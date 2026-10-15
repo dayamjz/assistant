@@ -321,7 +321,9 @@
 // service close itself, which that resolver's own comment names, and the
 // answer to a hold a task raised, recorded as whatever internal/ipc's
 // Request.HoldResolver derives for the request it arrived on, which is
-// ResolvedByMachineInterface.
+// ResolvedByMachineInterface, and each answer the program gives a run's
+// decision under standing consent, recorded as ResolvedByStandingConsent,
+// whose own comment says why it is not ResolvedByProgram.
 //
 // This records and does not gate, which PRD section 8 states as a requirement
 // rather than an aside. Nothing here reads a resolver to decide whether a

@@ -375,6 +375,11 @@ type driver struct {
 type topology struct {
 	pipeline *pipeline.Pipeline
 	executor *graph.Executor
+	// allowsConsent is whether this resolution's trusted copy allows standing
+	// consent, config.KeyAllowStandingConsent. It is the resolution's and so
+	// the topology's: the digest covers the documents it was read from, and
+	// consent.go reads it per segment rather than once per run.
+	allowsConsent bool
 }
 
 // Open takes the home's lock, opens its database, binds its socket, and
@@ -781,7 +786,7 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		s.forge,
 		redactor,
 		vcs.WithRedactor(redactor),
-	).WithJudge(s.judge).WithChecksWaits(s.store)
+	).WithJudge(s.judge).WithChecksWaits(s.store).WithRunRecords(s.store)
 	// The fix seam is built here, beside the stage seam and deliberately apart
 	// from it. It carries the one thing a stage body may not have: a route to
 	// the run's fixer role, which internal/runs hands out per run and which
@@ -813,7 +818,7 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 	if err != nil {
 		return nil, err
 	}
-	topo := &topology{pipeline: pipe, executor: executor}
+	topo := &topology{pipeline: pipe, executor: executor, allowsConsent: resolved.cfg.AllowStandingConsent}
 	s.topologies[resolved.digest] = topo
 	return topo, nil
 }

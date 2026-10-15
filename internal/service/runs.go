@@ -54,6 +54,18 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	if err != nil {
 		return machine.Run{}, err
 	}
+	// Standing consent asked for where the repository does not allow it is
+	// refused before any run is recorded or touched, so the refusal leaves
+	// nothing behind; consent.go owns the rule.
+	if req.StandingConsent {
+		allowed, err := s.standingConsentAllowed(ctx, repository)
+		if err != nil {
+			return machine.Run{}, err
+		}
+		if !allowed {
+			return machine.Run{}, standingConsentRefused(repository)
+		}
+	}
 	// Everything the record is built from is read before the branch is
 	// claimed, so what the claim holds is the decision and the write - the
 	// row, and the one fetch create makes to record the commit in the gate -
@@ -69,6 +81,11 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	})
 	if err != nil {
 		return machine.Run{}, err
+	}
+	if req.StandingConsent {
+		if record, err = s.giveStandingConsent(ctx, record); err != nil {
+			return machine.Run{}, err
+		}
 	}
 	if !created {
 		view, err := s.attach(ctx, record.ID)
@@ -359,7 +376,7 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 	// recorded as what followed the decision-model answers about them only
 	// once the answer is accepted; observe.go says what that record is.
 	stage, paths, mark := s.heldPaths(ctx, record.ID)
-	answered, err := s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
+	answered, err := s.advance(ctx, record.ID, topo, func(ctx context.Context) (graph.Result, error) {
 		return topo.executor.AnswerWith(ctx, record.ID, req.Answer, detail)
 	})
 	if err == nil {
@@ -477,6 +494,9 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 	if err != nil {
 		return machine.Run{}, err
 	}
+	if settled.Status == store.RunHeld && settled.StandingConsent.IsKnown() {
+		return s.answerHeldUnderConsent(ctx, settled)
+	}
 	if settled.Status != store.RunRunning && settled.Status != store.RunPending {
 		return s.view(ctx, settled.ID)
 	}
@@ -523,7 +543,7 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 	// attaching asks where a run stands, and "it is moving" is an answer to
 	// that. Taking the slot and reporting the refusal is what makes this a
 	// decision rather than a check that another caller can win the race to.
-	view, err := s.advance(ctx, settled.ID, func(ctx context.Context) (graph.Result, error) {
+	view, err := s.advance(ctx, settled.ID, topo, func(ctx context.Context) (graph.Result, error) {
 		return topo.executor.Resume(ctx, settled.ID)
 	})
 	if errors.Is(err, ErrRunAdvancing) || errors.Is(err, ErrRunEnding) {
@@ -606,7 +626,7 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	if _, err := built.runs.Start(ctx, record.ID); err != nil {
 		return machine.Run{}, err
 	}
-	return s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
+	return s.advance(ctx, record.ID, topo, func(ctx context.Context) (graph.Result, error) {
 		return topo.executor.Run(ctx, record.ID, initial)
 	})
 }
@@ -758,7 +778,7 @@ func baseCommit(ctx context.Context, working *vcs.Repository, head, defaultBranc
 // segment starts and released after the record has been reconciled, so a
 // caller that reads an answer and immediately asks again finds the record
 // already settled rather than the run still moving.
-func (s *Service) advance(ctx context.Context, runID string, step func(context.Context) (graph.Result, error)) (machine.Run, error) {
+func (s *Service) advance(ctx context.Context, runID string, topo *topology, step func(context.Context) (graph.Result, error)) (machine.Run, error) {
 	// The segment carries which run it advances, so the containment wrapper
 	// around the resolved agent can register an invocation under the run that
 	// launched it without any stage body carrying the fact there.
@@ -787,6 +807,13 @@ func (s *Service) advance(ctx context.Context, runID string, step func(context.C
 	defer stop()
 
 	result, err := step(segment)
+	if err == nil {
+		// A decision standing consent answers is answered here, in this
+		// segment and this slot, so the run is not recorded held at a
+		// decision the program is about to answer; consent.go owns what it
+		// answers and what it never does.
+		result, err = s.underStandingConsent(segment, runID, topo, result)
+	}
 	if err != nil {
 		s.log.Printf("run %s stopped: %v", runID, err)
 		how.stranded = true

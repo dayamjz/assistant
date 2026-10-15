@@ -226,7 +226,8 @@
 // the two failure codes a failure ends with is decided once, in failureExit:
 // a command line refused here and a request the service answered
 // invalid-request are both incorrect usage, whatever method answered, as is
-// init's refusal when the working copy holds no default branch to read, and
+// init's refusal when the working copy holds no default branch to read, or
+// no origin to take the upstream from and no --upstream naming one, and
 // every other failure is operational. A run that
 // stopped to ask something is a success, because the answer goes back through
 // the same surface and an agent that read a decision as a failure would stop

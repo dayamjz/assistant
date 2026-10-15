@@ -1012,8 +1012,9 @@ func FixRoundPhrase(option string) Phrase {
 }
 
 // Evidence rows: the message that points a person at one of the two
-// detailed evidence documents PRD section 9 names, and the two notices about
-// a request that sit beside a run's evidence without being part of it. P13
+// detailed evidence documents PRD section 9 names, the two notices about a
+// request and the one about the run's standing consent that sit beside a
+// run's evidence without being part of it. P13
 // lets an evidence document keep exact identifiers and stage names and keeps
 // the message that points at one phrased, so these rows are what a person
 // reads before the evidence, and the evidence itself is not a row here.
@@ -1054,6 +1055,17 @@ var (
 		Consequence: "That run goes on as it was begun, without it.",
 		Decision:    "Give it again when this branch next starts a run; assistant --json names what was not used.",
 	}
+	// PhraseStandingConsent is the row beside a run whose record says it was
+	// put under standing consent: the program answered the decisions about
+	// findings that come before the change is sent upstream, each answer is
+	// recorded as the program's, and the decisions it never answers still
+	// come to the person. When consent was given is the structured
+	// rendering's.
+	PhraseStandingConsent = Phrase{
+		Outcome:     "This change runs under standing consent, so the program itself answers the decisions about its findings that come before it is sent upstream.",
+		Consequence: "Each of those answers is recorded as the program's rather than yours, and a decision about sending the change, its pull request or its checks still comes to you.",
+		Decision:    "Nothing to decide from it alone; assistant --json says when consent was given.",
+	}
 	// PhraseAnswerNotApplied is the row for an answer the service did not
 	// apply because the decision it answered had been closed first, on a
 	// re-read of the run's pull request. The service's own sentence for why
@@ -1082,6 +1094,10 @@ const (
 	// CheckGate is whether the checkout is bound to a gate and has the
 	// repository record a run is resolved against.
 	CheckGate = "gate"
+	// CheckCommitIdentity is whether git names an author and a committer
+	// for a commit made in the checkout's gate, which is where a run's copy
+	// takes its identity from.
+	CheckCommitIdentity = "commit identity"
 	// CheckService is whether a service answered for the home.
 	CheckService = "service"
 	// CheckAgent is whether a coding agent resolves for a run.
@@ -1098,7 +1114,7 @@ const (
 // CheckNames is every check name phraseByCheck has rows for, in the order
 // assistant doctor makes them. The result is a copy.
 func CheckNames() []string {
-	return []string{CheckHome, CheckDatabase, CheckWorkingCopy, CheckGate, CheckService,
+	return []string{CheckHome, CheckDatabase, CheckWorkingCopy, CheckGate, CheckCommitIdentity, CheckService,
 		CheckAgent, CheckNamedOnlyAgents, CheckCodeHost, CheckStages}
 }
 
@@ -1127,6 +1143,13 @@ var phraseByCheck = map[string][2]Phrase{
 	CheckGate: {
 		{Outcome: "This checkout is set up for validation.", Consequence: "A change sent from here is validated before it goes anywhere.", Decision: "Nothing to do."},
 		{Outcome: "This checkout is not set up for validation.", Consequence: "A run cannot start from it.", Decision: "Run assistant init here."},
+	},
+	CheckCommitIdentity: {
+		{Outcome: "Git names who a change made during a run is recorded under.", Consequence: "A step that has to record a change can do so.", Decision: "Nothing to do."},
+		{Outcome: "Git could not name who a change made during a run is recorded under.",
+			Consequence: "A run can still start, and a step that has to record a change, such as a fix round or bringing your branch up to date, fails until git has both.",
+			Decision: `Run git config --global user.name "Your Name" and git config --global user.email "you@example.com", then run assistant doctor again; ` +
+				"if both are already set, run assistant --json doctor for what git said."},
 	},
 	CheckService: {PhraseServiceUp, PhraseServiceAbsent},
 	CheckAgent: {
@@ -1412,9 +1435,10 @@ var PhraseNoReading = Phrase{
 // given none of its subcommands, the two rows for a rerun refused because
 // the checkout moved, a gate created, reattached and removed, a row per source of the
 // default branch an init recorded with the row for an answer naming none and
-// a row per refusal to record one, the gate's own rows, and the rows pointing
+// a row per refusal to record one, the row for an init that could not learn
+// where changes go, the gate's own rows, and the rows pointing
 // at a run's evidence
-// and the two notices beside it, and the catch-up read's: a heading and an
+// and the three notices beside it, and the catch-up read's: a heading and an
 // empty row per part, a row per kind of landed record, the row for what a
 // read left out, and the two rows for a mark, and custody's: a row per class
 // planned and carried out and as status prints it, a row per refusal, and a
@@ -1469,12 +1493,14 @@ func TablePhrases() []Phrase {
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
-	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied)
+	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied,
+		PhraseStandingConsent)
 	out = append(out, phraseWaitingOnYou, phraseNothingWaiting, phraseLandedSince, phraseNothingLanded,
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)
 	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
 		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
 	out = append(out, defaultBranchRows()...)
+	out = append(out, upstreamRows()...)
 	out = append(out, commandsRows()...)
 	out = append(out, custodyRows()...)
 	return append(out, coordinatorRows()...)

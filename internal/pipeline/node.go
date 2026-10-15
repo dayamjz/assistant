@@ -361,6 +361,63 @@ func requestedHold(stage Stage, summary string, changed bool) findings.Finding {
 	}
 }
 
+// FixReviewFinding returns the identifier, in the stage's recorded report, of
+// the hold its last requested fix round left so the stage holds again for the
+// round's result to be seen, and false when the report carries no such hold.
+// It is the one way to tell that hold from an ask the stage or its fixer
+// raised, which matters to a caller that would accept a round's result as it
+// stands and would not accept anything else on the same terms.
+//
+// It is decided from what the request node wrote and not from the report's
+// text alone: the last hold the stage's last round left, which a requested
+// round always appends after its fixer's own, has to read as requestedHold
+// renders it for the summary that round wrote, and exactly one ask in the
+// report may carry that text. A report carrying two, which only a stage body
+// or a fixer imitating the hold could produce, answers false, so the
+// imitation is never taken for the round's result. Anything that cannot be
+// read is an error rather than false.
+func FixReviewFinding(s graph.State, stage Stage) (string, bool, error) {
+	if !stage.Requestable() {
+		return "", false, nil
+	}
+	heldValue, ok := s.Get(string(stage.HeldKey()))
+	if !ok {
+		return "", false, nil
+	}
+	heldText, _ := heldValue.Text()
+	if heldText == "" {
+		return "", false, nil
+	}
+	var held []findings.Finding
+	if err := json.Unmarshal([]byte(heldText), &held); err != nil {
+		return "", false, fmt.Errorf("%w: %s: the holds its last fix round raised: %w", ErrBadReport, stage, err)
+	}
+	summaryValue, ok := s.Get(string(stage.FixKey()))
+	if !ok {
+		return "", false, nil
+	}
+	summary, _ := summaryValue.Text()
+	last := strings.TrimSpace(held[len(held)-1].Description)
+	if last != strings.TrimSpace(requestedHold(stage, summary, true).Description) &&
+		last != strings.TrimSpace(requestedHold(stage, summary, false).Description) {
+		return "", false, nil
+	}
+	report, err := StageReport(s, stage)
+	if err != nil {
+		return "", false, err
+	}
+	id, found := "", 0
+	for _, f := range report.Findings {
+		if f.Holds() && strings.TrimSpace(f.Description) == last {
+			id, found = f.ID, found+1
+		}
+	}
+	if found != 1 {
+		return "", false, nil
+	}
+	return id, true, nil
+}
+
 // changesState reports whether any of a fixer's writes would change the value
 // its key holds. A key the fixer may not write is not judged here: applyWrites
 // refuses it, and that refusal is the answer that matters.

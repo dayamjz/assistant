@@ -213,7 +213,10 @@ func TestCaptureReferenceReadsTheHeldSession(t *testing.T) {
 	p, _ := provider(t, sub.home, workerScript())
 	s := create(t, p, sub.spec("begin"))
 	ref := s.Reference().String()
-	waitCapture(t, p, s, "worker ready")
+	// The worker answers the line it was started with after its greeting,
+	// and no exchange of the script answers it, so wait for that answer too:
+	// until it is written the bytes can change between the two reads below.
+	waitCapture(t, p, s, "answers this line: begin")
 
 	byHandle, err := p.Capture(s)
 	if err != nil {
