@@ -94,6 +94,11 @@ type Config struct {
 	// where the program may merge a run that ended checks-passed. Empty
 	// means it merges nothing. Ask MergesIn rather than searching it.
 	AutonomyMerge []string
+	// AllowStandingConsent is whether a run of the repository may be put
+	// under standing consent by the per-run flag. It is never taken from a
+	// pushed branch; KeyAllowStandingConsent says what it allows and what it
+	// does not.
+	AllowStandingConsent bool
 }
 
 // MergesIn reports whether repository, named as the code host names it, is

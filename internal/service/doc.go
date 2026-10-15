@@ -649,10 +649,24 @@
 // It does not push, open a pull request, or move any reference. Those are
 // stage bodies' work, behind internal/vcs, internal/safety and internal/forge.
 //
-// It does not decide who resolved a hold, or who acknowledged a wake.
-// internal/ipc derives both from the surface: every resolution arriving over
-// this protocol is store.ResolvedByMachineInterface, including one a person
-// typed, and every acknowledgement is store.AcknowledgedByCoordinator.
-// taskholds.go records the resolver Request.HoldResolver returns and names
-// none of its own.
+// It does not decide who resolved a hold that arrived on the socket, or who
+// acknowledged a wake. internal/ipc derives both from the surface: every
+// resolution arriving over this protocol is store.ResolvedByMachineInterface,
+// including one a person typed, and every acknowledgement is
+// store.AcknowledgedByCoordinator. taskholds.go records the resolver
+// Request.HoldResolver returns and names none of its own. The resolutions it
+// names itself are the ones it makes itself: store.ResolvedByProgram at the
+// checks hold above, and store.ResolvedByStandingConsent for each answer
+// standing consent gives, which consent.go records.
+//
+// # Standing consent answers inside the segment, and consent.go owns it
+//
+// PRD section 9's standing consent is a per-run flag on a start or an attach,
+// refused unless the repository's trusted copy sets allow_standing_consent,
+// and recorded on the run row once given. A segment that stops at a decision
+// consent answers is answered in the same segment and the same slot, in
+// advance, before the record moves, so a run under consent is never recorded
+// held at a decision the program is about to answer. Which decisions it
+// answers, the ones it never does, how each answer is recorded, and the gaps
+// are consent.go's.
 package service

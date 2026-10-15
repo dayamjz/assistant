@@ -284,6 +284,7 @@ git push assistant BRANCH      # hand a branch to the gate, which starts a run
 assistant                      # attach to this branch's run, or start one
 assistant --answer approved    # answer the decision it is holding on
 assistant --answer fix --select ID --note TEXT   # ask for one fix round there
+assistant --standing-consent   # let the program answer this run's pre-push holds, where the repository allows it
 assistant tasks                # fleet work and where each task stands
 assistant watch                # catch up, then follow everything in flight
 assistant runs --usage=7d      # what the stage agents' calls cost, by agent and run

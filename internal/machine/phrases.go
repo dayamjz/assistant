@@ -1012,8 +1012,9 @@ func FixRoundPhrase(option string) Phrase {
 }
 
 // Evidence rows: the message that points a person at one of the two
-// detailed evidence documents PRD section 9 names, and the two notices about
-// a request that sit beside a run's evidence without being part of it. P13
+// detailed evidence documents PRD section 9 names, the two notices about a
+// request and the one about the run's standing consent that sit beside a
+// run's evidence without being part of it. P13
 // lets an evidence document keep exact identifiers and stage names and keeps
 // the message that points at one phrased, so these rows are what a person
 // reads before the evidence, and the evidence itself is not a row here.
@@ -1053,6 +1054,17 @@ var (
 		Outcome:     "What you gave to start a run with was not used, because this branch already had a run and this is that run.",
 		Consequence: "That run goes on as it was begun, without it.",
 		Decision:    "Give it again when this branch next starts a run; assistant --json names what was not used.",
+	}
+	// PhraseStandingConsent is the row beside a run whose record says it was
+	// put under standing consent: the program answered the decisions about
+	// findings that come before the change is sent upstream, each answer is
+	// recorded as the program's, and the decisions it never answers still
+	// come to the person. When consent was given is the structured
+	// rendering's.
+	PhraseStandingConsent = Phrase{
+		Outcome:     "This change runs under standing consent, so the program itself answers the decisions about its findings that come before it is sent upstream.",
+		Consequence: "Each of those answers is recorded as the program's rather than yours, and a decision about sending the change, its pull request or its checks still comes to you.",
+		Decision:    "Nothing to decide from it alone; assistant --json says when consent was given.",
 	}
 	// PhraseAnswerNotApplied is the row for an answer the service did not
 	// apply because the decision it answered had been closed first, on a
@@ -1414,7 +1426,7 @@ var PhraseNoReading = Phrase{
 // default branch an init recorded with the row for an answer naming none and
 // a row per refusal to record one, the gate's own rows, and the rows pointing
 // at a run's evidence
-// and the two notices beside it, and the catch-up read's: a heading and an
+// and the three notices beside it, and the catch-up read's: a heading and an
 // empty row per part, a row per kind of landed record, the row for what a
 // read left out, and the two rows for a mark, and custody's: a row per class
 // planned and carried out and as status prints it, a row per refusal, and a
@@ -1469,7 +1481,8 @@ func TablePhrases() []Phrase {
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
-	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied)
+	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied,
+		PhraseStandingConsent)
 	out = append(out, phraseWaitingOnYou, phraseNothingWaiting, phraseLandedSince, phraseNothingLanded,
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)
 	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),

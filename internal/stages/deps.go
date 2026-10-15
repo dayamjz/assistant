@@ -187,6 +187,18 @@ type StageDeps struct {
 	// cannot wait, and it refuses rather than holding on the first unsettled
 	// read, because a hold there would be a timeout of zero nobody configured.
 	waits ChecksWaits
+	// records is the run record the pull request body reads the one fact it
+	// states from a record rather than from state: whether the run was put
+	// under standing consent. That fact is the run row's, written by
+	// internal/service when the per-run flag is given, and it can be given
+	// after a run began, so no node wrote it into state; reading the row is
+	// what keeps the row its one owner. It is build-scoped for the reason
+	// waits is: one service holds one store and every run is a row in it.
+	//
+	// It is unexported on the same terms as waits. A nil record is a body
+	// that says it could not read whether consent was given, rather than one
+	// that says it was not.
+	records RunRecords
 	// clock is how the checks body tells the time and paces its re-reads. Its
 	// zero value is the wall clock and a minute between reads; only this
 	// package's own tests set anything else.
@@ -215,6 +227,27 @@ type ChecksWaits interface {
 // store it opened for the home.
 func (d StageDeps) WithChecksWaits(w ChecksWaits) StageDeps {
 	d.waits = w
+	return d
+}
+
+// RunRecords is the run record, and the one route a stage body has to it.
+// internal/store's Run is the implementation; the pull request body is the one
+// consumer, and it reads the standing consent the record carries and nothing
+// else, so no body comes to decide anything from a record a run keeps.
+//
+// It is an interface because a stage body opens no database, per the rule
+// that internal/store is the only package that does; internal/service hands
+// over the store it already opened.
+type RunRecords interface {
+	// Run returns the run's record.
+	Run(ctx context.Context, id string) (store.Run, error)
+}
+
+// WithRunRecords returns these dependencies with the run record the pull
+// request body reads standing consent from. internal/service is what calls
+// it, with the store it opened for the home.
+func (d StageDeps) WithRunRecords(r RunRecords) StageDeps {
+	d.records = r
 	return d
 }
 

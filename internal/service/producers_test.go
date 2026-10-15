@@ -13,7 +13,8 @@ import (
 
 // store.ResolvedByProgram has exactly one producer in this repository, the
 // checks-hold closer in this package, which is what store's own doc comment
-// on it claims. A second reference would be a second place the program could
+// on it claims, and store.ResolvedByStandingConsent has exactly one too,
+// consent.go. A second reference would be a second place the program could
 // decide a hold without a person, which PRD section 8 gives it for one hold
 // and no other, so this reads every non-test source file in the module and
 // counts every reference to the name: a call, a function value taken and
@@ -43,6 +44,16 @@ func TestOnlyTheChecksHoldCloserProducesAProgramResolution(t *testing.T) {
 	}
 	if !equalSets(program, want) {
 		t.Fatalf("store.ResolvedByProgram is referred to in %v, want only %v", program, want)
+	}
+	// The answers standing consent gives are the program's too, under a
+	// member of their own, and consent.go is the one place that produces it.
+	consent := references(t, root, "ResolvedByStandingConsent")
+	wantConsent := []string{
+		filepath.Join("internal", "service", "consent.go"),
+		filepath.Join("internal", "store", "resolver.go"),
+	}
+	if !equalSets(consent, wantConsent) {
+		t.Fatalf("store.ResolvedByStandingConsent is referred to in %v, want only %v", consent, wantConsent)
 	}
 	machineInterface := references(t, root, "ResolvedByMachineInterface")
 	if len(machineInterface) == 0 {

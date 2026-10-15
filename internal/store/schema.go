@@ -60,6 +60,11 @@ const runParkMigration = "run park record"
 // constant.
 const promotedIntentMigration = "task delivery intent recorded at promotion"
 
+// runStandingConsentMigration names the migration that records when a run
+// was put under standing consent, for the reason sealCheckpointTableMigration
+// is a constant.
+const runStandingConsentMigration = "run standing consent"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1321,6 +1326,34 @@ var schema = []migration{
 					OR OLD.shape <> 'investigation' OR NEW.shape <> 'delivery'
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a task''s delivery intent is written once, by the promotion that makes it a delivery task, and is not revised');
+				END`,
+		},
+	},
+	{
+		version: 30,
+		name:    runStandingConsentMigration,
+		statements: []string{
+			// When a run was put under the standing consent PRD section 9
+			// describes, which is the run record's own statement that the
+			// program answered some of its decisions rather than a person.
+			// It sits on the run row because it qualifies the run, the way
+			// park does, and every surface that composes the record carries
+			// it without a second read.
+			//
+			// It is nullable with no default, so every run written before it
+			// and every run nobody gave consent to reads back unknown. The
+			// trigger makes it given once: an update naming it is refused
+			// unless the row had none and is given one. No statement clears
+			// it, so consent cannot be withdrawn from the record of a run
+			// whose decisions it already answered, and none revises when it
+			// was given. An update that does not name the column cannot
+			// change it, so it does not reach the trigger.
+			`ALTER TABLE run ADD COLUMN standing_consent TEXT`,
+			`CREATE TRIGGER run_standing_consent_is_given_once
+				BEFORE UPDATE OF standing_consent ON run
+				WHEN OLD.standing_consent IS NOT NULL OR NEW.standing_consent IS NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run''s standing consent is given once and is neither revised nor withdrawn');
 				END`,
 		},
 	},

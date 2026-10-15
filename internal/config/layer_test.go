@@ -100,7 +100,8 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"commit": {"fix_message": "fix(gate): {summary}"},
 		"allow_pushed_commands": true,
 		"autonomy": {"merge": ["owner/name"]},
-		"delivery": "local"
+		"delivery": "local",
+		"allow_standing_consent": true
 	}`
 	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
