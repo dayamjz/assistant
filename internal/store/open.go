@@ -123,10 +123,10 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 // 5's stop guard and pull guard are: a hook deciding whether work is in
 // flight while the service holding the home's lock may be gone.
 //
-// It needs no redactor, because the redactor exists for the two URL columns
-// UpsertRepository writes and nothing here writes. What it cannot do, it
-// refuses as an *UnreadableError, which matches ErrUnreadable and the cause
-// beneath it: a file that is missing or not a database, a schema behind this
+// It needs no redactor, because the redactor runs only on the way into the
+// columns doc.go names as stored redacted, and nothing here writes. What it
+// cannot do, it refuses as an *UnreadableError, which matches ErrUnreadable
+// and the cause beneath it: a file that is missing or not a database, a schema behind this
 // build (ErrSchemaBehind, since a read-only open may not migrate), ahead of
 // it (ErrSchemaAhead), recorded differently (ErrSchemaChanged), or a
 // connection that does not report the settings the package comment's
@@ -279,8 +279,8 @@ const (
 
 // probeRedactor refuses a redactor that leaves the probe's credential intact.
 //
-// It establishes one thing: the redactor that will run on the repository URL
-// columns is not inert. That is the failure a caller cannot see for themselves,
+// It establishes one thing: the redactor that will run on the columns doc.go
+// names as stored redacted is not inert. That is the failure a caller cannot see for themselves,
 // because a redactor that was never wired up produces a store that looks
 // completely normal and quietly holds passwords.
 //

@@ -73,9 +73,9 @@ type Run struct {
 	ApprovedCommit Optional[string] `json:"approved_commit"`
 	// PushBinding is what the run pushed and where, in the caller's own
 	// notation. It is unknown until the run pushes. It is stored exactly as
-	// given: the redactor runs on the repository URL columns and on nothing
-	// else, so a caller that writes a credentialed remote here has stored the
-	// credential.
+	// given: the redactor runs only on the columns doc.go names as stored
+	// redacted, and this is not one, so a caller that writes a credentialed
+	// remote here has stored the credential.
 	PushBinding Optional[string] `json:"push_binding"`
 	// PullRequest is the pull request the run opened, in the caller's own
 	// notation. It is unknown until one exists.

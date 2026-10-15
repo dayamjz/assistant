@@ -106,10 +106,10 @@ func (s *Store) UpsertRepository(ctx context.Context, r Repository) (Repository,
 	return s.Repository(ctx, r.ID)
 }
 
-// safeURL is the one path the repository URL columns take into this database,
-// and it is the only place the redactor runs. It says nothing about any other
-// column: everything else this package stores is bound exactly as the caller
-// supplied it.
+// safeURL is the one path the repository URL columns take into this database.
+// It is one of the three places the redactor runs; the other two are the
+// message text and refusal columns, and doc.go names all four. Every other
+// column is bound exactly as the caller supplied it.
 func (s *Store) safeURL(raw, column string) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", fmt.Errorf("store: %s is empty", column)
