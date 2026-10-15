@@ -82,11 +82,12 @@ func TestTheRecordTierOutranksTheRun(t *testing.T) {
 	}
 
 	// An investigation task that names a merged run is Landed and no more:
-	// the terminal tier resolves no Complete for an investigation.
+	// the terminal tier resolves an investigation Complete only from its
+	// findings relayed record, never from a cleanup record.
 	investigation := store.Task{ID: "t", Shape: store.TaskInvestigation}
 	got = Resolve(Inputs{Task: investigation, Runs: []store.Run{runIn("r1", store.RunPassed, 1)}, MergeRecords: []store.MergeRecord{merged("r1", 7)}, Cleanup: cleanup(true)})
 	if got.State != Landed {
-		t.Fatalf("an investigation task landed and removed resolved %s, want landed: the tier resolves no Complete for an investigation", got.State)
+		t.Fatalf("an investigation task landed and removed resolved %s, want landed: an investigation's removal is not its Complete", got.State)
 	}
 }
 

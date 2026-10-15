@@ -130,6 +130,7 @@ func TestRecordedLinesArePlayedAsTheyAre(t *testing.T) {
 	for _, bad := range []Exchange{
 		{Contains: "x", Reply: "also this", Recorded: recorded},
 		{Contains: "x", Run: true, Recorded: recorded},
+		{Contains: "x", Write: true, Recorded: recorded},
 		{Contains: "x", Recorded: []string{"one\ntwo"}},
 	} {
 		if err := bad.valid(); err == nil {

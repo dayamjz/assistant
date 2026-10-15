@@ -89,6 +89,15 @@ const (
 	// the one anchored relaunch PRD section 11's reconciliation uses. It is
 	// the coordinator's on MethodTaskCreate's terms.
 	MethodTaskRelaunch Method = "task.relaunch"
+	// MethodTaskRelay records that the coordinator relayed a reported
+	// investigation's findings, PRD section 6's "findings relayed", which
+	// moves the task to Complete through the terminal tier's own record. It
+	// is refused unless the records make the task a reported investigation:
+	// an investigation task with a stored report, no open hold naming it,
+	// and no relay already recorded. It is the coordinator's on
+	// MethodTaskCreate's terms, so no worker records its own findings
+	// relayed.
+	MethodTaskRelay Method = "task.relay"
 	// MethodTaskMessage sends a message to a running task's worker, PRD
 	// section 6's steering: the program appends the message record, then
 	// writes the text to the worker's input, and the record says which of
@@ -285,6 +294,7 @@ var specs = []Spec{
 	{MethodTaskCreate, KindRequest, AccessRestricted, "Record a new task through intake, for the coordinator."},
 	{MethodTaskPromote, KindRequest, AccessRestricted, "Promote an investigation task to delivery in place, for the coordinator."},
 	{MethodTaskRelaunch, KindRequest, AccessRestricted, "Relaunch a task whose terminal is gone, in its own copy, for the coordinator."},
+	{MethodTaskRelay, KindRequest, AccessRestricted, "Record a reported investigation's findings relayed, for the coordinator."},
 	{MethodTaskMessage, KindRequest, AccessRestricted, "Send a message to a running task's worker, recorded first, for the coordinator."},
 	{MethodTaskStop, KindRequest, AccessRestricted, "End a running task's worker, prove it dead, and hold the task, for the coordinator."},
 	{MethodTaskInterrupt, KindRequest, AccessRestricted, "Interrupt a worker's turn; refused, since no adapter declares the capability."},

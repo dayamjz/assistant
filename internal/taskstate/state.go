@@ -57,7 +57,8 @@ type Source string
 // The sources. SourceNone accompanies Unknown when no tier had anything to say.
 const (
 	// SourceRecord is the terminal tier: a merge record of an attributed
-	// run, or that and the task's cleanup record. It outranks every run,
+	// run, or that and the task's cleanup record, the local landing record,
+	// or an investigation's findings relayed record. It outranks every run,
 	// because PRD section 6 makes a terminal record final for the task.
 	SourceRecord Source = "record"
 	// SourceHold is the hold tier: an open hold naming the task, which
@@ -143,6 +144,13 @@ type Inputs struct {
 	// appended beside it. It decides the report tier for an investigation
 	// task only; a promoted task keeps its row and is no longer read by it.
 	ReportStoredAt store.Optional[time.Time]
+	// Relay is the task's findings relayed record, store.TaskSnapshot's
+	// field of the same name, and unknown while none has been written. It
+	// decides the terminal tier's Complete for an investigation task only,
+	// and is read from the row and never from the history entry appended
+	// beside it (P8). A record naming another task is not this task's and
+	// is not read.
+	Relay store.Optional[store.TaskRelay]
 	// Process is what the terminal looked like, as of when it was asked.
 	Process Liveness
 	// Advancing is whether the service is executing the newest of Runs now:
@@ -224,6 +232,11 @@ type Basis struct {
 	// a promoted investigation is: it decided exactly when Source is
 	// SourceReport.
 	ReportStored bool `json:"report_stored"`
+	// Relayed is whether the task has a findings relayed record naming it.
+	// It is recorded whether or not it decided, and for a delivery task
+	// too: it decided exactly when Source is SourceRecord and State is
+	// Complete for an investigation task.
+	Relayed bool `json:"relayed"`
 	// Hold is the key of the oldest open hold naming the task, read on
 	// Resolve's terms, and empty when none is open. It is recorded whether
 	// or not it decided, as LandedRun is: it decided exactly when Source is

@@ -794,6 +794,17 @@ type TaskRelaunched struct {
 	Swept string `json:"swept,omitempty"`
 }
 
+// TaskRelayed is the answer to task.relay: the findings relayed record the
+// coordinator's statement wrote and the history entry written with it, both
+// internal/store's records rather than a second shape of them. The task's
+// Complete is resolved from Record and read from task.get.
+type TaskRelayed struct {
+	// Record is the findings relayed record as stored.
+	Record store.TaskRelay `json:"record"`
+	// Event is the findings-relayed entry the task's history now carries.
+	Event store.TaskEvent `json:"event"`
+}
+
 // TaskMessaged is the answer to task.message: the message record as the
 // send left it, which is the one place delivery is read from (P8). Delivery
 // is written when the provider's Send returned and refused, with the

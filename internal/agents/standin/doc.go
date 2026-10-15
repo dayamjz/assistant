@@ -139,7 +139,12 @@
 // arrives from outside the worker's group, as a real worker's push does; a
 // rule placing a worker's descendants by the worker's group alone cannot pass
 // a test that drives the worker this way. runCommand says what of the CLI it
-// does not model.
+// does not model, and bashCheck the one refusal it does: a here-document
+// carrying braces and quotes, which #267 saw the CLI refuse. An exchange may
+// instead Write what the line carries as a file in the worker's directory,
+// which is how a test has a worker use the CLI's file editing tool, and a
+// path outside that directory is refused, which #267 saw needed an approval
+// nobody was there to give.
 //
 // A worker's Call is the exception to "complete or absent": it is written
 // when the worker starts and rewritten whole, under the same number, as each

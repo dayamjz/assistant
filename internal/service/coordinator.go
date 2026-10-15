@@ -16,7 +16,8 @@ import (
 
 // The coordinator's task methods: task.create, task.promote and
 // task.relaunch, PRD section 9's three service methods beside the command
-// table (#95 lines A, E and J). Its paragraph's two steering methods,
+// table (#95 lines A, E and J), and task.relay, the coordinator's record of
+// section 6's "findings relayed" (#278). Its paragraph's two steering methods,
 // task.message and task.stop, and the refused task.interrupt are steer.go's,
 // on this file's terms for who may ask and how a refusal crosses the wire.
 //
@@ -26,10 +27,12 @@ import (
 // task.create calls internal/tasks' Queue.Create, task.promote calls its
 // Queue.Promote, and task.relaunch calls relaunchTask, the one anchored
 // relaunch reconcile.go's start-time pass calls, and then hands the launch
-// to launchInBackground exactly as that pass does. A promotion then sends
-// the task's live worker its brief through steer.go's deliverMessage, the
-// route task.message takes, rather than a send of its own. What this file
-// adds is who may ask and how an answer or a refusal crosses the wire.
+// to launchInBackground exactly as that pass does; and task.relay calls
+// store.RecordTaskRelay, the one writer of the findings relayed record,
+// anchored to the resolution it read. A promotion then sends the task's live
+// worker its brief through steer.go's deliverMessage, the route task.message
+// takes, rather than a send of its own. What this file adds is who may ask
+// and how an answer or a refusal crosses the wire.
 //
 // # Who may ask
 //
@@ -208,6 +211,63 @@ func (s *Service) relaunchTaskFor(ctx context.Context, req ipc.Request, r machin
 	}, nil
 }
 
+// relayTask records, for the coordinator, that a reported investigation's
+// findings were relayed: PRD section 6's Reported to Complete edge. The task
+// is read through the service's reader for the history position to anchor
+// to, and the record is written by store.RecordTaskRelay, which decides in
+// its own transaction whether the records make the task a reported
+// investigation: an investigation task with a stored report, no open hold
+// naming it and no relay recorded, which are the facts behind
+// internal/taskstate's Reported from the report tier and the hold tier above
+// it. Anything else is refused there and crosses the wire as ipc.ErrRefused,
+// and a history that moved since the read refuses the relay rather than
+// recording it past what was appended (P6). The task then resolves Complete
+// from the record, and the held worker and the copy are left to landed.go's
+// terms for a task in the terminal tier, asked at once on a goroutine
+// through settleLanded and again by the supervisor's pass.
+//
+// The record is the coordinator's word: nothing here witnesses a relay. The
+// run tier, which sits between the hold tier and the report tier, is not
+// re-checked: an investigation pushes nothing and is attributed no run by
+// its branch, so in this build only a run its own row names could reach it,
+// and no production path names one for an investigation.
+func (s *Service) relayTask(ctx context.Context, req ipc.Request, r machine.TaskRequest) (machine.TaskRelayed, error) {
+	if err := s.refuseWorker(req); err != nil {
+		return machine.TaskRelayed{}, err
+	}
+	if r.Task == "" {
+		return machine.TaskRelayed{}, fmt.Errorf("%w: a relay names no task", ipc.ErrInvalidRequest)
+	}
+	resolved, err := s.tasks().Resolved(ctx, r.Task)
+	if err != nil {
+		return machine.TaskRelayed{}, err
+	}
+	relay, event, err := s.store.RecordTaskRelay(ctx, r.Task, resolved.State.Basis.EventSequence)
+	if err != nil {
+		return machine.TaskRelayed{}, refusalOf(err)
+	}
+	s.publishTaskEvent(event)
+	s.log.Printf("task %s's findings were recorded relayed by %s", r.Task, peerOf(req))
+	s.settleInBackground(r.Task)
+	return machine.TaskRelayed{Record: relay, Event: event}, nil
+}
+
+// settleInBackground runs settleLanded for the task on a goroutine
+// registered through startWork, so the answer that wrote a terminal record
+// does not wait on ending a worker or on the cleanup decision, and Close
+// still waits for both. A service giving up its home leaves both to the
+// supervisor's pass or the next start.
+func (s *Service) settleInBackground(id string) {
+	if !s.startWork() {
+		s.log.Printf("task %s's worker and copy were left for the next start because this service is giving up the home", id)
+		return
+	}
+	go func() {
+		defer s.work.Done()
+		s.settleLanded(s.stopCtx, id)
+	}()
+}
+
 // dispatchInBackground runs dispatchDue on a goroutine registered through
 // startWork, so the answer that recorded a task does not wait on cutting its
 // copy and Close still waits for the dispatch.
@@ -249,6 +309,8 @@ func refusalOf(err error) error {
 		errors.Is(err, store.ErrTaskMoved),
 		errors.Is(err, store.ErrTaskShapeMoved),
 		errors.Is(err, store.ErrCleanupRecorded),
+		errors.Is(err, store.ErrNotRelayable),
+		errors.Is(err, store.ErrTaskRelayed),
 		errors.Is(err, errRelaunchNotDue),
 		errors.Is(err, errRelaunchNotDead),
 		errors.Is(err, errRelaunchInFlight),

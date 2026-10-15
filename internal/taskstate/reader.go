@@ -127,7 +127,7 @@ func (r *Reader) resolve(ctx context.Context, snap store.TaskSnapshot) Resolutio
 	in := Inputs{
 		Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds, Events: snap.Events,
 		MergeRecords: snap.MergeRecords, Cleanup: snap.Cleanup, LocalLanding: snap.LocalLanding,
-		ReportStoredAt: snap.ReportStoredAt, Process: Unobserved,
+		ReportStoredAt: snap.ReportStoredAt, Relay: snap.Relay, Process: Unobserved,
 	}
 	if run, ok := newest(snap.Runs); ok && r.advancing != nil {
 		in.Advancing = r.advancing(run.ID)

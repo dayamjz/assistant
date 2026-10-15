@@ -80,6 +80,19 @@ const (
 	routeEvent       = "event"
 )
 
+// routeReportFile is the file routeSection tells an investigation's worker to
+// write its report into, at the top of its copy, and to name to the report
+// command. #267 found that the Claude Code CLI's Bash check refused the
+// here-document this section used to prescribe, a command carrying JSON
+// braces and quotes, and that writing a file outside the copy needed an
+// approval nobody was there to give; a file in the copy, written with the
+// worker's file editing tool, is what a worker launched under the grant can
+// make. The report command removes the file once the report is filed, which
+// internal/cli's workerReport owns, so it does not stay in the copy to keep
+// the copy from being cleaned up or to be committed if the investigation is
+// promoted.
+const routeReportFile = "assistant-report.json"
+
 // routeSection is what a launch appends to a worker's instructions when this
 // service was given a route: the commands the worker may run to tell the
 // program about its work, each beginning with the route exactly as the
@@ -111,15 +124,18 @@ func (s *Service) routeSection(shape store.TaskShape) string {
 		"coordinator as unread.\n\n")
 	fmt.Fprintf(&b, "    %s %s NUMBER\n", s.workerRoute, routeAcknowledge)
 	if shape == store.TaskInvestigation {
-		b.WriteString("\nWhen the investigation is finished, file your report once, on standard input, as one JSON " +
-			"object with a \"summary\" and a list of \"findings\", each with a \"description\" and an \"action\": " +
-			"\"ask\" for a decision a person has to make, \"note\" for something to know, \"fix\" for a change you would " +
-			"make, which no one makes on the strength of the report. A finding with no action, or one that is not of " +
-			"those three, is held for a person as an ask. Do not write the report into this copy: a file left in it " +
-			"keeps the copy from being cleaned up. A report that cannot be read is refused and nothing is filed; a " +
-			"second report is refused and the first stands.\n\n")
-		fmt.Fprintf(&b, "    %s %s --file - <<'REPORT'\n    {\"summary\": \"...\", \"findings\": [{\"action\": \"ask\", "+
-			"\"description\": \"...\"}]}\n    REPORT\n", s.workerRoute, routeReport)
+		fmt.Fprintf(&b, "\nWhen the investigation is finished, file your report once. Write it with your file editing tool, "+
+			"not through the shell, into the file %s at the top of this working copy, as one JSON object with a \"summary\" "+
+			"and a list of \"findings\", each with a \"description\" and an \"action\": \"ask\" for a decision a person has to "+
+			"make, \"note\" for something to know, \"fix\" for a change you would make, which no one makes on the strength "+
+			"of the report. For example: {\"summary\": \"...\", \"findings\": [{\"action\": \"ask\", \"description\": "+
+			"\"...\"}]}. A finding with no action, or one that is not of those three, is held for a person as an ask. Then "+
+			"run the command below from the top of this working copy. Once the report is filed the command removes that "+
+			"file: a file left in this copy keeps the copy from being cleaned up and must never be committed. If the "+
+			"answer says the file could not be removed, remove it with git clean -f -- %s. A report that cannot be read is "+
+			"refused, nothing is filed, and the file is kept for you to correct; a second report is refused and the "+
+			"first stands.\n\n", routeReportFile, routeReportFile)
+		fmt.Fprintf(&b, "    %s %s --file %s\n", s.workerRoute, routeReport, routeReportFile)
 	}
 	fmt.Fprintf(&b, "\nTo record how the work stands, name one of these kinds, with a short detail if it helps: %s.\n\n",
 		strings.Join(kinds, ", "))
