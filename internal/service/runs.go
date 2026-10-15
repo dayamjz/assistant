@@ -1704,22 +1704,26 @@ func stageNames() []string {
 // supplied, and that is the whole of it.
 //
 // The residual gap is that this column is not what drives the difference
-// between offered and absent. Both give IntentSupplied false, so the graph
-// state a run begins from differs only in the intent text itself, and a reader
-// gets that from the Intent column rather than from this one.
+// between offered, task and absent. All three give IntentSupplied false, so
+// the graph state a run begins from differs only in the intent text itself,
+// and a reader gets that from the Intent column rather than from this one.
 //
 // The stage that weighs a hint differently from a contract is the intent
 // stage, and it has a body. It reads the intent text and the supplied bit out
-// of graph state, never this column, and reports the three apart: a supplied
-// intent as authoritative acceptance criteria, an offered one as a hint the
-// change is not held to and not a defect to depart from, and no intent text at
-// all as absent. It decides that from the same two facts this function reads,
-// so what it reports matches what was recorded here. There is no corner where
-// the two disagree: create refuses a supplied claim with nothing behind it
-// before a row exists, so a supplied source always stands over text.
+// of graph state, never this column, and reports three cases apart: a
+// supplied intent as authoritative acceptance criteria, any other intent text
+// as a hint the change is not held to and not a defect to depart from, and no
+// intent text at all as absent. An intent taken from a task is the second of
+// those, reported as intent-offered: the stage cannot tell it from an offered
+// one, and only this column says it came from the task. It decides that from
+// the same two facts this function reads, so what it reports matches what was
+// recorded here. There is no corner where the two disagree: create refuses a
+// supplied claim with nothing behind it before a row exists, so a supplied
+// source always stands over text.
 //
-// The three are kept apart here anyway because the record must not say that a
-// run holds intent text and that nothing was given.
+// The four are kept apart here anyway because the record must not say that a
+// run holds intent text and that nothing was given, nor that a person said
+// what the program read off a task.
 const (
 	// intentSourceSupplied is an intent a person or a driving agent stated as
 	// acceptance criteria.
@@ -1731,6 +1735,13 @@ const (
 	// stage reports it as absent; inferring one is deferred work, so nothing
 	// in this build fills it in.
 	intentSourceAbsent = "absent"
+	// intentSourceTask is an intent the program read off the task whose
+	// worker pushed the run's branch: the task's project and the
+	// instructions the coordinator wrote at intake, which workers.go's
+	// pushIntent decides from the worker group set and the task's records.
+	// Nobody stated it as acceptance criteria for this run, so it is never
+	// supplied, and a person's push of the same branch never carries it.
+	intentSourceTask = "task"
 )
 
 // intentSource says where a run's intent came from.

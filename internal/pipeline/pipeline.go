@@ -315,7 +315,9 @@ type Start struct {
 	Base string
 	// Submitted is the commit the push submitted to the gate.
 	Submitted string
-	// Intent is what the change set out to do, when the person supplied it.
+	// Intent is what the change set out to do, when the run carries one.
+	// Whether it is acceptance criteria or a hint is IntentSupplied's to say,
+	// not this text's.
 	Intent string
 	// IntentSupplied says the intent above was supplied rather than inferred,
 	// which makes it authoritative acceptance criteria downstream. Setting it

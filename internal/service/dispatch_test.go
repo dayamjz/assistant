@@ -34,6 +34,14 @@ func recordDispatchedTask(t *testing.T, h *home.Home, repository store.Repositor
 func recordDispatchedTaskUnder(t *testing.T, h *home.Home, repository store.Repository, shape store.TaskShape, branch string,
 	posture store.Optional[config.Delivery]) string {
 	t.Helper()
+	return recordDispatchedTaskWith(t, h, repository, shape, branch, posture, "one", "Do the work the coordinator asked for.\n")
+}
+
+// recordDispatchedTaskWith is recordDispatchedTaskUnder with the project
+// the record carries and the instructions intake would have written.
+func recordDispatchedTaskWith(t *testing.T, h *home.Home, repository store.Repository, shape store.TaskShape, branch string,
+	posture store.Optional[config.Delivery], project, text string) string {
+	t.Helper()
 	id, err := home.NewTaskID()
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +51,7 @@ func recordDispatchedTaskUnder(t *testing.T, h *home.Home, repository store.Repo
 		t.Fatal(err)
 	}
 	task := store.Task{
-		ID: id, Shape: shape, Project: "one", Mode: "interactive", WorktreePath: copyPath,
+		ID: id, Shape: shape, Project: project, Mode: "interactive", WorktreePath: copyPath,
 		RepositoryID: store.Known(repository.ID), Delivery: posture,
 	}
 	if branch != "" {
@@ -61,7 +69,7 @@ func recordDispatchedTaskUnder(t *testing.T, h *home.Home, repository store.Repo
 	if err := os.MkdirAll(filepath.Dir(instructions), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(instructions, []byte("Do the work the coordinator asked for.\n"), 0o600); err != nil {
+	if err := os.WriteFile(instructions, []byte(text), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return id

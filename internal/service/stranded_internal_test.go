@@ -111,7 +111,7 @@ func TestAPushThatCannotReplaceTheRunItDisplacedReleasesTheSuccessor(t *testing.
 	if got, err := reader.Task(ctx, successor.ID); err != nil || got.State != taskstate.Queued {
 		t.Fatalf("before the push the successor resolves %+v (%v), want queued", got, err)
 	}
-	_, _, err = s.claimPush(ctx, &driver{agent: resolution, runs: runService}, repository.ID, "work", "cccc", "")
+	_, _, err = s.claimPush(ctx, &driver{agent: resolution, runs: runService}, repository.ID, "work", "cccc", "", noPushedIntent)
 	if err == nil {
 		t.Fatal("the push created its replacement run, so the stranded path was not reached")
 	}

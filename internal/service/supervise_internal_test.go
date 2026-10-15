@@ -233,9 +233,12 @@ func (l *loopSubject) pass(t *testing.T) passReport {
 }
 
 // freshPass is pass over a drained report channel: the reports of passes
-// the ticker already made are discarded first, so the report returned is of
-// a pass that began after the test's last step, whichever of the kick and
-// the ticker started it.
+// the ticker already made are discarded first. It does not promise the
+// report returned is of a pass that began after the test's last step: a
+// ticker pass already running when the channel is drained posts its report
+// afterwards, the kick waits for that pass to end, and that report is the
+// one read. A check that needs a pass to have seen a change since its last
+// step takes passes until one has.
 func (l *loopSubject) freshPass(t *testing.T) passReport {
 	t.Helper()
 	for {
@@ -868,13 +871,25 @@ func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 	waitLiveness(t, provider, ref, taskstate.Dead)
 	// A ticker pass may have surfaced it already, in which case the kicked
 	// pass finds the row standing and absorbs it as surfaced this window;
-	// the wake table is the owner of the fact, so it is what is read.
-	third := l.freshPass(t)
-	if gone := detectionsOf(third, id, supervisor.KindTerminalGone); len(gone) == 1 && !gone[0].Verdict.Surfaces() &&
-		gone[0].Verdict.Reason != supervisor.ReasonSurfacedThisWindow {
-		t.Fatalf("the finished worker = %+v, want terminal gone surfaced", gone)
+	// the wake table is the owner of the fact, so it is what is read. A
+	// ticker pass that began before the worker was read Dead can still post
+	// its report after freshPass drained the channel, and that report is the
+	// one freshPass returns, so passes are taken until one has read the
+	// worker gone rather than trusting the first.
+	var rows []store.Wake
+	deadline := time.Now().Add(loopWait)
+	for {
+		third := l.freshPass(t)
+		gone := detectionsOf(third, id, supervisor.KindTerminalGone)
+		if len(gone) == 1 && !gone[0].Verdict.Surfaces() &&
+			gone[0].Verdict.Reason != supervisor.ReasonSurfacedThisWindow {
+			t.Fatalf("the finished worker = %+v, want terminal gone surfaced", gone)
+		}
+		rows = wakesOfKind(t, l.records(t), id, supervisor.KindTerminalGone)
+		if len(gone) != 0 || len(rows) != 0 || time.Now().After(deadline) {
+			break
+		}
 	}
-	rows := wakesOfKind(t, l.records(t), id, supervisor.KindTerminalGone)
 	if len(rows) != 1 || !rows[0].Queued() || !strings.HasPrefix(rows[0].Marker, "terminal-gone:dead:"+ref+":") {
 		t.Fatalf("the terminal-gone wakes = %+v, want one queued row for the dead terminal", rows)
 	}

@@ -533,9 +533,12 @@ func (q *Queue) refuseIsolation(ctx context.Context, id string, anchor int64, re
 // Lookup is what checks the spelling is one that package knows.
 const isolationRefusedKind = "isolation-refused"
 
-// promotionHeading is the heading the intent and the delivery second check
-// are appended to the instructions under.
-const promotionHeading = "## Promoted to delivery, written by the program at promotion"
+// PromotionHeading is the heading the intent and the delivery second check
+// are appended to the instructions under. It is exported for one consumer,
+// internal/service's task intent (intakeInstructions in workers.go), which
+// reads the instructions file as the coordinator wrote it at intake and stops
+// at the first section the program appended, this one among them.
+const PromotionHeading = "## Promoted to delivery, written by the program at promotion"
 
 // appendPromotion appends the delivery intent and the second check to the
 // instructions file. The file is the one thing the worker was started with,
@@ -546,7 +549,7 @@ func appendPromotion(path, intent, line string) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	text := "\n\n" + promotionHeading + "\n\n" +
+	text := "\n\n" + PromotionHeading + "\n\n" +
 		"This task is now a delivery task. Its deliverable is a change on the task's branch, pushed only to the " +
 		"assistant remote, and the intent for it is:\n\n" + strings.TrimSpace(intent) + "\n\n" +
 		"Before committing anything further, run this line in the working copy you were started in and stop if it " +
