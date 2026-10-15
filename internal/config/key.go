@@ -154,6 +154,25 @@ const (
 	// lists a repository. What the live read requires is internal/service's;
 	// whether a merge is allowed is the code host's.
 	KeyAutonomyMerge Key = "autonomy.merge"
+	// KeyAllowStandingConsent is "allow_standing_consent": whether a run of
+	// this repository may be put under the standing consent PRD section 9
+	// describes, answering the decisions its stages before push hold on
+	// without a person. It allows and does not turn on: a run is put under
+	// it only by the per-run flag PRD section 9 gives the bare command, and
+	// that flag is refused where this resolved false.
+	//
+	// It is trusted-only, so a pushed branch can never allow standing consent
+	// for itself (P7): a pushed copy setting it is dropped at the merge and
+	// reported as a rejection like any other trusted-only key. The class also
+	// admits the operator's own file, as it does for every trusted-only key,
+	// so an operator who sets it there allows it in every repository of the
+	// home. It is false by default. What the consent answers, and what it
+	// never answers, is internal/service's consent.go.
+	//
+	// PRD section 9 names the flag and this key; section 10's schema table
+	// does not yet carry a row for it, which is the same position
+	// KeyAllowPushedCommands was chosen in.
+	KeyAllowStandingConsent Key = "allow_standing_consent"
 
 	// KeyDelivery is "delivery": PRD section 10's delivery posture, the path
 	// a repository's delivery tasks ship on, section 6's delivery modes. It
@@ -264,6 +283,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.AutonomyMerge = cloneSlice(v.([]string)) }},
 	{KeyDelivery, TrustTrusted, DefaultDelivery, decodeDelivery,
 		func(c *Config, v any) { c.Delivery = v.(Delivery) }},
+	{KeyAllowStandingConsent, TrustTrusted, false, decodeBool,
+		func(c *Config, v any) { c.AllowStandingConsent = v.(bool) }},
 }
 
 // specByKey indexes the schema, and sections holds every dotted prefix a key

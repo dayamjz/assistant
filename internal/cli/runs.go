@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -62,6 +63,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		note         string
 		own          repeated
 		task         string
+		consent      bool
 	)
 	if err := in.parseFlags("", func(set *flag.FlagSet) {
 		set.StringVar(&intent, "intent", "", "what this change sets out to do, in your own terms")
@@ -74,6 +76,9 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 			"the hold lists only the findings holding it, and "+everyFindingIsIn)
 		set.StringVar(&note, "note", "", "with --answer fix: a note for the fixer")
 		set.Var(&own, "finding", "with --answer fix: a finding of your own for the round to resolve; may be repeated")
+		set.BoolVar(&consent, "standing-consent", false, "put the run this starts or attaches to under standing consent, "+
+			"where the repository's default branch sets "+string(config.KeyAllowStandingConsent)+": the program then answers "+
+			"the decisions about findings before the push itself, and never the push, pull request or checks ones")
 	}); err != nil {
 		return nil, err
 	}
@@ -99,7 +104,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		return nil, usagef("--answer and --cancel are two different things to do with one run; pass one")
 	}
 	if acting := actingOnTheRunInFlight(answered, cancel); acting != "" {
-		for _, name := range []string{"intent", "intent-supplied", "skip"} {
+		for _, name := range []string{"intent", "intent-supplied", "skip", "standing-consent"} {
 			if flagWasSet(in.flags, name) {
 				return nil, usagef("%s acts on the run this branch already has, and --%s is for starting one; pass one", acting, name)
 			}
@@ -144,6 +149,10 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		Intent:         intent,
 		IntentSupplied: supplied,
 		Skip:           splitList(skip),
+		// Whether the repository allows it is the service's to read, from
+		// the trusted copy; a refusal comes back as an invalid request and
+		// exits as incorrect usage.
+		StandingConsent: consent,
 	}, &run)
 	return run, err
 }
