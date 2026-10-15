@@ -11,6 +11,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/principles"
 )
 
@@ -266,5 +267,70 @@ func TestInitRefusesAnOriginHeadGitCannotRead(t *testing.T) {
 	git(t, subject, "remote", "set-head", "origin", "--auto")
 	if answer := recordedDefaultBranch(t, h, subject); answer.Repository.DefaultBranch != "main" {
 		t.Fatalf("after the remedy init recorded %q, want main", answer.Repository.DefaultBranch)
+	}
+}
+
+// A working copy with no origin, given no --upstream, has nothing to take the
+// upstream from, and the remedy is a flag the caller supplies, so init
+// refuses as incorrect usage and phrases the refusal as internal/machine's row
+// naming --upstream, held to P13's derived vocabulary. The refusal is checked
+// in both renderings and against what was set up, which is nothing. The
+// controls change one thing at a time: the same init with --upstream gets
+// past this refusal and meets the default branch refusal a checkout with no
+// origin owes, and with --default-branch beside it init succeeds and records
+// the upstream it was given.
+func TestInitRefusesAWorkingCopyWithNoOriginUntilTheUpstreamIsNamed(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P13)
+	vocabtest.Control(t)
+	h := newHome(t)
+	subject := newSubjectWithoutOrigin(t)
+	row := machine.PhraseInitNoUpstream.String()
+	vocabtest.Assert(t, row)
+	if !strings.Contains(row, "--upstream") {
+		t.Fatalf("the refusal's row %q does not name --upstream", row)
+	}
+
+	plain := run(t, h, subject, "init")
+	if plain.code != machine.ExitUsage {
+		t.Fatalf("init with no origin and no --upstream exited %s, want %s:\n%s%s", plain.code, machine.ExitUsage, plain.stdout, plain.stderr)
+	}
+	if !strings.Contains(plain.stderr, row) {
+		t.Errorf("the refusal does not carry the row %q:\n%s", row, plain.stderr)
+	}
+
+	structured := run(t, h, subject, "--json", "init")
+	if structured.code != machine.ExitUsage {
+		t.Fatalf("init --json with no origin and no --upstream exited %s, want %s:\n%s%s", structured.code, machine.ExitUsage, structured.stdout, structured.stderr)
+	}
+	var failure machine.Failure
+	if err := json.Unmarshal([]byte(structured.stdout), &failure); err != nil {
+		t.Fatalf("the refusal does not decode as a failure: %v\n%s", err, structured.stdout)
+	}
+	if failure.Error != row {
+		t.Errorf("the structured refusal is %q, want the row %q", failure.Error, row)
+	}
+
+	if remotes := git(t, subject, "remote"); strings.Contains(remotes, "assistant") {
+		t.Errorf("the refused init left an assistant remote behind: %q", remotes)
+	}
+	records := openStore(t, h)
+	if binding, err := records.GateBinding(t.Context(), subject); err == nil {
+		t.Errorf("the refused init bound the working copy to gate %s", binding.GateID)
+	}
+	_ = records.Close()
+
+	upstream := t.TempDir()
+	named := run(t, h, subject, "init", "--upstream", upstream)
+	if strings.Contains(named.stderr, row) {
+		t.Fatalf("init given --upstream still refuses for want of one:\n%s", named.stderr)
+	}
+	if !strings.Contains(named.stderr, machine.DefaultBranchRefusalPhrase(machine.DefaultBranchNoOrigin).String()) {
+		t.Fatalf("init given --upstream and no origin was not refused for the default branch instead:\n%s%s", named.stdout, named.stderr)
+	}
+
+	answer := recordedDefaultBranch(t, h, subject, "--upstream", upstream, "--default-branch", "main")
+	if answer.Repository.UpstreamURL != upstream {
+		t.Fatalf("init recorded the upstream %q, want %q", answer.Repository.UpstreamURL, upstream)
 	}
 }

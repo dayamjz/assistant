@@ -24,6 +24,12 @@ and sets up no gate; record it with `git remote set-head origin --auto`, or name
 the branch with `--default-branch`. Either way `init` says which branch it
 recorded and where that answer came from.
 
+`init` takes the upstream, where validated changes go, from the working copy's
+origin. When there is no origin and `--upstream` names none, `init` refuses,
+sets up no gate, and exits with the incorrect-usage code (2). Name the
+repository with `--upstream`; a working copy with no origin also has no default
+branch to learn, so give `--default-branch` beside it.
+
 The test and lint stages run the commands the trusted configuration names and
 hold for you when it names none. To shorten that setup, `init` reads the
 checkout's files for the commands the repository already declares (a
@@ -51,6 +57,19 @@ A run walks nine stages in a fixed order: intent, rebase, review, test,
 document, lint, push, pull request, and checks. Each stage that cannot decide
 holds for a person, and `assistant status` and `assistant doctor` say where a
 run stands and what stops one.
+
+Fix rounds and the rebase stage record commits in the run's isolated copy,
+which is a linked worktree of the gate repository, so they take the committer
+identity git resolves there: your global or system configuration and the gate
+repository's own, not the working copy's. With no `user.name` or `user.email`
+in effect, such a step fails with git's own refusal, and nothing supplies an
+identity in its place. `assistant doctor` asks git the same question in the
+gate repository and reports the answer as its "commit identity" check, with
+`git config --global user.name` and `git config --global user.email` as the
+remedy. The check does not stop a run from starting, and it answers for the
+environment doctor runs in, so an identity set only in variables such as
+`GIT_AUTHOR_NAME`, or a different `GIT_CONFIG_GLOBAL` for the service, can
+make it disagree with what a run meets.
 
 ## Answering a hold
 

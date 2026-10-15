@@ -1154,9 +1154,11 @@ func TestAnInitThatCannotCompleteCreatesNothing(t *testing.T) {
 	h := newHome(t)
 	subject := newSubjectWithoutOrigin(t)
 
+	// The refusal is incorrect usage, because its remedy is --upstream, a flag
+	// the caller supplies; what it says is checked beside the init tests.
 	refused := run(t, h, subject, "init")
-	if refused.code != machine.ExitFailure {
-		t.Fatalf("init with no origin and no --upstream exited %s, want failure:\n%s%s",
+	if refused.code != machine.ExitUsage {
+		t.Fatalf("init with no origin and no --upstream exited %s, want incorrect usage:\n%s%s",
 			refused.code, refused.stdout, refused.stderr)
 	}
 
