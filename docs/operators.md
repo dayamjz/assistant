@@ -100,6 +100,39 @@ the identifier of any finding the stage reported, including a fix or note
 finding the hold does not list. `assistant --json status` lists every one, with
 its identifier, under `active_run.stages[].report.findings`.
 
+## Waiting on a fleet
+
+A coordinator agent running tasks through `assistant coordinator` does not
+need to poll the wake queue. `assistant coordinator await` blocks until the
+queue holds a wake nobody has acknowledged, then lists the queued wakes the
+same way `assistant coordinator wakes` does, or lists none once its bound
+passes:
+
+```sh
+assistant --json coordinator await --timeout 5m
+```
+
+The bound is whole seconds from `1s` to `1h`, and `5m` when none is given;
+anything else is refused as incorrect usage rather than clamped. The wait
+acknowledges nothing, so a wake it returned keeps being returned until
+`assistant coordinator acknowledge` names it. It keeps nothing between calls,
+so after a service restart, which ends a wait in progress as an operational
+failure, waiting again reads the same durable queue; `assistant coordinator
+supervision` confirms the service is watching the fleet again first. Like the
+other coordinator subcommands, it is refused for a task's worker.
+
+A restart does not leave that queue exactly as it was. When the service
+starts it reconciles every task, and a task whose worker's terminal is gone
+with its work not landed is relaunched, up to `relaunch_attempts` times
+(2 unless configured). A relaunch records each still-queued `terminal-gone`
+wake about the session it replaced as handled by the program, so the next
+wait does not return it. Read `assistant tasks` after a restart as well as
+the queue: a relaunched task shows its new attempt there, and a task past
+`relaunch_attempts` holds for an answer instead of being relaunched.
+
+How soon it answers after a worker stops is set by the service's supervision
+pass, which records the wake, not by the wait.
+
 ## Standing consent
 
 `assistant --standing-consent` starts or attaches to this branch's run and puts
