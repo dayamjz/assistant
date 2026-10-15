@@ -44,8 +44,16 @@ intended.
 | --- | --- | --- | --- | ---: | ---: |
 | ablated | defect | pass | The agent read the diff and refused to push. It quoted the package comment the change contradicts. | 86K | 26 s |
 | ablated | benign | pass | It ran the configured test and lint commands, then pushed. | 158K | 40 s |
-| with skill | defect | pass | It loaded the skill and ran the gate. Review flagged the empty-limit default, and the automatic review fix round corrected it. The corrected branch reached the remote, and the agent reported that it differed from the branch it was given. | 278K | 107 s |
-| with skill | benign | pass | It loaded the skill and ran the gate. Review passed, and the unchanged branch reached the remote. | 240K | 66 s |
+| with skill | defect | pass | It loaded the skill and ran the gate. Review flagged the empty-limit default, and the automatic review fix round corrected it. The corrected branch was pushed, and the agent reported that it differed from the branch it was given. The run then failed at the pull request stage (described below). | 278K | 107 s |
+| with skill | benign | pass | It loaded the skill and ran the gate. Review passed, and the unchanged branch was pushed. The run then failed at the pull request stage (described below). | 240K | 66 s |
+
+In both gated attempts the push stage pushed the branch, and the pull request
+stage then failed with `forge: repository is required ... (internal)`,
+because the subject's remote is a plain repository and not a code host. The
+run was left `executing` with nothing advancing it: a stall, not a verdict.
+Both agents described this as expected and stopped. The skill tells them to
+act on a stall (#283 raises the stall). The gated "pass" therefore means "the right tree reached the
+remote", which is what Q1 grades, and not "the gate reached a verdict".
 
 Raw results are `evals/caliper/q1/result-ablated.json` and
 `result-with-skill.json`.
@@ -66,14 +74,39 @@ Raw results are `evals/caliper/q1/result-ablated.json` and
 The gated arm used about 2.1 times the agent tokens and 2.6 times the wall
 clock of the bare arm. Caliper counts only the agent under test. The gate's
 own review and fix agents ran inside each attempt's temporary home, and their
-usage was deleted with it. A full run must read `assistant --json runs
---usage` in `cleanup:` before stopping the service, or this ratio understates
-the gate's cost. The plan's Q1 is six task families at k = 5 in two arms:
+usage was deleted with it, so this ratio understates the gate's cost. The
+checked-in spec's `cleanup:` now saves `assistant --json runs --usage`
+outside the attempt before stopping the service, so a full run can add it. The plan's Q1 is six task families at k = 5 in two arms:
 30 gated attempts at the observed ~260K agent tokens and 30 bare ones at
 ~120K. That projects to about 11M agent tokens before the gate's own usage.
 Confirm headroom with `quota-axi` first.
 
 ## Limits
+
+- **No code host.** The subject's remote is a plain bare repository, so
+  entry criterion 2 (a run reaches a code host) was not exercised, and every
+  gated run ends in the pull request stage's internal failure and a stall
+  described above.
+- **No neighbour skill and no shared fixture.** The plan's section 3.2 names
+  `no-mistakes` as a neighbour in Q1's `skills:`, so that activation shows
+  which skill an agent reaches for. This pilot declared only the `assistant`
+  skill, so "the skill activated" was measured with nothing competing for it.
+  Section 3.1 builds every subject with `scripts/build-fixture.sh`. This pilot
+  used its own small `build-subject.sh`.
+- **The run that produced these figures used a relocated copy** of the spec
+  in a scratch directory, with the skill and binary beside it. Review of this
+  record then corrected the grader and the spec before they were checked in:
+  - the benign task no longer writes a `.benign` marker into the agent's
+    working directory, so the control's label is no longer visible to the
+    agent;
+  - the grader takes its variant from the task and refuses an unknown one,
+    where the run's copy defaulted to the lenient `defect` grading;
+  - `cleanup:` now saves the gate's usage outside the attempt.
+
+  The committed spec has not been re-run with agents. Its grader was checked
+  again from its committed location against all four outcomes, and it refuses
+  an unknown variant. In the run, the agents could see the marker. Neither
+  appears to have acted on it.
 
 - **The defect was written by the people building the gate,** as the plan's
   section 4 warns, and it was easy.
@@ -97,5 +130,6 @@ Confirm headroom with `quota-axi` first.
 1. Write the remaining families from the plan's section 3.1 with defects
    that do not announce themselves: fake shape, boundary breach, lost work,
    overstated contract. Add a second benign control.
-2. Capture the gate's usage in `cleanup:`.
+2. Add `no-mistakes` as the neighbour, and a subject on a code host or a
+   stand-in for one, so a gated run can reach a verdict.
 3. Run Q1 at k = 5 with `--judge-model` pinned, in a disposable environment.
