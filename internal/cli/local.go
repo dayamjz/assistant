@@ -37,9 +37,11 @@ import (
 // repairs.
 func initGate(ctx context.Context, in *invocation) (any, error) {
 	var upstream, defaultBranch string
+	var acceptCommands bool
 	if err := in.parseFlags("init", func(set *flag.FlagSet) {
 		set.StringVar(&upstream, "upstream", "", "the remote the change is destined for; the default is this working copy's origin")
 		set.StringVar(&defaultBranch, "default-branch", "", "the branch trusted configuration is read from; the default is what this working copy records origin's HEAD as naming, and init refuses when it records none")
+		set.BoolVar(&acceptCommands, acceptCommandsFlag, false, "write every command init offers into this checkout's configuration file without asking; without it a command is written only when accepted at a terminal")
 	}); err != nil {
 		return nil, err
 	}
@@ -70,7 +72,13 @@ func initGate(ctx context.Context, in *invocation) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The offer comes after the gate and the record, because both are what
+	// init is for and neither depends on it: a person who declines every
+	// command, or whose configuration file cannot take one, still has a
+	// gate. propose.go owns what is offered and where it is written.
+	commands := proposeCommands(working, acceptCommands, in.env.Interactive && !in.json, in.env.Stderr, in.env.Stdin)
 	return machine.Init{
+		Commands:   commands,
 		Gate:       machine.Gate{Present: true, ID: built.ID(), Repository: built.Repository()},
 		Reattached: built.Reattached(),
 		Repository: repository,
