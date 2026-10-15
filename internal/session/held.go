@@ -114,7 +114,7 @@ func (h *held) capture(s *Session) (Capture, error) {
 		return Capture{}, ErrNotHeld
 	}
 	got := s.worker.Capture()
-	return Capture{Text: got.Text, Dropped: got.Dropped, Uncounted: got.Uncounted, Digest: Digest(got.Text)}, nil
+	return Capture{Text: got.Text, Dropped: got.Dropped, Uncounted: got.Uncounted, Digest: Digest(got.Text), Format: got.Format}, nil
 }
 
 // captureReference is capture addressed by reference, on the terms

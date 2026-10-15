@@ -104,9 +104,16 @@ assistant --json coordinator peek ID
 ```
 
 It reads the recent output of the worker of the task's latest attempt, as
-the service holds it: `output` is redacted of the credential shapes the
-program recognizes and cut to the last 16 KiB, `dropped` counts what is not
-in it, and `liveness` is how the worker's terminal probed. When the service
+the service holds it, as a transcript: `events` is what the worker said and
+did, oldest first, each with a `kind` (`text`, `tool_call` naming the `tool`,
+`tool_result`, `message`, `turn_ended`, `error`, `output`, `partial`, or
+`unrecognized` naming a line type the program has no row for), and `output`
+is the same events as lines you can read. Counters, status lines and thinking
+are left out and counted in `omitted`. Every event is redacted of the
+credential shapes the program recognizes and abbreviated, and only the most
+recent events that fit in 16 KiB of `output` are shown: `earlier` counts the
+events read and not shown, `dropped` the bytes the capture let go before the
+read, and `liveness` is how the worker's terminal probed. When the service
 hosts workers in tmux, `attach` is the command a person runs to watch the
 worker and type into it; it is empty for a worker with no terminal. What
 someone types there reaches the worker as its own input, the same input a
@@ -161,6 +168,14 @@ It turns the investigation into a delivery on the branch, in place, in the
 same copy. `--intent-file` works as `--instructions-file` does, and
 `--delivery` as it does on create. Promoting a task that is not an
 investigation is refused.
+
+The promotion then sends the task's running worker its brief, the intent and
+what is now expected of it, as a message recorded and acknowledged like any
+other; the same brief is appended to its instructions, which a worker begun
+on the task later reads. The answer's `brief.message` is that record. When no
+running worker could be sent it, the promotion still stands, `brief.message`
+is absent and `brief.unsent` says why; send the worker the new direction
+yourself if one is running again.
 
 ## Record an investigation's findings relayed
 

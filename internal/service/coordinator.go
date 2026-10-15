@@ -11,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // The coordinator's task methods: task.create, task.promote and
@@ -28,8 +29,10 @@ import (
 // relaunch reconcile.go's start-time pass calls, and then hands the launch
 // to launchInBackground exactly as that pass does; and task.relay calls
 // store.RecordTaskRelay, the one writer of the findings relayed record,
-// anchored to the resolution it read. What this file adds is who may ask and
-// how an answer or a refusal crosses the wire.
+// anchored to the resolution it read. A promotion then sends the task's live
+// worker its brief through steer.go's deliverMessage, the route task.message
+// takes, rather than a send of its own. What this file adds is who may ask
+// and how an answer or a refusal crosses the wire.
 //
 // # Who may ask
 //
@@ -125,7 +128,63 @@ func (s *Service) promoteTask(ctx context.Context, req ipc.Request, r machine.Ta
 		at := report.RecordedAt
 		out.ReportRecordedAt = &at
 	}
+	out.Brief = s.briefPromoted(ctx, req, r.Task, promoted.Brief)
 	return out, nil
+}
+
+// briefPromoted sends a promoted task's live worker its brief, the text the
+// promotion appended to the task's instructions, through deliverMessage,
+// the route task.message takes, so the brief is a message record the worker
+// acknowledges like any other. It sends only to the latest attempt's worker
+// when this service's Terminals probe it Live, which is answered only for a
+// session this service holds whose process has not exited; for any other
+// worker nothing is recorded and Unsent says why, because a record appended
+// for a worker nothing can reach would be refused by the send anyway, and
+// the instructions file already carries the brief to whatever worker is
+// begun on the task next. A brief over machine.MaxMessageBytes is not sent
+// either, on task.message's terms. Nothing here undoes or refuses the
+// promotion, which stands whatever became of the brief: the answer carries
+// what did, typed.
+//
+// The probe and the send are two steps: a worker that exits between them is
+// sent nothing, and the record says refused with the reason, as a message to
+// it would.
+func (s *Service) briefPromoted(ctx context.Context, req ipc.Request, task, brief string) machine.Briefing {
+	unsent := func(format string, args ...any) machine.Briefing {
+		b := machine.Briefing{Unsent: fmt.Sprintf(format, args...)}
+		s.log.Printf("the brief for promoted task %s was not sent: %s", task, b.Unsent)
+		return b
+	}
+	if len(brief) > machine.MaxMessageBytes {
+		return unsent("the brief is %d bytes, over the message limit of %d", len(brief), machine.MaxMessageBytes)
+	}
+	latest, ok, err := s.latestAttempt(ctx, task)
+	if err != nil {
+		return unsent("the task's attempts could not be read: %v", err)
+	}
+	ref, launched := latest.SessionRef.Get()
+	if !ok || !launched {
+		return unsent("the task's latest attempt names no worker")
+	}
+	if s.terminals == nil {
+		return unsent("this service has no terminal hookup to probe the worker with")
+	}
+	bound, cancel := context.WithTimeout(ctx, stopProbeBound)
+	observed := s.terminals.Probe(bound, ref)
+	cancel()
+	if observed.Liveness != taskstate.Live {
+		return unsent("the worker of attempt %d (session %s) is not one this service can reach: the probe answered %s (%s)",
+			latest.Sequence, ref, observed.Liveness, observed.Detail)
+	}
+	m, err := s.deliverMessage(ctx, req, task, latest.Sequence, ref, brief)
+	if err != nil {
+		b := machine.Briefing{Unsent: err.Error()}
+		if m.ID != 0 {
+			b.Message = &m
+		}
+		return b
+	}
+	return machine.Briefing{Message: &m}
 }
 
 // relaunchTaskFor relaunches a task whose terminal is gone, for the
