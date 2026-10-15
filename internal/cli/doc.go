@@ -26,21 +26,28 @@
 // the owner decided on #227, nor the three for the fourth, which #226 asked
 // for, and the four are not a precedent for a fifth.
 //
-// Six things the section leaves to a verb's parameters are flags or arguments
-// rather than verbs.
+// Seven things the section leaves to a verb's parameters are flags or
+// arguments rather than verbs.
 //
 // Answering a held run is --answer on the command that attaches to it, and
 // ending one is --cancel on the same command. Attaching is where a person is
 // shown the decision, and an agent driving the same gate needs the same
 // decision with the same options and no terminal to give it in. The
-// specification's table names no command for either, which is a gap against
-// section 9 worth raising rather than a licence to add a verb. A hold a task
+// specification's table names no command for either, and section 9 now says
+// in prose that both are flags on that command, so neither is a verb. A hold a task
 // raised with no run behind it, an investigation's or a task's at its
 // relaunch bound, is answered by the same flag given --task, which section 9
 // says in as many words: answering takes a task as well as a run, and no
 // verb is added for it. Given a task with no hold of its own open, the same
 // flag answers the hold on the task's current run, which section 9 says too,
 // so a run a task produced is answered without a checkout of its branch.
+// Ending a run by name is the same flag written --cancel=RUN, which the owner
+// decided on #234: it reads no working copy, so it ends the run named from
+// anywhere, and a run with nothing to end is machine.CancelRefused.
+//
+// Rerunning with a replaced intent is --intent on rerun, on the same
+// decision: the fresh run records it as supplied, and nothing else a rerun
+// inherits changes with it.
 //
 // Reading one run or one task in full is an argument to the command that lists
 // them, because that section gives runs one row and tasks one row.

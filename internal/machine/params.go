@@ -104,8 +104,21 @@ type StartRequest struct {
 // the commit its last run pushed, or the commit that run was submitted with
 // when it pushed nothing. A working copy whose HEAD is another commit is
 // refused with RerunMoved, and no run begins.
+//
+// Intent replaces the inherited intent when it is not empty. The fresh run
+// then records Intent as supplied, the standing an intent given to a start
+// with nothing said about it takes, so the intent stage reports it as
+// acceptance criteria the way it reports any supplied intent. Nothing else a
+// rerun inherits changes with it: the branch, the head it validates and the
+// refusal when the working copy stands elsewhere are the same with or without
+// it. An intent of whitespace alone is refused as an invalid request rather
+// than read as no replacement, because a caller who wrote one asked for a
+// replacement and nothing would be honouring that.
 type RerunRequest struct {
 	Working
+	// Intent is the intent that replaces the one the last run recorded,
+	// empty to inherit that one.
+	Intent string `json:"intent,omitempty"`
 }
 
 // RerunMoved is a rerun refused because the working copy it names stands at a
@@ -277,11 +290,72 @@ type TaskMessageRequest struct {
 // same worker input.
 const MaxMessageBytes = 16 << 10
 
-// CancelRequest ends a run.
+// CancelRequest ends a run. A run no record names, and a run that has already
+// ended, are refused with CancelRefused rather than answered, so a caller who
+// named the wrong run is told so instead of being handed a run as it stands.
 type CancelRequest struct {
 	// Run is the run to end.
 	Run string `json:"run"`
 }
+
+// CancelRefused is a cancellation refused because there was nothing to end:
+// Run is the identifier the caller named, Reason says whether no record
+// carries it or the run it names has already ended, and Status is the status
+// an ended run was recorded in, empty when no record was found. A refused
+// cancellation changed nothing.
+//
+// It is a refusal rather than an answer, so it travels as an error, and
+// internal/service sends it as an invalid request: the caller named something
+// that cannot be ended, which is the caller's to correct. Its message is the
+// row Phrase chooses followed by the identifier and the status, which are
+// machine text a person copies and so stand beside the row rather than in it.
+type CancelRefused struct {
+	// Run is the identifier the caller named.
+	Run string `json:"run"`
+	// Reason is why there was nothing to end.
+	Reason CancelRefusedReason `json:"reason"`
+	// Status is the status a run that had already ended was recorded in,
+	// empty for a run no record carries.
+	Status store.RunStatus `json:"status,omitempty"`
+}
+
+// CancelRefusedReason is why a cancellation found nothing to end.
+type CancelRefusedReason string
+
+const (
+	// CancelUnknownRun is an identifier no run in the home carries.
+	CancelUnknownRun CancelRefusedReason = "unknown"
+	// CancelRunEnded is a run whose record already says it ended, whichever
+	// way it ended.
+	CancelRunEnded CancelRefusedReason = "ended"
+)
+
+// Phrase is the row for this refusal's reason. A reason outside the two is
+// phrased as CancelUnknownRun, whose remedy is to check the identifier and
+// which claims nothing about a run that may not exist.
+func (c CancelRefused) Phrase() Phrase {
+	if c.Reason == CancelRunEnded {
+		return phraseCancelEnded
+	}
+	return phraseCancelUnknown
+}
+
+// Error is the refusal as a person reads it: the row, then the identifier
+// named and, for a run that had ended, the status it was recorded in.
+func (c CancelRefused) Error() string {
+	text := fmt.Sprintf("%s %s %s.", c.Phrase(), cancelRunLabel, c.Run)
+	if c.Status != "" {
+		text = fmt.Sprintf("%s %s %s.", text, cancelStatusLabel, c.Status)
+	}
+	return text
+}
+
+// The labels CancelRefused puts before the machine text it carries beside its
+// row.
+const (
+	cancelRunLabel    = "The run you named:"
+	cancelStatusLabel = "Its recorded status:"
+)
 
 // TaskRequest names one piece of fleet work.
 type TaskRequest struct {
