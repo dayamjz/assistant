@@ -24,6 +24,20 @@ and sets up no gate; record it with `git remote set-head origin --auto`, or name
 the branch with `--default-branch`. Either way `init` says which branch it
 recorded and where that answer came from.
 
+The test and lint stages run the commands the trusted configuration names and
+hold for you when it names none. To shorten that setup, `init` reads the
+checkout's files for the commands the repository already declares (a
+Makefile's `test`, `check` and `lint` targets, `go.mod`, `package.json`
+scripts, `Cargo.toml`, `tox.ini` and `pyproject.toml`), runs none of them, and
+offers them. At a terminal it asks about each one; elsewhere it only prints
+them, and `--accept-commands` writes them all. They are merged into the
+checkout's `assistant.json` and never replace a key it already names. Runs read
+commands from that file only as the default branch on origin holds it, so
+commit the file and land it there before expecting a run to use them. Nothing
+is offered for `commands.document`: no common build file declares a command
+that updates prose, so that stage keeps holding until you configure one or
+answer it.
+
 The gate's admission hook decides whether the push may proceed, and its
 notification hook starts a run for that branch and commit. A push that deletes
 a branch, or carries anything that is not a branch, starts nothing. An ordinary

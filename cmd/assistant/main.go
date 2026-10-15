@@ -21,6 +21,7 @@ import (
 	"runtime/debug"
 
 	"github.com/dayamjz/assistant/internal/cli"
+	"github.com/mattn/go-isatty"
 )
 
 func main() {
@@ -43,8 +44,17 @@ func main() {
 		WorkingDir: workingDir,
 		Executable: executable,
 		Version:    version(),
+		// A person is at a terminal when both the stream init reads an
+		// answer from and the one it asks on are one.
+		Interactive: terminal(os.Stdin) && terminal(os.Stderr),
 	})
 	os.Exit(int(code))
+}
+
+// terminal reports whether f is a terminal, including the one a Cygwin or
+// MSYS shell gives a process on Windows.
+func terminal(f *os.File) bool {
+	return isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd())
 }
 
 // version is what --version reports: the build information the Go toolchain

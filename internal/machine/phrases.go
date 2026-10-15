@@ -1473,5 +1473,6 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
 		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
 	out = append(out, defaultBranchRows()...)
+	out = append(out, commandsRows()...)
 	return append(out, custodyRows()...)
 }

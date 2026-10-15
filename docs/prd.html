@@ -2018,13 +2018,19 @@ flowchart TB
     </table>
   </div>
   <p class="mb-4 opacity-90">
-    <code>assistant init</code> records the repository the gate validates, and takes two flags.
+    <code>assistant init</code> records the repository the gate validates, and takes three flags.
     <code>--upstream</code> names the remote the change is destined for, and without it that is the
     working copy's origin. <code>--default-branch</code> names the branch trusted configuration is
     read from. Without it, init takes the branch the working copy records origin's HEAD as naming,
     which it reads locally without fetching, and never the branch checked out. When the working copy
     has no origin, records no HEAD for it, or records one outside origin's branches, init refuses and
     sets up no gate and records no repository. Either way it reports which branch it recorded and where that came from.
+    It then offers the test and lint commands the checkout's own files declare, reading files and running nothing,
+    and writes one into the checkout's <code>assistant.json</code> only with consent (P1): an answer at a terminal,
+    one command at a time, or <code>--accept-commands</code> for all of them. Without either it writes nothing. It
+    never replaces a key the file already names and offers nothing for <code>commands.document</code>. A written
+    command reaches no run until the file lands on the default branch, because commands are read there (P7), and
+    init says so.
   </p>
   <p class="mb-4 opacity-90">
     The <b>usage view</b> is a flag on <code>assistant runs</code>, taking a window. It reads section
