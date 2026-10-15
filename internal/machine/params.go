@@ -89,16 +89,18 @@ type StartRequest struct {
 // The branch is read from the working copy this names, the same way a start
 // reads it, so a rerun never acts on a branch the caller is not on. A branch
 // with no run of its own is refused by that branch's name rather than answered
-// with another branch's run. A working copy whose HEAD is not the head the
-// branch's last run recorded is refused with RerunMoved, and no run begins.
+// with another branch's run. A rerun validates the branch's last known head:
+// the commit its last run pushed, or the commit that run was submitted with
+// when it pushed nothing. A working copy whose HEAD is another commit is
+// refused with RerunMoved, and no run begins.
 type RerunRequest struct {
 	Working
 }
 
 // RerunMoved is a rerun refused because the working copy it names stands at a
 // commit other than the one the rerun would validate: Local is the commit the
-// working copy's HEAD resolved to, Recorded is the head the branch's last run
-// recorded, which is what a rerun validates, Branch is the branch both are
+// working copy's HEAD resolved to, Recorded is the branch's last known head,
+// which is what a rerun validates, Branch is the branch both are
 // about, and Reason says which of the two remedies applies. A rerun refused
 // this way began no run and recorded nothing, and reading HEAD changed nothing
 // in the working copy.
@@ -131,7 +133,7 @@ const (
 	// a push to the gate's remote, or a start with an intent.
 	RerunMovedElsewhere RerunMovedReason = "elsewhere"
 	// RerunMovedBehind is Local established as an ancestor of Recorded where
-	// Recorded is work the run recorded past the commit it was submitted.
+	// Recorded is work the run pushed past the commit it was submitted.
 	// The remedy is assistant sync, which reconciles the branch with what the
 	// pipeline holds: it prints its plan and changes nothing until it is
 	// repeated with --confirm.
