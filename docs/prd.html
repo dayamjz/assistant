@@ -2052,9 +2052,8 @@ flowchart TB
   <p class="mb-8 opacity-90">
     Creating a task, promoting an investigation to delivery, and relaunching a task whose terminal
     is gone are the coordinator's typed commands from section 8, and each is a service method
-    rather than a command: none is a row in the table above, a person never types one, and they sit
-    beside the table on the same terms as <code>assistant gate</code> and <code>assistant host</code>.
-    Each is coordinator-only. A caller whose process is inside a
+    rather than a verb: none is a row in the table above, and each is reached through the
+    coordinator client described below. Each is coordinator-only. A caller whose process is inside a
     registered worker group, which the service decides from the credentials the socket reports and
     never from anything the caller says about itself, is refused, so an investigation cannot
     promote itself and no worker can create or relaunch a task. Relaunch goes through the one
