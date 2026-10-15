@@ -4,6 +4,7 @@ package standin
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -140,6 +141,43 @@ func TestARunExchangeReportsFailureAndRefusesAScriptItCannotAnswer(t *testing.T)
 		run(func() { NewWorker(fake, Script{Worker: &WorkerScript{Exchanges: []Exchange{bad}}}) })
 		if !fake.failed || !strings.Contains(fake.message, "Run exchange") {
 			t.Errorf("a script with the exchange %+v was built, or refused as %q", bad, fake.message)
+		}
+	}
+}
+
+// #267: the one refusal of the Claude Code CLI's Bash check the stand-in
+// models. A here-document carrying a report, braces and quotes, is refused
+// without running, so a file it would have written is never there; the
+// controls are the same here-document with no braces, and a plain command
+// carrying braces and quotes, which both run.
+func TestARunExchangeRefusesAHereDocumentCarryingJSON(t *testing.T) {
+	t.Parallel()
+	agent := New(t, runScript(), agents.WithTerminationGrace(300*time.Millisecond))
+	dir := t.TempDir()
+	worker, err := agents.OpenWorker(t.Context(), agent.Runner(), agents.WorkerSpec{Dir: dir, Instructions: "work"})
+	if err != nil {
+		t.Fatalf("starting the worker: %v", err)
+	}
+	defer worker.Close()
+	for _, c := range []struct {
+		command string
+		file    string
+		refused bool
+	}{
+		{"cat > refused.json <<'REPORT'\n{\"summary\": \"x\"}\nREPORT", "refused.json", true},
+		{"cat > plain.txt <<'REPORT'\nsummary x\nREPORT", "plain.txt", false},
+		{`printf '%s' '{"summary": "x"}' > braces.json`, "braces.json", false},
+	} {
+		if err := worker.Send(t.Context(), "run: "+c.command); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		ran := waitRan(t, worker, c.command)
+		_, statErr := os.Stat(filepath.Join(dir, c.file))
+		switch {
+		case c.refused && (ran.Refused == "" || ran.Exit != -1 || statErr == nil):
+			t.Errorf("%q answered %+v and wrote its file (%v), want it refused unrun", c.command, ran, statErr)
+		case !c.refused && (ran.Refused != "" || ran.Exit != 0 || statErr != nil):
+			t.Errorf("%q answered %+v (%v), want it run", c.command, ran, statErr)
 		}
 	}
 }
