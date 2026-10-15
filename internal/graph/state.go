@@ -83,6 +83,27 @@ type Key struct {
 	// Merge is the rule combining an existing value with an incoming write.
 	// MergeNone means no rule is declared, which limits the key to one writer.
 	Merge Merge
+	// Late marks a key declared after runs of the graph may already have
+	// written checkpoints. Those checkpoints' states do not hold it, and
+	// without this a graph that declares one more key refuses every one of
+	// them as a state missing a declared key.
+	//
+	// A late key may be absent from a checkpoint's state and from a state a
+	// run is started from, and nowhere else: the executor fills it in with
+	// the zero value of its kind before anything reads it, so a body still
+	// reads a defined value and a state the executor holds still holds every
+	// declared key. A key that is not late and is absent is refused exactly as
+	// before.
+	//
+	// A late key holding its zero value is also left out of the convergence
+	// fingerprint. A run that checkpointed before the key existed recorded
+	// fingerprints of states without it, and the same state read back with
+	// the key filled in has to fingerprint alike, or the first round after
+	// the resume could never be found to have changed nothing. Leaving it out
+	// loses nothing: every state the executor compares holds every declared
+	// key, so two states that differ in a late key still fingerprint apart
+	// unless both hold the zero value.
+	Late bool
 }
 
 // State is the typed record a run advances. It always holds every key the
@@ -167,10 +188,22 @@ func (s *State) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// fingerprint returns a canonical encoding of the state. Two states with the
-// same fingerprint are equal, which is how the convergence check decides that
-// a round changed nothing.
-func (s State) fingerprint() string {
+// fingerprint returns a canonical encoding of the state as this graph
+// compares it. Two states holding every key g declares fingerprint alike
+// exactly when they are equal, which is how the convergence check decides that
+// a round changed nothing. A late key holding its zero value is left out, for
+// the reason Key.Late gives, so a state from before that key existed
+// fingerprints as the same state with the key filled in.
+func (g *Graph) fingerprint(s State) string {
+	for _, k := range g.keys {
+		if !k.Late {
+			continue
+		}
+		if v, ok := s.values[k.Name]; ok && v.Equal(zeroValue(k.Kind)) {
+			s = s.Clone()
+			delete(s.values, k.Name)
+		}
+	}
 	b, err := s.MarshalJSON()
 	if err != nil {
 		// Every value in a live state carries a declared kind, so encoding
