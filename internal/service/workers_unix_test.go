@@ -428,9 +428,11 @@ func TestAWorkersReportIsStoredThroughItsRecordAndOnlyAnInvestigationFilesOne(t 
 }
 
 // The queue and arm verification are the coordinator's. A drain from outside
-// every worker group returns what the loop surfaced and acknowledges it in
-// the same step, recorded as the coordinator, the derived acknowledger, so
-// the next drain does not return it and acknowledging it again is refused;
+// every worker group returns what the loop surfaced and hands it out,
+// recorded as handed to the coordinator, the derived acknowledger, and
+// still queued; acknowledging it is accepted and recorded as the
+// coordinator's, after which the next drain does not return it and
+// acknowledging it again is refused;
 // arm verification answers from the real beacon the service's own loop
 // writes; and every one of them, the wake stream included, is refused from
 // the worker. The wake drained is one the service's supervisor loop
@@ -443,7 +445,7 @@ func TestAWorkersReportIsStoredThroughItsRecordAndOnlyAnInvestigationFilesOne(t 
 func TestTheQueueAndArmVerificationAreTheCoordinatorsAndNotAWorkers(t *testing.T) {
 	launchedWorker(t, "task/three", func(w launched) {
 		running, task := w.running, w.task
-		for _, method := range []ipc.Method{ipc.MethodWakesList, ipc.MethodWakesAcknowledge, ipc.MethodWakesSubscribe, ipc.MethodSupervisionAssert} {
+		for _, method := range []ipc.Method{ipc.MethodWakesList, ipc.MethodWakesPeek, ipc.MethodWakesAcknowledge, ipc.MethodWakesSubscribe, ipc.MethodSupervisionAssert} {
 			params := any(struct{}{})
 			if method == ipc.MethodWakesAcknowledge {
 				params = machine.AcknowledgeRequest{Wakes: []int64{1}}
@@ -471,15 +473,24 @@ func TestTheQueueAndArmVerificationAreTheCoordinatorsAndNotAWorkers(t *testing.T
 		}
 		ids := make([]int64, 0, len(queued.Wakes))
 		for _, w := range queued.Wakes {
-			if w.TaskID != task || w.Queued() {
-				t.Fatalf("the drain returned %+v, want a wake of task %s recorded as handled", w, task)
+			if w.TaskID != task || !w.HandedOut() {
+				t.Fatalf("the drain returned %+v, want a wake of task %s handed out and still queued", w, task)
 			}
 			ids = append(ids, w.ID)
 		}
 		records := recordsOf(t, w.home)
 		for _, id := range ids {
-			if row := wakeRow(t, records, task, id); row.AcknowledgedBy != store.Known(store.AcknowledgedByCoordinator()) {
-				t.Fatalf("the drained wake reads %+v in the records, want it acknowledged by the coordinator", row)
+			if row := wakeRow(t, records, task, id); row.HandedOutTo != store.Known(store.AcknowledgedByCoordinator()) || !row.Queued() {
+				t.Fatalf("the drained wake reads %+v in the records, want it handed to the coordinator and still queued", row)
+			}
+		}
+		var closed machine.Acknowledged
+		if err := running.client.Call(t.Context(), ipc.MethodWakesAcknowledge, machine.AcknowledgeRequest{Wakes: ids}, &closed); err != nil {
+			t.Fatalf("acknowledging the handed-out wakes: %v", err)
+		}
+		for _, id := range ids {
+			if row := wakeRow(t, records, task, id); row.Queued() || row.AcknowledgedBy != store.Known(store.AcknowledgedByCoordinator()) {
+				t.Fatalf("the acknowledged wake reads %+v in the records, want it closed by the coordinator", row)
 			}
 		}
 		var again machine.Wakes
@@ -489,14 +500,14 @@ func TestTheQueueAndArmVerificationAreTheCoordinatorsAndNotAWorkers(t *testing.T
 		for _, w := range again.Wakes {
 			for _, id := range ids {
 				if w.ID == id {
-					t.Fatalf("wake %d was drained and the next drain returned it again", id)
+					t.Fatalf("wake %d was acknowledged and the next drain returned it again", id)
 				}
 			}
 		}
 		var acknowledged machine.Acknowledged
 		err := running.client.Call(t.Context(), ipc.MethodWakesAcknowledge, machine.AcknowledgeRequest{Wakes: ids[:1]}, &acknowledged)
 		if !errors.Is(err, ipc.ErrInvalidRequest) {
-			t.Fatalf("acknowledging a drained wake = %v, want ErrInvalidRequest", err)
+			t.Fatalf("acknowledging an acknowledged wake again = %v, want ErrInvalidRequest", err)
 		}
 
 		var arm supervisor.Arm

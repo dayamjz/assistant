@@ -37,6 +37,7 @@ func TestMethodTableIsWrittenDownHere(t *testing.T) {
 		"task.interrupt":     true,
 		"task.peek":          true,
 		"wakes.list":         true,
+		"wakes.peek":         true,
 		"wakes.acknowledge":  true,
 		"wakes.wait":         true,
 		"wakes.subscribe":    true,

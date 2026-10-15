@@ -1213,7 +1213,8 @@ flowchart TD
     Queued, Dispatched, Running, Paused, Validating, or Unknown, or has a wake not yet
     acknowledged; a task that resolves Held, Ready, Reported, Failed, Landed, or Complete is not in
     flight by its state alone, because the only one it waits on is you and the wake that told you
-    is in the queue.
+    is in the queue. A wake counts until it is acknowledged, not until it is drained: a wake handed
+    out to the coordinator and not yet acknowledged keeps its task in flight.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
     <table class="table table-sm table-zebra">
@@ -1890,7 +1891,7 @@ flowchart TB
         <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, launch notation (how the worker was started), delivery posture (recorded at intake or promotion, in a field of its own), isolated copy path, session reference, linked run, linked pull request.</td></tr>
         <tr><td><b>task state</b></td><td>Resolved on read</td><td>Not a stored row. A resolution with its source attached, computed on each read from the records that own its facts, as of one consistent read of them; section 6 says what it rests on. Distinct from the event log, per P8.</td></tr>
         <tr><td><b>task event</b></td><td>History</td><td>Append-only. Every append is a wake.</td></tr>
-        <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write. Draining acknowledges a row and never deletes it: drained rows are kept, and a row is actionable until acknowledged.</td></tr>
+        <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write. Draining hands a row out; acknowledging closes it. The coordinator acknowledges a row after it has acted on it, and a row handed out and never acknowledged is handed out again: after a restart, and once the coordinator it was handed to is no longer attached. No row is deleted: closed rows are kept, and a row is actionable until acknowledged.</td></tr>
         <tr><td><b>merge record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the code-host read that ends a run on a merge: the pull request, the head read, and when. The code host owns the merge; this is the program's record that it saw it. The run's <code>passed</code> on a merge and the task's Landed are both derived from this one record, and neither stores the fact again.</td></tr>
         <tr><td><b>local landing record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the approved fast-forward that delivers a <code>local</code> task: the task, the commit, the local default branch's tip before and after, and when. The task's Landed for a <code>local</code> task is derived from it, read in the same tier as the merge record.</td></tr>
         <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. The task's Complete is derived from it. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>

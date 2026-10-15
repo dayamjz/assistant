@@ -284,6 +284,7 @@ var renderings = []rendering{
 	{name: "wakes", voice: VoicePhrased, of: typeOf[machine.Wakes](), render: func(w io.Writer, v any) {
 		writeln(w, machine.WakesPhrase(v.(machine.Wakes)))
 	}},
+	{name: "queued wakes", voice: VoicePhrased, of: typeOf[machine.QueuedWakes](), render: func(w io.Writer, v any) { readOutQueuedWakes(w, v.(machine.QueuedWakes)) }},
 	{name: "wakes acknowledged", voice: VoicePhrased, of: typeOf[machine.Acknowledged](), render: func(w io.Writer, v any) {
 		writeln(w, machine.AcknowledgedPhrase(v.(machine.Acknowledged)))
 	}},
@@ -682,6 +683,19 @@ func readOutCatchUp(w io.Writer, c machine.CatchUp) {
 	writeln(w, stopped)
 	for _, task := range c.Stopped {
 		readOutTask(w, task)
+	}
+}
+
+// readOutQueuedWakes is a person's listing of the queue: the count row, then
+// one line per row, the project of the task it is about, which is the
+// person's own text and escaped, beside the phrase-table rows for what the
+// notice says and whether the coordinator has been handed it. Neither a
+// task's identifier nor a notice's kind is printed; the --json form carries
+// both.
+func readOutQueuedWakes(w io.Writer, q machine.QueuedWakes) {
+	writeln(w, machine.QueuedWakesPhrase(q))
+	for _, row := range q.Wakes {
+		writef(w, "%s: %s %s\n", printable(row.Project), machine.QueuedWakePhrase(row), machine.QueuedWakeStanding(row))
 	}
 }
 

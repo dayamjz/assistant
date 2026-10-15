@@ -314,6 +314,13 @@ func fixtures(t *testing.T) map[string]any {
 		"wakes": machine.Wakes{Wakes: []store.Wake{
 			{ID: 7, TaskID: sampleID, Kind: string(supervisor.KindTerminalGone), Marker: sampleID, CreatedAt: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)},
 		}},
+		"queued wakes": machine.QueuedWakes{Wakes: []machine.QueuedWake{
+			{Project: "the parser", Wake: store.Wake{ID: 7, TaskID: sampleID, Kind: string(supervisor.KindTerminalGone), Marker: sampleID,
+				CreatedAt: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC), HandedOutAt: store.Known(time.Date(2026, 10, 13, 9, 1, 0, 0, time.UTC)),
+				Handouts: store.Known(int64(1))}},
+			{Project: "the parser", Wake: store.Wake{ID: 8, TaskID: sampleID, Kind: string(supervisor.KindHoldOpened), Marker: "hold:" + sampleID,
+				CreatedAt: time.Date(2026, 10, 13, 9, 2, 0, 0, time.UTC)}},
+		}},
 		"wakes acknowledged": machine.Acknowledged{Wakes: []int64{7}, By: store.AcknowledgedByCoordinator().String()},
 		"supervision":        supervisor.Arm{Outcome: supervisor.ArmAttached, Sequence: 12},
 		"catch up":           fixtureCatchUp(),

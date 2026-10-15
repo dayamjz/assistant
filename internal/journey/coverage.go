@@ -268,8 +268,9 @@ func Coverage() []Established {
 				"provider, a worker the service launched is absorbed on its unchanged live screen " +
 				"and surfaced as terminal gone once it has exited. Its wake tests cite it for the " +
 				"coordinator's side: a queued wake is pushed on the coordinator's wake stream and " +
-				"refused to a worker, a wait is woken by the loop's append, and a coordinator that " +
-				"only polls still drains the wake. Evidence derivation is " +
+				"refused to a worker, a wait is woken by the loop's append, a coordinator that " +
+				"only polls still drains the wake, a drain hands a wake out until it is acknowledged, " +
+				"and a task's run moving to held wakes the coordinator. Evidence derivation is " +
 				"internal/taskstate's. The task walk here reaches a worker and reads its task as " +
 				"Running with progress off the binary, but it classifies no wake and cites nothing " +
 				"for P9, and the kind for an " +
@@ -391,7 +392,7 @@ var (
 	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop", "host install",
 		"decision", "doctor", "lifecycle", "managed removal", "init", "plan", "eject", "health", "admission", "notification",
 		"task answer", "catch up", "marked seen", "task created", "task message", "task stop", "task peek", "task relaunch", "task relay",
-		"task promotion", "wakes", "wakes acknowledged", "supervision", "worker event", "fallback"}
+		"task promotion", "wakes", "queued wakes", "wakes acknowledged", "supervision", "worker event", "fallback"}
 	p13Evidence  = []string{"details", "findings", "usage", "log"}
 	p13Remaining []string
 )

@@ -54,6 +54,17 @@ type Row struct {
 	State State
 	// Writer is who may append the kind.
 	Writer Writer
+	// Routine is whether an entry of the kind is the program's record of an
+	// act the coordinator asked for or the program made on its own schedule,
+	// which tells the coordinator nothing it does not already have: the
+	// intake's entry and the dispatch's. Such an entry needs no decision and
+	// asks nobody anything, so internal/supervisor's Event reads it here and
+	// its classifier absorbs it, which queues no wake for it; what it claims
+	// for the resolver is Role's and
+	// State's and is unchanged by this. Only a WriterProgram kind may be
+	// routine, which a test holds the table to, and a program kind that can
+	// report something going wrong, the isolation refusal, is not.
+	Routine bool
 	// Detail validates the detail text an event of this kind may carry, and
 	// is nil for a kind whose detail is free text. A kind with a decoder has
 	// a closed detail vocabulary, which a writer checks before appending
@@ -165,8 +176,8 @@ func decodeIsolationRefusal(detail string) error {
 // investigation's Complete is the terminal tier's, read from the record, so
 // an entry with no record behind it moves no task to Complete (P8).
 var kinds = []Row{
-	{Kind: store.OpeningEventKind, Role: RoleState, State: Queued, Writer: WriterProgram},
-	{Kind: store.DispatchedEventKind, Role: RoleState, State: Dispatched, Writer: WriterProgram},
+	{Kind: store.OpeningEventKind, Role: RoleState, State: Queued, Writer: WriterProgram, Routine: true},
+	{Kind: store.DispatchedEventKind, Role: RoleState, State: Dispatched, Writer: WriterProgram, Routine: true},
 	{Kind: "isolation-refused", Role: RoleState, State: Failed, Writer: WriterProgram, Detail: decodeIsolationRefusal},
 	{Kind: "relaunched", Role: RoleNote, Writer: WriterProgram},
 	{Kind: store.PromotedEventKind, Role: RoleNote, Writer: WriterProgram},

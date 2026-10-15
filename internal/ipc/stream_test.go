@@ -617,3 +617,54 @@ func TestThePublisherReleasesASubscriptionThatEnded(t *testing.T) {
 	}
 	drain(t, live, 2)
 }
+
+// An attachment is a stretch with at least one subscription open. The number
+// holds while subscriptions overlap, so one closing while another is open is
+// not an end; it is not open once the last closes, and the next subscription
+// begins a new number rather than reusing the old one. Close ends the
+// stretch too. The control is the first read, where nothing has subscribed
+// and nothing is open.
+func TestAnAttachmentLastsWhileAnySubscriptionIsOpen(t *testing.T) {
+	pub, err := ipc.NewPublisher(ipc.PublisherConfig{})
+	if err != nil {
+		t.Fatalf("NewPublisher: %v", err)
+	}
+	if n, open := pub.Attachment(); n != 0 || open {
+		t.Fatalf("a publisher nothing subscribed to reports attachment %d open=%v", n, open)
+	}
+	first, err := pub.Subscribe(0)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	n1, open := pub.Attachment()
+	if !open || n1 == 0 {
+		t.Fatalf("with one subscription the attachment is %d open=%v", n1, open)
+	}
+	second, err := pub.Subscribe(0)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	first.Close()
+	if n, open := pub.Attachment(); n != n1 || !open {
+		t.Fatalf("an overlapping subscription left attachment %d open=%v, want %d still open", n, open, n1)
+	}
+	second.Close()
+	if n, open := pub.Attachment(); n != n1 || open {
+		t.Fatalf("with every subscription closed the attachment is %d open=%v, want %d closed", n, open, n1)
+	}
+	third, err := pub.Subscribe(0)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer third.Close()
+	n3, open := pub.Attachment()
+	if n3 == n1 || !open {
+		t.Fatalf("a subscription after a break reports attachment %d open=%v, want a new number open", n3, open)
+	}
+	if err := pub.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if n, open := pub.Attachment(); n != n3 || open {
+		t.Fatalf("a closed publisher reports attachment %d open=%v", n, open)
+	}
+}

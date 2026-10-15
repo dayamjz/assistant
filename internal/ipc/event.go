@@ -86,8 +86,9 @@ const (
 	// rather than activity, so an overflowing stream may not discard it as
 	// noise: it can be evicted only into the gap marker, and a coordinator
 	// that receives the marker drains the queue, which is the read that
-	// gives back every wake still queued. A pushed wake is a notice and not
-	// the record: whether it is still actionable is the queue's to say.
+	// gives back every wake still queued and not already handed out to it. A
+	// pushed wake is a notice and not the record: whether it is still
+	// actionable is the queue's to say.
 	TypeWakeQueued Type = "wake.queued"
 
 	// TypeGap says the stream discarded something. It is produced by this
