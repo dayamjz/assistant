@@ -535,9 +535,9 @@ const isolationRefusedKind = "isolation-refused"
 
 // PromotionHeading is the heading the intent and the delivery second check
 // are appended to the instructions under. It is exported for one consumer,
-// internal/service's task intent (taskintent.go), which reads the
-// instructions file as the coordinator wrote it at intake and stops at the
-// first section the program appended, this one among them.
+// internal/service's task intent (intakeInstructions in workers.go), which
+// reads the instructions file as the coordinator wrote it at intake and stops
+// at the first section the program appended, this one among them.
 const PromotionHeading = "## Promoted to delivery, written by the program at promotion"
 
 // appendPromotion appends the delivery intent and the second check to the
