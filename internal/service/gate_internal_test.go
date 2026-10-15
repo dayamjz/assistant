@@ -37,7 +37,7 @@ func TestEveryPathThatCreatesARunAsksForTheBranchGateFirst(t *testing.T) {
 		{"push", func(ctx context.Context, s *Service) error {
 			// The driver a push's claim is handed is nil here, and that is the
 			// point: a path that did not wait for the gate would reach it.
-			_, _, err := s.claimPush(ctx, nil, key.repository, key.branch, "head", "base")
+			_, _, err := s.claimPush(ctx, nil, key.repository, key.branch, "head", "base", noPushedIntent)
 			return err
 		}},
 	} {

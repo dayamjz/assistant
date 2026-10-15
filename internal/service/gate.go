@@ -176,6 +176,11 @@ func checkUpdates(req machine.GateRequest) error {
 // credentials, as admission reads it, and a person's push of any branch
 // starts its run.
 //
+// Who pushed also decides the intent a started run is recorded with, and
+// only that: workers.go's pushIntent gives a run of a task's own branch,
+// pushed by that task's worker, the task's intent under its own source, and
+// every other run the absent intent a push has always carried.
+//
 // A deletion also ends nothing. The PRD is silent on what deleting a branch
 // should do to a run of it, so that branch's run keeps advancing and its
 // ignored reason says so and names the command that ends it, rather than
@@ -198,7 +203,8 @@ func (s *Service) notify(ctx context.Context, from ipc.Request, req machine.Gate
 			out.Ignored = append(out.Ignored, s.offerLocal(ctx, task, update))
 			continue
 		}
-		started, err := s.startPushedBranch(ctx, found, update.Branch(), update.New)
+		intent := s.pushIntent(ctx, from, found, update)
+		started, err := s.startPushedBranch(ctx, found, update.Branch(), update.New, intent)
 		if err != nil {
 			return machine.Notification{}, pushPartlyStarted(req.Gate, out.Started, update.Ref, err)
 		}
@@ -277,8 +283,11 @@ func pushPartlyStarted(gateID string, started []machine.Started, ref string, cau
 // The commit is the one the push moved the branch to, and the branch is the
 // one the push named. Neither is read from the working copy: the working copy
 // stands wherever its owner left it, and a run recorded from its head would be
-// a run about a commit nobody pushed.
-func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, head string) (machine.Started, error) {
+// a run about a commit nobody pushed. The intent is the one pushIntent
+// decided, and it is never supplied: the run starts with
+// pipeline.Start.IntentSupplied false whatever it carries.
+func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, head string,
+	intent pushedIntent) (machine.Started, error) {
 	// Everything slow happens before the branch is claimed: resolving an agent
 	// asks what is runnable on this machine, and the base is a git invocation.
 	// Under the claim, branches would queue behind each other's.
@@ -287,7 +296,7 @@ func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, 
 		return machine.Started{}, err
 	}
 	base := s.baseOfPushedCommit(ctx, found, head)
-	record, superseded, err := s.claimPush(ctx, built, found.repository.ID, branch, head, base)
+	record, superseded, err := s.claimPush(ctx, built, found.repository.ID, branch, head, base, intent)
 	if err != nil {
 		return machine.Started{}, err
 	}
@@ -295,6 +304,7 @@ func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, 
 		Branch:    record.Branch,
 		Base:      found.repository.DefaultBranch,
 		Submitted: record.SubmittedHead,
+		Intent:    record.Intent,
 	})
 	return machine.Started{Branch: branch, Head: head, Run: record.ID, Superseded: superseded}, nil
 }
@@ -338,7 +348,8 @@ func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, 
 // unsettled checks waits there, reading the provider once a minute, until they
 // settle or checks_timeout elapses; internal/stages' CI says why that body does
 // not ask whether its run is still wanted.
-func (s *Service) claimPush(ctx context.Context, built *driver, repository, branch, head, base string) (store.Run, string, error) {
+func (s *Service) claimPush(ctx context.Context, built *driver, repository, branch, head, base string,
+	intent pushedIntent) (store.Run, string, error) {
 	key := branchKey{repository: repository, branch: branch}
 	release, err := s.holdBranch(ctx, key)
 	if err != nil {
@@ -383,7 +394,8 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 		branch:     key.branch,
 		head:       head,
 		base:       base,
-		source:     intentSourceAbsent,
+		intent:     intent.text,
+		source:     intent.source,
 		// The push landed the commit in the gate before this notification
 		// ran, so the run's reference is written at it and nothing is
 		// fetched: the working copy need not hold it and is not asked to.
