@@ -507,6 +507,7 @@ flowchart LR
   E -. findings .-> X
   F -. findings .-> X
   I -. failures .-> X
+  I -. conflict after push .-> B
     </pre>
   </div>
 
@@ -524,7 +525,7 @@ flowchart LR
         <tr><td class="prd-num">6</td><td><b>Lint</b></td><td>Static analysis. Last among local checks so it does not churn over code that may still change.</td><td class="prd-num">3</td></tr>
         <tr><td class="prd-num">7</td><td><b>Push</b></td><td>Forwards the exact verified commit, and only after confirming the update will not discard commits already on the target. Requires a durable record that a completed review approved a commit this one descends from. When the head is not that commit, a fresh review of the commits between them must raise nothing but notes before anything is pushed (section 14, decision 7).</td><td class="opacity-60">none</td></tr>
         <tr><td class="prd-num">8</td><td><b>Pull request</b></td><td>Creates or updates the pull request. Body is written for a reviewer who was not present: what changed, what was checked, what the risks are, what the pipeline had to fix.</td><td class="opacity-60">none</td></tr>
-        <tr><td class="prd-num">9</td><td><b>Checks</b></td><td>Watches your CI and mergeability, fixes failures, resolves conflicts. The only stage that talks to the outside world for validation.</td><td class="prd-num">3</td></tr>
+        <tr><td class="prd-num">9</td><td><b>Checks</b></td><td>Watches your CI and mergeability, fixes failures, resolves conflicts. The only stage that talks to the outside world for validation. A conflict after the push is resolved by rebasing, reviewing again, and pushing again, and only where the rebase applies cleanly; the run never decides conflicting content on its own (section 14, decision 7).</td><td class="prd-num">3</td></tr>
       </tbody>
     </table>
   </div>
@@ -941,6 +942,40 @@ flowchart TD
     the merge record in section 8's data model: the pull request, the head read, and when. The run's
     <code>passed</code> is derived from that record, and so is the task's Landed in section 6;
     neither stores the fact again.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">A conflict after the push</h3>
+  <p class="mb-4 opacity-90">
+    Another pull request can merge first while a run waits on its checks, and the code host then
+    reports this one as conflicting with its base. The checks stage answers that by sending the
+    run back to the rebase stage. It adds no stage: it is a path between existing stages, and like
+    every cycle it is bounded. A run takes it at most twice, and a third conflict parks the run.
+  </p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>The rebase is of the branch the run pushed, anchored where the run left it.</b> The
+      rebase stage observes the branch again and goes on only if it still stands at the commit the
+      push stage forwarded. A branch anybody else moved since holds for you, so a commit someone
+      else pushed there is never dropped.</li>
+    <li><b>Only a rebase that applies cleanly goes on.</b> One that conflicts is abandoned, nothing
+      is rewritten, and the stage holds. The run never decides on its own what conflicting content
+      should be, and no automatic fix round is offered for it; a fix round you ask for at that hold
+      is your explicit answer, held to the judge rule like any other. A rebase that leaves nothing
+      to push holds too, rather than ending the run past an open pull request.</li>
+    <li><b>The result is reviewed again before it is pushed.</b> It passes the review stage in a
+      fresh session with no memory of any fix, then the test, document, and lint stages, as the
+      first pass did. Fix round limits are per run, so a stage that spent its rounds on the first
+      pass has none left on the second.</li>
+    <li><b>The second push is anchored on the first.</b> The push stage updates the branch only on
+      an observation of it standing at the commit the first push left there, checked against the
+      live target like any push, so a branch that moved after the rebase stage observed it is
+      refused and held. The commits it replaces are the ones the first push left there, and the
+      push names them.</li>
+  </ul>
+  <p class="mb-8 opacity-90">
+    Where that path cannot do its job, the checks stage holds on the conflict instead and says
+    why: the run pushed nothing, its head is not the commit it pushed, or the run skips the
+    rebase, review, or push stage. A checks fix round's commit is not taken down this path; it
+    still holds, as section 14 decision 8 records.
   </p>
 
   <h3 class="text-xl font-semibold mb-3">What passing the gate means</h3>
@@ -2707,12 +2742,12 @@ flowchart TB
         <tr>
           <td class="prd-num">7</td>
           <td>Commits a fix round writes <b>after review are reviewed before they are pushed</b>, and only when there are some.</td>
-          <td>Closes the gap P5 left open for the test and lint stages, whose rounds were verified only by their own check. When the head is not the commit review read, the push stage reviews the commits between the two in a fresh session, as author code, with each stage's last round summary handed over as a claim, and holds with that review's findings unless all are notes. It is the review stage's own review measured from the reviewed commit, so the evidence rule, both lenses, and the decision-model checks apply unchanged. It adds no stage and no cycle: the stage order and why review comes before test both stand, because the first review still reads the code you wrote and the second reads only what the pipeline wrote. A run whose head is the reviewed commit pays nothing for it. The checks stage's rounds run after the push and are not covered.</td>
+          <td>Closes the gap P5 left open for the test and lint stages, whose rounds were verified only by their own check. When the head is not the commit review read, the push stage reviews the commits between the two in a fresh session, as author code, with each stage's last round summary handed over as a claim, and holds with that review's findings unless all are notes. It is the review stage's own review measured from the reviewed commit, so the evidence rule, both lenses, and the decision-model checks apply unchanged. It adds no stage and no cycle: the stage order and why review comes before test both stand, because the first review still reads the code you wrote and the second reads only what the pipeline wrote. A run whose head is the reviewed commit pays nothing for it. The checks stage's rounds run after the push and are not covered. A pull request the code host reports as conflicting after the push is the one case where the run updates a pushed branch a second time, and it is reviewed by the same rule: the checks stage sends the run back to the rebase stage, which rebases only while the branch still stands at the commit the run pushed and only when the rebase applies cleanly, holding otherwise, so the run never decides conflicting content on its own. The result passes the review stage again in a fresh session, as author code, and the stages after it, and the push stage updates the branch a second time anchored on the commit the first push left there. That path is a cycle between existing stages, bounded at two passes back; it adds no stage, and section 5's "A conflict after the push" carries the detail.</td>
         </tr>
         <tr>
           <td class="prd-num">8</td>
           <td>A fix round you ask for at a hold is <b>bounded at three per stage per run</b>, by a fixed number rather than a setting.</td>
-          <td>Section 5's Fix action is a second cycle through a stage, and every cycle carries a bound. Each of these rounds is your explicit answer, so the bound is a backstop against a loop nobody is driving rather than a policy a repository tunes, and section 10 gains no key for it. An answer asking for a fourth is refused while the hold is still open, so approve, skip, and cancel remain; the run-wide budget still counts every round. The round is held to the judge rule at every stage it is offered at, review and rebase included, because asking for a round is not approving an edit to a check. It is offered at the stages before push and not at push, pull request, or checks: push forwards a commit, so re-running it would push the round's result before you saw it, and a round at the two stages after it would leave a commit nothing pushes. A round that changes nothing returns to the hold and says so; it does not end the run on the convergence bound, because every such round is one you asked for.</td>
+          <td>Section 5's Fix action is a second cycle through a stage, and every cycle carries a bound. Each of these rounds is your explicit answer, so the bound is a backstop against a loop nobody is driving rather than a policy a repository tunes, and section 10 gains no key for it. An answer asking for a fourth is refused while the hold is still open, so approve, skip, and cancel remain; the run-wide budget still counts every round. The round is held to the judge rule at every stage it is offered at, review and rebase included, because asking for a round is not approving an edit to a check. It is offered at the stages before push and not at push, pull request, or checks: push forwards a commit, so re-running it would push the round's result before you saw it, and a round at the two stages after it would leave a commit nothing pushes. The checks stage's rebase of a conflicted pull request, which decision 7 records, is not such a round: it is no fixer's work, and it reaches the pull request only through a second review and a second anchored push. A round that changes nothing returns to the hold and says so; it does not end the run on the convergence bound, because every such round is one you asked for.</td>
         </tr>
         <tr>
           <td class="prd-num">9</td>

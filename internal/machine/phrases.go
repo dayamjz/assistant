@@ -727,6 +727,15 @@ var (
 		Consequence: "What that means for its work shows once it has been read.",
 		Decision:    "Nothing to decide until it does.",
 	}
+	// PhraseNoticeQueued is the row for a wake pushed on the coordinator's
+	// wake stream: a notice is waiting, and it stays waiting until a drain
+	// takes it, because the push acknowledges nothing. Which work it is
+	// about and its kind are the structured rendering's.
+	PhraseNoticeQueued = Phrase{
+		Outcome:     "A notice about the fleet is waiting to be handled.",
+		Consequence: "It stays waiting until it is read with assistant coordinator wakes, which records it as handled.",
+		Decision:    "Run assistant --json coordinator wakes to read and take it.",
+	}
 	// PhraseActivity is the row for a worker's or a stage's output arriving
 	// on the stream. P13 makes that output something to read and never
 	// something to relay, so the row says that something was produced and
@@ -1492,7 +1501,7 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseMessageUnread, phraseMessageRead, phraseMessageRefused, phraseMessageUnknown,
 		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept)
-	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
+	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseNoticeQueued, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
 	for _, name := range CheckNames() {

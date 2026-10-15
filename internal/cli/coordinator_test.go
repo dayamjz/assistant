@@ -84,13 +84,14 @@ func TestTheCoordinatorVerbServesItsTableAndNothingElse(t *testing.T) {
 		{"coordinator", "await", "--timeout", "100000h"},
 		{"coordinator", "await", "--limit", "-1"},
 		{"coordinator", "await", "now"},
+		{"coordinator", "listen", "now"},
 		{"coordinator", "supervision", "now"},
 	} {
 		if got := run(t, h, subject, args...); got.code != machine.ExitUsage {
 			t.Fatalf("assistant %s exited %s, want incorrect usage:\n%s%s", strings.Join(args, " "), got.code, got.stdout, got.stderr)
 		}
 	}
-	for _, args := range [][]string{{"wakes"}, {"await", "--timeout", "1s"}, {"await", "--timeout", "1h"}} {
+	for _, args := range [][]string{{"wakes"}, {"await", "--timeout", "1s"}, {"await", "--timeout", "1h"}, {"listen"}} {
 		got := run(t, h, subject, append([]string{"--json", "coordinator"}, args...)...)
 		var failure machine.Failure
 		if got.code != machine.ExitFailure || json.Unmarshal([]byte(got.stdout), &failure) != nil ||

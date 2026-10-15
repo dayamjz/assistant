@@ -33,9 +33,10 @@ type Acknowledger struct{ name string }
 //
 // Its one producer is internal/ipc's Request.WakeAcknowledger, which derives
 // it from the surface the way Request.HoldResolver derives a resolver, and
-// no frame carries it; the method that records it, wakes.acknowledge,
-// refuses a task's worker from the worker group set internal/session holds,
-// so the value reaches a row only through a coordinator's call.
+// no frame carries it; the methods that record it, the drains wakes.list
+// and wakes.wait and the acknowledgement wakes.acknowledge, refuse a task's
+// worker from the worker group set internal/session holds, so the value
+// reaches a row only through a coordinator's call.
 func AcknowledgedByCoordinator() Acknowledger { return Acknowledger{name: "coordinator"} }
 
 // AcknowledgedByProgram is an acknowledgement the program made itself, for a

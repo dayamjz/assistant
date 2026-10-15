@@ -38,6 +38,7 @@ func TestMethodTableIsWrittenDownHere(t *testing.T) {
 		"wakes.list":         true,
 		"wakes.acknowledge":  true,
 		"wakes.wait":         true,
+		"wakes.subscribe":    true,
 		"supervision.assert": true,
 		"catchup.read":       false,
 		"catchup.mark":       true,
@@ -72,10 +73,12 @@ func TestMethodTableIsWrittenDownHere(t *testing.T) {
 	}
 }
 
+// TestOnlySubscribeStreams states which methods open a stream: the open
+// event stream and the coordinator's wake stream, and nothing else.
 func TestOnlySubscribeStreams(t *testing.T) {
 	for _, spec := range ipc.Methods() {
 		want := ipc.KindRequest
-		if spec.Method == "events.subscribe" {
+		if spec.Method == "events.subscribe" || spec.Method == "wakes.subscribe" {
 			want = ipc.KindStream
 		}
 		if spec.Kind != want {

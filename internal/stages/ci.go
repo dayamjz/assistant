@@ -23,10 +23,10 @@ import (
 // PRD section 5 gives this stage two jobs: watch CI and mergeability, and fix
 // failures and conflicts. This implementation reads the checks on the pull
 // request's head and whether the provider reports the pull request mergeable,
-// and reports what it read once both are settled. It fixes neither a conflict
-// nor a failure in a way that reaches the pull request: a conflict holds for a
-// person, and a fix round's commit holds rather than being pushed. The two
-// sections below say why.
+// and reports what it read once both are settled. A conflict it answers by
+// sending the run back to rebase, which reaches the pull request only through
+// a second review and a second anchored push; a fix round's commit holds
+// rather than being pushed. The two sections below say how and why.
 //
 // A pass establishes that every registered check settled and passed, and that
 // the provider reported the pull request mergeable, in the reads this
@@ -40,19 +40,30 @@ import (
 // Mergeability is read off the same read of the pull request that comes
 // before the checks, forge.PullRequest.Mergeability, which forge keeps apart
 // from the checks on purpose. A pull request the provider positively reports
-// as conflicted holds the stage at once with an ask finding, whatever its
-// checks say, and its checks are not read: a conflict is not something
-// waiting resolves, and resolving one means deciding what conflicting content
-// should be, which is a person's decision and never this run's.
+// as conflicted is answered at once, whatever its checks say, and its checks
+// are not read: a conflict is not something waiting resolves.
 //
-// That is detect-and-hold and not PRD section 5's "resolves conflicts". A
-// rebase here would rewrite a branch the push stage already forwarded, so it
-// would need a second anchored update of that branch and a review of the
-// rebased commits before the update. PRD section 14 decision 7 describes the
-// review of later commits at the push stage only and says the checks stage's
-// rounds are not covered, and nothing in the PRD describes re-pushing from
-// this stage, so this body ships neither; the hold says how a person moves
-// the work on instead.
+// The answer is PRD section 14 decision 7's rebase of a conflicted pull
+// request. The body asks for internal/pipeline's path back to the rebase
+// stage with pipeline.Output.Rebase, over a report carrying one note that
+// says why, and the run goes through rebase, review, the checks before push,
+// a second push and the pull request stage before it reads here again. None
+// of that is this body's: the rebase stage anchors the second push only where
+// this run's first push left the branch and rebases only when the replay
+// applies cleanly, holding otherwise, so this run never decides on its own
+// what conflicting content should be; the review stage reviews the result with no
+// session behind it; and the push stage decides through internal/safety.
+// internal/pipeline bounds the path by RebaseAfterPushRounds, and a request
+// past it parks the run.
+//
+// The body asks only where that path can do what it says. The run has to have
+// pushed, its head has to be the commit it pushed, and none of the rebase,
+// review and push stages may be on this run's skip list: a run that pushed
+// nothing has no branch to rebase, a head a fix round of this stage moved is
+// held on below, and a skipped stage would leave the second push without the
+// anchor, the review, or the push itself. Anywhere else the conflict holds
+// with an ask finding, as it did before the path existed, saying why the run
+// did not rebase and how a person moves the work on.
 //
 // Checks that passed are not a pass until the provider has also reported the
 // pull request mergeable. A mergeability the provider has not reported, or
@@ -68,8 +79,9 @@ import (
 // stage forwarded the branch, so the pull request and its checks still stand
 // on the pushed commit. PRD section 14 decision 7 has the commits a round
 // writes after review reviewed before they are pushed, and says this stage's
-// rounds run after the push and are not covered; nothing in this build pushes
-// them either. So when this stage runs again after one of its own rounds and
+// fix rounds run after the push and are not covered; nothing in this build
+// pushes them either, and the path back to rebase above is taken for a
+// conflict and never for a fix round's commit. So when this stage runs again after one of its own rounds and
 // the run's head is not the commit the push stage forwarded, it holds with an
 // ask finding naming both commits and saying the round's commit will not
 // reach the pull request, rather than reading checks that cannot have seen
@@ -265,6 +277,7 @@ func CI(deps StageDeps) pipeline.Implementation {
 			pipeline.KeyForgeRepository, pipeline.KeyPullRequest,
 			pipeline.KeyRepository, pipeline.KeyRun, pipeline.KeyBase,
 			pipeline.KeyHead, pipeline.KeyPushed, pipeline.StageCI.FixKey(),
+			pipeline.KeySkip,
 		},
 		Writes: []pipeline.Key{pipeline.KeyPullRequestEnd, pipeline.KeyPullRequestEndHead},
 		NewBody: func() pipeline.Body {
@@ -372,6 +385,9 @@ func runChecks(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 			cancel()
 			if err := w.end(ctx); err != nil {
 				return pipeline.Output{}, err
+			}
+			if facts.mayRebase() {
+				return pipeline.Output{Report: rebasingReport(pr, facts), Rebase: true}, nil
 			}
 			return pipeline.Output{Report: conflictedReport(pr, facts)}, nil
 		}
@@ -613,6 +629,49 @@ type ciFacts struct {
 	head     string
 	pushed   string
 	roundRan bool
+	// skipped names the stages this run's skip list passes over, which is
+	// what says whether the path back to rebase would run the stages it is
+	// for.
+	skipped map[pipeline.Stage]bool
+}
+
+// rebasePath is the stages the path back to rebase needs to run for a second
+// push to be anchored, reviewed and made.
+var rebasePath = []pipeline.Stage{pipeline.StageRebase, pipeline.StageReview, pipeline.StagePush}
+
+// mayRebase reports whether a conflict is answered by the path back to
+// rebase: the run pushed, its head is the commit it pushed, and the stages the
+// path needs are not skipped in this run.
+func (f ciFacts) mayRebase() bool {
+	if f.pushed == "" || f.head != f.pushed {
+		return false
+	}
+	for _, stage := range rebasePath {
+		if f.skipped[stage] {
+			return false
+		}
+	}
+	return true
+}
+
+// whyNotRebased says why a conflict holds rather than taking the path back,
+// in a sentence a hold can carry. It is asked only where mayRebase is false.
+func (f ciFacts) whyNotRebased() string {
+	if f.pushed == "" {
+		return "This run pushed no commit, so it has no branch of its own to rebase."
+	}
+	if f.head != f.pushed {
+		return fmt.Sprintf("This run's head %s is not %s, the commit it pushed, so a rebase of it would not be "+
+			"the branch the pull request stands on.", f.head, f.pushed)
+	}
+	var names []string
+	for _, stage := range rebasePath {
+		if f.skipped[stage] {
+			names = append(names, stage.String())
+		}
+	}
+	return fmt.Sprintf("This run skips the %s stage(s), which a rebase after the push has to pass through "+
+		"before a second push.", strings.Join(names, ", "))
 }
 
 // unpushedRound reports whether a fix round of this stage moved the run's
@@ -647,6 +706,18 @@ func readCIState(state pipeline.Reader) (ciFacts, error) {
 			return ciFacts{}, err
 		}
 		*t.into, _ = value.Text()
+	}
+
+	skip, err := state.Get(pipeline.KeySkip)
+	if err != nil {
+		return ciFacts{}, err
+	}
+	names, _ := skip.List()
+	facts.skipped = make(map[pipeline.Stage]bool, len(names))
+	for _, name := range names {
+		if stage, ok := pipeline.ParseStage(name); ok {
+			facts.skipped[stage] = true
+		}
 	}
 
 	summary, err := state.Get(pipeline.StageCI.FixKey())
@@ -911,9 +982,46 @@ func checksElapsedReport(result forge.ChecksResult, prNumber int, timeout time.D
 	return report
 }
 
+// findingRebasing is the note a conflict that takes the path back to rebase
+// carries, saying why the run went back.
+const findingRebasing = "ci-conflicted-rebasing"
+
+// rebasingReport is the report for a pull request the provider reports as
+// conflicting with its base, when the run answers it by going back to rebase.
+// It passes on its own, so internal/pipeline records OutcomeRebase for it and
+// takes the path; its one finding is a note saying what was read and what
+// happens next, for the pull request stage's account of the run.
+//
+// Like conflictedReport it names nothing that varies between two reads of the
+// same conflict, because the report is recorded in the run's graph state.
+func rebasingReport(pr forge.PullRequest, facts ciFacts) findings.Report {
+	base := pr.Base
+	if base == "" {
+		base = facts.base
+	}
+	return findings.Report{
+		Revision: pr.HeadCommit,
+		Summary: fmt.Sprintf("Pull request %d conflicts with its base branch %s, as the code host reports it, "+
+			"so its checks were not read and the run goes back to rebase %s onto %s.", pr.Number, base, facts.pushed, base),
+		Findings: []findings.Finding{{
+			ID:       findingRebasing,
+			Severity: findings.SeverityInfo,
+			Action:   findings.ActionNote,
+			Description: fmt.Sprintf("The code host reports that pull request %d cannot be merged into %s because "+
+				"the two conflict. The run goes back to the rebase stage, which rebases %s, the commit this run "+
+				"pushed, onto %s only if the rebase applies cleanly and only while the branch still stands at "+
+				"that commit; this run never decides what conflicting content should be, and holds for you "+
+				"instead. A clean rebase is reviewed again, passes the checks before push again, and is pushed "+
+				"on an anchor at the commit this run pushed before this stage reads the pull request again.",
+				pr.Number, base, facts.pushed, base),
+		}},
+	}
+}
+
 // conflictedReport is the report for a pull request the provider reports as
-// conflicting with its base. It holds, and it says that this run will not
-// resolve the conflict and what a person does instead.
+// conflicting with its base, when the run cannot take the path back to
+// rebase. It holds, and it says why the run did not rebase, that this run
+// will not resolve the conflict, and what a person does instead.
 //
 // It names the pull request's head as the provider read it and nothing that
 // varies between two reads of the same conflict, because the report is
@@ -923,21 +1031,22 @@ func conflictedReport(pr forge.PullRequest, facts ciFacts) findings.Report {
 	if base == "" {
 		base = facts.base
 	}
+	why := facts.whyNotRebased()
 	return findings.Report{
 		Revision: pr.HeadCommit,
 		Summary: fmt.Sprintf("Pull request %d conflicts with its base branch %s, as the code host reports it, "+
-			"so its checks were not read. This run does not rebase a branch it has pushed.", pr.Number, base),
+			"so its checks were not read. This run does not rebase it: %s", pr.Number, base, why),
 		Findings: []findings.Finding{{
 			ID:       findingConflicted,
 			Severity: findings.SeverityError,
 			Action:   findings.ActionAsk,
 			Description: fmt.Sprintf("The code host reports that pull request %d cannot be merged into %s because "+
-				"the two conflict. Resolving it means deciding what the conflicting content should be, which this run never "+
-				"decides for you, and this build does not rebase or re-push a branch after the push stage. "+
-				"Rebase the branch onto %s yourself and push it through the gate: that starts a new run, which "+
-				"reviews the result before it reaches the pull request. Approving carries this run past a pull "+
-				"request that cannot merge; skipping records this stage as skipped; cancelling ends the run.",
-				pr.Number, base, base),
+				"the two conflict. %s Resolving a conflict means deciding what the conflicting content should "+
+				"be, which this run never decides for you. Rebase the branch onto %s yourself and push it "+
+				"through the gate: that starts a new run, which reviews the result before it reaches the pull "+
+				"request. Approving carries this run past a pull request that cannot merge; skipping records "+
+				"this stage as skipped; cancelling ends the run.",
+				pr.Number, base, why, base),
 		}},
 	}
 }

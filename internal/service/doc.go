@@ -406,8 +406,9 @@
 // worker cannot append what the program decides, and writing a message
 // acknowledgement and an investigation's report through their own records;
 // a launched worker reaches it over the route route.go gives it; wakes.list,
-// wakes.acknowledge, wakes.wait and supervision.assert are the coordinator's
-// and refuse a worker, with who acknowledged derived by internal/ipc's
+// wakes.acknowledge, wakes.wait, the wake stream wakes.subscribe and
+// supervision.assert are the coordinator's and refuse a worker, with who
+// acknowledged, by a drain or by an acknowledgement, derived by internal/ipc's
 // Request.WakeAcknowledger and read from nothing; catchup.mark, which moves
 // PRD section 9's seen mark and which catchup.go owns, refuses a worker on
 // the same terms while catchup.read stays open; and gate.admit holds a
@@ -486,8 +487,9 @@
 // # A restart reconciles the fleet, and relaunches a dead terminal in place
 //
 // PRD section 11's fleet reconciliation runs inside recover, after the runs
-// are reconciled and before anything is served: the queued wakes are drained
-// as input, every task of this home is read with its terminal probed under a
+// are reconciled and before anything is served: the queued wakes are read
+// as input with store.QueuedWakes, which acknowledges nothing because a
+// drain is the coordinator's and draining acknowledges, every task of this home is read with its terminal probed under a
 // bound, and a terminal gone with the work not landed is relaunched in the
 // copy it stood in. reconcile.go owns the table, which is keyed on the
 // resolved state, the source that decided it and the probed liveness, and

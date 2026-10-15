@@ -41,6 +41,42 @@ import (
 //
 // This stage has 3 fix rounds available per config.FixRounds.Rebase. When
 // conflicts occur during rebase, the fixer can be invoked to resolve them.
+// That is the first pass only, before anything was pushed; the section below
+// says what a conflict does after the push.
+//
+// # After the push: a second pass that rebases a branch the run pushed
+//
+// The checks stage sends a run back here when the code host reports its pull
+// request conflicting with its base, PRD section 14 decision 7's rebase of a
+// conflicted pull request, and internal/pipeline's path back from that stage
+// is how. pipeline.KeyPushed is what tells this pass from the first: it names
+// the commit the push stage forwarded, and it is empty until a push happened.
+// rebaseAfterPush is the pass, and it differs from the first in three ways.
+//
+// The anchor it records is not whatever the branch holds now. The branch is
+// observed, and the observation is accepted only where it finds the branch at
+// the commit this run pushed, which safety.RequireObservedAt decides; a branch
+// anybody else moved since the push holds for a person and records no anchor,
+// so the second push cannot drop what they added. A fresh observation is still
+// taken here rather than reused, so the gap P6 asks for between observing and
+// pushing is a real one on this pass too.
+//
+// It only rebases where the rebase applies cleanly. A conflict is aborted,
+// which returns the run's copy to the commit it stood on, and holds with an
+// ask: this run never decides on its own what conflicting content should be
+// after the push, and no automatic fix round is offered there, because the
+// finding is an ask and an ask never enters one. A fix round a person asks
+// for at that hold is the one way an agent changes anything here: it works
+// on the branch as it stands, since the abandoned rebase leaves nothing in
+// progress, and this pass then rebases its result if that applies cleanly.
+// What that round does with the content is not established here; it is the
+// person's request, held to the judge rule like any requested round.
+//
+// And it never ends the run as having nothing left to change. A rebase that
+// leaves no difference from the base, or that leaves the branch where it was,
+// holds instead, because a pull request still stands open on the code host
+// and the run reporting success past it would say something it did not
+// establish.
 func Rebase(deps StageDeps) pipeline.Implementation {
 	return pipeline.Implementation{
 		Reads: []pipeline.Key{
@@ -50,6 +86,7 @@ func Rebase(deps StageDeps) pipeline.Implementation {
 			pipeline.KeyBase,
 			pipeline.KeySubmitted,
 			pipeline.KeyHead,
+			pipeline.KeyPushed,
 		},
 		Writes: []pipeline.Key{
 			pipeline.KeyHead,
@@ -67,14 +104,22 @@ func Rebase(deps StageDeps) pipeline.Implementation {
 // runRebase is the stage body: it fetches fresh upstream and target, then
 // rebases the working copy onto them.
 func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline.Output, error) {
-	repositoryID, runID, branch, base, submitted, _, err := readRebaseState(in.State)
+	repositoryID, runID, branch, base, submitted, head, err := readRebaseState(in.State)
 	if err != nil {
 		return pipeline.Output{}, err
 	}
+	pushedValue, err := in.State.Get(pipeline.KeyPushed)
+	if err != nil {
+		return pipeline.Output{}, err
+	}
+	pushed, _ := pushedValue.Text()
 
 	copied, err := deps.Copy(ctx, repositoryID, runID)
 	if err != nil {
 		return pipeline.Output{}, err
+	}
+	if pushed != "" {
+		return rebaseAfterPush(ctx, copied, afterPush{branch: branch, base: base, head: head, pushed: pushed})
 	}
 
 	// The anchor is taken here, before this stage brings the change up to date

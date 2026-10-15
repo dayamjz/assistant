@@ -38,10 +38,13 @@
 // matters: the other way round, it would apply a delta first and find out
 // afterwards that its base was wrong.
 //
-// Four state types have a producer in this build, all in internal/service
-// and all drawing their revision from one counter there: a run's state, a
-// task's resolved state, a hold opening or closing, and an entry a worker
-// appended to its task's history. The other two state
+// Four state types on the open event stream have a producer in this build,
+// all in internal/service and all drawing their revision from one counter
+// there: a run's state, a task's resolved state, a hold opening or closing,
+// and an entry a worker appended to its task's history. A fifth, a wake the
+// supervisor queued, has a producer there too and travels only on the
+// coordinator's wake stream, below, with the wake row's identifier as its
+// revision. The other two state
 // types the table names, a stage's state and a finding set, have none, and a
 // consumer rendering them has no owned shape to read; the table keeps them
 // because a type is a row and not a promise of a producer.
@@ -52,6 +55,35 @@
 // cannot move a consumer backwards. A cursor opens gapped and a subscription
 // opens gapped, so a first attach and a reattach both reconcile from a full
 // read before anything is applied.
+//
+// # A stream only the coordinator may hold
+//
+// MethodEventsSubscribe is open, so anything published on it reaches every
+// caller that can reach the socket, a task's worker and a validating agent
+// included. A coordinator's wakes may reach neither, so they have a stream of
+// their own, MethodWakesSubscribe, with a publisher of its own in
+// ServerConfig.Streams, and the stream is restricted. A restricted stream is
+// opened and registered on the goroutine reading the connection, so a cancel
+// is ordered against it as it is for an open one, and then decided on a
+// goroutine of its own: the access check a restricted request gets, and then
+// the handler, asked with a Request naming the stream's method, whose error
+// refuses it. Nothing is acknowledged and nothing is written to the caller
+// until both have admitted it, so a refused caller is never sent an event,
+// including one published while the decision was open; the refusal closes the
+// subscription unread.
+//
+// What this does not cover is which publisher a producer chooses. Nothing here
+// stops a producer from publishing a coordinator's wake on the open stream;
+// that is internal/service's to get right, and its wake producer publishes on
+// the wake stream's publisher alone.
+//
+// A pushed wake is TypeWakeQueued, a state event, so overflow treats it as
+// state: it is never discarded as activity, and it is evicted only into the
+// gap marker. A coordinator that receives the marker drains the durable
+// queue, which gives back every wake still queued, so an eviction loses no
+// wake the queue still holds. The event is a notice and not the record: it
+// acknowledges nothing, and whether the wake is still actionable is the
+// queue's to say.
 //
 // # Where state may be discarded, and why that is not the exception it looks like
 //
@@ -146,7 +178,7 @@
 // worker, is not answered here either, and it is not a third access class.
 // The handler decides it, from internal/service's worker group set, for the
 // methods whose answer turns on it: task.event admits only a worker, the
-// wakes methods, supervision.assert, task.respond, the coordinator's task
+// wakes methods, the wake stream among them, supervision.assert, task.respond, the coordinator's task
 // methods (task.create, task.promote, task.relaunch, task.message, task.stop
 // and task.interrupt) and catchup.mark, which moves the seen mark section 9's
 // catching up reads, refuse one, and gate.admit
@@ -199,9 +231,10 @@
 // # What one connection may hold at once
 //
 // A connection holds a bounded number of open streams and a bounded number of
-// requests being served, because the method that opens a stream is served
-// without consulting any credentials and an unbounded resource reachable
-// without authority is the hazard the frame limit already exists for.
+// requests being served, because the open event stream is served without
+// consulting any credentials, a restricted stream holds its slot while it is
+// decided, and an unbounded resource reachable without authority is the
+// hazard the frame limit already exists for.
 // Exceeding either bound is a refusal naming the limit and the current count,
 // never a silent drop, and a slot frees when a stream ends or a call is
 // answered. A request's slot is taken before its authority is decided and held

@@ -209,6 +209,26 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 		b.Edge(graph.Edge{From: stage.RequestNode(), To: stage.Node(), Rounds: RequestedFixRounds, Answered: true})
 	}
 
+	// The hold's other two exits. They come before the stage's own edges
+	// rather than after them because the exit to the next stage is a back
+	// edge for a stage on the path back from the checks stage to rebase, and
+	// every back edge of a stage sits ahead of the stage's configured fix
+	// return; repush.go says why that exit is a back edge at all, and doc.go
+	// has the arithmetic. Order among edges matters only per node they leave,
+	// and these leave the hold, whose unconditional exit is still its last.
+	b.Edge(guarded(stage.HoldNode(), stage, OutcomeCancelled, NodeCancel))
+	b.Edge(graph.Edge{From: stage.HoldNode(), To: next, Rounds: holdExitRounds(stage)})
+	if stage.RebasesAfterPush() {
+		// PRD section 14 decision 7's rebase of a conflicted pull request:
+		// the stage sends the run back to rebase, and from there through
+		// review, the checks before push, and a second push, to stand here
+		// again. It is a back edge, so it carries a bound, and it comes ahead
+		// of the stage's own edges for the reason the hold's exits do.
+		// Its guard and the stage's other guards read the one outcome key, so
+		// at most one of them passes and the order among them decides nothing.
+		b.Edge(rebaseAfterPushEdge(stage))
+	}
+
 	// A stage that found something a person must decide holds. A stage that
 	// found only fix-eligible findings goes to its fixer, and to the same hold
 	// when it has none, which is what a round limit of zero means.
@@ -216,7 +236,7 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 	if rounds > 0 {
 		fixes = stage.FixNode()
 		b.Node(fixNode(stage, fixer))
-		// The back edge, which closes the one cycle in the pipeline. The graph
+		// The back edge, which closes the stage's fix cycle. The graph
 		// requires a bound on it and the stage's round limit is that bound. It
 		// is the same limit the edge into the fixer carries below, and it
 		// cannot be the first to reach its round bound, because every return
@@ -237,9 +257,6 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 	entry.Rounds = rounds
 	b.Edge(entry)
 	b.Edge(graph.Edge{From: stage.Node(), To: next})
-
-	b.Edge(guarded(stage.HoldNode(), stage, OutcomeCancelled, NodeCancel))
-	b.Edge(graph.Edge{From: stage.HoldNode(), To: next})
 	return nil
 }
 

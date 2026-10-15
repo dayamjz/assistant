@@ -149,6 +149,9 @@ type checksRun struct {
 	// onPause runs after each pause has moved the clock, so a test can change
 	// the world partway through a wait.
 	onPause func(r *checksRun)
+	// state is what earlier stages of the run wrote beyond what every run
+	// here carries, such as the commit the push stage forwarded.
+	state map[pipeline.Key]graph.Value
 }
 
 func newChecksRun(t *testing.T) *checksRun {
@@ -247,15 +250,19 @@ func (r *checksRun) runOut(ctx context.Context, t *testing.T, withoutWaits bool)
 	for _, key := range impl.Reads {
 		allowed[key] = true
 	}
+	state := map[pipeline.Key]graph.Value{
+		pipeline.KeyRepository:      graph.TextValue("repository-1"),
+		pipeline.KeyRun:             graph.TextValue("run-1"),
+		pipeline.KeyBase:            graph.TextValue("main"),
+		pipeline.KeyForgeRepository: graph.TextValue("dayamjz/assistant"),
+		pipeline.KeyPullRequest:     graph.TextValue("7"),
+	}
+	for key, value := range r.state {
+		state[key] = value
+	}
 	out, err := impl.NewBody()(ctx, pipeline.Input{
 		Stage: pipeline.StageCI,
-		State: declaredReader{allowed: allowed, state: map[pipeline.Key]graph.Value{
-			pipeline.KeyRepository:      graph.TextValue("repository-1"),
-			pipeline.KeyRun:             graph.TextValue("run-1"),
-			pipeline.KeyBase:            graph.TextValue("main"),
-			pipeline.KeyForgeRepository: graph.TextValue("dayamjz/assistant"),
-			pipeline.KeyPullRequest:     graph.TextValue("7"),
-		}},
+		State: declaredReader{allowed: allowed, state: state},
 	})
 	if err != nil {
 		return pipeline.Output{}, err
@@ -866,5 +873,60 @@ func TestChecksTimeoutHeldRecognizesOnlyTheElapsedHold(t *testing.T) {
 		!hasFinding(elapsedOnMergeability, "ci-mergeability-unknown") || !hasFinding(conflicted, "ci-conflicted") {
 		t.Fatalf("the reports are not what the cases say they are: %+v, %+v, %+v, %+v, %+v, %+v",
 			elapsed, elapsedOnNoChecks, passed, ended, elapsedOnMergeability, conflicted)
+	}
+}
+
+// A pull request that conflicts with its base after this run pushed is
+// answered by asking for the path back to rebase, over a report that holds
+// nothing and says why, and its checks are not read. The body asks only where
+// that path can do what it is for: the head is the commit the run pushed, and
+// none of the stages a second push needs is skipped. Each other case holds
+// with ci-conflicted naming what stood in the way, and the nothing-pushed
+// case is TestAPullRequestThatConflictsAfterItsChecksPassedHoldsTheChecksStage.
+func TestAConflictAfterThePushGoesBackToRebaseOnlyWhereThePathCanTakeIt(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	t.Parallel()
+	const pushed = "4f1c0de4f1c0de4f1c0de4f1c0de4f1c0de4f1c0"
+	for _, tc := range []struct {
+		name    string
+		head    string
+		skip    []string
+		rebase  bool
+		because string
+	}{
+		{name: "the head is the pushed commit", head: pushed, rebase: true},
+		{name: "the review is skipped", head: pushed, skip: []string{"review"}, because: "review"},
+		{name: "the head is not the pushed commit", head: "0123abc", because: "0123abc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newChecksRun(t)
+			r.provider.mergeability = forge.MergeabilityConflicted
+			r.state = map[pipeline.Key]graph.Value{
+				pipeline.KeyPushed: graph.TextValue(pushed),
+				pipeline.KeyHead:   graph.TextValue(tc.head),
+				pipeline.KeySkip:   graph.ListValue(tc.skip...),
+			}
+			out, err := r.runOut(t.Context(), t, false)
+			if err != nil {
+				t.Fatalf("running the checks stage: %v", err)
+			}
+			if r.provider.reads != 0 {
+				t.Fatalf("the checks were read %d time(s) on a conflicting pull request", r.provider.reads)
+			}
+			if out.Rebase != tc.rebase || out.Report.HasHeld() == tc.rebase {
+				t.Fatalf("asked for the path back = %v and held = %v, want %v and %v: %+v",
+					out.Rebase, out.Report.HasHeld(), tc.rebase, !tc.rebase, out.Report)
+			}
+			if tc.rebase {
+				if !hasFinding(out.Report, "ci-conflicted-rebasing") || !strings.Contains(out.Report.Summary, pushed) {
+					t.Fatalf("the request does not say what it rebases: %+v", out.Report)
+				}
+				return
+			}
+			if !hasFinding(out.Report, "ci-conflicted") || !strings.Contains(out.Report.Findings[0].Description, tc.because) {
+				t.Fatalf("the conflict holds without naming %q: %+v", tc.because, out.Report)
+			}
+		})
 	}
 }
