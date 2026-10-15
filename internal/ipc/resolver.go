@@ -38,10 +38,12 @@ func (Request) HoldResolver() store.Resolver {
 
 // WakeAcknowledger returns who an acknowledgement carried by a request on
 // this protocol is recorded as having come from, which is always
-// [store.AcknowledgedByCoordinator].
+// [store.AcknowledgedByCoordinator]. That covers a drain as well as an
+// acknowledgement, because a drain acknowledges the rows it returns.
 //
-// It is HoldResolver's rule applied to the queue. MethodWakesAcknowledge is
-// the coordinator's: the handler refuses a task's worker from the caller's
+// It is HoldResolver's rule applied to the queue. MethodWakesAcknowledge and
+// the two drains, MethodWakesList and MethodWakesWait, are the
+// coordinator's: the handler refuses a task's worker from the caller's
 // credentials, and a coordinator acting under PRD section 9's authority is
 // the one caller left. So, as with a hold, what has to hold is what a call
 // may say about itself, and the two mechanisms are the same: no frame this

@@ -683,6 +683,9 @@ func ranAs(result pipeline.StageResult) string {
 		return "This stage ran, found something a person had to decide, and a person skipped it."
 	case pipeline.OutcomePassed:
 		return "This stage ran and nothing it found needed anything done about it."
+	case pipeline.OutcomeRebase:
+		return "This stage ran, found the pull request conflicting with its base after the push, and sent " +
+			"the run back to rebase it; the stages since then are that pass."
 	case pipeline.OutcomePending:
 		return "This stage ran and what became of it was not recorded."
 	default:

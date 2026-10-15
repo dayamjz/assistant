@@ -198,7 +198,8 @@ func TestEveryCycleEdgeCarriesTheStagesRoundLimit(t *testing.T) {
 }
 
 // backEdgeOwners returns, for every edge index the built graph reports as a
-// back edge, the stage whose fix node or request node that edge leaves. The owner is read off
+// back edge, the stage whose fix, request or hold node that edge leaves, or
+// whose own node it leaves for the path back to rebase. The owner is read off
 // the topology - the node the edge starts at - rather than computed from any
 // formula, so what it reports is what the graph is rather than what a
 // derivation says it should be.
@@ -211,13 +212,20 @@ func backEdgeOwners(t *testing.T, g *graph.Graph) map[int]Stage {
 		}
 		found := false
 		for _, stage := range Order() {
-			if e.From == stage.FixNode() || e.From == stage.RequestNode() {
+			switch {
+			case e.From == stage.FixNode() || e.From == stage.RequestNode(),
+				// The path back from the checks stage to rebase, and the hold
+				// exits the graph reads as back edges because that path exists;
+				// repush.go says why.
+				e.From == stage.Node() && stage.RebasesAfterPush() && e.To == StageRebase.Node(),
+				e.From == stage.HoldNode() && holdExitRounds(stage) > 0:
 				owners[i] = stage
 				found = true
 			}
 		}
 		if !found {
-			t.Fatalf("edge %d, %q -> %q, is a back edge leaving no stage's fix or request node", i, e.From, e.To)
+			t.Fatalf("edge %d, %q -> %q, is a back edge leaving no stage's fix, request or hold node "+
+				"and not the path back to rebase", i, e.From, e.To)
 		}
 	}
 	return owners
@@ -275,13 +283,21 @@ func TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations(t *testing.T) {
 		// One per stage taking automatic rounds, and one per requestable
 		// stage for the rounds a person may ask for at its hold, since a
 		// fixer was given.
-		requestable := 0
+		requestable, rebasing := 0, 0
 		for _, stage := range Order() {
 			if stage.Requestable() {
 				requestable++
 			}
+			// The path back from the checks stage to rebase is one back edge,
+			// and every hold on that path has an exit the graph reads as one.
+			if stage.RebasesAfterPush() {
+				rebasing++
+			}
+			if holdExitRounds(stage) > 0 {
+				rebasing++
+			}
 		}
-		if want := len(taking) + requestable; len(owners) != want {
+		if want := len(taking) + requestable + rebasing; len(owners) != want {
 			t.Errorf("configuration %q has %d back edges, want %d", name, len(owners), want)
 		}
 		for i, stage := range owners {

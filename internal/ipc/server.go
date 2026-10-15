@@ -135,7 +135,8 @@ type Ancestry interface {
 	// It is called on the goroutine serving the request it decides, so it may
 	// take as long as resolving a process tree takes without holding up
 	// anything else on that connection, and it is counted against
-	// ServerConfig.MaxInFlight while it does. A panic here costs that one
+	// ServerConfig.MaxInFlight while it does, or, for a restricted stream,
+	// against ServerConfig.MaxStreams, which the stream already holds. A panic here costs that one
 	// request, exactly as a panic in a Handler does: it is recovered, reported
 	// through ServerConfig.ReportPanic, and answered as an internal error.
 	Contained(ctx context.Context, c Credentials) (Containment, error)
@@ -151,8 +152,17 @@ type ServerConfig struct {
 	// restricted methods to a validating agent, which is the failure the rule
 	// exists to prevent, so a server cannot be built without one.
 	Ancestry Ancestry
-	// Events is the stream subscribers attach to.
+	// Events is the stream MethodEventsSubscribe attaches to.
 	Events *Publisher
+	// Streams is the publisher of every other streaming method, by method.
+	// It may be nil or leave a method out, and a stream nothing publishes is
+	// refused with ErrUnavailable when a caller asks for it rather than
+	// opened on a publisher that will never deliver. Nothing here sends one
+	// method's events to another's subscribers: which publisher an event
+	// reaches is the producer's choice, and a producer that put a
+	// restricted stream's events on Events would have published them to
+	// every caller, which this package cannot see.
+	Streams map[Method]*Publisher
 	// Backlog is the per-subscriber queue depth. Zero means DefaultBacklog.
 	Backlog int
 	// MaxFrameBytes bounds one frame in either direction. Zero means
@@ -437,17 +447,26 @@ func (c *conn) dispatch(f frame) {
 		return
 	}
 	peer := c.peer.withMarker(f.Marker)
+	if spec.Kind == KindStream && spec.Access == AccessRestricted {
+		c.startAdmittedStream(f, spec, peer)
+		return
+	}
 	if spec.Kind == KindStream {
-		// A stream is authorized here rather than on a goroutine of its own,
-		// because opening it has to be ordered against a cancel that may
+		// An open stream is authorized here rather than on a goroutine of its
+		// own, because opening it has to be ordered against a cancel that may
 		// follow it on this connection. Nothing a caller supplied runs here:
-		// the method table refuses a streaming method that is restricted, so
-		// this decides an open method, which is a comparison.
+		// an open method's authorization is a comparison. A restricted stream
+		// takes startAdmittedStream instead, which is the same ordering with
+		// the decision moved off this goroutine.
 		if err := c.authorize(spec, peer); err != nil {
 			c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
 			return
 		}
-		c.startStream(f)
+		sub, ok := c.openStream(f)
+		if !ok {
+			return
+		}
+		c.acknowledgeStream(f, sub)
 		return
 	}
 	// The slot is taken before authority is decided, because deciding it is
@@ -562,15 +581,24 @@ func undeliverableAnswer(id uint64, code Code) frame {
 // fixedRefusals are the frames this package must always be able to write: the
 // fallback answer to a request whose reply could not be delivered, and each
 // reason a stream ends over something rather than nothing. Every one of them
-// carries a fixed message, so the widest identifier gives the widest frame.
+// carries a fixed message, so the widest identifier gives the widest frame,
+// and a stream's end is measured for every streaming method the table
+// declares, because the method's name is in the frame.
 func fixedRefusals() []frame {
 	const widest = ^uint64(0)
-	return []frame{
+	out := []frame{
 		undeliverableAnswer(widest, CodeFrameTooLarge),
 		undeliverableAnswer(widest, CodeInternal),
-		{ID: widest, Done: true, Error: newError(MethodEventsSubscribe, ErrSubscriberStalled)},
-		{ID: widest, Done: true, Error: newError(MethodEventsSubscribe, errUndeliverableControl)},
 	}
+	for _, spec := range specs {
+		if spec.Kind != KindStream {
+			continue
+		}
+		out = append(out,
+			frame{ID: widest, Done: true, Error: newError(spec.Method, ErrSubscriberStalled)},
+			frame{ID: widest, Done: true, Error: newError(spec.Method, errUndeliverableControl)})
+	}
+	return out
 }
 
 // minFrameBytes is the widest of those, measured rather than guessed so it
@@ -655,21 +683,39 @@ func (c *conn) authorize(spec Spec, peer Peer) error {
 	return nil
 }
 
-// startStream subscribes and pumps events to the caller. The subscription is
-// acknowledged before the first event, so a caller learns synchronously that
-// its stream is open.
-func (c *conn) startStream(f frame) {
-	sub, err := c.srv.cfg.Events.Subscribe(c.srv.cfg.Backlog)
+// publisherOf is the publisher a streaming method attaches to, or the
+// refusal a caller gets when this server publishes nothing for it.
+func (c *conn) publisherOf(m Method) (*Publisher, error) {
+	if m == MethodEventsSubscribe {
+		return c.srv.cfg.Events, nil
+	}
+	if p := c.srv.cfg.Streams[m]; p != nil {
+		return p, nil
+	}
+	return nil, fmt.Errorf("%w: this service publishes no stream for %q", ErrUnavailable, m)
+}
+
+// openStream subscribes and registers the stream under the frame's
+// identifier, on the goroutine reading the connection, so a cancel that
+// follows on this connection finds it. It answers the caller itself when it
+// cannot, and reports whether the stream is open.
+func (c *conn) openStream(f frame) (*Subscription, bool) {
+	pub, err := c.publisherOf(f.Method)
 	if err != nil {
 		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
-		return
+		return nil, false
+	}
+	sub, err := pub.Subscribe(c.srv.cfg.Backlog)
+	if err != nil {
+		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
+		return nil, false
 	}
 	c.mu.Lock()
 	if _, dup := c.streams[f.ID]; dup {
 		c.mu.Unlock()
 		sub.Close()
 		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, fmt.Errorf("%w: stream %d is already open", ErrInvalidRequest, f.ID))})
-		return
+		return nil, false
 	}
 	if limit := c.srv.maxStreams(); len(c.streams) >= limit {
 		open := len(c.streams)
@@ -677,10 +723,17 @@ func (c *conn) startStream(f frame) {
 		sub.Close()
 		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, fmt.Errorf("%w: this connection already holds %d of %d allowed event streams",
 			ErrConnectionBusy, open, limit))})
-		return
+		return nil, false
 	}
 	c.streams[f.ID] = sub
 	c.mu.Unlock()
+	return sub, true
+}
+
+// acknowledgeStream tells the caller its stream is open and starts pumping
+// it. The acknowledgement goes out before the first event, so a caller
+// learns synchronously that its stream is open.
+func (c *conn) acknowledgeStream(f frame, sub *Subscription) {
 	if err := c.w.write(c.ctx, frame{ID: f.ID, Result: json.RawMessage("{}")}); err != nil {
 		c.endStream(f.ID, ErrStreamClosed)
 		return
@@ -688,7 +741,59 @@ func (c *conn) startStream(f frame) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		c.pump(f.ID, sub)
+		c.pump(f.ID, f.Method, sub)
+	}()
+}
+
+// startAdmittedStream opens a restricted stream: the access check a
+// restricted request gets, and then the handler, both on a goroutine of
+// their own, before anything the stream carries is written.
+//
+// The subscription is opened and registered here, on the goroutine reading
+// the connection, so a cancel that follows is ordered against it exactly as
+// it is for an open stream; only the decision moves. Until the decision is
+// made nothing is acknowledged and nothing is pumped, so an event published
+// meanwhile waits in the stream's own bounded queue and reaches the caller
+// only once it has been admitted. A refusal closes the subscription unread
+// and answers the caller, so a refused caller is never written an event.
+//
+// The handler is asked with a Request naming the stream's method, and its
+// error is the refusal; its result is not read. That is how a stream turns
+// on a relation this package does not own, such as whether the caller is a
+// task's worker: the same handler that decides it for a request decides it
+// here, from the same Credentials. A handler that does not recognize the
+// method refuses it, so a stream is closed until its handler says otherwise.
+//
+// The decision is counted against ServerConfig.MaxStreams rather than
+// MaxInFlight, because the registration it runs behind already holds one of
+// those slots, and a cancel or the connection ending while it runs leaves
+// nothing to answer.
+func (c *conn) startAdmittedStream(f frame, spec Spec, peer Peer) {
+	sub, ok := c.openStream(f)
+	if !ok {
+		return
+	}
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		_, err := c.serveRequest(f, spec, peer, &answered{})
+		c.mu.Lock()
+		held, open := c.streams[f.ID]
+		open = open && held == sub
+		if open && err != nil {
+			delete(c.streams, f.ID)
+		}
+		c.mu.Unlock()
+		switch {
+		case !open:
+			// A cancel or the connection ending took the stream while the
+			// decision ran, and closed it; there is nobody to answer.
+		case err == nil:
+			c.acknowledgeStream(f, sub)
+		default:
+			sub.Close()
+			c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
+		}
 	}()
 }
 
@@ -701,11 +806,11 @@ func (c *conn) startStream(f frame) {
 // raise the gap, because a gapped consumer reads back what it missed, and
 // control ends the stream, because nothing gives it back. A connection that
 // failed ends the stream too, because there is nothing left to deliver on.
-func (c *conn) pump(id uint64, sub *Subscription) {
+func (c *conn) pump(id uint64, method Method, sub *Subscription) {
 	for {
 		e, err := sub.Recv(c.ctx)
 		if err != nil {
-			c.finishStream(id, err)
+			c.finishStream(id, method, err)
 			return
 		}
 		event := e
@@ -723,7 +828,7 @@ func (c *conn) pump(id uint64, sub *Subscription) {
 			// dropping one would be the invariant relaxed in the one path
 			// nobody looks at. The stream ends with a reason instead, and
 			// attaching again reconciles.
-			c.finishStream(id, errUndeliverableControl)
+			c.finishStream(id, method, errUndeliverableControl)
 			return
 		default:
 			// Activity and state are recoverable, so an event that could not
@@ -736,7 +841,7 @@ func (c *conn) pump(id uint64, sub *Subscription) {
 }
 
 // finishStream tells the caller a stream ended and why, and forgets it.
-func (c *conn) finishStream(id uint64, cause error) {
+func (c *conn) finishStream(id uint64, method Method, cause error) {
 	c.mu.Lock()
 	sub, ok := c.streams[id]
 	delete(c.streams, id)
@@ -746,7 +851,7 @@ func (c *conn) finishStream(id uint64, cause error) {
 	}
 	f := frame{ID: id, Done: true}
 	if cause != nil && !errors.Is(cause, ErrStreamClosed) && !errors.Is(cause, context.Canceled) {
-		f.Error = newError(MethodEventsSubscribe, cause)
+		f.Error = newError(method, cause)
 	}
 	_ = c.w.write(c.ctx, f)
 }

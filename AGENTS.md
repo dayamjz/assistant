@@ -188,8 +188,8 @@ Each has cost this repository more than one round of review.
   understates who decided rather than overstating it. It records and does not
   gate, so nothing may branch on the value to decide whether a resolution may
   proceed. `Acknowledger` is the same shape for the wake queue, with no member
-  meaning a person and, in this build, no producer: the ipc rows that would
-  derive it wait on #91's worker set. The queue is `wake`, a table and never a
+  meaning a person; `internal/ipc`'s `Request.WakeAcknowledger` is the
+  coordinator's producer. The queue is `wake`, a table and never a
   directory, appended and sealed so acknowledging is a row's one revision;
   `AppendWakeWithMarkers` is the only way a wake lands and it advances the
   task's `wake_marker` row in the same transaction, deriving the change epoch
@@ -199,7 +199,9 @@ Each has cost this repository more than one round of review.
   `supervisor_incarnation` with `ErrStaleIncarnation` inside the same
   transaction: the store owns which loop incarnation is current, and that is
   the fence `internal/service`'s repair in place rests on. A
-  drain is a read, delivery is at least once, and `OpenReadOnly` is the open
+  drain acknowledges what it returns (PRD section 8), so delivery to a drain
+  is at most once and the row is kept; `QueuedWakes` is the read that takes
+  nothing, for the program's own reconciliation, and `OpenReadOnly` is the open
   a reader with no service takes, answering `ErrUnreadable` for what it
   cannot read. It also holds the run checkpoint history the durability layer needs,
   which is the only record of a run's position: opaque payloads indexed by run
@@ -404,6 +406,11 @@ Each has cost this repository more than one round of review.
   a field for who resolved a hold, and `Request.HoldResolver` derives the answer
   from the surface rather than reading it, so a caller cannot claim a person
   decided; `Request.WakeAcknowledger` is the same rule for the wake queue.
+  A stream may be restricted: `wakes.subscribe` is, and it is opened only
+  after the access check and then the handler admit the caller, off the
+  goroutine reading the connection, so a coordinator's wake reaches neither
+  a contained caller nor a worker; it has its own publisher in
+  `ServerConfig.Streams`, because the open event stream reaches everyone.
   Whether a peer is a task's worker is a second relation over the same
   `Credentials`, decided by the handler from `internal/session`'s worker group
   set and never a third access class: the rows whose answer turns on it
@@ -438,7 +445,10 @@ Each has cost this repository more than one round of review.
   riding as the hold's `Halt.Detail`, and it always holds again after. It
   exists only at the stage table's requestable stages, the ones before push,
   and its edge back is `graph.Edge.Answered`, exempt from convergence and
-  from no other bound. Read its
+  from no other bound. The checks stage's path back to rebase (`repush.go`) is
+  a third, the one edge from a stage to an earlier stage, and because of it
+  `internal/graph` reads every hold exit on that path as a back edge, so those
+  carry a bound too. Read its
   `doc.go` before changing the loop or the holds, and for the residual gaps: no
   review reads what a person left unselected, and convergence is over the whole
   state.
@@ -802,8 +812,8 @@ Each has cost this repository more than one round of review.
   hands the two kinds with a record beside the history to that record's
   writer (`acknowledgeMessage`, and `route.go`'s `fileReport`, whose request
   detail is the report);
-  `wakes.list`, `wakes.acknowledge`, `wakes.wait` and `supervision.assert`
-  refuse one; the
+  `wakes.list`, `wakes.acknowledge`, `wakes.wait`, `wakes.subscribe` and
+  `supervision.assert` refuse one; the
   coordinator's task methods (`coordinator.go`'s create, promote and
   relaunch, `steer.go`'s message, stop and interrupt, `peek.go`'s peek, and
   `task.respond`) refuse one through the same `refuseWorker`. `task.peek`
@@ -1032,12 +1042,16 @@ Each has cost this repository more than one round of review.
   `coordinator.go` names the gap in that placement, a reparented chain. `skills/coordinator/SKILL.md` is what it tells a
   coordinating agent, and claims only what the build does. `peek`'s output
   and attach command are in the structured answer only, because a worker's
-  output is never relayed (P13) and the command names a home path. Its `await` is
-  `internal/service`'s `wakes.wait`: one request answered from a
-  `store.DrainWakes` read when the queue holds a queued wake or its bound
-  elapses, acknowledging nothing, woken by a bell the supervisor loop rings
-  on an append and never read as a record; `wakewait.go` owns that and its
-  gaps, and `machine.WakeWaitRequest.Bounds` is the one owner of the range.
+  output is never relayed (P13) and the command names a home path. Its `wakes`
+  and `await` drain, and a drain acknowledges what it returns: `await` is
+  `internal/service`'s `wakes.wait`, one request answered with a
+  `store.DrainWakes` when the queue holds a queued wake or its bound elapses,
+  woken by a bell the supervisor loop rings on an append and never read as a
+  record. Its `listen` holds `wakes.subscribe`, on which the service pushes
+  each wake the loop appends and acknowledges nothing; `acknowledge` is for a
+  row handled without a drain. `wakewait.go` owns the push, the wait and
+  their gaps, and `machine.WakeWaitRequest.Bounds` is the one owner of the
+  range.
   `assistant worker` is a launched worker's route back to the program: its
   subcommands are the `workerActions` table in `worker.go`, each one
   `task.event`, and `workerRoute` is the one composition of the prefix

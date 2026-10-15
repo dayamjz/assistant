@@ -189,8 +189,9 @@ the local protocol's restricted `task.create` method; there is no person-facing
 create verb, by PRD section 9's design. Each delivery task is cut its own copy,
 asserted isolated before its worker starts, and the worker is started through
 the resolved adapter's worker sessions, which the Claude Code adapter declares.
-A supervisor loop keeps a durable wake queue for the coordinator, and
-`assistant host install` prints, or with `--write` adds, the stop guard that
+A supervisor loop keeps a durable wake queue for the coordinator and pushes
+each wake to a coordinator holding `assistant coordinator listen`; a drain
+takes what is queued and records it as handled. `assistant host install` prints, or with `--write` adds, the stop guard that
 keeps the coordinator's turn from ending while work is in flight with no live
 supervisor. A worker's
 push goes through the gate like anyone's, unless its task was recorded under the

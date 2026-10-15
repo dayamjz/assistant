@@ -118,6 +118,58 @@ func TestThePushStageRefusesWhenTheBranchMovedSinceTheRunObservedIt(t *testing.T
 	}
 }
 
+// A second push, which a run makes after the checks stage sent it back to
+// rebase, is anchored only where the run's first push left the branch.
+//
+// Most anchors from before the first push are refused without that rule,
+// because the first push moved the branch off them and internal/safety's
+// fresh read sees it. The one that is not is a branch somebody put back where
+// it stood before the run: the old observation then matches the branch again,
+// and a decision on it alone would force the second push over whatever they
+// meant by putting it back. Here the branch stood at a commit before the run,
+// the run pushed another, and the branch is back on the first; the stage
+// refuses and holds, and the branch stays where they put it.
+//
+// The control is the same branch and the same anchor in a run that has not
+// pushed, which is a first push: the decision over that anchor allows the
+// update, so the refusal above is the second-push rule and nothing else.
+func TestASecondPushIsAnchoredOnlyWhereTheFirstLeftTheBranch(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	for _, tc := range []struct {
+		name   string
+		second bool
+	}{
+		{"a second push over a branch put back where it stood before the run", true},
+		{"control: the same anchor on a first push", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := newPushRun(t)
+			before := run.commitOnUpstreamBranch(t, "topic", "before.txt", "where the branch stood\n")
+			run.anchor = run.anchorFor(t, "refs/heads/topic", true, before)
+			if tc.second {
+				// The commit the run's first push forwarded. The branch no
+				// longer holds it, which is the branch put back.
+				run.pushed = run.commitOnUpstreamBranch(t, "first", "first.txt", "the first push\n")
+			}
+
+			report := run.mustPush(t)
+			if report.HasHeld() != tc.second || hasFinding(report, "push-refused") != tc.second {
+				t.Fatalf("held = %v, want %v: %+v", report.HasHeld(), tc.second, report)
+			}
+			want := run.head
+			if tc.second {
+				want = before
+				if !strings.Contains(report.Findings[0].Description, run.pushed) {
+					t.Fatalf("the refusal does not name the commit the first push left, %s: %+v", run.pushed, report)
+				}
+			}
+			if got := run.upstreamCommit(t, "refs/heads/topic"); got != want {
+				t.Fatalf("the branch stands at %s, want %s", got, want)
+			}
+		})
+	}
+}
+
 // TestThePushStageRelaysTheCommitsARefusalWouldDiscardAndItsRemedy is what a
 // person at the push-refused hold needs in order to decide: which commits
 // somebody else landed, and what gets the run past them. The stage relays both
@@ -410,7 +462,10 @@ type pushRun struct {
 	source string
 
 	// The facts a test varies to exercise one guard at a time.
-	anchor         string
+	anchor string
+	// pushed is the commit an earlier push of this run forwarded, empty for a
+	// run that has not pushed.
+	pushed         string
 	reviewedCommit string
 	reviewOutcome  pipeline.Outcome
 }
@@ -575,6 +630,7 @@ func (r *pushRun) state(t *testing.T) map[pipeline.Key]graph.Value {
 		pipeline.KeyBase:                  graph.TextValue("main"),
 		pipeline.KeyHead:                  graph.TextValue(r.head),
 		pipeline.KeyPushAnchor:            graph.TextValue(r.anchor),
+		pipeline.KeyPushed:                graph.TextValue(r.pushed),
 		pipeline.StageReview.ReportKey():  graph.TextValue(string(review)),
 		pipeline.StageReview.OutcomeKey(): graph.TextValue(string(r.reviewOutcome)),
 	}

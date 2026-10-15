@@ -193,32 +193,38 @@
 // CurrentIncarnation. It is one row rather than a history because the
 // question is present tense, and the epoch only grows across restarts.
 //
-// Draining is a read. DrainWakes returns the queued rows oldest first under
-// a batch limit and acknowledges none, so delivery is at least once by
-// construction and every consumer is idempotent over a row's identifier: a
-// consumer that handled a wake and did not acknowledge it, because it
-// crashed or ended its turn between the two, is handed the same row again.
-// AcknowledgeWakes is the one revision a row takes, a batch that checks
+// Draining acknowledges, which is PRD section 8's "draining acknowledges a
+// row and never deletes it". DrainWakes reads the queued rows oldest first
+// under a batch limit and acknowledges exactly those rows, by the drainer, in
+// the transaction that read them, so a second drain does not return them and
+// the table keeps them. A row is actionable until acknowledged, and a drain
+// is an acknowledgement, so delivery to a drain is at most once: a consumer
+// that drained a row and crashed before acting on it, or whose answer never
+// reached its caller, is not handed the row again. That is the PRD's text
+// rather than a choice made here, and wake.go's DrainWakes states it; what
+// is left to such a consumer is the kept row in TaskWakes and whatever the
+// supervisor loop surfaces next. QueuedWakes is the read that takes nothing,
+// for the program's own reconciliation and relaunch, which must see what
+// stands for the coordinator without handing it over. AcknowledgeWakes is
+// the acknowledgement of a row that was not drained, a batch that checks
 // every identifier and then writes every row in one transaction, so an
-// unknown identifier or a row already acknowledged refuses the batch with a
-// *WakeIDError and writes nothing, and a subset acknowledged leaves the rest
-// queued. UnacknowledgedWakes is the queue's half of PRD section 5's "work
-// is in flight": how many queued rows each task has, which
-// internal/supervisor's in-flight table reads beside the resolved states.
-// Which states are in flight is that table's and not this package's.
+// unknown identifier or a row already acknowledged, a drained one included,
+// refuses the batch with a *WakeIDError and writes nothing, and a subset
+// acknowledged leaves the rest queued. UnacknowledgedWakes is the queue's
+// half of PRD section 5's "work is in flight": how many queued rows each
+// task has, which internal/supervisor's in-flight table reads beside the
+// resolved states. Which states are in flight is that table's and not this
+// package's.
 //
 // Who acknowledged is an Acknowledger, closed on Resolver's terms and for
 // Resolver's reason: a struct with one unexported field, so no text a
 // caller was handed decodes into one, and the member a surface records is
 // decided in source at that surface. There is no member meaning a person,
 // because no surface here witnesses one and the queue is the coordinator's.
-// AcknowledgedByCoordinator has no producer in this build: its producer is
-// the two machine-interface rows that drain and acknowledge the queue, and
-// those are not added before the worker set #91 produces exists, because a
-// method that exists and admits a task worker to the coordinator's queue is
-// worse than one that does not, so the rows wait on that set, and with them
-// the derivation internal/ipc will make from the surface the way
-// Request.HoldResolver does. AcknowledgedByProgram's one producer is
+// AcknowledgedByCoordinator's producer is internal/ipc's
+// Request.WakeAcknowledger, which internal/service passes to DrainWakes for
+// the coordinator's drains and to AcknowledgeWakes for its acknowledgements,
+// each refused for a task's worker. AcknowledgedByProgram's one producer is
 // internal/service's relaunch, for the terminal-gone rows about the session
 // it replaced. This records and does not gate: every member closes a row on
 // the same terms.

@@ -48,6 +48,16 @@ const (
 	// and holds again so the person sees the result. The answer carries what
 	// the round is to resolve as a FixRequest, in the hold's detail.
 	OutcomeFixRequested Outcome = "fix"
+	// OutcomeRebase means the stage found the pull request conflicting with
+	// its base after the push and sent the run back to the rebase stage, PRD
+	// section 14 decision 7's rebase of a conflicted pull request. Only a
+	// stage whose row says Stage.RebasesAfterPush records it, and only over a
+	// report that would otherwise have passed, so a stage that found anything
+	// to fix or to hold for still does that instead. It stands only while the
+	// run takes that path: the stage runs again at the end of it and records
+	// what it found then, unless RebaseAfterPushRounds parks the run first, in
+	// which case it is the outcome the parked run shows for the stage.
+	OutcomeRebase Outcome = "rebase"
 )
 
 // holdOptions are the answers a hold accepts, and they are the outcomes a

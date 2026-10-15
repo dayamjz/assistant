@@ -92,7 +92,19 @@ func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
 				if err := w.Set(string(stage.ReportKey()), graph.TextValue(string(encoded))); err != nil {
 					return err
 				}
-				if err := w.Set(string(stage.OutcomeKey()), graph.TextValue(string(classify(report)))); err != nil {
+				outcome := classify(report)
+				if out.Rebase {
+					if !stage.RebasesAfterPush() {
+						return fmt.Errorf("%w: %s", ErrRebaseNotOffered, stage)
+					}
+					// A hold or a fix round wins over the rebase, so asking
+					// for one never trades away a finding: only a report that
+					// would have passed takes the path back.
+					if outcome == OutcomePassed {
+						outcome = OutcomeRebase
+					}
+				}
+				if err := w.Set(string(stage.OutcomeKey()), graph.TextValue(string(outcome))); err != nil {
 					return err
 				}
 				return applyWrites(w, permitted, "stage "+stage.String(), out.Writes)

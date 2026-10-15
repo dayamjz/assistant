@@ -86,7 +86,8 @@ const callVerb = "ipc-call"
 // the kernel attributes and the test could not state. It takes the socket,
 // the method and the parameters as JSON, writes the answer to standard
 // output, and on a refusal writes the wire code to standard error and exits
-// non-zero. Nothing here decides anything: it is internal/ipc's client over
+// non-zero. A streaming method is opened rather than called, and "{}" is
+// the answer that it opened. Nothing here decides anything: it is internal/ipc's client over
 // the arguments it was given.
 func callMain() {
 	if len(os.Args) != 5 || os.Args[1] != callVerb {
@@ -101,6 +102,25 @@ func callMain() {
 		os.Exit(2)
 	}
 	defer func() { _ = client.Close() }()
+	if spec, ok := ipc.Lookup(ipc.Method(method)); ok && spec.Kind == ipc.KindStream {
+		// A stream answers with events rather than a result, so what this
+		// reports is whether the service opened it: "{}" when it did, and
+		// the refusal's code when it did not, which is the half a test
+		// placing this process in a worker's group asks about.
+		stream, err := client.SubscribeTo(ctx, ipc.Method(method), json.RawMessage(params))
+		if err != nil {
+			var wire *ipc.Error
+			if errors.As(err, &wire) {
+				fmt.Fprint(os.Stderr, string(wire.Code))
+				os.Exit(1)
+			}
+			fmt.Fprintln(os.Stderr, "subscribe:", err)
+			os.Exit(2)
+		}
+		stream.Close()
+		fmt.Fprint(os.Stdout, "{}")
+		os.Exit(0)
+	}
 	var answer json.RawMessage
 	if err := client.Call(ctx, ipc.Method(method), json.RawMessage(params), &answer); err != nil {
 		var wire *ipc.Error
