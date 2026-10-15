@@ -114,6 +114,10 @@ const (
 	// ReasonNoChange is a pass that observed everything and found nothing
 	// changed.
 	ReasonNoChange Reason = "no-change"
+	// ReasonRoutine is an event whose kind taskstate marks Routine: the
+	// program's record of an act the coordinator asked for or the program
+	// made itself, which asks nobody anything.
+	ReasonRoutine Reason = "routine"
 	// ReasonSurfacedThisWindow is a ClassResurface wake that has already
 	// surfaced and whose window, measured from that surface, has not
 	// elapsed: the crashed worker PRD section 5 surfaces once per
@@ -138,6 +142,13 @@ func (v Verdict) Surfaces() bool { return v.Level != Absorb }
 //
 //   - A wake nothing built, or an event whose kind is unrecognized, surfaces
 //     with ReasonUnrecognized before anything else is read.
+//   - An event whose kind taskstate marks Routine absorbs with
+//     ReasonRoutine, whatever evidence says. It is the third case this
+//     package absorbs with no proof of progress, and it rests on the entry
+//     itself rather than on time: the program wrote it about an act the
+//     coordinator asked for or the program made, so it tells the
+//     coordinator nothing. What the act leads to, a worker that never
+//     starts or dies, is the terminal's reading and surfaces there.
 //   - ClassActionable surfaces, whatever evidence, window and surfaced say.
 //   - ClassResurface reads no evidence. Not yet surfaced, it surfaces as
 //     actionable; surfaced, it absorbs while window is WindowOpen and
@@ -154,8 +165,8 @@ func (v Verdict) Surfaces() bool { return v.Level != Absorb }
 //     when the escalation window elapses, so a screen unchanged for that long
 //     surfaces even with evidence. And without evidence, surfaced=true
 //     absorbs while the window is open, which with ClassResurface's absorb
-//     is one of the two cases this package absorbs with no proof of
-//     progress: the terminal-ish wait that has surfaced once and whose idle
+//     and the routine entry is one of the three cases this package absorbs
+//     with no proof of progress: the terminal-ish wait that has surfaced once and whose idle
 //     screen is redrawing. When the window elapses it surfaces once more,
 //     and the caller restarts the window at that surface, so the
 //     post-surface absorb lasts one window at a time and not for good.
@@ -180,6 +191,9 @@ func Classify(wake Wake, evidence Evidence, window WindowState, surfaced bool, s
 	row, ok := Lookup(wake.kind)
 	if !ok || wake.unrecognized {
 		return Verdict{Level: Surface, Reason: ReasonUnrecognized}
+	}
+	if wake.routine {
+		return Verdict{Level: Absorb, Reason: ReasonRoutine}
 	}
 	switch row.Class {
 	case ClassActionable:

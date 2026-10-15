@@ -4,7 +4,8 @@ import "fmt"
 
 // Acknowledger says who acknowledged a wake, which is the act that takes a
 // row off the queue and, once internal/supervisor's in-flight table reads the
-// queue, releases the stop guard for a task nothing else holds in flight. It
+// queue, releases the stop guard for a task nothing else holds in flight.
+// The same set says who a drain handed a row out to, which closes nothing. It
 // is a closed set on Resolver's terms, and for Resolver's reason: a struct
 // with one unexported field and no conversion into it, so outside this
 // package the only values are the two the functions below return and the
@@ -34,9 +35,10 @@ type Acknowledger struct{ name string }
 // Its one producer is internal/ipc's Request.WakeAcknowledger, which derives
 // it from the surface the way Request.HoldResolver derives a resolver, and
 // no frame carries it; the methods that record it, the drains wakes.list
-// and wakes.wait and the acknowledgement wakes.acknowledge, refuse a task's
-// worker from the worker group set internal/session holds, so the value
-// reaches a row only through a coordinator's call.
+// and wakes.wait as who a row was handed to and the acknowledgement
+// wakes.acknowledge as who closed it, refuse a task's worker from the
+// worker group set internal/session holds, so the value reaches a row only
+// through a coordinator's call.
 func AcknowledgedByCoordinator() Acknowledger { return Acknowledger{name: "coordinator"} }
 
 // AcknowledgedByProgram is an acknowledgement the program made itself, for a

@@ -38,8 +38,9 @@ func (Request) HoldResolver() store.Resolver {
 
 // WakeAcknowledger returns who an acknowledgement carried by a request on
 // this protocol is recorded as having come from, which is always
-// [store.AcknowledgedByCoordinator]. That covers a drain as well as an
-// acknowledgement, because a drain acknowledges the rows it returns.
+// [store.AcknowledgedByCoordinator]. A drain records the same value as who
+// it handed its rows out to, which closes nothing; only an acknowledgement
+// closes a row.
 //
 // It is HoldResolver's rule applied to the queue. MethodWakesAcknowledge and
 // the two drains, MethodWakesList and MethodWakesWait, are the

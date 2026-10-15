@@ -88,8 +88,9 @@
 // "work is in flight" one owner. A state is in flight when something other
 // than a person moves next, including Unknown; a state whose only waiter is
 // a person is not, and what keeps such a task under the guard until the
-// person has been told is a queued wake row, queued until a drain or an
-// acknowledgement takes it, which store.UnacknowledgedWakes counts and
+// person has been told is a queued wake row, queued until an
+// acknowledgement closes it, a drain handing it out leaving it queued,
+// which store.UnacknowledgedWakes counts and
 // InFlightOf reads beside the states. The table is closed in
 // both directions by its test, which derives the set from
 // taskstate.States() and fails on a state with no row, so a state added

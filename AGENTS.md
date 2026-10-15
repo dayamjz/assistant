@@ -199,9 +199,13 @@ Each has cost this repository more than one round of review.
   `supervisor_incarnation` with `ErrStaleIncarnation` inside the same
   transaction: the store owns which loop incarnation is current, and that is
   the fence `internal/service`'s repair in place rests on. A
-  drain acknowledges what it returns (PRD section 8), so delivery to a drain
-  is at most once and the row is kept; `QueuedWakes` is the read that takes
-  nothing, for the program's own reconciliation, and `OpenReadOnly` is the open
+  drain hands rows out and an acknowledgement closes them (PRD section 8):
+  `DrainWakes` records who and under which attachment, migration 31, and a
+  row handed out under an attachment the caller no longer names as held is
+  handed out again, so delivery is at least once and which attachments are
+  held is `internal/service`'s `wakewait.go`; `QueuedWakes` is the read that
+  takes nothing, for the program's own reconciliation and a person's
+  listing, and `OpenReadOnly` is the open
   a reader with no service takes, answering `ErrUnreadable` for what it
   cannot read. It also holds the run checkpoint history the durability layer needs,
   which is the only record of a run's position: opaque payloads indexed by run
@@ -1070,16 +1074,18 @@ Each has cost this repository more than one round of review.
   `coordinator.go` names the gap in that placement, a reparented chain. `skills/coordinator/SKILL.md` is what it tells a
   coordinating agent, and claims only what the build does. `peek`'s output
   and attach command are in the structured answer only, because a worker's
-  output is never relayed (P13) and the command names a home path. Its `wakes`
-  and `await` drain, and a drain acknowledges what it returns: `await` is
-  `internal/service`'s `wakes.wait`, one request answered with a
-  `store.DrainWakes` when the queue holds a queued wake or its bound elapses,
-  woken by a bell the supervisor loop rings on an append and never read as a
-  record. Its `listen` holds `wakes.subscribe`, on which the service pushes
-  each wake the loop appends and acknowledges nothing; `acknowledge` is for a
-  row handled without a drain. `wakewait.go` owns the push, the wait and
-  their gaps, and `machine.WakeWaitRequest.Bounds` is the one owner of the
-  range.
+  output is never relayed (P13) and the command names a home path. Its
+  `wakes --json` and `await` drain, and a drain hands rows out and closes
+  none; `wakes` without `--json` is `wakes.peek`, a person's listing that
+  hands out nothing. `await` is `internal/service`'s `wakes.wait`, one
+  request answered with a `store.DrainWakes` when the queue holds a row on
+  offer or its bound elapses, woken by a bell the supervisor loop rings on an
+  append and never read as a record. Its `listen` holds `wakes.subscribe`,
+  on which the service pushes each wake the loop appends, and holding it is
+  what the service reads as the coordinator attached; `acknowledge`, made
+  after acting, is what closes a row. `wakewait.go` owns the push, the wait,
+  when a handed-out row is handed out again, and their gaps, and
+  `machine.WakeWaitRequest.Bounds` is the one owner of the range.
   `assistant worker` is a launched worker's route back to the program: its
   subcommands are the `workerActions` table in `worker.go`, each one
   `task.event`, and `workerRoute` is the one composition of the prefix

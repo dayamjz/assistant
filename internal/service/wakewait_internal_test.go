@@ -16,7 +16,7 @@ import (
 // wait, and the recheck is not: the recheck is pushed to an hour, past the
 // wait's own minute, so a wait that answers within seconds of the terminal
 // dying was woken by the append. Whatever the loop queued for the planted
-// task before the wait is armed is drained first, so the wait starts
+// task before the wait is armed is acknowledged first, so the wait starts
 // over an empty queue and does not answer while the terminal is live and
 // unchanged inside the escalation window; the scripted terminal is then
 // read dead, and the wait answers with the terminal-gone row the loop
@@ -47,8 +47,18 @@ func TestAnArmedWaitIsWokenByTheLoopsAppendAndNotByItsRecheck(t *testing.T) {
 
 	l.pass(t)
 	l.pass(t)
-	if _, err := l.records(t).DrainWakes(ctx, machine.DefaultWakesLimit, store.AcknowledgedByCoordinator()); err != nil {
+	before, err := l.records(t).QueuedWakes(ctx, machine.DefaultWakesLimit)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(before) > 0 {
+		ids := make([]int64, len(before))
+		for i, w := range before {
+			ids[i] = w.ID
+		}
+		if err := l.records(t).AcknowledgeWakes(ctx, ids, store.AcknowledgedByCoordinator()); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	type answer struct {
@@ -78,7 +88,7 @@ func TestAnArmedWaitIsWokenByTheLoopsAppendAndNotByItsRecheck(t *testing.T) {
 		}
 		found := false
 		for _, w := range got.wakes.Wakes {
-			found = found || (w.TaskID == task && w.Kind == string(supervisor.KindTerminalGone) && !w.Queued())
+			found = found || (w.TaskID == task && w.Kind == string(supervisor.KindTerminalGone) && w.HandedOut())
 		}
 		if !found {
 			t.Fatalf("the wait answered %+v, want the terminal-gone wake of task %s", got.wakes, task)

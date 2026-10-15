@@ -33,7 +33,7 @@ import (
 // validation stage, so nothing here asks whether a caller is contained. The
 // one question a handler asks of a caller is the other relation,
 // whether it is a task's worker, and workers.go derives that from the same
-// credentials for the methods whose answer depends on it: the five there,
+// credentials for the methods whose answer depends on it: the six there,
 // wakewait.go's wakes.wait and wakes.subscribe, coordinator.go's three, steer.go's three,
 // taskholds.go's task.respond, catchup.go's catchup.mark and custody.go's
 // branch.sync. wakes.subscribe is a stream, so internal/ipc asks this only
@@ -122,6 +122,10 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 	case ipc.MethodWakesList:
 		return call(ctx, req, func(ctx context.Context, r machine.WakesRequest) (machine.Wakes, error) {
 			return s.listWakes(ctx, req, r)
+		})
+	case ipc.MethodWakesPeek:
+		return call(ctx, req, func(ctx context.Context, r machine.WakesRequest) (machine.QueuedWakes, error) {
+			return s.peekWakes(ctx, req, r)
 		})
 	case ipc.MethodWakesAcknowledge:
 		return call(ctx, req, func(ctx context.Context, r machine.AcknowledgeRequest) (machine.Acknowledged, error) {

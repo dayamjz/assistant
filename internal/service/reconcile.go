@@ -19,9 +19,10 @@ import (
 // terminal gone with the work not landed is relaunched in its own copy with
 // the same instructions plus a note, ambiguous liveness is left alone, and
 // queued wakes are drained before anything else. The drain is the
-// coordinator's, and draining acknowledges, so the pass reads the queue with
-// store.QueuedWakes and takes nothing: what it reads is logged as standing
-// for the coordinator, whose own drain is what hands it over. This file is that pass as
+// coordinator's, and a drain hands rows out to whoever makes it, so the pass
+// reads the queue with store.QueuedWakes and takes nothing: what it reads is
+// logged as standing for the coordinator, whose own drain is what hands it
+// over. This file is that pass as
 // the service runs it, inside recover, after the runs are reconciled and
 // before anything is served, and before supervise.go's loop begins. "Before
 // serving anything" is a property of the claim and not of the launch: the
@@ -208,7 +209,7 @@ const reconcileProbeTimeout = time.Second
 const reconcileProbeBound = 15 * time.Second
 
 // reconcileDrainLimit bounds the read of the queue that is the pass's input,
-// a store.QueuedWakes read that acknowledges nothing. A queue
+// a store.QueuedWakes read that hands out and acknowledges nothing. A queue
 // longer than this has a coordinator that stopped reading it; the pass reads
 // the oldest rows and says so.
 const reconcileDrainLimit = 4096
