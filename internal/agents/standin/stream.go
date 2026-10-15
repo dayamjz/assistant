@@ -97,7 +97,11 @@ func (l streamLine) text() (string, error) {
 // It exits when its input closes, or after a reply whose exchange says Ends.
 // A script with a Greeting is refused, because a line printed before any
 // message is a line-mode shape and not one the CLI in this mode was seen to
-// produce.
+// produce. The refusal waits for the first input line, or for input to
+// close, and prints nothing either way: exiting before the opener has written
+// its first line would make the opener's write fail on a closed pipe or not,
+// depending on which process the scheduler ran first, and a refusal that
+// races the opener is not one a test can rely on.
 func serveStreamWorker(control string, args []string) int {
 	script, err := readScript(control)
 	if err != nil {
@@ -109,6 +113,7 @@ func serveStreamWorker(control string, args []string) int {
 		worker = &WorkerScript{}
 	}
 	if worker.Greeting != "" {
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 		fmt.Fprintln(os.Stderr, "standin: a stream-mode worker prints nothing before a message, so a script's Greeting is a line-mode shape it does not produce")
 		return exitNoScript
 	}
