@@ -39,14 +39,18 @@ const checksTimeout = 30 * time.Minute
 // states its rollup reading maps a check onto. The pull request it answers is
 // one that adapter produces too: numbered as asked, which the adapter refuses
 // to answer otherwise, in a state its reading maps gh's OPEN, MERGED and
-// CLOSED onto, or the zero state, which is what any other word maps to.
+// CLOSED onto, or the zero state, which is what any other word maps to; its
+// mergeability is one the adapter maps gh's MERGEABLE, CONFLICTING or
+// UNKNOWN onto.
 type checksProvider struct {
 	answer func() forge.ChecksReport
 	reads  int
 	// state is where the pull request stands at the current read, and gets
-	// counts the reads of it.
-	state forge.PullRequestState
-	gets  int
+	// counts the reads of it. mergeability is what the same read reports
+	// about merging it.
+	state        forge.PullRequestState
+	mergeability forge.Mergeability
+	gets         int
 	// refuseGet makes every read of the pull request a refusal the provider
 	// made on its own, with the state above never reached, and refuseChecks
 	// does the same for the checks. Both are the refusal the GitHub adapter
@@ -88,7 +92,7 @@ func (p *checksProvider) Get(ctx context.Context, number int) (forge.PullRequest
 		return forge.PullRequest{}, &forge.Refusal{Reason: forge.ReasonRejected, Op: "get",
 			Detail: "the provider refused to describe the pull request"}
 	}
-	return forge.PullRequest{Number: number, State: p.state, HeadCommit: "0123abc"}, nil
+	return forge.PullRequest{Number: number, State: p.state, Mergeability: p.mergeability, HeadCommit: "0123abc"}, nil
 }
 
 func (p *checksProvider) Checks(ctx context.Context, _ int) (forge.ChecksReport, error) {
@@ -133,6 +137,9 @@ type checksRun struct {
 	upstream string
 	store    *store.Store
 	provider *checksProvider
+	// host, when set, is the code host the body opens instead of provider:
+	// a forgetest stand-in the real GitHub adapter reads over the wire.
+	host forge.Host
 
 	start time.Time
 	now   time.Time
@@ -149,8 +156,9 @@ func newChecksRun(t *testing.T) *checksRun {
 	r := &checksRun{
 		home:     newHome(t),
 		upstream: filepath.Join(t.TempDir(), "upstream.git"),
-		provider: &checksProvider{answer: pending, state: forge.PullRequestStateOpen},
-		start:    time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
+		provider: &checksProvider{answer: pending, state: forge.PullRequestStateOpen,
+			mergeability: forge.MergeabilityMergeable},
+		start: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC),
 	}
 	r.now = r.start
 	git(t, filepath.Dir(r.upstream), "init", "--quiet", "--bare", "-b", "main", r.upstream)
@@ -196,7 +204,11 @@ func (r *checksRun) deps(ctx context.Context, t *testing.T, withoutWaits bool) s
 	t.Helper()
 	cfg := config.Defaults()
 	cfg.ChecksTimeout = checksTimeout
-	deps := stages.NewStageDeps(agents.StageAgent{}, r.home, cfg, hostFor{provider: r.provider}, redact.New())
+	var host forge.Host = hostFor{provider: r.provider}
+	if r.host != nil {
+		host = r.host
+	}
+	deps := stages.NewStageDeps(agents.StageAgent{}, r.home, cfg, host, redact.New())
 	if !withoutWaits {
 		deps = deps.WithChecksWaits(r.store)
 	}
@@ -817,6 +829,14 @@ func TestChecksTimeoutHeldRecognizesOnlyTheElapsedHold(t *testing.T) {
 	merging := newChecksRun(t)
 	merging.provider.state = forge.PullRequestStateMerged
 	ended := merging.mustRun(t)
+	unreported := newChecksRun(t)
+	unreported.provider.answer = green
+	unreported.provider.mergeability = forge.MergeabilityUnknown
+	elapsedOnMergeability := unreported.mustRun(t)
+	conflicting := newChecksRun(t)
+	conflicting.provider.answer = green
+	conflicting.provider.mergeability = forge.MergeabilityConflicted
+	conflicted := conflicting.mustRun(t)
 
 	withJudgeHold := elapsed
 	withJudgeHold.Findings = append(slices.Clone(elapsed.Findings), findings.Finding{
@@ -831,6 +851,8 @@ func TestChecksTimeoutHeldRecognizesOnlyTheElapsedHold(t *testing.T) {
 	}{
 		{"checks running when the timeout elapsed", elapsed, true},
 		{"no checks registered when the timeout elapsed", elapsedOnNoChecks, true},
+		{"mergeability unreported when the timeout elapsed", elapsedOnMergeability, true},
+		{"control: the pull request conflicts", conflicted, false},
 		{"control: checks passed", passed, false},
 		{"control: the pull request ended the wait", ended, false},
 		{"control: the elapsed hold with a fix round's hold appended", withJudgeHold, false},
@@ -840,8 +862,9 @@ func TestChecksTimeoutHeldRecognizesOnlyTheElapsedHold(t *testing.T) {
 			t.Errorf("ChecksTimeoutHeld(%s) = %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	if !elapsed.HasHeld() || !elapsedOnNoChecks.HasHeld() || passed.HasHeld() || ended.HasHeld() {
-		t.Fatalf("the reports are not what the cases say they are: %+v, %+v, %+v, %+v",
-			elapsed, elapsedOnNoChecks, passed, ended)
+	if !elapsed.HasHeld() || !elapsedOnNoChecks.HasHeld() || passed.HasHeld() || ended.HasHeld() ||
+		!hasFinding(elapsedOnMergeability, "ci-mergeability-unknown") || !hasFinding(conflicted, "ci-conflicted") {
+		t.Fatalf("the reports are not what the cases say they are: %+v, %+v, %+v, %+v, %+v, %+v",
+			elapsed, elapsedOnNoChecks, passed, ended, elapsedOnMergeability, conflicted)
 	}
 }
