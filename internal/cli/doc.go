@@ -1,7 +1,7 @@
 // Package cli is the command surface: the verbs PRD section 9 specifies, the
-// flags that parameterize them, the two renderings of one answer, the two
-// subcommands a gate's hooks invoke, and the host verb's turn-end hook and its
-// installer.
+// flags that parameterize them, the two renderings of one answer, the
+// subcommands a gate's hooks invoke, the host verb's turn-end hook and its
+// installer, and the coordinator's client.
 //
 // A person at a terminal and an agent driving programmatically are both
 // first-class users of the same commands. They share the same decisions, the
@@ -16,11 +16,12 @@
 // verbs in cli.go is the whole of what a caller drives. Every row is a command
 // PRD section 9's table names, and a command that section does not name is not
 // here: a verb this product needs and that section does not describe is a
-// finding to raise against the specification, not a row to add quietly. The two
-// things this binary answers to that are not in that table are the gate hook
-// interface and the host hook interface, which the two sections below are
-// about; section 9 names both outside its table and says they are not a
-// precedent for a third.
+// finding to raise against the specification, not a row to add quietly. The
+// three things this binary answers to that are not in that table are the
+// gate hook interface, the host hook interface and the coordinator's client,
+// which the sections below are about; section 9 names all three outside its
+// table. The first two are not a precedent for the third, which the owner
+// decided on #227, and the three are not a precedent for a fourth.
 //
 // Six things the section leaves to a verb's parameters are flags or arguments
 // rather than verbs.
@@ -91,7 +92,7 @@
 // definite admission - a refusal, a failure, a service that did not answer -
 // is a non-zero status and a rejected push.
 //
-// # The host hook verb is the second, and the last
+// # The host hook verb is the second
 //
 // hostHooks in host.go holds "assistant host stop", which the coordinator's
 // host runs from the hook it fires at turn end. It is PRD section 5's stop
@@ -101,7 +102,9 @@
 // and this command is where that verdict becomes an exit status the host
 // reads. It is dispatched beside the table for the gate verb's reason, and
 // PRD section 9 says the two together are not a precedent for a third: each
-// is the interface a hook this program installed or asked for requires.
+// is the interface a hook this program installed or asked for requires. The
+// coordinator's client below is a third because the owner decided it, not
+// because these two allowed it.
 //
 // It decides nothing of its own. The verdict is internal/supervisor's
 // Assess, fed by internal/supervisor/feed's reads of the beacon file, the
@@ -169,6 +172,35 @@
 // hostInputWait, is read as no signal and blocked again; the bounds are
 // chosen, not measured against a host.
 //
+// # The coordinator's client is the third, by decision
+//
+// coordinatorActions in coordinator.go holds "assistant coordinator" and its
+// subcommands, one for each of the coordinator's service methods that has
+// no command in the table: create, message, stop, relaunch and promote a
+// task, list and acknowledge the wake queue, and verify supervision. The
+// owner decided on #227 to keep PRD section 9's table as it is and ship this
+// client beside it, as the gate and host verbs are, and section 9 says so
+// beside the table. It is one verb so the door beside the table is one door.
+// Listing and reading fleet work are not in it, because the table serves
+// both as assistant tasks, and neither is answering a task's hold, which is
+// --answer given --task; task.interrupt is not in it, because the service
+// refuses it on every call.
+//
+// It decides nothing. Every subcommand is one call, the request is
+// internal/machine's shape for the method, and what the service refuses
+// arrives typed: a caller the service places inside a task's worker group
+// is refused with ipc.ErrWorker, decided from the socket's credentials, and
+// nothing here holds a second copy of that rule. The command line is
+// checked before the service is asked: operands, a flag and its -file
+// sibling given together, a file that cannot be read, and wake identifiers
+// that are not numbers are incorrect usage. The refusal rests on the
+// service's placement of its caller, and coordinatorVerbName names the gap
+// in that placement: #225.
+//
+// The subcommand comes first after the verb, for the gate verb's reason:
+// several subcommands take flags with values, and a scan for the subcommand
+// would read a value as one.
+//
 // # Which verbs need the service, and which cannot
 //
 // A verb that acts on a run or on fleet state is a call to the service, which
@@ -195,7 +227,10 @@
 // own rather than one of the four that say a run is finished with. An answer
 // to a task's hold exits with the operational failure exactly when it was a
 // retry that began no work, machine.AnswerEffect.RetryNotBegun, and a retry
-// that began an attempt, by relaunch or by dispatch, is a success.
+// that began an attempt, by relaunch or by dispatch, is a success. Arm
+// verification through the coordinator's client exits with the operational
+// failure when it could not establish a live loop, so a coordinator's
+// session start reads the verdict from the code.
 //
 // A verb's answer goes to standard output as a document under --json, and
 // progress goes to standard error, so a caller redirecting standard output
