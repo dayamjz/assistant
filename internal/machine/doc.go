@@ -56,7 +56,11 @@
 // says what the host's protocol is not; the stop guard installer's rows, one
 // per HostInstallResult and one per HostInstallRefusal, reached through
 // HostInstallPhrase, with HostInstall beside them in host.go and the file and
-// the line kept out of every row; a row per taskstate.State, with the domain derived
+// the line kept out of every row; init's command offer rows in commands.go,
+// one per CommandsResult and one per CommandsRefusal through CommandsPhrase,
+// with the consent row and the row saying nothing is offered for prose
+// documentation, the file and every command kept out of each; a row per
+// taskstate.State, with the domain derived
 // from that package so a state added there fails until it is phrased, and
 // three translations TaskPhrase makes - Paused is never the word but what the
 // worker said it is waiting on, carried on Task.Waiting, Unknown after a

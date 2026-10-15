@@ -974,7 +974,12 @@ Each has cost this repository more than one round of review.
   the one row a person types: it prints the host's line and writes nothing
   unless given `--write` (P1), and refuses rather than overrides a file it
   cannot merge into; `hostinstall.go` names where the host's settings shape
-  comes from and its gaps.
+  comes from and its gaps. `init` offers the test and lint commands a
+  checkout's files declare on the same consent terms: detection in
+  `propose.go` reads files and runs nothing, a command is written into the
+  checkout's `assistant.json` only on `--accept-commands` or a y at a terminal
+  (`Environment.Interactive`, never under `--json`), and every write says it
+  reaches no run until the file lands on the default branch (P7).
   What a person reads is rendered through the `renderings` table in
   `render.go`, which `readOut` dispatches through and `Renderings` enumerates:
   every renderer but four is phrased through `internal/machine`'s table and

@@ -43,6 +43,13 @@ type Environment struct {
 	Executable string
 	// Version is what --version reports.
 	Version string
+	// Interactive says a person is at a terminal: standard input and
+	// standard error are both one. Only init reads it, to decide whether it
+	// may ask about each command it offers, reading the answers from Stdin
+	// and writing the questions to Stderr. It is false unless the process
+	// boundary established it, so a caller that does not set it is never
+	// prompted and consents only through --accept-commands.
+	Interactive bool
 }
 
 // usageError marks a failure that is about the command line rather than about
@@ -650,6 +657,15 @@ func exitFor(answer any) machine.Code {
 		}
 	case machine.HostInstall:
 		if v.Result == machine.HostInstallRefused {
+			return machine.ExitFailure
+		}
+	case machine.Init:
+		// Commands the person consented to and that were not written are a
+		// request not carried out, which a caller has to see without reading
+		// the document, though the gate itself was set up. Every other
+		// result, nothing offered and an offer declined among them, is what
+		// was asked for.
+		if v.Commands.Result == machine.CommandsRefused {
 			return machine.ExitFailure
 		}
 	}
