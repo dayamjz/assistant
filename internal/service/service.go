@@ -434,10 +434,26 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	instance, err := newInstanceID()
+	// The lifecycle log is opened as soon as the lock is held, so a start
+	// that fails after it opened writes why to the log an operator is
+	// pointed at. A failure to open it, and any failure before the lock is
+	// held, is not written there: the log then cannot be written or belongs
+	// to whichever service holds the home, and that failure is this
+	// process's own to return.
+	log, err := o.Home.OpenLog(0)
 	if err != nil {
 		_ = lock.Release()
 		return nil, err
+	}
+	unstarted := func(err error) error {
+		log.Printf("the service could not start: %v", err)
+		_ = log.Close()
+		_ = lock.Release()
+		return err
+	}
+	instance, err := newInstanceID()
+	if err != nil {
+		return nil, unstarted(err)
 	}
 	// PRD section 8 has the service write its instance identity once at
 	// start, after it holds the lock, so that a process outside this one can
@@ -450,12 +466,12 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	// be given, so the strict stance is to not serve rather than to serve
 	// under another process's name.
 	if err := o.Home.WriteInstance(instance); err != nil {
-		_ = lock.Release()
-		return nil, err
+		return nil, unstarted(err)
 	}
 	s := &Service{
 		home:       o.Home,
 		lock:       lock,
+		log:        log,
 		instance:   instance,
 		newStages:  o.NewStages,
 		build:      o.Build,
@@ -504,6 +520,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	s.judge = judge.FromEnvironment(lookup,
 		append(append([]judge.Option(nil), o.Judge...), judge.WithRecorder(decisionRecorder{s}))...)
 	if err := s.openParts(ctx, o); err != nil {
+		s.log.Printf("the service could not start: %v", err)
 		_ = s.Close()
 		return nil, err
 	}
@@ -513,6 +530,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	// first request arrives and the beacon is being written before anything
 	// reads it.
 	if err := s.startSupervision(o.hooks, s.terminals); err != nil {
+		s.log.Printf("the service could not start: %v", err)
 		_ = s.Close()
 		return nil, err
 	}
@@ -545,9 +563,6 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 		return err
 	}
 
-	if s.log, err = s.home.OpenLog(0); err != nil {
-		return err
-	}
 	// The containment registry's entries are recorded durably from here,
 	// so what this service starts and does not live to end is something the
 	// next service of this home can reap; reap.go owns the record.

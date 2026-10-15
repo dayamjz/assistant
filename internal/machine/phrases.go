@@ -1249,18 +1249,35 @@ var (
 		Consequence: "Nothing is validated or watched until it is brought back up.",
 		Decision:    "Run assistant service start when you want it back.",
 	}
+	phraseRestartConfigurationRefused = Phrase{
+		Outcome:     "The service was left up and not restarted, because its replacement would refuse to start on this home's configuration file.",
+		Consequence: "The service that is up keeps serving on the configuration it read when it came up.",
+		Decision:    "Correct the file as the refusal after this says, then repeat the command.",
+	}
+	// PhraseStartConfigurationRefused is a start refused before anything was
+	// launched, because the service would refuse to start on the home's
+	// configuration file. The refusal itself is printed after it.
+	PhraseStartConfigurationRefused = Phrase{
+		Outcome:     "No service was brought up, because it would refuse to start on this home's configuration file.",
+		Consequence: "Nothing is validated or watched until a service is up.",
+		Decision:    "Correct the file as the refusal after this says, then run assistant service start.",
+	}
 )
 
 // LifecyclePhrase is what a person reads about a request to stop or restart
-// the service: the restarted or stopping row when it was accepted, and when it
-// was refused because runs are under way, a row counting them. The runs
-// themselves are the renderer's to list beside it, each by its branch.
+// the service: the restarted or stopping row when it was accepted, the row for
+// a restart refused on the home's configuration file, whose refusal is the
+// renderer's to print after it, and when it was refused because runs are under
+// way, a row counting them. The runs themselves are the renderer's to list
+// beside it, each by its branch.
 func LifecyclePhrase(l Lifecycle) Phrase {
 	switch {
 	case l.Accepted && l.Restarting:
 		return phraseServiceRestarted
 	case l.Accepted:
 		return phraseServiceStopped
+	case l.ConfigurationRefused:
+		return phraseRestartConfigurationRefused
 	}
 	return Phrase{
 		Outcome:     fmt.Sprintf("The service was left up, because %d run(s) are under way.", len(l.Active)),
@@ -1529,7 +1546,8 @@ func TablePhrases() []Phrase {
 		out = append(out, CheckPhrase(Check{Name: name, OK: true}), CheckPhrase(Check{Name: name}))
 	}
 	out = append(out, phraseCheckUnfamiliar, phraseRunCanStart, phraseRunCannotStart)
-	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}))
+	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}),
+		LifecyclePhrase(Lifecycle{ConfigurationRefused: true}), PhraseStartConfigurationRefused)
 	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil), phraseRerunMoved, phraseRerunBehind,
 		phraseCancelUnknown, phraseCancelEnded)
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))

@@ -717,9 +717,14 @@ func readOutDoctor(w io.Writer, report machine.Doctor) {
 
 // readOutLifecycle prints what became of a request to stop or restart the
 // service, and for a refusal each run that caused it, by its branch and its
-// phrase from the record, as the run listing prints one.
+// phrase from the record, as the run listing prints one. A restart refused on
+// the home's configuration file is followed by that file's refusal, which
+// names the key and the value.
 func readOutLifecycle(w io.Writer, answer machine.Lifecycle) {
 	writeln(w, machine.LifecyclePhrase(answer))
+	if answer.ConfigurationRefused {
+		writeln(w, "  "+printable(answer.Detail))
+	}
 	for _, record := range answer.Active {
 		writef(w, "  %s: %s\n", printable(record.Branch), machine.RecordPhrase(record))
 	}

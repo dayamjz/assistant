@@ -10,7 +10,11 @@
 // # Two documents, three layers
 //
 // A global document lives in the operator's home and a repository document,
-// named RepositoryDocument, lives at the repository root. A run reads the
+// named RepositoryDocument, lives at the repository root. The global document
+// is YAML, which PRD section 8 names config.yaml, and is read with ParseYAML;
+// the repository document is JSON and is read with Parse. Both reduce to one
+// value tree and are validated by one walk, so a key means the same thing and
+// is refused the same way in either. A run reads the
 // repository document twice - once from the default branch at a freshly
 // fetched commit, the trusted copy, and once from the commit under
 // validation, the pushed copy - and ResolveRun composes those three layers.

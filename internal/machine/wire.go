@@ -596,6 +596,11 @@ type Lifecycle struct {
 	Active []store.Run `json:"active,omitempty"`
 	// Detail says why it refused, and is empty when it did not.
 	Detail string `json:"detail,omitempty"`
+	// ConfigurationRefused is whether a restart was refused because the
+	// home's configuration file, which a replacement reads at start, could
+	// not be read or parsed when the restart was asked for. Detail then holds
+	// that refusal, and the running service was left serving.
+	ConfigurationRefused bool `json:"configuration_refused,omitempty"`
 }
 
 // Init is the answer to creating or repairing a gate.
