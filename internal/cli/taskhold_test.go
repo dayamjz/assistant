@@ -221,20 +221,27 @@ func TestAnInvestigationsHoldIsAnsweredGivenTheTask(t *testing.T) {
 	}
 }
 
-// --task is read only with --answer and takes a task, and it acts on one
-// thing at a time. Each is incorrect usage, decided before any service is
-// asked. A fix round given --task is not among them: it goes to the task's
-// run, which taskrun_test.go drives.
-func TestTheTaskFlagIsReadOnlyWithAnAnswer(t *testing.T) {
+// --task is read only with --answer or --standing-consent and takes a task,
+// and it acts on one thing at a time. Each is incorrect usage, decided before
+// any service is asked. A fix round given --task is not among them: it goes
+// to the task's run, which taskrun_test.go drives, and neither is consent
+// given a task alone, which consent_test.go drives.
+func TestTheTaskFlagIsReadOnlyWithAnAnswerOrConsent(t *testing.T) {
 	t.Parallel()
 	h := newHome(t)
 	dir := t.TempDir()
 	for _, args := range [][]string{
 		{"--task", "abcdefghij23"},
+		{"--task", "abcdefghij23", "--standing-consent=false"},
 		{"--task", "", "--answer", "retry"},
+		{"--task", "", "--standing-consent"},
 		{"--task", "abcdefghij23", "--answer", "retry", "--note", "do it"},
 		{"--task", "abcdefghij23", "--answer", "retry", "--cancel"},
 		{"--task", "abcdefghij23", "--answer", "retry", "--intent", "something"},
+		{"--task", "abcdefghij23", "--answer", "retry", "--standing-consent"},
+		{"--task", "abcdefghij23", "--standing-consent", "--intent", "something"},
+		{"--task", "abcdefghij23", "--standing-consent", "--skip", "lint"},
+		{"--task", "abcdefghij23", "--standing-consent", "--cancel"},
 	} {
 		if got := run(t, h, dir, args...); got.code != machine.ExitUsage {
 			t.Errorf("assistant %s exited %s, want incorrect usage:\n%s", strings.Join(args, " "), got.code, got.stderr)
