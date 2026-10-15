@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -35,6 +36,35 @@ import (
 // because PRD principle P13 makes a report evidence to read and never text
 // to relay: the row holds the evidence, and the surface that shows a person
 // the hold translates it (#110) rather than printing it.
+//
+// The worker's words are kept with the credentials in them removed, and
+// StoreReport is where that happens, because it is the one point every
+// filing passes before anything of the report is stored: internal/service's
+// fileReport reaches the store only through it, and no other production code
+// calls store.StoreTaskReport. internal/redact decides what a credential is,
+// and this file only decides where the call is made. The removal runs inside
+// the parse, through findings.ParseReportThrough, after the report is decoded
+// and before it is normalized, so every hold's subject and detail, every
+// derived finding identifier and so every hold key, and the parsed report are
+// derived from the redacted text. The body and the evidence copy are the filed
+// text with the same remover run over it whole, and a refusal's text passes it
+// too, so a refusal quoting the filed report quotes it redacted.
+//
+// Redacting the filed text first and then parsing it would be shorter and
+// wrong: the remover takes an Authorization value to the end of its line,
+// which in a report written on one line takes the closing quote and braces
+// with it, and the report would then be refused, or an earlier object in the
+// text read in its place.
+//
+// What that does not cover is named rather than implied. A report stored
+// before this removal ran is kept as it was filed, because a stored report is
+// written once and never revised. A body redacted whole is evidence for a
+// person to read and nothing parses it again, so where an Authorization value
+// stood it may no longer be valid JSON. A credential in a shape
+// internal/redact does not recognize is stored as written, which is that
+// package's stated gap. And the text a worker sends travels to the service
+// whole before it reaches this point; this removes it from what is stored and
+// answered, not from the request in flight.
 
 // ErrReportUnreadable matches a report findings.ParseReport refused.
 // Nothing is stored and no hold is registered, because a report this
@@ -68,6 +98,19 @@ type StoredReport struct {
 	Evidence string
 }
 
+// reportRedactor is the remover a filed report passes through before any of
+// it is stored. It is a package variable rather than a dependency the Cleaner
+// is handed, so no Cleaner can store a report without it.
+var reportRedactor = redact.New()
+
+// redactedError is a refusal whose text has passed reportRedactor, so a
+// refusal quoting the filed report quotes it redacted. It still unwraps to
+// the refusal, so a caller asking which one it was is answered.
+type redactedError struct{ err error }
+
+func (e redactedError) Error() string { return reportRedactor.Redact(e.err.Error()) }
+func (e redactedError) Unwrap() error { return e.err }
+
 // HoldKey is the key the hold for one of a task's report findings is
 // registered under. It is derived from the finding's identifier, which
 // internal/findings derives from the finding's content, so storing the same
@@ -80,6 +123,9 @@ func HoldKey(taskID, findingID string) string { return "task/" + taskID + "/find
 // evidence copy, and returns what it recorded. The task must be an investigation task; a report the parser
 // refuses is ErrReportUnreadable, wrapped, and a task that already has one
 // is store.ErrTaskReportStored, wrapped, with the first report standing.
+// The report's text, in what it stores, writes and returns and in a refusal,
+// passes internal/redact first, on the terms this file's opening comment
+// states.
 //
 // The evidence copy is written after the row, so a crash between the two
 // leaves a stored report with no copy; the row is the source and nothing
@@ -93,10 +139,11 @@ func (c *Cleaner) StoreReport(ctx context.Context, taskID, raw string) (StoredRe
 	if task.Shape != store.TaskInvestigation {
 		return StoredReport{}, fmt.Errorf("%w: task %s is a %s task", ErrNotInvestigation, taskID, task.Shape)
 	}
-	report, err := findings.ParseReport(raw)
+	report, err := findings.ParseReportThrough(raw, reportRedactor.Redact)
 	if err != nil {
-		return StoredReport{}, fmt.Errorf("%w: %w", ErrReportUnreadable, err)
+		return StoredReport{}, fmt.Errorf("%w: %w", ErrReportUnreadable, redactedError{err})
 	}
+	raw = reportRedactor.Redact(raw)
 	encoded, err := json.Marshal(report)
 	if err != nil {
 		return StoredReport{}, fmt.Errorf("tasks: encoding the report of task %s: %w", taskID, err)

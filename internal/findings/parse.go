@@ -167,6 +167,14 @@ func ParseReviewReport(raw string, d Demand) (Report, Binding, error) {
 // reviewer wrote nor one the binding would introduce can reach a caller as an
 // accepted report.
 func parse(raw string, demand *Demand) (Report, Binding, error) {
+	return parseThrough(raw, demand, nil)
+}
+
+// parseThrough is parse with text, when it is not nil, run over the decoded
+// report by Report.Rewritten before anything else reads it, which is what
+// ParseReportThrough documents. The candidate scan and carriesReportField
+// read raw as it arrived, so text cannot change which object is the report.
+func parseThrough(raw string, demand *Demand, text func(string) string) (Report, Binding, error) {
 	if len(raw) > MaxRawBytes {
 		return Report{}, Binding{}, fmt.Errorf("%w: %d bytes, limit %d",
 			ErrRawTooLarge, len(raw), MaxRawBytes)
@@ -184,6 +192,9 @@ func parse(raw string, demand *Demand) (Report, Binding, error) {
 				return Report{}, Binding{}, fmt.Errorf("%w: %w", ErrUnreadableReport, err)
 			}
 			continue
+		}
+		if text != nil {
+			report = report.Rewritten(text)
 		}
 		var binding Binding
 		if demand != nil {

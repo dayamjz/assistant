@@ -423,8 +423,8 @@
 // Every other column holds exactly what the caller passed. A push binding, a
 // pull request reference, a run's intent, a promoted task's delivery intent,
 // a run's fixer session reference, an attempt's session reference, a hold's
-// subject and detail, a stage's log path, and the round and graph checkpoint
-// payloads are all bound verbatim, so a caller that puts a credential in one
+// subject and detail, a stage's log path, a task report's body and parsed
+// report, and the round and graph checkpoint payloads are all bound verbatim, so a caller that puts a credential in one
 // of them has stored a credential, and nothing in this package will notice
 // or remove it. That is the caller's
 // responsibility, and this package does not claim otherwise: it is not a
