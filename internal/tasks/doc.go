@@ -116,8 +116,8 @@
 // stored report is carried only as a pointer to its row, because it is the
 // worker's text and the intent stage reads supplied intent. The order is the
 // protection: store.TransitionTaskShape writes the shape, the repository,
-// the branch and the delivery posture together with the "promoted" entry in
-// one transaction, anchored
+// the branch, the delivery posture and the delivery intent together with the
+// "promoted" entry in one transaction, anchored
 // to the event sequence the resolution it decided from had read, and only
 // then is the copy written to, given the assistant remote at this home's
 // gate and the task's branch at its current HEAD, and asserted on the

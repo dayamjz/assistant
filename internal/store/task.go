@@ -61,6 +61,17 @@ type Task struct {
 	// investigation task, and the schema refuses any later write of it but
 	// promotion's.
 	Delivery Optional[config.Delivery] `json:"delivery"`
+	// DeliveryIntent is what the delivery is to do, as the coordinator asked
+	// for it when it promoted the task, PRD section 5: written by
+	// TransitionTaskShape in the write that changes the shape, and never
+	// revised. It is unknown for an investigation task, for a task intake
+	// recorded as a delivery task, whose intent is in the instructions intake
+	// wrote, and for a task promoted before the column existed. CreateTask
+	// refuses a known value, and the schema refuses every write of it but
+	// promotion's. It is stored as given, on doc.go's terms for every column
+	// but the repository URLs, so a reader that carries it further redacts
+	// it on the way out.
+	DeliveryIntent Optional[string] `json:"delivery_intent"`
 	// WorktreePath is the isolated copy the worker was given. PRD principle
 	// P11 says isolation is asserted at launch rather than inferred from this
 	// field; recording it is what lets a cleanup proof name what it refused to
@@ -127,14 +138,14 @@ type Disposition struct {
 }
 
 const taskColumns = `SELECT rowid, id, shape, project, mode, worktree_path, run_id, pull_request,
-	repository_id, branch, blocker_task, created_at, start_snapshot, delivery`
+	repository_id, branch, blocker_task, created_at, start_snapshot, delivery, delivery_intent`
 
 func scanTask(sc scanner) (Task, error) {
 	var t Task
 	var shape, created string
 	var snapshot, delivery Optional[string]
 	if err := sc.Scan(&t.Row, &t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath, &t.RunID,
-		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created, &snapshot, &delivery); err != nil {
+		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created, &snapshot, &delivery, &t.DeliveryIntent); err != nil {
 		return Task{}, err
 	}
 	t.Shape = TaskShape(shape)
@@ -210,6 +221,9 @@ func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, er
 	}
 	if blocker, ok := d.Blocker.Get(); ok && blocker == t.ID {
 		return Task{}, fmt.Errorf("store: task %s is named as its own blocker", t.ID)
+	}
+	if t.DeliveryIntent.IsKnown() {
+		return Task{}, fmt.Errorf("store: task %s: a delivery intent is recorded by promotion, never at intake", t.ID)
 	}
 	var delivery Optional[string]
 	if posture, ok := t.Delivery.Get(); ok {

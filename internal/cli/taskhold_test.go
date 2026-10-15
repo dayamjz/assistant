@@ -13,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -84,10 +85,9 @@ func TestATaskPastItsRelaunchBoundHoldsUntilAnAnswerRetriesItOnce(t *testing.T) 
 	}
 	heldBy(t, h, subject, id, first[0].Key)
 
-	// An answer the hold does not offer is refused and records nothing.
-	if got := run(t, h, subject, "--json", "--task", id, "--answer", "approve"); got.code != machine.ExitFailure {
-		t.Fatalf("answering the bound's hold approve exited %s, want failure:\n%s%s", got.code, got.stdout, got.stderr)
-	}
+	// An answer the hold does not offer is the caller's mistake: refused as
+	// an invalid request, exiting as incorrect usage, and recording nothing.
+	refusedAs(t, run(t, h, subject, "--json", "--task", id, "--answer", "approve"), ipc.CodeInvalidRequest, machine.ExitUsage)
 	if still := openHoldsOf(t, h, id); len(still) != 1 || still[0].Key != first[0].Key {
 		t.Fatalf("a refused answer moved the task's holds to %+v", still)
 	}
@@ -147,9 +147,10 @@ func TestATaskPastItsRelaunchBoundHoldsUntilAnAnswerRetriesItOnce(t *testing.T) 
 	if n := len(attemptsOf(t, h, id)); n != 2 {
 		t.Fatalf("a task answered stop was relaunched: %d attempts", n)
 	}
-	if got := run(t, h, subject, "--json", "--task", id, "--answer", machine.AnswerRetry); got.code != machine.ExitFailure {
-		t.Fatalf("answering a task with nothing open exited %s, want failure:\n%s", got.code, got.stdout)
-	}
+	// With nothing open the answer is refused against the records, which is
+	// an operational failure and the control that only an invalid request
+	// moved to incorrect usage.
+	refusedAs(t, run(t, h, subject, "--json", "--task", id, "--answer", machine.AnswerRetry), ipc.CodeRefused, machine.ExitFailure)
 	stop()
 }
 
@@ -241,6 +242,22 @@ func TestTheTaskFlagIsReadOnlyWithAnAnswer(t *testing.T) {
 		if got := run(t, h, dir, args...); got.code != machine.ExitUsage {
 			t.Errorf("assistant %s exited %s, want incorrect usage:\n%s", strings.Join(args, " "), got.code, got.stderr)
 		}
+	}
+}
+
+// refusedAs holds a --json invocation to a refusal that crossed the wire as
+// code and exited with exit.
+func refusedAs(t *testing.T, got invocation, code ipc.Code, exit machine.Code) {
+	t.Helper()
+	if got.code != exit {
+		t.Fatalf("the answer exited %s, want %s:\n%s%s", got.code, exit, got.stdout, got.stderr)
+	}
+	var failure machine.Failure
+	if err := json.Unmarshal([]byte(got.stdout), &failure); err != nil {
+		t.Fatalf("the refusal is not a failure document: %v\n%s", err, got.stdout)
+	}
+	if failure.Code != string(code) {
+		t.Fatalf("the refusal crossed the wire as %q, want %q: %s", failure.Code, code, failure.Error)
 	}
 }
 
