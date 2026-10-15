@@ -102,6 +102,15 @@ failure, waiting again reads the same durable queue; `assistant coordinator
 supervision` confirms the service is watching the fleet again first. Like the
 other coordinator subcommands, it is refused for a task's worker.
 
+A restart does not leave that queue exactly as it was. When the service
+starts it reconciles every task, and a task whose worker's terminal is gone
+with its work not landed is relaunched, up to `relaunch_attempts` times
+(2 unless configured). A relaunch records each still-queued `terminal-gone`
+wake about the session it replaced as handled by the program, so the next
+wait does not return it. Read `assistant tasks` after a restart as well as
+the queue: a relaunched task shows its new attempt there, and a task past
+`relaunch_attempts` holds for an answer instead of being relaunched.
+
 How soon it answers after a worker stops is set by the service's supervision
 pass, which records the wake, not by the wait.
 

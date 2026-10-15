@@ -260,9 +260,16 @@ func coordinatorWakes(ctx context.Context, in *invocation) (any, error) {
 	return wakes, err
 }
 
-// coordinatorAwait is wakes.wait: one call that blocks until the queue
-// holds a queued wake or the bound elapses, answered as coordinatorWakes'
-// answer is, so an empty list is the bound elapsing. It acknowledges
+// coordinatorAwait is wakes.wait, named await rather than wait because a
+// subcommand name reaches a person in the refusal that lists the
+// subcommands, and internal/machine/vocabtest's Forbidden set, which
+// internal/cli's P13 tests hold that text to, derives a term from every row
+// of internal/supervisor's wake-kind table, its kind and its class:
+// supervisor.ClassWait is the bare word "wait".
+//
+// It is one call that blocks until the queue holds a queued wake or the
+// bound elapses, answered as coordinatorWakes' answer is, so an empty list
+// is the bound elapsing. It acknowledges
 // nothing, so a wait armed again before coordinatorAcknowledge names what
 // was handled is answered at once with the same rows.
 //

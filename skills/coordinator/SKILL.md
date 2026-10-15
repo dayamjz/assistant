@@ -156,7 +156,11 @@ assistant coordinator acknowledge 12 13     # the ids you handled
 
 ## Wait for a wake
 
-Instead of polling, block on the queue between turns of work:
+Instead of polling, block on the queue. The specification has the
+coordinator hold exactly one supervision wait whenever work is in flight,
+resumed as the last action of every turn: end each turn by arming one
+`await`. The build does not enforce one: a second wait armed beside the
+first is served too, and keeping to one is yours.
 
 ```sh
 assistant --json coordinator await --timeout 5m   # blocks, then lists queued wakes
@@ -174,11 +178,14 @@ assistant --json coordinator await --timeout 5m   # blocks, then lists queued wa
   command, or run it in the background if your tool allows that.
 - `--limit N` bounds the answer, as on `wakes`.
 - If the service stops or restarts while you wait, the command exits `1`.
-  Nothing is lost: run `assistant coordinator supervision` to confirm the
-  watch is live again, then wait again. Wakes still queued are returned at
-  once. A restart can itself relaunch a task whose worker is gone, and
-  then records that task's `terminal-gone` wake as handled by the program,
-  so after a restart read `assistant tasks` as well as the queue.
+  Run `assistant coordinator supervision` to confirm the watch is live
+  again, then arm the wait again; wakes still queued are returned at once.
+  A restart can change the queue first: on start the service relaunches a
+  task whose worker's terminal is gone and whose work has not landed, up
+  to `relaunch_attempts` times (2 unless configured), and records that
+  task's queued `terminal-gone` wake about the replaced worker as handled
+  by the program, so the wait no longer returns it. After a restart read
+  `assistant tasks` as well as the queue.
 
 ## Known gaps in this build
 
