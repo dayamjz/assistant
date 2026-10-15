@@ -16,7 +16,9 @@ jobs:
   check:
     name: check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Above the test step's -timeout 30m with room for setup, vet and lint,
+    # so go test's own bound is the one that ends a slow package.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
