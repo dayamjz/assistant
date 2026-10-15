@@ -567,10 +567,27 @@ func render(in *invocation, answer any, err error) machine.Code {
 // in this binary rather than in the caller's command line, and this exits
 // with incorrect usage for it all the same, which is the gap in reading the
 // code rather than where it was raised.
+//
+// Init's refusal to record a default branch it could not establish is
+// incorrect usage when the working copy holds no answer to read: no origin,
+// no record of origin's HEAD, or a record pointing outside origin's branches.
+// Each is answered by something the caller supplies, --default-branch or a
+// record made with git remote set-head origin --auto, and init was asked to
+// infer a fact the checkout does not hold. A read that failed is not that: the
+// answer may well be there and git could not read it, so it stays an
+// operational failure, as does a reason outside machine.DefaultBranchRefusals,
+// which internal/machine already reads out as the unreadable row.
 func failureExit(err error) machine.Code {
 	var usage usageError
 	if errors.As(err, &usage) || errors.Is(err, ipc.ErrInvalidRequest) {
 		return machine.ExitUsage
+	}
+	var unproven defaultBranchRefused
+	if errors.As(err, &unproven) {
+		switch unproven.reason {
+		case machine.DefaultBranchNoOrigin, machine.DefaultBranchUnrecorded, machine.DefaultBranchOutsideOrigin:
+			return machine.ExitUsage
+		}
 	}
 	return machine.ExitFailure
 }
