@@ -108,12 +108,20 @@ func (s *Service) cleanUpLanded(ctx context.Context, record store.Run) {
 
 // storeTaskReport stores an investigation task's report through
 // internal/tasks, publishes the holds it registered and the history entry
-// that claims Reported at internal/taskstate's event tier, and then asks for
-// its copy's cleanup, which is the investigation half of the lifecycle's
-// Complete edge. It returns what the store refused; the cleanup's answer
-// goes to the log on this file's terms, and a task whose terminal could not
-// be read after the report was stored is a cleanup not asked for rather than
-// one asked with a stated liveness.
+// that claims Reported at internal/taskstate's event tier, asks for its
+// copy's cleanup, and then releases what is queued behind the task, through
+// releaseInBackground. It returns what the store refused; the cleanup's
+// answer goes to the log on this file's terms, and a task whose terminal
+// could not be read after the report was stored is a cleanup not asked for
+// rather than one asked with a stated liveness.
+//
+// The release follows the stored report and not the history entry or a log
+// line (P8): it is asked only once StoreReport has returned the row, which
+// is the record internal/taskstate's report tier resolves Reported from, and
+// internal/tasks' Release decides from that resolution whether the blocker
+// cleared. A report whose asks opened holds leaves the task Held, which does
+// not clear, so nothing queued behind it is released by this call;
+// releaseQueued names when such a successor is released instead.
 func (s *Service) storeTaskReport(ctx context.Context, taskID, raw string) (tasks.StoredReport, error) {
 	stored, err := s.cleaner.StoreReport(ctx, taskID, raw)
 	if err != nil {
@@ -130,9 +138,11 @@ func (s *Service) storeTaskReport(ctx context.Context, taskID, raw string) (task
 	resolved, err := s.tasks().Resolved(ctx, taskID)
 	if err != nil {
 		s.log.Printf("the isolated copy of task %s was not cleaned up: its terminal could not be read: %v", taskID, err)
+		s.releaseInBackground()
 		return stored, nil
 	}
 	s.logCleanup(s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: taskID, Terminal: resolved.State.Basis.Process}))
+	s.releaseInBackground()
 	return stored, nil
 }
 
