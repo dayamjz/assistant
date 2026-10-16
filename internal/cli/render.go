@@ -254,7 +254,14 @@ var renderings = []rendering{
 	{name: "admission", voice: VoicePhrased, of: typeOf[machine.Admission](), render: func(w io.Writer, v any) { readOutAdmission(w, v.(machine.Admission)) }},
 	{name: "notification", voice: VoicePhrased, of: typeOf[machine.Notification](), render: func(w io.Writer, v any) { readOutNotification(w, v.(machine.Notification)) }},
 	{name: "task answer", voice: VoicePhrased, of: typeOf[machine.TaskAnswered](), render: func(w io.Writer, v any) {
-		writeln(w, machine.TaskAnsweredPhrase(v.(machine.TaskAnswered)))
+		a := v.(machine.TaskAnswered)
+		writeln(w, machine.TaskAnsweredPhrase(a))
+		// The note is the person's own words beside the closed Phrase
+		// table: HoldPhrase and TaskAnsweredPhrase stay fixed rows, and
+		// the note is written after them when the hold carries one.
+		if note, ok := a.Hold.ResolutionNote.Get(); ok && strings.TrimSpace(note) != "" {
+			writeln(w, "What was decided: "+printable(note))
+		}
 	}},
 	{name: "catch up", voice: VoicePhrased, of: typeOf[machine.CatchUp](), render: func(w io.Writer, v any) { readOutCatchUp(w, v.(machine.CatchUp)) }},
 	{name: "marked seen", voice: VoicePhrased, of: typeOf[machine.Marked](), render: func(w io.Writer, v any) {

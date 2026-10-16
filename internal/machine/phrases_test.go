@@ -284,18 +284,21 @@ func wholeWord(text, word string) bool {
 
 // A task the hold tier resolved Held waits on a hold naming the task, which
 // is answered given the task, so its row says that it waits on the person and
-// names --task and --answer. The control is Held from the run tier, a run's
-// decision answered from its branch, which keeps the table's row and names no
-// --task; and an open hold naming a task says the same command where one
-// naming a run does not.
+// names --task, --answer, --hold and --note. The control is Held from the run
+// tier, a run's decision answered from its branch, which keeps the table's
+// row and names no --task; and an open hold naming a task says the same
+// command where one naming a run does not.
 func TestAHeldTaskSaysItWaitsOnYouAndHowToAnswer(t *testing.T) {
 	t.Parallel()
 	vocabtest.Control(t)
 	byHold := machine.TaskPhrase(machine.Task{State: taskstate.Resolution{State: taskstate.Held, Source: taskstate.SourceHold}}).String()
-	for _, want := range []string{"waiting on an answer from you", "assistant --task", "--answer", "assistant tasks --json"} {
+	for _, want := range []string{"waiting on an answer from you", "assistant --task", "--answer", "assistant tasks --json", "--hold", "--note"} {
 		if !strings.Contains(byHold, want) {
 			t.Errorf("the hold tier's row %q does not say %q", byHold, want)
 		}
+	}
+	if strings.Contains(byHold, "--run") {
+		t.Errorf("the hold tier's row %q names --run, which answers a run rather than a hold of the task's own", byHold)
 	}
 	vocabtest.Assert(t, byHold)
 	if wholeWord(byHold, string(taskstate.Held)) {
@@ -307,8 +310,10 @@ func TestAHeldTaskSaysItWaitsOnYouAndHowToAnswer(t *testing.T) {
 	}
 
 	taskHold := machine.HoldPhrase(store.Hold{Subject: "whether to begin this work again", TaskID: store.Known("abcdefghij23")}).String()
-	if !strings.Contains(taskHold, "assistant --task") || !strings.Contains(taskHold, "--answer") {
-		t.Errorf("an open hold naming a task reads %q, which does not say how to answer it", taskHold)
+	for _, want := range []string{"assistant --task", "--answer", "--hold", "--note"} {
+		if !strings.Contains(taskHold, want) {
+			t.Errorf("an open hold naming a task reads %q, which does not say %q", taskHold, want)
+		}
 	}
 	vocabtest.Assert(t, taskHold)
 	runHold := machine.HoldPhrase(store.Hold{Subject: "approve", TaskID: store.Known("abcdefghij23"), RunID: store.Known("r")}).String()

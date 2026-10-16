@@ -252,9 +252,12 @@ var phraseTaskHeld = Phrase{
 
 // taskAnswerDecision is how a hold naming a task is answered, which the task
 // row above and HoldPhrase's open row for such a hold share, so the two
-// cannot name different commands.
+// cannot name different commands. --hold and --note are optional: --hold
+// chooses among several open holds, and --note records what was decided.
+// --run is not named here; it answers the task's run rather than a hold of
+// the task's own, and is not required to close one.
 const taskAnswerDecision = "Answer it with assistant --task and the work's identifier, which assistant tasks --json shows, " +
-	"followed by --answer and your answer."
+	"followed by --answer and your answer; --hold names which open hold when there are several, and --note records what was decided."
 
 // The rows for an answer given a task that reaches no run's decision, which
 // internal/service's refusal carries after the identifiers it names. An
