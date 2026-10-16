@@ -399,7 +399,10 @@ worker: its pushes are a person's and start the full run.
 Two things it needs. tmux has to be on the service's PATH; without it every
 launch is refused and the task stays dispatched, which the service log says.
 And the resolved agent has to declare terminal workers, which Claude Code
-does. A worker an earlier service started is never attached to or read
+does. `assistant doctor` checks both when this file chooses tmux, and reports
+the stall by name before a task waits Dispatched. Cursor and Grok do not
+declare terminal workers; naming one under tmux fails that check the same
+way. A worker an earlier service started is never attached to or read
 through the new one: its terminal reads as unobservable until it ends, as it
 does under the default provider.
 
@@ -433,7 +436,11 @@ a shell command or a slash command. Some limits are worth knowing:
 
 - What you type in the pane is not given that space. Typing `!` into an
   empty input there runs a shell command outside the worker's permissions,
-  as it does in any Claude Code session.
+  as it does in any Claude Code session. That residual is not closed: a
+  person attached to the pane can still reach a shell the program did not
+  grant, and a new window on the same server is not the worker for git or
+  delivery (its pushes are a person's). Do not take attach as a guarantee
+  that every keystroke stays inside the worker's permissions.
 - A long or multi-line message reaches the model wrapped as pasted content
   rather than as bare text.
 - All of this rests on what Claude Code 2.1.301 drew on screen and kept in

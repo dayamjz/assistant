@@ -4,6 +4,7 @@ package service_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,11 +17,16 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/supervisor"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // tmuxGlobal is the home's configuration that puts the service's workers in
@@ -260,4 +266,251 @@ func TestUnderTmuxAPeekIsTheCoordinatorsRedactedAndBounded(t *testing.T) {
 			t.Fatalf("task.peek from a person's window on the worker's server was refused with %q", code)
 		}
 	})
+}
+
+// twoTmuxWorkers records and launches two delivery tasks under the tmux
+// provider in one service, and hands the body both launched workers. The
+// catalog answers a message naming "for-A-only" so a test can message one
+// without the other hearing it.
+func twoTmuxWorkers(t *testing.T, body func(a, b launched, h *home.Home)) {
+	t.Helper()
+	standin.Tmux(t)
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	quietMaintenance(t, subject)
+	repository := recordRepository(t, h, subject)
+	quietMaintenance(t, gateRepositoryOf(t, h, subject))
+	if err := os.WriteFile(h.ConfigFile(), []byte(tmuxGlobal+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	idA := recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/tmux-a")
+	idB := recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/tmux-b")
+	o := options(t, h)
+	agent := standin.NewWorker(t, standin.Script{
+		Steps: []standin.Step{{
+			Match: standin.MatchReview(),
+			Times: standin.Always,
+			Reply: standin.Reviewed("the change reads cleanly"),
+		}},
+		Worker: &standin.WorkerScript{
+			Greeting: "worker ready",
+			Exchanges: []standin.Exchange{
+				{Contains: shellMarker, Run: true},
+				{Contains: "for-A-only", Reply: "heard: for-A-only"},
+				{Contains: "status", Reply: "still working on it"},
+				{Contains: "This is attempt", Reply: "the relaunch note was read"},
+				{Contains: "git rev-parse --show-toplevel", Reply: "the second check was read"},
+				{Contains: "finish", Reply: "worker finished", Ends: true},
+			},
+		},
+	}, agents.WithTerminationGrace(2*time.Second))
+	o.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()})
+	gateRepo := gateRepositoryOf(t, h, subject)
+	withServiceOptions(t, o, func(running serviceUnderTest) {
+		workerOf := func(id string) launched {
+			provider, session := waitSession(t, running.service, id)
+			waitCapture(t, provider, session, "worker ready")
+			return launched{running: running, home: h, repository: repository, gateRepo: gateRepo,
+				task: id, group: session.Reference().PID, provider: provider, session: session}
+		}
+		body(workerOf(idA), workerOf(idB), h)
+	})
+}
+
+// Under tmux, two concurrent workers are independently observable and
+// steerable: peeks are distinct, a message reaches only the task it names,
+// and stopping one holds it over a dead terminal while the other stays
+// Running. Restart relaunch of dead terminals under tmux is
+// TestARestartUnderTmuxRelaunchesADeadTerminalInPlace's.
+func TestUnderTmuxTwoWorkersArePeekedMessagedAndStoppedIndependently(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P9)
+	twoTmuxWorkers(t, func(a, b launched, _ *home.Home) {
+		refA, refB := a.session.Reference(), b.session.Reference()
+		if refA == refB {
+			t.Fatalf("both workers share session reference %s", refA)
+		}
+
+		const markerA, markerB = "peek-marker-A-unique", "peek-marker-B-unique"
+		asWorker(t, a, "printf '%s\\n' "+shellQuote(markerA))
+		asWorker(t, b, "printf '%s\\n' "+shellQuote(markerB))
+
+		peek := func(id string) machine.TaskPeek {
+			t.Helper()
+			var got machine.TaskPeek
+			if err := a.running.client.Call(t.Context(), ipc.MethodTaskPeek, machine.TaskRequest{Task: id}, &got); err != nil {
+				t.Fatalf("task.peek %s: %v", id, err)
+			}
+			return got
+		}
+		pa, pb := peek(a.task), peek(b.task)
+		if pa.Session != refA.String() || pb.Session != refB.String() {
+			t.Fatalf("peeks named sessions %q and %q, want %s and %s", pa.Session, pb.Session, refA, refB)
+		}
+		if !strings.Contains(pa.Output, markerA) || strings.Contains(pa.Output, markerB) {
+			t.Fatalf("peek of A carries B's marker or not A's:\n%s", pa.Output)
+		}
+		if !strings.Contains(pb.Output, markerB) || strings.Contains(pb.Output, markerA) {
+			t.Fatalf("peek of B carries A's marker or not B's:\n%s", pb.Output)
+		}
+
+		var sent machine.TaskMessaged
+		if err := a.running.client.Call(t.Context(), ipc.MethodTaskMessage,
+			machine.TaskMessageRequest{Task: a.task, Text: "for-A-only: stay on scope"}, &sent); err != nil {
+			t.Fatalf("task.message to A: %v", err)
+		}
+		if sent.Delivery != store.DeliveryWritten {
+			t.Fatalf("task.message answered %+v, want written", sent)
+		}
+		waitCapture(t, a.provider, a.session, "heard: for-A-only")
+		if got, err := b.provider.Capture(b.session); err != nil || strings.Contains(got.Text, "heard: for-A-only") {
+			t.Fatalf("B's screen carried A's message (%v):\n%s", err, got.Text)
+		}
+
+		var stopped machine.TaskStopped
+		if err := a.running.client.Call(t.Context(), ipc.MethodTaskStop, machine.TaskRequest{Task: a.task}, &stopped); err != nil {
+			t.Fatalf("task.stop A: %v", err)
+		}
+		held := listedTask(t, a.running.client, a.task)
+		if held.State != taskstate.Held || held.Source != taskstate.SourceHold || held.Basis.Process != taskstate.Dead {
+			t.Fatalf("stopped A reads %+v, want Held over a dead terminal", held)
+		}
+		if got := listedTask(t, a.running.client, b.task); !readsRunning(got) {
+			t.Fatalf("B after A's stop reads %+v, want still Running", got)
+		}
+		if obs := b.provider.Probe(t.Context(), refB.String()); obs.Liveness != taskstate.Live {
+			t.Fatalf("B's session probes %+v, want Live", obs)
+		}
+	})
+}
+
+// Killing one worker's tmux window while the service stays up surfaces
+// terminal-gone for that task and leaves its sibling Live/Running. The
+// killed task reads Unknown from its dead terminal (no stop hold), which is
+// the reading a restart's reconciliation relaunches on under
+// TestARestartUnderTmuxRelaunchesADeadTerminalInPlace.
+func TestUnderTmuxKillingOneWindowSurfacesTerminalGoneAndLeavesTheSibling(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P9)
+	twoTmuxWorkers(t, func(a, b launched, h *home.Home) {
+		refA := a.session.Reference()
+
+		socket := workerSocket(t, a)
+		if out, err := exec.Command(standin.Tmux(t), "-S", socket, "kill-window", "-t", "worker").CombinedOutput(); err != nil {
+			t.Fatalf("killing A's tmux window: %v: %s", err, out)
+		}
+		waitProbe(t, a.provider, refA.String(), taskstate.Dead)
+		waitState(t, a.running.client, a.task, "read Unknown from its killed terminal", func(r taskstate.Resolution) bool {
+			return r.State == taskstate.Unknown && r.Source == taskstate.SourceProcess && r.Basis.Process == taskstate.Dead
+		})
+		deadline := time.Now().Add(60 * time.Second)
+		for len(wakesOf(t, h, a.task, supervisor.KindTerminalGone)) == 0 {
+			if !time.Now().Before(deadline) {
+				t.Fatal("the loop raised no terminal-gone wake for the killed worker")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if got := listedTask(t, a.running.client, b.task); !readsRunning(got) {
+			t.Fatalf("B after A's window was killed reads %+v, want still Running", got)
+		}
+		if obs := b.provider.Probe(t.Context(), b.session.Reference().String()); obs.Liveness != taskstate.Live {
+			t.Fatalf("B's session probes %+v, want Live", obs)
+		}
+		if gone := wakesOf(t, h, b.task, supervisor.KindTerminalGone); len(gone) != 0 {
+			t.Fatalf("the loop raised terminal-gone for the living sibling: %+v", gone)
+		}
+	})
+}
+
+// A person's new window on a worker's tmux server is not the worker for git
+// admission: a push from that window of the worker's own branch under another
+// name is admitted as a person's (the worker rule never sees it), while the
+// same push run by the worker is refused. Attach typing "!" is a residual
+// outside this placement rule; session/doc.go and docs/operators.md say so.
+func TestUnderTmuxAPersonsWindowIsNotTheWorkerForGitAdmission(t *testing.T) {
+	t.Parallel()
+	launchedTmuxWorker(t, "task/tmux-git", func(w launched) {
+		running, task, gateRepo := w.running, w.task, w.gateRepo
+		h := running.service
+		copyPath := resolvedCopy(t, w.home, task)
+		quietMaintenance(t, copyPath)
+		if err := os.WriteFile(filepath.Join(copyPath, "work.txt"), []byte("the worker's change\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		mustGitAs(t, w, copyPath, "add", "-A")
+		mustGitAs(t, w, copyPath, "commit", "--quiet", "-m", "the worker's change")
+		head := mustGitAs(t, w, copyPath, "rev-parse", "HEAD")
+
+		forget := h.StageStarted("run-under-validation", "review", 424242)
+		defer forget()
+
+		out, err := gitAs(t, w, copyPath, "push", gate.RemoteName, "task/tmux-git")
+		if err != nil {
+			t.Fatalf("the worker's push of its own branch was refused:\n%s", out)
+		}
+		if !strings.Contains(gateRefs(t, gateRepo), "refs/heads/task/tmux-git "+head) {
+			t.Fatalf("the admitted push did not move the gate's branch to %s:\n%s", head, gateRefs(t, gateRepo))
+		}
+		before := gateRefs(t, gateRepo)
+
+		out, err = gitAs(t, w, copyPath, "push", gate.RemoteName, "task/tmux-git:refs/heads/other")
+		if err == nil {
+			t.Fatalf("a push outside its branch by the worker was admitted:\n%s", out)
+		}
+		if !strings.Contains(out, "is not that branch") {
+			t.Fatalf("the worker's off-branch push was refused without saying why:\n%s", out)
+		}
+		if got := gateRefs(t, gateRepo); got != before {
+			t.Fatalf("the refused worker push changed the gate's references:\nbefore: %s\nafter:  %s", before, got)
+		}
+
+		// The same off-branch push from a person's window on the worker's
+		// server is not placed as the worker, so the worker rule does not
+		// refuse it; the gate admits it as a person's push.
+		out, err = gitFromWindow(t, w, copyPath, "push", gate.RemoteName, "task/tmux-git:refs/heads/other")
+		if err != nil {
+			t.Fatalf("a person's window push of the worker's tip under another name was refused, so the worker rule reached a person:\n%s", out)
+		}
+		if !strings.Contains(gateRefs(t, gateRepo), "refs/heads/other "+head) {
+			t.Fatalf("the person's window push was reported admitted and moved nothing:\n%s", gateRefs(t, gateRepo))
+		}
+	})
+}
+
+// gitFromWindow has a shell in a new window of the worker's own tmux server
+// run git in dir, the way a person who opened a window there would, and
+// returns its output and an error when git failed.
+func gitFromWindow(t *testing.T, w launched, dir string, args ...string) (string, error) {
+	t.Helper()
+	tmpdir := t.TempDir()
+	out, errOut, code := filepath.Join(tmpdir, "out"), filepath.Join(tmpdir, "err"), filepath.Join(tmpdir, "code")
+	script := "cd " + shellQuote(dir) + " && " +
+		"GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid " +
+		"GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid " +
+		shellQuote(append([]string{"git"}, args...)...) +
+		" > " + shellQuote(out) + " 2> " + shellQuote(errOut) +
+		"; echo $? > " + shellQuote(code+".tmp") + " && mv " + shellQuote(code+".tmp") + " " + shellQuote(code)
+	if raw, err := exec.Command(standin.Tmux(t), "-S", workerSocket(t, w), "new-window", "-d", "--",
+		"/bin/sh", "-c", script).CombinedOutput(); err != nil {
+		t.Fatalf("opening a window in the worker's server: %v: %s", err, raw)
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		raw, err := os.ReadFile(code)
+		if err == nil {
+			status, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+			stdout, _ := os.ReadFile(out)
+			stderr, _ := os.ReadFile(errOut)
+			combined := string(stdout) + string(stderr)
+			if status != 0 {
+				return combined, fmt.Errorf("git exited with status %d", status)
+			}
+			return combined, nil
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("git from a window of the worker's server never finished")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

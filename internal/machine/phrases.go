@@ -1140,6 +1140,11 @@ const (
 	// CheckNamedOnlyAgents is whether any adapter resolves that a run uses
 	// only when configuration names it.
 	CheckNamedOnlyAgents = "named-only agents"
+	// CheckSessionProvider is whether the operator's chosen terminal session
+	// provider can host workers on this machine: the default pipe always
+	// can, and tmux needs both a tmux binary and an agent that declares
+	// terminal_workers.
+	CheckSessionProvider = "session provider"
 	// CheckCodeHost is whether the code host's command line resolves.
 	CheckCodeHost = "code host"
 	// CheckUpstream is how this checkout's recorded upstream treats pull
@@ -1153,7 +1158,7 @@ const (
 // assistant doctor makes them. The result is a copy.
 func CheckNames() []string {
 	return []string{CheckHome, CheckDatabase, CheckWorkingCopy, CheckGate, CheckCommitIdentity, CheckService,
-		CheckAgent, CheckNamedOnlyAgents, CheckCodeHost, CheckUpstream, CheckStages}
+		CheckAgent, CheckNamedOnlyAgents, CheckSessionProvider, CheckCodeHost, CheckUpstream, CheckStages}
 }
 
 // readDoctor is the decision every row for a check that found something
@@ -1197,6 +1202,14 @@ var phraseByCheck = map[string][2]Phrase{
 	CheckNamedOnlyAgents: {
 		{Outcome: "No agent is installed here that is used only when named.", Consequence: "A run uses the agent it chooses on its own.", Decision: "Nothing to do."},
 		{Outcome: "Some agents installed here are used only when your configuration names them.", Consequence: "A run never chooses one on its own, and nothing here has checked them against their own command lines.", Decision: "Name one in your configuration only if you mean to try it."},
+	},
+	CheckSessionProvider: {
+		{Outcome: "The terminal session provider this home is configured for can host workers here.",
+			Consequence: "Fleet work can start a worker under that provider.",
+			Decision:    "Nothing to do."},
+		{Outcome: "The terminal session provider this home is configured for cannot host workers here.",
+			Consequence: "Every worker launch is refused and fleet work waits without a worker until the provider can.",
+			Decision:    "Install tmux on the service's PATH, or choose an agent that declares terminal workers, or set session_provider back to pipe; " + readDoctor},
 	},
 	CheckCodeHost: {
 		{Outcome: "The code host's command line was found here.", Consequence: "Whether it can reach your repository is learned when a run first needs it.", Decision: "Nothing to do."},
