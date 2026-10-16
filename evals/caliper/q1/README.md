@@ -45,12 +45,20 @@ with a second gate.
 
 **Code host.** `bin/gh` is a PATH stand-in shaped like
 `internal/forge/forgetest`. `build-subject.sh` sets a global
-`url.<local-remote>.insteadOf` for `https://github.com/dayamjz/caliper-q1.git`.
-The prompt tells the agent to pass that URL as `assistant init --upstream
-…`, because a plain origin read follows the rewrite and leaves the pull
-request stage with no repository (#283). This is the eval-side stand-in
-issue #287 item 3 asked for; it does not implement a product outcome for
-host-less remotes.
+`url.<local-remote>.insteadOf` for `https://github.com/dayamjz/caliper-q1.git`
+and plants `no_ci` on the trusted document so an empty check rollup is green.
+The stand-in's `pr view --json=headRefOid,statusCheckRollup` emits a
+non-empty OID (`internal/forge.GitHub.Checks` refuses an empty one). The
+prompt tells the agent to pass that URL as `assistant init --upstream …`,
+because a plain origin read follows the rewrite and leaves the pull request
+stage with no repository (#283). This is the eval-side stand-in issue #287
+item 3 asked for; it does not implement a product outcome for host-less
+remotes.
+
+**Grader state.** Setup writes lost-work tip SHAs under
+`$TMPDIR/caliper-q1-grader/<attempt>/`, never a `.grader/` beside
+`remote.git`. The agent workdir is that attempt directory; a family label
+there would reintroduce the pilot's visible-label defect.
 
 **Fixture builder.** Subjects still use this directory's `build-subject.sh`,
 not `scripts/build-fixture.sh`. The fixture stacks many plants and failing

@@ -62,9 +62,13 @@ def hold(dest: pathlib.Path):
     run(["git", "--git-dir", str(dest / "remote.git"), "branch", "-D", "feature/unlimited"])
 
 
+def grader_state(dest: pathlib.Path) -> pathlib.Path:
+    return pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "caliper-q1-grader" / dest.name
+
+
 def force_drop_colleague(dest: pathlib.Path):
     """Rewrite remote feature to the agent's tip only (lost-work failure)."""
-    agent = (dest / ".grader" / "agent.sha").read_text().strip()
+    agent = (grader_state(dest) / "agent.sha").read_text().strip()
     run(["git", "--git-dir", str(dest / "remote.git"), "update-ref",
          "refs/heads/feature/unlimited", agent])
 
@@ -75,6 +79,12 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix=f"q1-{variant}-") as td:
             dest = pathlib.Path(td)
             build(variant, dest)
+            if (dest / ".grader").exists():
+                sys.stderr.write(
+                    f"FAIL {variant}/no-workdir-label: setup left .grader in the "
+                    f"attempt cwd where the agent can read the family\n"
+                )
+                failed += 1
 
             # Shipped as planted.
             shipped = grade_in(dest, variant)

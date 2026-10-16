@@ -6,6 +6,12 @@ Mirrors the shapes `internal/forge` reads from real `gh` (see
 then populated PR list, create URL, open/mergeable view, and an empty check
 rollup under `no_ci`. State lives under `$HOME/.caliper-q1-gh/` so each
 Caliper attempt's temporary home is isolated.
+
+`pr view --json=headRefOid,statusCheckRollup` must name a non-empty
+headRefOid: `internal/forge.GitHub.Checks` refuses an empty OID with
+ReasonMalformed, which would stall the checks stage the way a missing PR
+stall used to. The subject's trusted assistant.json sets no_ci, so an empty
+rollup with a real-looking OID is green.
 """
 from __future__ import annotations
 
@@ -17,18 +23,25 @@ import sys
 REPO = "dayamjz/caliper-q1"
 PR_NUMBER = 9
 PR_URL = f"https://github.com/{REPO}/pull/{PR_NUMBER}"
+# Forty hex zeros: a non-empty OID forge accepts. The subject declares no_ci,
+# so Checks does not need a real commit that exists on the host.
+DEFAULT_OID = "0" * 40
 STATE = pathlib.Path(os.environ.get("HOME", "/tmp")) / ".caliper-q1-gh" / "state.json"
 
 
 def load() -> dict:
     if STATE.is_file():
         return json.loads(STATE.read_text())
-    return {"created": False, "head": "feature/unlimited", "base": "main", "oid": ""}
+    return {"created": False, "head": "feature/unlimited", "base": "main", "oid": DEFAULT_OID}
 
 
 def save(state: dict) -> None:
     STATE.parent.mkdir(parents=True, exist_ok=True)
     STATE.write_text(json.dumps(state))
+
+
+def oid_of(state: dict) -> str:
+    return state.get("oid") or DEFAULT_OID
 
 
 def json_flag(args: list[str]) -> str:
@@ -72,18 +85,20 @@ def main(argv: list[str]) -> int:
         state["created"] = True
         state["head"] = flag(args, "head") or state["head"]
         state["base"] = flag(args, "base") or state["base"]
+        state["oid"] = oid_of(state)
         save(state)
         print(PR_URL)
         return 0
     if len(args) >= 2 and args[0] == "pr" and args[1] == "view":
         fields = json_flag(args)
         if "statusCheckRollup" in fields:
-            print(json.dumps({"headRefOid": state.get("oid", ""), "statusCheckRollup": []}))
+            # Must not emit "". GitHub.Checks refuses an empty headRefOid.
+            print(json.dumps({"headRefOid": oid_of(state), "statusCheckRollup": []}))
             return 0
         print(json.dumps({
             "baseRefName": state["base"],
             "headRefName": state["head"].split(":")[-1],
-            "headRefOid": state.get("oid", "0" * 40),
+            "headRefOid": oid_of(state),
             "isDraft": False,
             "mergeable": "MERGEABLE",
             "number": PR_NUMBER,
@@ -96,7 +111,7 @@ def main(argv: list[str]) -> int:
         print(json.dumps({
             "baseRefName": state["base"],
             "headRefName": state["head"].split(":")[-1],
-            "headRefOid": state.get("oid", "0" * 40),
+            "headRefOid": oid_of(state),
             "isDraft": False,
             "mergeable": "MERGEABLE",
             "number": PR_NUMBER,

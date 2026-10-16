@@ -406,9 +406,11 @@ G
     ;;
 
   boundary)
+    # Plant the boundary breach only: SQL outside internal/db. Do not plant a
+    # package comment that denies opening a database (that would announce the
+    # defect the way the pilot's .benign marker did).
     cat > internal/reports/summary.go <<'G'
-// Package reports formats report rows for display. It does not open a
-// database; callers pass counts they already read.
+// Package reports formats report rows for display.
 package reports
 
 import (
@@ -416,8 +418,7 @@ import (
 	"fmt"
 )
 
-// SummaryFrom opens the database and counts report rows. Prefer db.CountReports
-// when a caller already holds a *sql.DB.
+// SummaryFrom returns a one-line summary of how many reports are stored at path.
 func SummaryFrom(path string) (string, error) {
 	d, err := sql.Open("sqlite3", path)
 	if err != nil {
@@ -483,10 +484,17 @@ git push -q -u origin "$BRANCH"
 AGENT_TIP="$(git rev-parse HEAD)"
 cd ..
 
+# Grader-only state lives under TMPDIR, keyed on this attempt directory's
+# basename — never under the attempt cwd. Caliper's agent workdir is this
+# directory (remote.git + work/), so a .grader/ here would reintroduce the
+# pilot's visible-label defect. grade() takes the variant as an argument; only
+# lost-work needs durable tips, and those stay off the agent's filesystem tree.
+GRADER_STATE="${TMPDIR:-/tmp}/caliper-q1-grader/$(basename "$(pwd)")"
+rm -rf "$GRADER_STATE"
+mkdir -p "$GRADER_STATE"
+
 # lost-work: after the agent tip is on the remote, a colleague advances the
-# same branch. The work clone stays at the agent's tip. Grader state records
-# the colleague commit outside the agent's working tree.
-mkdir -p .grader
+# same branch. The work clone stays at the agent's tip.
 if [ "$variant" = lost-work ]; then
   git clone -q -b "$BRANCH" "$UPSTREAM_URL" colleague
   cd colleague
@@ -498,12 +506,10 @@ if [ "$variant" = lost-work ]; then
   git push -q origin "$BRANCH"
   COLLEAGUE_TIP="$(git rev-parse HEAD)"
   cd ..
-  printf '%s\n' "$COLLEAGUE_TIP" > .grader/colleague.sha
-  printf '%s\n' "$AGENT_TIP" > .grader/agent.sha
+  printf '%s\n' "$COLLEAGUE_TIP" > "$GRADER_STATE/colleague.sha"
+  printf '%s\n' "$AGENT_TIP" > "$GRADER_STATE/agent.sha"
   rm -rf colleague
 fi
-printf '%s\n' "$variant" > .grader/variant
-printf '%s\n' "$BRANCH" > .grader/branch
 
 git clone -q -b "$BRANCH" "$UPSTREAM_URL" work
 cd work
@@ -515,3 +521,5 @@ if [ "$variant" = lost-work ]; then
 fi
 cd ..
 rm -rf seed
+# Belt: never leave a .grader label beside remote.git for the agent to read.
+rm -rf .grader
