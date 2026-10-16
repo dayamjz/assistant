@@ -225,12 +225,13 @@ fixed, pushed, and turned into a pull request. Your ordinary `git push` keeps
 working as it always did.
 
 **Parallel work you can watch.** Each worker runs in its own isolated copy,
-supervised, and what it ships goes through the gate. The specification has
-every worker running in a real terminal you can attach to, read, and type into,
-with a direct intervention there being authoritative. This build starts workers
-over a pipe instead, so you watch them through `assistant watch` and
-`assistant tasks` and steer them through the coordinator, not by typing into
-their terminal.
+supervised, and what it ships goes through the gate. By default a worker runs
+on pipes the service holds, which you watch through `assistant watch` and
+`assistant tasks` and steer through the coordinator. With `session_provider:
+tmux` in your own configuration file, each worker instead runs in a terminal
+you can attach to, read, and type into; `assistant coordinator peek ID` names
+the attach command, and [`docs/operators.md`](docs/operators.md) states what
+that mode needs and what attaching still cannot guarantee.
 
 ## What it is not
 

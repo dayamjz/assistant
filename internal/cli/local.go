@@ -5,15 +5,18 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -409,6 +412,7 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		add(machine.Check{Name: machine.CheckAgent, OK: true, Blocking: true, Detail: resolution.Name})
 	}
 	add(namedOnlyAgents(ctx, catalog))
+	add(sessionProvider(ctx, in.home.ConfigFile(), catalog))
 
 	add(codeHost())
 	if records != nil && workErr == nil {
@@ -428,6 +432,63 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		report.Detail = "a run cannot start: " + strings.Join(blocking, ", ")
 	}
 	return report, nil
+}
+
+// sessionProvider reports whether the operator's chosen terminal session
+// provider can host workers here. The default pipe always can. tmux needs a
+// tmux binary on PATH and an agent that declares terminal_workers; without
+// either, every launch is refused and the task stays Dispatched, which is
+// the stall this row names before an operator waits on one. It reads the
+// operator's file the way the service does at start, and resolves the agent
+// list that file names (defaults included), which is what launches go
+// through. It does not block a run: gate validation does not need a worker
+// terminal, and a missing prerequisite is a fleet launch refusal rather than
+// a run-start refusal.
+func sessionProvider(ctx context.Context, configFile string, catalog *agents.Catalog) machine.Check {
+	cfg, err := service.GlobalConfig(configFile)
+	if err != nil {
+		return machine.Check{
+			Name:   machine.CheckSessionProvider,
+			Detail: "the home's configuration could not be read, so whether workers can launch under it is unknown: " + err.Error(),
+		}
+	}
+	if cfg.SessionProvider != config.SessionProviderTmux {
+		return machine.Check{
+			Name: machine.CheckSessionProvider,
+			OK:   true,
+			Detail: "workers run on pipes (the default); set session_provider: tmux in " +
+				configFile + " to host each in an attachable terminal",
+		}
+	}
+	tmux, lookErr := exec.LookPath("tmux")
+	if lookErr != nil {
+		return machine.Check{
+			Name: machine.CheckSessionProvider,
+			Detail: "session_provider is tmux and no tmux binary is on PATH, so every launch is refused and the task stays dispatched: " +
+				lookErr.Error(),
+		}
+	}
+	resolution, err := agents.Resolve(ctx, cfg.Agent, catalog)
+	if err != nil {
+		return machine.Check{
+			Name: machine.CheckSessionProvider,
+			Detail: "session_provider is tmux and the agent that would host workers could not be resolved, so every launch is refused and the task stays dispatched: " +
+				err.Error(),
+		}
+	}
+	if !resolution.Runner.Capabilities().Has(agents.CapabilityTerminalWorkers) {
+		return machine.Check{
+			Name: machine.CheckSessionProvider,
+			Detail: fmt.Sprintf("session_provider is tmux and %s has not declared %s, so every launch is refused and the task stays dispatched",
+				resolution.Name, agents.CapabilityTerminalWorkers),
+		}
+	}
+	return machine.Check{
+		Name: machine.CheckSessionProvider,
+		OK:   true,
+		Detail: fmt.Sprintf("tmux at %s, and %s declares %s",
+			tmux, resolution.Name, agents.CapabilityTerminalWorkers),
+	}
 }
 
 // namedOnlyAgents reports the adapters that resolve on this machine but that

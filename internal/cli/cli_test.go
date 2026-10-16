@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/custody"
 	"github.com/dayamjz/assistant/internal/gate"
@@ -1371,6 +1372,91 @@ func TestDoctorSeparatesANamedOnlyRunnableAgentFromTheAutoEligibleOne(t *testing
 	namedOnly, _ = findCheck(report, "named-only agents")
 	if namedOnly.OK || !strings.Contains(namedOnly.Detail, "cursor") || strings.Contains(namedOnly.Detail, "claude") {
 		t.Fatalf("named-only row is %+v, want cursor and not claude", namedOnly)
+	}
+}
+
+// doctor reports the operator's session_provider before a task stalls
+// Dispatched: the default pipe is fine; tmux with a binary and an agent that
+// declares terminal_workers is fine; tmux without the binary, or with an
+// agent that has not declared the capability, is not OK and names the stall.
+// It stays serial because PATH is process state.
+func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("building a PATH that holds named executables needs a script this test cannot portably make on windows")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolving git: %v", err)
+	}
+	realTmux, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skipf("tmux is not on PATH: %v", err)
+	}
+	bin := t.TempDir()
+	for name, target := range map[string]string{"git": realGit, "tmux": realTmux} {
+		if err := os.Symlink(target, filepath.Join(bin, name)); err != nil {
+			t.Fatalf("planting %s on the probe PATH: %v", name, err)
+		}
+	}
+	plant := func(name string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("planting %s: %v", name, err)
+		}
+	}
+	plant("claude")
+	t.Setenv("PATH", bin)
+
+	h := newHome(t)
+	subject := newSubject(t)
+
+	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found := findCheck(report, machine.CheckSessionProvider)
+	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "pipes") {
+		t.Fatalf("doctor's session provider row with the default is %+v, want OK naming pipes", row)
+	}
+
+	if err := os.WriteFile(h.ConfigFile(), []byte("session_provider: tmux\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, machine.CheckSessionProvider)
+	if !found || !row.OK || row.Blocking ||
+		!strings.Contains(row.Detail, "tmux") || !strings.Contains(row.Detail, string(agents.CapabilityTerminalWorkers)) {
+		t.Fatalf("doctor's session provider row with tmux and claude is %+v, want OK naming tmux and %s",
+			row, agents.CapabilityTerminalWorkers)
+	}
+
+	// Same file, no tmux on PATH: the row fails closed and names the stall.
+	noTmux := t.TempDir()
+	if err := os.Symlink(realGit, filepath.Join(noTmux, "git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(noTmux, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", noTmux)
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, machine.CheckSessionProvider)
+	if !found || row.OK || row.Blocking || !strings.Contains(row.Detail, "stays dispatched") ||
+		!strings.Contains(row.Detail, "tmux") {
+		t.Fatalf("doctor's session provider row without tmux is %+v, want not OK naming the dispatched stall", row)
+	}
+
+	// tmux present again, but the configured agent has no terminal_workers.
+	t.Setenv("PATH", bin)
+	plant(agents.CursorName)
+	if err := os.WriteFile(h.ConfigFile(), []byte("session_provider: tmux\nagent: "+agents.CursorName+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, machine.CheckSessionProvider)
+	if !found || row.OK || row.Blocking ||
+		!strings.Contains(row.Detail, agents.CursorName) ||
+		!strings.Contains(row.Detail, string(agents.CapabilityTerminalWorkers)) ||
+		!strings.Contains(row.Detail, "stays dispatched") {
+		t.Fatalf("doctor's session provider row with cursor under tmux is %+v, want not OK naming %s and %s",
+			row, agents.CursorName, agents.CapabilityTerminalWorkers)
 	}
 }
 
