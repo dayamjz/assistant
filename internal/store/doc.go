@@ -70,9 +70,12 @@
 //
 // The attempt's session_ref is the one record of which session an attempt
 // had, filled once by SetAttemptSession after the process starts. The
-// session_ref column migration 1 gave the task table is neither written nor
-// read by this build: it stays declared because a migration may not remove a
-// column, and holds NULL for every task created here.
+// attempt's adapter and route_reason are the one record of which coding
+// agent agents.Route selected for the worker and why, filled once by
+// SetAttemptRoute before the process starts. The session_ref column
+// migration 1 gave the task table is neither written nor read by this
+// build: it stays declared because a migration may not remove a column, and
+// holds NULL for every task created here.
 //
 // # What the terminal tier reads
 //

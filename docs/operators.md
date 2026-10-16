@@ -359,6 +359,12 @@ default `~/.assistant`), which is a YAML document:
 session_provider: tmux
 ```
 
+Workers also need an adapter that declares terminal workers (today: Claude).
+A Cursor-only `agent:` pin refuses the launch with a recorded `route-refused`
+reason rather than falling back or widening grants; list Claude after Cursor
+if you want Cursor for runs and Claude for attachable workers. See
+`docs/multi-agent-support.md`.
+
 It is read strictly: an unrecognized key, a key written twice, and a value of
 the wrong type are each refused by name rather than ignored or converted, so
 `yes` is not `true` and `"3"` is not `3`. A file written as JSON, as this one

@@ -215,8 +215,7 @@ func (s *Service) relaunchTaskWith(ctx context.Context, id, stopNote string) (re
 func (s *Service) releaseSuperseded(id, ref string) {
 	s.mu.Lock()
 	held, ok := s.launched[id]
-	built := s.built
-	if ok && built != nil && held.Reference().String() == ref {
+	if ok && held.session != nil && held.host != nil && held.session.Reference().String() == ref {
 		delete(s.launched, id)
 	} else {
 		ok = false
@@ -225,7 +224,7 @@ func (s *Service) releaseSuperseded(id, ref string) {
 	if !ok {
 		return
 	}
-	if err := built.sessions.Close(held); err != nil {
+	if err := held.host.Close(held.session); err != nil {
 		s.log.Printf("the superseded session %s of task %s was not released: %v", ref, id, err)
 	}
 }

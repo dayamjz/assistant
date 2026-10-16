@@ -115,9 +115,10 @@ func TestADispatchedDeliveryTaskIsCutAnIsolatedClone(t *testing.T) {
 	primaryConfigBefore := git(t, subject, "config", "--local", "--list")
 
 	withServiceOptions(t, workerlessOptions(t, h), func(running serviceUnderTest) {
-		if got := taskState(t, running.client, id); got.State != taskstate.Dispatched || got.Source != taskstate.SourceEvent {
-			t.Fatalf("after dispatch the task resolves %s from %s; its adapter declares no worker sessions, so it stays dispatched",
-				got.State, got.Source)
+		// Workerless routing fails the launch after the copy is proven; the
+		// clone checks below read the copy dispatch left.
+		if got := taskState(t, running.client, id); got.State != taskstate.Failed || got.Basis.EventKind != "route-refused" {
+			t.Fatalf("after dispatch the task resolves %+v; want Failed from route-refused over a workerless adapter", got)
 		}
 	})
 
@@ -213,7 +214,7 @@ func TestADispatchedDeliveryTaskIsCutAnIsolatedClone(t *testing.T) {
 
 // An investigation task's clone carries no remote at all and a detached HEAD
 // at the default branch's tip. The adapter declares no worker sessions, so
-// the copy is read as dispatch left it.
+// routing refuses the launch and the copy is read as dispatch left it.
 func TestADispatchedInvestigationTaskIsCutADetachedCloneWithNoRemote(t *testing.T) {
 	t.Parallel()
 	h := newHome(t)
@@ -224,8 +225,8 @@ func TestADispatchedInvestigationTaskIsCutADetachedCloneWithNoRemote(t *testing.
 	mainTip := git(t, subject, "rev-parse", "refs/heads/main")
 
 	withServiceOptions(t, workerlessOptions(t, h), func(running serviceUnderTest) {
-		if got := taskState(t, running.client, id); got.State != taskstate.Dispatched {
-			t.Fatalf("after dispatch the task resolves %s", got.State)
+		if got := taskState(t, running.client, id); got.State != taskstate.Failed || got.Basis.EventKind != "route-refused" {
+			t.Fatalf("after dispatch the task resolves %+v; want Failed from route-refused over a workerless adapter", got)
 		}
 	})
 

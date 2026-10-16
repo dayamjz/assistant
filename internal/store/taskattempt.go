@@ -34,14 +34,23 @@ type TaskAttempt struct {
 	// the process starts; an attempt whose process never started keeps it
 	// unknown, and that is the record of a relaunch that did not come up.
 	SessionRef Optional[string] `json:"session_ref"`
+	// Adapter is the coding-agent name agents.Route selected for this
+	// attempt's worker. It is unknown until SetAttemptRoute fills it, which
+	// happens once, before the process starts; an attempt that never reached
+	// routing keeps it unknown.
+	Adapter Optional[string] `json:"adapter"`
+	// RouteReason is the stable reason code agents.Route returned with the
+	// selection (override or ordered). It is filled with Adapter by
+	// SetAttemptRoute and unknown on the same terms.
+	RouteReason Optional[string] `json:"route_reason"`
 }
 
-const taskAttemptColumns = `SELECT task_id, sequence, started_at, session_ref`
+const taskAttemptColumns = `SELECT task_id, sequence, started_at, session_ref, adapter, route_reason`
 
 func scanTaskAttempt(sc scanner) (TaskAttempt, error) {
 	var a TaskAttempt
 	var started string
-	if err := sc.Scan(&a.TaskID, &a.Sequence, &started, &a.SessionRef); err != nil {
+	if err := sc.Scan(&a.TaskID, &a.Sequence, &started, &a.SessionRef, &a.Adapter, &a.RouteReason); err != nil {
 		return TaskAttempt{}, err
 	}
 	var err error
@@ -101,9 +110,9 @@ func (s *Store) BeginTaskAttempt(ctx context.Context, taskID string, expectedLat
 }
 
 // SetAttemptSession records the session the attempt's process runs in. It is
-// the one revision an attempt's row takes, and it takes it once: a second
-// call on the same attempt is refused with ErrAttemptSessionRecorded, because
-// a process that was replaced is a new attempt. An empty reference is refused,
+// one revision an attempt's row takes, and it takes it once: a second call on
+// the same attempt is refused with ErrAttemptSessionRecorded, because a
+// process that was replaced is a new attempt. An empty reference is refused,
 // and an attempt that does not exist is ErrNotFound, wrapped.
 func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence int64, sessionRef string) error {
 	if strings.TrimSpace(sessionRef) == "" {
@@ -125,6 +134,39 @@ func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence i
 			sessionRef, taskID, sequence)
 		if err != nil {
 			return fmt.Errorf("store: task %s attempt %d: recording its session: %w", taskID, sequence, err)
+		}
+		return nil
+	})
+}
+
+// SetAttemptRoute records the adapter agents.Route selected for the attempt
+// and the reason code it returned. It is filled once, before the process
+// starts: a second call is refused with ErrAttemptRouteRecorded. An empty
+// adapter or reason is refused, and an attempt that does not exist is
+// ErrNotFound, wrapped.
+func (s *Store) SetAttemptRoute(ctx context.Context, taskID string, sequence int64, adapter, reason string) error {
+	if strings.TrimSpace(adapter) == "" {
+		return fmt.Errorf("store: task %s attempt %d: the routed adapter is empty", taskID, sequence)
+	}
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("store: task %s attempt %d: the route reason is empty", taskID, sequence)
+	}
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		var recordedAdapter, recordedReason Optional[string]
+		err := tx.QueryRowContext(ctx,
+			`SELECT adapter, route_reason FROM task_attempt WHERE task_id = ? AND sequence = ?`, taskID, sequence).
+			Scan(&recordedAdapter, &recordedReason)
+		if err != nil {
+			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, errNoRows(err))
+		}
+		if recordedAdapter.IsKnown() || recordedReason.IsKnown() {
+			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrAttemptRouteRecorded)
+		}
+		_, err = tx.ExecContext(ctx,
+			`UPDATE task_attempt SET adapter = ?, route_reason = ? WHERE task_id = ? AND sequence = ?`,
+			adapter, reason, taskID, sequence)
+		if err != nil {
+			return fmt.Errorf("store: task %s attempt %d: recording its route: %w", taskID, sequence, err)
 		}
 		return nil
 	})

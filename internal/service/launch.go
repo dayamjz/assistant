@@ -5,24 +5,28 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/session"
+	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
-// Launching a dispatched task: the second assertion, the session, and the
-// reference.
+// Launching a dispatched task: the second assertion, capability-aware
+// routing, the session, and the reference.
 //
 // PRD section 5's lifecycle moves a task from Dispatched to Running only when
 // isolation is proven, and this file is the launch half of that edge, over
 // the proof dispatch.go ended at. It is PRD section 8's "the supervisor owns
-// terminal sessions, one per worker": the service holds one session.Provider,
-// built in driverFor over the agent as resolved, and the sessions it creates
-// are held here per task, one per attempt, until Close ends them.
+// terminal sessions, one per worker": each launch builds a session.Host over
+// the adapter agents.Route selected for that worker (which may differ from
+// the run agent), and the sessions it creates are held here per task, one
+// per attempt, until Close ends them.
 //
 // # The proof is made again at launch
 //
@@ -45,38 +49,51 @@ import (
 // otherwise; the second check in the instructions is what runs after that,
 // and it is detection by an obedient worker.
 //
+// # Capability-aware routing (GAP-02)
+//
+// Before Create, agents.Route selects a worker adapter from the operator's
+// agent list and the worker capability need (worker_sessions, plus
+// terminal_workers when session_provider is tmux). A single named entry that
+// is not auto is an operator pin (Override): missing Need is a typed refuse
+// with no fallthrough. A longer list is ordered preference with capability
+// filtering. The selection is recorded on the attempt through
+// store.SetAttemptRoute before Create, so every launch that reaches a
+// process names the adapter and reason. A routing refusal is recorded as
+// "route-refused" and the task resolves Failed rather than staying
+// Dispatched forever. Grants are unchanged: the selected worker still starts
+// under GrantWorker through the ordinary session Create path.
+//
 // # Records precede processes, and what that leaves open
 //
 // The attempt row is dispatch's claim, and it exists before Create is asked
-// for anything; Session.Reference is recorded on it through
-// store.SetAttemptSession right after Create returns, which is the one
-// record of which terminal a task's attempt runs in and the reference
-// internal/taskstate's probe reads. A reference that cannot be recorded ends
-// the session before the failure is reported, so no process this service
-// started stands behind an attempt whose row does not name it. Between
-// Create returning and the row being written, a crash leaves the process
-// internal/session's doc describes: one no record names. The dispatch that
-// retries the task sweeps the standing copy before its claim, on sweep.go's
-// terms, which finds such a process by its working directory on Linux and
-// macOS and is agents.ErrSweepUnsupported elsewhere, where the retry is
-// refused and holds for a person, and the window stays open only behind a
-// retry answer to that hold.
+// for anything; the route is recorded on it before Create, and
+// Session.Reference is recorded through store.SetAttemptSession right after
+// Create returns, which is the one record of which terminal a task's attempt
+// runs in and the reference internal/taskstate's probe reads. A reference
+// that cannot be recorded ends the session before the failure is reported,
+// so no process this service started stands behind an attempt whose row does
+// not name it. Between Create returning and the row being written, a crash
+// leaves the process internal/session's doc describes: one no record names.
+// The dispatch that retries the task sweeps the standing copy before its
+// claim, on sweep.go's terms, which finds such a process by its working
+// directory on Linux and macOS and is agents.ErrSweepUnsupported elsewhere,
+// where the retry is refused and holds for a person, and the window stays
+// open only behind a retry answer to that hold.
 //
 // # What the launch moves, and what it does not
 //
 // The task's resolved state is not moved here, and it moves anyway: Running
 // is answered by internal/taskstate's process tier from a Live probe of the
 // recorded reference, every reader this service builds probes through its
-// Terminals, which in production is the provider this launch created the
-// session through, and that provider answers Live for a session it holds
-// whose process is running. So a launched task reads Running from the
-// process tier on the task surface, the queue, reconciliation and the loop
-// from the moment the reference is recorded until the worker exits, and
-// then what precedence gives with Dead: Unknown from the process tier when
-// no run is attributed, or the run's state. Nothing here writes an event to
-// say Running: that would be a second record of a fact the process tier
-// owns. An adapter that launches nothing records no reference, so such a
-// task reads Dispatched from the record, on the terms below.
+// Terminals, which in production looks up the per-task host when this
+// service still holds the session, and that provider answers Live for a
+// session it holds whose process is running. So a launched task reads
+// Running from the process tier on the task surface, the queue,
+// reconciliation and the loop from the moment the reference is recorded
+// until the worker exits, and then what precedence gives with Dead: Unknown
+// from the process tier when no run is attributed, or the run's state.
+// Nothing here writes an event to say Running: that would be a second record
+// of a fact the process tier owns.
 //
 // One launch per attempt per service, and a launched task is never
 // dispatched again. A restart holds no session and no slot, and what it
@@ -92,32 +109,23 @@ import (
 // probes Unobserved while it stands and Dead once it is gone, and only then
 // is the task relaunched, after the sweep sweep.go reads has been asked of
 // the copy.
-//
-// # An adapter without worker sessions dispatches and never launches
-//
-// Create asks the resolved agent for a worker through agents.OpenWorker,
-// which refuses an adapter that has not declared
-// agents.CapabilityWorkerSessions with a *agents.CapabilityError. The Claude
-// Code adapter declares it, so a service resolved to it launches what it
-// dispatches; one resolved to an adapter that does not, such as the Cursor
-// adapter, dispatches every task and launches none: the refusal is
-// logged, the task stays Dispatched with its slot and its attempt standing,
-// and no reference is recorded. Nothing here turns that into a recorded
-// refusal, because internal/taskstate's refusal tokens are about isolation
-// and this is not an isolation failure. That is stated rather than widened.
+
+// launchedWorker is one task's held session host and session. The host is
+// built over the routed adapter for that launch.
+type launchedWorker struct {
+	host    session.Host
+	session *session.Session
+}
 
 // launchTask launches the worker for a dispatch that reached proven: it
-// asserts the copy again, creates the terminal session with the task's
-// instructions and the route back to this service, on route.go's terms,
-// records the session's reference on the attempt, and holds the session. A copy that fails the assertion is an *isolationRefused,
-// recorded; an agent without worker sessions is a *agents.CapabilityError,
-// wrapped, with nothing recorded; a session whose reference could not be
-// recorded is ended before the error is reported.
+// asserts the copy again, routes a worker adapter, records the route,
+// creates the terminal session with the task's instructions and the route
+// back to this service, on route.go's terms, records the session's
+// reference on the attempt, and holds the session. A copy that fails the
+// assertion is an *isolationRefused, recorded; a routing refusal is a
+// *routeRefused, recorded; a session whose reference could not be recorded
+// is ended before the error is reported.
 func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Session, error) {
-	built, err := s.driverFor(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("service: resolving the agent to launch task %s with: %w", d.id, err)
-	}
 	instructions, err := os.ReadFile(d.instructions)
 	if err != nil {
 		return nil, fmt.Errorf("service: reading the instructions of task %s: %w", d.id, err)
@@ -126,18 +134,30 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	if err != nil {
 		return nil, err
 	}
-	launched, err := built.sessions.Create(ctx, session.Spec{
+	selection, err := s.routeWorker(ctx)
+	if err != nil {
+		return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
+	}
+	if err := s.store.SetAttemptRoute(ctx, d.id, d.attempt, selection.Resolution.Name, selection.Reason); err != nil {
+		return nil, fmt.Errorf("service: recording the route of task %s attempt %d: %w", d.id, d.attempt, err)
+	}
+	host := s.sessionHost(selection.Resolution.Runner)
+	launched, err := host.Create(ctx, session.Spec{
 		TaskID:       d.id,
 		Isolation:    fresh,
 		Instructions: string(instructions) + d.note + s.routeSection(d.want.Shape),
 		Route:        s.workerRoute,
 	})
 	if err != nil {
+		var undeclared *agents.CapabilityError
+		if errors.As(err, &undeclared) {
+			return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
+		}
 		return nil, fmt.Errorf("service: launching task %s attempt %d: %w", d.id, d.attempt, err)
 	}
 	reference := launched.Reference().String()
 	if err := s.store.SetAttemptSession(ctx, d.id, d.attempt, reference); err != nil {
-		if closeErr := built.sessions.Close(launched); closeErr != nil {
+		if closeErr := host.Close(launched); closeErr != nil {
 			s.log.Printf("the worker of task %s, whose session could not be recorded, was not ended either: %v",
 				d.id, closeErr)
 		}
@@ -145,12 +165,68 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	}
 	s.mu.Lock()
 	if s.launched == nil {
-		s.launched = make(map[string]*session.Session)
+		s.launched = make(map[string]launchedWorker)
 	}
-	s.launched[d.id] = launched
+	s.launched[d.id] = launchedWorker{host: host, session: launched}
 	s.mu.Unlock()
+	s.log.Printf("task %s attempt %d was routed to %s (%s)", d.id, d.attempt, selection.Resolution.Name, selection.Reason)
 	return launched, nil
 }
+
+// routeWorker selects the adapter a task worker launches with, on
+// agents.Route's terms. A single named agent entry that is not auto is an
+// operator pin; a longer list is ordered preference with capability
+// filtering. Grants are not decided here.
+func (s *Service) routeWorker(ctx context.Context) (agents.Selection, error) {
+	tmux := s.cfg.SessionProvider == config.SessionProviderTmux
+	return agents.Route(ctx, s.catalog, s.cfg.Agent, agents.NeedForWorker(tmux), workerOverride(s.cfg.Agent))
+}
+
+// workerOverride is the operator pin: a single named agent entry that is not
+// auto. An empty list, auto alone, and a multi-entry preference list each
+// yield no override so Route expands and filters in order.
+func workerOverride(entries []string) string {
+	if len(entries) != 1 {
+		return ""
+	}
+	entry := strings.TrimSpace(entries[0])
+	if entry == "" || entry == agents.AutoEntry {
+		return ""
+	}
+	return entry
+}
+
+// refuseRoute records the refusal as the task's "route-refused" event,
+// anchored to the history the dispatch was decided from, and returns the
+// typed refusal. The task resolves Failed from it so a routing miss does
+// not leave the attempt Dispatched forever.
+func (s *Service) refuseRoute(ctx context.Context, id string, attempt, anchor int64, cause error) error {
+	detail := cause.Error()
+	s.log.Printf("task %s attempt %d was refused a worker by routing: %v", id, attempt, cause)
+	event, err := s.store.AppendTaskEventAfter(ctx, id, anchor, routeRefusedKind, detail)
+	if err != nil {
+		return fmt.Errorf("service: recording the routing refusal of task %s: %w", id, err)
+	}
+	return &routeRefused{Task: id, Attempt: attempt, Event: event, Cause: cause}
+}
+
+// routeRefusedKind is the kind internal/taskstate gives a routing refusal.
+const routeRefusedKind = "route-refused"
+
+// routeRefused reports a launch whose worker routing refused every configured
+// agent. The task resolves Failed from the recorded event.
+type routeRefused struct {
+	Task    string
+	Attempt int64
+	Event   store.TaskEvent
+	Cause   error
+}
+
+func (e *routeRefused) Error() string {
+	return fmt.Sprintf("service: task %s attempt %d: worker routing refused: %v", e.Task, e.Attempt, e.Cause)
+}
+
+func (e *routeRefused) Unwrap() error { return e.Cause }
 
 // assertAtLaunch observes the copy the dispatch proved and asserts it again,
 // under the environment the worker is started with, and returns the fresh
@@ -191,16 +267,16 @@ func (s *Service) assertCopy(ctx context.Context, id string, attempt, anchor int
 }
 
 // sessionOf reports the session this service launched for a task and the
-// provider holding it, and whether it launched one. It is the one reader of
+// host holding it, and whether it launched one. It is the one reader of
 // the launched map outside Close.
-func (s *Service) sessionOf(id string) (session.Provider, *session.Session, bool) {
+func (s *Service) sessionOf(id string) (session.Host, *session.Session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	launched, ok := s.launched[id]
-	if !ok || s.built == nil {
+	if !ok || launched.host == nil || launched.session == nil {
 		return nil, nil, false
 	}
-	return s.built.sessions, launched, true
+	return launched.host, launched.session, true
 }
 
 // closeSessions ends every session this service launched and still holds,
@@ -211,18 +287,15 @@ func (s *Service) sessionOf(id string) (session.Provider, *session.Session, bool
 func (s *Service) closeSessions() []error {
 	s.mu.Lock()
 	held := s.launched
-	s.launched = make(map[string]*session.Session)
-	built := s.built
+	s.launched = make(map[string]launchedWorker)
 	s.mu.Unlock()
 	var errs []error
 	for id, launched := range held {
-		if built == nil {
-			// A session is held only once a driver was built, so this is
-			// unreachable; it is refused rather than dereferenced.
+		if launched.host == nil {
 			errs = append(errs, fmt.Errorf("service: task %s holds a session and no provider", id))
 			continue
 		}
-		if err := built.sessions.Close(launched); err != nil {
+		if err := launched.host.Close(launched.session); err != nil {
 			errs = append(errs, fmt.Errorf("service: ending the worker of task %s: %w", id, err))
 		}
 	}

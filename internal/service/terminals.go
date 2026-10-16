@@ -25,9 +25,12 @@ import (
 // reads Unobserved, on that package's terms. Capture is answered out of the
 // same held set, through the provider's CaptureReference, so the reference a
 // probe answers Live for is the one a capture reads, and the reference to
-// handle lookup has one owner, the provider's held set; nothing here reads
-// the launched map for either question. Every task reader this service
-// builds, the task surface's, the queue's, reconciliation's and the loop's,
+// handle lookup has one owner, the provider's held set. When this service
+// still holds the session, Probe and Capture prefer that launch's host
+// (which may be a different adapter than the run agent); otherwise they use
+// the driver's provider for identity-only answers after a restart. Every
+// task reader this service builds, the task surface's, the queue's,
+// reconciliation's and the loop's,
 // probes through this type, so what a person listing tasks sees of a
 // terminal is what the loop acts on and what a restart relaunches on.
 //
@@ -109,10 +112,14 @@ func (s *Service) sessionHost(r agents.Runner) session.Host {
 // is nil, which is what the product passes.
 type heldTerminals struct{ s *Service }
 
-// Probe answers through the provider the launches go through, on
-// session.Provider.Probe's terms, and Unobserved with
+// Probe answers through the per-task host when this service still holds the
+// session, else through the driver's provider for identity-only probes after
+// a restart, on session.Provider.Probe's terms, and Unobserved with
 // session.ReasonUnreadable when no provider can be built.
 func (h heldTerminals) Probe(ctx context.Context, ref string) session.Observation {
+	if host, ok := h.s.hostForReference(ref); ok {
+		return host.Probe(ctx, ref)
+	}
 	built, err := h.s.driverFor(ctx)
 	if err != nil {
 		return session.Observation{
@@ -124,14 +131,28 @@ func (h heldTerminals) Probe(ctx context.Context, ref string) session.Observatio
 	return built.sessions.Probe(ctx, ref)
 }
 
-// Capture answers through the provider's CaptureReference, so a reference
-// the provider does not hold is session.ErrNotHeld, this terminal's failure,
-// and a service that cannot build a provider is ErrTerminalsUnavailable,
-// wrapped, the provider's.
+// Capture answers through the per-task host when held, else through the
+// driver's CaptureReference, so a reference the provider does not hold is
+// session.ErrNotHeld, this terminal's failure, and a service that cannot
+// build a provider is ErrTerminalsUnavailable, wrapped, the provider's.
 func (h heldTerminals) Capture(ctx context.Context, ref string) (session.Capture, error) {
+	if host, ok := h.s.hostForReference(ref); ok {
+		return host.CaptureReference(ctx, ref)
+	}
 	built, err := h.s.driverFor(ctx)
 	if err != nil {
 		return session.Capture{}, fmt.Errorf("%w: no session provider could be built to capture with: %w", ErrTerminalsUnavailable, err)
 	}
 	return built.sessions.CaptureReference(ctx, ref)
+}
+
+// hostForReference reports the per-task host this service holds for the
+// session ref names, when the reference parses and names a launched task.
+func (s *Service) hostForReference(ref string) (session.Host, bool) {
+	parsed, err := session.ParseReference(ref)
+	if err != nil {
+		return nil, false
+	}
+	host, _, ok := s.sessionOf(parsed.Task)
+	return host, ok
 }

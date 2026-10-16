@@ -365,6 +365,13 @@
 // refusal wrapping ErrNoAgent, which is what keeps a run from starting and
 // reporting command-only validation as a pass.
 //
+// Route is the capability-aware sibling for task workers: it takes the same
+// list plus a Need set and an optional operator Override, skips runnable
+// adapters that do not cover Need (or refuses without fallthrough when
+// Override is set), and returns a Selection naming the adapter and a stable
+// reason code. NeedForWorker builds the worker need. Route does not change
+// grants; a selected worker still starts under GrantWorker.
+//
 // "auto" is limited to adapters whose factory declares AutoEligible. Only
 // the Claude adapter declares it, because PRD section 12 makes Claude Code the
 // only phase-one adapter; the others resolve when an entry names them. That is
