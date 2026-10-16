@@ -491,18 +491,22 @@ func outcomePhrase(outcome Outcome, park store.Optional[store.RunPark], advancin
 
 // RecordPhrase is what a person reads about a run of which only the record is
 // in hand: a listing, or a run's state travelling as an event. The record
-// carries its status and the park that ended it, if a bound did, and no merge
-// record, no checkpoint and no advancing fact, so this is the row for the
-// record read through OutcomeOf with the execution unrecorded, and
-// OutcomeExecuting is left at the weaker row rather than sharpened on facts
-// the caller does not have. A terminated record naming a park reads as that
-// bound's row, as RunPhrase reads it. Two readings are still the record's and
-// not the run's, and RunPhrase is where the run's are: a passed record reads
-// as having cleared the gate, which is true of a merged one too, and a
-// terminated record parked before the park record existed reads as ended
-// before a verdict; those readings need the merge record and the checkpoint.
+// carries its status, the park that ended it if a bound did, and whether begin
+// settled no code host, and no merge record, no checkpoint and no advancing
+// fact, so this is the row for the record read through OutcomeOf with the
+// execution unrecorded, and OutcomeExecuting is left at the weaker row rather
+// than sharpened on facts the caller does not have. A terminated record naming
+// a park reads as that bound's row, as RunPhrase reads it. A passed record
+// with NoCodeHost known true reads as pushed; without that flag a passed
+// record still reads as having cleared the gate (checks-passed), which is
+// also true of a merged one, and RunPhrase is where the merge record settles
+// that. A terminated record parked before the park record existed reads as
+// ended before a verdict.
 func RecordPhrase(r store.Run) Phrase {
-	outcome := OutcomeOf(Standing{Record: r.Status, Park: r.Park, Execution: ExecutionUnrecorded()})
+	outcome := OutcomeOf(Standing{
+		Record: r.Status, Park: r.Park, NoCodeHost: r.NoCodeHost,
+		Execution: ExecutionUnrecorded(),
+	})
 	if p, ok := parkPhrase(outcome, r.Park); ok {
 		return p
 	}

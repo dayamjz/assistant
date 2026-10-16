@@ -252,6 +252,13 @@ type Standing struct {
 	// record says which bound, so a surface holding the record alone reads
 	// the same answer a surface holding the checkpoint does.
 	Park store.Optional[store.RunPark]
+	// NoCodeHost is whether the run's record says begin settled there is no
+	// code host, read off store.Run.NoCodeHost. It travels beside Record so a
+	// listing that has only the row can still choose pushed over
+	// checks-passed without restoring a checkpoint. Unknown means the record
+	// predates that column or begin never settled it; then Execution's
+	// pipeline.KeyNoCodeHost is the fallback.
+	NoCodeHost store.Optional[bool]
 	// Execution is where the run's execution stands.
 	Execution Execution
 	// Advancing is whether a segment of the run was executing when the answer
@@ -276,17 +283,15 @@ type Standing struct {
 // later, its own under the autonomy flag or a person's, was recorded, and PRD
 // section 9 makes that the point at
 // which a driving agent asks the person. The one completed run that reads as
-// pushed is one whose state says there was no code host: the pull request and
-// checks stages were skipped for that reason, and checks-passed would claim
-// checks that did not run. That fact lives in the checkpoint state
-// (pipeline.KeyNoCodeHost), so a passed record whose Execution was not
-// restored from a checkpoint still reads as checks-passed: the record alone
-// does not carry no_code_host, and inventing pushed without the state would
-// overclaim. Surfaces that build Standing are expected to restore the
-// checkpoint the way internal/service does. The one passed record that reads
-// as passed is one whose merge record says a merge ended it, which is
-// Standing's PullRequestEnd, read off that record rather than inferred from a
-// checkpoint that still stands at the checks stage. A run that ended without
+// pushed is one with no code host: the pull request and checks stages were
+// skipped for that reason, and checks-passed would claim checks that did not
+// run. Standing.NoCodeHost carries that fact from the run row when begin
+// settled it; otherwise Execution's pipeline.KeyNoCodeHost is the fallback for
+// a surface that restored a checkpoint. A passed record that has neither still
+// reads as checks-passed rather than inventing pushed. The one passed record
+// that reads as passed is one whose merge record says a merge ended it, which
+// is Standing's PullRequestEnd, read off that record rather than inferred from
+// a checkpoint that still stands at the checks stage. A run that ended without
 // a verdict is cancelled when a person ended it and failed when a bound
 // parked it, which is the difference between the two things a terminated
 // record covers; the reason on a parked run says which bound. A parked run is
@@ -306,6 +311,12 @@ func OutcomeOf(s Standing) Outcome {
 	case store.RunPassed:
 		if s.PullRequestEnd == store.PullRequestMerged {
 			return OutcomePassed
+		}
+		if noHost, ok := s.NoCodeHost.Get(); ok {
+			if noHost {
+				return OutcomePushed
+			}
+			return OutcomeChecksPassed
 		}
 		if s.Execution.recorded && pipeline.NoCodeHost(s.Execution.state) {
 			return OutcomePushed

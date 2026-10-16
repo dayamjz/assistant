@@ -159,6 +159,33 @@ func TestATerminalRecordDecidesOverWhereExecutionStopped(t *testing.T) {
 	}
 }
 
+// A passed record whose row says begin settled no code host reads as pushed
+// without a restored checkpoint, which is what lets a listing phrase it
+// correctly. The same record with the flag known false, or unknown, stays
+// checks-passed so a missing fact cannot invent pushed.
+func TestAPassedRecordWithNoCodeHostReadsAsPushed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		flag store.Optional[bool]
+		want machine.Outcome
+	}{
+		{"known true", store.Known(true), machine.OutcomePushed},
+		{"known false", store.Known(false), machine.OutcomeChecksPassed},
+		{"unknown", store.Optional[bool]{}, machine.OutcomeChecksPassed},
+	}
+	for _, c := range cases {
+		got := machine.OutcomeOf(machine.Standing{
+			Record:     store.RunPassed,
+			NoCodeHost: c.flag,
+			Execution:  machine.ExecutionUnrecorded(),
+		})
+		if got != c.want {
+			t.Fatalf("%s: OutcomeOf = %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
 // A passed record reads as passed only when the record itself says a merge
 // ended the run, which is PRD section 9's one meaning for the word; the same
 // record with no end, or a run its pull request closed, reads as it did. The

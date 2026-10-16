@@ -282,22 +282,28 @@ func (s *Service) readPersonMerge(ctx context.Context, record store.Run) (mergeR
 		s.log.Printf("run %s: the read for merges could not read its merge record: %v", record.ID, err)
 		return mergeReadFailed, true
 	}
-	// Which runs are checks-passed is internal/machine's derivation, from
-	// the record and its merge record, as report composes it.
-	standing := machine.Standing{Record: record.Status}
+	if s.mergeReadSettled(record.ID) {
+		return mergeReadSkipped, true
+	}
+	// Restore the checkpoint before OutcomeOf so a no-code-host completion
+	// (and a record that predates NoCodeHost) is not mistaken for
+	// checks-passed. The record's NoCodeHost flag is the durable half.
+	latest, err := s.checkpoints.Latest(ctx, record.ID)
+	if err != nil {
+		s.log.Printf("run %s: the read for merges could not read its position: %v", record.ID, err)
+		return mergeReadFailed, true
+	}
+	standing := machine.Standing{
+		Record:     record.Status,
+		Park:       record.Park,
+		NoCodeHost: record.NoCodeHost,
+		Execution:  machine.ExecutionAt(latest.Status, latest.State),
+	}
 	if ended {
 		standing.PullRequestEnd = merge.End
 	}
 	if machine.OutcomeOf(standing) != machine.OutcomeChecksPassed {
 		return "", false
-	}
-	if s.mergeReadSettled(record.ID) {
-		return mergeReadSkipped, true
-	}
-	latest, err := s.checkpoints.Latest(ctx, record.ID)
-	if err != nil {
-		s.log.Printf("run %s: the read for merges could not read its position: %v", record.ID, err)
-		return mergeReadFailed, true
 	}
 	facts, ok := passedPullRequestOf(latest.State)
 	if !ok {

@@ -95,27 +95,38 @@ func TestARunWhoseUpstreamNamesAnUnsupportedHostIsRefusedAtStart(t *testing.T) {
 }
 
 // TestARunWhoseUpstreamIsALocalPathCarriesNoCodeHost is the local half of
-// #283: the run starts, carries an empty forge repository, and marks
-// no_code_host so the pull request and checks stages skip.
+// #283: the run starts, carries an empty forge repository, and records
+// no_code_host on the run row so listings phrase a completion as pushed.
 func TestARunWhoseUpstreamIsALocalPathCarriesNoCodeHost(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 
 	subject := newSubject(t)
 	local := git(t, subject, "remote", "get-url", "origin")
-	seen := observeForgeRepository(t, local, local)
+	seen, record := observeForgeRepositoryAndRun(t, local, local)
 	if seen != "" {
 		t.Fatalf("a local-upstream run acts on %q, want nothing on the code host", seen)
+	}
+	if noHost, ok := record.NoCodeHost.Get(); !ok || !noHost {
+		t.Fatalf("local-upstream run NoCodeHost = %v, %v; want known true", noHost, ok)
 	}
 }
 
 // observeForgeRepository starts one run of a subject repository whose record
 // names upstream and whose checkout's origin remote names remote, and returns
 // the code host repository the run's first stage was handed.
+func observeForgeRepository(t *testing.T, upstream, remote string) string {
+	t.Helper()
+	seen, _ := observeForgeRepositoryAndRun(t, upstream, remote)
+	return seen
+}
+
+// observeForgeRepositoryAndRun is observeForgeRepository and the run row as
+// stored after begin, so a caller can assert durable facts begin wrote.
 //
-// It reads the value out of a real run: the stage body is placed through the
-// service's own stage hook, so what it sees is what the service put in the
-// run's state and not what a helper computed alongside it.
+// It reads the forge repository out of a real run: the stage body is placed
+// through the service's own stage hook, so what it sees is what the service
+// put in the run's state and not what a helper computed alongside it.
 //
 // A run fetches the recorded upstream now - the trusted configuration copy is
 // read at a freshly fetched default branch - and the URLs these tests record
@@ -125,7 +136,7 @@ func TestARunWhoseUpstreamIsALocalPathCarriesNoCodeHost(t *testing.T) {
 // record's URL as written, which is the fact under test; where the bytes of a
 // fetch of it come from is what the rewrite decides, and that keeps this test
 // off the network without weakening what it observes.
-func observeForgeRepository(t *testing.T, upstream, remote string) string {
+func observeForgeRepositoryAndRun(t *testing.T, upstream, remote string) (string, store.Run) {
 	t.Helper()
 
 	h := newHome(t)
@@ -148,11 +159,13 @@ func observeForgeRepository(t *testing.T, upstream, remote string) string {
 
 	var got string
 	var read bool
+	var runID string
 	withServiceOptions(t, opts, func(under serviceUnderTest) {
 		// Only the first stage is under test here, and every stage after it
 		// would reach for the upstream this record names, which is a real code
 		// host. Skipping them keeps this test off the network.
-		startRunSkipping(t, under.client, subject, afterIntent()...)
+		run := startRunSkipping(t, under.client, subject, afterIntent()...)
+		runID = run.Record.ID
 		select {
 		case got, read = <-seen:
 		default:
@@ -161,7 +174,13 @@ func observeForgeRepository(t *testing.T, upstream, remote string) string {
 	if !read {
 		t.Fatal("the run never reached the stage that reads the repository it acts on")
 	}
-	return got
+	records := openRecords(t, h)
+	defer records.Close()
+	record, err := records.Run(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("reading the run after start: %v", err)
+	}
+	return got, record
 }
 
 // observingStage is a stage body that reports the code host repository the run

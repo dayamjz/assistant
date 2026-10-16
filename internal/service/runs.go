@@ -647,6 +647,17 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 		}
 		return machine.Run{}, err
 	}
+	// Persist the trichotomy on the run row so listings that have only the
+	// record still phrase a completed no-code-host run as pushed.
+	if noCodeHost {
+		if err := s.store.SetRunNoCodeHost(ctx, record.ID); err != nil {
+			return machine.Run{}, err
+		}
+	} else {
+		if err := s.store.SetRunHasCodeHost(ctx, record.ID); err != nil {
+			return machine.Run{}, err
+		}
+	}
 	start.ForgeRepository, start.ForkRepository, start.NoCodeHost = forgeRepository, forkRepository, noCodeHost
 	// The copy is built before the run is recorded as started, so a run that
 	// is walking has somewhere to walk. PRD section 8 orders the row before
@@ -1723,10 +1734,11 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 		return machine.Run{}, err
 	}
 	standing := machine.Standing{
-		Record:    record.Status,
-		Park:      record.Park,
-		Execution: machine.ExecutionUnrecorded(),
-		Advancing: result == nil && s.isAdvancing(runID),
+		Record:     record.Status,
+		Park:       record.Park,
+		NoCodeHost: record.NoCodeHost,
+		Execution:  machine.ExecutionUnrecorded(),
+		Advancing:  result == nil && s.isAdvancing(runID),
 	}
 	answer := machine.Run{Record: record}
 	if cleanup.Run != "" {
