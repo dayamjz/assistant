@@ -17,20 +17,27 @@ Nothing here runs in `make check` or CI. Graders are checked by
 ```sh
 make build
 pip install --user 'caliper-eval==0.19.0'   # pinned (plan section 4)
+# Claude Code on PATH and logged in (pilot backend). API key auth:
+#   export ANTHROPIC_API_KEY=…
+#   # or: claude auth login
 export PATH="$HOME/.local/bin:$PWD/bin:$PATH"
 cd evals/caliper/q1
 python3 verify_graders.py
 caliper validate q1.eval.yaml
 # Check provider headroom before a full run:
 #   quota-axi …
-caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 2 --judge-model <pinned>
-caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 2 --judge-model <pinned> --ablate assistant
-caliper compare <results A> <results B>
+# Pin the under-test and judge models to the same pair; do not leave defaults.
+MODEL=claude-code:claude-sonnet-4-5
+./run-full.sh "$MODEL"
 ```
 
-Use a disposable environment. Caliper's `sandbox:` scans transcripts and
-runs Claude Code with `--dangerously-skip-permissions` under a temporary
-HOME on the operator's machine.
+`run-full.sh` runs both arms at k = 5 with identical `--model` /
+`--judge-model`, writes `result-q1-with-skill.json` and
+`result-q1-ablated.json`, then `caliper compare`. It refuses before graders
+when Claude is not logged in and `ANTHROPIC_API_KEY` is unset. Use a
+disposable environment. Caliper's `sandbox:` scans transcripts and runs
+Claude Code with `--dangerously-skip-permissions` under a temporary HOME
+on the operator's machine.
 
 ## Decisions recorded here
 

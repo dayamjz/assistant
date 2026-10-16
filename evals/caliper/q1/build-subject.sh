@@ -35,6 +35,13 @@ git init -q --bare -b main remote.git
 REMOTE_ABS="$(cd remote.git && pwd)"
 # Every git process in this attempt's HOME — including the gate bare repo
 # assistant init creates — rewrites the recorded upstream to the local remote.
+# Drop any prior rewrite of the same URL first: a dead path from an earlier
+# attempt (or a parallel worker) would otherwise win and make clone/push fail
+# with "does not appear to be a git repository".
+git config --global --get-regexp '^url\..*\.insteadof$' "$UPSTREAM_URL" 2>/dev/null |
+	while read -r key _; do
+		git config --global --unset-all "$key" 2>/dev/null || true
+	done
 git config --global "url.${REMOTE_ABS}.insteadOf" "$UPSTREAM_URL"
 
 git init -q -b main seed

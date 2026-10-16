@@ -16,12 +16,13 @@ can start without redesigning the subject.
 | `assistant` | built from this branch with `make build` |
 | Families | defect, benign, overstated, fake-shape, boundary, lost-work, benign-max |
 | Neighbour | `no-mistakes` from `kunchenguid/no-mistakes` @ `1773fc4b465bd154ed225c909eec271ab8fc73d2` |
-| Code host | `evals/caliper/q1/bin/gh` + `url.<local>.insteadOf` for `https://github.com/dayamjz/caliper-q1.git` |
+| Code host | `evals/caliper/path/gh` + `url.<local>.insteadOf` for `https://github.com/dayamjz/caliper-q1.git` |
 | Grader check | `python3 evals/caliper/q1/verify_graders.py` — all assert outcomes pass |
 
 Each assert family was checked for both held and shipped outcomes before any
-agent run. `overstated` and `fake-shape` are `expect:` (judge) tasks; the
-assert path refuses them so a tree check cannot silently pass them.
+agent run. Every family — including `overstated` and `fake-shape` — grades
+with `assert:` / `check.py` tree (or history) patterns, not judge `expect:`
+text that would spell the planted bug.
 
 ## Decisions
 
@@ -64,21 +65,15 @@ planted surface:
 
 ## What this does not cover
 
-- **No full Q1 agent run.** This environment has no Claude Code credentials
-  and no provider quota check. Issue #287 items 4–5 — k = 5 both arms with
-  `--judge-model` pinned, in a disposable environment, and the write-up with
-  figures — remain. Projection from the pilot is still about 11M agent
-  tokens plus gate usage from the cleanup files.
-- **Plan section 3.3's token assumption stays falsified** until a full run
-  adds the cleanup usage files into the reported cost. The pilot record now
-  names that disagreement explicitly.
+- **Full Q1 agent run is recorded separately** in
+  `docs/evaluations/2026-10-16-caliper-q1-full.md`. That write-up still could
+  not include gate-internal usage (cleanup talked to the operator HOME);
+  plan section 3.3's token assumption stays incomplete until a later run
+  confirms the fixed `cleanup.sh`.
 - **Planted defects are ours**, as plan section 4 warns.
 
 ## Next
 
-1. Confirm provider headroom (`quota-axi`).
-2. Run `q1.eval.yaml` at k = 5 both arms with `--judge-model` pinned, in a
-   disposable environment.
-3. Write the run up as a new `docs/evaluations/` entry answering Q1 with
-   limits, every figure traceable to a checked-in results file. Then Q3,
-   then Q2, per plan step 4.
+Full Q1 at k = 5 both arms and its write-up are in
+`docs/evaluations/2026-10-16-caliper-q1-full.md` (issue #287 items 4–5).
+Plan step 4 continues with Q3, then Q2.
