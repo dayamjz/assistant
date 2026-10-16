@@ -359,13 +359,17 @@ func (r *codexRunner) invoke(ctx context.Context, purpose Purpose, inv Invocatio
 
 // arguments builds the command line for `codex exec`.
 //
-// Layout: configured entry flags, then `exec`, then managed flags (--json,
-// --color never, grant sandbox flags, --model), then either the prompt (new
-// session) or `resume <thread_id>` and the prompt. The prompt is a trailing
-// argv operand after `--` so a prompt that begins with a dash cannot be read
-// as an option. config.ReservedAgentFlags refuses a configured entry that
-// names --json, --sandbox, --resume, or the dangerous bypass flags, so an
-// entry cannot contradict how output and grants are managed.
+// Layout for a new session: configured entry flags, then `exec`, then managed
+// flags (--json, --color never, grant flags, --model), then the prompt after
+// `--`. Layout for a resume: the same managed flags, then the `resume`
+// subcommand and thread id, then the prompt after `--`. Grant and color flags
+// stay before `resume` because Codex's clap schema marks only some exec flags
+// global; --sandbox and --color are parent options and must precede the
+// subcommand. The prompt is a trailing argv operand after `--` so a prompt
+// that begins with a dash cannot be read as an option.
+// config.ReservedAgentFlags refuses a configured entry that names --json,
+// --sandbox, --resume, or the dangerous bypass flags, so an entry cannot
+// contradict how output and grants are managed.
 //
 // CodexKeyVariable is stripped from the environment; authentication is the
 // CLI login.
@@ -386,11 +390,11 @@ func (r *codexRunner) arguments(grant Grant, inv Invocation, resume string) []st
 // codexGrantFlags is Codex's translation of a Grant.
 //
 //   - GrantRead runs with --sandbox read-only.
-//   - GrantEdit runs with --sandbox workspace-write and --approve-for-me so a
-//     headless fix can write under the workspace without a person answering
-//     prompts. Residual gap versus Claude's GrantEdit: --approve-for-me still
-//     routes shell through Codex's automatic review rather than denying the
-//     shell outright, and this package does not pass
+//   - GrantEdit runs with --approve-for-me alone. That flag sets workspace-write
+//     and routes approval requests through Codex automatic review; Codex's CLI
+//     refuses combining it with --sandbox (ArgumentConflict). Residual gap
+//     versus Claude's GrantEdit: shell still goes through that automatic
+//     review rather than being denied outright, and this package does not pass
 //     --dangerously-bypass-approvals-and-sandbox (reserved; wider than an
 //     edit grant).
 //   - GrantWorker is GrantRead's: this adapter declares no worker capability.
@@ -399,7 +403,7 @@ func (r *codexRunner) arguments(grant Grant, inv Invocation, resume string) []st
 func codexGrantFlags(g Grant) []string {
 	switch g {
 	case GrantEdit:
-		return []string{"--sandbox", "workspace-write", "--approve-for-me"}
+		return []string{"--approve-for-me"}
 	}
 	return []string{"--sandbox", "read-only"}
 }

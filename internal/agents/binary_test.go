@@ -199,8 +199,11 @@ func TestCodexUsesExecJSONStripsAPIKeyAndWritesGrant(t *testing.T) {
 		t.Fatalf("fix: %v", err)
 	}
 	fixArgs := decodeCall(t, fix.Text).Args
-	if !slices.Contains(fixArgs, "workspace-write") || !slices.Contains(fixArgs, "--approve-for-me") {
-		t.Errorf("fix grant missing workspace-write --approve-for-me: %q", fixArgs)
+	if !slices.Contains(fixArgs, "--approve-for-me") {
+		t.Errorf("fix grant missing --approve-for-me: %q", fixArgs)
+	}
+	if slices.Contains(fixArgs, "--sandbox") || slices.Contains(fixArgs, "workspace-write") {
+		t.Errorf("fix must not combine --sandbox with --approve-for-me: %q", fixArgs)
 	}
 
 	envFactory := agents.CodexFactory(

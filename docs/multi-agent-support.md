@@ -47,9 +47,10 @@ OpenAI, and Grok Build.
 - **Prompt delivery**: trailing argv after `--` (stdin closed empty; Codex
   would otherwise treat a live stdin as more prompt input)
 - **Sessions**: resumable fixer sessions (`thread_id` from `thread.started`)
-- **Grants**: `--sandbox read-only` (review); `--sandbox workspace-write
-  --approve-for-me` (fix). Residual: fix grant still permits shell through
-  Codex automatic review, not a hard Bash deny.
+- **Grants**: `--sandbox read-only` (review); `--approve-for-me` alone (fix;
+  that flag already sets workspace-write and conflicts with `--sandbox` on
+  the Codex CLI). Residual: fix grant still permits shell through Codex
+  automatic review, not a hard Bash deny.
 
 ### 4. OpenAI (legacy stub)
 
@@ -73,9 +74,9 @@ OpenAI, and Grok Build.
 
 By default, `assistant` uses `"auto"`, which tries only adapters that declare
 `AutoEligible`. PRD section 12 makes Claude Code the only phase-one adapter, so
-`auto` expands to Claude alone. Cursor, OpenAI, and Grok run only when named in
-`agent`. `assistant doctor` lists any that resolve on PATH under "named-only
-agents".
+`auto` expands to Claude alone. Cursor, Codex, OpenAI, and Grok run only when
+named in `agent`. `assistant doctor` lists any that resolve on PATH under
+"named-only agents".
 
 ```yaml
 # .assistant.yaml
@@ -126,13 +127,13 @@ assistant doctor
 
 ## Agent Capabilities
 
-| Feature | Cursor | Claude | OpenAI | Grok |
-|---------|--------|--------|--------|------|
-| Basic execution | ✅ | ✅ | ✅ | ✅ |
-| Structured output | ✅ | ✅ | ✅ | ✅ |
-| Resumable sessions | ✅ | ✅ | ❌ | ✅ |
-| CLI login (no API key) | ✅ | ✅ (print mode) | TBD | ✅ |
-| Terminal workers | ❌ | ✅ | ❌ | ❌ |
+| Feature | Cursor | Claude | Codex | OpenAI | Grok |
+|---------|--------|--------|-------|--------|------|
+| Basic execution | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Structured output | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Resumable sessions | ✅ | ✅ | ✅ | ❌ | ✅ |
+| CLI login (no API key) | ✅ | ✅ (print mode) | ✅ | TBD | ✅ |
+| Terminal workers | ❌ | ✅ | ❌ | ❌ | ❌ |
 
 ## How It Works
 
@@ -141,10 +142,11 @@ assistant doctor
 3. For each entry, resolve the binary on PATH and use the first that can run
 4. If none are available, refuse before the first stage
 
-Each adapter executes the agent CLI, passes the prompt (Cursor: trailing
-argv; Claude: stdin; Grok: `--prompt-file`), reads a JSON result envelope
-from stdout, and returns a structured `Result`. Cursor and Grok strip their
-provider API-key environment variables so authentication is the CLI login.
+Each adapter executes the agent CLI, passes the prompt (Cursor/Codex: trailing
+argv; Claude: stdin; Grok: `--prompt-file`), reads a structured result from
+stdout (Claude-shaped JSON envelope, or Codex JSONL events), and returns a
+structured `Result`. Cursor, Codex, and Grok strip their provider API-key
+environment variables so authentication is the CLI login.
 
 ## Troubleshooting
 

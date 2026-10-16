@@ -357,10 +357,14 @@ func decodeCall(t *testing.T, text string) agentCall {
 }
 
 // resumedSession is the session the command line asked to continue, empty when
-// it asked for none.
+// it asked for none. Claude/Cursor use --resume; Codex uses the exec resume
+// subcommand token.
 func (c agentCall) resumedSession() string {
 	for i, a := range c.Args {
 		if a == "--resume" && i+1 < len(c.Args) {
+			return c.Args[i+1]
+		}
+		if a == "resume" && i+1 < len(c.Args) && !strings.HasPrefix(c.Args[i+1], "-") {
 			return c.Args[i+1]
 		}
 	}
