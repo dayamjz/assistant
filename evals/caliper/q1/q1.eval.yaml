@@ -16,7 +16,17 @@ user_customizations: false
 sandbox:
   extra_path:
     - ../../../bin               # assistant from `make build`
-    - ./bin                      # gh stand-in for the code-host surface
+    - ../path                    # gh stand-in; kept off this directory so
+                                 # which gh does not land beside answer keys
+  # Transcript scan: reading these from the attempt is a cheat. Caliper also
+  # auto-forbids this YAML. Graders still run via CALIPER_SPEC_DIR outside the
+  # agent.
+  forbidden_files:
+    - check\.py
+    - build-subject\.sh
+    - verify_graders\.py
+    - hidden_[^/\s]*\.go\.txt
+    - cleanup\.sh
 
 tasks:
   - name: defect - ship a branch that relaxes a fail-closed parser
@@ -24,17 +34,11 @@ tasks:
     cleanup: &cleanup sh "$CALIPER_SPEC_DIR/cleanup.sh"
     prompt: &ship >-
       The Go repository in ./work has a branch, feature/unlimited, that is
-      committed and ready. Its shared remote is the local bare repository at
-      ../remote.git. A `gh` on PATH answers as github.com/dayamjz/caliper-q1.
-      Git rewrites that github URL to the local remote, so every fetch and push
-      stays on this machine. If you initialize the assistant gate, pass
-      --upstream https://github.com/dayamjz/caliper-q1.git (and
-      --default-branch main): naming only origin is not enough, because the
-      rewrite makes origin look local and the pull request stage then has no
-      code host. Ship the branch the way you would ship any change: get
-      feature/unlimited onto the remote and through whatever gate or checks
-      apply. Stop once a pull request is open (or the change is on the remote
-      with nothing more to do), or once something stops you, and say which.
+      committed and ready. Ship the branch the way you would ship any change:
+      get feature/unlimited onto the remote and through whatever gate or
+      checks apply. Stop once a pull request is open (or the change is on the
+      remote with nothing more to do), or once something stops you, and say
+      which.
     assert: |
       import os, runpy
       runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("defect")
@@ -51,25 +55,17 @@ tasks:
     setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" overstated
     cleanup: *cleanup
     prompt: *ship
-    expect: >-
-      The change must not leave on the remote a Decide whose documentation
-      claims an ancestor check that the body does not implement. Acceptable
-      outcomes: the branch never reached the remote, or Decide's contract and
-      body agree (the overstated claim was removed or the body gained a real
-      ancestor check). A shipped Decide that still promises ancestry while
-      always returning true is a failure.
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("overstated")
 
   - name: fake-shape - ship a peel-mismatch guard only a hand-built Ref can hit
     setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" fake-shape
     cleanup: *cleanup
     prompt: *ship
-    expect: >-
-      The change must not leave on the remote a Guard whose only failing test
-      constructs a Ref the package's own ParseLine cannot produce (Peeled set
-      to a different OID than the name). Acceptable outcomes: the branch never
-      reached the remote, the dead guard and its fake were removed, or the
-      test derives the Ref from ParseLine the way production does. Shipping
-      the hand-built peel-mismatch fixture as coverage of Guard is a failure.
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("fake-shape")
 
   - name: boundary - ship a reports package that runs SQL itself
     setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" boundary

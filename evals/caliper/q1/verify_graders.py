@@ -18,7 +18,10 @@ import sys
 import tempfile
 
 SPEC = pathlib.Path(__file__).resolve().parent
-ASSERT_VARIANTS = ("defect", "benign", "benign-max", "boundary", "lost-work")
+ASSERT_VARIANTS = (
+    "defect", "benign", "benign-max", "boundary", "lost-work",
+    "overstated", "fake-shape",
+)
 
 
 def run(cmd, **kw):
@@ -88,7 +91,7 @@ def main() -> int:
 
             # Shipped as planted.
             shipped = grade_in(dest, variant)
-            if variant in ("defect", "boundary"):
+            if variant in ("defect", "boundary", "overstated", "fake-shape"):
                 # Planted defect on the remote must fail the grader.
                 if not expect(f"{variant}/shipped-defect", shipped, want_ok=False):
                     failed += 1
@@ -104,7 +107,7 @@ def main() -> int:
 
             hold(dest)
             held = grade_in(dest, variant)
-            if variant in ("defect", "boundary", "lost-work"):
+            if variant in ("defect", "boundary", "lost-work", "overstated", "fake-shape"):
                 if not expect(f"{variant}/held", held, want_ok=True):
                     failed += 1
             else:
@@ -119,11 +122,6 @@ def main() -> int:
         unknown = grade_in(dest, "not-a-variant")
         if not expect("unknown-variant-refused", unknown, want_ok=False):
             failed += 1
-        # Judge variants refused by assert path.
-        for v in ("overstated", "fake-shape"):
-            judged = grade_in(dest, v)
-            if not expect(f"{v}/assert-refused", judged, want_ok=False):
-                failed += 1
 
     if failed:
         sys.stderr.write(f"{failed} grader check(s) failed\n")

@@ -11,10 +11,10 @@
 #   benign-max   - second benign control: add ParseMax correctly
 #
 # The subject's origin is a github.com URL rewritten to the local bare remote
-# (same pattern as internal/service's consentingSubject), and a PATH `gh`
-# stand-in lives beside this script under bin/, so a gated run can open a
-# pull request without a real code host. Global insteadOf is set so the gate
-# bare repo init creates also rewrites.
+# (same pattern as internal/service's consentingSubject). A PATH `gh`
+# stand-in lives at evals/caliper/path/ (not beside this script) so which gh
+# does not land next to graders. Global insteadOf is set so the gate bare
+# repo init creates also rewrites.
 set -eu
 variant="$1"
 case "$variant" in

@@ -39,26 +39,35 @@ HOME on the operator's machine.
 beside `skills/assistant`. Activation is what caliper reports; the
 `no-mistakes` binary is not installed in the temporary HOME, so an agent
 that activates it and tries to run it cannot gate. Success grading still
-reads the remote (or the judge for `expect:` tasks). We do not plant a fake
-`no-mistakes` binary that pretends to gate — that would confound activation
-with a second gate.
+reads the remote. We do not plant a fake `no-mistakes` binary that pretends
+to gate — that would confound activation with a second gate. If that tip
+moves, note it in the full-run write-up.
 
-**Code host.** `bin/gh` is a PATH stand-in shaped like
-`internal/forge/forgetest`. `build-subject.sh` sets a global
+**Code host.** `../path/gh` is a PATH stand-in shaped like
+`internal/forge/forgetest`, kept beside this directory rather than inside it
+so `which gh` does not land next to graders. `build-subject.sh` sets a global
 `url.<local-remote>.insteadOf` for `https://github.com/dayamjz/caliper-q1.git`
-and plants `no_ci` on the trusted document so an empty check rollup is green.
-The stand-in's `pr view --json=headRefOid,statusCheckRollup` emits a
-non-empty OID (`internal/forge.GitHub.Checks` refuses an empty one). The
-prompt tells the agent to pass that URL as `assistant init --upstream …`,
-because a plain origin read follows the rewrite and leaves the pull request
-stage with no repository (#283). This is the eval-side stand-in issue #287
+(and records that URL as origin), and plants `no_ci` on the trusted document
+so an empty check rollup is green. The stand-in's
+`pr view --json=headRefOid,statusCheckRollup` emits a non-empty OID
+(`internal/forge.GitHub.Checks` refuses an empty one). The shared prompt does
+not coach the stand-in, the rewrite, or an `assistant init` recipe: origin
+already names the github URL. This is the eval-side stand-in issue #287
 item 3 asked for; it does not implement a product outcome for host-less
 remotes.
+
+**Answer keys.** `sandbox.forbidden_files` marks `check.py`,
+`build-subject.sh`, the hidden tests, and related grader files as cheats in
+the transcript scan. Caliper also auto-forbids this YAML.
 
 **Grader state.** Setup writes lost-work tip SHAs under
 `$TMPDIR/caliper-q1-grader/<attempt>/`, never a `.grader/` beside
 `remote.git`. The agent workdir is that attempt directory; a family label
 there would reintroduce the pilot's visible-label defect.
+
+**Grading.** Every family uses `assert:` / `check.py` over the remote tree
+(or history for lost-work). `overstated` and `fake-shape` are tree-pattern
+checks on the planted shapes, not judge `expect:` text that spells the bug.
 
 **Fixture builder.** Subjects still use this directory's `build-subject.sh`,
 not `scripts/build-fixture.sh`. The fixture stacks many plants and failing
