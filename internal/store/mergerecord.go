@@ -127,6 +127,10 @@ type HoldClosure struct {
 	Resolution string
 	// By is who decided, which ResolveHold refuses as the zero Resolver.
 	By Resolver
+	// Note is free text recorded with the resolution, on
+	// ResolveHoldWithNote's terms: redacted before it is written, and none
+	// when empty. A hold already carrying a resolution keeps its own note.
+	Note string
 }
 
 // MergeRecord returns the run's merge record and whether there is one. A run
@@ -186,7 +190,7 @@ func (s *Store) TransitionRunOnPullRequest(ctx context.Context, id string, from 
 	}
 	return s.transitionRun(ctx, id, from, to, func(tx *sql.Tx, now string) error {
 		if closing.Hold.Key != "" {
-			if err := closeHold(ctx, tx, closing, now); err != nil {
+			if err := s.closeHold(ctx, tx, closing, now); err != nil {
 				return err
 			}
 		}
@@ -201,8 +205,8 @@ func (s *Store) TransitionRunOnPullRequest(ctx context.Context, id string, from 
 }
 
 // closeHold registers and resolves a hold inside a transaction, on
-// HoldClosure's terms.
-func closeHold(ctx context.Context, tx *sql.Tx, closing HoldClosure, now string) error {
+// HoldClosure's terms, with the note passed through holdNote.
+func (s *Store) closeHold(ctx context.Context, tx *sql.Tx, closing HoldClosure, now string) error {
 	h := closing.Hold
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by)
@@ -216,8 +220,8 @@ func closeHold(ctx context.Context, tx *sql.Tx, closing HoldClosure, now string)
 		return fmt.Errorf("store: resolving hold %s: %w", h.Key, err)
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ? WHERE key = ? AND resolution IS NULL`,
-		closing.Resolution, now, resolver, h.Key); err != nil {
+		`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE key = ? AND resolution IS NULL`,
+		closing.Resolution, now, resolver, s.holdNote(closing.Note), h.Key); err != nil {
 		return fmt.Errorf("store: resolving hold %s: %w", h.Key, err)
 	}
 	return nil

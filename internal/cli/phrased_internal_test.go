@@ -129,7 +129,7 @@ func fixtureCatchUp() machine.CatchUp {
 	return machine.CatchUp{
 		Waiting: []machine.Waiting{
 			{Hold: &store.Hold{Key: "task/" + sampleID + "/relaunch-bound/2", TaskID: store.Known(sampleID),
-				Subject: "whether to begin this work again", OpenedAt: at}, Task: &task, Answer: machine.TaskAnswering(sampleID)},
+				Subject: "whether to begin this work again", OpenedAt: at}, Task: &task, Answer: machine.TaskAnswering(sampleID, "task/"+sampleID+"/relaunch-bound/2")},
 			{Run: &run, Answer: machine.RunAnswering("/somewhere/parser", run.Record.Branch)},
 		},
 		Landed: []machine.Landed{

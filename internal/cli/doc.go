@@ -41,6 +41,12 @@
 // verb is added for it. Given a task with no hold of its own open, the same
 // flag answers the hold on the task's current run, which section 9 says too,
 // so a run a task produced is answered without a checkout of its branch.
+// Which decision is meant is --hold on the same command, which the owner
+// queued on #279: a task's own hold by key or report finding, or its
+// current run's, which reaches the run while the task's own holds are open,
+// and an answer that names none where several are open is refused listing
+// them. --note records free text with an answer to a task's own hold. Both
+// are parameters of the answer and neither is a verb.
 // Ending a run by name is the same flag written --cancel=RUN, which the owner
 // decided on #234: it reads no working copy, so it ends the run named from
 // anywhere, and a run with nothing to end is machine.CancelRefused.

@@ -80,6 +80,11 @@ const runHeldMovesMigration = "run held moves"
 // sealCheckpointTableMigration is a constant.
 const taskRelayMigration = "task findings relayed record"
 
+// holdNoteMigration names the migration that adds the note an answer
+// records with a hold's resolution, for the reason
+// sealCheckpointTableMigration is a constant.
+const holdNoteMigration = "hold resolution note"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1480,6 +1485,32 @@ var schema = []migration{
 				BEFORE DELETE ON task_relay
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a task''s findings relayed record is written once and is not deleted');
+				END`,
+		},
+	},
+	{
+		version: 34,
+		name:    holdNoteMigration,
+		statements: []string{
+			// The free text an answer carries, recorded with the hold's
+			// resolution (#279). It is nullable with no default, so a hold
+			// resolved before it, and one resolved with no note, read back
+			// unknown. What is written is the note as the store's redactor
+			// left it, which holdNote is the one route for.
+			//
+			// The trigger makes the note part of the resolution rather than
+			// something written beside it later: an update naming the
+			// column is refused unless the same statement moves the hold
+			// from open to resolved. A resolution is written once, so the
+			// note is too, and no note stands on a hold nobody answered. An
+			// update that does not name the column cannot change it, so it
+			// does not reach the trigger.
+			`ALTER TABLE hold ADD COLUMN resolution_note TEXT`,
+			`CREATE TRIGGER hold_note_is_written_with_its_resolution
+				BEFORE UPDATE OF resolution_note ON hold
+				WHEN OLD.resolution IS NOT NULL OR NEW.resolution IS NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a hold''s note is written with its resolution and at no other time');
 				END`,
 		},
 	},

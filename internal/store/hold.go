@@ -45,6 +45,16 @@ type Hold struct {
 	// the column existed, which is a different fact from a resolution nobody
 	// is recorded for: ResolveHold refuses to create one of those.
 	ResolvedBy Optional[Resolver]
+	// Note is free text given with the resolution, stored as the store's
+	// redactor left it, so a credential in a shape internal/redact
+	// recognizes is never stored. It is unknown while the hold is open, for
+	// a resolution given without one, and for a hold resolved before the
+	// column existed. It is the answer's own words and nothing more: no
+	// accessor reads it to decide anything, it is never parsed into an
+	// action, and it says nothing about who resolved, which is ResolvedBy
+	// alone, derived from the surface the answer arrived on and never from
+	// text a caller wrote.
+	Note Optional[string]
 }
 
 // Open reports whether the hold is still waiting on a person.
@@ -91,6 +101,17 @@ func (s *Store) RegisterHold(ctx context.Context, h Hold) (Hold, error) {
 // call, and a resolution that became refused because of what it would say would
 // be this record gating rather than recording.
 func (s *Store) ResolveHold(ctx context.Context, key, resolution string, by Resolver) (Hold, error) {
+	return s.ResolveHoldWithNote(ctx, key, resolution, "", by)
+}
+
+// ResolveHoldWithNote is ResolveHold with a note recorded beside the
+// resolution, in the same statement, on ResolveHold's terms and with its
+// refusals. The note passes the store's redactor before it is written, and
+// an empty note is recorded as none. The note is written with the
+// resolution or not at all: the database refuses a note written to a hold
+// that is open after the write or was already resolved before it, so a note
+// cannot be added to a decision afterwards or stand on one nobody made.
+func (s *Store) ResolveHoldWithNote(ctx context.Context, key, resolution, note string, by Resolver) (Hold, error) {
 	if strings.TrimSpace(resolution) == "" {
 		return Hold{}, fmt.Errorf("%w: hold %s", ErrNoResolution, key)
 	}
@@ -98,10 +119,11 @@ func (s *Store) ResolveHold(ctx context.Context, key, resolution string, by Reso
 	if err != nil {
 		return Hold{}, fmt.Errorf("store: resolving hold %s: %w", key, err)
 	}
+	noted := s.holdNote(note)
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx,
-			`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ? WHERE key = ? AND resolution IS NULL`,
-			resolution, encodeTime(nowUTC()), resolver, key)
+			`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE key = ? AND resolution IS NULL`,
+			resolution, encodeTime(nowUTC()), resolver, noted, key)
 		if err != nil {
 			return err
 		}
@@ -153,7 +175,7 @@ func (s *Store) RecordHoldResolution(ctx context.Context, closing HoldClosure) (
 		return Hold{}, fmt.Errorf("store: resolving hold %s: %w", key, err)
 	}
 	if err := s.inTx(ctx, func(tx *sql.Tx) error {
-		return closeHold(ctx, tx, closing, encodeTime(nowUTC()))
+		return s.closeHold(ctx, tx, closing, encodeTime(nowUTC()))
 	}); err != nil {
 		return Hold{}, err
 	}
@@ -199,13 +221,24 @@ func (s *Store) OpenHolds(ctx context.Context) ([]Hold, error) {
 	return out, nil
 }
 
-const holdColumns = `SELECT key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by`
+const holdColumns = `SELECT key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by, resolution_note`
+
+// holdNote is what the resolution_note column is given for note: unknown
+// for an empty note, and otherwise the note as the store's redactor leaves
+// it. It is the one way a note reaches the column, so no accessor that
+// resolves a hold can store one the redactor has not seen.
+func (s *Store) holdNote(note string) Optional[string] {
+	if note == "" {
+		return Unknown[string]()
+	}
+	return Known(s.redact.Redact(note))
+}
 
 func scanHold(sc scanner) (Hold, error) {
 	var h Hold
 	var opened string
 	var resolvedAt, resolvedBy Optional[string]
-	if err := sc.Scan(&h.Key, &h.RunID, &h.TaskID, &h.Subject, &h.Detail, &opened, &h.Resolution, &resolvedAt, &resolvedBy); err != nil {
+	if err := sc.Scan(&h.Key, &h.RunID, &h.TaskID, &h.Subject, &h.Detail, &opened, &h.Resolution, &resolvedAt, &resolvedBy, &h.Note); err != nil {
 		return Hold{}, err
 	}
 	var err error

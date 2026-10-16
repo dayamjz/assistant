@@ -131,13 +131,17 @@ func TestATasksRunIsAnsweredGivenTheTaskFromOffItsBranch(t *testing.T) {
 	}
 }
 
-// A task's own hold keeps the precedence it had: while one is open, --task
-// answers it and leaves the task's run held where it was, and a fix round,
-// which only a run takes, is refused naming the hold that comes first
-// rather than reaching past it. Once the task's own holds are answered the
-// same flag reaches its run. The task is an investigation promoted to
-// delivery in place with its report's decisions still open, which promotion
-// allows, so the shape is one the coordinator's commands produce.
+// A task's own hold keeps its precedence over an answer that does not say
+// which decision it means: a fix round, which only a run takes, is refused
+// naming the hold that comes first rather than reaching past it, and an
+// approval naming nothing is refused listing the task's own decisions,
+// since there are two. Naming the run's decision reaches the run while
+// those stay open (#279), which is what a promoted task needs: here an
+// investigation promoted to delivery in place with its report's decisions
+// still open, which promotion allows, so the shape is one the coordinator's
+// commands produce. A name for a run that is not the task's current one is
+// refused and moves nothing, which is the control that the name is read
+// rather than ignored; the task's own decisions are then answered by name.
 //
 // The refusal is typed on the wire and carries internal/machine's row,
 // which P13 holds to the vocabulary every phrase is.
@@ -172,23 +176,52 @@ func TestATasksOwnHoldIsAnsweredBeforeItsRun(t *testing.T) {
 	vocabtest.Assert(t, machine.PhraseTaskOwnHoldFirst.String())
 	assertHeldAt(t, h, elsewhere, runBefore.Record.ID, holds)
 
-	// Each answer closes the task's own oldest hold, and the run stays put.
-	for _, answer := range []string{"approved", "skipped"} {
-		got := answerTask(t, h, elsewhere, id, answer)
-		if got.Effect != machine.AnswerRecorded || got.Hold.Resolution.Or("") != answer {
-			t.Fatalf("answering %q given the task reports %+v, want the task's own hold recorded", answer, got)
+	// An approval naming nothing, with two of the task's own open, is
+	// refused listing both rather than given to the oldest (#279), and
+	// neither the holds nor the run move.
+	unnamed := run(t, h, elsewhere, "--json", "--task", id, "--answer", string(pipeline.OutcomeApproved))
+	refusedAs(t, unnamed, ipc.CodeInvalidRequest, machine.ExitUsage)
+	for _, hold := range own {
+		if !strings.Contains(unnamed.stdout, hold.Key) {
+			t.Fatalf("the refusal %s does not list hold %s", unnamed.stdout, hold.Key)
 		}
-		assertHeldAt(t, h, elsewhere, runBefore.Record.ID, holds)
 	}
+	if still := openHoldsOf(t, h, id); len(still) != 2 {
+		t.Fatalf("a refused answer left the task holding %+v, want both decisions open", still)
+	}
+	assertHeldAt(t, h, elsewhere, runBefore.Record.ID, holds)
 
-	// With none of its own open, the same flag reaches the run.
-	moved := run(t, h, elsewhere, "--json", "--task", id, "--answer", string(pipeline.OutcomeApproved))
+	// Naming the run's decision reaches it while the task's own holds stay
+	// open: the promoted task's run is answered from off its branch, and
+	// neither report decision is touched.
+	runName := machine.RunHoldName(runBefore.Record.ID)
+	if got := run(t, h, elsewhere, "--task", id, "--hold", runName, "--answer", string(pipeline.OutcomeApproved), "--note", "why"); got.code != machine.ExitUsage {
+		t.Fatalf("a note with an answer to the run's decision exited %s, want incorrect usage: a run's approval records none:\n%s", got.code, got.stderr)
+	}
+	stale := run(t, h, elsewhere, "--json", "--task", id, "--hold", machine.RunHoldName("0123456789ab"), "--answer", string(pipeline.OutcomeApproved))
+	refusedAs(t, stale, ipc.CodeRefused, machine.ExitFailure)
+	assertHeldAt(t, h, elsewhere, runBefore.Record.ID, holds)
+	moved := run(t, h, elsewhere, "--json", "--task", id, "--hold", runName, "--answer", string(pipeline.OutcomeApproved))
 	if moved.code != machine.ExitOK {
-		t.Fatalf("approving the task's run exited %s:\n%s%s", moved.code, moved.stdout, moved.stderr)
+		t.Fatalf("approving the task's run by name exited %s:\n%s%s", moved.code, moved.stdout, moved.stderr)
 	}
 	after := decodeRun(t, moved.stdout)
 	if after.Record.ID != runBefore.Record.ID || after.Decision == nil || after.Decision.Stage != next.String() {
 		t.Fatalf("the approval left run %s at %+v, want run %s holding at %s", after.Record.ID, after.Decision, runBefore.Record.ID, next)
+	}
+	if still := openHoldsOf(t, h, id); len(still) != 2 || still[0].Key != own[0].Key || still[1].Key != own[1].Key {
+		t.Fatalf("answering the run moved the task's own holds to %+v, want both still open", still)
+	}
+
+	// Each of the task's own is answered by name, the one by its key and
+	// the other by its report finding, and the run stays where it is.
+	for i, name := range []string{own[1].Key, strings.TrimPrefix(own[0].Key, tasks.HoldKey(id, ""))} {
+		got := answerNamed(t, h, elsewhere, id, name, "approved")
+		want := own[1-i].Key
+		if got.Effect != machine.AnswerRecorded || got.Hold.Key != want || got.Hold.Resolution.Or("") != "approved" {
+			t.Fatalf("answering %s given the task reports %+v, want hold %s recorded", name, got, want)
+		}
+		assertHeldAt(t, h, elsewhere, runBefore.Record.ID, next)
 	}
 }
 

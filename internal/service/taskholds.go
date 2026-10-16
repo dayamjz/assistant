@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
 )
 
 // A task's holds: the one the relaunch bound raises, the ones a relaunch
@@ -153,10 +155,14 @@ import (
 // A hold naming a task and no run, an investigation's report's among them,
 // PRD section 11's "Recovering an investigation", is closed by the same
 // answer: the resolution is recorded as given, on the same terms, and acts
-// on nothing further here. Which hold an answer closes is the oldest one
-// open naming the task and no run, the order internal/store lists open
-// holds in, and the answer names it. A hold naming a run belongs to that
-// run and is answered through the run.
+// on nothing further here. Which hold an answer closes is the one it names,
+// by key or by the report finding it was registered for, and an answer
+// naming none closes the task's one open hold naming the task and no run;
+// with several open, it is refused listing them rather than given to the
+// oldest (#279), and the answer names the hold it closed. A note given with
+// the answer is recorded with the resolution, and is the answer's words and
+// nothing more. A hold naming a run belongs to that run and is answered
+// through the run.
 //
 // # Residual gaps
 //
@@ -428,13 +434,16 @@ func (s *Service) holdAtBound(ctx context.Context, id string, attempts []store.T
 	return h, nil
 }
 
-// respondTask answers the oldest open hold naming the task and no run, on
-// the terms this file's opening comment states. A task's worker is refused
+// respondTask answers the open hold naming the task and no run that the
+// request names, or the task's one such hold when it names none, which
+// namedTaskHold selects, on the terms this file's opening comment states.
+// The request's note is recorded with the resolution, redacted by
+// internal/store, and the resolver is the one Request.HoldResolver derives
+// from the surface whatever the note says. A task's worker is refused
 // with ipc.ErrWorker, from the caller's credentials. A request naming no
-// task or giving no answer, and an answer a retry hold does not offer,
-// are ipc.ErrInvalidRequest, as is a note given with anything but a retry
-// on a stop's hold, or one over machine.MaxMessageBytes; a task with no such
-// hold is errNoTaskHold and a
+// task or giving no answer, an answer a retry hold does not offer, a note
+// over machine.MaxMessageBytes, and an answer naming no one hold are
+// ipc.ErrInvalidRequest; a task with no such hold is errNoTaskHold and a
 // hold another caller answered first is store.ErrHoldResolved, each wrapped
 // in ipc.ErrRefused. None of those records anything. A retry on a relaunch
 // hold asks relaunchTask, one on a stop's hold asks relaunchTaskWith with the
@@ -459,9 +468,13 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 	if err != nil {
 		return machine.TaskAnswered{}, err
 	}
-	hold, err := s.oldestTaskHold(ctx, r.Task)
+	if len(r.Note) > machine.MaxMessageBytes {
+		return machine.TaskAnswered{}, fmt.Errorf("%w: the note is %d bytes, over the limit of %d, and is refused rather than cut",
+			ipc.ErrInvalidRequest, len(r.Note), machine.MaxMessageBytes)
+	}
+	hold, err := s.namedTaskHold(ctx, r.Task, r.Hold)
 	if err != nil {
-		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+		return machine.TaskAnswered{}, err
 	}
 	if _, _, local := localApprovalOf(hold.Key, r.Task); local {
 		out, err := s.answerLocal(ctx, req, r, task, hold)
@@ -480,16 +493,7 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 		return machine.TaskAnswered{}, fmt.Errorf("%w: task %s holds on %s, which is answered %q or %q, not %q",
 			ipc.ErrInvalidRequest, r.Task, hold.Key, machine.AnswerRetry, machine.AnswerStop, r.Answer)
 	}
-	switch {
-	case r.Note == "":
-	case !isStopped(hold.Key, r.Task) || r.Answer != machine.AnswerRetry:
-		return machine.TaskAnswered{}, fmt.Errorf("%w: task %s holds on %s answered %q, and only a %q on a stop's hold carries a note",
-			ipc.ErrInvalidRequest, r.Task, hold.Key, r.Answer, machine.AnswerRetry)
-	case len(r.Note) > machine.MaxMessageBytes:
-		return machine.TaskAnswered{}, fmt.Errorf("%w: the note is %d bytes, over the limit of %d, and is refused rather than cut",
-			ipc.ErrInvalidRequest, len(r.Note), machine.MaxMessageBytes)
-	}
-	resolved, err := s.store.ResolveHold(ctx, hold.Key, r.Answer, req.HoldResolver())
+	resolved, err := s.store.ResolveHoldWithNote(ctx, hold.Key, r.Answer, r.Note, req.HoldResolver())
 	if errors.Is(err, store.ErrHoldResolved) {
 		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
 	}
@@ -574,8 +578,9 @@ func (s *Service) answerDispatchRetry(ctx context.Context, r machine.TaskRespond
 // relaunch's, with one more: a stopped task already relaunched
 // relaunch_attempts times is past the bound like every other, so the
 // bound's hold is registered for the attempt now rather than at the next
-// start, and the answer is AnswerRetryAtBound naming it. The note does not
-// survive that wait, because it is recorded nowhere, and the answer says so.
+// start, and the answer is AnswerRetryAtBound naming it. The note is
+// recorded with this answer's resolution and is not carried to the relaunch
+// that bound's hold allows, and the answer says so.
 func (s *Service) answerStopRetry(ctx context.Context, r machine.TaskRespondRequest, hold store.Hold, out *machine.TaskAnswered) {
 	relaunch, err := s.relaunchTaskWith(ctx, r.Task, r.Note)
 	var unswept *relaunchUnswept
@@ -590,7 +595,7 @@ func (s *Service) answerStopRetry(ctx context.Context, r machine.TaskRespondRequ
 			out.NotRelaunched = fmt.Sprintf("the task has been relaunched as many times as relaunch_attempts allows, so it holds on %s; "+
 				"a retry there relaunches it with its unacknowledged messages", bound.Key)
 			if r.Note != "" {
-				out.NotRelaunched += ", and without the note given here, which is not recorded"
+				out.NotRelaunched += ", and without the note given here, which is recorded with this answer and is not told to that relaunch"
 			}
 			s.log.Printf("task %s was answered %q on hold %s and was not relaunched, because it is past its relaunch bound and holds on %s",
 				r.Task, r.Answer, hold.Key, bound.Key)
@@ -710,16 +715,111 @@ func retryNotBegun(err error) machine.AnswerEffect {
 }
 
 // oldestTaskHold is the oldest open hold naming the task and no run, in the
-// order internal/store lists open holds, or errNoTaskHold.
+// order internal/store lists open holds, or errNoTaskHold. It answers
+// whether the task has a hold of its own open and which comes first, for
+// taskrun.go's precedence and nothing else: which hold an answer closes is
+// namedTaskHold's.
 func (s *Service) oldestTaskHold(ctx context.Context, id string) (store.Hold, error) {
-	open, err := s.store.OpenHolds(ctx)
+	own, err := s.openTaskHolds(ctx, id)
 	if err != nil {
 		return store.Hold{}, err
 	}
+	if len(own) == 0 {
+		return store.Hold{}, fmt.Errorf("%w: task %s", errNoTaskHold, id)
+	}
+	return own[0], nil
+}
+
+// openTaskHolds is every open hold naming the task and no run, oldest
+// first, in the order internal/store lists open holds.
+func (s *Service) openTaskHolds(ctx context.Context, id string) ([]store.Hold, error) {
+	open, err := s.store.OpenHolds(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var own []store.Hold
 	for _, h := range open {
 		if task, ok := h.TaskID.Get(); ok && task == id && !h.RunID.IsKnown() {
-			return h, nil
+			own = append(own, h)
 		}
 	}
-	return store.Hold{}, fmt.Errorf("%w: task %s", errNoTaskHold, id)
+	return own, nil
 }
+
+// namedTaskHold is the hold an answer given the task closes: the open hold
+// naming the task and no run that name names, by its key or by the
+// identifier of the report finding it was registered for, or with no name
+// the task's one such hold (#279).
+//
+// It never chooses. With no name, a task with none open is errNoTaskHold
+// and one with several is machine.HoldUnnamed, listing them, rather than
+// the oldest answered in their place. A name matching none of them is
+// machine.HoldNameUnknown, and one matching two, one by its key and the
+// other by its finding, machine.HoldNameAmbiguous; each is an invalid
+// request, the caller's to correct. A name that matches a hold of the task
+// answered already is store.ErrHoldResolved, refused against the record, so
+// a decision someone else closed first is reported as closed rather than as
+// a name nobody recognizes. Nothing is recorded on any refusal.
+func (s *Service) namedTaskHold(ctx context.Context, id, name string) (store.Hold, error) {
+	own, err := s.openTaskHolds(ctx, id)
+	if err != nil {
+		return store.Hold{}, err
+	}
+	if name == "" {
+		switch len(own) {
+		case 0:
+			return store.Hold{}, fmt.Errorf("%w: %w: task %s", ipc.ErrRefused, errNoTaskHold, id)
+		case 1:
+			return own[0], nil
+		}
+		return store.Hold{}, holdNotNamed{machine.HoldNotNamed{Task: id, Reason: machine.HoldUnnamed, Open: holdKeys(own)}}
+	}
+	candidates := []string{name, tasks.HoldKey(id, name)}
+	var matched []store.Hold
+	for _, h := range own {
+		if slices.Contains(candidates, h.Key) {
+			matched = append(matched, h)
+		}
+	}
+	switch len(matched) {
+	case 1:
+		return matched[0], nil
+	case 0:
+	default:
+		return store.Hold{}, holdNotNamed{machine.HoldNotNamed{Task: id, Reason: machine.HoldNameAmbiguous, Named: name, Open: holdKeys(matched)}}
+	}
+	for _, key := range candidates {
+		h, err := s.store.Hold(ctx, key)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			continue
+		case err != nil:
+			return store.Hold{}, err
+		}
+		if task, ok := h.TaskID.Get(); ok && task == id && !h.RunID.IsKnown() && !h.Open() {
+			return store.Hold{}, fmt.Errorf("%w: task %s: hold %s: %w with %s", ipc.ErrRefused, id, h.Key, store.ErrHoldResolved, h.Resolution.Or(""))
+		}
+	}
+	return store.Hold{}, holdNotNamed{machine.HoldNotNamed{Task: id, Reason: machine.HoldNameUnknown, Named: name, Open: holdKeys(own)}}
+}
+
+// holdKeys is the key of each hold, in order.
+func holdKeys(holds []store.Hold) []string {
+	keys := make([]string, 0, len(holds))
+	for _, h := range holds {
+		keys = append(keys, h.Key)
+	}
+	return keys
+}
+
+// holdNotNamed is machine.HoldNotNamed as this service refuses with it, on
+// cancelRefused's terms: ipc.ErrInvalidRequest on the wire, because which
+// hold an answer closes is the caller's to say, with the refusal's own text
+// and errors.As still reaching the refusal inside.
+type holdNotNamed struct{ refused machine.HoldNotNamed }
+
+// Error is the refusal's own text.
+func (h holdNotNamed) Error() string { return h.refused.Error() }
+
+// Unwrap resolves to the wire category and to the refusal.
+func (h holdNotNamed) Unwrap() []error { return []error{ipc.ErrInvalidRequest, h.refused} }

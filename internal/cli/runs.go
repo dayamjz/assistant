@@ -38,9 +38,13 @@ import (
 // PRD section 5's Fix action is the answer "fix", and what the round is to
 // resolve rides on the same command as three more flags: --select names
 // findings of the held stage's report, --note is free text for the fixer, and
-// --finding, which may be repeated, is a finding of the caller's own. They are
-// read only with --answer fix and refused with anything else, because an
-// instruction given and then ignored is worse than one refused.
+// --finding, which may be repeated, is a finding of the caller's own. --select
+// and --finding are read only with --answer fix and refused with anything
+// else, because an instruction given and then ignored is worse than one
+// refused. --note is read with one other answer: given --task, an answer to
+// one of the task's own holds records it with the resolution, redacted by
+// internal/store; it is the answer's words, never who answered and never an
+// action. Anywhere else it would be dropped, so it is refused.
 //
 // --task names a task instead of this branch's run: PRD section 9 has
 // answering a hold take a task as well as a run, so an investigation's
@@ -50,7 +54,12 @@ import (
 // reaches from a checkout of the task's branch, so a coordinator answers a
 // task's run without checking that branch out anywhere. It is read only
 // with --answer or --standing-consent, and the fix round's flags go with
-// --answer fix to the task's run, as they would to this branch's. With
+// --answer fix to the task's run, as they would to this branch's. --hold
+// names which of the task's decisions the answer closes: one of its own by
+// key or by report finding, or its current run's as machine.RunHoldName
+// writes it, which reaches the run while the task's own holds stay open.
+// With several of its own open and none named, the answer is refused
+// listing them rather than given to the oldest (#279). With
 // --standing-consent it puts the task's current run under standing consent
 // and attaches to it, the way the flag does for this branch's run, and the
 // flags that start a run are refused beside it. None of these needs a
@@ -72,6 +81,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		note         string
 		own          repeated
 		task         string
+		hold         string
 		consent      bool
 	)
 	if err := in.parseArgs("", 1, func(set *flag.FlagSet) {
@@ -80,12 +90,15 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&answer, "answer", "", "answer the decision the run is holding on, or with --task the task's")
 		set.StringVar(&task, "task", "", "with --answer: the task whose hold is answered, or with none of its own open, the hold on the task's current run; "+
 			"with --standing-consent: the task whose current run is put under standing consent")
+		set.StringVar(&hold, holdFlagName, "", "with --task and --answer: the decision answered, by its key or the identifier of the report finding it "+
+			"was registered for, or "+machine.RunHoldName("RUN")+" for the one the task's current run RUN is holding on")
 		set.Var(&cancel, cancelFlagName, "end this branch's run, wherever it stands; written --"+cancelFlagName+
 			"=RUN it ends the run RUN instead, from anywhere")
 		set.StringVar(&skip, "skip", "", "comma-separated stages this one run does not take")
 		set.StringVar(&selected, "select", "", "with --answer fix: comma-separated identifiers of findings the held stage reported, for the round to resolve; "+
 			"the hold lists only the findings holding it, and "+everyFindingIsIn)
-		set.StringVar(&note, "note", "", "with --answer fix: a note for the fixer")
+		set.StringVar(&note, "note", "", "with --answer fix: a note for the fixer; with --task, answering one of the task's own decisions: "+
+			"a note recorded with the answer")
 		set.Var(&own, "finding", "with --answer fix: a finding of your own for the round to resolve; may be repeated")
 		set.BoolVar(&consent, "standing-consent", false, "put the run this starts or attaches to under standing consent, "+
 			"where the repository's default branch sets "+string(config.KeyAllowStandingConsent)+": the program then answers "+
@@ -107,13 +120,33 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	}
 	answered := flagWasSet(in.flags, "answer")
 	fixing := answered && answer == string(pipeline.OutcomeFixRequested)
-	for _, name := range []string{"select", "note", "finding"} {
+	for _, name := range []string{"select", "finding"} {
 		if flagWasSet(in.flags, name) && !fixing {
 			return nil, usagef("--%s says what a fix round resolves, and it is read only with --answer %s",
 				name, pipeline.OutcomeFixRequested)
 		}
 	}
 	tasked := flagWasSet(in.flags, "task")
+	noted := flagWasSet(in.flags, "note")
+	if noted && !fixing && !(tasked && answered) {
+		return nil, usagef("--note is told to the fixer with --answer %s, or recorded with an answer to one of a task's own "+
+			"decisions given --task; it is read with nothing else", pipeline.OutcomeFixRequested)
+	}
+	if noted && !fixing && strings.TrimSpace(note) == "" {
+		return nil, usagef("--note was given no note; it takes the text recorded with the answer")
+	}
+	named := flagWasSet(in.flags, holdFlagName)
+	if named && !(tasked && answered) {
+		return nil, usagef("--%s names which of a task's decisions --answer closes, and it is read only with --task and --answer", holdFlagName)
+	}
+	if named && strings.TrimSpace(hold) == "" {
+		return nil, usagef("--%s was given no decision; it takes a decision's key, a report finding's identifier, or %s",
+			holdFlagName, machine.RunHoldName("RUN"))
+	}
+	if _, ofRun := machine.RunNamedBy(hold); named && fixing && !ofRun {
+		return nil, usagef("a fix round is a run's, and --%s with --answer %s names only the run's decision, %s",
+			holdFlagName, pipeline.OutcomeFixRequested, machine.RunHoldName("RUN"))
+	}
 	if tasked && !answered && !consent {
 		return nil, usagef("--task names the task whose hold --answer closes, or whose run --standing-consent is given to, " +
 			"and it is read only with one of the two")
@@ -163,7 +196,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		return in.consentGivenTask(ctx, task)
 	}
 	if tasked {
-		return in.answerGivenTask(ctx, task, answer, request)
+		return in.answerGivenTask(ctx, taskAnswer{task: task, hold: hold, answer: answer, note: note, fix: request})
 	}
 	if cancel.on && cancel.run != "" {
 		return in.endNamedRun(ctx, cancel.run)
@@ -253,34 +286,74 @@ func (in *invocation) answerDecision(ctx context.Context, working, answer string
 	return run, err
 }
 
-// answerGivenTask answers --task: the task's own hold while one is open, and
-// otherwise the hold on the task's current run.
+// holdFlagName is the flag that names which of a task's decisions an
+// answer given the task closes, named once so the declaration, the
+// refusals and machine.TaskAnswering's command line read the same word.
+const holdFlagName = "hold"
+
+// taskAnswer is an answer given a task, as the command line wrote it.
+type taskAnswer struct {
+	// task is the task the answer is given.
+	task string
+	// hold names the decision answered, empty when none was named.
+	hold string
+	// answer is what was decided.
+	answer string
+	// note is recorded with an answer to the task's own hold, and is told
+	// to the fixer instead when fix is set, which put it there.
+	note string
+	// fix is what a fix round resolves, nil for every other answer.
+	fix *pipeline.FixRequest
+}
+
+// answerGivenTask answers --task: the decision --hold names, and with none
+// named, the task's own hold while one is open and otherwise the hold on the
+// task's current run.
 //
-// Which of the two is read off the task's resolution, whose basis names the
-// oldest open hold naming the task whichever tier decided its state, so a
-// task that has landed with a hold still open is routed to that hold too. A
-// fix round goes to the run without the read, because only a run takes one.
-// The read routes and decides nothing: the service refuses an answer to the
-// task's run while the task has a hold of its own open, and refuses an
-// answer to the task's own hold when none is, so a hold that opened or
-// closed after the read is a typed refusal and never the other hold
+// A name is routed by its shape and nothing else: machine.RunNamedBy reads
+// the run's decision, which goes to the task's run past any hold of the
+// task's own, and every other name is one of the task's own holds, which the
+// service resolves by key or by report finding and refuses when it matches
+// none or several (#279). A fix round goes to the run without a read,
+// because only a run takes one.
+//
+// With no name, which of the two is read off the task's resolution, whose
+// basis names the oldest open hold naming the task whichever tier decided
+// its state, so a task that has landed with a hold still open is routed to
+// that hold too. The read routes and decides nothing: the service refuses an
+// answer to the task's run while the task has a hold of its own open and
+// none is named, refuses an answer to the task's own hold when none is, and
+// refuses one naming no hold when several are, listing them, so a hold that
+// opened or closed after the read is a typed refusal and never another hold
 // answered. The basis counts a hold naming the task and a run as well, and
 // the service's own hold is one naming the task and no run; nothing in this
 // build registers the first shape, and one that did would be routed to the
 // task's own hold and refused there, never answered past.
-func (in *invocation) answerGivenTask(ctx context.Context, task, answer string, request *pipeline.FixRequest) (any, error) {
-	if request == nil {
+//
+// A note is recorded only with an answer to one of the task's own holds. An
+// answer that reaches a run's decision other than a fix round's has nowhere
+// to record one, so a note given with it is refused rather than dropped.
+func (in *invocation) answerGivenTask(ctx context.Context, a taskAnswer) (any, error) {
+	_, ofRun := machine.RunNamedBy(a.hold)
+	toRun := a.fix != nil || ofRun
+	if !toRun && a.hold == "" {
 		var view machine.Task
-		if err := in.callService(ctx, ipc.MethodTaskGet, machine.TaskRequest{Task: task}, &view); err != nil {
+		if err := in.callService(ctx, ipc.MethodTaskGet, machine.TaskRequest{Task: a.task}, &view); err != nil {
 			return nil, err
 		}
-		if view.State.Basis.Hold != "" {
-			return in.answerTask(ctx, task, answer)
-		}
+		toRun = view.State.Basis.Hold == ""
 	}
-	in.progressf("answering the decision task %s's run is holding on with %q; this blocks until the run needs another decision", task, answer)
+	if !toRun {
+		return in.answerTask(ctx, a)
+	}
+	if a.fix == nil && a.note != "" {
+		return nil, usagef("--note is recorded with an answer to one of a task's own decisions, and this answer goes to "+
+			"what task %s's run is holding on, which records none except a fix round's, given with --answer %s",
+			a.task, pipeline.OutcomeFixRequested)
+	}
+	in.progressf("answering the decision task %s's run is holding on with %q; this blocks until the run needs another decision", a.task, a.answer)
 	var run machine.Run
-	err := in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{Task: task, Answer: answer, Fix: request}, &run)
+	err := in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{Task: a.task, Hold: a.hold, Answer: a.answer, Fix: a.fix}, &run)
 	return run, err
 }
 
@@ -298,14 +371,16 @@ func (in *invocation) consentGivenTask(ctx context.Context, task string) (any, e
 	return run, err
 }
 
-// answerTask answers the oldest open hold the task raised with no run behind
-// it. Which hold that was, what the answer did and the task as it then
-// stands are in the answer; who resolved it is the service's to derive and
-// nothing here says.
-func (in *invocation) answerTask(ctx context.Context, task, answer string) (any, error) {
-	in.progressf("answering the hold task %s is waiting on with %q", task, answer)
+// answerTask answers the hold the task raised with no run behind it that
+// the answer names, or its one open hold when it names none, with the note
+// recorded beside the answer. Which hold that was, what the answer did and
+// the task as it then stands are in the answer; who resolved it is the
+// service's to derive, and nothing here says, the note included.
+func (in *invocation) answerTask(ctx context.Context, a taskAnswer) (any, error) {
+	in.progressf("answering the hold task %s is waiting on with %q", a.task, a.answer)
 	var answered machine.TaskAnswered
-	err := in.callService(ctx, ipc.MethodTaskRespond, machine.TaskRespondRequest{Task: task, Answer: answer}, &answered)
+	err := in.callService(ctx, ipc.MethodTaskRespond,
+		machine.TaskRespondRequest{Task: a.task, Hold: a.hold, Answer: a.answer, Note: a.note}, &answered)
 	return answered, err
 }
 

@@ -11,7 +11,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
-	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -19,7 +18,6 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
-	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
@@ -154,76 +152,13 @@ func TestATaskPastItsRelaunchBoundHoldsUntilAnAnswerRetriesItOnce(t *testing.T) 
 	stop()
 }
 
-// PRD section 11's "Recovering an investigation": a decision an
-// investigation's report registered is closed by the same answer that
-// closes a run's hold, given the task, with no run anywhere. Two holds are
-// answered oldest first, each recorded as given and by the machine
-// interface, and with both closed a third answer is refused. No working
-// copy is needed: the answer is given from a directory that is not one.
-func TestAnInvestigationsHoldIsAnsweredGivenTheTask(t *testing.T) {
-	requiresIdentifiedPeer(t)
-	h := newHome(t)
-	serve(t, h)
-	elsewhere := t.TempDir()
-
-	id := "investigat23"
-	records := openStore(t, h)
-	if _, err := records.CreateTask(t.Context(), store.Task{
-		ID: id, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: "/worktrees/one",
-	}, store.Disposition{}); err != nil {
-		t.Fatal(err)
-	}
-	raw := `{"summary":"two decisions","findings":[` +
-		`{"severity":"warning","action":"ask","description":"Whether the old index may be dropped."},` +
-		`{"severity":"warning","description":"Whether the cache should move."}]}`
-	report, err := findings.ParseReport(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := json.Marshal(report)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var holds []store.Hold
-	for _, f := range report.Held() {
-		holds = append(holds, store.Hold{Key: tasks.HoldKey(id, f.ID), TaskID: store.Known(id), Subject: f.Description, Detail: f.Description})
-	}
-	if len(holds) != 2 {
-		t.Fatalf("the report holds %d findings, want both: one ask and one with no action, which P3 makes an ask", len(holds))
-	}
-	if _, _, err := records.StoreTaskReport(t.Context(), store.TaskReport{TaskID: id, Body: raw, Report: encoded}, holds); err != nil {
-		t.Fatal(err)
-	}
-	_ = records.Close()
-
-	var answered []string
-	for _, answer := range []string{"approved", "skipped"} {
-		got := answerTask(t, h, elsewhere, id, answer)
-		if got.Effect != machine.AnswerRecorded || got.Hold.Resolution.Or("") != answer {
-			t.Fatalf("answering %q reports %+v, want the hold recorded as answered", answer, got)
-		}
-		// Who resolved is read from the record: a store.Resolver does not
-		// travel, which is internal/store's design and not a gap here.
-		if stored := holdOf(t, h, got.Hold.Key); stored.Resolution.Or("") != answer ||
-			stored.ResolvedBy.Or(store.Resolver{}) != store.ResolvedByMachineInterface() {
-			t.Fatalf("answering %q left the hold %+v, want it resolved as given by the machine interface", answer, stored)
-		}
-		answered = append(answered, got.Hold.Key)
-	}
-	if answered[0] == answered[1] {
-		t.Fatalf("both answers closed hold %s", answered[0])
-	}
-	if open := openHoldsOf(t, h, id); len(open) != 0 {
-		t.Fatalf("after two answers the investigation still holds %+v", open)
-	}
-	if got := run(t, h, elsewhere, "--json", "--task", id, "--answer", "approved"); got.code != machine.ExitFailure {
-		t.Fatalf("a third answer exited %s, want failure:\n%s", got.code, got.stdout)
-	}
-}
-
 // --task is read only with --answer or --standing-consent and takes a task,
-// and it acts on one thing at a time. Each is incorrect usage, decided before
-// any service is asked. A fix round given --task is not among them: it goes
+// and it acts on one thing at a time. --hold is read only with both --task
+// and --answer, takes a name, and with a fix round names only the run's
+// decision; --note outside a fix round is read only with an answer given a
+// task, takes text, and is refused with an answer to the run's decision,
+// which records none. Each is incorrect usage, decided before any service
+// is asked. A fix round given --task is not among them: it goes
 // to the task's run, which taskrun_test.go drives, and neither is consent
 // given a task alone, which consent_test.go drives.
 func TestTheTaskFlagIsReadOnlyWithAnAnswerOrConsent(t *testing.T) {
@@ -235,7 +170,14 @@ func TestTheTaskFlagIsReadOnlyWithAnAnswerOrConsent(t *testing.T) {
 		{"--task", "abcdefghij23", "--standing-consent=false"},
 		{"--task", "", "--answer", "retry"},
 		{"--task", "", "--standing-consent"},
-		{"--task", "abcdefghij23", "--answer", "retry", "--note", "do it"},
+		{"--task", "abcdefghij23", "--answer", "retry", "--note", ""},
+		{"--note", "do it", "--answer", "approved"},
+		{"--hold", "f-1", "--answer", "approved"},
+		{"--task", "abcdefghij23", "--hold", "f-1"},
+		{"--task", "abcdefghij23", "--hold", "f-1", "--standing-consent"},
+		{"--task", "abcdefghij23", "--hold", "", "--answer", "approved"},
+		{"--task", "abcdefghij23", "--hold", "f-1", "--answer", "fix"},
+		{"--task", "abcdefghij23", "--hold", "run/0123456789ab", "--answer", "approved", "--note", "why"},
 		{"--task", "abcdefghij23", "--answer", "retry", "--cancel"},
 		{"--task", "abcdefghij23", "--answer", "retry", "--intent", "something"},
 		{"--task", "abcdefghij23", "--answer", "retry", "--standing-consent"},
@@ -310,6 +252,22 @@ func answerTask(t *testing.T, h *home.Home, dir, id, answer string) machine.Task
 	got := run(t, h, dir, "--json", "--task", id, "--answer", answer)
 	if got.code != machine.ExitOK {
 		t.Fatalf("answering task %s %q exited %s:\n%s%s", id, answer, got.code, got.stdout, got.stderr)
+	}
+	var answered machine.TaskAnswered
+	if err := json.Unmarshal([]byte(got.stdout), &answered); err != nil {
+		t.Fatalf("decoding: %v\n%s", err, got.stdout)
+	}
+	return answered
+}
+
+// answerNamed answers the task's hold named name through the surface, with
+// any further arguments before the answer, and decodes what it reported.
+func answerNamed(t *testing.T, h *home.Home, dir, id, name, answer string, more ...string) machine.TaskAnswered {
+	t.Helper()
+	args := append([]string{"--json", "--task", id, "--hold", name}, more...)
+	got := run(t, h, dir, append(args, "--answer", answer)...)
+	if got.code != machine.ExitOK {
+		t.Fatalf("answering task %s's hold %s %q exited %s:\n%s%s", id, name, answer, got.code, got.stdout, got.stderr)
 	}
 	var answered machine.TaskAnswered
 	if err := json.Unmarshal([]byte(got.stdout), &answered); err != nil {

@@ -151,7 +151,7 @@ func eventLine(event ipc.Event) string {
 		if err := json.Unmarshal(event.Payload, &hold); err != nil {
 			return machine.PhraseUnfamiliarUpdate.String()
 		}
-		return printable(machine.HoldPhrase(hold).String())
+		return printable(machine.HoldPhrase(hold).String()) + holdNote(hold)
 	case ipc.TypeTaskEvent:
 		return machine.PhraseWorkerSpoke.String()
 	case ipc.TypeWakeQueued:

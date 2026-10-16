@@ -307,10 +307,14 @@ func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T)
 			t.Fatalf("the records are %+v, want the second message recorded refused with its reason", messages)
 		}
 
+		// A note is recorded with any answer now (#279), and the one refusal
+		// left is a note past the fixed limit, which is refused rather than
+		// cut and leaves the hold open for the retry below.
 		var badNote machine.TaskAnswered
 		if err := running.client.Call(t.Context(), ipc.MethodTaskRespond,
-			machine.TaskRespondRequest{Task: task, Answer: machine.AnswerStop, Note: "a note on a stop"}, &badNote); !errors.Is(err, ipc.ErrInvalidRequest) {
-			t.Fatalf("a note with a stop answer = %v, want ErrInvalidRequest", err)
+			machine.TaskRespondRequest{Task: task, Answer: machine.AnswerStop, Note: strings.Repeat("n", machine.MaxMessageBytes+1)},
+			&badNote); !errors.Is(err, ipc.ErrInvalidRequest) {
+			t.Fatalf("a note past the limit with a stop answer = %v, want ErrInvalidRequest", err)
 		}
 		var answered machine.TaskAnswered
 		if err := running.client.Call(t.Context(), ipc.MethodTaskRespond,
@@ -320,6 +324,9 @@ func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T)
 		if answered.Effect != machine.AnswerRelaunched || answered.Relaunch == nil ||
 			answered.Relaunch.Attempt != 2 || answered.Relaunch.Superseded != stoppedRef || answered.Hold.Key != stopped.Hold.Key {
 			t.Fatalf("the retry answered %+v, want attempt 2 relaunched over %s on hold %s", answered, stoppedRef, stopped.Hold.Key)
+		}
+		if answered.Hold.Note.Or("") != "narrow it to the parser" {
+			t.Fatalf("the retry's hold records the note %q, want the one told to the relaunch", answered.Hold.Note.Or(""))
 		}
 		if kinds := kindsOf(t, w.home, task); len(kinds) < 2 ||
 			kinds[len(kinds)-2] != "relaunched" || kinds[len(kinds)-1] != store.DispatchedEventKind {

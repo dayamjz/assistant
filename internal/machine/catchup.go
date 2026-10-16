@@ -73,8 +73,8 @@ type Waiting struct {
 
 // Answering is the command line that closes one listed decision: assistant
 // followed by Args and then the answer. It is the existing answer path and
-// nothing new: --answer on the command with no verb, given --task and the
-// task for a hold a task raised with no run behind it, and run from the
+// nothing new: --answer on the command with no verb, given --task, the task
+// and --hold with the hold's key for a hold a task raised, and run from the
 // change's checkout for a run, because there --answer answers the run of
 // the branch it is run on.
 type Answering struct {
@@ -89,9 +89,11 @@ type Answering struct {
 	Branch string `json:"branch,omitempty"`
 }
 
-// TaskAnswering is how a hold naming a task and no run is answered.
-func TaskAnswering(task string) Answering {
-	return Answering{Args: []string{"--task", task, "--answer"}}
+// TaskAnswering is how a hold naming a task is answered: given the task,
+// naming the hold by its key, so the command closes the decision listed
+// beside it whatever else the task has open.
+func TaskAnswering(task, key string) Answering {
+	return Answering{Args: []string{"--task", task, "--hold", key, "--answer"}}
 }
 
 // RunAnswering is how a run's decision is answered: from the run's

@@ -254,7 +254,8 @@ var renderings = []rendering{
 	{name: "admission", voice: VoicePhrased, of: typeOf[machine.Admission](), render: func(w io.Writer, v any) { readOutAdmission(w, v.(machine.Admission)) }},
 	{name: "notification", voice: VoicePhrased, of: typeOf[machine.Notification](), render: func(w io.Writer, v any) { readOutNotification(w, v.(machine.Notification)) }},
 	{name: "task answer", voice: VoicePhrased, of: typeOf[machine.TaskAnswered](), render: func(w io.Writer, v any) {
-		writeln(w, machine.TaskAnsweredPhrase(v.(machine.TaskAnswered)))
+		answered := v.(machine.TaskAnswered)
+		writeln(w, machine.TaskAnsweredPhrase(answered).String()+holdNote(answered.Hold))
 	}},
 	{name: "catch up", voice: VoicePhrased, of: typeOf[machine.CatchUp](), render: func(w io.Writer, v any) { readOutCatchUp(w, v.(machine.CatchUp)) }},
 	{name: "marked seen", voice: VoicePhrased, of: typeOf[machine.Marked](), render: func(w io.Writer, v any) {
@@ -588,6 +589,18 @@ func writeFindings(w io.Writer, list []findings.Finding) {
 // the text's own line breaks to survive splits on them first and passes each
 // line: what reaches this is then one line, and every control character in it
 // is one that does not belong.
+// holdNote is the note a hold's answer recorded, after its label and
+// escaped, with a space before it, or nothing for a hold with no note. A
+// line that shows a resolved hold ends with it, so the note is read back
+// wherever the hold is.
+func holdNote(h store.Hold) string {
+	note, ok := h.Note.Get()
+	if !ok {
+		return ""
+	}
+	return " " + machine.HoldNoteLabel + " " + printable(note)
+}
+
 func printable(text string) string {
 	if !strings.ContainsFunc(text, unicode.IsControl) {
 		return text

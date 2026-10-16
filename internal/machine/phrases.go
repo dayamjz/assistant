@@ -254,7 +254,8 @@ var phraseTaskHeld = Phrase{
 // row above and HoldPhrase's open row for such a hold share, so the two
 // cannot name different commands.
 const taskAnswerDecision = "Answer it with assistant --task and the work's identifier, which assistant tasks --json shows, " +
-	"followed by --answer and your answer."
+	"then --hold and the decision's name if it waits on more than one, which assistant watch --once --json lists, " +
+	"then --answer and your answer."
 
 // The rows for an answer given a task that reaches no run's decision, which
 // internal/service's refusal carries after the identifiers it names. An
@@ -552,6 +553,12 @@ func HoldPhrase(h store.Hold) Phrase {
 		Decision:    "Nothing to decide.",
 	}
 }
+
+// HoldNoteLabel is what a person reads before the note an answer recorded
+// with a hold's resolution. The note is the answerer's own text, so it
+// stands beside the hold's row rather than in it, escaped by the renderer
+// as every other text a person or an agent wrote is.
+const HoldNoteLabel = "The note recorded with the answer:"
 
 // The rows for an answer to a task's hold that did more than close it: a
 // retry that began the work again where it left off, one that began it
@@ -1337,6 +1344,36 @@ var (
 	}
 )
 
+// The rows for an answer given a task refused because it did not name one
+// of the task's own decisions, chosen by HoldNotNamed.Phrase. The name given
+// and the decisions open are HoldNotNamed's to print beside the row, and the
+// decision says how a validation of the work is named, because an answer
+// meant for it is given the same way.
+var (
+	// phraseHoldUnnamed is HoldUnnamed's row.
+	phraseHoldUnnamed = Phrase{
+		Outcome:     "Nothing was answered, because this work is waiting on more than one decision and the answer did not say which.",
+		Consequence: "Every decision stays open, and nothing changed.",
+		Decision:    holdNameDecision,
+	}
+	// phraseHoldNameUnknown is HoldNameUnknown's row.
+	phraseHoldNameUnknown = Phrase{
+		Outcome:     "Nothing was answered, because no decision this work is waiting on goes by the name you gave.",
+		Consequence: "Every decision stays open, and nothing changed.",
+		Decision:    holdNameDecision,
+	}
+	// phraseHoldNameAmbiguous is HoldNameAmbiguous's row.
+	phraseHoldNameAmbiguous = Phrase{
+		Outcome:     "Nothing was answered, because the name you gave fits more than one decision this work is waiting on.",
+		Consequence: "Every decision stays open, and nothing changed.",
+		Decision:    "Give the answer again with --hold and the full name of the decision you mean, from the list after this.",
+	}
+)
+
+// holdNameDecision is the remedy the unnamed and unknown rows share.
+const holdNameDecision = "Give the answer again with --hold and the name of the decision you mean, from the list after this; " +
+	"to answer what a validation of the work is waiting on, name it run/ followed by that validation's identifier."
+
 // The rows for a cancellation refused because there was nothing to end,
 // chosen by CancelRefused.Phrase. Which run was named, and the status an
 // ended one was recorded in, are CancelRefused's to print beside the row.
@@ -1488,7 +1525,8 @@ var PhraseNoReading = Phrase{
 // surface: a decision and a fix round's offer, a row per doctor check and
 // result and the verdict, the service lifecycle, the two rows for a command
 // given none of its subcommands, the two rows for a rerun refused because
-// the checkout moved, a gate created, reattached and removed, a row per source of the
+// the checkout moved, the two for a cancellation that found nothing to end,
+// the three for an answer given a task that named no one decision, a gate created, reattached and removed, a row per source of the
 // default branch an init recorded with the row for an answer naming none and
 // a row per refusal to record one, the row for an init that could not learn
 // where changes go, a row per refusal of a fork and the row for one
@@ -1549,7 +1587,7 @@ func TablePhrases() []Phrase {
 	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}),
 		LifecyclePhrase(Lifecycle{ConfigurationRefused: true}), PhraseStartConfigurationRefused)
 	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil), phraseRerunMoved, phraseRerunBehind,
-		phraseCancelUnknown, phraseCancelEnded)
+		phraseCancelUnknown, phraseCancelEnded, phraseHoldUnnamed, phraseHoldNameUnknown, phraseHoldNameAmbiguous)
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)

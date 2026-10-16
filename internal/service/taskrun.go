@@ -44,6 +44,14 @@ import (
 // carries a fix round, which only a run takes. Either way nothing is
 // answered, and the refusal says to answer the task's own decision first.
 //
+// That precedence is for an answer that does not say which decision it
+// means. One that names the run's, machine.RunHoldName with the run's
+// identifier, reaches the run while the task's own holds stay open (#279),
+// which is what a promoted investigation needs: its report's decisions
+// stay open on the task while its run holds at a stage. The name is checked
+// against the run selected, so a name for a run a later push superseded is
+// refused rather than taken to mean the newer one.
+//
 // # Standing consent given a task
 //
 // Standing consent reaches the same run the same way, through run.start
@@ -79,6 +87,10 @@ import (
 // ipc.ErrInvalidRequest.
 func (s *Service) respondTo(ctx context.Context, req ipc.Request, r machine.RespondRequest) (machine.Run, error) {
 	if r.Task == "" {
+		if r.Hold != "" {
+			return machine.Run{}, fmt.Errorf("%w: an answer names decision %s and no task; a decision is named only given the task",
+				ipc.ErrInvalidRequest, r.Hold)
+		}
 		return s.respond(ctx, r)
 	}
 	if r.Run != "" {
@@ -87,26 +99,42 @@ func (s *Service) respondTo(ctx context.Context, req ipc.Request, r machine.Resp
 	if err := s.refuseWorker(req); err != nil {
 		return machine.Run{}, err
 	}
-	run, err := s.taskRun(ctx, r.Task)
+	run, err := s.taskRun(ctx, r.Task, r.Hold)
 	if err != nil {
 		return machine.Run{}, err
 	}
-	r.Run, r.Task = run.ID, ""
+	r.Run, r.Task, r.Hold = run.ID, "", ""
 	return s.respond(ctx, r)
 }
 
 // taskRun is the task's current run, held at a decision, or a typed
-// refusal. A task with a hold of its own open, a task naming no branch, a
-// branch with no unfinished run, and a run not waiting on an answer are each
+// refusal. A task with a hold of its own open and no run named, a name that
+// is not the current run's, a task naming no branch, a branch with no
+// unfinished run, and a run not waiting on an answer are each
 // ipc.ErrRefused, and an unknown task is ipc.ErrRefused too; each refusal
-// carries the internal/machine row a person reads about it.
-func (s *Service) taskRun(ctx context.Context, id string) (store.Run, error) {
-	record, err := s.taskCurrentRun(ctx, id)
+// carries the internal/machine row a person reads about it. A name that is
+// not a run's at all is ipc.ErrInvalidRequest, because a task's own hold is
+// answered through task.respond.
+func (s *Service) taskRun(ctx context.Context, id, name string) (store.Run, error) {
+	var named string
+	if name != "" {
+		run, ok := machine.RunNamedBy(name)
+		if !ok {
+			return store.Run{}, fmt.Errorf("%w: an answer to task %s's run names %s, which is not a run's decision; "+
+				"a run's is named %s", ipc.ErrInvalidRequest, id, name, machine.RunHoldName("<run>"))
+		}
+		named = run
+	}
+	record, err := s.taskCurrentRunNamed(ctx, id, named != "")
 	if err != nil {
 		return store.Run{}, err
 	}
+	if named != "" && record.ID != named {
+		return store.Run{}, fmt.Errorf("%w: the answer names run %s, and task %s's current run is %s. %s",
+			ipc.ErrRefused, named, id, record.ID, machine.PhraseTaskNothingWaiting)
+	}
 	if record.Status != store.RunHeld {
-		return store.Run{}, fmt.Errorf("%w: task %s has no hold open and its run %s is %s, not waiting on an answer. %s",
+		return store.Run{}, fmt.Errorf("%w: task %s's run %s is %s, not waiting on an answer. %s",
 			ipc.ErrRefused, id, record.ID, record.Status, machine.PhraseTaskNothingWaiting)
 	}
 	return record, nil
@@ -161,6 +189,14 @@ func (s *Service) startTo(ctx context.Context, req ipc.Request, r machine.StartR
 // checkpoint, whatever it is doing, or a typed refusal on taskRun's terms for
 // every case but a run that is not held.
 func (s *Service) taskCurrentRun(ctx context.Context, id string) (store.Run, error) {
+	return s.taskCurrentRunNamed(ctx, id, false)
+}
+
+// taskCurrentRunNamed is taskCurrentRun, and with named it reaches the run
+// past the task's own open holds rather than refusing for them: the answer
+// named the run's decision, so no hold of the task's own is the one it
+// meant (#279). Whether the run named is this one is taskRun's to check.
+func (s *Service) taskCurrentRunNamed(ctx context.Context, id string, named bool) (store.Run, error) {
 	if strings.TrimSpace(id) == "" {
 		return store.Run{}, fmt.Errorf("%w: an answer given a task names no task", ipc.ErrInvalidRequest)
 	}
@@ -173,6 +209,7 @@ func (s *Service) taskCurrentRun(ctx context.Context, id string) (store.Run, err
 	}
 	own, err := s.oldestTaskHold(ctx, id)
 	switch {
+	case named:
 	case err == nil:
 		return store.Run{}, fmt.Errorf("%w: task %s waits on its own hold %s, which an answer given the task closes before its run's. %s",
 			ipc.ErrRefused, id, own.Key, machine.PhraseTaskOwnHoldFirst)
@@ -190,7 +227,7 @@ func (s *Service) taskCurrentRun(ctx context.Context, id string) (store.Run, err
 		return store.Run{}, err
 	}
 	if !found {
-		return store.Run{}, fmt.Errorf("%w: task %s has no hold open and its branch %s has no run under way. %s",
+		return store.Run{}, fmt.Errorf("%w: task %s's branch %s has no run under way. %s",
 			ipc.ErrRefused, id, branch, machine.PhraseTaskNothingWaiting)
 	}
 	return s.reconcile(ctx, active.ID)

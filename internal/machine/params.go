@@ -2,6 +2,7 @@ package machine
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/gate"
@@ -219,9 +220,16 @@ type RespondRequest struct {
 	// --answer reaches from a checkout of that branch. A task with a hold
 	// of its own open is refused rather than having its run answered past
 	// that hold, because the hold naming the task is the one an answer
-	// given the task closes first; internal/service's taskrun.go owns
-	// both rules.
+	// given the task closes first, unless Hold names the run's decision;
+	// internal/service's taskrun.go owns both rules.
 	Task string `json:"task,omitempty"`
+	// Hold names the decision meant, and is read only with Task: the
+	// task's current run's, written as RunHoldName gives it. Named, the
+	// answer reaches that run even while the task has holds of its own
+	// open, and a name that is not the current run's is refused rather
+	// than answered past; empty, the task's own holds come first, on
+	// Task's terms.
+	Hold string `json:"hold,omitempty"`
 	// Answer is one of the options the decision offered. An answer outside
 	// them is refused by internal/graph rather than interpreted here.
 	Answer string `json:"answer"`
@@ -240,8 +248,11 @@ type RespondRequest struct {
 // which PRD section 9 has answered the same way a run's hold is, given the
 // task rather than a run: a task past relaunch_attempts, a relaunch refused
 // because the platform has no process sweep, or a decision an
-// investigation's report registered. The hold answered is the oldest one
-// open that names the task and no run; the answer names which.
+// investigation's report registered. The hold answered is the one Hold
+// names, or, when it names none, the one hold open that names the task and
+// no run; with several open and none named the answer is refused with
+// HoldNotNamed, which lists them, rather than given to any one of them. The
+// answer names which hold it closed.
 //
 // It carries no field saying who answered, on RespondRequest's terms: who
 // resolved a hold is derived from the surface by internal/ipc's
@@ -249,6 +260,12 @@ type RespondRequest struct {
 type TaskRespondRequest struct {
 	// Task is the task whose hold is answered.
 	Task string `json:"task"`
+	// Hold names the hold answered, empty for the task's one open hold. It
+	// is the hold's key, or the identifier of the report finding the hold
+	// was registered for, which internal/tasks' HoldKey turns into the key.
+	// A name matching none of the task's open holds, or more than one, is
+	// refused with HoldNotNamed and answers nothing.
+	Hold string `json:"hold,omitempty"`
 	// Answer is what was decided. A relaunch hold, the one the relaunch
 	// bound raised or the one a relaunch with no process sweep raised,
 	// offers exactly AnswerRetry and AnswerStop and refuses anything else; a
@@ -256,12 +273,14 @@ type TaskRespondRequest struct {
 	// a hold an investigation's report registered offers no closed set, and
 	// the answer is recorded as given.
 	Answer string `json:"answer"`
-	// Note is what a retry on a stop's hold tells the relaunched worker,
-	// after the relaunch note and before the text of every message the
-	// stopped attempt never acknowledged, PRD section 6's "optionally with
-	// a note". It is accepted only with a retry on a stop's hold, the one
-	// answer that starts a worker with it, and refused as an invalid request
-	// with any other answer or hold rather than dropped.
+	// Note is free text recorded with the resolution and read back with the
+	// hold, at most MaxMessageBytes and refused past that rather than cut.
+	// internal/store redacts it before it is stored. It is the answer's
+	// words and nothing more: it never names who resolved, which is derived
+	// from the surface, and nothing parses it into an action. A retry on a
+	// stop's hold also tells it to the relaunched worker, after the
+	// relaunch note and before the text of every message the stopped
+	// attempt never acknowledged, PRD section 6's "optionally with a note".
 	Note string `json:"note,omitempty"`
 }
 
@@ -364,6 +383,97 @@ func (c CancelRefused) Error() string {
 const (
 	cancelRunLabel    = "The run you named:"
 	cancelStatusLabel = "Its recorded status:"
+)
+
+// RunHoldName is how an answer given a task names the decision the task's
+// current run is holding on, the run's identifier after the prefix every
+// hold internal/service registers for a run carries. It is a name and not a
+// hold's key: a run's decision is its checkpoint's, and no hold row is
+// registered for it.
+func RunHoldName(run string) string { return runHoldPrefix + run }
+
+// RunNamedBy reads a name RunHoldName wrote back into the run, and reports
+// whether the name is one. Every other name is a task's own hold's.
+func RunNamedBy(name string) (string, bool) {
+	run, ok := strings.CutPrefix(name, runHoldPrefix)
+	return run, ok && run != ""
+}
+
+const runHoldPrefix = "run/"
+
+// HoldNotNamed is an answer given a task refused because it did not say
+// which of the task's own open holds it closes: none was named and more
+// than one is open, the name matches none of them, or it matches more than
+// one. A refused answer changed nothing.
+//
+// It is a refusal rather than an answer, so it travels as an error, and
+// internal/service sends it as an invalid request, the caller's to correct,
+// on CancelRefused's terms. Its message is the row Phrase chooses followed
+// by the name given and the keys of the holds open, which are machine text
+// a person copies and so stand beside the row rather than in it.
+type HoldNotNamed struct {
+	// Task is the task the answer was given.
+	Task string `json:"task"`
+	// Reason is which of the three it was.
+	Reason HoldNotNamedReason `json:"reason"`
+	// Named is the name the answer gave, empty when it gave none.
+	Named string `json:"named,omitempty"`
+	// Open is the key of every hold of the task's own that is open, oldest
+	// first, or for HoldNameAmbiguous the keys the name matched.
+	Open []string `json:"open"`
+}
+
+// HoldNotNamedReason is why an answer given a task named no one hold.
+type HoldNotNamedReason string
+
+const (
+	// HoldUnnamed is an answer naming no hold given a task with more than
+	// one of its own open.
+	HoldUnnamed HoldNotNamedReason = "unnamed"
+	// HoldNameUnknown is a name matching none of the task's open holds.
+	HoldNameUnknown HoldNotNamedReason = "unknown"
+	// HoldNameAmbiguous is a name matching more than one of them, one by its
+	// key and another by its finding's identifier.
+	HoldNameAmbiguous HoldNotNamedReason = "ambiguous"
+)
+
+// Phrase is the row for this refusal's reason. A reason outside the three
+// is phrased as HoldUnnamed, whose remedy is to name one of those listed.
+func (h HoldNotNamed) Phrase() Phrase {
+	switch h.Reason {
+	case HoldNameUnknown:
+		return phraseHoldNameUnknown
+	case HoldNameAmbiguous:
+		return phraseHoldNameAmbiguous
+	default:
+		return phraseHoldUnnamed
+	}
+}
+
+// Error is the refusal as a person reads it: the row, then the name given,
+// when one was, and the holds open.
+func (h HoldNotNamed) Error() string {
+	text := h.Phrase().String()
+	if h.Named != "" {
+		text = fmt.Sprintf("%s %s %s.", text, holdNamedLabel, h.Named)
+	}
+	label := holdOpenLabel
+	if h.Reason == HoldNameAmbiguous {
+		label = holdMatchedLabel
+	}
+	open := "none"
+	if len(h.Open) > 0 {
+		open = strings.Join(h.Open, ", ")
+	}
+	return fmt.Sprintf("%s %s %s.", text, label, open)
+}
+
+// The labels HoldNotNamed puts before the machine text it carries beside
+// its row.
+const (
+	holdNamedLabel   = "The name you gave:"
+	holdOpenLabel    = "The decisions open:"
+	holdMatchedLabel = "The decisions it matches:"
 )
 
 // TaskRequest names one piece of fleet work.

@@ -73,8 +73,9 @@ import (
 //     recorded before the column existed, or promoted before promotion
 //     recorded a posture. Nothing writes one onto such a task afterwards.
 //   - Each push of a local task's branch offers its commit on a hold of its
-//     own, and an answer closes the oldest open one, so a worker that pushed
-//     twice is approved or stopped one offer at a time, oldest first.
+//     own, and with two offers open an answer has to name the one it
+//     closes, on namedTaskHold's terms, so a worker that pushed twice is
+//     approved or stopped one named offer at a time.
 //   - Between the landing's move and its record a crash leaves the branch
 //     moved with no record; the hold stays open, and an approve answered
 //     again is refused as moved, because the anchor no longer describes the
@@ -194,10 +195,11 @@ func localTarget(ctx context.Context, repository store.Repository) (safety.Targe
 func localFetchRef(task string) string { return "refs/assistant/local/" + task }
 
 // landLocally performs an approved landing on the terms this file's opening
-// comment states and returns the record it wrote. Every refusal is a
-// *safety.Refusal or a typed vcs error wrapped with what was being done, and
-// on every one nothing is recorded and the hold is left open.
-func (s *Service) landLocally(ctx context.Context, req ipc.Request, task store.Task, hold store.Hold) (store.LocalLanding, error) {
+// comment states and returns the record it wrote, with note recorded on the
+// hold's resolution. Every refusal is a *safety.Refusal or a typed vcs error
+// wrapped with what was being done, and on every one nothing is recorded and
+// the hold is left open.
+func (s *Service) landLocally(ctx context.Context, req ipc.Request, task store.Task, hold store.Hold, note string) (store.LocalLanding, error) {
 	commit, tip, ok := localApprovalOf(hold.Key, task.ID)
 	if !ok {
 		return store.LocalLanding{}, fmt.Errorf("service: hold %s is not a local approval of task %s", hold.Key, task.ID)
@@ -245,7 +247,7 @@ func (s *Service) landLocally(ctx context.Context, req ipc.Request, task store.T
 	before := decision.Anchor().State().Commit
 	landing, err := s.store.RecordLocalLanding(ctx, store.LocalLanding{
 		Task: task.ID, Commit: decision.Proposed(), Branch: target.Ref, Before: before, After: decision.Proposed(),
-	}, store.HoldClosure{Hold: hold, Resolution: machine.AnswerApprove, By: req.HoldResolver()})
+	}, store.HoldClosure{Hold: hold, Resolution: machine.AnswerApprove, By: req.HoldResolver(), Note: note})
 	if err != nil {
 		s.log.Printf("task %s: %s in %s was fast-forwarded from %s to %s and the landing could not be recorded: %v",
 			task.ID, repository.DefaultBranch, repository.WorkingPath, before, decision.Proposed(), err)
@@ -262,7 +264,7 @@ func (s *Service) answerLocal(ctx context.Context, req ipc.Request, r machine.Ta
 	hold store.Hold) (machine.TaskAnswered, error) {
 	switch r.Answer {
 	case machine.AnswerStop:
-		resolved, err := s.store.ResolveHold(ctx, hold.Key, r.Answer, req.HoldResolver())
+		resolved, err := s.store.ResolveHoldWithNote(ctx, hold.Key, r.Answer, r.Note, req.HoldResolver())
 		if errors.Is(err, store.ErrHoldResolved) {
 			return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
 		}
@@ -277,7 +279,7 @@ func (s *Service) answerLocal(ctx context.Context, req ipc.Request, r machine.Ta
 		return machine.TaskAnswered{}, fmt.Errorf("%w: task %s holds on %s, which is answered %q or %q, not %q",
 			ipc.ErrInvalidRequest, task.ID, hold.Key, machine.AnswerApprove, machine.AnswerStop, r.Answer)
 	}
-	landing, err := s.landLocally(ctx, req, task, hold)
+	landing, err := s.landLocally(ctx, req, task, hold, r.Note)
 	if err != nil {
 		s.log.Printf("task %s: the approval on %s was not acted on: %v", task.ID, hold.Key, err)
 		var refusal *safety.Refusal

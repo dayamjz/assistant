@@ -187,7 +187,7 @@ func TestWatchCatchesUpOnEveryPartThroughTheSurface(t *testing.T) {
 	if second.Hold == nil || second.Hold.Key != "task/reportheldaa/report/1" || second.Task == nil || second.Task.Record.ID != "reportheldaa" {
 		t.Fatalf("the second decision is %+v, want the hold with the task it names", second)
 	}
-	if !slices.Equal(second.Answer.Args, machine.TaskAnswering("reportheldaa").Args) {
+	if !slices.Equal(second.Answer.Args, machine.TaskAnswering("reportheldaa", "task/reportheldaa/report/1").Args) {
 		t.Fatalf("the hold is answered with %+v, want the task-given answer", second.Answer)
 	}
 

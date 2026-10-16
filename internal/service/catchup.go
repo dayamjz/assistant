@@ -225,7 +225,7 @@ func (s *Service) answeringHold(ctx context.Context, h store.Hold) (machine.Answ
 	run, ofRun := h.RunID.Get()
 	if !ofRun {
 		if named {
-			return machine.TaskAnswering(task), nil
+			return machine.TaskAnswering(task, h.Key), nil
 		}
 		return machine.Answering{Args: []string{"--answer"}}, nil
 	}
@@ -233,7 +233,7 @@ func (s *Service) answeringHold(ctx context.Context, h store.Hold) (machine.Answ
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		if named {
-			return machine.TaskAnswering(task), nil
+			return machine.TaskAnswering(task, h.Key), nil
 		}
 		return machine.Answering{Args: []string{"--answer"}}, nil
 	case err != nil:
