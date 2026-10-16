@@ -906,7 +906,9 @@ type TaskStopped struct {
 // until the caller acknowledges it after acting on it, and a row not
 // acknowledged is handed out again once the caller it was handed to is no
 // longer attached: delivery is at least once, so a caller may be handed a
-// row it has seen, and Handouts counts how many times it has been.
+// row it has seen, and Handouts counts how many times it has been. Act on a
+// row keyed by its task, kind and session reference (in the marker for
+// terminal-gone), never by Handouts; acknowledge every id acted on.
 //
 // Who the drain handed the rows to is in the record and not on this wire:
 // store.Acknowledger has no text form outside internal/store, so
