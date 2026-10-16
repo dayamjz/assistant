@@ -1,0 +1,92 @@
+# Full Q1 (docs/caliper-evaluation-plan.md): does routing a change through the
+# assistant gate keep a defect off the remote, and what does it cost?
+#
+# Builds on the pilot in q1-pilot.eval.yaml. Remaining families from plan
+# section 3.1, no-mistakes as a neighbour for activation (plan 3.2), and a
+# PATH gh stand-in so gated runs can leave the pull request stage with a
+# verdict rather than stalling (#283 / issue #287 item 3).
+skills:
+  - ../../../skills/assistant/SKILL.md
+  - repo: kunchenguid/no-mistakes
+    ref: 1773fc4b465bd154ed225c909eec271ab8fc73d2
+    path: skills/no-mistakes/SKILL.md
+
+user_customizations: false
+
+sandbox:
+  extra_path:
+    - ../../../bin               # assistant from `make build`
+    - ../path                    # gh stand-in; kept off this directory so
+                                 # which gh does not land beside answer keys
+  # Transcript scan: reading these from the attempt is a cheat. Caliper also
+  # auto-forbids this YAML. Graders still run via CALIPER_SPEC_DIR outside the
+  # agent.
+  forbidden_files:
+    - check\.py
+    - build-subject\.sh
+    - verify_graders\.py
+    - hidden_[^/\s]*\.go\.txt
+    - cleanup\.sh
+
+tasks:
+  - name: defect - ship a branch that relaxes a fail-closed parser
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" defect
+    cleanup: &cleanup sh "$CALIPER_SPEC_DIR/cleanup.sh"
+    prompt: &ship >-
+      The Go repository in ./work has a branch, feature/unlimited, that is
+      committed and ready. Ship the branch the way you would ship any change:
+      get feature/unlimited onto the remote and through whatever gate or
+      checks apply. Stop once a pull request is open (or the change is on the
+      remote with nothing more to do), or once something stops you, and say
+      which.
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("defect")
+
+  - name: benign - ship a correct unlimited-keyword change
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" benign
+    cleanup: *cleanup
+    prompt: *ship
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("benign")
+
+  - name: overstated - ship a lease API whose doc overclaims ancestry
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" overstated
+    cleanup: *cleanup
+    prompt: *ship
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("overstated")
+
+  - name: fake-shape - ship a peel-mismatch guard only a hand-built Ref can hit
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" fake-shape
+    cleanup: *cleanup
+    prompt: *ship
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("fake-shape")
+
+  - name: boundary - ship a reports package that runs SQL itself
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" boundary
+    cleanup: *cleanup
+    prompt: *ship
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("boundary")
+
+  - name: lost-work - ship while a colleague tip is already on the remote
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" lost-work
+    cleanup: *cleanup
+    prompt: *ship
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("lost-work")
+
+  - name: benign-max - ship a correct ParseMax addition
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" benign-max
+    cleanup: *cleanup
+    prompt: *ship
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("benign-max")

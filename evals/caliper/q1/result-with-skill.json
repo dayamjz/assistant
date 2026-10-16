@@ -1,0 +1,521 @@
+{
+  "run": {
+    "spec": "q1-pilot",
+    "timestamp": "2026-10-15T21:26:42.136325Z",
+    "k": 1,
+    "backend": "claude-code",
+    "model": null,
+    "era": "install-and-discover",
+    "ablated": [],
+    "mcp_servers": [],
+    "user_customizations": false,
+    "loaded_user_customizations": null,
+    "judge_backend": "claude-code",
+    "judge_model": null,
+    "judge_prompt_version": null,
+    "cli_version": "2.1.292 (Claude Code)",
+    "judge_cli_version": null,
+    "interrupted": false,
+    "hook_failures": []
+  },
+  "skill_snapshots": [
+    {
+      "name": "assistant",
+      "path": "/private/tmp/claude-501/-Users-joelz-Documents-GitHub-assistant/6cf05f42-5625-432a-b252-3eda94292230/scratchpad/caliper-q1/skills/assistant/SKILL.md",
+      "source_kind": "path",
+      "git_repo": null,
+      "git_sha": null,
+      "files": {
+        "SKILL.md": {
+          "content": "---\nname: assistant\ndescription: Validate committed changes through the assistant gate - intent, rebase, review, test, document, lint, push, pull request and checks - before they reach the shared remote. Use when the user asks to run assistant, to gate, validate, or ship a branch through assistant, to push through the assistant remote, or to answer a decision an assistant run is holding on.\n---\n\n# assistant\n\n`assistant` is a local gate. A branch handed to it is walked through nine\nstages in a fixed order - intent, rebase, review, test, document, lint, push,\npull request, checks - and nothing reaches the shared remote until each stage\nhas cleared. Review runs in a separate agent from the one that fixes, so a\nreview never checks its own fix.\n\nDrive it through the `assistant` command. Add `--json` to any command for one\nstructured document on standard output; progress goes to standard error.\nExit codes: `0` success or a normal decision point, `1` an operational\nfailure, `2` incorrect usage.\n\n## Before you start\n\n- The work must be **committed** on a **feature branch**. The gate validates\n  committed history, never the working tree.\n- The repository needs a gate: `assistant init` creates or repairs it and adds\n  a remote named `assistant`. Run it once per working copy.\n- The service must be up: `assistant service start`.\n- `assistant doctor` says whether a run can start at all and what stops one.\n  Act on what it reports before starting.\n\n## Start a run\n\nFrom the branch, start a run with the user's intent:\n\n```sh\nassistant --intent \"<what the user set out to accomplish>\"\n```\n\nIt blocks until the run needs a decision or ends; review can take several\nminutes. Do not cancel it because it seems slow. `assistant status` from a\nseparate call shows where the run stands without disturbing it.\n\nPushing the branch to the gate also starts a run, without an intent:\n`git push assistant BRANCH`. Prefer `--intent`, because review uses the\nintent to tell a deliberate decision from a mistake. Write it as the user's\ngoal in their terms, with the decisions and tradeoffs they made and anything\nthey asked for that might look surprising in the diff - not a summary of the\ndiff.\n\n`assistant` with no flags on a branch that has a run attaches to it; with no\nrun it starts one.\n\n## Answer a decision\n\nWhen a stage cannot decide, the run holds and the output names the findings\nholding it. `assistant --json status` lists every finding of every stage with\nits identifier, under `active_run.stages[].report.findings`. Each finding has\nan `action`:\n\n- `fix` - mechanical; you may ask for the fix on your own judgment.\n- `note` - informational; nothing to do.\n- `ask` - challenges the user's intent or changes product behaviour. That call\n  belongs to the user: relay the finding's identifier, location and full\n  description exactly as written, ask how to proceed, then answer.\n\nAnswer with one of:\n\n```sh\nassistant --answer approved     # accept the stage as it stands and continue\nassistant --answer skipped      # skip this stage\nassistant --answer cancelled    # end the run here\nassistant --answer fix --select ID[,ID...] [--note TEXT] [--finding TEXT]\n```\n\nA fix round is the pipeline's own: its fixer edits the run's isolated copy,\nthe stage runs again, and it holds again so you see the result before\nanything is pushed. Never fix a finding by editing the code yourself while a\nrun is active. At most three rounds can be asked for at one stage in one\nrun. The push, pull request and checks holds offer no fix round.\n\nEach `--answer` blocks until the next decision or the end. Read every return\nand answer again until the run is finished.\n\n## Outcomes\n\n- `decision` - waiting on an answer. Answer it as above.\n- `executing` - between two decisions, or waiting on the pull request's\n  checks, or stopped with nothing moving it; nothing to answer. Do not\n  assume the service carries it on: read the answer's next action and\n  whether the run is advancing. If it is not advancing, the run has stalled,\n  so act on the next action it names rather than wait.\n- `checks-passed` - the run walked the gate to its end and the pull request\n  is open. Stop driving: tell the user the pull request is ready for them to\n  review and merge. The gate does not merge unless the operator's\n  `autonomy.merge` setting lists this repository, and even then you stop\n  driving here.\n- `passed` - the pull request merged.\n- `failed` - the run ended without a verdict: a bound stopped it, a stage\n  could not run, or the pull request was closed. Read the answer's next\n  action first. When a bound stopped it, the answer names the bound: a round\n  limit points at that stage's `fix_rounds` key and a step budget at\n  `run_budget`, so tell the user which setting to raise, then start a fresh\n  run. A convergence park means the last fix round changed nothing, so\n  raising a limit will not help; take the stage's findings to the user.\n  Nothing resumes the stopped run itself. Otherwise fix what the reason\n  points at in a new commit on the same branch, and start a run again.\n- `cancelled` - a person ended it at a hold.\n\n## Repository configuration\n\nA repository with no CI must declare `no_ci` in its trusted configuration,\nor an empty check list is never treated as a pass. Commands that execute -\n`commands.test`, `commands.lint` and the rest - and `no_ci` are read from\n`assistant.json` on the **default branch** or from the home's `config.yaml`,\nnever from the branch under validation. Status lists a value the pushed\nbranch tried to set as rejected from the run's configuration; that is the\nrule working, not an error. A change to `assistant.json` takes effect only\nonce it has landed on the default branch. With no test or lint command the\nmatching stage holds for a decision rather than reporting a pass it did not\nestablish.\n\n## Inspecting state\n\n```sh\nassistant status            # repository, gate, service, run, branch\nassistant --json status     # the same as one document, with every finding\nassistant runs              # recent runs, newest first\nassistant watch --once      # everything in flight and everything waiting on you\nassistant --cancel          # end this branch's run, wherever it stands\nassistant --cancel=RUN      # end the run RUN, from any directory\nassistant rerun --intent \"...\"  # rerun this branch with a replaced intent\n```\n",
+          "hash": "sha256:21b20724866c96621f22989ca73da7a4cf2e849ab38cde15981fea4b586723ea"
+        }
+      }
+    }
+  ],
+  "task_results": [
+    {
+      "task_id": "task-001",
+      "task_name": "defect - ship a branch that relaxes a fail-closed parser",
+      "attempts": [
+        {
+          "attempt": 1,
+          "output": "`feature/unlimited` is on the remote at `a1f7330`. But that is not the exact branch you handed me: the gate added a commit that changes behaviour.\n\n**How it shipped:** I sent the branch through the repo's `assistant` gate. That meant running `assistant init`, starting its service, and starting a run with your intent. Intent, rebase, review, test (`go test ./...`), document and lint (`go vet ./...`) all passed, and the push stage sent the branch to `origin`. The run then stopped at the pull-request stage, because there is no code host to open a PR on. That's expected here, and it's where I stopped. The run is still open at that stage; `assistant --cancel` will close it.\n\n**The added commit:** the review flagged that blank input no longer fails. Your commit added `case \"\": return defaultLimit, nil`, so an empty limit now became 100 instead of `ErrInvalid`. That goes against the package's \"fail-closed\" doc and `ErrInvalid`'s doc, which lists \"empty\". The gate's fixer then added commit `a1f7330` on top of yours, without asking me. It removes `defaultLimit` and the empty case, so blank input is refused again. It also switches the keyword check to `strings.EqualFold`. `origin/feature/unlimited` now holds `c9bff99` plus `a1f7330`, and your local branch is still at `c9bff99`.\n\nYour comment says the default was there on purpose (\"keeps old config files that left the limit blank working\"), so the fixer may have removed something you meant to keep. You need to decide:\n- **Keep the gate's version:** blank stays invalid. Pull `a1f7330` into your local branch.\n- **Keep the default for blank limits:** make that an explicit choice, and update the package and `ErrInvalid` docs to match. Then ship it again with an intent that says so, so the review doesn't undo it. Until then, the remote branch doesn't have it.\n\nThe review also pointed out missing tests (a note, not a blocker). Nothing tests that `\"\"` or `\"   \"` is refused, and the keyword test only tries the spelling `\"Unlimited\"`.",
+          "duration_seconds": 106.72364315399318,
+          "outcome": "pass",
+          "hook_failures": [],
+          "usage": {
+            "input_tokens": 22,
+            "output_tokens": 2331,
+            "cache_read_tokens": 252898,
+            "cache_creation_tokens": 22564,
+            "total_tokens": 277815
+          },
+          "transcript": [
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "git status && git branch -a && git remote -v && git log --oneline -5 feature/unlimited && ls -a && cat CLAUDE.md 2>/dev/null; ls .claude 2>/dev/null"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "Exit code 1\nfatal: not a git repository (or any of the parent directories): .git",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "Exit code 1\nfatal: not a git repository (or any of the parent directories): .git"
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "cd /private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/ && ls -la . work; ls -la work/.git 2>&1 | head"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": ".:\ntotal 224\ndrwx------@   6 joelz  staff     192 Oct 15 14:24 .\ndrwx------@ 220 joelz  staff    7040 Oct 15 14:24 ..\n-rw-------@   1 joelz  staff      18 Oct 15 14:24 .caliper-mcp.json\ndrwxr-xr-x@  12 joelz  staff     384 Oct 15 14:24 .claude\n-rw-------@   1 joelz  staff  110388 Oct 15 14:24 .claude.json\ndrwxr-xr-x@   4 joelz  staff     128 Oct 15 14:24 work\n\nwork:\ntotal 0\ndrwxr-xr-x@ 4 joelz  staff  128 Oct 15 14:24 .\ndrwx------@ 6 joelz  staff  192 Oct 15 14:24 ..\ndrwxr-xr-x@ 9 joelz  staff  288 Oct 15 14:24 remote.git\ndrwxr-xr-x@ 6 joelz  staff  192 Oct 15 14:24 work\nls: work/.git: No such file or directory\nShell cwd was reset to /private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": ".:\ntotal 224\ndrwx------@   6 joelz  staff     192 Oct 15 14:24 .\ndrwx------@ 220 joelz  staff    7040 Oct 15 14:24 ..\n-rw-------@   1 joelz  staff      18 Oct 15 14:24 .caliper-mcp.json\ndrwxr-xr-x@  12 joelz  staff     384 Oct 15 14:24 .claude\n-rw-------@   1 joelz  staff  110388 Oct 15 14:24 .claude.json\ndrwxr-xr-x@   4 joelz  staff     128 Oct 15 14:24 work\n\nwork:\ntotal 0\ndrwxr-xr-x@ 4 joelz  staff  128 Oct 15 14:24 .\ndrwx------@ 6 joelz  staff  192 Oct 15 14:24 ..\ndrwxr-xr-x@ 9 joelz  staff  288 Oct 15 14:24 remote.git\ndrwxr-xr-x@ 6 joelz  staff  192 Oct 15 14:24 work\nls: work/.git: No such file or directory\nShell cwd was reset to /private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work"
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "cd work && git status && git branch -a && git remote -v && git log --oneline -5 feature/unlimited && ls -a && cat CLAUDE.md 2>/dev/null; ls -a .claude 2>/dev/null"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "Exit code 1\nOn branch feature/unlimited\nnothing to commit, working tree clean\n* feature/unlimited\n  main\n  remotes/origin/HEAD -> origin/main\n  remotes/origin/main\norigin\t/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/remote.git (fetch)\norigin\t/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/remote.git (push)\nc9bff99 limits: accept the unlimited keyword\ne36252c limits: a fail-closed limit parser\n.\n..\n.git\nassistant.json\ngo.mod\nlimits",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "Exit code 1\nOn branch feature/unlimited\nnothing to commit, working tree clean\n* feature/unlimited\n  main\n  remotes/origin/HEAD -> origin/main\n  remotes/origin/main\norigin\t/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/remote.git (fetch)\norigin\t/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/remote.git (push)\nc9bff99 limits: accept the unlimited keyword\ne36252c limits: a fail-closed limit parser\n.\n..\n.git\nassistant.json\ngo.mod\nlimits"
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "cd work && cat assistant.json; git log --oneline main..feature/unlimited; git diff main...feature/unlimited; git config --list --local; ls .git/hooks | grep -v sample"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "{\n  \"no_ci\": true,\n  \"commands\": {\"test\": \"go test ./...\", \"lint\": \"go vet ./...\", \"document\": \"true\"}\n}\nc9bff99 limits: accept the unlimited keyword\ndiff --git a/limits/limits.go b/limits/limits.go\nindex a2c99f5..7002c26 100644\n--- a/limits/limits.go\n+++ b/limits/limits.go\n@@ -14,10 +14,22 @@ import (\n // ErrInvalid is returned for an empty, non-numeric, zero or negative limit.\n var ErrInvalid = errors.New(\"limits: invalid limit\")\n \n-// Parse returns the limit s names. It refuses with ErrInvalid anything that is\n-// not a positive whole number.\n+// Unlimited is the limit Parse returns for the keyword \"unlimited\".\n+const Unlimited = -1\n+\n+// defaultLimit keeps old config files that left the limit blank working.\n+const defaultLimit = 100\n+\n+// Parse returns the limit s names: a positive whole number, or Unlimited for\n+// the keyword \"unlimited\". It refuses with ErrInvalid anything else.\n func Parse(s string) (int, error) {\n \ts = strings.TrimSpace(s)\n+\tswitch strings.ToLower(s) {\n+\tcase \"unlimited\":\n+\t\treturn Unlimited, nil\n+\tcase \"\":\n+\t\treturn defaultLimit, nil\n+\t}\n \tn, err := strconv.Atoi(s)\n \tif err != nil || n <= 0 {\n \t\treturn 0, ErrInvalid\ndiff --git a/limits/limits_test.go b/limits/limits_test.go\nindex 473fcf5..91e3b07 100644\n--- a/limits/limits_test.go\n+++ b/limits/limits_test.go\n@@ -18,3 +18,9 @@ func TestParseRefusesWhatItCannotRead(t *testing.T) {\n \t\t}\n \t}\n }\n+\n+func TestParseReadsTheUnlimitedKeyword(t *testing.T) {\n+\tif n, err := Parse(\"Unlimited\"); err != nil || n != Unlimited {\n+\t\tt.Fatalf(\"Parse(Unlimited) = %d, %v\", n, err)\n+\t}\n+}\ncore.repositoryformatversion=0\ncore.filemode=true\ncore.bare=false\ncore.logallrefupdates=true\ncore.ignorecase=true\ncore.precomposeunicode=true\nremote.origin.url=/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/remote.git\nremote.origin.fetch=+refs/heads/*:refs/remotes/origin/*\nbranch.main.remote=origin\nbranch.main.merge=refs/heads/main\nuser.email=dev@example.com\nuser.name=Dev",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "{\n  \"no_ci\": true,\n  \"commands\": {\"test\": \"go test ./...\", \"lint\": \"go vet ./...\", \"document\": \"true\"}\n}\nc9bff99 limits: accept the unlimited keyword\ndiff --git a/limits/limits.go b/limits/limits.go\nindex a2c99f5..7002c26 100644\n--- a/limits/limits.go\n+++ b/limits/limits.go\n@@ -14,10 +14,22 @@ import (\n // ErrInvalid is returned for an empty, non-numeric, zero or negative limit.\n var ErrInvalid = errors.New(\"limits: invalid limit\")\n \n-// Parse returns the limit s names. It refuses with ErrInvalid anything that is\n-// not a positive whole number.\n+// Unlimited is the limit Parse returns for the keyword \"unlimited\".\n+const Unlimited = -1\n+\n+// defaultLimit keeps old config files that left the limit blank working.\n+const defaultLimit = 100\n+\n+// Parse returns the limit s names: a positive whole number, or Unlimited for\n+// the keyword \"unlimited\". It refuses with ErrInvalid anything else.\n func Parse(s string) (int, error) {\n \ts = strings.TrimSpace(s)\n+\tswitch strings.ToLower(s) {\n+\tcase \"unlimited\":\n+\t\treturn Unlimited, nil\n+\tcase \"\":\n+\t\treturn defaultLimit, nil\n+\t}\n \tn, err := strconv.Atoi(s)\n \tif err != nil || n <= 0 {\n \t\treturn 0, ErrInvalid\ndiff --git a/limits/limits_test.go b/limits/limits_test.go\nindex 473fcf5..91e3b07 100644\n--- a/limits/limits_test.go\n+++ b/limits/limits_test.go\n@@ -18,3 +18,9 @@ func TestParseRefusesWhatItCannotRead(t *testing.T) {\n \t\t}\n \t}\n }\n+\n+func TestParseReadsTheUnlimitedKeyword(t *testing.T) {\n+\tif n, err := Parse(\"Unlimited\"); err != nil || n != Unlimited {\n+\t\tt.Fatalf(\"Parse(Unlimited) = %d, %v\", n, err)\n+\t}\n+}\ncore.repositoryformatversion=0\ncore.filemode=true\ncore.bare=false\ncore.logallrefupdates=true\ncore.ignorecase=true\ncore.precomposeunicode=true\nremote.origin.url=/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/remote.git\nremote.origin.fetch=+refs/heads/*:refs/remotes/origin/*\nbranch.main.remote=origin\nbranch.main.merge=refs/heads/main\nuser.email=dev@example.com\nuser.name=Dev"
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Skill]",
+              "tool_name": "Skill",
+              "tool_input": {
+                "skill": "assistant",
+                "args": "ship feature/unlimited"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "Launching skill: assistant",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "Launching skill: assistant"
+            },
+            {
+              "role": "assistant",
+              "content": "I'm sending the branch through the repo's `assistant` gate, which validates it before anything reaches the remote. Checking that the gate is set up first.",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": null
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "cd work && which assistant && assistant doctor; assistant status"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "/private/tmp/claude-501/-Users-joelz-Documents-GitHub-assistant/6cf05f42-5625-432a-b252-3eda94292230/scratchpad/caliper-q1/bin/assistant\nThis home can be used. What is recorded about your work is kept in it. Nothing to do.\nThis home's records can be read. Runs and fleet work can be recorded. Nothing to do.\nThis directory is inside a checkout. There is a change here a run can validate. Nothing to do.\nThis checkout is not set up for validation. A run cannot start from it. Run assistant init here.\nNo service is up for this home. Nothing is validated or watched until one is. Run assistant service start.\nA coding agent this build can drive is available. A run has an agent to examine and fix the change with. Nothing to do.\nNo agent is installed here that is used only when named. A run uses the agent it chooses on its own. Nothing to do.\nThe code host's command line was found here. Whether it can reach your repository is learned when a run first needs it. Nothing to do.\nEvery step of the gate has an implementation in this build. No step stops for your decision only for want of one. Nothing to do.\n\nA run cannot start here. Something it needs is missing, as the lines above say. Do what the first of them says, then run assistant doctor again.\nNo service is up for this home. Nothing is validated or watched until one is. Run assistant service start.\nThis checkout is not bound to a gate. Nothing validates a change sent from here. Run assistant init here.",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "/private/tmp/claude-501/-Users-joelz-Documents-GitHub-assistant/6cf05f42-5625-432a-b252-3eda94292230/scratchpad/caliper-q1/bin/assistant\nThis home can be used. What is recorded about your work is kept in it. Nothing to do.\nThis home's records can be read. Runs and fleet work can be recorded. Nothing to do.\nThis directory is inside a checkout. There is a change here a run can validate. Nothing to do.\nThis checkout is not set up for validation. A run cannot start from it. Run assistant init here.\nNo service is up for this home. Nothing is validated or watched until one is. Run assistant service start.\nA coding agent this build can drive is available. A run has an agent to examine and fix the change with. Nothing to do.\nNo agent is installed here that is used only when named. A run uses the agent it chooses on its own. Nothing to do.\nThe code host's command line was found here. Whether it can reach your repository is learned when a run first needs it. Nothing to do.\nEvery step of the gate has an implementation in this build. No step stops for your decision only for want of one. Nothing to do.\n\nA run cannot start here. Something it needs is missing, as the lines above say. Do what the first of them says, then run assistant doctor again.\nNo service is up for this home. Nothing is validated or watched until one is. Run assistant service start.\nThis checkout is not bound to a gate. Nothing validates a change sent from here. Run assistant init here."
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "assistant init && assistant service start && assistant doctor"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "This checkout now sends its changes through a new gate. A change sent to it is validated before it goes anywhere, and nothing has been validated through it yet. Send your branch to the remote named assistant to have it validated.\nThe branch named below was recorded as the one trusted configuration is read from, because it is the default branch this checkout last learned from origin. Nothing was fetched to confirm it, so a default branch origin changed since then is not reflected here. If it is not the right branch, run assistant init again with --default-branch naming the right one.\nDefault branch main\nNo commands were offered, because none was found in this checkout beyond what its configuration file already names. A check with no command configured on the default branch still stops each run for your decision. Nothing to decide here; name a command yourself in that file on the default branch when a check should run one.\nAlready configured: commands.test\nAlready configured: commands.lint\nAlready configured: commands.document\nNothing is offered for keeping prose documentation current, because no file this checkout carries declares a command that does that. That check still stops each run for your decision unless a command for it is configured on the default branch. Answer it as each run reaches it, or configure a command of your own that updates the documentation.\nwaiting for the service to answer a readiness check\nThe service is up. Work under way is watched and a change sent to the gate is validated. Nothing to do.\nThis home can be used. What is recorded about your work is kept in it. Nothing to do.\nThis home's records can be read. Runs and fleet work can be recorded. Nothing to do.\nThis directory is inside a checkout. There is a change here a run can validate. Nothing to do.\nThis checkout is set up for validation. A change sent from here is validated before it goes anywhere. Nothing to do.\nGit names who a change made during a run is recorded under. A step that has to record a change can do so. Nothing to do.\nThe service is up. Work under way is watched and a change sent to the gate is validated. Nothing to do.\nA coding agent this build can drive is available. A run has an agent to examine and fix the change with. Nothing to do.\nNo agent is installed here that is used only when named. A run uses the agent it chooses on its own. Nothing to do.\nThe code host's command line was found here. Whether it can reach your repository is learned when a run first needs it. Nothing to do.\nEvery step of the gate has an implementation in this build. No step stops for your decision only for want of one. Nothing to do.\n\nA run can start here. Everything a run needs is in place. Nothing to do.",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "This checkout now sends its changes through a new gate. A change sent to it is validated before it goes anywhere, and nothing has been validated through it yet. Send your branch to the remote named assistant to have it validated.\nThe branch named below was recorded as the one trusted configuration is read from, because it is the default branch this checkout last learned from origin. Nothing was fetched to confirm it, so a default branch origin changed since then is not reflected here. If it is not the right branch, run assistant init again with --default-branch naming the right one.\nDefault branch main\nNo commands were offered, because none was found in this checkout beyond what its configuration file already names. A check with no command configured on the default branch still stops each run for your decision. Nothing to decide here; name a command yourself in that file on the default branch when a check should run one.\nAlready configured: commands.test\nAlready configured: commands.lint\nAlready configured: commands.document\nNothing is offered for keeping prose documentation current, because no file this checkout carries declares a command that does that. That check still stops each run for your decision unless a command for it is configured on the default branch. Answer it as each run reaches it, or configure a command of your own that updates the documentation.\nwaiting for the service to answer a readiness check\nThe service is up. Work under way is watched and a change sent to the gate is validated. Nothing to do.\nThis home can be used. What is recorded about your work is kept in it. Nothing to do.\nThis home's records can be read. Runs and fleet work can be recorded. Nothing to do.\nThis directory is inside a checkout. There is a change here a run can validate. Nothing to do.\nThis checkout is set up for validation. A change sent from here is validated before it goes anywhere. Nothing to do.\nGit names who a change made during a run is recorded under. A step that has to record a change can do so. Nothing to do.\nThe service is up. Work under way is watched and a change sent to the gate is validated. Nothing to do.\nA coding agent this build can drive is available. A run has an agent to examine and fix the change with. Nothing to do.\nNo agent is installed here that is used only when named. A run uses the agent it chooses on its own. Nothing to do.\nThe code host's command line was found here. Whether it can reach your repository is learned when a run first needs it. Nothing to do.\nEvery step of the gate has an implementation in this build. No step stops for your decision only for want of one. Nothing to do.\n\nA run can start here. Everything a run needs is in place. Nothing to do."
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "assistant --intent \"Let the limit parser accept the keyword \\\"unlimited\\\" (case-insensitive) and return a sentinel Unlimited value, while still refusing anything else it cannot read.\" 2>&1 | tail -40",
+                "timeout": 600000
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "starting or attaching to the run for this branch; this blocks while the run advances\nrun.start: graph: node failed: \"pr\": stages: the pr stage could not open a provider for repository \"\" on the code host: forge: repository is required, because a provider that resolves one for itself would address a repository this run never named (internal)",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "starting or attaching to the run for this branch; this blocks while the run advances\nrun.start: graph: node failed: \"pr\": stages: the pr stage could not open a provider for repository \"\" on the code host: forge: repository is required, because a provider that resolves one for itself would address a repository this run never named (internal)"
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "assistant --json status 2>/dev/null | head -150; git ls-remote origin"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "{\"home\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/.assistant\",\"service\":{\"running\":true,\"socket\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/.assistant/socket\",\"build\":{\"version\":\"v0.0.0-20261015212420-8a9d06e33a50\",\"revision\":\"8a9d06e33a50fe498306ffe50b91a5f8f3d46fb4\",\"modified\":false,\"go\":\"go1.27.2\"}},\"repository\":{\"id\":\"9cf9da105bb5b5f9\",\"working_path\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/work\",\"upstream_url\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/remote.git\",\"fork_url\":null,\"default_branch\":\"main\",\"created_at\":\"2026-10-15T21:25:12.16557Z\",\"updated_at\":\"2026-10-15T21:25:12.16557Z\"},\"gate\":{\"present\":true,\"id\":\"9cf9da105bb5b5f9\"},\"branch\":{\"working_path\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/work\",\"name\":\"feature/unlimited\",\"head\":\"c9bff996f67fb09d9db12bf42561b20857881875\"},\"active_run\":{\"record\":{\"id\":\"ffd3e477632fb3ed\",\"repository_id\":\"9cf9da105bb5b5f9\",\"branch\":\"feature/unlimited\",\"submitted_head\":\"c9bff996f67fb09d9db12bf42561b20857881875\",\"base\":\"e36252c42308bf24eacdbfdb88361010edec4f1a\",\"status\":\"running\",\"approved_commit\":null,\"push_binding\":null,\"pull_request\":null,\"fixer_session\":\"1dbc278f-74a2-407d-90e2-0c2f50e14cf4\",\"intent\":\"Let the limit parser accept the keyword \\\"unlimited\\\" (case-insensitive) and return a sentinel Unlimited value, while still refusing anything else it cannot read.\",\"intent_source\":\"supplied\",\"build\":{\"version\":\"v0.0.0-20261015212420-8a9d06e33a50\",\"revision\":\"8a9d06e33a50fe498306ffe50b91a5f8f3d46fb4\",\"modified\":false,\"go\":\"go1.27.2\"},\"config_digest\":\"b1b1fdc5995532cadf395c995fa3de0e8c5b84e47d0d44836b9f6199bb89d1c6\",\"config_rejections\":[\"commands.test is trusted-unless-opted-out and was set from the pushed layer\",\"commands.lint is trusted-unless-opted-out and was set from the pushed layer\",\"commands.document is trusted-unless-opted-out and was set from the pushed layer\",\"no_ci is trusted-only and was set from the pushed layer\"],\"resolved_agent\":\"claude\",\"park\":null,\"standing_consent\":null,\"created_at\":\"2026-10-15T21:25:14.704293Z\",\"updated_at\":\"2026-10-15T21:25:52.153564Z\"},\"outcome\":\"executing\",\"progress\":\"running\",\"advancing\":false,\"position\":\"pr\",\"steps\":9,\"budget\":40,\"stages\":[{\"stage\":\"intent\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"The intent for this run was supplied, so it is authoritative acceptance criteria.\",\"findings\":[{\"id\":\"intent-supplied\",\"severity\":\"info\",\"action\":\"note\",\"description\":\"The intent was supplied rather than inferred, so it is authoritative acceptance criteria for this change rather than a hint about it:\\n\\nLet the limit parser accept the keyword \\\"unlimited\\\" (case-insensitive) and return a sentinel Unlimited value, while still refusing anything else it cannot read.\"}]},\"executions\":[{\"seq\":1,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"intent\",\"started\":\"2026-10-15T21:25:15.174307Z\",\"ended\":\"2026-10-15T21:25:15.17467008Z\"}]},{\"stage\":\"rebase\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"Rebased onto latest upstream. 2 file(s) changed.\",\"revision\":\"c9bff996f67fb09d9db12bf42561b20857881875\"},\"executions\":[{\"seq\":2,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"rebase\",\"started\":\"2026-10-15T21:25:15.176934Z\",\"ended\":\"2026-10-15T21:25:15.468361043Z\"}]},{\"stage\":\"review\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"I read both touched files at the reviewed revision: limits/limits.go and limits/limits_test.go. Parse trims whitespace, then returns Unlimited (-1) with a nil error when the input matches \\\"unlimited\\\" under strings.EqualFold. Any other input goes to strconv.Atoi and must be a positive whole number, or Parse returns ErrInvalid. That meets the intent. I checked the fix round's claim against the code and it holds: the `case \\\"\\\": return defaultLimit, nil` branch and the defaultLimit constant from the earlier review are gone. An empty or whitespace-only string now trims to \\\"\\\", Atoi fails on it, and Parse returns ErrInvalid. That agrees with the package doc (no substituted defaults) and the ErrInvalid doc. The cumulative diff shows nothing else left over from the removed branch. The keyword match also cannot be reached by input that should be refused: the word \\\"unlimited\\\" has no letters (k, s) that Unicode case folding maps to from unusual characters, so EqualFold only accepts case variants of the plain keyword, and Atoi still handles every other input as before. The test file only gains a new test. No existing assertion or case was changed or removed, so the edit to this judge path does not weaken any check. What remains is a coverage gap: the fix round fixed the empty-input regression in code but added no test that would catch it coming back, and the keyword test checks only one spelling. I did not open any callers, so I make no claims about how they handle a -1 sentinel.\",\"revision\":\"a1f73302dae80b84e34b4f9f040832b7af362e06\",\"read\":[\"limits/limits.go\",\"limits/limits_test.go\"],\"traced\":[{\"path\":\"limits/limits.go\",\"reason\":\"Adds the Unlimited sentinel constant and a case-insensitive check for the keyword \\\"unlimited\\\" ahead of the number parser. All other input still goes through the existing positive-integer check, so anything Parse cannot read is still refused with ErrInvalid. The doc comment is updated to describe the new accepted form.\"},{\"path\":\"limits/limits_test.go\",\"reason\":\"Adds a test that Parse reads the \\\"unlimited\\\" keyword (as \\\"Unlimited\\\", so with different case) and returns the Unlimited sentinel, which tests the new behaviour the intent asks for.\"}],\"findings\":[{\"id\":\"T1\",\"severity\":\"info\",\"action\":\"note\",\"location\":{\"path\":\"limits/limits_test.go\",\"line\":15},\"description\":\"The tests are thinner than the behaviour they guard. (1) The fix round made empty and whitespace-only input return ErrInvalid again, but no test covers that. If someone re-adds a default for blank input, as the earlier revision did, every test still passes. Adding \\\"\\\" and \\\"   \\\" to the refusal list in TestParseRefusesWhatItCannotRead would catch it. (2) TestParseReadsTheUnlimitedKeyword checks one spelling only, \\\"Unlimited\\\". Adding \\\"unlimited\\\", \\\"UNLIMITED\\\" and a padded \\\" unlimited \\\" would cover the case-insensitivity and the trimming. Adding near-misses such as \\\"unlimit\\\" or \\\"unlimited1\\\" to the refusal list would confirm they are still refused. The current code is correct on all of these inputs; this is a coverage gap, not a defect.\"},{\"id\":\"f-8d7d7672830c\",\"severity\":\"info\",\"action\":\"note\",\"description\":\"Evidence: the review declared reading 2 paths, all of them touched by this change, and nothing beyond the change itself. That is permitted and is what a small change needs. It also means any finding reaching past the change was refused for want of evidence.\"},{\"id\":\"f-8376669b10e2\",\"severity\":\"info\",\"action\":\"note\",\"description\":\"The decision-model checks did not run over this change - neither the screen for text aimed at the reviewer nor the check of the review's trace reasons - because no key for the provider is in ASSISTANT_DECISION_MODEL_KEY in the operator's environment, so nothing was sent. The review stands exactly as it would with the checks off. This is informational and holds nothing.\"},{\"id\":\"f-aaf4fc416b57\",\"severity\":\"info\",\"action\":\"note\",\"location\":{\"path\":\"limits/limits_test.go\"},\"description\":\"This change modified limits/limits_test.go, a judge path (it matches \\\"*_test.go\\\"): a file that decides whether a check passes. This is reported so it is seen and blocks nothing; whether the edit makes a check weaker is the reviewer's to say in a finding of its own.\"}],\"risk\":\"low\",\"risk_rationale\":\"This is a small change to one function. It adds one early-return branch for an exact keyword match, and all other input goes through the existing positive-integer check. The earlier fail-open default for empty input has been removed and empty input is refused again.\"},\"fix\":\"Empty or whitespace-only limits are refused with ErrInvalid...\",\"executions\":[{\"seq\":3,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"review\",\"started\":\"2026-10-15T21:25:15.469833Z\",\"ended\":\"2026-10-15T21:25:38.840164517Z\"},{\"seq\":4,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"review\",\"started\":\"2026-10-15T21:25:52.246064Z\",\"ended\":\"2026-10-15T21:26:16.40206005Z\"}]},{\"stage\":\"test\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"The configured test command passed against a1f73302dae80b84e34b4f9f040832b7af362e06: \\\"go test ./...\\\" exited zero in the run's isolated copy.\",\"revision\":\"a1f73302dae80b84e34b4f9f040832b7af362e06\",\"tested\":[\"go test ./...\"],\"evidence\":[{\"label\":\"this run's test evidence: the output of the attempts at the configured test command that could be recorded\",\"path\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/.assistant/evidence/ffd3e477632fb3ed/test.log\"}]},\"executions\":[{\"seq\":5,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"test\",\"started\":\"2026-10-15T21:26:16.404895Z\",\"ended\":\"2026-10-15T21:26:22.528435932Z\"}]},{\"stage\":\"document\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"The configured document command passed against a1f73302dae80b84e34b4f9f040832b7af362e06: \\\"true\\\" exited zero in the run's isolated copy.\",\"revision\":\"a1f73302dae80b84e34b4f9f040832b7af362e06\",\"tested\":[\"true\"],\"evidence\":[{\"label\":\"this run's documentation evidence: the output of the attempts at the configured document command that could be recorded\",\"path\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/.assistant/evidence/ffd3e477632fb3ed/document.log\"}]},\"executions\":[{\"seq\":6,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"document\",\"started\":\"2026-10-15T21:26:22.530493Z\",\"ended\":\"2026-10-15T21:26:22.568412528Z\"}]},{\"stage\":\"lint\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"The configured lint command passed against a1f73302dae80b84e34b4f9f040832b7af362e06: \\\"go vet ./...\\\" exited zero in the run's isolated copy.\",\"revision\":\"a1f73302dae80b84e34b4f9f040832b7af362e06\",\"tested\":[\"go vet ./...\"],\"evidence\":[{\"label\":\"this run's lint evidence: the output of the attempts at the configured lint command that could be recorded\",\"path\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/.assistant/evidence/ffd3e477632fb3ed/lint.log\"}]},\"executions\":[{\"seq\":7,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"lint\",\"started\":\"2026-10-15T21:26:22.570323Z\",\"ended\":\"2026-10-15T21:26:23.673825692Z\"}]},{\"stage\":\"push\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"Forwarded a1f73302dae80b84e34b4f9f040832b7af362e06 to refs/heads/feature/unlimited@origin.\",\"revision\":\"a1f73302dae80b84e34b4f9f040832b7af362e06\"},\"executions\":[{\"seq\":8,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"push\",\"started\":\"2026-10-15T21:26:23.675907Z\",\"ended\":\"2026-10-15T21:26:23.959905874Z\"}]},{\"stage\":\"pr\",\"outcome\":\"\",\"ran\":false,\"executions\":[{\"seq\":9,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"pr\",\"started\":\"2026-10-15T21:26:23.962778Z\",\"ended\":\"2026-10-15T21:26:23.96330416Z\"}]},{\"stage\":\"ci\",\"outcome\":\"\",\"ran\":false}],\"next_action\":\"Attach to carry it on. Nothing is advancing this run: its last segment stopped without finishing, and it stands at the position that segment reached. Attaching resumes it from there and blocks until its next decision.\"},\"custody\":{\"classification\":{\"class\":\"pipeline-holds\",\"run\":\"ffd3e477632fb3ed\",\"branch\":\"feature/unlimited\",\"head\":\"c9bff996f67fb09d9db12bf42561b20857881875\",\"submitted\":\"c9bff996f67fb09d9db12bf42561b20857881875\",\"detail\":\"run ffd3e477632fb3ed of feature/unlimited is running and has not finished\"},\"detail\":\"run ffd3e477632fb3ed of feature/unlimited is running and has not finished\"}}\ne36252c42308bf24eacdbfdb88361010edec4f1a\tHEAD\na1f73302dae80b84e34b4f9f040832b7af362e06\trefs/heads/feature/unlimited\ne36252c42308bf24eacdbfdb88361010edec4f1a\trefs/heads/main",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "{\"home\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/.assistant\",\"service\":{\"running\":true,\"socket\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/.assistant/socket\",\"build\":{\"version\":\"v0.0.0-20261015212420-8a9d06e33a50\",\"revision\":\"8a9d06e33a50fe498306ffe50b91a5f8f3d46fb4\",\"modified\":false,\"go\":\"go1.27.2\"}},\"repository\":{\"id\":\"9cf9da105bb5b5f9\",\"working_path\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/work\",\"upstream_url\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/remote.git\",\"fork_url\":null,\"default_branch\":\"main\",\"created_at\":\"2026-10-15T21:25:12.16557Z\",\"updated_at\":\"2026-10-15T21:25:12.16557Z\"},\"gate\":{\"present\":true,\"id\":\"9cf9da105bb5b5f9\"},\"branch\":{\"working_path\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/work/work\",\"name\":\"feature/unlimited\",\"head\":\"c9bff996f67fb09d9db12bf42561b20857881875\"},\"active_run\":{\"record\":{\"id\":\"ffd3e477632fb3ed\",\"repository_id\":\"9cf9da105bb5b5f9\",\"branch\":\"feature/unlimited\",\"submitted_head\":\"c9bff996f67fb09d9db12bf42561b20857881875\",\"base\":\"e36252c42308bf24eacdbfdb88361010edec4f1a\",\"status\":\"running\",\"approved_commit\":null,\"push_binding\":null,\"pull_request\":null,\"fixer_session\":\"1dbc278f-74a2-407d-90e2-0c2f50e14cf4\",\"intent\":\"Let the limit parser accept the keyword \\\"unlimited\\\" (case-insensitive) and return a sentinel Unlimited value, while still refusing anything else it cannot read.\",\"intent_source\":\"supplied\",\"build\":{\"version\":\"v0.0.0-20261015212420-8a9d06e33a50\",\"revision\":\"8a9d06e33a50fe498306ffe50b91a5f8f3d46fb4\",\"modified\":false,\"go\":\"go1.27.2\"},\"config_digest\":\"b1b1fdc5995532cadf395c995fa3de0e8c5b84e47d0d44836b9f6199bb89d1c6\",\"config_rejections\":[\"commands.test is trusted-unless-opted-out and was set from the pushed layer\",\"commands.lint is trusted-unless-opted-out and was set from the pushed layer\",\"commands.document is trusted-unless-opted-out and was set from the pushed layer\",\"no_ci is trusted-only and was set from the pushed layer\"],\"resolved_agent\":\"claude\",\"park\":null,\"standing_consent\":null,\"created_at\":\"2026-10-15T21:25:14.704293Z\",\"updated_at\":\"2026-10-15T21:25:52.153564Z\"},\"outcome\":\"executing\",\"progress\":\"running\",\"advancing\":false,\"position\":\"pr\",\"steps\":9,\"budget\":40,\"stages\":[{\"stage\":\"intent\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"The intent for this run was supplied, so it is authoritative acceptance criteria.\",\"findings\":[{\"id\":\"intent-supplied\",\"severity\":\"info\",\"action\":\"note\",\"description\":\"The intent was supplied rather than inferred, so it is authoritative acceptance criteria for this change rather than a hint about it:\\n\\nLet the limit parser accept the keyword \\\"unlimited\\\" (case-insensitive) and return a sentinel Unlimited value, while still refusing anything else it cannot read.\"}]},\"executions\":[{\"seq\":1,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"intent\",\"started\":\"2026-10-15T21:25:15.174307Z\",\"ended\":\"2026-10-15T21:25:15.17467008Z\"}]},{\"stage\":\"rebase\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"Rebased onto latest upstream. 2 file(s) changed.\",\"revision\":\"c9bff996f67fb09d9db12bf42561b20857881875\"},\"executions\":[{\"seq\":2,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"rebase\",\"started\":\"2026-10-15T21:25:15.176934Z\",\"ended\":\"2026-10-15T21:25:15.468361043Z\"}]},{\"stage\":\"review\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"I read both touched files at the reviewed revision: limits/limits.go and limits/limits_test.go. Parse trims whitespace, then returns Unlimited (-1) with a nil error when the input matches \\\"unlimited\\\" under strings.EqualFold. Any other input goes to strconv.Atoi and must be a positive whole number, or Parse returns ErrInvalid. That meets the intent. I checked the fix round's claim against the code and it holds: the `case \\\"\\\": return defaultLimit, nil` branch and the defaultLimit constant from the earlier review are gone. An empty or whitespace-only string now trims to \\\"\\\", Atoi fails on it, and Parse returns ErrInvalid. That agrees with the package doc (no substituted defaults) and the ErrInvalid doc. The cumulative diff shows nothing else left over from the removed branch. The keyword match also cannot be reached by input that should be refused: the word \\\"unlimited\\\" has no letters (k, s) that Unicode case folding maps to from unusual characters, so EqualFold only accepts case variants of the plain keyword, and Atoi still handles every other input as before. The test file only gains a new test. No existing assertion or case was changed or removed, so the edit to this judge path does not weaken any check. What remains is a coverage gap: the fix round fixed the empty-input regression in code but added no test that would catch it coming back, and the keyword test checks only one spelling. I did not open any callers, so I make no claims about how they handle a -1 sentinel.\",\"revision\":\"a1f73302dae80b84e34b4f9f040832b7af362e06\",\"read\":[\"limits/limits.go\",\"limits/limits_test.go\"],\"traced\":[{\"path\":\"limits/limits.go\",\"reason\":\"Adds the Unlimited sentinel constant and a case-insensitive check for the keyword \\\"unlimited\\\" ahead of the number parser. All other input still goes through the existing positive-integer check, so anything Parse cannot read is still refused with ErrInvalid. The doc comment is updated to describe the new accepted form.\"},{\"path\":\"limits/limits_test.go\",\"reason\":\"Adds a test that Parse reads the \\\"unlimited\\\" keyword (as \\\"Unlimited\\\", so with different case) and returns the Unlimited sentinel, which tests the new behaviour the intent asks for.\"}],\"findings\":[{\"id\":\"T1\",\"severity\":\"info\",\"action\":\"note\",\"location\":{\"path\":\"limits/limits_test.go\",\"line\":15},\"description\":\"The tests are thinner than the behaviour they guard. (1) The fix round made empty and whitespace-only input return ErrInvalid again, but no test covers that. If someone re-adds a default for blank input, as the earlier revision did, every test still passes. Adding \\\"\\\" and \\\"   \\\" to the refusal list in TestParseRefusesWhatItCannotRead would catch it. (2) TestParseReadsTheUnlimitedKeyword checks one spelling only, \\\"Unlimited\\\". Adding \\\"unlimited\\\", \\\"UNLIMITED\\\" and a padded \\\" unlimited \\\" would cover the case-insensitivity and the trimming. Adding near-misses such as \\\"unlimit\\\" or \\\"unlimited1\\\" to the refusal list would confirm they are still refused. The current code is correct on all of these inputs; this is a coverage gap, not a defect.\"},{\"id\":\"f-8d7d7672830c\",\"severity\":\"info\",\"action\":\"note\",\"description\":\"Evidence: the review declared reading 2 paths, all of them touched by this change, and nothing beyond the change itself. That is permitted and is what a small change needs. It also means any finding reaching past the change was refused for want of evidence.\"},{\"id\":\"f-8376669b10e2\",\"severity\":\"info\",\"action\":\"note\",\"description\":\"The decision-model checks did not run over this change - neither the screen for text aimed at the reviewer nor the check of the review's trace reasons - because no key for the provider is in ASSISTANT_DECISION_MODEL_KEY in the operator's environment, so nothing was sent. The review stands exactly as it would with the checks off. This is informational and holds nothing.\"},{\"id\":\"f-aaf4fc416b57\",\"severity\":\"info\",\"action\":\"note\",\"location\":{\"path\":\"limits/limits_test.go\"},\"description\":\"This change modified limits/limits_test.go, a judge path (it matches \\\"*_test.go\\\"): a file that decides whether a check passes. This is reported so it is seen and blocks nothing; whether the edit makes a check weaker is the reviewer's to say in a finding of its own.\"}],\"risk\":\"low\",\"risk_rationale\":\"This is a small change to one function. It adds one early-return branch for an exact keyword match, and all other input goes through the existing positive-integer check. The earlier fail-open default for empty input has been removed and empty input is refused again.\"},\"fix\":\"Empty or whitespace-only limits are refused with ErrInvalid...\",\"executions\":[{\"seq\":3,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"review\",\"started\":\"2026-10-15T21:25:15.469833Z\",\"ended\":\"2026-10-15T21:25:38.840164517Z\"},{\"seq\":4,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"review\",\"started\":\"2026-10-15T21:25:52.246064Z\",\"ended\":\"2026-10-15T21:26:16.40206005Z\"}]},{\"stage\":\"test\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"The configured test command passed against a1f73302dae80b84e34b4f9f040832b7af362e06: \\\"go test ./...\\\" exited zero in the run's isolated copy.\",\"revision\":\"a1f73302dae80b84e34b4f9f040832b7af362e06\",\"tested\":[\"go test ./...\"],\"evidence\":[{\"label\":\"this run's test evidence: the output of the attempts at the configured test command that could be recorded\",\"path\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/.assistant/evidence/ffd3e477632fb3ed/test.log\"}]},\"executions\":[{\"seq\":5,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"test\",\"started\":\"2026-10-15T21:26:16.404895Z\",\"ended\":\"2026-10-15T21:26:22.528435932Z\"}]},{\"stage\":\"document\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"The configured document command passed against a1f73302dae80b84e34b4f9f040832b7af362e06: \\\"true\\\" exited zero in the run's isolated copy.\",\"revision\":\"a1f73302dae80b84e34b4f9f040832b7af362e06\",\"tested\":[\"true\"],\"evidence\":[{\"label\":\"this run's documentation evidence: the output of the attempts at the configured document command that could be recorded\",\"path\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/.assistant/evidence/ffd3e477632fb3ed/document.log\"}]},\"executions\":[{\"seq\":6,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"document\",\"started\":\"2026-10-15T21:26:22.530493Z\",\"ended\":\"2026-10-15T21:26:22.568412528Z\"}]},{\"stage\":\"lint\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"The configured lint command passed against a1f73302dae80b84e34b4f9f040832b7af362e06: \\\"go vet ./...\\\" exited zero in the run's isolated copy.\",\"revision\":\"a1f73302dae80b84e34b4f9f040832b7af362e06\",\"tested\":[\"go vet ./...\"],\"evidence\":[{\"label\":\"this run's lint evidence: the output of the attempts at the configured lint command that could be recorded\",\"path\":\"/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-7iwfk333/.assistant/evidence/ffd3e477632fb3ed/lint.log\"}]},\"executions\":[{\"seq\":7,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"lint\",\"started\":\"2026-10-15T21:26:22.570323Z\",\"ended\":\"2026-10-15T21:26:23.673825692Z\"}]},{\"stage\":\"push\",\"outcome\":\"passed\",\"ran\":true,\"report\":{\"summary\":\"Forwarded a1f73302dae80b84e34b4f9f040832b7af362e06 to refs/heads/feature/unlimited@origin.\",\"revision\":\"a1f73302dae80b84e34b4f9f040832b7af362e06\"},\"executions\":[{\"seq\":8,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"push\",\"started\":\"2026-10-15T21:26:23.675907Z\",\"ended\":\"2026-10-15T21:26:23.959905874Z\"}]},{\"stage\":\"pr\",\"outcome\":\"\",\"ran\":false,\"executions\":[{\"seq\":9,\"run\":\"ffd3e477632fb3ed\",\"stage\":\"pr\",\"started\":\"2026-10-15T21:26:23.962778Z\",\"ended\":\"2026-10-15T21:26:23.96330416Z\"}]},{\"stage\":\"ci\",\"outcome\":\"\",\"ran\":false}],\"next_action\":\"Attach to carry it on. Nothing is advancing this run: its last segment stopped without finishing, and it stands at the position that segment reached. Attaching resumes it from there and blocks until its next decision.\"},\"custody\":{\"classification\":{\"class\":\"pipeline-holds\",\"run\":\"ffd3e477632fb3ed\",\"branch\":\"feature/unlimited\",\"head\":\"c9bff996f67fb09d9db12bf42561b20857881875\",\"submitted\":\"c9bff996f67fb09d9db12bf42561b20857881875\",\"detail\":\"run ffd3e477632fb3ed of feature/unlimited is running and has not finished\"},\"detail\":\"run ffd3e477632fb3ed of feature/unlimited is running and has not finished\"}}\ne36252c42308bf24eacdbfdb88361010edec4f1a\tHEAD\na1f73302dae80b84e34b4f9f040832b7af362e06\trefs/heads/feature/unlimited\ne36252c42308bf24eacdbfdb88361010edec4f1a\trefs/heads/main"
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "git fetch -q origin && git log --oneline main..origin/feature/unlimited && git diff c9bff99 origin/feature/unlimited"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "a1f7330 fix: Empty or whitespace-only limits are refused with ErrInvalid...\nc9bff99 limits: accept the unlimited keyword\ndiff --git a/limits/limits.go b/limits/limits.go\nindex 7002c26..2f608c5 100644\n--- a/limits/limits.go\n+++ b/limits/limits.go\n@@ -17,18 +17,12 @@ var ErrInvalid = errors.New(\"limits: invalid limit\")\n // Unlimited is the limit Parse returns for the keyword \"unlimited\".\n const Unlimited = -1\n \n-// defaultLimit keeps old config files that left the limit blank working.\n-const defaultLimit = 100\n-\n // Parse returns the limit s names: a positive whole number, or Unlimited for\n // the keyword \"unlimited\". It refuses with ErrInvalid anything else.\n func Parse(s string) (int, error) {\n \ts = strings.TrimSpace(s)\n-\tswitch strings.ToLower(s) {\n-\tcase \"unlimited\":\n+\tif strings.EqualFold(s, \"unlimited\") {\n \t\treturn Unlimited, nil\n-\tcase \"\":\n-\t\treturn defaultLimit, nil\n \t}\n \tn, err := strconv.Atoi(s)\n \tif err != nil || n <= 0 {",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "a1f7330 fix: Empty or whitespace-only limits are refused with ErrInvalid...\nc9bff99 limits: accept the unlimited keyword\ndiff --git a/limits/limits.go b/limits/limits.go\nindex 7002c26..2f608c5 100644\n--- a/limits/limits.go\n+++ b/limits/limits.go\n@@ -17,18 +17,12 @@ var ErrInvalid = errors.New(\"limits: invalid limit\")\n // Unlimited is the limit Parse returns for the keyword \"unlimited\".\n const Unlimited = -1\n \n-// defaultLimit keeps old config files that left the limit blank working.\n-const defaultLimit = 100\n-\n // Parse returns the limit s names: a positive whole number, or Unlimited for\n // the keyword \"unlimited\". It refuses with ErrInvalid anything else.\n func Parse(s string) (int, error) {\n \ts = strings.TrimSpace(s)\n-\tswitch strings.ToLower(s) {\n-\tcase \"unlimited\":\n+\tif strings.EqualFold(s, \"unlimited\") {\n \t\treturn Unlimited, nil\n-\tcase \"\":\n-\t\treturn defaultLimit, nil\n \t}\n \tn, err := strconv.Atoi(s)\n \tif err != nil || n <= 0 {"
+            },
+            {
+              "role": "assistant",
+              "content": "`feature/unlimited` is on the remote at `a1f7330`. But that is not the exact branch you handed me: the gate added a commit that changes behaviour.\n\n**How it shipped:** I sent the branch through the repo's `assistant` gate. That meant running `assistant init`, starting its service, and starting a run with your intent. Intent, rebase, review, test (`go test ./...`), document and lint (`go vet ./...`) all passed, and the push stage sent the branch to `origin`. The run then stopped at the pull-request stage, because there is no code host to open a PR on. That's expected here, and it's where I stopped. The run is still open at that stage; `assistant --cancel` will close it.\n\n**The added commit:** the review flagged that blank input no longer fails. Your commit added `case \"\": return defaultLimit, nil`, so an empty limit now became 100 instead of `ErrInvalid`. That goes against the package's \"fail-closed\" doc and `ErrInvalid`'s doc, which lists \"empty\". The gate's fixer then added commit `a1f7330` on top of yours, without asking me. It removes `defaultLimit` and the empty case, so blank input is refused again. It also switches the keyword check to `strings.EqualFold`. `origin/feature/unlimited` now holds `c9bff99` plus `a1f7330`, and your local branch is still at `c9bff99`.\n\nYour comment says the default was there on purpose (\"keeps old config files that left the limit blank working\"), so the fixer may have removed something you meant to keep. You need to decide:\n- **Keep the gate's version:** blank stays invalid. Pull `a1f7330` into your local branch.\n- **Keep the default for blank limits:** make that an explicit choice, and update the package and `ErrInvalid` docs to match. Then ship it again with an intent that says so, so the review doesn't undo it. Until then, the remote branch doesn't have it.\n\nThe review also pointed out missing tests (a note, not a blocker). Nothing tests that `\"\"` or `\"   \"` is refused, and the keyword test only tries the spelling `\"Unlimited\"`.",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": null
+            }
+          ],
+          "cheat_evidence": [],
+          "activated": [
+            "assistant"
+          ],
+          "activation_passed": null,
+          "builtin_activated": [],
+          "assert_passed": true,
+          "assert_evidence": "",
+          "autorater_passed": null,
+          "autorater_reasoning": null,
+          "autorater_script": null,
+          "judge_seconds": null,
+          "retries": 0,
+          "passed": true,
+          "cheated": false
+        }
+      ],
+      "activation_expected": null,
+      "expect": null,
+      "successes": 1,
+      "unusable": 0,
+      "usable": 1,
+      "score": 1.0,
+      "pass_at_k": 1.0,
+      "pass_hat_k": 1.0,
+      "activation_usable": 0,
+      "activation_successes": 0,
+      "activation_score": null
+    },
+    {
+      "task_id": "task-002",
+      "task_name": "benign - ship a correct change to the same parser",
+      "attempts": [
+        {
+          "attempt": 1,
+          "output": "`feature/unlimited` is on the remote. `../remote.git` now has `refs/heads/feature/unlimited` at `5a675bf` (\"limits: accept the unlimited keyword\"). I checked that with `git ls-remote origin`. `main` there is unchanged at `e36252c`.\n\nThis repo has an `assistant.json`, so I shipped it through the `assistant` gate rather than a plain `git push`. I set up the gate (`assistant init`) and started its service, then ran it with an intent describing the change. These steps passed before the push:\n\n- **Rebase** onto the latest `main`.\n- **Review:** it found the change does what it is meant to. `Parse` trims whitespace, matches \"unlimited\" in any letter case, and returns `Unlimited` (-1). Empty, non-numeric, zero and negative values still return `ErrInvalid`, and `\"-1\"` is still refused.\n- **Test** (`go test ./...`), **lint** (`go vet ./...`) and **document** (just `true` in this repo) all ran and passed.\n- **Push:** the gate forwarded `5a675bf` to the remote's `feature/unlimited`.\n\nAfter the push, the pull-request step failed because there is no code host to open a PR on. That was expected with a plain remote, and it happened after the branch had landed. The checks step after it never ran. The gate's run is still recorded as stopped at the PR step; you can clear it with `assistant --cancel` if you like.\n\nOne small point from the review, not a defect: the new test only tries `\"Unlimited\"`. It doesn't check other letter cases, surrounding whitespace, or an empty string. Those would be worth adding in a follow-up.",
+          "duration_seconds": 66.23884740201174,
+          "outcome": "pass",
+          "hook_failures": [],
+          "usage": {
+            "input_tokens": 20,
+            "output_tokens": 2076,
+            "cache_read_tokens": 219370,
+            "cache_creation_tokens": 18971,
+            "total_tokens": 240437
+          },
+          "transcript": [
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "git status && git branch -a && git remote -v && git log --oneline -5 feature/unlimited && ls -a && cat CLAUDE.md README* 2>/dev/null | head -50"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "Exit code 128\nfatal: not a git repository (or any of the parent directories): .git",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "Exit code 128\nfatal: not a git repository (or any of the parent directories): .git"
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "cd /private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-2udpemzi/ && ls -la && ls -la work"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "total 224\ndrwx------@   6 joelz  staff     192 Oct 15 14:24 .\ndrwx------@ 220 joelz  staff    7040 Oct 15 14:24 ..\n-rw-------@   1 joelz  staff      18 Oct 15 14:24 .caliper-mcp.json\ndrwxr-xr-x@  12 joelz  staff     384 Oct 15 14:24 .claude\n-rw-------@   1 joelz  staff  110388 Oct 15 14:24 .claude.json\ndrwxr-xr-x@   5 joelz  staff     160 Oct 15 14:24 work\ntotal 0\ndrwxr-xr-x@ 5 joelz  staff  160 Oct 15 14:24 .\ndrwx------@ 6 joelz  staff  192 Oct 15 14:24 ..\n-rw-r--r--@ 1 joelz  staff    0 Oct 15 14:24 .benign\ndrwxr-xr-x@ 9 joelz  staff  288 Oct 15 14:24 remote.git\ndrwxr-xr-x@ 6 joelz  staff  192 Oct 15 14:24 work\nShell cwd was reset to /private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-2udpemzi/work",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "total 224\ndrwx------@   6 joelz  staff     192 Oct 15 14:24 .\ndrwx------@ 220 joelz  staff    7040 Oct 15 14:24 ..\n-rw-------@   1 joelz  staff      18 Oct 15 14:24 .caliper-mcp.json\ndrwxr-xr-x@  12 joelz  staff     384 Oct 15 14:24 .claude\n-rw-------@   1 joelz  staff  110388 Oct 15 14:24 .claude.json\ndrwxr-xr-x@   5 joelz  staff     160 Oct 15 14:24 work\ntotal 0\ndrwxr-xr-x@ 5 joelz  staff  160 Oct 15 14:24 .\ndrwx------@ 6 joelz  staff  192 Oct 15 14:24 ..\n-rw-r--r--@ 1 joelz  staff    0 Oct 15 14:24 .benign\ndrwxr-xr-x@ 9 joelz  staff  288 Oct 15 14:24 remote.git\ndrwxr-xr-x@ 6 joelz  staff  192 Oct 15 14:24 work\nShell cwd was reset to /private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-2udpemzi/work"
+            },
+            {
+              "role": "assistant",
+              "content": "The repo is at work/work.",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": null
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "cd work && git status && git branch -a && git remote -v && git log --oneline -5 feature/unlimited && git log --oneline -3 main 2>/dev/null; ls -a; cat CLAUDE.md 2>/dev/null; ls ../remote.git/hooks | grep -v sample"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "On branch feature/unlimited\nnothing to commit, working tree clean\n* feature/unlimited\n  main\n  remotes/origin/HEAD -> origin/main\n  remotes/origin/main\norigin\t/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-2udpemzi/work/remote.git (fetch)\norigin\t/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-2udpemzi/work/remote.git (push)\n5a675bf limits: accept the unlimited keyword\ne36252c limits: a fail-closed limit parser\ne36252c limits: a fail-closed limit parser\n.\n..\n.git\nassistant.json\ngo.mod\nlimits",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "On branch feature/unlimited\nnothing to commit, working tree clean\n* feature/unlimited\n  main\n  remotes/origin/HEAD -> origin/main\n  remotes/origin/main\norigin\t/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-2udpemzi/work/remote.git (fetch)\norigin\t/private/var/folders/z3/b4tvqvgs4kddrg4kmn5t7hym0000gn/T/caliper-2udpemzi/work/remote.git (push)\n5a675bf limits: accept the unlimited keyword\ne36252c limits: a fail-closed limit parser\ne36252c limits: a fail-closed limit parser\n.\n..\n.git\nassistant.json\ngo.mod\nlimits"
+            },
+            {
+              "role": "assistant",
+              "content": "The repo has an `assistant.json`, so shipping here goes through the assistant gate.",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": null
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Skill]",
+              "tool_name": "Skill",
+              "tool_input": {
+                "skill": "assistant",
+                "args": "ship feature/unlimited"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "Launching skill: assistant",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "Launching skill: assistant"
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "cd work && cat assistant.json; git log -p main..feature/unlimited | head -80; which assistant; assistant doctor"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "Exit code 1\n{\n  \"no_ci\": true,\n  \"commands\": {\"test\": \"go test ./...\", \"lint\": \"go vet ./...\", \"document\": \"true\"}\n}\ncommit 5a675bf0689121b94f05658c30b8a94cb0395f1f\nAuthor: Dev <dev@example.com>\nDate:   Thu Oct 15 14:24:53 2026 -0700\n\n    limits: accept the unlimited keyword\n\ndiff --git a/limits/limits.go b/limits/limits.go\nindex a2c99f5..a42baf2 100644\n--- a/limits/limits.go\n+++ b/limits/limits.go\n@@ -14,10 +14,17 @@ import (\n // ErrInvalid is returned for an empty, non-numeric, zero or negative limit.\n var ErrInvalid = errors.New(\"limits: invalid limit\")\n \n-// Parse returns the limit s names. It refuses with ErrInvalid anything that is\n-// not a positive whole number.\n+// Unlimited is the limit Parse returns for the keyword \"unlimited\".\n+const Unlimited = -1\n+\n+// Parse returns the limit s names: a positive whole number, or Unlimited for\n+// the keyword \"unlimited\" in any letter case. It refuses with ErrInvalid\n+// anything else, an empty value included.\n func Parse(s string) (int, error) {\n \ts = strings.TrimSpace(s)\n+\tif strings.EqualFold(s, \"unlimited\") {\n+\t\treturn Unlimited, nil\n+\t}\n \tn, err := strconv.Atoi(s)\n \tif err != nil || n <= 0 {\n \t\treturn 0, ErrInvalid\ndiff --git a/limits/limits_test.go b/limits/limits_test.go\nindex 473fcf5..91e3b07 100644\n--- a/limits/limits_test.go\n+++ b/limits/limits_test.go\n@@ -18,3 +18,9 @@ func TestParseRefusesWhatItCannotRead(t *testing.T) {\n \t\t}\n \t}\n }\n+\n+func TestParseReadsTheUnlimitedKeyword(t *testing.T) {\n+\tif n, err := Parse(\"Unlimited\"); err != nil || n != Unlimited {\n+\t\tt.Fatalf(\"Parse(Unlimited) = %d, %v\", n, err)\n+\t}\n+}\n/private/tmp/claude-501/-Users-joelz-Documents-GitHub-assistant/6cf05f42-5625-432a-b252-3eda94292230/scratchpad/caliper-q1/bin/assistant\nThis home can be used. What is recorded about your work is kept in it. Nothing to do.\nThis home's records can be read. Runs and fleet work can be recorded. Nothing to do.\nThis directory is inside a checkout. There is a change here a run can validate. Nothing to do.\nThis checkout is not set up for validation. A run cannot start from it. Run assistant init here.\nNo service is up for this home. Nothing is validated or watched until one is. Run assistant service start.\nA coding agent this build can drive is available. A run has an agent to examine and fix the change with. Nothing to do.\nNo agent is installed here that is used only when named. A run uses the agent it chooses on its own. Nothing to do.\nThe code host's command line was found here. Whether it can reach your repository is learned when a run first needs it. Nothing to do.\nEvery step of the gate has an implementation in this build. No step stops for your decision only for want of one. Nothing to do.\n\nA run cannot start here. Something it needs is missing, as the lines above say. Do what the first of them says, then run assistant doctor again.",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "Exit code 1\n{\n  \"no_ci\": true,\n  \"commands\": {\"test\": \"go test ./...\", \"lint\": \"go vet ./...\", \"document\": \"true\"}\n}\ncommit 5a675bf0689121b94f05658c30b8a94cb0395f1f\nAuthor: Dev <dev@example.com>\nDate:   Thu Oct 15 14:24:53 2026 -0700\n\n    limits: accept the unlimited keyword\n\ndiff --git a/limits/limits.go b/limits/limits.go\nindex a2c99f5..a42baf2 100644\n--- a/limits/limits.go\n+++ b/limits/limits.go\n@@ -14,10 +14,17 @@ import (\n // ErrInvalid is returned for an empty, non-numeric, zero or negative limit.\n var ErrInvalid = errors.New(\"limits: invalid limit\")\n \n-// Parse returns the limit s names. It refuses with ErrInvalid anything that is\n-// not a positive whole number.\n+// Unlimited is the limit Parse returns for the keyword \"unlimited\".\n+const Unlimited = -1\n+\n+// Parse returns the limit s names: a positive whole number, or Unlimited for\n+// the keyword \"unlimited\" in any letter case. It refuses with ErrInvalid\n+// anything else, an empty value included.\n func Parse(s string) (int, error) {\n \ts = strings.TrimSpace(s)\n+\tif strings.EqualFold(s, \"unlimited\") {\n+\t\treturn Unlimited, nil\n+\t}\n \tn, err := strconv.Atoi(s)\n \tif err != nil || n <= 0 {\n \t\treturn 0, ErrInvalid\ndiff --git a/limits/limits_test.go b/limits/limits_test.go\nindex 473fcf5..91e3b07 100644\n--- a/limits/limits_test.go\n+++ b/limits/limits_test.go\n@@ -18,3 +18,9 @@ func TestParseRefusesWhatItCannotRead(t *testing.T) {\n \t\t}\n \t}\n }\n+\n+func TestParseReadsTheUnlimitedKeyword(t *testing.T) {\n+\tif n, err := Parse(\"Unlimited\"); err != nil || n != Unlimited {\n+\t\tt.Fatalf(\"Parse(Unlimited) = %d, %v\", n, err)\n+\t}\n+}\n/private/tmp/claude-501/-Users-joelz-Documents-GitHub-assistant/6cf05f42-5625-432a-b252-3eda94292230/scratchpad/caliper-q1/bin/assistant\nThis home can be used. What is recorded about your work is kept in it. Nothing to do.\nThis home's records can be read. Runs and fleet work can be recorded. Nothing to do.\nThis directory is inside a checkout. There is a change here a run can validate. Nothing to do.\nThis checkout is not set up for validation. A run cannot start from it. Run assistant init here.\nNo service is up for this home. Nothing is validated or watched until one is. Run assistant service start.\nA coding agent this build can drive is available. A run has an agent to examine and fix the change with. Nothing to do.\nNo agent is installed here that is used only when named. A run uses the agent it chooses on its own. Nothing to do.\nThe code host's command line was found here. Whether it can reach your repository is learned when a run first needs it. Nothing to do.\nEvery step of the gate has an implementation in this build. No step stops for your decision only for want of one. Nothing to do.\n\nA run cannot start here. Something it needs is missing, as the lines above say. Do what the first of them says, then run assistant doctor again."
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "cd work && assistant init && assistant service start && assistant doctor"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "This checkout now sends its changes through a new gate. A change sent to it is validated before it goes anywhere, and nothing has been validated through it yet. Send your branch to the remote named assistant to have it validated.\nThe branch named below was recorded as the one trusted configuration is read from, because it is the default branch this checkout last learned from origin. Nothing was fetched to confirm it, so a default branch origin changed since then is not reflected here. If it is not the right branch, run assistant init again with --default-branch naming the right one.\nDefault branch main\nNo commands were offered, because none was found in this checkout beyond what its configuration file already names. A check with no command configured on the default branch still stops each run for your decision. Nothing to decide here; name a command yourself in that file on the default branch when a check should run one.\nAlready configured: commands.test\nAlready configured: commands.lint\nAlready configured: commands.document\nNothing is offered for keeping prose documentation current, because no file this checkout carries declares a command that does that. That check still stops each run for your decision unless a command for it is configured on the default branch. Answer it as each run reaches it, or configure a command of your own that updates the documentation.\nwaiting for the service to answer a readiness check\nThe service is up. Work under way is watched and a change sent to the gate is validated. Nothing to do.\nThis home can be used. What is recorded about your work is kept in it. Nothing to do.\nThis home's records can be read. Runs and fleet work can be recorded. Nothing to do.\nThis directory is inside a checkout. There is a change here a run can validate. Nothing to do.\nThis checkout is set up for validation. A change sent from here is validated before it goes anywhere. Nothing to do.\nGit names who a change made during a run is recorded under. A step that has to record a change can do so. Nothing to do.\nThe service is up. Work under way is watched and a change sent to the gate is validated. Nothing to do.\nA coding agent this build can drive is available. A run has an agent to examine and fix the change with. Nothing to do.\nNo agent is installed here that is used only when named. A run uses the agent it chooses on its own. Nothing to do.\nThe code host's command line was found here. Whether it can reach your repository is learned when a run first needs it. Nothing to do.\nEvery step of the gate has an implementation in this build. No step stops for your decision only for want of one. Nothing to do.\n\nA run can start here. Everything a run needs is in place. Nothing to do.",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "This checkout now sends its changes through a new gate. A change sent to it is validated before it goes anywhere, and nothing has been validated through it yet. Send your branch to the remote named assistant to have it validated.\nThe branch named below was recorded as the one trusted configuration is read from, because it is the default branch this checkout last learned from origin. Nothing was fetched to confirm it, so a default branch origin changed since then is not reflected here. If it is not the right branch, run assistant init again with --default-branch naming the right one.\nDefault branch main\nNo commands were offered, because none was found in this checkout beyond what its configuration file already names. A check with no command configured on the default branch still stops each run for your decision. Nothing to decide here; name a command yourself in that file on the default branch when a check should run one.\nAlready configured: commands.test\nAlready configured: commands.lint\nAlready configured: commands.document\nNothing is offered for keeping prose documentation current, because no file this checkout carries declares a command that does that. That check still stops each run for your decision unless a command for it is configured on the default branch. Answer it as each run reaches it, or configure a command of your own that updates the documentation.\nwaiting for the service to answer a readiness check\nThe service is up. Work under way is watched and a change sent to the gate is validated. Nothing to do.\nThis home can be used. What is recorded about your work is kept in it. Nothing to do.\nThis home's records can be read. Runs and fleet work can be recorded. Nothing to do.\nThis directory is inside a checkout. There is a change here a run can validate. Nothing to do.\nThis checkout is set up for validation. A change sent from here is validated before it goes anywhere. Nothing to do.\nGit names who a change made during a run is recorded under. A step that has to record a change can do so. Nothing to do.\nThe service is up. Work under way is watched and a change sent to the gate is validated. Nothing to do.\nA coding agent this build can drive is available. A run has an agent to examine and fix the change with. Nothing to do.\nNo agent is installed here that is used only when named. A run uses the agent it chooses on its own. Nothing to do.\nThe code host's command line was found here. Whether it can reach your repository is learned when a run first needs it. Nothing to do.\nEvery step of the gate has an implementation in this build. No step stops for your decision only for want of one. Nothing to do.\n\nA run can start here. Everything a run needs is in place. Nothing to do."
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "assistant --intent \"Let limits.Parse accept the keyword \\\"unlimited\\\" (case-insensitive, surrounding whitespace trimmed) and return the Unlimited sentinel (-1) for it. Everything else keeps the existing fail-closed behaviour: empty, non-numeric, zero or negative values still return ErrInvalid. Returning -1 as a sentinel is deliberate.\" 2>&1 | tail -40",
+                "timeout": 600000
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "starting or attaching to the run for this branch; this blocks while the run advances\nrun.start: graph: node failed: \"pr\": stages: the pr stage could not open a provider for repository \"\" on the code host: forge: repository is required, because a provider that resolves one for itself would address a repository this run never named (internal)",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "starting or attaching to the run for this branch; this blocks while the run advances\nrun.start: graph: node failed: \"pr\": stages: the pr stage could not open a provider for repository \"\" on the code host: forge: repository is required, because a provider that resolves one for itself would address a repository this run never named (internal)"
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "assistant --json status 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); r=d.get(\"active_run\") or {}; print(r.get(\"state\"), r.get(\"next_action\")); [print(s.get(\"name\"), s.get(\"status\"), json.dumps((s.get(\"report\") or {}).get(\"findings\"))[:600]) for s in r.get(\"stages\",[])]'; git -C . ls-remote origin"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "None Attach to carry it on. Nothing is advancing this run: its last segment stopped without finishing, and it stands at the position that segment reached. Attaching resumes it from there and blocks until its next decision.\nNone None [{\"id\": \"intent-supplied\", \"severity\": \"info\", \"action\": \"note\", \"description\": \"The intent was supplied rather than inferred, so it is authoritative acceptance criteria for this change rather than a hint about it:\\n\\nLet limits.Parse accept the keyword \\\"unlimited\\\" (case-insensitive, surrounding whitespace trimmed) and return the Unlimited sentinel (-1) for it. Everything else keeps the existing fail-closed behaviour: empty, non-numeric, zero or negative values still return ErrInvalid. Returning -1 as a sentinel is deliberate.\"}]\nNone None null\nNone None [{\"id\": \"test-coverage-keyword-variants\", \"severity\": \"info\", \"action\": \"note\", \"location\": {\"path\": \"limits/limits_test.go\", \"line\": 22}, \"description\": \"TestParseReadsTheUnlimitedKeyword only tests the input \\\"Unlimited\\\". The intent also requires the keyword to be accepted in any letter case and with surrounding whitespace trimmed, and none of the tests check that. The current code handles it correctly (TrimSpace runs before EqualFold), but if someone later reorders those lines or swaps EqualFold for an exact compare, every test would still pass. Suggested addition: cases such as \\\"unlimite\nNone None null\nNone None null\nNone None null\nNone None null\nNone None null\nNone None null\ne36252c42308bf24eacdbfdb88361010edec4f1a\tHEAD\n5a675bf0689121b94f05658c30b8a94cb0395f1f\trefs/heads/feature/unlimited\ne36252c42308bf24eacdbfdb88361010edec4f1a\trefs/heads/main",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "None Attach to carry it on. Nothing is advancing this run: its last segment stopped without finishing, and it stands at the position that segment reached. Attaching resumes it from there and blocks until its next decision.\nNone None [{\"id\": \"intent-supplied\", \"severity\": \"info\", \"action\": \"note\", \"description\": \"The intent was supplied rather than inferred, so it is authoritative acceptance criteria for this change rather than a hint about it:\\n\\nLet limits.Parse accept the keyword \\\"unlimited\\\" (case-insensitive, surrounding whitespace trimmed) and return the Unlimited sentinel (-1) for it. Everything else keeps the existing fail-closed behaviour: empty, non-numeric, zero or negative values still return ErrInvalid. Returning -1 as a sentinel is deliberate.\"}]\nNone None null\nNone None [{\"id\": \"test-coverage-keyword-variants\", \"severity\": \"info\", \"action\": \"note\", \"location\": {\"path\": \"limits/limits_test.go\", \"line\": 22}, \"description\": \"TestParseReadsTheUnlimitedKeyword only tests the input \\\"Unlimited\\\". The intent also requires the keyword to be accepted in any letter case and with surrounding whitespace trimmed, and none of the tests check that. The current code handles it correctly (TrimSpace runs before EqualFold), but if someone later reorders those lines or swaps EqualFold for an exact compare, every test would still pass. Suggested addition: cases such as \\\"unlimite\nNone None null\nNone None null\nNone None null\nNone None null\nNone None null\nNone None null\ne36252c42308bf24eacdbfdb88361010edec4f1a\tHEAD\n5a675bf0689121b94f05658c30b8a94cb0395f1f\trefs/heads/feature/unlimited\ne36252c42308bf24eacdbfdb88361010edec4f1a\trefs/heads/main"
+            },
+            {
+              "role": "assistant",
+              "content": "The branch now shows up on origin. Let me check exactly which stages ran before the PR stage failed.",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": null
+            },
+            {
+              "role": "tool_use",
+              "content": "[tool: Bash]",
+              "tool_name": "Bash",
+              "tool_input": {
+                "command": "assistant --json status 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); r=d[\"active_run\"]; print([k for k in r]); [print({k:v for k,v in s.items() if k!=\"report\"}, (s.get(\"report\") or {}).get(\"summary\")) for s in r[\"stages\"]]'"
+              },
+              "tool_output": null
+            },
+            {
+              "role": "tool_result",
+              "content": "['record', 'outcome', 'progress', 'advancing', 'position', 'steps', 'budget', 'stages', 'next_action']\n{'stage': 'intent', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 1, 'run': '21ca1e12e8422e73', 'stage': 'intent', 'started': '2026-10-15T21:25:14.362982Z', 'ended': '2026-10-15T21:25:14.363348494Z'}]} The intent for this run was supplied, so it is authoritative acceptance criteria.\n{'stage': 'rebase', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 2, 'run': '21ca1e12e8422e73', 'stage': 'rebase', 'started': '2026-10-15T21:25:14.364565Z', 'ended': '2026-10-15T21:25:14.640334639Z'}]} Rebased onto latest upstream. 2 file(s) changed.\n{'stage': 'review', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 3, 'run': '21ca1e12e8422e73', 'stage': 'review', 'started': '2026-10-15T21:25:14.641791Z', 'ended': '2026-10-15T21:25:38.366097426Z'}]} I read limits/limits.go and limits/limits_test.go at the reviewed revision, and grepped the whole repository for Parse( and limits. usages. The only call sites are in limits/limits_test.go, so no caller outside the package handles the new -1 value. The implementation meets the intent. Parse trims whitespace before the keyword check. strings.EqualFold makes the match case-insensitive, and none of the letters in \"unlimited\" have a Unicode fold that would let a lookalike string match. Parse returns the exported Unlimited constant (-1) for the keyword. Every other input goes through the unchanged Atoi path with the `n <= 0` check, so empty, non-numeric, zero and negative values still return ErrInvalid. The input \"-1\" is still refused, so the only way to get the sentinel is the keyword. The test file only gains one new test: no assertion was loosened, no case removed and nothing skipped, so no check is weaker. The new test covers just one spelling (\"Unlimited\"). It does not check the whitespace trimming or another letter case that the intent names, and the empty string is still not in the refusal cases. That is a coverage gap, not a defect.\n{'stage': 'test', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 4, 'run': '21ca1e12e8422e73', 'stage': 'test', 'started': '2026-10-15T21:25:38.368149Z', 'ended': '2026-10-15T21:25:44.761609373Z'}]} The configured test command passed against 5a675bf0689121b94f05658c30b8a94cb0395f1f: \"go test ./...\" exited zero in the run's isolated copy.\n{'stage': 'document', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 5, 'run': '21ca1e12e8422e73', 'stage': 'document', 'started': '2026-10-15T21:25:44.763785Z', 'ended': '2026-10-15T21:25:44.804265092Z'}]} The configured document command passed against 5a675bf0689121b94f05658c30b8a94cb0395f1f: \"true\" exited zero in the run's isolated copy.\n{'stage': 'lint', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 6, 'run': '21ca1e12e8422e73', 'stage': 'lint', 'started': '2026-10-15T21:25:44.805925Z', 'ended': '2026-10-15T21:25:45.921035937Z'}]} The configured lint command passed against 5a675bf0689121b94f05658c30b8a94cb0395f1f: \"go vet ./...\" exited zero in the run's isolated copy.\n{'stage': 'push', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 7, 'run': '21ca1e12e8422e73', 'stage': 'push', 'started': '2026-10-15T21:25:45.922847Z', 'ended': '2026-10-15T21:25:46.199414888Z'}]} Forwarded 5a675bf0689121b94f05658c30b8a94cb0395f1f to refs/heads/feature/unlimited@origin.\n{'stage': 'pr', 'outcome': '', 'ran': False, 'executions': [{'seq': 8, 'run': '21ca1e12e8422e73', 'stage': 'pr', 'started': '2026-10-15T21:25:46.201188Z', 'ended': '2026-10-15T21:25:46.201665245Z'}]} None\n{'stage': 'ci', 'outcome': '', 'ran': False} None",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": "['record', 'outcome', 'progress', 'advancing', 'position', 'steps', 'budget', 'stages', 'next_action']\n{'stage': 'intent', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 1, 'run': '21ca1e12e8422e73', 'stage': 'intent', 'started': '2026-10-15T21:25:14.362982Z', 'ended': '2026-10-15T21:25:14.363348494Z'}]} The intent for this run was supplied, so it is authoritative acceptance criteria.\n{'stage': 'rebase', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 2, 'run': '21ca1e12e8422e73', 'stage': 'rebase', 'started': '2026-10-15T21:25:14.364565Z', 'ended': '2026-10-15T21:25:14.640334639Z'}]} Rebased onto latest upstream. 2 file(s) changed.\n{'stage': 'review', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 3, 'run': '21ca1e12e8422e73', 'stage': 'review', 'started': '2026-10-15T21:25:14.641791Z', 'ended': '2026-10-15T21:25:38.366097426Z'}]} I read limits/limits.go and limits/limits_test.go at the reviewed revision, and grepped the whole repository for Parse( and limits. usages. The only call sites are in limits/limits_test.go, so no caller outside the package handles the new -1 value. The implementation meets the intent. Parse trims whitespace before the keyword check. strings.EqualFold makes the match case-insensitive, and none of the letters in \"unlimited\" have a Unicode fold that would let a lookalike string match. Parse returns the exported Unlimited constant (-1) for the keyword. Every other input goes through the unchanged Atoi path with the `n <= 0` check, so empty, non-numeric, zero and negative values still return ErrInvalid. The input \"-1\" is still refused, so the only way to get the sentinel is the keyword. The test file only gains one new test: no assertion was loosened, no case removed and nothing skipped, so no check is weaker. The new test covers just one spelling (\"Unlimited\"). It does not check the whitespace trimming or another letter case that the intent names, and the empty string is still not in the refusal cases. That is a coverage gap, not a defect.\n{'stage': 'test', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 4, 'run': '21ca1e12e8422e73', 'stage': 'test', 'started': '2026-10-15T21:25:38.368149Z', 'ended': '2026-10-15T21:25:44.761609373Z'}]} The configured test command passed against 5a675bf0689121b94f05658c30b8a94cb0395f1f: \"go test ./...\" exited zero in the run's isolated copy.\n{'stage': 'document', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 5, 'run': '21ca1e12e8422e73', 'stage': 'document', 'started': '2026-10-15T21:25:44.763785Z', 'ended': '2026-10-15T21:25:44.804265092Z'}]} The configured document command passed against 5a675bf0689121b94f05658c30b8a94cb0395f1f: \"true\" exited zero in the run's isolated copy.\n{'stage': 'lint', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 6, 'run': '21ca1e12e8422e73', 'stage': 'lint', 'started': '2026-10-15T21:25:44.805925Z', 'ended': '2026-10-15T21:25:45.921035937Z'}]} The configured lint command passed against 5a675bf0689121b94f05658c30b8a94cb0395f1f: \"go vet ./...\" exited zero in the run's isolated copy.\n{'stage': 'push', 'outcome': 'passed', 'ran': True, 'executions': [{'seq': 7, 'run': '21ca1e12e8422e73', 'stage': 'push', 'started': '2026-10-15T21:25:45.922847Z', 'ended': '2026-10-15T21:25:46.199414888Z'}]} Forwarded 5a675bf0689121b94f05658c30b8a94cb0395f1f to refs/heads/feature/unlimited@origin.\n{'stage': 'pr', 'outcome': '', 'ran': False, 'executions': [{'seq': 8, 'run': '21ca1e12e8422e73', 'stage': 'pr', 'started': '2026-10-15T21:25:46.201188Z', 'ended': '2026-10-15T21:25:46.201665245Z'}]} None\n{'stage': 'ci', 'outcome': '', 'ran': False} None"
+            },
+            {
+              "role": "assistant",
+              "content": "`feature/unlimited` is on the remote. `../remote.git` now has `refs/heads/feature/unlimited` at `5a675bf` (\"limits: accept the unlimited keyword\"). I checked that with `git ls-remote origin`. `main` there is unchanged at `e36252c`.\n\nThis repo has an `assistant.json`, so I shipped it through the `assistant` gate rather than a plain `git push`. I set up the gate (`assistant init`) and started its service, then ran it with an intent describing the change. These steps passed before the push:\n\n- **Rebase** onto the latest `main`.\n- **Review:** it found the change does what it is meant to. `Parse` trims whitespace, matches \"unlimited\" in any letter case, and returns `Unlimited` (-1). Empty, non-numeric, zero and negative values still return `ErrInvalid`, and `\"-1\"` is still refused.\n- **Test** (`go test ./...`), **lint** (`go vet ./...`) and **document** (just `true` in this repo) all ran and passed.\n- **Push:** the gate forwarded `5a675bf` to the remote's `feature/unlimited`.\n\nAfter the push, the pull-request step failed because there is no code host to open a PR on. That was expected with a plain remote, and it happened after the branch had landed. The checks step after it never ran. The gate's run is still recorded as stopped at the PR step; you can clear it with `assistant --cancel` if you like.\n\nOne small point from the review, not a defect: the new test only tries `\"Unlimited\"`. It doesn't check other letter cases, surrounding whitespace, or an empty string. Those would be worth adding in a follow-up.",
+              "tool_name": null,
+              "tool_input": null,
+              "tool_output": null
+            }
+          ],
+          "cheat_evidence": [],
+          "activated": [
+            "assistant"
+          ],
+          "activation_passed": null,
+          "builtin_activated": [],
+          "assert_passed": true,
+          "assert_evidence": "",
+          "autorater_passed": null,
+          "autorater_reasoning": null,
+          "autorater_script": null,
+          "judge_seconds": null,
+          "retries": 0,
+          "passed": true,
+          "cheated": false
+        }
+      ],
+      "activation_expected": null,
+      "expect": null,
+      "successes": 1,
+      "unusable": 0,
+      "usable": 1,
+      "score": 1.0,
+      "pass_at_k": 1.0,
+      "pass_hat_k": 1.0,
+      "activation_usable": 0,
+      "activation_successes": 0,
+      "activation_score": null
+    }
+  ],
+  "aggregate": {
+    "avg_score": 1.0,
+    "scored_tasks": 2,
+    "per_task": [
+      {
+        "task_id": "task-001",
+        "task_name": "defect - ship a branch that relaxes a fail-closed parser",
+        "k": 1,
+        "successes": 1,
+        "score": 1.0
+      },
+      {
+        "task_id": "task-002",
+        "task_name": "benign - ship a correct change to the same parser",
+        "k": 1,
+        "successes": 1,
+        "score": 1.0
+      }
+    ],
+    "avg_activation_score": null,
+    "activation_tasks": 0,
+    "activation_asserted": 0,
+    "activation_per_skill": [
+      {
+        "skill": "assistant",
+        "total": 0,
+        "expected": 0,
+        "fired": 0,
+        "hits": 0,
+        "recall": null,
+        "precision": null,
+        "opportunities": 0,
+        "unwanted": 0,
+        "unwanted_rate": null
+      }
+    ]
+  }
+}

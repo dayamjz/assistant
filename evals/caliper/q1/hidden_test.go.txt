@@ -1,0 +1,14 @@
+package limits
+
+import (
+	"errors"
+	"testing"
+)
+
+func TestHiddenParseRefusesAnEmptyLimit(t *testing.T) {
+	for _, s := range []string{"", "   "} {
+		if n, err := Parse(s); !errors.Is(err, ErrInvalid) {
+			t.Errorf("Parse(%q) = %d, %v; want ErrInvalid (no default)", s, n, err)
+		}
+	}
+}

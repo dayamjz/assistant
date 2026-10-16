@@ -1,7 +1,10 @@
 # Caliper evaluation of assistant: plan
 
-Status: plan only. It is deferred until the entry criteria in section 2 hold,
-and nothing here runs in `make check` or CI.
+Status: entry criteria met; pilot recorded
+(`docs/evaluations/2026-10-15-caliper-q1-pilot.md`); full Q1 harness checked
+in under `evals/caliper/q1/` (`docs/evaluations/2026-10-15-caliper-q1-harness.md`).
+The full agent run at k = 5 is still outstanding (issue #287). Nothing here
+runs in `make check` or CI.
 
 ## 1. What caliper measures, and why it fits
 
