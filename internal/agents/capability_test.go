@@ -584,8 +584,9 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 		t.Fatalf("grok factory failed: %v", err)
 	}
 	grokDeclared := grok.Capabilities()
-	if got := grokDeclared.List(); len(got) != 0 {
-		t.Errorf("the grok adapter declares %v, want no capabilities", got)
+	wantGrok := []agents.Capability{agents.CapabilityResumableSessions}
+	if got := grokDeclared.List(); !slices.Equal(got, wantGrok) {
+		t.Errorf("the grok adapter declares %v, want exactly %v", got, wantGrok)
 	}
 }
 

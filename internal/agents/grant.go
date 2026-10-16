@@ -19,14 +19,14 @@ package agents
 // configuration name.
 //
 // What a grant buys is the command line an adapter writes for it, and an
-// adapter states its translation beside its argument builder. Only the Claude
-// Code adapter has one: the cursor, grok and openai adapters write no grant,
-// so what their agents may do is still their own defaults and settings, and
-// a fix round there edits only where those allow it. Enforcing that
-// command line is the agent's own permission system and not this package's,
-// so a grant is only as strong as the agent's reading of the flags it was
-// given. config.ReservedAgentFlags refuses an entry naming the flags a grant
-// is written with, the permission-mode and tool-list flags, so a configured
+// adapter states its translation beside its argument builder. Claude Code,
+// Cursor, and Grok each write one; the openai adapter writes none, so what
+// that agent may do is still its own defaults and settings, and a fix round
+// there edits only where those allow it. Enforcing that command line is the
+// agent's own permission system and not this package's, so a grant is only as
+// strong as the agent's reading of the flags it was given.
+// config.ReservedAgentFlags refuses an entry naming the flags a grant is
+// written with, the permission-mode and tool-list flags, so a configured
 // entry cannot contradict them. That is all it refuses: an entry may still
 // name another of the CLI's flags that widens what an agent can do under a
 // grant, such as one adding MCP servers whose tools no grant's list names or

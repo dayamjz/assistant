@@ -98,13 +98,14 @@ func helperMain(mode string) {
 		os.Exit(helperExitCode())
 	case "call":
 		// Report how this package called the agent: the command line it built
-		// and what reached the agent's standard input.
-		input, err := io.ReadAll(os.Stdin)
+		// and what reached the agent as its prompt (standard input, or the
+		// contents of --prompt-file for Grok Build).
+		input, err := helperReadPrompt(os.Args[1:])
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "reading standard input: "+err.Error())
+			fmt.Fprintln(os.Stderr, "reading the prompt: "+err.Error())
 			os.Exit(6)
 		}
-		encoded, err := json.Marshal(agentCall{Args: os.Args[1:], Stdin: string(input)})
+		encoded, err := json.Marshal(agentCall{Args: os.Args[1:], Stdin: input})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "encoding the call: "+err.Error())
 			os.Exit(7)
@@ -260,6 +261,22 @@ func helperSession() string {
 		}
 	}
 	return "session-opened"
+}
+
+// helperReadPrompt returns the prompt the adapter delivered: the contents of
+// --prompt-file when that flag is present, otherwise standard input.
+func helperReadPrompt(args []string) (string, error) {
+	for i, a := range args {
+		if a == "--prompt-file" && i+1 < len(args) {
+			raw, err := os.ReadFile(args[i+1])
+			if err != nil {
+				return "", err
+			}
+			return string(raw), nil
+		}
+	}
+	raw, err := io.ReadAll(os.Stdin)
+	return string(raw), err
 }
 
 // helperEnvelope renders a result envelope of the shape the adapter reads.

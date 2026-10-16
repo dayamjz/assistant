@@ -2,80 +2,92 @@
 
 ## Overview
 
-As of this update, `assistant` supports multiple LLM providers through a pluggable agent architecture. You can use Cursor, Claude, OpenAI, or Grok agents to power the validation pipeline.
+`assistant` drives coding agents through their CLIs. It does not call provider
+HTTP APIs directly. Supported adapters are Cursor (Agent CLI), Claude Code,
+OpenAI, and Grok Build.
 
 ## Supported Agents
 
-### 1. Cursor
-- **Binary**: `cursor` or `cursor-cli`
-- **Features**: Full agent support, optimized for Cursor environment
-- **Sessions**: TBD based on Cursor CLI capabilities
+### 1. Cursor (Agent CLI)
+
+- **Config name**: `cursor`
+- **Binaries on PATH** (first match wins): `cursor-agent`, `cursor`, `agent`
+- **Install**: `curl https://cursor.com/install -fsS | bash`
+- **Auth (CLI login only)**: `agent login` (or `cursor-agent login`). The adapter
+  strips `CURSOR_API_KEY` from the process environment and never passes
+  `--api-key`, so a key in the service environment cannot redirect runs onto
+  the API-key route.
+- **Sessions**: resumable fixer sessions (`--resume`)
+- **Note**: Grok’s installer also links `agent`. Prefer `cursor-agent` on PATH
+  when both are installed.
 
 ### 2. Claude (Claude Code)
+
 - **Binary**: `claude`
-- **Features**: Full-featured with resumable sessions
-- **Sessions**: ✅ Supported (fixer sessions persist across rounds)
+- **Auth**: `claude` login / Pro·Max subscription, or `ANTHROPIC_API_KEY`
+- **Sessions**: resumable fixer sessions
+- **Terminal workers**: still require `ANTHROPIC_API_KEY` in the service
+  environment (see `docs/operators.md`); each worker gets an isolated config
+  directory that does not carry your login.
 
 ### 3. OpenAI
-- **Binary**: `openai` or `openai-cli`
-- **Features**: Core agent functionality
-- **Sessions**: ❌ Not supported
 
-### 4. Grok
-- **Binary**: `grok` or `grok-cli`
-- **Features**: Core agent functionality
-- **Sessions**: ❌ Not supported
+- **Binary**: `openai`
+- **Sessions**: not supported
+- Named-only; authenticate however that CLI documents.
+
+### 4. Grok (Grok Build)
+
+- **Binary**: `grok`
+- **Install**: `curl -fsSL https://x.ai/cli/install.sh | bash`
+- **Auth (CLI login only)**: `grok login` or `grok login --device-auth` for
+  headless hosts. The adapter strips `XAI_API_KEY` and never passes an API key
+  flag, so runs stay on the login / inference-proxy path.
+- **Prompt delivery**: `--prompt-file` (not stdin / `--print`)
+- **Sessions**: resumable fixer sessions (`--resume` with `sessionId`)
 
 ## Configuration
 
 ### Auto-Detection (Default)
 
-By default, `assistant` uses `"auto"` which tries agents in this order:
-1. Claude
-
-`auto` considers only the adapters PRD section 12 puts in phase one, and Claude
-Code is the only one. Cursor, OpenAI, and Grok run only when named in `agent`.
-`assistant doctor` lists any that resolve on PATH under "named-only agents".
-None of the adapters, Claude included, is tested against its real CLI in this
-repository; the conformance suite drives a test helper binary for all of them.
+By default, `assistant` uses `"auto"`, which tries only adapters that declare
+`AutoEligible`. PRD section 12 makes Claude Code the only phase-one adapter, so
+`auto` expands to Claude alone. Cursor, OpenAI, and Grok run only when named in
+`agent`. `assistant doctor` lists any that resolve on PATH under "named-only
+agents".
 
 ```yaml
 # .assistant.yaml
-# No agent configuration needed - uses auto-detection
+# No agent configuration needed - uses auto → Claude when present
 ```
 
 ### Explicit Agent Selection
 
-Specify a single agent:
-
 ```yaml
-# .assistant.yaml
 agent: cursor
 ```
 
-### Fallback List
+```yaml
+agent: grok
+```
 
-Provide an ordered fallback list:
+### Model pin and fallback list
 
 ```yaml
-# .assistant.yaml
+agent: cursor --model gpt-5
+```
+
+```yaml
 agent:
   - cursor
   - claude
-  - openai
+  - grok
 ```
 
-The first runnable agent in the list will be used. Naming a named-only adapter
-here is the way to select it.
+The first runnable agent in the list is used. Naming a named-only adapter is
+how you select it.
 
 ## CLI Binary Requirements
-
-Each agent requires its CLI tool to be installed and on PATH:
-
-- **Cursor**: Install Cursor CLI
-- **Claude**: Install Claude Code CLI
-- **OpenAI**: Install OpenAI CLI
-- **Grok**: Install Grok CLI
 
 Check availability with:
 
@@ -83,7 +95,12 @@ Check availability with:
 assistant doctor
 ```
 
-This will report which agents are available in your environment.
+| Adapter | Check |
+|---------|--------|
+| Cursor | `cursor-agent --version` or `agent --version` |
+| Claude | `claude --version` |
+| OpenAI | `openai --version` |
+| Grok | `grok version` |
 
 ## Agent Capabilities
 
@@ -91,117 +108,53 @@ This will report which agents are available in your environment.
 |---------|--------|--------|--------|------|
 | Basic execution | ✅ | ✅ | ✅ | ✅ |
 | Structured output | ✅ | ✅ | ✅ | ✅ |
-| Resumable sessions | TBD | ✅ | ❌ | ❌ |
-| Project instructions | ✅ | ✅ | TBD | TBD |
+| Resumable sessions | ✅ | ✅ | ❌ | ✅ |
+| CLI login (no API key) | ✅ | ✅ (print mode) | TBD | ✅ |
+| Terminal workers | ❌ | ✅ | ❌ | ❌ |
 
 ## How It Works
 
-### Agent Resolution
-
 1. Read `agent` config key (defaults to `["auto"]`)
-2. If `"auto"`, expand to the auto-eligible adapters in catalog order (Claude)
-3. For each agent name:
-   - Check if the binary exists on PATH
-   - If yes, use that agent
-   - If no, try the next one
-4. If none are available, error
+2. If `"auto"`, expand to auto-eligible adapters (Claude)
+3. For each entry, resolve the binary on PATH and use the first that can run
+4. If none are available, refuse before the first stage
 
-### Agent Invocation
-
-All agents follow the same interface:
-
-```go
-type Runner interface {
-    Name() string
-    Capabilities() Capabilities
-    Run(ctx context.Context, purpose Purpose, inv Invocation) (Result, error)
-}
-```
-
-Each adapter:
-1. Executes the agent CLI with appropriate flags
-2. Passes the prompt via stdin
-3. Reads JSON result envelope from stdout
-4. Parses findings/reports from the result
-5. Returns structured Result
-
-### Result Format
-
-All agents must output a JSON envelope:
-
-```json
-{
-  "result": "<stage report or review report>",
-  "model": "<model used>",
-  "usage": {
-    "input_tokens": 1000,
-    "output_tokens": 500
-  }
-}
-```
-
-## Adding a New Agent
-
-To add support for another LLM provider:
-
-1. Create `internal/agents/newagent.go`
-2. Implement the Factory interface
-3. Implement the Runner interface
-4. Add factory to DefaultCatalog in `resolve.go`
-5. Document capabilities and requirements
-
-See `claude.go` as the reference implementation.
+Each adapter executes the agent CLI, passes the prompt (stdin or
+`--prompt-file`), reads a JSON result envelope from stdout, and returns a
+structured `Result`. Cursor and Grok strip their provider API-key environment
+variables so authentication is the CLI login.
 
 ## Troubleshooting
 
 ### "No runnable agent"
 
-None of the configured agents are available on PATH.
+Install at least one agent CLI and ensure it is on the service’s PATH.
 
-**Solution**: Install at least one agent CLI:
-- `cursor --version`
-- `claude --version`
-- `openai --version`
-- `grok --version`
+### Cursor resolves as Grok’s `agent`
 
-### Agent fails to run
+Install Cursor’s CLI and ensure `cursor-agent` appears on PATH ahead of a
+Grok-owned `agent` symlink, or pin the binary:
 
-The binary exists but fails when invoked.
+```yaml
+# Not supported as a path in agent: — put cursor-agent on PATH instead.
+agent: cursor
+```
 
-**Solution**: 
-- Check authentication (most CLIs need API keys)
-- Verify CLI version compatibility
-- Run `<agent> --help` to test manually
+### Cursor / Grok: not authenticated
+
+```bash
+agent login          # Cursor
+grok login           # Grok (browser)
+grok login --device-auth   # Grok headless
+```
+
+Do not set `CURSOR_API_KEY` or `XAI_API_KEY` for `assistant` runs; the adapters
+strip those variables on purpose.
 
 ### Wrong agent selected
 
-Auto-detection picked an agent you don't want (it only picks Claude).
-
-**Solution**: Explicitly configure the agent:
-```yaml
-agent: cursor  # Force Cursor
-```
-
-## Migration from Claude-only
-
-No changes needed! If you have Claude installed, it will continue to work. The new agents are additive.
-
-To switch to a different agent:
+`auto` only picks Claude. Name the agent you want:
 
 ```yaml
-# Old (still works)
-agent: claude
-
-# New (try Cursor first, fallback to Claude)
-agent:
-  - cursor
-  - claude
+agent: cursor
 ```
-
-## Future Enhancements
-
-Planned additions:
-- Anthropic API (direct API calls, no CLI)
-- OpenAI API (direct API calls, no CLI)
-- Gemini support
-- Local model support (Ollama, etc.)

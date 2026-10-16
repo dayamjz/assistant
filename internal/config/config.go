@@ -463,6 +463,17 @@ var ReservedAgentFlags = []string{
 	"--disallowedTools",
 	"--disallowed-tools",
 	"--tools",
+	// Cursor / Grok grant and prompt delivery the adapters write themselves.
+	"--force",
+	"--yolo",
+	"--mode",
+	"--always-approve",
+	"--deny",
+	"--allow",
+	"--single",
+	"--prompt-file",
+	"--prompt-json",
+	"--api-key",
 }
 
 // Defaults returns the configuration a repository with no configuration at all

@@ -344,6 +344,11 @@ it every Claude Code launch under tmux is refused with an error naming the
 variable. The directory holds the key's last 20 characters, which is how
 the CLI records an approval, and never the whole key.
 
+Cursor and Grok are different: those adapters strip `CURSOR_API_KEY` and
+`XAI_API_KEY` and authenticate only through their CLI logins (`agent login`,
+`grok login`). Name them in the `agent` key when you want them; `auto` still
+selects only Claude. See `docs/multi-agent-support.md`.
+
 What you see in the pane is the CLI's flat screen reader layout. A message
 the program sends waits until the worker's current turn has ended and its
 input is empty, and then arrives as one paste, so a message of several lines

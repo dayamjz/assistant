@@ -2,6 +2,12 @@ package agents
 
 import "context"
 
+// LookPathFirst exposes lookPathFirst for tests of the Cursor binary search.
+var LookPathFirst = lookPathFirst
+
+// WithoutEnvNames exposes withoutEnvNames for tests of API-key stripping.
+var WithoutEnvNames = withoutEnvNames
+
 // EndListed exposes endListed, so a test can hand the ending step an identity
 // the listing produced and then mutated, which is the reuse it must refuse.
 var EndListed = endListed

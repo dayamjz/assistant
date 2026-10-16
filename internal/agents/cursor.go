@@ -17,12 +17,28 @@ import (
 // CursorName is the name configuration spells this adapter with.
 const CursorName = "cursor"
 
+// CursorKeyVariable is the environment variable Cursor's Agent CLI reads as an
+// API key. This adapter strips it from every invocation's environment so the
+// CLI authenticates with `agent login` credentials rather than the API-key
+// route. A key set only for the service process therefore does not redirect
+// Cursor runs onto pay-as-you-go API billing.
+const CursorKeyVariable = "CURSOR_API_KEY"
+
+// CursorBinaries is the PATH search order when no WithCursorBinary pin is set.
+// Cursor's installer puts the CLI on PATH as "agent" and also as
+// "cursor-agent" under its versioned install tree; Grok's installer reuses the
+// name "agent", so "cursor-agent" is tried first, then the historical
+// "cursor", then "agent".
+var CursorBinaries = []string{"cursor-agent", "cursor", "agent"}
+
 // CursorOption configures the Cursor adapter. Options are supplied when
 // the factory is built and are fixed for the lifetime of every Runner it
 // produces, so every invocation runs under the same configuration.
 type CursorOption func(*cursorSettings)
 
 type cursorSettings struct {
+	// bin, when non-empty, is the only executable LookPath may resolve. Empty
+	// means search CursorBinaries in order.
 	bin      string
 	base     []string
 	baseSet  bool
@@ -32,9 +48,9 @@ type cursorSettings struct {
 	sweep    Sweep
 }
 
-// WithCursorBinary names the executable to run. The default is "cursor", resolved
-// through PATH. A caller that pins an installation, or a test that substitutes
-// a stand-in, passes it here.
+// WithCursorBinary names the executable to run. The default searches
+// CursorBinaries on PATH. A caller that pins an installation, or a test that
+// substitutes a stand-in, passes it here.
 func WithCursorBinary(path string) CursorOption {
 	return func(s *cursorSettings) {
 		if path != "" {
@@ -46,9 +62,9 @@ func WithCursorBinary(path string) CursorOption {
 // WithCursorBaseEnvironment sets the environment every invocation starts from,
 // before an Invocation's own Env is applied over it. The default is the
 // process environment; an empty or nil slice given here is a deliberately
-// empty base rather than a request for the default. Nothing is filtered out of it: an agent's credentials
-// legitimately arrive this way, and what keeps them out of a record is that
-// Record has no field they could be written into.
+// empty base rather than a request for the default. CursorKeyVariable is
+// stripped at invoke time regardless of what this base carries, so an API key
+// in the service environment cannot redirect a run onto the API-key route.
 func WithCursorBaseEnvironment(env []string) CursorOption {
 	return func(s *cursorSettings) {
 		s.base = slices.Clone(env)
@@ -94,7 +110,6 @@ func WithCursorSweep(sw Sweep) CursorOption {
 
 func newCursorSettings(opts []CursorOption) cursorSettings {
 	s := cursorSettings{
-		bin:    CursorName,
 		grace:  DefaultTerminationGrace,
 		maxOut: DefaultMaxOutput,
 	}
@@ -128,20 +143,31 @@ func (f *cursorFactory) AutoEligible() bool { return false }
 // New reports whether Cursor can be run here, and returns a Runner when
 // it can.
 //
-// What availability means here is exactly one thing: the named executable
-// resolves to a file this process may execute. That is what an ordered
-// fallback list needs to skip an agent that is not installed, and it is all
-// this check buys. An installation that resolves and then fails on its first
-// invocation, because it is unauthenticated or of an incompatible version, is
-// not caught here; it surfaces as a failed invocation with the agent's own
-// message. Proving more would mean running the agent during resolution, which
-// costs a process and a possible hang at the exact moment a run is deciding
-// whether it can start at all.
+// What availability means here is exactly one thing: one of the candidate
+// executables resolves to a file this process may execute. That is what an
+// ordered fallback list needs to skip an agent that is not installed, and it
+// is all this check buys. An installation that resolves and then fails on its
+// first invocation, because it is unauthenticated or of an incompatible
+// version, is not caught here; it surfaces as a failed invocation with the
+// agent's own message. Proving more would mean running the agent during
+// resolution, which costs a process and a possible hang at the exact moment a
+// run is deciding whether it can start at all.
 func (f *cursorFactory) New(ctx context.Context, args []string) (Runner, error) {
 	_ = ctx
-	resolved, err := exec.LookPath(f.settings.bin)
-	if err != nil {
-		return nil, fmt.Errorf("%s is not runnable: %w", f.settings.bin, err)
+	var (
+		resolved string
+		err      error
+	)
+	if f.settings.bin != "" {
+		resolved, err = exec.LookPath(f.settings.bin)
+		if err != nil {
+			return nil, fmt.Errorf("%s is not runnable: %w", f.settings.bin, err)
+		}
+	} else {
+		resolved, err = lookPathFirst(CursorBinaries...)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &cursorRunner{
 		settings: f.settings,
@@ -310,10 +336,10 @@ func (r *cursorRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 
 	proc := runProcess(ctx, procSpec{
 		bin:     r.resolved,
-		args:    r.arguments(inv, s.resume),
+		args:    r.arguments(GrantFor(purpose), inv, s.resume),
 		stdin:   inv.Prompt,
 		dir:     inv.Dir,
-		env:     environment(r.settings.base, inv.Env),
+		env:     withoutEnvNames(environment(r.settings.base, inv.Env), CursorKeyVariable),
 		grace:   r.settings.grace,
 		maxOut:  r.settings.maxOut,
 		started: inv.Started,
@@ -419,8 +445,8 @@ func (r *cursorRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 }
 
 // arguments builds the command line. The configured entry's own flags come
-// first, then the four this run manages: --print, --output-format, --model,
-// and --resume.
+// first, then the grant (cursorGrantFlags), then the four this run manages:
+// --print, --output-format, --model, and --resume.
 //
 // Of those four, config.ReservedAgentFlags refuses a configured entry that
 // names --output-format or --resume, so an entry cannot contradict the two
@@ -432,9 +458,11 @@ func (r *cursorRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 // The prompt is not on the command line at all. It is written to the agent's
 // standard input, so its size is bounded by MaxPromptBytes rather than by an
 // argument list, and a prompt that begins with a dash cannot be read as an
-// option.
-func (r *cursorRunner) arguments(inv Invocation, resume string) []string {
+// option. --api-key is never written: authentication is the CLI login, and
+// CursorKeyVariable is stripped from the environment for the same reason.
+func (r *cursorRunner) arguments(grant Grant, inv Invocation, resume string) []string {
 	args := slices.Clone(r.extra)
+	args = append(args, cursorGrantFlags(grant)...)
 	args = append(args, "--print", "--output-format", "json")
 	if inv.Model != "" {
 		args = append(args, "--model", inv.Model)
@@ -443,6 +471,23 @@ func (r *cursorRunner) arguments(inv Invocation, resume string) []string {
 		args = append(args, "--resume", resume)
 	}
 	return args
+}
+
+// cursorGrantFlags is Cursor Agent CLI's translation of a Grant.
+//
+//   - GrantRead runs in ask mode, which the CLI documents as read-only.
+//   - GrantEdit runs with --force so tool calls a headless fix needs are not
+//     left waiting on a person who is not there.
+//   - GrantWorker is GrantRead's: this adapter declares no worker capability,
+//     so a worker grant is not a path a run reaches here.
+//
+// An unrecognized grant is GrantRead's.
+func cursorGrantFlags(g Grant) []string {
+	switch g {
+	case GrantEdit:
+		return []string{"--force"}
+	}
+	return []string{"--mode", "ask"}
 }
 
 // report hands one record to the configured Recorder, if there is one.

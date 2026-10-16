@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
@@ -15,6 +16,12 @@ import (
 
 // GrokName is the name configuration spells this adapter with.
 const GrokName = "grok"
+
+// GrokKeyVariable is the environment variable Grok Build reads as an API key.
+// This adapter strips it from every invocation's environment so the CLI
+// authenticates with `grok login` credentials rather than the API-key route
+// that bills against console.x.ai.
+const GrokKeyVariable = "XAI_API_KEY"
 
 // GrokOption configures the Grok adapter. Options are supplied when the
 // factory is built and are fixed for the lifetime of every Runner it produces,
@@ -45,9 +52,9 @@ func WithGrokBinary(path string) GrokOption {
 // WithGrokBaseEnvironment sets the environment every invocation starts from,
 // before an Invocation's own Env is applied over it. The default is the
 // process environment; an empty or nil slice given here is a deliberately
-// empty base rather than a request for the default. Nothing is filtered out of
-// it: an agent's credentials legitimately arrive this way, and what keeps them
-// out of a record is that Record has no field they could be written into.
+// empty base rather than a request for the default. GrokKeyVariable is
+// stripped at invoke time regardless of what this base carries, so an API key
+// in the service environment cannot redirect a run onto the API-key route.
 func WithGrokBaseEnvironment(env []string) GrokOption {
 	return func(s *grokSettings) {
 		s.base = slices.Clone(env)
@@ -111,8 +118,8 @@ func newGrokSettings(opts []GrokOption) grokSettings {
 // grokFactory is the Factory for Grok.
 type grokFactory struct{ settings grokSettings }
 
-// GrokFactory returns the Factory for the Grok adapter. Grok does not have
-// resumable sessions, so it implements only Runner and not SessionRunner.
+// GrokFactory returns the Factory for the Grok adapter. It follows the same
+// pattern as Cursor with a result envelope and resumable sessions.
 func GrokFactory(opts ...GrokOption) Factory {
 	return &grokFactory{settings: newGrokSettings(opts)}
 }
@@ -148,7 +155,7 @@ func (f *grokFactory) New(ctx context.Context, args []string) (Runner, error) {
 	}, nil
 }
 
-// grokRunner runs prompts through one Grok installation.
+// grokRunner runs prompts through one Grok Build installation.
 type grokRunner struct {
 	settings grokSettings
 	resolved string
@@ -160,46 +167,114 @@ func (r *grokRunner) Name() string { return GrokName }
 
 // Capabilities is what this adapter declares.
 //
+// Resumable sessions are declared because the mechanism is here: a fixer's
+// rounds after the first carry --resume with the sessionId the envelope
+// reported, which arguments and invoke build, and the Fixer method below is
+// what makes that reachable.
+//
 // Instruction suppression is not declared, because nothing here implements it.
-// This adapter carries a configured entry's own flags and the four the run
+// This adapter carries a configured entry's own flags and the flags the run
 // manages, and none of those tells Grok to ignore a repository's instruction
 // files. Declaring it would buy a run that suppresses nothing while reporting
 // that it did, which is the substitution PRD section 8 refuses. Leaving it
 // undeclared is what lets internal/pipeline refuse a run that asks for
 // suppression against this adapter before it launches one.
-//
-// Resumable sessions are not declared, because Grok does not support session
-// resumption. This adapter has no Fixer method and does not implement
-// SessionRunner.
 func (r *grokRunner) Capabilities() Capabilities {
-	return Capabilities{}
+	return Declare(CapabilityResumableSessions)
 }
 
-// Run executes one invocation with no session.
+// Run executes one invocation with no session. It resumes nothing, and the
+// session the agent opens for itself is not kept, so a record it produces
+// always reads SessionNone whatever its purpose.
 func (r *grokRunner) Run(ctx context.Context, purpose Purpose, inv Invocation) (Result, error) {
 	if !purpose.Recognized() {
 		return Result{}, fmt.Errorf("%w: %q", ErrUnrecognizedPurpose, string(purpose))
 	}
-	return r.invoke(ctx, purpose, inv)
+	res, _, err := r.invoke(ctx, purpose, inv, session{})
+	return res, err
+}
+
+// Fixer opens the run's durable fixer session. resume is empty for a new one,
+// or the reference a previous Fixer reported.
+//
+// Having this method is what makes this adapter a SessionRunner, and
+// Capabilities declares the same fact. Resolve refuses an adapter where the
+// two disagree, so the pair cannot drift apart unnoticed.
+func (r *grokRunner) Fixer(ctx context.Context, resume string) (Fixer, error) {
+	_ = ctx
+	return &grokFixer{runner: r, reference: resume}, nil
+}
+
+// grokFixer is one run's fixer session. Apply takes no purpose and no
+// session, so every invocation it makes is a fix that continues this session
+// and nothing else can reach it.
+//
+// A round whose agent reported no session reference leaves the fixer with
+// nothing to continue, and the next round opens a fresh session instead. The
+// round's own result stands, because refusing a fix that already edited files
+// would be worse than losing the conversation, and the loss is visible rather
+// than silent: that round's record says the session was not opened.
+//
+// A round that reported one keeps it whether or not the round then succeeded.
+// None of this reaches P4. Runner.Run still passes no session in and keeps
+// none out, so a review invocation records SessionNone whatever it does, and
+// an invocation asking for a review shape is refused here rather than answered
+// from this conversation.
+type grokFixer struct {
+	runner *grokRunner
+
+	mu        sync.Mutex
+	reference string
+}
+
+// Apply runs one fix round in this session, opening it on the first round and
+// resuming it afterwards. An invocation asking for a review shape is refused
+// with ErrReviewInFixerSession before anything starts, so this session never
+// answers a review.
+func (f *grokFixer) Apply(ctx context.Context, inv Invocation) (Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	res, reference, err := f.runner.invoke(ctx, PurposeFix, inv, session{resume: f.reference, keep: true})
+	if reference != "" {
+		f.reference = reference
+	}
+	return res, err
+}
+
+// Reference returns the agent's opaque handle for this session, empty until a
+// round has produced one.
+func (f *grokFixer) Reference() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reference
 }
 
 // invoke runs one agent process and turns what it printed into a Result or a
 // refusal.
-func (r *grokRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation) (Result, error) {
-	if err := inv.Validate(); err != nil {
-		return Result{}, err
+//
+// It returns the session reference the agent reported when the caller keeps
+// it, so the Fixer can carry it to the next round. That happens whatever the
+// invocation then produced: one place decides what a round did with its
+// session, and both the record and the Fixer read that one decision.
+func (r *grokRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation, s session) (Result, string, error) {
+	validate := inv.Validate
+	if s.carried() {
+		validate = inv.ValidateForFixer
+	}
+	if err := validate(); err != nil {
+		return Result{}, "", err
 	}
 
 	record := Record{
 		Purpose: purpose,
 		Agent:   GrokName,
 		Model:   inv.Model,
-		Session: SessionNone,
+		Session: s.use(),
 		Started: time.Now(),
 		Served:  inv.Served,
 	}
-
-	fail := func(res *procResult, category Failure, cause error, message string) (Result, error) {
+	reference := ""
+	fail := func(res *procResult, category Failure, cause error, message string) (Result, string, error) {
 		record.Duration = time.Since(record.Started)
 		record.Failure = category
 		r.report(record)
@@ -210,7 +285,7 @@ func (r *grokRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation
 				message = res.stderr
 			}
 		}
-		return Result{}, &InvocationError{
+		return Result{}, reference, &InvocationError{
 			Purpose:  purpose,
 			Agent:    GrokName,
 			Failure:  category,
@@ -220,17 +295,29 @@ func (r *grokRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation
 		}
 	}
 
+	promptFile, err := os.CreateTemp("", "assistant-grok-prompt-*")
+	if err != nil {
+		return fail(nil, FailureProcess, err, "creating a prompt file")
+	}
+	promptPath := promptFile.Name()
+	defer func() { _ = os.Remove(promptPath) }()
+	if _, err := promptFile.WriteString(inv.Prompt); err != nil {
+		_ = promptFile.Close()
+		return fail(nil, FailureProcess, err, "writing the prompt file")
+	}
+	if err := promptFile.Close(); err != nil {
+		return fail(nil, FailureProcess, err, "closing the prompt file")
+	}
+
 	proc := runProcess(ctx, procSpec{
 		bin:     r.resolved,
-		args:    r.arguments(inv),
-		stdin:   inv.Prompt,
+		args:    r.arguments(GrantFor(purpose), inv, s.resume, promptPath),
 		dir:     inv.Dir,
-		env:     environment(r.settings.base, inv.Env),
+		env:     withoutEnvNames(environment(r.settings.base, inv.Env), GrokKeyVariable),
 		grace:   r.settings.grace,
 		maxOut:  r.settings.maxOut,
 		started: inv.Started,
 	})
-
 	r.sweep(ctx, inv.Dir)
 
 	var envelope grokEnvelope
@@ -239,6 +326,14 @@ func (r *grokRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation
 		record.Usage = envelope.usage()
 		if envelope.Model != "" {
 			record.Model = envelope.Model
+		}
+	}
+	if s.keep && decodeErr == nil {
+		if sid := envelope.session(); sid != "" {
+			reference = sid
+			if !s.resumed() {
+				record.Session = SessionOpened
+			}
 		}
 	}
 
@@ -257,8 +352,10 @@ func (r *grokRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation
 	if !proc.exited || (proc.err != nil && !errors.As(proc.err, &exited)) {
 		return fail(&proc, FailureProcess, proc.err, "")
 	}
-
-	if decodeErr == nil && envelope.IsError {
+	// Grok's auth and other hard failures print {"type":"error","message":…}
+	// rather than the success envelope. Treat that as the agent's own failure
+	// before looking at the exit status, so the message reaches the caller.
+	if decodeErr == nil && envelope.isError() {
 		return fail(&proc, FailureAgent,
 			errors.New("agent reported its own failure"), envelope.failureText())
 	}
@@ -269,22 +366,23 @@ func (r *grokRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation
 		return fail(&proc, FailureOutput,
 			fmt.Errorf("agent did not print a result envelope: %w", decodeErr), "")
 	}
-	if envelope.Result == "" {
+	text := envelope.resultText()
+	if text == "" {
 		return fail(&proc, FailureOutput,
 			errors.New("agent's result envelope carried no result"), "")
 	}
 
-	result := Result{Text: envelope.Result}
+	result := Result{Text: text}
 	switch inv.Shape {
 	case ShapeReport:
-		report, err := findings.ParseReport(envelope.Result)
+		report, err := findings.ParseReport(text)
 		if err != nil {
 			return fail(&proc, FailureOutput,
 				fmt.Errorf("agent's result is not a stage report: %w", err), "")
 		}
 		result.Report = report
 	case ShapeReview:
-		report, binding, err := findings.ParseReviewReport(envelope.Result, inv.Review)
+		report, binding, err := findings.ParseReviewReport(text, inv.Review)
 		if err != nil {
 			return fail(&proc, FailureOutput,
 				fmt.Errorf("agent's result is not a bindable review report: %w", err), "")
@@ -296,23 +394,50 @@ func (r *grokRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation
 	record.Failure = FailureNone
 	r.report(record)
 	result.Record = record
-	return result, nil
+	return result, reference, nil
 }
 
 // arguments builds the command line. The configured entry's own flags come
-// first, then the managed flags: --print, --output-format, and --model.
+// first, then the grant (grokGrantFlags), then the flags this run manages:
+// --prompt-file, --output-format, --model, and --resume.
 //
-// The prompt is not on the command line at all. It is written to the agent's
-// standard input, so its size is bounded by MaxPromptBytes rather than by an
-// argument list, and a prompt that begins with a dash cannot be read as an
-// option.
-func (r *grokRunner) arguments(inv Invocation) []string {
+// Grok Build takes the prompt as --prompt-file (or -p/--single), not on
+// standard input, so the prompt is written to a temporary file and that path
+// is named here. config.ReservedAgentFlags refuses a configured entry that
+// names --output-format, --resume, --prompt-file, or --single, so an entry
+// cannot contradict how the prompt and output are managed. --model is managed
+// here without being reserved there.
+//
+// GrokKeyVariable is stripped from the environment and --api-key is never
+// written, so authentication is the CLI login.
+func (r *grokRunner) arguments(grant Grant, inv Invocation, resume, promptPath string) []string {
 	args := slices.Clone(r.extra)
-	args = append(args, "--print", "--output-format", "json")
+	args = append(args, grokGrantFlags(grant)...)
+	args = append(args, "--prompt-file", promptPath, "--output-format", "json")
 	if inv.Model != "" {
 		args = append(args, "--model", inv.Model)
 	}
+	if resume != "" {
+		args = append(args, "--resume", resume)
+	}
 	return args
+}
+
+// grokGrantFlags is Grok Build's translation of a Grant.
+//
+//   - GrantRead runs in plan mode, which the CLI documents as read-only.
+//   - GrantEdit runs in acceptEdits with the shell denied, so a headless fix
+//     can write files without a person answering prompts and cannot run
+//     commands.
+//   - GrantWorker is GrantRead's: this adapter declares no worker capability.
+//
+// An unrecognized grant is GrantRead's.
+func grokGrantFlags(g Grant) []string {
+	switch g {
+	case GrantEdit:
+		return []string{"--permission-mode", "acceptEdits", "--deny", "Bash"}
+	}
+	return []string{"--permission-mode", "plan"}
 }
 
 // report hands one record to the configured Recorder, if there is one.
@@ -332,26 +457,27 @@ func (r *grokRunner) sweep(ctx context.Context, dir string) {
 	r.settings.sweep.SweepUnder(context.WithoutCancel(ctx), dir)
 }
 
-// grokEnvelope is the result envelope this adapter reads, holding only the
-// fields it uses. Every field is optional at the decoding layer and what is
-// required is decided above, so a field the agent stops reporting produces a
-// named refusal rather than a decoding error a caller cannot act on.
-//
-// A field this struct does not name is ignored, so an agent that adds one does
-// not cost an otherwise usable result.
+// grokEnvelope is the result envelope this adapter reads. Grok Build's
+// headless --output-format json object uses text and sessionId (camelCase),
+// and auth failures use {"type":"error","message":…}. Every field is optional
+// at the decoding layer and what is required is decided above.
 //
 // This describes what the adapter reads, not what the agent guarantees to
 // write. An envelope this adapter cannot read is FailureOutput.
 type grokEnvelope struct {
-	Subtype string `json:"subtype"`
-	IsError bool   `json:"is_error"`
-	Result  string `json:"result"`
-	Model   string `json:"model"`
-	// Every count is a pointer so that a counter the agent omitted stays
-	// distinguishable from one it reported as zero. Decoding into a number
-	// would collapse the two here, where the difference is still knowable.
-	NumTurns *int64 `json:"num_turns"`
-	Usage    struct {
+	Type       string `json:"type"`
+	Message    string `json:"message"`
+	Text       string `json:"text"`
+	Result     string `json:"result"`
+	StopReason string `json:"stopReason"`
+	SessionID  string `json:"sessionId"`
+	// SessionIDSnake is the Claude-shaped field the test helper still prints.
+	// The real CLI uses sessionId; accepting both keeps the conformance suite
+	// on the helper binary without inventing a second envelope shape.
+	SessionIDSnake string `json:"session_id"`
+	Model          string `json:"model"`
+	NumTurns       *int64 `json:"num_turns"`
+	Usage          struct {
 		InputTokens              *int64 `json:"input_tokens"`
 		OutputTokens             *int64 `json:"output_tokens"`
 		CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
@@ -359,8 +485,24 @@ type grokEnvelope struct {
 	} `json:"usage"`
 }
 
-// usage converts the reported counts into the recorded form, carrying which of
-// them the agent actually reported.
+func (e grokEnvelope) isError() bool {
+	return e.Type == "error"
+}
+
+func (e grokEnvelope) session() string {
+	if e.SessionID != "" {
+		return e.SessionID
+	}
+	return e.SessionIDSnake
+}
+
+func (e grokEnvelope) resultText() string {
+	if e.Text != "" {
+		return e.Text
+	}
+	return e.Result
+}
+
 func (e grokEnvelope) usage() Usage {
 	return Usage{
 		InputTokens:         reportedCount(e.Usage.InputTokens),
@@ -371,11 +513,12 @@ func (e grokEnvelope) usage() Usage {
 	}
 }
 
-// failureText is what the agent said about its own failure. It is content, so
-// it reaches an *InvocationError and never a Record.
 func (e grokEnvelope) failureText() string {
-	if e.Result != "" {
-		return e.Result
+	if e.Message != "" {
+		return e.Message
 	}
-	return e.Subtype
+	if e.Text != "" {
+		return e.Text
+	}
+	return e.Type
 }
