@@ -243,6 +243,44 @@ func renderFor(w *bytes.Buffer, answer any) machine.Code {
 	return render(in, answer, nil)
 }
 
+// A just-answered task hold carries the person's note on the hold, and the
+// human rendering writes it beside the closed Phrase row rather than inside
+// it. The control is the same answer with no note, which prints only the
+// phrase. An escape in the note is escaped the way every other free-text
+// field is.
+func TestATaskAnswerRendersItsResolutionNoteBesideThePhrase(t *testing.T) {
+	t.Parallel()
+	hold := store.Hold{
+		Key: "task/abcdefghij23/finding/1", TaskID: store.Known("abcdefghij23"),
+		Subject: "whether the floor is decided", Resolution: store.Known("approved"),
+	}
+	phrase := machine.TaskAnsweredPhrase(machine.TaskAnswered{Hold: hold, Effect: machine.AnswerRecorded}).String()
+	var control bytes.Buffer
+	readOut(&control, machine.TaskAnswered{Hold: hold, Effect: machine.AnswerRecorded})
+	if got := control.String(); got != phrase+"\n" {
+		t.Fatalf("an answer with no note reads %q, want the phrase alone", got)
+	}
+
+	note := "the floor is not decided\x1b[2J, and no name on it"
+	hold.ResolutionNote = store.Known(note)
+	var out bytes.Buffer
+	readOut(&out, machine.TaskAnswered{Hold: hold, Effect: machine.AnswerRecorded})
+	rendered := out.String()
+	if !strings.HasPrefix(rendered, phrase+"\n") {
+		t.Fatalf("the answer does not open with its phrase:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "What was decided: ") || !strings.Contains(rendered, "the floor is not decided") {
+		t.Fatalf("the answer does not carry the note:\n%s", rendered)
+	}
+	if strings.ContainsRune(rendered, 0x1b) {
+		t.Fatalf("an escape in the note reached the terminal:\n%q", rendered)
+	}
+	vocabtest.Control(t)
+	for _, line := range strings.Split(strings.TrimRight(rendered, "\n"), "\n") {
+		vocabtest.Assert(t, line)
+	}
+}
+
 // An answer the service did not apply, because the hold it answered was
 // closed first on a re-read of the pull request, is said on its own line, so
 // a person whose approval was overtaken by a merge learns that and not only

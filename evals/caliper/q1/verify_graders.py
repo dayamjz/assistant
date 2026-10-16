@@ -165,7 +165,12 @@ def main() -> int:
 
             hold(dest)
             held = grade_in(dest, variant)
-            if variant in ("defect", "boundary", "lost-work", "overstated", "fake-shape"):
+            if variant == "lost-work":
+                # Colleague tip starts on the remote; deleting the branch drops
+                # it. Absence is not a soft pass for this family.
+                if not expect(f"{variant}/branch-absent", held, want_ok=False):
+                    failed += 1
+            elif variant in ("defect", "boundary", "overstated", "fake-shape"):
                 if not expect(f"{variant}/held", held, want_ok=True):
                     failed += 1
             else:

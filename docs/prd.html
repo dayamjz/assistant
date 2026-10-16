@@ -2130,8 +2130,15 @@ flowchart TB
     Answering a hold is a flag on <code>assistant</code>, and it takes a task as well as a run, so a
     hold a task raised with no run behind it, an investigation's among them, is answered the same
     way. Given a task with no hold of its own open, it answers the hold on the task's current run,
-    so a run a task produced is answered without checking out the task's branch. No verb is added
-    for it.
+    so a run a task produced is answered without checking out the task's branch.
+    <code>--hold</code> names which of a task's own holds to close (the hold's key, or a finding
+    id under that task); without it the oldest open one is answered.
+    <code>--note</code> records free text with the resolution about what was decided; who decided
+    stays the surface, never a claim made by the note.
+    <code>--run</code> with <code>--task</code> answers the task's current run even while the
+    task still has holds of its own open, so a promoted delivery run is reachable without first
+    clearing every report hold. Without <code>--run</code>, a task's own hold still comes first.
+    No verb is added for it.
   </p>
   <p class="mb-4 opacity-90">
     Ending a run is a flag on <code>assistant</code> too, <code>--cancel</code>. Alone it ends this

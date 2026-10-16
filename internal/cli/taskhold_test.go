@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
@@ -221,6 +222,79 @@ func TestAnInvestigationsHoldIsAnsweredGivenTheTask(t *testing.T) {
 	}
 }
 
+// Issue #279: a task with three report holds can answer the middle one by
+// name (finding id), with a note, and the note is on the hold's record.
+// Oldest-first is no longer the only path.
+func TestANamedTaskHoldIsAnsweredWithANote(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	serve(t, h)
+	elsewhere := t.TempDir()
+
+	id := "namedholds23"
+	records := openStore(t, h)
+	if _, err := records.CreateTask(t.Context(), store.Task{
+		ID: id, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: "/worktrees/named",
+	}, store.Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"summary":"three decisions","findings":[` +
+		`{"severity":"warning","action":"ask","description":"Whether the floor is decided."},` +
+		`{"severity":"warning","action":"ask","description":"Whether the old index may be dropped."},` +
+		`{"severity":"warning","action":"ask","description":"Whether the cache should move."}]}`
+	report, err := findings.ParseReport(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := report.Held()
+	if len(held) != 3 {
+		t.Fatalf("the report holds %d findings, want three", len(held))
+	}
+	var holds []store.Hold
+	for _, f := range held {
+		holds = append(holds, store.Hold{Key: tasks.HoldKey(id, f.ID), TaskID: store.Known(id), Subject: f.Description, Detail: f.Description})
+	}
+	if _, _, err := records.StoreTaskReport(t.Context(), store.TaskReport{TaskID: id, Body: raw, Report: encoded}, holds); err != nil {
+		t.Fatal(err)
+	}
+	_ = records.Close()
+
+	middle := held[1]
+	note := "the floor is not decided, and no name on it"
+	got := run(t, h, elsewhere, "--json", "--task", id, "--hold", middle.ID, "--answer", "approved", "--note", note)
+	if got.code != machine.ExitOK {
+		t.Fatalf("answering the middle hold exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	var answered machine.TaskAnswered
+	if err := json.Unmarshal([]byte(got.stdout), &answered); err != nil {
+		t.Fatalf("decoding: %v\n%s", err, got.stdout)
+	}
+	wantKey := tasks.HoldKey(id, middle.ID)
+	if answered.Hold.Key != wantKey || answered.Hold.Resolution.Or("") != "approved" || answered.Effect != machine.AnswerRecorded {
+		t.Fatalf("the answer reports %+v, want hold %s recorded approved", answered, wantKey)
+	}
+	if gotNote, ok := answered.Hold.ResolutionNote.Get(); !ok || gotNote != note {
+		t.Fatalf("the answer carries resolution note %+v, want %q", answered.Hold.ResolutionNote, note)
+	}
+	stored := holdOf(t, h, wantKey)
+	if gotNote, ok := stored.ResolutionNote.Get(); !ok || gotNote != note {
+		t.Fatalf("the hold record carries note %+v, want %q", stored.ResolutionNote, note)
+	}
+	open := openHoldsOf(t, h, id)
+	if len(open) != 2 {
+		t.Fatalf("after naming the middle hold the task still holds %+v, want the other two", open)
+	}
+	for _, remaining := range open {
+		if remaining.Key == wantKey {
+			t.Fatalf("the named hold is still open: %+v", open)
+		}
+	}
+}
+
 // --task is read only with --answer or --standing-consent and takes a task,
 // and it acts on one thing at a time. Each is incorrect usage, decided before
 // any service is asked. A fix round given --task is not among them: it goes
@@ -235,8 +309,13 @@ func TestTheTaskFlagIsReadOnlyWithAnAnswerOrConsent(t *testing.T) {
 		{"--task", "abcdefghij23", "--standing-consent=false"},
 		{"--task", "", "--answer", "retry"},
 		{"--task", "", "--standing-consent"},
-		{"--task", "abcdefghij23", "--answer", "retry", "--note", "do it"},
 		{"--task", "abcdefghij23", "--answer", "retry", "--cancel"},
+		{"--hold", "finding-1", "--answer", "approved"},
+		{"--run", "--answer", "approved"},
+		{"--task", "abcdefghij23", "--hold", "finding-1", "--run", "--answer", "approved"},
+		{"--task", "abcdefghij23", "--hold", "", "--answer", "approved"},
+		{"--task", "abcdefghij23", "--hold", "finding-1", "--answer", string(pipeline.OutcomeFixRequested)},
+		{"--task", "abcdefghij23", "--run", "--answer", "approved", "--note", "ignored"},
 		{"--task", "abcdefghij23", "--answer", "retry", "--intent", "something"},
 		{"--task", "abcdefghij23", "--answer", "retry", "--standing-consent"},
 		{"--task", "abcdefghij23", "--standing-consent", "--intent", "something"},

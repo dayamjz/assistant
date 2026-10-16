@@ -45,6 +45,11 @@ type Hold struct {
 	// the column existed, which is a different fact from a resolution nobody
 	// is recorded for: ResolveHold refuses to create one of those.
 	ResolvedBy Optional[Resolver]
+	// ResolutionNote is free text recorded with the resolution about what
+	// was decided. It is unknown while the hold is open, when no note was
+	// given, and for a hold resolved before the column existed. It is not
+	// who decided: that is ResolvedBy.
+	ResolutionNote Optional[string] `json:"resolution_note,omitempty"`
 }
 
 // Open reports whether the hold is still waiting on a person.
@@ -91,6 +96,13 @@ func (s *Store) RegisterHold(ctx context.Context, h Hold) (Hold, error) {
 // call, and a resolution that became refused because of what it would say would
 // be this record gating rather than recording.
 func (s *Store) ResolveHold(ctx context.Context, key, resolution string, by Resolver) (Hold, error) {
+	return s.ResolveHoldNoted(ctx, key, resolution, "", by)
+}
+
+// ResolveHoldNoted is ResolveHold with free text recorded beside the
+// resolution. An empty note leaves ResolutionNote unknown. The note is not
+// who decided: that remains by.
+func (s *Store) ResolveHoldNoted(ctx context.Context, key, resolution, note string, by Resolver) (Hold, error) {
 	if strings.TrimSpace(resolution) == "" {
 		return Hold{}, fmt.Errorf("%w: hold %s", ErrNoResolution, key)
 	}
@@ -98,10 +110,14 @@ func (s *Store) ResolveHold(ctx context.Context, key, resolution string, by Reso
 	if err != nil {
 		return Hold{}, fmt.Errorf("store: resolving hold %s: %w", key, err)
 	}
+	var noteCol any
+	if strings.TrimSpace(note) != "" {
+		noteCol = note
+	}
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx,
-			`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ? WHERE key = ? AND resolution IS NULL`,
-			resolution, encodeTime(nowUTC()), resolver, key)
+			`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE key = ? AND resolution IS NULL`,
+			resolution, encodeTime(nowUTC()), resolver, noteCol, key)
 		if err != nil {
 			return err
 		}
@@ -199,13 +215,13 @@ func (s *Store) OpenHolds(ctx context.Context) ([]Hold, error) {
 	return out, nil
 }
 
-const holdColumns = `SELECT key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by`
+const holdColumns = `SELECT key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by, resolution_note`
 
 func scanHold(sc scanner) (Hold, error) {
 	var h Hold
 	var opened string
-	var resolvedAt, resolvedBy Optional[string]
-	if err := sc.Scan(&h.Key, &h.RunID, &h.TaskID, &h.Subject, &h.Detail, &opened, &h.Resolution, &resolvedAt, &resolvedBy); err != nil {
+	var resolvedAt, resolvedBy, resolutionNote Optional[string]
+	if err := sc.Scan(&h.Key, &h.RunID, &h.TaskID, &h.Subject, &h.Detail, &opened, &h.Resolution, &resolvedAt, &resolvedBy, &resolutionNote); err != nil {
 		return Hold{}, err
 	}
 	var err error
@@ -218,5 +234,6 @@ func scanHold(sc scanner) (Hold, error) {
 	if h.ResolvedBy, err = resolverValue(resolvedBy, "resolved_by"); err != nil {
 		return Hold{}, err
 	}
+	h.ResolutionNote = resolutionNote
 	return h, nil
 }

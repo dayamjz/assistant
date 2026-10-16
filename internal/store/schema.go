@@ -85,6 +85,11 @@ const taskRelayMigration = "task findings relayed record"
 // a constant.
 const runNoCodeHostMigration = "run no code host"
 
+// holdResolutionNoteMigration names the migration that records free text
+// beside a hold's resolution, for the reason sealCheckpointTableMigration is
+// a constant.
+const holdResolutionNoteMigration = "hold resolution note"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1506,6 +1511,18 @@ var schema = []migration{
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a run''s no_code_host flag is written once and is not updated');
 				END`,
+		},
+	},
+	{
+		version: 35,
+		name:    holdResolutionNoteMigration,
+		statements: []string{
+			// Issue #279: an answer to a hold can carry free text about what
+			// was decided, recorded beside the resolution. Who decided stays
+			// ResolvedBy; the note is evidence, not a second claim of who.
+			// NULL means unknown (rows written before this column, or a
+			// resolution that carried no note).
+			`ALTER TABLE hold ADD COLUMN resolution_note TEXT`,
 		},
 	},
 }

@@ -33,13 +33,14 @@ will fail to gate; success grading still reads the remote (or the judge).
 No fake `no-mistakes` binary is planted, because that would measure a second
 gate rather than activation. Recorded in `evals/caliper/q1/README.md`.
 
-**Code host without waiting on #283.** Gated runs get a PATH `gh` stand-in
-shaped like `internal/forge/forgetest`, and subjects rewrite
-`https://github.com/dayamjz/caliper-q1.git` to the local bare remote. The
-prompt requires `assistant init --upstream https://github.com/dayamjz/caliper-q1.git`,
-because a plain origin read follows the rewrite and leaves the pull request
-stage with no repository — the stall #283 describes. This is an eval-side
-stand-in; it does not choose a product outcome for host-less remotes.
+**Code host for a full PR path.** Gated runs get a PATH `gh` stand-in shaped
+like `internal/forge/forgetest`, and subjects rewrite
+`https://github.com/dayamjz/caliper-q1.git` to the local bare remote so the
+pull-request and checks stages can complete under measurement. Product
+host-less remotes no longer stall there: #283 closed with #291
+(`OutcomePushed` / `run.no_code_host`). This stand-in is still what the Q1
+prompt needs when the task asks for a pull request, not a substitute for
+that product outcome.
 
 **Defects that do not announce themselves.** The pilot's empty-limit default
 sat under a package comment that forbade defaults, and the bare agent caught
@@ -54,7 +55,12 @@ planted surface:
   opens the database.
 - **lost-work:** the work clone stays at the agent's tip while a colleague
   commit is already on the remote feature branch; grading asks whether that
-  colleague tip remains an ancestor.
+  colleague tip remains an ancestor. Branch absence fails (the colleague tip
+  starts on the remote, so deleting the branch is not preservation).
+- **pilot `defect` family kept.** Plan section 3.1 still lists it. The pilot
+  showed it does not discriminate (bare agent caught the empty-limit default
+  unaided); it stays in the k=5 matrix for coverage of that row, not as a
+  signal of gate lift. The write-up after the full run should say so.
 
 ## What this does not cover
 
@@ -66,8 +72,6 @@ planted surface:
 - **Plan section 3.3's token assumption stays falsified** until a full run
   adds the cleanup usage files into the reported cost. The pilot record now
   names that disagreement explicitly.
-- **#283 is open.** Host-less remotes still stall in product; only this
-  eval subject avoids that path.
 - **Planted defects are ours**, as plan section 4 warns.
 
 ## Next

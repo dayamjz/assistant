@@ -38,9 +38,12 @@ import (
 // PRD section 5's Fix action is the answer "fix", and what the round is to
 // resolve rides on the same command as three more flags: --select names
 // findings of the held stage's report, --note is free text for the fixer, and
-// --finding, which may be repeated, is a finding of the caller's own. They are
-// read only with --answer fix and refused with anything else, because an
-// instruction given and then ignored is worse than one refused.
+// --finding, which may be repeated, is a finding of the caller's own.
+// --select and --finding are read only with --answer fix and refused with
+// anything else, because an instruction given and then ignored is worse than
+// one refused. --note is also the free text recorded with a task hold's
+// resolution (issue #279); with a run's answer that is not a fix round it is
+// refused, because a run's RespondRequest carries no resolution note.
 //
 // --task names a task instead of this branch's run: PRD section 9 has
 // answering a hold take a task as well as a run, so an investigation's
@@ -48,13 +51,18 @@ import (
 // flag and no verb of their own. A task with no hold of its own open has its
 // answer given to the hold on its current run instead, the run --answer
 // reaches from a checkout of the task's branch, so a coordinator answers a
-// task's run without checking that branch out anywhere. It is read only
-// with --answer or --standing-consent, and the fix round's flags go with
-// --answer fix to the task's run, as they would to this branch's. With
-// --standing-consent it puts the task's current run under standing consent
-// and attaches to it, the way the flag does for this branch's run, and the
-// flags that start a run are refused beside it. None of these needs a
-// working copy, so the command answers from wherever it is run.
+// task's run without checking that branch out anywhere. --hold names which
+// of the task's own holds to close (full key, or a finding id under the
+// task); without it the oldest open one is answered. --run with --task
+// answers the task's current run even while the task still has holds of its
+// own open, so a promoted delivery run is reachable without first clearing
+// every report hold. It is read only with --answer or --standing-consent,
+// and the fix round's flags go with --answer fix to the task's run, as they
+// would to this branch's. With --standing-consent it puts the task's current
+// run under standing consent and attaches to it, the way the flag does for
+// this branch's run, and the flags that start a run are refused beside it.
+// None of these needs a working copy, so the command answers from wherever
+// it is run.
 //
 // --cancel ends this branch's run, and given a run as --cancel=RUN it ends
 // that run instead, which PRD section 9 has it do from anywhere: like --task,
@@ -72,6 +80,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		note         string
 		own          repeated
 		task         string
+		hold         string
+		targetRun    bool
 		consent      bool
 	)
 	if err := in.parseArgs("", 1, func(set *flag.FlagSet) {
@@ -80,12 +90,17 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&answer, "answer", "", "answer the decision the run is holding on, or with --task the task's")
 		set.StringVar(&task, "task", "", "with --answer: the task whose hold is answered, or with none of its own open, the hold on the task's current run; "+
 			"with --standing-consent: the task whose current run is put under standing consent")
+		set.StringVar(&hold, "hold", "", "with --task --answer: which of the task's own holds to close "+
+			"(the hold's key, or a finding id under that task); without it the oldest open one is answered")
+		set.BoolVar(&targetRun, "run", false, "with --task --answer: answer the task's current run even while "+
+			"the task still has holds of its own open")
 		set.Var(&cancel, cancelFlagName, "end this branch's run, wherever it stands; written --"+cancelFlagName+
 			"=RUN it ends the run RUN instead, from anywhere")
 		set.StringVar(&skip, "skip", "", "comma-separated stages this one run does not take")
 		set.StringVar(&selected, "select", "", "with --answer fix: comma-separated identifiers of findings the held stage reported, for the round to resolve; "+
 			"the hold lists only the findings holding it, and "+everyFindingIsIn)
-		set.StringVar(&note, "note", "", "with --answer fix: a note for the fixer")
+		set.StringVar(&note, "note", "", "with --answer fix: a note for the fixer; with --task answering a task hold: "+
+			"free text recorded with the resolution about what was decided")
 		set.Var(&own, "finding", "with --answer fix: a finding of your own for the round to resolve; may be repeated")
 		set.BoolVar(&consent, "standing-consent", false, "put the run this starts or attaches to under standing consent, "+
 			"where the repository's default branch sets "+string(config.KeyAllowStandingConsent)+": the program then answers "+
@@ -107,13 +122,49 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	}
 	answered := flagWasSet(in.flags, "answer")
 	fixing := answered && answer == string(pipeline.OutcomeFixRequested)
-	for _, name := range []string{"select", "note", "finding"} {
+	for _, name := range []string{"select", "finding"} {
 		if flagWasSet(in.flags, name) && !fixing {
 			return nil, usagef("--%s says what a fix round resolves, and it is read only with --answer %s",
 				name, pipeline.OutcomeFixRequested)
 		}
 	}
 	tasked := flagWasSet(in.flags, "task")
+	holding := flagWasSet(in.flags, "hold")
+	running := flagWasSet(in.flags, "run")
+	if running && !targetRun {
+		// Writing --run=false is "do not target the run"; honour that rather
+		// than treating the flag's presence as the instruction.
+		running = false
+	}
+	if holding && strings.TrimSpace(hold) == "" {
+		return nil, usagef("--hold was given no hold; it takes the hold's key or a finding id under the task")
+	}
+	if (holding || running) && !tasked {
+		which := "--hold"
+		if running && !holding {
+			which = "--run"
+		}
+		return nil, usagef("%s is read only with --task", which)
+	}
+	if holding && running {
+		return nil, usagef("--hold closes a task's own hold and --run answers its run; pass one")
+	}
+	if holding && fixing {
+		return nil, usagef("--hold closes a task's own hold, and --answer %s is a fix round on its run; pass one",
+			pipeline.OutcomeFixRequested)
+	}
+	if (holding || running) && !answered {
+		return nil, usagef("--hold and --run name what --answer closes, and they are read only with --answer")
+	}
+	if flagWasSet(in.flags, "note") && !fixing {
+		// A resolution note rides on a task hold. A run's answer has no
+		// field for one, and --run makes the answer the run's even while
+		// the task still holds, so a note beside it would be ignored.
+		if !tasked || running {
+			return nil, usagef("--note records what was decided on a task's hold, or with --answer %s a note for the fixer",
+				pipeline.OutcomeFixRequested)
+		}
+	}
 	if tasked && !answered && !consent {
 		return nil, usagef("--task names the task whose hold --answer closes, or whose run --standing-consent is given to, " +
 			"and it is read only with one of the two")
@@ -163,7 +214,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		return in.consentGivenTask(ctx, task)
 	}
 	if tasked {
-		return in.answerGivenTask(ctx, task, answer, request)
+		return in.answerGivenTask(ctx, task, answer, hold, note, targetRun, request)
 	}
 	if cancel.on && cancel.run != "" {
 		return in.endNamedRun(ctx, cancel.run)
@@ -260,27 +311,38 @@ func (in *invocation) answerDecision(ctx context.Context, working, answer string
 // oldest open hold naming the task whichever tier decided its state, so a
 // task that has landed with a hold still open is routed to that hold too. A
 // fix round goes to the run without the read, because only a run takes one.
-// The read routes and decides nothing: the service refuses an answer to the
-// task's run while the task has a hold of its own open, and refuses an
-// answer to the task's own hold when none is, so a hold that opened or
-// closed after the read is a typed refusal and never the other hold
-// answered. The basis counts a hold naming the task and a run as well, and
-// the service's own hold is one naming the task and no run; nothing in this
-// build registers the first shape, and one that did would be routed to the
-// task's own hold and refused there, never answered past.
-func (in *invocation) answerGivenTask(ctx context.Context, task, answer string, request *pipeline.FixRequest) (any, error) {
-	if request == nil {
+// --run skips that read and answers the run while the task's own holds stay
+// open. --hold names the task hold to close and skips the run path. The
+// read routes and decides nothing: the service refuses an answer to the
+// task's run while the task has a hold of its own open (unless TargetRun),
+// and refuses an answer to the task's own hold when none is, so a hold that
+// opened or closed after the read is a typed refusal and never the other
+// hold answered. The basis counts a hold naming the task and a run as well,
+// and the service's own hold is one naming the task and no run; nothing in
+// this build registers the first shape, and one that did would be routed to
+// the task's own hold and refused there, never answered past.
+func (in *invocation) answerGivenTask(ctx context.Context, task, answer, hold, note string, targetRun bool, request *pipeline.FixRequest) (any, error) {
+	if hold != "" {
+		return in.answerTask(ctx, task, answer, hold, note)
+	}
+	if request == nil && !targetRun {
 		var view machine.Task
 		if err := in.callService(ctx, ipc.MethodTaskGet, machine.TaskRequest{Task: task}, &view); err != nil {
 			return nil, err
 		}
 		if view.State.Basis.Hold != "" {
-			return in.answerTask(ctx, task, answer)
+			return in.answerTask(ctx, task, answer, "", note)
+		}
+		if note != "" {
+			return nil, usagef("--note records what was decided on a task's hold, or with --answer %s a note for the fixer; "+
+				"task %s has no hold of its own open, so this answer is its run's", pipeline.OutcomeFixRequested, task)
 		}
 	}
 	in.progressf("answering the decision task %s's run is holding on with %q; this blocks until the run needs another decision", task, answer)
 	var run machine.Run
-	err := in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{Task: task, Answer: answer, Fix: request}, &run)
+	err := in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{
+		Task: task, Answer: answer, Fix: request, TargetRun: targetRun,
+	}, &run)
 	return run, err
 }
 
@@ -298,14 +360,21 @@ func (in *invocation) consentGivenTask(ctx context.Context, task string) (any, e
 	return run, err
 }
 
-// answerTask answers the oldest open hold the task raised with no run behind
-// it. Which hold that was, what the answer did and the task as it then
-// stands are in the answer; who resolved it is the service's to derive and
-// nothing here says.
-func (in *invocation) answerTask(ctx context.Context, task, answer string) (any, error) {
-	in.progressf("answering the hold task %s is waiting on with %q", task, answer)
+// answerTask answers an open hold the task raised with no run behind it.
+// Without hold, it is the oldest; with hold set, that hold is named. note is
+// free text recorded with the resolution. Which hold that was, what the
+// answer did and the task as it then stands are in the answer; who resolved
+// it is the service's to derive and nothing here says.
+func (in *invocation) answerTask(ctx context.Context, task, answer, hold, note string) (any, error) {
+	if hold != "" {
+		in.progressf("answering hold %s of task %s with %q", hold, task, answer)
+	} else {
+		in.progressf("answering the hold task %s is waiting on with %q", task, answer)
+	}
 	var answered machine.TaskAnswered
-	err := in.callService(ctx, ipc.MethodTaskRespond, machine.TaskRespondRequest{Task: task, Answer: answer}, &answered)
+	err := in.callService(ctx, ipc.MethodTaskRespond, machine.TaskRespondRequest{
+		Task: task, Hold: hold, Answer: answer, Note: note,
+	}, &answered)
 	return answered, err
 }
 
