@@ -76,6 +76,16 @@ var ErrRepositoryAgent = errors.New("service: this build resolves one agent per 
 // resolves it.
 var ErrForkUnresolved = errors.New("service: the repository record names a fork this run cannot push to and propose from")
 
+// ErrUnsupportedHost reports a repository whose upstream names a network host
+// this build does not address (GitLab, GitHub Enterprise, an scp-style host
+// that is not github.com, or a scheme-less host/path form). The run is refused
+// rather than walked to the pull request stage and stalled; begin ends any
+// pending record for that refusal before returning, so the branch is not left
+// with an unfinished run. A local path or file:// remote is not this error:
+// those have no code host and the run skips the pull request and checks
+// stages after push.
+var ErrUnsupportedHost = errors.New("service: the repository's upstream names a host this build does not address")
+
 // trustedRef is the name the gate repository holds a run's freshly fetched
 // default-branch tip under. It is named for the run so concurrent runs cannot
 // overwrite each other's, on the same terms as submittedRef, and it is

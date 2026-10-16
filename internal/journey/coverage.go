@@ -101,14 +101,13 @@ func Coverage() []Established {
 				"peer credentials the test is skipped rather than passing and nothing about P2 is " +
 				"established there."},
 		{principles.P3, ReachBinary,
-			"A run through the binary is walked to its end, asking to skip the pull request stage " +
-				"because its body fails when the run's record names no repository on the code host, " +
-				"and every hold it reaches is read: it holds " +
+			"A run through the binary is walked to its end; a local upstream sets no_code_host so the " +
+				"pull request and checks stages skip after push rather than holding, and every hold it " +
+				"reaches is read: it holds " +
 				"once for each stage this harness declares a run stops at - the test, document and " +
-				"lint stages, whose bodies hold for the commands nobody configured here, the push " +
-				"stage, whose body holds because the run carries no completed review, and the checks " +
-				"stage, whose body holds because the record names no code host - every hold is relayed " +
-				"with the finding that produced " +
+				"lint stages, whose bodies hold for the commands nobody configured here, and the push " +
+				"stage, whose body holds because the run carries no completed review - every hold is " +
+				"relayed with the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
 				"the runs that launch a reviewer answer it from a script rather than from the planted " +
@@ -159,9 +158,8 @@ func Coverage() []Established {
 				"it never block a run, and a stage that never holds offers nothing to kill at. Review " +
 				"is not among them either: the run asks to skip it, because its body launches the " +
 				"agent this harness scripts to answer nothing, and a skipped stage offers no hold. The " +
-				"pull request stage is not among them for the same reason: the driven run asks to " +
-				"skip it because its body fails when the run's record names no repository on the " +
-				"code host, so it offers no boundary either. What " +
+				"pull request and checks stages are not among them either: a local upstream sets " +
+				"no_code_host, so both skip after push and offer no boundary. What " +
 				"the recovered decision is held to is " +
 				"that it stands at the same stage and still offers what it offered, which a checkpoint " +
 				"round trip can lose; that it offers something nobody was offered is not claimed, " +

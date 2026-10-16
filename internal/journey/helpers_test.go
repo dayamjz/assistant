@@ -237,24 +237,23 @@ func startRun(t *testing.T, j *journey.Journey, args ...string) machine.Run {
 }
 
 // walkableRun starts a run a walk can carry from one hold to the next, which
-// in this build means skipping the review and pull request stages.
+// in this build means skipping the review stage (and naming the pull request
+// stage too, which a local upstream would skip via no_code_host anyway).
 //
-// The pull request stage's body fails rather than holding when a run takes
-// it: it opens a provider for the repository the run's record names on the
-// code host, no record here names one, and a walk that took the stage would
-// end there however its holds were answered. The review stage's body launches
-// the agent this harness stands on the run's PATH, and the default journey
-// scripts that agent to answer nothing, so a taken review stops at an ask
-// recording that no review happened - a hold these walks are not about and
-// whose approval would record the run advancing past a review nobody made.
-// The skip is a run input, which PRD principle P2 makes a person's per-run
-// choice, so this drives the surface a person would drive rather than
-// weakening the stages: the internal/cli and internal/service tests that
-// walk a run answer the review with a scripted agent for the same reason
-// this skips it. The stages are named rather than derived, and a name goes
-// away when a walk can give that stage's body what it needs: a scripted
-// review answer for the review stage, a repository on the code host for the
-// pull request stage.
+// The review stage's body launches the agent this harness stands on the run's
+// PATH, and the default journey scripts that agent to answer nothing, so a
+// taken review stops at an ask recording that no review happened - a hold
+// these walks are not about and whose approval would record the run advancing
+// past a review nobody made. The skip is a run input, which PRD principle P2
+// makes a person's per-run choice, so this drives the surface a person would
+// drive rather than weakening the stages: the internal/cli and internal/service
+// tests that walk a run answer the review with a scripted agent for the same
+// reason this skips it. Pull request and checks skip after push because the
+// fixture's upstream is local (#283); naming pull request in --skip keeps the
+// walk explicit about not taking that body. The stages are named rather than
+// derived, and a name goes away when a walk can give that stage's body what
+// it needs: a scripted review answer for the review stage, a repository on
+// the code host for the pull request stage.
 func walkableRun(t *testing.T, j *journey.Journey, intent string) machine.Run {
 	t.Helper()
 	return startRun(t, j,

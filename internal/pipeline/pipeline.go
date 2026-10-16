@@ -355,6 +355,10 @@ type Start struct {
 	IntentSupplied bool
 	// Skip names the stages this one run skips, on purpose.
 	Skip []Stage
+	// NoCodeHost says the run's upstream is a local path or file:// remote,
+	// so the pull request and checks stages skip after push. Begin sets it
+	// from forge.ClassifyRemote; a caller does not invent it.
+	NoCodeHost bool
 }
 
 // NewState returns the initial state for a run. It refuses a start that does
@@ -392,5 +396,6 @@ func (p *Pipeline) NewState(s Start) (graph.State, error) {
 		string(KeyIntent):           graph.TextValue(s.Intent),
 		string(KeyIntentSupplied):   graph.BoolValue(s.IntentSupplied),
 		string(KeySkip):             graph.ListValue(skip...),
+		string(KeyNoCodeHost):       graph.BoolValue(s.NoCodeHost),
 	})
 }

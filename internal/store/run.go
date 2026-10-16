@@ -147,6 +147,13 @@ type Run struct {
 	// it off every answer that composes this record: it identifies a hold for
 	// the loop and is nothing a reader decides from.
 	HeldMoves Optional[int64] `json:"-"`
+	// NoCodeHost is whether begin settled that this run's upstream has no
+	// code host (local or file://), known once SetRunNoCodeHost or
+	// SetRunHasCodeHost recorded it. Unknown for a run recorded before the
+	// column existed and for a run that never reached that settlement. It is
+	// what lets a listing that has only the record phrase a completed run as
+	// pushed rather than checks-passed without restoring a checkpoint.
+	NoCodeHost Optional[bool] `json:"no_code_host,omitempty"`
 	// CreatedAt is when the run was recorded, which PRD section 8 requires to
 	// precede the creation of its directory.
 	CreatedAt time.Time `json:"created_at"`
@@ -566,6 +573,57 @@ func (s *Store) GiveRunStandingConsent(ctx context.Context, id string) (Run, err
 	return s.Run(ctx, id)
 }
 
+// SetRunNoCodeHost records that begin settled this run has no code host. It
+// is written once: a second write of the same settlement is a no-op so a
+// begin that failed after the first write can retry, and a write that would
+// flip the settlement is refused by the schema trigger.
+func (s *Store) SetRunNoCodeHost(ctx context.Context, id string) error {
+	return s.setRunNoCodeHostFlag(ctx, id, true)
+}
+
+// SetRunHasCodeHost records that begin settled this run names a repository on
+// the code host. It is written once on the same terms as SetRunNoCodeHost.
+func (s *Store) SetRunHasCodeHost(ctx context.Context, id string) error {
+	return s.setRunNoCodeHostFlag(ctx, id, false)
+}
+
+func (s *Store) setRunNoCodeHostFlag(ctx context.Context, id string, noHost bool) error {
+	flag := int64(0)
+	if noHost {
+		flag = 1
+	}
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx,
+			`UPDATE run SET no_code_host = ?, updated_at = ? WHERE id = ? AND no_code_host IS NULL`,
+			flag, encodeTime(nowUTC()), id)
+		if err != nil {
+			return fmt.Errorf("store: recording run %s code-host settlement: %w", id, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("store: recording run %s code-host settlement: %w", id, err)
+		}
+		if affected == 1 {
+			return nil
+		}
+		var current Optional[int64]
+		switch err := tx.QueryRowContext(ctx, `SELECT no_code_host FROM run WHERE id = ?`, id).Scan(&current); {
+		case isNoRows(err):
+			return fmt.Errorf("store: recording run %s code-host settlement: %w", id, ErrNotFound)
+		case err != nil:
+			return fmt.Errorf("store: recording run %s code-host settlement: %w", id, err)
+		}
+		got, ok := current.Get()
+		if !ok {
+			return fmt.Errorf("store: recording run %s code-host settlement: %w", id, ErrNotFound)
+		}
+		if got == flag {
+			return nil
+		}
+		return fmt.Errorf("store: recording run %s code-host settlement: already settled the other way", id)
+	})
+}
+
 // updateRun writes one column of one run. The column name is never a caller's
 // string: it comes from the fixed set above, so no accessor composes SQL from
 // input.
@@ -595,7 +653,7 @@ const runColumns = `SELECT
 	id, repository_id, branch, submitted_head, base, current_head, status,
 	approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
 	build_version, build_revision, build_modified, build_go, config_digest,
-	config_rejections, resolved_agent, park, standing_consent, held_moves,
+	config_rejections, resolved_agent, park, standing_consent, held_moves, no_code_host,
 	created_at, updated_at`
 
 func scanRun(sc scanner) (Run, error) {
@@ -603,11 +661,12 @@ func scanRun(sc scanner) (Run, error) {
 	var status, created, updated string
 	var modified int
 	var rejections, park, consent Optional[string]
+	var noCodeHost Optional[int64]
 	if err := sc.Scan(
 		&r.ID, &r.RepositoryID, &r.Branch, &r.SubmittedHead, &r.Base, &r.CurrentHead, &status,
 		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.Intent, &r.IntentSource,
 		&r.Build.Version, &r.Build.Revision, &modified, &r.Build.Go, &r.ConfigDigest,
-		&rejections, &r.ResolvedAgent, &park, &consent, &r.HeldMoves,
+		&rejections, &r.ResolvedAgent, &park, &consent, &r.HeldMoves, &noCodeHost,
 		&created, &updated,
 	); err != nil {
 		return Run{}, err
@@ -623,6 +682,9 @@ func scanRun(sc scanner) (Run, error) {
 	}
 	if r.StandingConsent, err = optionalTimeValue(consent, "standing_consent"); err != nil {
 		return Run{}, err
+	}
+	if flag, ok := noCodeHost.Get(); ok {
+		r.NoCodeHost = Known(flag != 0)
 	}
 	if r.CreatedAt, err = decodeTime(created); err != nil {
 		return Run{}, err

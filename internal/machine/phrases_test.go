@@ -198,6 +198,19 @@ func TestEveryOutcomeHasAPhraseAndTheStandingSharpensIt(t *testing.T) {
 	if got := machine.RecordPhrase(store.Run{Status: "never-a-status"}); got != machine.RecordPhrase(store.Run{Status: store.RunFailed}) {
 		t.Errorf("a status outside the set reads as %q, want the row for a run without a verdict", got)
 	}
+	// A passed record with NoCodeHost known true phrases as pushed from the
+	// row alone; without the flag it stays the checks-passed listing row.
+	pushed := machine.RecordPhrase(store.Run{Status: store.RunPassed, NoCodeHost: store.Known(true)})
+	cleared := machine.RecordPhrase(store.Run{Status: store.RunPassed})
+	if pushed == cleared {
+		t.Fatalf("a no-code-host passed record reads as the checks-passed listing: %q", pushed)
+	}
+	if !strings.Contains(pushed.String(), "on the remote") {
+		t.Errorf("a no-code-host passed record reads %q, want the pushed row", pushed)
+	}
+	if !seen[pushed.String()] || !seen[cleared.String()] {
+		t.Errorf("listing rows missing from Phrases: pushed %q cleared %q", pushed, cleared)
+	}
 }
 
 // standingFor is one standing per outcome, written here so the table's
@@ -209,6 +222,11 @@ func standingFor(outcome machine.Outcome) (machine.Standing, bool) {
 		return machine.Standing{Record: store.RunPassed}, true
 	case machine.OutcomePassed:
 		return machine.Standing{Record: store.RunPassed, PullRequestEnd: store.PullRequestMerged}, true
+	case machine.OutcomePushed:
+		// The durable half: a listing that has only the record still reaches
+		// pushed. The checkpoint-state half remains covered by machine_test's
+		// completed-with-no-code-host case.
+		return machine.Standing{Record: store.RunPassed, NoCodeHost: store.Known(true)}, true
 	case machine.OutcomeFailed:
 		return machine.Standing{Record: store.RunFailed}, true
 	case machine.OutcomeCancelled:

@@ -80,6 +80,11 @@ const runHeldMovesMigration = "run held moves"
 // sealCheckpointTableMigration is a constant.
 const taskRelayMigration = "task findings relayed record"
 
+// runNoCodeHostMigration names the migration that records when a run's
+// upstream has no code host, for the reason sealCheckpointTableMigration is
+// a constant.
+const runNoCodeHostMigration = "run no code host"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1480,6 +1485,26 @@ var schema = []migration{
 				BEFORE DELETE ON task_relay
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a task''s findings relayed record is written once and is not deleted');
+				END`,
+		},
+	},
+	{
+		version: 34,
+		name:    runNoCodeHostMigration,
+		statements: []string{
+			// Issue #283: a run whose upstream is local has no code host, so
+			// it ends pushed rather than checks-passed. That fact must live
+			// on the run row so a listing that has only the record (and no
+			// restored checkpoint) still phrases and outcomes correctly.
+			// NULL means unknown (rows written before this column); 1 means
+			// no code host; 0 means a code host was named. Written once when
+			// begin settles the trichotomy.
+			`ALTER TABLE run ADD COLUMN no_code_host INTEGER`,
+			`CREATE TRIGGER run_no_code_host_is_written_once
+				BEFORE UPDATE OF no_code_host ON run
+				WHEN OLD.no_code_host IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run''s no_code_host flag is written once and is not updated');
 				END`,
 		},
 	},

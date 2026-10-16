@@ -62,11 +62,11 @@ type contended struct {
 //
 // The contention stays inside the holds that sit consecutively from the first
 // measured one, because a skipped stage's node between two holds prices that
-// transition differently. The run asks to skip the review and pull request
-// stages, for the reasons walkableRun states. The review crossing happens
-// before the run's first hold, so nothing measured includes it, and the run
-// is driven to the end across the pull request crossing afterwards, where no
-// arithmetic rests on what the crossing costs.
+// transition differently. The run asks to skip the review stage (walkableRun)
+// and a local upstream skips pull request and checks after push. The review
+// crossing happens before the run's first hold, so nothing measured includes
+// it, and the run is driven to the end across the post-push skips afterwards,
+// where no arithmetic rests on what those crossings cost.
 func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
@@ -75,15 +75,13 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	// stages a run holds at run consecutively: internal/pipeline gives a stage
 	// that holds a hold node as well as a stage node, and a stage that does
 	// not hold goes straight on, so a non-holding stage sitting between two
-	// holds adds a node to that transition and to no other. This run has two
-	// such stages: it skips review and the pull request stage for the reasons
-	// walkableRun states, and a skipped stage's node still executes to record
-	// the skip. The review crossing happens before the run's first hold, so
-	// nothing measured includes it; the pull request crossing sits before the
-	// last hold, so the contention stays inside the consecutive span before
-	// it. Bounding the measurement that way is what keeps the day another
-	// middle stage gets a body from arriving as a contention failure rather
-	// than as the measurement no longer applying.
+	// holds adds a node to that transition and to no other. Skipped stages
+	// still execute a node to record the skip. The review crossing happens
+	// before the run's first hold; pull request and checks skip after the
+	// last hold (push), so the contention stays inside the consecutive span
+	// Test→Document→Lint→Push. Bounding the measurement that way is what
+	// keeps a non-holding stage between holds from arriving as a contention
+	// failure rather than as the measurement no longer applying.
 	holding := contendedHolds(t, stagesARunStopsAt(t))
 
 	j := inClone(t)
@@ -127,7 +125,7 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 
 	observed.after = startRun(t, j)
 	observed.holdsAdvanced = holdPosition(t, holding, observed.after) - holdPosition(t, holding, observed.before)
-	observed.completed = last(answerHolds(t, j, observed.after, "approved")).Outcome == machine.OutcomeChecksPassed
+	observed.completed = last(answerHolds(t, j, observed.after, "approved")).Outcome == machine.OutcomePushed
 
 	sound := journey.Check[contended]{
 		What: "P6: one run several callers answer at once",
@@ -284,9 +282,9 @@ func holdPosition(t *testing.T, holding []pipeline.Stage, run machine.Run) int {
 // gives a stage that holds both a stage node and a hold node and sends a
 // stage that does not hold straight to the next one, so a stage with a body
 // sitting between two holds makes that one transition cost a node more than
-// its neighbours, and there is no single per-hold cost across it. The pull
-// request stage is that stage today, so the hold after it is left out of the
-// contention rather than priced wrong. Refusing a prefix too short for a
+// its neighbours, and there is no single per-hold cost across it. Today's
+// declared stops are consecutive through push; pull request and checks skip
+// after that and are outside the span. Refusing a prefix too short for a
 // measurement, several callers and a hold that survives them says plainly
 // that this check needs rewriting against whatever holds a run now, rather
 // than letting the arithmetic report a node body having run twice.

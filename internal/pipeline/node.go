@@ -21,7 +21,7 @@ import (
 // raised independent of the stage's implementation: a body cannot leave one
 // out, because it never handles it.
 func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
-	adapterReads := []Key{KeySkip, KeyDiffEmpty}
+	adapterReads := []Key{KeySkip, KeyDiffEmpty, KeyNoCodeHost}
 	if fixed {
 		adapterReads = append(adapterReads, stage.HeldKey())
 	}
@@ -113,8 +113,8 @@ func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
 	}
 }
 
-// skipped reports whether this stage does not run in this run. Two things say
-// so and both are read here rather than routed around the stage, so a stage
+// skipped reports whether this stage does not run in this run. Three things
+// say so and all are read here rather than routed around the stage, so a stage
 // that does not run still records that it was skipped rather than leaving the
 // question to whoever reads the state later.
 //
@@ -122,7 +122,11 @@ func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
 // skip a stage on purpose for one run and never lets a standing configuration
 // do it for them. The second is the empty-diff short circuit: once the rebase
 // stage reports that nothing remains to change, PRD section 5 ends the run
-// successfully with the rest of the stages skipped rather than failed.
+// successfully with the rest of the stages skipped rather than failed. The
+// third is a run with no code host: the pull request and checks stages skip
+// after push. The reason is KeyNoCodeHost on the run, not a stage report:
+// StageRan treats a recorded report as the body having run, so a skip must
+// leave the report empty.
 func skipped(r graph.Reader, stage Stage) (bool, error) {
 	empty, err := r.Get(string(KeyDiffEmpty))
 	if err != nil {
@@ -138,6 +142,15 @@ func skipped(r graph.Reader, stage Stage) (bool, error) {
 	list, _ := requested.List()
 	for _, name := range list {
 		if name == stage.String() {
+			return true, nil
+		}
+	}
+	if stage == StagePR || stage == StageCI {
+		flag, err := r.Get(string(KeyNoCodeHost))
+		if err != nil {
+			return false, err
+		}
+		if noHost, _ := flag.Bool(); noHost {
 			return true, nil
 		}
 	}

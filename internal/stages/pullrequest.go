@@ -151,16 +151,13 @@ const titleLimit = 72
 //
 // # What it refuses
 //
-// A run with no code host cannot open a pull request, and StageDeps' rule
-// for an adapter a body needs is that the body refuses rather than proceeding
-// without it, so both ways of lacking one fail with an error naming what is
-// missing rather than holding for a person: a StageDeps nothing wired a
-// forge.Host into, and a run whose record names no repository on that host,
-// which reaches this stage as an empty pipeline.KeyForgeRepository and is
-// refused by forge.Host.Open rather than resolved to a repository nobody
-// chose. internal/service's own answer-to-the-end test drives a run of the
-// second kind, so it skips this stage for that one run rather than this body
-// softening to let it past.
+// A run with no code host cannot open a pull request. For a local path or
+// file:// upstream, begin sets pipeline.KeyNoCodeHost and this stage's node
+// skips before the body runs (#283). A StageDeps nothing wired a forge.Host
+// into, or a state that reached this body with an empty
+// pipeline.KeyForgeRepository anyway, still fails with an error naming what
+// is missing rather than holding for a person: forge.Host.Open refuses an
+// empty specifier rather than resolving a repository nobody chose.
 //
 // A run whose record names a fork proposes from it: pipeline.KeyForkRepository
 // is the fork, the provider is opened with forge.Host.OpenFork on the upstream

@@ -477,11 +477,10 @@ func startRun(t *testing.T, client *ipc.Client, workingPath string) machine.Run 
 
 // startRunSkipping starts a run that does not take the named stages.
 //
-// It exists for the one thing these tests cannot walk a run through: a stage
-// body that fails rather than holds because what it needs is not there. The
-// subject repository's record names no repository on a code host this build
-// talks to, so the pull request stage's body fails on opening a provider. A
-// test that walks a run from one hold to the next has to go around that stage.
+// It exists for tests that still choose to skip stages on purpose. A subject
+// whose upstream is a local path now sets no_code_host at begin and skips
+// pull request and checks without a person naming them (#283); tests that
+// walk past review for the agent still pass those stages here when they want.
 //
 // The isolated copy is no longer one of those reasons. internal/service builds
 // a run one, so the review stage's body opens it like any other; what a test

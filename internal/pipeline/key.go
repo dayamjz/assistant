@@ -168,6 +168,12 @@ const (
 	// configuration may skip one on their behalf, which is why nothing in
 	// Options can write it.
 	KeySkip Key = "skip"
+	// KeyNoCodeHost says this run's upstream is a local path or file:// remote
+	// with no code host this build talks to. It is a run input set at begin
+	// from forge.ClassifyRemote, and the pull request and checks stage nodes
+	// skip when it is set. A late key: runs checkpointed before it existed
+	// behave as if it is false.
+	KeyNoCodeHost Key = "no_code_host"
 	// KeyCancelled says a person cancelled the run at a hold. This package's
 	// own cancel node writes it.
 	KeyCancelled Key = "cancelled"
@@ -223,6 +229,7 @@ var sharedKeys = []keySpec{
 	{KeySubmitted, graph.KindText, graph.MergeNone, ownerRun, false},
 	{KeySubmittedSubject, graph.KindText, graph.MergeNone, ownerRun, true},
 	{KeySkip, graph.KindList, graph.MergeNone, ownerRun, false},
+	{KeyNoCodeHost, graph.KindBool, graph.MergeNone, ownerRun, true},
 	{KeyHead, graph.KindText, graph.MergeLastWriteWins, ownerStage, false},
 	{KeyIntent, graph.KindText, graph.MergeNone, ownerStage, false},
 	{KeyIntentSupplied, graph.KindBool, graph.MergeNone, ownerRun, false},

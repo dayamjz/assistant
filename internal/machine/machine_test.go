@@ -123,6 +123,7 @@ func TestWhereARunStoppedDecidesTheOutcomeOfARunThatMayStillMove(t *testing.T) {
 	}{
 		{"halted", graph.StatusHalted, graph.State{}, machine.OutcomeDecision},
 		{"completed", graph.StatusCompleted, graph.State{}, machine.OutcomeChecksPassed},
+		{"completed with no code host", graph.StatusCompleted, noCodeHostState(t), machine.OutcomePushed},
 		{"completed after a cancellation", graph.StatusCompleted, cancelled, machine.OutcomeCancelled},
 		{"rounds exhausted", graph.StatusRoundsExhausted, graph.State{}, machine.OutcomeFailed},
 		{"budget exhausted", graph.StatusBudgetExhausted, graph.State{}, machine.OutcomeFailed},
@@ -154,6 +155,33 @@ func TestATerminalRecordDecidesOverWhereExecutionStopped(t *testing.T) {
 	for _, c := range cases {
 		if got := machine.OutcomeOf(standingAt(c.record, c.status, graph.State{})); got != c.want {
 			t.Fatalf("a run %s reports %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+// A passed record whose row says begin settled no code host reads as pushed
+// without a restored checkpoint, which is what lets a listing phrase it
+// correctly. The same record with the flag known false, or unknown, stays
+// checks-passed so a missing fact cannot invent pushed.
+func TestAPassedRecordWithNoCodeHostReadsAsPushed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		flag store.Optional[bool]
+		want machine.Outcome
+	}{
+		{"known true", store.Known(true), machine.OutcomePushed},
+		{"known false", store.Known(false), machine.OutcomeChecksPassed},
+		{"unknown", store.Optional[bool]{}, machine.OutcomeChecksPassed},
+	}
+	for _, c := range cases {
+		got := machine.OutcomeOf(machine.Standing{
+			Record:     store.RunPassed,
+			NoCodeHost: c.flag,
+			Execution:  machine.ExecutionUnrecorded(),
+		})
+		if got != c.want {
+			t.Fatalf("%s: OutcomeOf = %s, want %s", c.name, got, c.want)
 		}
 	}
 }
@@ -207,8 +235,27 @@ func TestEveryRecordedStatusHasAnOutcome(t *testing.T) {
 }
 
 // cancelledState is the state a run a person cancelled stands in. It is
+// noCodeHostState is a completed run's state with KeyNoCodeHost set the way
+// begin writes it for a local upstream, so OutcomeOf cannot be handed a shape
+// the mechanism cannot produce.
+func noCodeHostState(t *testing.T) graph.State {
+	t.Helper()
+	p, err := pipeline.New(pipeline.Options{Stages: pipeline.ConstantStages("ok"), Budget: 40})
+	if err != nil {
+		t.Fatalf("building a pipeline: %v", err)
+	}
+	initial, err := p.NewState(pipeline.Start{
+		Repository: "repo", Run: "r1", Branch: "b", Base: "main", Submitted: "abc",
+		NoCodeHost: true,
+	})
+	if err != nil {
+		t.Fatalf("building the initial state: %v", err)
+	}
+	return initial
+}
+
 // reached by driving the real pipeline to it rather than by stating the key
-// here, so a test cannot state a state the mechanism could not produce.
+// here, so a test cannot state a state the mechanism cannot produce.
 func cancelledState(t *testing.T) graph.State {
 	t.Helper()
 	holding := pipeline.ConstantStages("held for a decision", findings.Finding{
