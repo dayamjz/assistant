@@ -28,6 +28,7 @@ import (
 // resent it. P8: what the loop decides from is the message record, never
 // the history or a log.
 func TestAnUnacknowledgedMessageSurfacesOnceAfterTheWindowAndIsNotResent(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	h, records := loopHome(t)
 	ctx := t.Context()
@@ -104,6 +105,7 @@ func TestAnUnacknowledgedMessageSurfacesOnceAfterTheWindowAndIsNotResent(t *test
 // anything and endWorker reports as ended through its identity, so the refusals are the reference's and not every
 // unheld stop's.
 func TestAStopOfAnUnheldWorkerEndsOnlyAVerifiedIdentity(t *testing.T) {
+	t.Parallel()
 	h, records := loopHome(t)
 	_ = records.Close()
 	s := &Service{home: h}
@@ -138,6 +140,7 @@ func TestAStopOfAnUnheldWorkerEndsOnlyAVerifiedIdentity(t *testing.T) {
 // positive control is the same request once the double answers dead, which
 // registers the stop's hold for the attempt.
 func TestAStopTheProbeDoesNotProveRegistersNoHold(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	h, records := loopHome(t)
 	ref := session.Reference{Home: session.HomeMarker(h), Task: "unproventask", PID: 1 << 22, Start: 7}.String()

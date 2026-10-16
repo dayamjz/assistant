@@ -135,6 +135,7 @@ func linesCarrying(t *testing.T, agent *standin.Agent, text string) int {
 // acknowledgement repeated, of a message that is not one, or from a caller
 // in no worker group is refused, and the history does not grow.
 func TestAMessageIsRecordedWrittenAndAcknowledgedFromTheRecord(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	streamWorker(t, "task/message", steerConfig, func(w launched, agent *standin.Agent) {
 		running, task := w.running, w.task
@@ -237,6 +238,7 @@ func TestAMessageIsRecordedWrittenAndAcknowledgedFromTheRecord(t *testing.T) {
 // retry begins nothing, registers the bound's hold for attempt 2 and says
 // so, and the task reads Held on that hold with its attempts still two.
 func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	service.RequireSweepClearsHere(t, "a relaunch after a stop in the stopped worker's copy")
 	streamWorker(t, "task/stop", steerConfig, func(w launched, agent *standin.Agent) {
@@ -405,6 +407,7 @@ func waitRelaunched(t *testing.T, running serviceUnderTest, h *home.Home, task, 
 // a declaration and not off an adapter that declares nothing. The worker
 // runs on after both: nothing was interrupted.
 func TestAnInterruptIsRefusedAsUndeclared(t *testing.T) {
+	t.Parallel()
 	streamWorker(t, "task/interrupt", steerConfig, func(w launched, agent *standin.Agent) {
 		running, task := w.running, w.task
 		request := machine.TaskRequest{Task: task}

@@ -12,6 +12,7 @@ import (
 // is refused and the slot stays the dispatch's, and after it settles the
 // relaunch takes it, and a second relaunch is refused behind that one.
 func TestARelaunchRetakesASettledSlotAndNeverOneInFlight(t *testing.T) {
+	t.Parallel()
 	s := &Service{}
 	settleDispatch, err := s.claimDispatch("t1")
 	if err != nil {

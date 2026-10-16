@@ -47,7 +47,13 @@ import (
 // recorded as absent, and the body its run gives the pull request says so
 // and carries the note the lens leaves when it did not run (P1: a person's
 // push is consent to validation, and nothing about it is read off a task).
+//
+// It stays among the package's slowest tests because it walks two runs end
+// to end from a live worker, and every push in it reaches the service through
+// the gate's hooks, which start this test binary. Splitting it would build
+// the worker and the task twice; it runs in parallel with the rest instead.
 func TestAWorkersPushCarriesItsTasksIntentAndAPersonsDoesNot(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P1)
 	requiresIdentifiedPeer(t)
 
@@ -196,6 +202,7 @@ func TestAWorkersPushCarriesItsTasksIntentAndAPersonsDoesNot(t *testing.T) {
 // starts a run with no intent, recorded as absent (P1: a person's push is
 // consent to validation, and nothing about it is read off a task).
 func TestAPromotedTasksWorkerPushCarriesItsDeliveryIntent(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P1)
 	const (
 		branch   = "task/promoted"

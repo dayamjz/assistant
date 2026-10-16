@@ -77,6 +77,7 @@ func requestedRound(t *testing.T, path string) (machine.Run, pipeline.Stage, []s
 // requested round leaves; the judge test below is the same run with a judge
 // path, and the difference between the two is the judge rule.
 func TestAFixRoundAskedForAtAHoldRunsAndTheStageHoldsAgain(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	run, stage, calls := requestedRound(t, "notes.txt")
 
@@ -104,6 +105,7 @@ func TestAFixRoundAskedForAtAHoldRunsAndTheStageHoldsAgain(t *testing.T) {
 // paths the commit touched. The fixer said nothing about tests, so the account
 // is not what decided it.
 func TestAFixRoundAskedForAtAHoldIsHeldToTheJudgeRule(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	run, stage, _ := requestedRound(t, "added_test.go")
 
@@ -118,6 +120,7 @@ func TestAFixRoundAskedForAtAHoldIsHeldToTheJudgeRule(t *testing.T) {
 // caller before anything is recorded, and the hold is still open afterwards:
 // the same run can still be approved.
 func TestAFixRequestSelectingNothingTheStageReportedIsRefused(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

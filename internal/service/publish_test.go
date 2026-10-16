@@ -22,6 +22,7 @@ import (
 // consumer sees the run end and then the hold close, in that order of
 // revision.
 func TestTheChecksHoldClosureIsPublished(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	c := newChecksHoldSubject(t)
 

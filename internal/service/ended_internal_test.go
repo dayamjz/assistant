@@ -47,6 +47,7 @@ import (
 // the run was ended at, and the run's checkpoint history is what would then
 // record work nobody asked for.
 func TestARunEndedThroughTheProtocolIsNotCarriedOn(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 
 	t.Run("the record has moved by the time the segment returns", func(t *testing.T) {
@@ -376,6 +377,7 @@ func (f fixedRunner) New(context.Context, []string) (agents.Runner, error) { ret
 // nodes past the position the run was displaced at, and writes them into a
 // checkpoint history nobody asked for.
 func TestARunSupersededByAPushIsNotCarriedOn(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 
 	held := newHeldService(t)

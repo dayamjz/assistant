@@ -33,6 +33,7 @@ import (
 // restated the two identifiers would agree with a swap that restated them the
 // same way.
 func TestAStartedRunCarriesTheRecordsOwnIdentifiers(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 
 	h := newHome(t)
@@ -135,6 +136,7 @@ func stateText(in pipeline.Input, key pipeline.Key) (string, error) {
 // Without it, a convergence of the two would leave this test green with
 // vcs.WithRedactor dropped from the seam entirely.
 func TestTheSeamTheServiceBuildsCarriesItsHomeAndTheRedactorItChose(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 
 	h := newHome(t)

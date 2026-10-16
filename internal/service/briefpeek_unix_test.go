@@ -89,6 +89,7 @@ const briefHeard = "heard the new brief"
 // task.event, is held on that record. The person's row says the worker was
 // sent what it is to deliver.
 func TestAPromotionSendsTheLiveWorkerItsBriefAsAMessage(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	exchanges := []standin.Exchange{{Contains: "now a delivery task", Reply: briefHeard}}
 	streamWorkerOf(t, store.TaskInvestigation, "", exchanges, func(w launched, agent *standin.Agent) {
@@ -138,6 +139,7 @@ func TestAPromotionSendsTheLiveWorkerItsBriefAsAMessage(t *testing.T) {
 // the brief is in the instructions file, which is where a worker begun on
 // the task later reads it. The person's row says the worker was not sent it.
 func TestAPromotionWithNoLiveWorkerSaysTheBriefWasNotSent(t *testing.T) {
+	t.Parallel()
 	exchanges := []standin.Exchange{{Contains: "now a delivery task", Reply: briefHeard}}
 	streamWorkerOf(t, store.TaskInvestigation, "", exchanges, func(w launched, agent *standin.Agent) {
 		var stopped machine.TaskStopped
@@ -222,6 +224,7 @@ func eventsOfKind(p machine.TaskPeek, kind agents.TranscriptKind) []agents.Trans
 // within it, with the rest counted. The control for the noise rule is the
 // raw capture, which does carry every counter the peek left out.
 func TestAPeekShowsTheWorkersConversationAndNotItsCounters(t *testing.T) {
+	t.Parallel()
 	recorded := append(recordedStream(t),
 		`{"type":"brand_new_event","detail":"a type no row names"}`,
 		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_9","name":"Bash","input":{"command":"git clone https://ci:hunter2secret@example.com/r.git"}}]},"session_id":"recorded-session"}`)

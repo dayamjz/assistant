@@ -18,6 +18,7 @@ import (
 // what is read here is what a subscriber on the socket is pumped; the
 // socket itself is internal/cli's watch tests' subject.
 func TestStoringAReportPublishesEachHoldItRegistered(t *testing.T) {
+	t.Parallel()
 	h, records := loopHome(t)
 	ctx := t.Context()
 	copyPath, _ := h.TaskCopy("reportedaaaa")
@@ -89,6 +90,7 @@ func TestStoringAReportPublishesEachHoldItRegistered(t *testing.T) {
 // still exercised; the control is the unchanged copy, which must compare
 // equal, and the time-valued field moved to another location only.
 func TestSameBasisReadsEveryField(t *testing.T) {
+	t.Parallel()
 	base := taskstate.Basis{RunUpdatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	if !sameBasis(base, base) {
 		t.Fatal("a basis differs from itself")

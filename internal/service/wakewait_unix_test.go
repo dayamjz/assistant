@@ -50,6 +50,12 @@ func waitOn(ctx context.Context, client *ipc.Client, seconds int) <-chan waited 
 //
 // It cites P9: the coordinator's side of "supervision costs nothing until
 // something is actionable" is a wait that does not return while nothing is.
+//
+// It does not run in parallel. Its refusal half bounds how long a call may
+// take from above, under a second, and the package's other tests running
+// beside it would be measuring their load rather than the refusal. A
+// serial test runs before any parallel one resumes, so it measures an
+// otherwise idle process.
 func TestTheWaitOnAnIdleFleetAnswersEmptyAtItsBound(t *testing.T) {
 	principles.Cite(t, principles.P9)
 	requiresIdentifiedPeer(t)
@@ -118,6 +124,7 @@ func TestTheWaitOnAnIdleFleetAnswersEmptyAtItsBound(t *testing.T) {
 // It cites P9, because the coordinator is woken by the wake rather than by
 // asking again, and P8.
 func TestAWakeIsHandedOutUntilTheCoordinatorAcknowledgesIt(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P9)
 	principles.Cite(t, principles.P8)
 	var h *home.Home
@@ -238,6 +245,7 @@ func TestAWakeIsHandedOutUntilTheCoordinatorAcknowledgesIt(t *testing.T) {
 // It cites P9: absence of a listener does not make a crashed worker
 // invisible.
 func TestAWakeReachesACoordinatorThatOnlyPolls(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P9)
 	launchedWorker(t, "task/poll", func(w launched) {
 		if err := w.provider.Send(t.Context(), w.session, "finish"); err != nil {

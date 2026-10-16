@@ -31,6 +31,7 @@ import (
 // outside every worker group, starts its run, which is the control that the
 // worker's push started none for want of a posture and not of a gate.
 func TestALocalTasksPushStartsNoRunAndItsApprovalFastForwards(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	principles.Cite(t, principles.P1)
 	launchedWorkerUnder(t, store.TaskDelivery, "task/local", store.Known(config.DeliveryLocal), func(w launched) {

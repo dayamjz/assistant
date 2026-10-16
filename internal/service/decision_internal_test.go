@@ -57,6 +57,7 @@ func openDecisionService(t *testing.T, env map[string]string, provider *judgetes
 // call each land one row of the decision-model record, the failed one with no
 // probability. With no key in the environment the same service sends nothing.
 func TestTheServicesDecisionClientRecordsEveryAnswerInTheStore(t *testing.T) {
+	t.Parallel()
 	provider := judgetest.New(t, func(r judgetest.Request) judgetest.Reply {
 		if r.Path == "flagged.md" {
 			return judgetest.Answer(0.7)

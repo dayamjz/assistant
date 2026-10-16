@@ -14,6 +14,7 @@ import (
 // A stage the run skipped executed no body and carries none, which is the
 // control that the record is per execution rather than per stage named.
 func TestARunsRecordShowsHowLongEachStageTook(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

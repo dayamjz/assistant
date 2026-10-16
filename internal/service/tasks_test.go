@@ -106,6 +106,7 @@ func taskState(t *testing.T, client *ipc.Client, id string) taskstate.Resolution
 // Queued while the run stood, is Dispatched once the run has settled, and
 // nothing but the service's own release wrote that.
 func TestASettledRunReleasesTheTaskQueuedBehindIt(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -146,6 +147,7 @@ func TestASettledRunReleasesTheTaskQueuedBehindIt(t *testing.T) {
 // written with the blocker's run already failed, and the first read of the
 // successor finds it Dispatched.
 func TestOpeningTheServiceReleasesATaskWhoseBlockerClearedMeanwhile(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	subject := newSubject(t)
 	repository := recordRepository(t, h, subject)
@@ -180,6 +182,7 @@ func TestOpeningTheServiceReleasesATaskWhoseBlockerClearedMeanwhile(t *testing.T
 // rather than being dispatched onto a branch whose worker is still pushing
 // to it.
 func TestAPushSupersedingTheBlockersRunDoesNotReleaseTheSuccessor(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

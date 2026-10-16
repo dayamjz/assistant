@@ -66,6 +66,7 @@ func classOf(c *custody.Classification) custody.Class {
 // ended without moving anything is yours already, from the run's own
 // checkpoint.
 func TestSyncThroughTheServiceHoldsThenRecoversARunsWork(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)

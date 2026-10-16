@@ -18,6 +18,7 @@ import (
 // probes by identity and captures session.ErrNotHeld, this terminal's
 // failure; and a cancelled context is refused before the read.
 func TestTheTerminalSeamAnswersThroughTheServicesProvider(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	sub := newLaunchSubject(t, workerStandIn(t))
 	terminals := heldTerminals{sub.service}
@@ -87,6 +88,7 @@ func TestTheTerminalSeamAnswersThroughTheServicesProvider(t *testing.T) {
 // producer of. The control is the same seam over a service that resolves
 // an agent, above.
 func TestTheTerminalSeamOverNoProviderObservesNothing(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	sub := newDispatchSubject(t)
 	// A catalog holding a factory that refuses, so the driver cannot be

@@ -111,6 +111,7 @@ func callFromWindow(t *testing.T, w launched, method ipc.Method, params any) (js
 // it. That pair is what makes registering the pane's process, and not the
 // server, the right membership: the window is the server's child too.
 func TestUnderTmuxTheServicePlacesTheWorkerAndNotAPersonsWindow(t *testing.T) {
+	t.Parallel()
 	launchedTmuxWorker(t, "task/tmux-one", func(w launched) {
 		if _, ok := w.provider.(*session.Tmux); !ok {
 			t.Fatalf("the service launched through %T, want the tmux provider the operator's file chose", w.provider)
@@ -155,6 +156,7 @@ func TestUnderTmuxTheServicePlacesTheWorkerAndNotAPersonsWindow(t *testing.T) {
 // second attempt, and relaunches in the standing copy, in a tmux server of
 // its own, with a new reference, through which the task then reads Running.
 func TestARestartUnderTmuxRelaunchesADeadTerminalInPlace(t *testing.T) {
+	t.Parallel()
 	service.RequireSweepClearsHere(t, "a restart under tmux relaunching a dead terminal in place")
 	standin.Tmux(t)
 	requiresIdentifiedPeer(t)
@@ -207,6 +209,7 @@ func TestARestartUnderTmuxRelaunchesADeadTerminalInPlace(t *testing.T) {
 // worker's own server is served it, which is the placement rule above
 // applied to one more coordinator method.
 func TestUnderTmuxAPeekIsTheCoordinatorsRedactedAndBounded(t *testing.T) {
+	t.Parallel()
 	launchedTmuxWorker(t, "task/tmux-three", func(w launched) {
 		const secret = "hunter2-not-for-you"
 		// The credential is printed last, so the bound keeps it and only the

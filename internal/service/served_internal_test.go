@@ -28,8 +28,11 @@ import (
 // outside any run is the control that the names come from the context the
 // service marked and not from somewhere every call would find them.
 func TestAnAgentCallIsRecordedWithTheRunAndStageItServed(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), store.WithRedactor(redact.New()))
+	database := filepath.Join(t.TempDir(), "state.db")
+	seedDatabase(t, database)
+	st, err := store.Open(ctx, database, store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

@@ -15,6 +15,7 @@ import (
 // whole with nothing omitted, and a file that is not there is reported as not
 // there rather than as an empty log.
 func TestReadTailReturnsTheEndOfALogFromALineBoundary(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "review.log")
 	var lines []string
 	for i := 0; i < 50; i++ {

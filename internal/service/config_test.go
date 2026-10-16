@@ -55,6 +55,7 @@ const hermeticCommand = "go version"
 // holds there, and the record's configuration digest is the run's own
 // resolution rather than the operator-layer placeholder.
 func TestARunResolvesTheTrustedRepositoryConfiguration(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P7)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -99,6 +100,7 @@ func TestARunResolvesTheTrustedRepositoryConfiguration(t *testing.T) {
 // any stage body runs, rather than the run guessing at defaults, and the
 // refusal reaches the caller naming the trusted copy.
 func TestAnUnreadableTrustedConfigurationStopsTheRunBeforeLaunch(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P7)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -141,6 +143,7 @@ func TestAnUnreadableTrustedConfigurationStopsTheRunBeforeLaunch(t *testing.T) {
 // parse-time rule on the untrusted copy: a broken document surfaces before it
 // merges, even though its keys would mostly have been dropped.
 func TestAPushedConfigurationDocumentThatDoesNotParseIsRefused(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P7)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -166,6 +169,7 @@ func TestAPushedConfigurationDocumentThatDoesNotParseIsRefused(t *testing.T) {
 // pushed copy as trusted would fail its test stage on a command that is not
 // there; instead the run passes that stage and holds at the next.
 func TestAPushedCommandDoesNotDisplaceTheTrustedOne(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P7)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -217,6 +221,7 @@ func TestAPushedCommandDoesNotDisplaceTheTrustedOne(t *testing.T) {
 // for a different agent list stops the run before launch instead of the run
 // quietly using an agent its repository did not ask for.
 func TestARepositoryAgentThisBuildCannotHonourIsRefused(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

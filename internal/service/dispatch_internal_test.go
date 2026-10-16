@@ -36,6 +36,7 @@ func newDispatchSubject(t *testing.T) *dispatchSubject {
 	if err := h.Create(); err != nil {
 		t.Fatalf("creating the home: %v", err)
 	}
+	seedDatabase(t, h.Database())
 	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening the store: %v", err)
@@ -55,9 +56,9 @@ func newDispatchSubject(t *testing.T) *dispatchSubject {
 // copy and launch a worker: a primary checkout with an upstream, its
 // repository record and gate, and one delivery task resolving Dispatched
 // with the instructions file intake writes. It returns the task and its
-// copy path. Automatic git maintenance is turned off in the subject and
-// globally for the test, so no background git process holds a repository
-// a test is about to remove.
+// copy path. Automatic git maintenance is turned off in the subject here
+// and globally by TestMain for the whole process, so no background git
+// process holds a repository a test is about to remove.
 func plantLaunchable(t *testing.T, h *home.Home, records *store.Store) (id, copyPath string) {
 	t.Helper()
 	ctx := t.Context()
@@ -66,11 +67,6 @@ func plantLaunchable(t *testing.T, h *home.Home, records *store.Store) (id, copy
 		heldGit(t, dir, "config", "gc.auto", "0")
 		heldGit(t, dir, "config", "maintenance.auto", "false")
 	}
-	cfg := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(cfg, []byte("[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
 	repository, err := records.UpsertRepository(ctx, store.Repository{
 		ID: "subject", WorkingPath: primary, UpstreamURL: upstream, DefaultBranch: "main",
 	})
@@ -121,6 +117,7 @@ func plantLaunchable(t *testing.T, h *home.Home, records *store.Store) (id, copy
 // of which goroutine happened to run first. Run under the race detector,
 // which make test does.
 func TestConcurrentDispatchOfOneTaskClaimsOneAttempt(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	subject := newDispatchSubject(t)
 	ctx := t.Context()
@@ -176,6 +173,7 @@ func TestConcurrentDispatchOfOneTaskClaimsOneAttempt(t *testing.T) {
 // task it proved, and the slot is this service's memory: a service that
 // holds none for the task reads it as not dispatched here.
 func TestADispatchEndsWithTheProofInTheServicesSlot(t *testing.T) {
+	t.Parallel()
 	subject := newDispatchSubject(t)
 	ctx := t.Context()
 	if _, held := subject.service.isolationOf(subject.task); held {

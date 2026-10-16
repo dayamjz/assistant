@@ -12,6 +12,7 @@ import (
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -34,6 +35,7 @@ import (
 // request stage would open against it. That is the failure this catches, and
 // it is why the two are set to disagree rather than to match.
 func TestTheRepositoryAPullRequestWouldLandInComesFromTheRunsOwnRecord(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P1)
 	requiresIdentifiedPeer(t)
 
@@ -60,6 +62,7 @@ func TestTheRepositoryAPullRequestWouldLandInComesFromTheRunsOwnRecord(t *testin
 // specifier a provider is given names no host. So the run carries nothing, and
 // a provider opened on nothing refuses.
 func TestARunWhoseUpstreamIsNotOnThisHostCarriesNoRepository(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 
 	const elsewhere = "https://gitlab.example.invalid/dayamjz/assistant.git"
@@ -160,6 +163,7 @@ func recordRepositoryWithUpstream(t *testing.T, h *home.Home, workingPath, upstr
 	if err := h.Create(); err != nil {
 		t.Fatalf("creating the home: %v", err)
 	}
+	service.SeedDatabase(t, h.Database())
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening the store: %v", err)

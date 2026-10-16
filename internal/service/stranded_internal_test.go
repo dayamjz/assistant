@@ -24,6 +24,7 @@ import (
 // in driverFor, which resolves an agent out of an empty catalog. Nothing
 // here plants a fault in the store.
 func TestAPushThatCannotReplaceTheRunItDisplacedReleasesTheSuccessor(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	root := t.TempDir()
 	h, err := home.Open(root)
@@ -33,6 +34,7 @@ func TestAPushThatCannotReplaceTheRunItDisplacedReleasesTheSuccessor(t *testing.
 	if err := h.Create(); err != nil {
 		t.Fatalf("creating the home: %v", err)
 	}
+	seedDatabase(t, h.Database())
 	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening the store: %v", err)
