@@ -13,6 +13,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -695,5 +696,213 @@ func TestWithoutAProbeNothingIsRelaunchedOrDispatchedAgain(t *testing.T) {
 	}
 	if _, err := sub.restart.dispatchClaimed(ctx, sub.task); !errors.Is(err, errTaskLaunched) {
 		t.Fatalf("a dispatch of a launched task answered %v, want the launched refusal", err)
+	}
+}
+
+// GAP-05: a second handout of the same wake id after a lost ack does not
+// start a second attempt when the program has already relaunched. The wake
+// is drained twice under two attachments with no acknowledgement between
+// them (the lost-ack path), then the program relaunches once; a further
+// relaunch is refused, the attempt count stays at two, and a later drain
+// does not return the wake the program acknowledged as superseded.
+func TestASecondHandoutAfterLostAckDoesNotStartASecondAttemptWhenAlreadyRelaunched(t *testing.T) {
+	t.Parallel()
+	requireSweepClearsHere(t, "a second handout after a lost ack with the program already relaunched")
+	sub := newRelaunchSubject(t)
+	ctx := t.Context()
+	ref := sub.first.Reference().String()
+	inc, err := sub.records.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	since := time.Now()
+	appended, err := sub.records.AppendWakeWithMarkers(ctx, inc, store.WakeRequest{
+		TaskID: sub.task, Kind: string(supervisor.KindTerminalGone),
+		Marker: terminalGoneMarker(goneDead, ref, since),
+	}, store.MarkerAdvance{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wakeID := appended.Wake.ID
+	first, err := sub.records.DrainWakes(ctx, 10, store.WakeHandout{
+		To: store.AcknowledgedByCoordinator(), Under: "lost-ack-1", Held: []string{"lost-ack-1"},
+	})
+	if err != nil || len(first) != 1 || first[0].ID != wakeID || first[0].Handouts != store.Known(int64(1)) {
+		t.Fatalf("first handout = %+v (%v), want wake %d handed out once", first, err, wakeID)
+	}
+	// Attachment ended without an acknowledgement: the next drain under a
+	// different stretch is the second handout of the same id.
+	second, err := sub.records.DrainWakes(ctx, 10, store.WakeHandout{
+		To: store.AcknowledgedByCoordinator(), Under: "lost-ack-2", Held: []string{"lost-ack-2"},
+	})
+	if err != nil || len(second) != 1 || second[0].ID != wakeID || second[0].Handouts != store.Known(int64(2)) {
+		t.Fatalf("second handout = %+v (%v), want wake %d handed out a second time", second, err, wakeID)
+	}
+
+	out, err := sub.restart.relaunchTask(ctx, sub.task)
+	if err != nil {
+		t.Fatalf("the program's relaunch after the lost ack: %v", err)
+	}
+	if out.launch.attempt != 2 || out.superseded != ref {
+		t.Fatalf("the relaunch established %+v, want attempt 2 superseding %s", out, ref)
+	}
+	if _, err := sub.restart.relaunchTask(ctx, sub.task); !errors.Is(err, errRelaunchNotDue) {
+		t.Fatalf("a second relaunch after the program already relaunched = %v, want not due", err)
+	}
+	attempts, err := sub.records.TaskAttempts(ctx, sub.task)
+	if err != nil || len(attempts) != 2 {
+		t.Fatalf("attempts after the duplicate handout path = %+v (%v), want exactly two", attempts, err)
+	}
+	got, err := sub.records.TaskWakes(ctx, sub.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range got {
+		if w.ID == wakeID && (w.Queued() || w.AcknowledgedBy.Or(store.Acknowledger{}) != store.AcknowledgedByProgram()) {
+			t.Fatalf("wake %d is %+v, want acknowledged by the program after the relaunch", wakeID, w)
+		}
+	}
+	if again, err := sub.records.DrainWakes(ctx, 10, store.WakeHandout{
+		To: store.AcknowledgedByCoordinator(), Under: "after-relaunch",
+	}); err != nil || len(again) != 0 {
+		t.Fatalf("a drain after the program acknowledged the superseded wake = %+v (%v), want none", again, err)
+	}
+}
+
+// GAP-05: restart over Failed with a Dead terminal sweeps the standing copy,
+// begins attempt N+1, and acknowledges the old terminal-gone wake as the
+// program so a later drain cannot deliver a duplicate action for that session.
+func TestARestartRelaunchesAFailedDeadTerminalSweepsAndAcknowledgesItsWake(t *testing.T) {
+	t.Parallel()
+	requireSweepClearsHere(t, "a restart relaunching a Failed dead terminal with its wake acknowledged")
+	sub := newRelaunchSubject(t)
+	ctx := t.Context()
+	ref := sub.first.Reference().String()
+	left := filepath.Join(sub.copy, "progress-from-attempt-one.txt")
+	if err := os.WriteFile(left, []byte("kept\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	build, err := store.CurrentBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := sub.records.Task(ctx, sub.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sub.records.CreateRun(ctx, store.Run{
+		ID: "run-failed-dead", RepositoryID: task.RepositoryID.Or(""), Branch: task.Branch.Or(""),
+		SubmittedHead: "0000000000000000000000000000000000000001",
+		Base:          "0000000000000000000000000000000000000000",
+		Status:        store.RunFailed, Build: build, ConfigDigest: "digest",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := sub.restart.tasks().Task(ctx, sub.task); err != nil ||
+		got.State != taskstate.Failed || got.Source != taskstate.SourceRun || got.Basis.Process != taskstate.Dead {
+		t.Fatalf("before reconcile the task resolves %+v (%v), want Failed with a dead terminal", got, err)
+	}
+	inc, err := sub.records.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	since := time.Now()
+	gone, err := sub.records.AppendWakeWithMarkers(ctx, inc, store.WakeRequest{
+		TaskID: sub.task, Kind: string(supervisor.KindTerminalGone),
+		Marker: terminalGoneMarker(goneDead, ref, since),
+	}, store.MarkerAdvance{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sub.restart.reconcileTasks(ctx)
+	sub.restart.work.Wait()
+
+	attempts, err := sub.records.TaskAttempts(ctx, sub.task)
+	if err != nil || len(attempts) != 2 {
+		t.Fatalf("after restart reconcile attempts = %+v (%v), want attempt N+1", attempts, err)
+	}
+	if attempts[1].SessionRef.Or("") == ref {
+		t.Fatalf("attempt 2 reused the dead session %s", ref)
+	}
+	if _, err := os.Stat(left); err != nil {
+		t.Fatalf("the standing copy was not reused after the sweep: %v", err)
+	}
+	wakes, err := sub.records.TaskWakes(ctx, sub.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range wakes {
+		if w.ID == gone.Wake.ID && (w.Queued() || w.AcknowledgedBy.Or(store.Acknowledger{}) != store.AcknowledgedByProgram()) {
+			t.Fatalf("terminal-gone wake about the old session is %+v, want acknowledged by the program", w)
+		}
+	}
+	if kinds := eventKinds(t, sub.records, sub.task); !endsWith(kinds, relaunchedKind, store.DispatchedEventKind) {
+		t.Fatalf("history ends %v, want relaunched then dispatched", kinds)
+	}
+}
+
+// GAP-05: Unobserved never deletes the standing copy and never relaunches.
+// A surviving worker an earlier service started probes Unobserved on the
+// restarted service; reconciliation and a direct relaunch leave the attempt
+// count alone, the copy's contents stay where the first worker left them,
+// and cleanup handed Unobserved refuses without removing the directory.
+func TestUnobservedNeverRelaunchesOrDeletesTheStandingCopy(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	sub := newLaunchSubject(t, workerStandIn(t))
+	sub.service.terminals = heldTerminals{sub.service}
+	d, err := sub.service.dispatchTask(ctx, sub.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	first, err := sub.service.launchTask(ctx, d)
+	if err != nil {
+		t.Fatalf("launching: %v", err)
+	}
+	provider, _, _ := sub.service.sessionOf(sub.task)
+	waitCaptured(t, provider, first, "worker ready")
+	left := filepath.Join(sub.copy, "standing-under-unobserved.txt")
+	if err := os.WriteFile(left, []byte("do not delete\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ref := first.Reference().String()
+	restart, agent := restartedService(t, sub)
+
+	if got := restart.terminals.Probe(ctx, ref); got.Liveness != taskstate.Unobserved {
+		t.Fatalf("probe of the survivor = %+v, want Unobserved", got)
+	}
+	restart.reconcileTasks(ctx)
+	restart.dispatchDue(ctx)
+	restart.work.Wait()
+	if _, err := restart.relaunchTask(ctx, sub.task); !errors.Is(err, errRelaunchNotDue) {
+		t.Fatalf("relaunch under Unobserved = %v, want not due", err)
+	}
+	if attempts, err := sub.records.TaskAttempts(ctx, sub.task); err != nil || len(attempts) != 1 {
+		t.Fatalf("Unobserved relaunched or replaced the attempt: %+v (%v)", attempts, err)
+	}
+	if _, err := os.Stat(left); err != nil {
+		t.Fatalf("Unobserved deleted or replaced the standing copy: %v", err)
+	}
+	for _, call := range agent.Calls() {
+		if call.Worker {
+			t.Fatalf("Unobserved started a worker: %s", call)
+		}
+	}
+
+	cleaner, err := tasks.NewCleaner(tasks.CleanupDeps{
+		Home: sub.service.home, Store: sub.records,
+		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cleaner.CleanUp(ctx, tasks.TaskCopy{Task: sub.task, Terminal: taskstate.Unobserved})
+	var refused *tasks.CleanupRefusal
+	if !errors.As(err, &refused) || refused.Reason != tasks.ReasonTerminalUnobserved {
+		t.Fatalf("cleanup under Unobserved = %v, want ReasonTerminalUnobserved", err)
+	}
+	if _, err := os.Stat(left); err != nil {
+		t.Fatalf("cleanup under Unobserved removed the standing copy: %v", err)
 	}
 }

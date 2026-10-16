@@ -205,25 +205,30 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
 - A drain hands wakes out and records none as handled. Always drain with
   `--json`: without it, `wakes` is a person's listing that hands out
   nothing.
-- Act on each wake, then acknowledge it by its `id`. Acknowledging is the
-  only thing that records a wake as handled, and a wake keeps its task
-  counted as in flight until you do.
+- Act keyed by `(task_id, kind, session-ref)`, never by `handouts`. Delivery
+  is at least once, so the same wake id can reach you twice after a lost
+  ack; `handouts` only counts deliveries. Read the task before every act.
+- Act on each wake, then acknowledge it by its `id` — every id you acted on,
+  including one you decided needs nothing further after reading the task.
+  Acknowledging is the only thing that records a wake as handled, and a wake
+  keeps its task counted as in flight until you do.
 - A wake you were handed and did not acknowledge is handed out again: after
   a service restart, and on your next drain once you are no longer
   attached. You are attached while you hold `listen`; if you hold no
   `listen`, every drain hands you the wakes you have not acknowledged yet.
-  So a wake can reach you twice: `handouts` counts how many times it has
-  been handed out, and a repeat may be one you already acted on. Read the
-  task before acting again.
 - `--limit N` bounds one drain; the default is 100. Wakes past the limit
   stay queued for the next drain.
-- Each wake names a `task_id` and a `kind`. Read the task before acting:
-  for `terminal-gone`, relaunch it or decide to let it go; for
-  `hold-opened`, a decision waits on an answer, the task's own or one its
-  branch's run is held at, and `assistant --task ID --answer ...` reaches
-  either; for `message-unacknowledged`, the worker has not acknowledged a
-  message. The program's own records of creating and dispatching a task
-  wake nobody.
+- Each wake names a `task_id` and a `kind`. For `terminal-gone`, the session
+  reference is in `marker` between the case and the unobserved-since
+  instant. If the task's latest attempt already names a different session,
+  or the program already relaunched that one, do not call `task.relaunch`
+  again. A marker carrying `:again:` is a resurface reminder for the same
+  silence, not a second relaunch. Case `unobservable` means probe or wait;
+  never `task.relaunch` on it — only `dead` is a crashed worker the program
+  relaunches. For `hold-opened`, answer with
+  `assistant --task ID --answer ...`. For `message-unacknowledged`, the
+  worker has not acknowledged a message. The program's own records of
+  creating and dispatching a task wake nobody.
 - `acknowledge` also closes a wake `listen` printed that you dealt with
   without draining. Naming an id no wake has, or one already acknowledged,
   refuses the whole batch with code `invalid-request`.
@@ -298,9 +303,11 @@ assistant --json coordinator await --timeout 5m   # blocks, then drains
   not your session. A `listen` left running after your session died keeps
   what you were handed until that process ends, and two streams held at
   once count as one, so a coordinator going away is not noticed until every
-  stream has closed. If you hold `listen` and never acknowledge what you
-  acted on, you are not handed it again, and it keeps the work counted as in
-  flight: acknowledge as you go.
+  stream has closed. This build does not expire or heartbeat that
+  attachment, so a zombie `listen` can pin handouts until the process ends.
+  If you hold `listen` and never acknowledge what you acted on, you are not
+  handed it again, and it keeps the work counted as in flight: acknowledge
+  as you go, and do not leave a detached `listen` running.
 - **The service pushes only to `listen`.** It does not start a turn in your
   host by itself; a coordinator holding neither `listen` nor `await` is
   woken by nothing.

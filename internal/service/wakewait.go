@@ -116,6 +116,10 @@ import (
 //     ends; and two streams that overlap are one stretch, so a coordinator
 //     that went away while another stream was held, a person's own or a
 //     second coordinator's, is not noticed until every stream has closed.
+//     Nothing here expires or heartbeats a listen attachment: a zombie
+//     listen pins those handouts for as long as the process lives. That is
+//     GAP-05's residual on delivery attachment, stated in docs/operators.md
+//     rather than papered over with a clock that would invent detachment.
 //   - A coordinator that holds the stream, drains and keeps running without
 //     acknowledging what it acted on is never handed those rows again by
 //     this service, and they keep their tasks in flight; that is the

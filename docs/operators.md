@@ -191,6 +191,27 @@ drain. A coordinator that holds no stream is never attached, so every drain
 hands it the wakes it has not acknowledged yet. The structured answer counts,
 in `handouts`, how many times each wake has been handed out.
 
+### Wake action contract
+
+Delivery is at least once, so `handouts` is a delivery counter, not a licence
+to act again. Act keyed by `(task_id, kind, session-ref)`:
+
+- Read the task (`assistant --json tasks` or the task surface) before acting.
+  For `terminal-gone`, the session reference sits in the wake's `marker`
+  between the case (`dead`, `unobservable`, or `provider-wide`) and the
+  unobserved-since instant. If the task's latest attempt already names a
+  different session, or the program has already relaunched, do not call
+  `task.relaunch` again.
+- Acknowledge every wake id you acted on, including one you decided needs no
+  further action after reading the task. An unacked row stays in flight.
+- A resurface whose marker carries `:again:` is the same silence reminded
+  once the escalation window elapsed. It is not a second crash and must not
+  start a second relaunch when the first surface was already handled or the
+  program already relaunched that session.
+- A marker case of `unobservable` is ambiguous liveness: probe or wait. Never
+  call `task.relaunch` on it. The service leaves Unobserved alone the same
+  way; only a later `dead` reading relaunches.
+
 The service can push wakes to the coordinator. `assistant coordinator listen`
 holds the coordinator's wake stream and prints each wake as the service
 queues it, until it is interrupted:
@@ -254,6 +275,35 @@ the queue: a relaunched task shows its new attempt there, and a task past
 How soon a wake is pushed or answered after a worker stops is set by the
 service's supervision pass, which records the wake, not by the stream or the
 wait.
+
+## Unattended operating posture
+
+When nobody is at the keyboard, read the fleet against these postures.
+They are distinct on purpose: treating one as another is how recovery goes
+wrong.
+
+| Posture | What is true | What the service does | What you do |
+|---|---|---|---|
+| Active execution | Terminal Live, or a validation run the service is advancing | Absorbs; no wake | Nothing |
+| Declared wait | Worker declared a wait whose recheck window is open | Absorbs until the window elapses | Nothing until a wake surfaces |
+| Missing heartbeats / stalled screen | Terminal Live but the capture is unchanged past the escalation window | Surfaces `terminal-unchanged` once, then absorbs redraws until the next window | Inspect; do not treat as a crash |
+| Dead process | Probe answers Dead; work not landed; no stored report | Queues `terminal-gone` with case `dead`; on restart (or `task.relaunch`) sweeps the standing copy and relaunches in place up to `relaunch_attempts`, acknowledging that session's queued `terminal-gone` wakes as the program | After a restart, read `assistant tasks` before acting on a re-handed wake |
+| Ambiguous / unobserved | Probe answers Unobserved (unheld survivor, unreadable, foreign home, and the like) | Surfaces `terminal-gone` with case `unobservable`; never relaunches; never deletes the standing copy | Probe or wait; never `task.relaunch` |
+| Blocked decision | Open hold naming the task (relaunch bound, no-sweep, stop, report decision, …) | Resolves Held; leaves alone until answered | `assistant --task ID --answer …` |
+| Failed recovery | Relaunch or sweep refused, or past `relaunch_attempts` | Holds or surfaces; does not destroy the copy | Read the hold or service log; answer retry/stop or fix the host |
+
+A legitimate declared wait is never classified as a dead worker. A dead worker
+is never left looking like a wait once the probe answers Dead. Ambiguous
+state never triggers destructive cleanup or a duplicate delivery action: the
+copy stays, and a second handout of the same wake id after a lost ack does
+not start another attempt once the program has already relaunched that
+session.
+
+**Residual (listen attachment).** Being attached is the `listen` process, not
+your session. A zombie `listen` left running after its host died keeps
+handouts pinned under that stretch until the process ends; this build does
+not expire or heartbeat that attachment. Acknowledge as you go, and do not
+leave a detached `listen` running.
 
 ## Standing consent
 
