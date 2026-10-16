@@ -39,13 +39,17 @@ fi
 python3 verify_graders.py
 caliper validate q1.eval.yaml
 
+# workers=1: build-subject.sh installs a global insteadOf for the subject
+# upstream URL so the gate bare repo rewrites too; two attempts sharing this
+# machine's HOME would race that rewrite. Caliper's attempt HOME isolation
+# does not cover the setup hook's git config --global here.
 echo "running with-skill arm (model=$MODEL)" >&2
-caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 2 \
+caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
 	--output result-q1-with-skill.json
 
 echo "running ablated arm (model=$MODEL)" >&2
-caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 2 \
+caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
 	--ablate assistant --output result-q1-ablated.json
 
