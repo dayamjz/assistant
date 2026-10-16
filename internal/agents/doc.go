@@ -376,8 +376,9 @@
 // Cursor and Grok are CLI-login adapters: each strips its provider API-key
 // environment variable (CURSOR_API_KEY, XAI_API_KEY) so a key in the service
 // environment cannot redirect a run onto API billing. Cursor searches
-// cursor-agent, then cursor, then agent on PATH; Grok uses --prompt-file for
-// the prompt rather than standard input.
+// cursor-agent then cursor on PATH (never the bare name "agent", which Grok's
+// installer reuses) and passes the prompt as a trailing argv operand; Grok
+// uses --prompt-file rather than standard input.
 //
 // Availability is one thing: the named executable resolves to a file this
 // process may execute. An installation that resolves and then fails on its

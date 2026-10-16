@@ -11,15 +11,19 @@ OpenAI, and Grok Build.
 ### 1. Cursor (Agent CLI)
 
 - **Config name**: `cursor`
-- **Binaries on PATH** (first match wins): `cursor-agent`, `cursor`, `agent`
+- **Binaries on PATH** (first match wins): `cursor-agent`, then `cursor`
 - **Install**: `curl https://cursor.com/install -fsS | bash`
-- **Auth (CLI login only)**: `agent login` (or `cursor-agent login`). The adapter
-  strips `CURSOR_API_KEY` from the process environment and never passes
-  `--api-key`, so a key in the service environment cannot redirect runs onto
-  the API-key route.
+- **Auth (CLI login only)**: `cursor-agent login`. The adapter strips
+  `CURSOR_API_KEY` from the process environment and never passes `--api-key`,
+  so a key in the service environment cannot redirect runs onto the API-key
+  route.
+- **Prompt delivery**: trailing argv after `--` (the CLI’s documented
+  `prompt...` argument; not stdin). Large prompts are still bounded by
+  `MaxPromptBytes`; there is no Cursor `--prompt-file`.
 - **Sessions**: resumable fixer sessions (`--resume`)
-- **Note**: Grok’s installer also links `agent`. Prefer `cursor-agent` on PATH
-  when both are installed.
+- **Note**: Grok’s installer also links `agent`. That name is **not** a Cursor
+  candidate here, so a machine with only Grok’s `agent` will not resolve as
+  `cursor`. Put `cursor-agent` on PATH.
 
 ### 2. Claude (Claude Code)
 
@@ -97,7 +101,7 @@ assistant doctor
 
 | Adapter | Check |
 |---------|--------|
-| Cursor | `cursor-agent --version` or `agent --version` |
+| Cursor | `cursor-agent --version` |
 | Claude | `claude --version` |
 | OpenAI | `openai --version` |
 | Grok | `grok version` |
@@ -119,10 +123,10 @@ assistant doctor
 3. For each entry, resolve the binary on PATH and use the first that can run
 4. If none are available, refuse before the first stage
 
-Each adapter executes the agent CLI, passes the prompt (stdin or
-`--prompt-file`), reads a JSON result envelope from stdout, and returns a
-structured `Result`. Cursor and Grok strip their provider API-key environment
-variables so authentication is the CLI login.
+Each adapter executes the agent CLI, passes the prompt (Cursor: trailing
+argv; Claude: stdin; Grok: `--prompt-file`), reads a JSON result envelope
+from stdout, and returns a structured `Result`. Cursor and Grok strip their
+provider API-key environment variables so authentication is the CLI login.
 
 ## Troubleshooting
 
@@ -130,20 +134,20 @@ variables so authentication is the CLI login.
 
 Install at least one agent CLI and ensure it is on the service’s PATH.
 
-### Cursor resolves as Grok’s `agent`
+### `agent: cursor` will not resolve
 
-Install Cursor’s CLI and ensure `cursor-agent` appears on PATH ahead of a
-Grok-owned `agent` symlink, or pin the binary:
+Put `cursor-agent` (or `cursor`) on PATH. The bare name `agent` is not a
+Cursor candidate — Grok’s installer owns that symlink. Pinning a path is not
+supported in the `agent:` key; fix PATH instead.
 
 ```yaml
-# Not supported as a path in agent: — put cursor-agent on PATH instead.
 agent: cursor
 ```
 
 ### Cursor / Grok: not authenticated
 
 ```bash
-agent login          # Cursor
+cursor-agent login   # Cursor
 grok login           # Grok (browser)
 grok login --device-auth   # Grok headless
 ```

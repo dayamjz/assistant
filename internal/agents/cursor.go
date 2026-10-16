@@ -25,11 +25,13 @@ const CursorName = "cursor"
 const CursorKeyVariable = "CURSOR_API_KEY"
 
 // CursorBinaries is the PATH search order when no WithCursorBinary pin is set.
-// Cursor's installer puts the CLI on PATH as "agent" and also as
-// "cursor-agent" under its versioned install tree; Grok's installer reuses the
-// name "agent", so "cursor-agent" is tried first, then the historical
-// "cursor", then "agent".
-var CursorBinaries = []string{"cursor-agent", "cursor", "agent"}
+// Cursor's installer puts the CLI on PATH as "cursor-agent" (and historically
+// "cursor"). The bare name "agent" is deliberately absent: Grok's installer
+// links that name to Grok Build, so accepting it would resolve a Cursor
+// factory to Grok when cursor-agent is missing. Operators who only have the
+// colliding "agent" symlink must put cursor-agent on PATH (or pin
+// WithCursorBinary).
+var CursorBinaries = []string{"cursor-agent", "cursor"}
 
 // CursorOption configures the Cursor adapter. Options are supplied when
 // the factory is built and are fixed for the lifetime of every Runner it
@@ -337,7 +339,6 @@ func (r *cursorRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	proc := runProcess(ctx, procSpec{
 		bin:     r.resolved,
 		args:    r.arguments(GrantFor(purpose), inv, s.resume),
-		stdin:   inv.Prompt,
 		dir:     inv.Dir,
 		env:     withoutEnvNames(environment(r.settings.base, inv.Env), CursorKeyVariable),
 		grace:   r.settings.grace,
@@ -446,20 +447,23 @@ func (r *cursorRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 
 // arguments builds the command line. The configured entry's own flags come
 // first, then the grant (cursorGrantFlags), then the four this run manages:
-// --print, --output-format, --model, and --resume.
+// --print, --output-format, --model, and --resume, then the prompt as a
+// trailing argv operand (Cursor Agent documents `prompt...` as an argument,
+// not standard input).
 //
-// Of those four, config.ReservedAgentFlags refuses a configured entry that
-// names --output-format or --resume, so an entry cannot contradict the two
-// that decide how output is read and which session is continued. --print and
-// --model are managed here without being reserved there, so an entry may
+// Of the managed flags, config.ReservedAgentFlags refuses a configured entry
+// that names --output-format or --resume, so an entry cannot contradict the
+// two that decide how output is read and which session is continued. --print
+// and --model are managed here without being reserved there, so an entry may
 // carry either: its own copy is placed ahead of the managed one and what a
 // repeated flag means is left to the agent's own argument parsing.
 //
-// The prompt is not on the command line at all. It is written to the agent's
-// standard input, so its size is bounded by MaxPromptBytes rather than by an
-// argument list, and a prompt that begins with a dash cannot be read as an
-// option. --api-key is never written: authentication is the CLI login, and
-// CursorKeyVariable is stripped from the environment for the same reason.
+// The prompt is placed after `--` so a prompt that begins with a dash cannot
+// be read as an option. MaxPromptBytes still bounds what this package
+// accepts; the OS argument-list ceiling is a residual gap beyond that (Cursor
+// has no --prompt-file the way Grok does). --api-key is never written:
+// authentication is the CLI login, and CursorKeyVariable is stripped from the
+// environment for the same reason.
 func (r *cursorRunner) arguments(grant Grant, inv Invocation, resume string) []string {
 	args := slices.Clone(r.extra)
 	args = append(args, cursorGrantFlags(grant)...)
@@ -470,14 +474,19 @@ func (r *cursorRunner) arguments(grant Grant, inv Invocation, resume string) []s
 	if resume != "" {
 		args = append(args, "--resume", resume)
 	}
+	args = append(args, "--", inv.Prompt)
 	return args
 }
 
 // cursorGrantFlags is Cursor Agent CLI's translation of a Grant.
 //
 //   - GrantRead runs in ask mode, which the CLI documents as read-only.
-//   - GrantEdit runs with --force so tool calls a headless fix needs are not
-//     left waiting on a person who is not there.
+//   - GrantEdit runs with --force so headless tool calls are not left waiting
+//     on a person who is not there. Residual gap versus Claude's GrantEdit:
+//     Cursor's --force auto-approves commands as well as edits (the CLI's
+//     "force allow commands unless explicitly denied"); this package does not
+//     pass a deny list to narrow that, so the grant is wider than "edits
+//     only".
 //   - GrantWorker is GrantRead's: this adapter declares no worker capability,
 //     so a worker grant is not a path a run reaches here.
 //

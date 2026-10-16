@@ -48,8 +48,8 @@ func TestCursorResolvesCursorAgentWhenThatIsWhatIsOnPath(t *testing.T) {
 		t.Skip("planting bare executable names needs a portable script")
 	}
 	dir := t.TempDir()
-	// Prefer cursor-agent over a colliding "agent" (Grok's installer reuses that name).
-	for _, name := range []string{"agent", "cursor-agent"} {
+	// cursor-agent wins over historical "cursor"; bare "agent" is not a candidate.
+	for _, name := range []string{"cursor", "cursor-agent"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -60,10 +60,31 @@ func TestCursorResolvesCursorAgentWhenThatIsWhatIsOnPath(t *testing.T) {
 		t.Fatalf("LookPathFirst: %v", err)
 	}
 	if !strings.HasSuffix(got, string(filepath.Separator)+"cursor-agent") {
-		t.Errorf("resolved %q, want …/cursor-agent ahead of agent", got)
+		t.Errorf("resolved %q, want …/cursor-agent ahead of cursor", got)
 	}
 	if _, err := agents.CursorFactory().New(t.Context(), nil); err != nil {
 		t.Fatalf("CursorFactory.New: %v", err)
+	}
+}
+
+func TestCursorDoesNotResolveBareAgentAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("planting bare executable names needs a portable script")
+	}
+	dir := t.TempDir()
+	// Grok's installer links "agent"; that must not satisfy CursorBinaries.
+	if err := os.WriteFile(filepath.Join(dir, "agent"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	if _, err := agents.LookPathFirst(agents.CursorBinaries...); err == nil {
+		t.Fatal("LookPathFirst resolved bare agent; CursorBinaries must omit it")
+	}
+	if _, err := agents.CursorFactory().New(t.Context(), nil); err == nil {
+		t.Fatal("CursorFactory.New succeeded with only bare agent on PATH")
+	}
+	if slices.Contains(agents.CursorBinaries, "agent") {
+		t.Fatal(`CursorBinaries still lists "agent"`)
 	}
 }
 
@@ -86,12 +107,19 @@ func TestCursorStripsAPIKeyAndWritesGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("review: %v", err)
 	}
-	reviewArgs := decodeCall(t, review.Text).Args
+	reviewCall := decodeCall(t, review.Text)
+	reviewArgs := reviewCall.Args
 	if !slices.Contains(reviewArgs, "--mode") || !slices.Contains(reviewArgs, "ask") {
 		t.Errorf("review grant missing --mode ask: %q", reviewArgs)
 	}
 	if slices.Contains(reviewArgs, "--force") {
 		t.Errorf("review must not carry --force: %q", reviewArgs)
+	}
+	if reviewCall.Stdin != "" {
+		t.Errorf("cursor must not send the prompt on stdin: %q", reviewCall.Stdin)
+	}
+	if !slices.Contains(reviewArgs, "--") || !slices.Contains(reviewArgs, "review this change") {
+		t.Errorf("cursor must pass the prompt as a trailing argv operand after --: %q", reviewArgs)
 	}
 
 	fix, err := runner.Run(t.Context(), agents.PurposeFix, invocation(t, agents.ShapeText, nil))
