@@ -77,9 +77,6 @@ planted surface:
 
 ## Next
 
-1. Confirm provider headroom (`quota-axi`).
-2. Run `q1.eval.yaml` at k = 5 both arms with `--judge-model` pinned, in a
-   disposable environment.
-3. Write the run up as a new `docs/evaluations/` entry answering Q1 with
-   limits, every figure traceable to a checked-in results file. Then Q3,
-   then Q2, per plan step 4.
+Full Q1 at k = 5 both arms and its write-up are in
+`docs/evaluations/2026-10-16-caliper-q1-full.md` (issue #287 items 4–5).
+Plan step 4 continues with Q3, then Q2.
