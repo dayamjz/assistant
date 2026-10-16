@@ -278,16 +278,20 @@ type Standing struct {
 // which a driving agent asks the person. The one completed run that reads as
 // pushed is one whose state says there was no code host: the pull request and
 // checks stages were skipped for that reason, and checks-passed would claim
-// checks that did not run. The one passed record that reads as
-// passed is one whose merge record says a merge ended it, which is Standing's
-// PullRequestEnd, read off that record rather than inferred from a checkpoint
-// that still stands at the checks stage. A run that ended without
-// a verdict is
-// cancelled when a person ended it and failed when a bound parked it, which is
-// the difference between the two things a terminated record covers; the reason
-// on a parked run says which bound. A parked run is terminal here even though
-// internal/graph can take it further through a fork or a new budget, and the
-// next action says so.
+// checks that did not run. That fact lives in the checkpoint state
+// (pipeline.KeyNoCodeHost), so a passed record whose Execution was not
+// restored from a checkpoint still reads as checks-passed: the record alone
+// does not carry no_code_host, and inventing pushed without the state would
+// overclaim. Surfaces that build Standing are expected to restore the
+// checkpoint the way internal/service does. The one passed record that reads
+// as passed is one whose merge record says a merge ended it, which is
+// Standing's PullRequestEnd, read off that record rather than inferred from a
+// checkpoint that still stands at the checks stage. A run that ended without
+// a verdict is cancelled when a person ended it and failed when a bound
+// parked it, which is the difference between the two things a terminated
+// record covers; the reason on a parked run says which bound. A parked run is
+// terminal here even though internal/graph can take it further through a fork
+// or a new budget, and the next action says so.
 //
 // It reads where the run stopped and nothing about what any stage established.
 // A run reaches the end when every stage cleared, and the stage reports say how

@@ -46,6 +46,13 @@ func (k RemoteKind) String() string {
 // repository this adapter addresses, a local path or file:// remote with no
 // code host, or a network host this build cannot talk to. An empty remote is
 // unsupported rather than local, because there is nothing to push to.
+//
+// A bare name with no scheme and no host:path form (for example "remote.git")
+// is local, the same as an explicit relative path: git accepts that shape as a
+// path, and this classifier does not invent a host for it. A typo that was
+// meant to be a network URL but lost its scheme therefore lands as no-code-host
+// rather than unsupported; naming an absolute, ./, ../, or file:// path is
+// what makes the local answer unmistakable.
 func ClassifyRemote(remote string) RemoteKind {
 	remote = strings.TrimSpace(remote)
 	if remote == "" {
