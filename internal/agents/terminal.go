@@ -75,15 +75,26 @@ import (
 //
 // # Typing
 //
-// Send and the instructions are typed, not written to a pipe: the adapter's
-// terminal framing turns the text into the bytes a person would type, which
-// are loaded into a tmux buffer of this server and pasted into the pane, with
-// each newline pasted as the Enter key. That is the same path a person's
-// keystrokes take into the pane, which is why typing into an attached window
-// reaches the agent exactly as a Send does and why this package cannot tell
-// the two apart afterwards: the pane has one input. A send ctx ends returns
-// ctx's error, and the tmux client it was running is killed, which may leave
-// part of the text pasted; nothing here takes it back.
+// Send is typed, not written to a pipe, on the terms of the adapter's
+// terminalTyping, which is the adapter's and not the provider's: its framing
+// turns the text into the bytes a person would type, which are loaded into a
+// tmux buffer of this server and pasted into the pane. The scripted adapter
+// pastes every newline as the Enter key, which is what a program reading
+// lines needs, and types its instructions the same way. The Claude Code
+// adapter pastes each send as one bracketed paste, so a line break inside it
+// stays part of the one message, and then types Enter as a key of its own;
+// it types only once its reading of the screen says the interface is ready,
+// and its instructions are on its command line rather than typed.
+// claudeterminal.go states its terms. A start whose adapter reads the screen
+// returns only once that reading says the interface is drawn, within ctx and
+// terminalReadyTimeout, and is refused with ErrTerminalNotReady otherwise.
+//
+// That is the same path a person's keystrokes take into the pane, which is
+// why typing into an attached window reaches the agent exactly as a Send
+// does and why this package cannot tell the two apart afterwards: the pane
+// has one input. A send ctx ends returns ctx's error, and the tmux client it
+// was running is killed, which may leave part of the text pasted; nothing
+// here takes it back.
 //
 // # Capture
 //
@@ -112,8 +123,28 @@ import (
 //     in whatever order they reached the server, and nothing records the
 //     person's.
 //   - A line longer than the terminal's line-editing limit reaches a program
-//     reading lines in that mode cut short; the adapter's framing is what
-//     refuses such a line, and only the scripted adapter has one.
+//     reading lines in that mode cut short; the scripted adapter's framing
+//     is what refuses such a line. The Claude Code adapter's paste is not
+//     read in that mode, and is not bounded by it.
+//   - What a person types is typed as they type it. The leading space the
+//     Claude Code framing puts before a "!" or a "/" is put only before a
+//     Send, so a person attached to a Claude Code worker's pane can still
+//     type "!" into an empty input and run a shell command outside the
+//     worker's grant, or "/" and run a slash command.
+//   - A long or multi-line send reaches a Claude Code worker's model wrapped
+//     in a pasted-content element rather than as the bare text: the CLI
+//     collapsed a four-line paste on screen and sent it that way, and took
+//     ten kilobytes whole the same way.
+//   - The Claude Code typing rests on what one CLI version, 2.1.301, drew
+//     and read: the footer and input text claudeScreen reads, the state
+//     file's keys, and the approval's twenty characters. A later CLI that
+//     draws something else is refused at start or at a send rather than
+//     typed at blind; one that draws the same and reads its input otherwise
+//     is not noticed here.
+//   - A send to a Claude Code worker waits for the turn running when it is
+//     made, so a caller whose bound is shorter than a turn has its text
+//     refused, nothing typed, rather than queued. The CLI was seen to queue
+//     a message pasted while a turn ran; nothing here relies on that.
 
 // TerminalWorkerRunner is a Runner that can be started as a terminal worker,
 // which is what CapabilityTerminalWorkers names: an adapter implements it
@@ -225,6 +256,51 @@ const terminalTarget = "worker"
 // pasted, deleted by the paste.
 const terminalBuffer = "assistant-send"
 
+// ErrTerminalNotReady is the refusal of a terminal worker whose screen did
+// not read as ready for what was asked: at start, an interface that was not
+// drawn within the bound, and at a send, one that did not read ready to be
+// typed into before the send's ctx ended. Nothing is typed into a screen that has not read
+// ready, so a send refused with it typed nothing. It is wrapped together
+// with ctx's error where ctx is what ended the wait.
+var ErrTerminalNotReady = errors.New("agents: the terminal worker's screen did not read ready")
+
+// screenState is what an adapter's reader makes of a terminal worker's
+// screen.
+type screenState int
+
+const (
+	// screenNotDrawn is a screen that does not show the agent's interface:
+	// before it is drawn, or a screen of another kind, a first-run screen
+	// among them.
+	screenNotDrawn screenState = iota
+	// screenDrawn is the interface drawn and not ready to be typed into: a
+	// turn is running, or its input is not empty.
+	screenDrawn
+	// screenReady is the interface drawn with no turn running and nothing
+	// in its input, which is the one state a send types into.
+	screenReady
+)
+
+// terminalTyping is how an adapter types into a terminal worker: the bytes
+// one send is typed as, how they are pasted, and how its screen is read. It
+// is the adapter's and never the provider's, so the scripted adapter's line
+// framing and the Claude Code adapter's paste are each one value.
+type terminalTyping struct {
+	// frame turns one send into the bytes pasted for it, or refuses it with
+	// an error wrapping ErrInvalidInvocation before anything is typed.
+	frame func(text string) ([]byte, error)
+	// bracketed pastes the bytes as one bracketed paste and then types Enter
+	// as a key of its own, so a line break inside the bytes stays part of
+	// the one input. Unset, every newline is pasted as the Enter key, which
+	// is what a program reading lines needs.
+	bracketed bool
+	// read is the adapter's reading of the pane's visible screen. Set, the
+	// start returns only once it reads other than screenNotDrawn, and a send
+	// types only once it reads screenReady. Nil, nothing is read and every
+	// send is typed at once.
+	read func(screen string) screenState
+}
+
 // tmuxWorker is the TerminalWorker over one tmux server this package
 // started.
 type tmuxWorker struct {
@@ -232,7 +308,8 @@ type tmuxWorker struct {
 	identity Identity
 	grace    time.Duration
 	maxOut   int64
-	frame    func(string) ([]byte, error)
+	typing   terminalTyping
+	cleanup  func()
 
 	done      chan struct{}
 	closeOnce sync.Once
@@ -255,12 +332,28 @@ type procSpecTerminal struct {
 	env    []string
 	grace  time.Duration
 	maxOut int64
+	// cleanup is run once the worker has ended, after its server: what the
+	// adapter made for this worker alone and nothing after it reads. It is
+	// not run when the start fails, which the adapter answers for itself.
+	cleanup func()
 }
 
-// startTerminalWorker starts spec as a terminal worker on t and types the
-// instructions, on the terms the mechanism's documentation states.
+// terminalCommandLimit is the most bytes the arguments of the tmux command
+// that starts a server may total, each counted with one byte more for its
+// end. tmux 3.4 refused a new-session command whose arguments totalled
+// about 16.3 KB with "command too long" and accepted one a little under, so
+// the limit is set below that and a command over it is refused here, before
+// anything starts, rather than by the server in a message about something
+// else. Another tmux may draw the line elsewhere; this is where the one it
+// was observed on did.
+const terminalCommandLimit = 16000
+
+// startTerminalWorker starts spec as a terminal worker on t and, when
+// instructions is not empty, types them, on the terms the mechanism's
+// documentation states. An adapter that puts its instructions on the command
+// line instead passes none.
 func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal, instructions string,
-	frame func(string) ([]byte, error)) (*tmuxWorker, error) {
+	typing terminalTyping) (*tmuxWorker, error) {
 	if err := t.Validate(); err != nil {
 		return nil, err
 	}
@@ -272,8 +365,10 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 	}
 	// A send that cannot be framed is refused before any process exists, as
 	// startWorker does.
-	if _, err := frame(instructions); err != nil {
-		return nil, fmt.Errorf("framing the worker's instructions: %w", err)
+	if instructions != "" {
+		if _, err := typing.frame(instructions); err != nil {
+			return nil, fmt.Errorf("framing the worker's instructions: %w", err)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(t.Socket), 0o700); err != nil {
 		return nil, fmt.Errorf("creating the terminal socket's directory: %w", err)
@@ -290,6 +385,13 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 	args := append([]string{"-S", t.Socket, "-f", os.DevNull,
 		"new-session", "-d", "-s", terminalTarget, "-x", "200", "-y", "50", "-c", spec.dir,
 		"-P", "-F", "#{pane_pid}", "--", spec.bin}, spec.args...)
+	if size := commandSize(args); size > terminalCommandLimit {
+		return nil, &invocationFieldError{
+			field: "command",
+			reason: fmt.Sprintf("the command that starts the terminal is %d bytes, over the %d tmux is given, so the instructions it carries are too long for a terminal worker",
+				size, terminalCommandLimit),
+		}
+	}
 	cmd := exec.CommandContext(ctx, t.Tmux, args...)
 	cmd.Dir = spec.dir
 	cmd.Env = withoutTmux(spec.env)
@@ -324,15 +426,74 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 		identity: identity,
 		grace:    spec.grace,
 		maxOut:   spec.maxOut,
-		frame:    frame,
+		typing:   typing,
 		done:     make(chan struct{}),
 	}
 	go w.poll()
-	if err := w.Send(ctx, instructions); err != nil {
-		w.Close()
-		return nil, fmt.Errorf("typing the worker's instructions: %w", err)
+	if typing.read != nil {
+		bound, cancel := context.WithTimeout(ctx, terminalReadyTimeout)
+		err := w.await(bound, func(s screenState) bool { return s != screenNotDrawn })
+		cancel()
+		if err != nil {
+			w.Close()
+			return nil, fmt.Errorf("waiting for the terminal worker's interface: %w", err)
+		}
 	}
+	if instructions != "" {
+		if err := w.Send(ctx, instructions); err != nil {
+			w.Close()
+			return nil, fmt.Errorf("typing the worker's instructions: %w", err)
+		}
+	}
+	// The cleanup is set once the start has succeeded, so a start that
+	// fails leaves it to the adapter, which made what it removes.
+	w.cleanup = spec.cleanup
 	return w, nil
+}
+
+// terminalReadyTimeout bounds how long a start waits for an adapter's
+// interface to be drawn, whatever ctx allows, so a worker that opens on a
+// screen nothing here answers is refused rather than waited on for ever.
+// The Claude Code CLI took about three seconds to draw its interface
+// against a local server when it was observed.
+const terminalReadyTimeout = 60 * time.Second
+
+// commandSize is the bytes args total, each with one more for its end.
+func commandSize(args []string) int {
+	n := 0
+	for _, a := range args {
+		n += len(a) + 1
+	}
+	return n
+}
+
+// await reads the visible screen through the adapter's reader, every
+// terminalPoll, until ok accepts what it reads. It returns ErrWorkerEnded
+// once the worker has ended, and an error wrapping ErrTerminalNotReady and
+// ctx's error when ctx ends first. A screen that cannot be read is read
+// again rather than taken for any state.
+func (w *tmuxWorker) await(ctx context.Context, ok func(screenState) bool) error {
+	tick := time.NewTicker(terminalPoll)
+	defer tick.Stop()
+	for {
+		if screen, err := w.screen(ctx); err == nil && ok(w.typing.read(screen)) {
+			return nil
+		}
+		select {
+		case <-w.done:
+			return ErrWorkerEnded
+		case <-ctx.Done():
+			return fmt.Errorf("%w: %w", ErrTerminalNotReady, ctx.Err())
+		case <-tick.C:
+		}
+	}
+}
+
+// screen is the pane's visible screen, with lines tmux wrapped joined back.
+func (w *tmuxWorker) screen(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, w.terminal.Tmux, "-S", w.terminal.Socket,
+		"capture-pane", "-p", "-J", "-t", terminalTarget).Output()
+	return string(out), err
 }
 
 // awaitGroupLeader returns once the process id names leads its own process
@@ -413,6 +574,9 @@ func (w *tmuxWorker) poll() {
 func (w *tmuxWorker) end() {
 	w.endOnce.Do(func() {
 		killTerminalServer(w.terminal)
+		if w.cleanup != nil {
+			w.cleanup()
+		}
 		close(w.done)
 	})
 }
@@ -430,7 +594,7 @@ func killTerminalServer(t Terminal) {
 // Send types text into the pane on the terms TerminalWorkerRunner's
 // mechanism states.
 func (w *tmuxWorker) Send(ctx context.Context, text string) error {
-	framed, err := w.frame(text)
+	framed, err := w.typing.frame(text)
 	if err != nil {
 		return err
 	}
@@ -444,9 +608,21 @@ func (w *tmuxWorker) Send(ctx context.Context, text string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, w.terminal.Tmux, "-S", w.terminal.Socket,
+	if w.typing.read != nil {
+		if err := w.await(ctx, func(s screenState) bool { return s == screenReady }); err != nil {
+			return err
+		}
+	}
+	args := []string{"-S", w.terminal.Socket,
 		"load-buffer", "-b", terminalBuffer, "-", ";",
-		"paste-buffer", "-d", "-b", terminalBuffer, "-t", terminalTarget)
+		"paste-buffer", "-d", "-b", terminalBuffer, "-t", terminalTarget}
+	if w.typing.bracketed {
+		args = []string{"-S", w.terminal.Socket,
+			"load-buffer", "-b", terminalBuffer, "-", ";",
+			"paste-buffer", "-p", "-d", "-b", terminalBuffer, "-t", terminalTarget, ";",
+			"send-keys", "-t", terminalTarget, "Enter"}
+	}
+	cmd := exec.CommandContext(ctx, w.terminal.Tmux, args...)
 	cmd.Stdin = bytes.NewReader(framed)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

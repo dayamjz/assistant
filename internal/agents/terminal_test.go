@@ -282,16 +282,20 @@ func TestATerminalIsRefusedBeforeAnythingStarts(t *testing.T) {
 	}
 }
 
-// OpenTerminalWorker reads the declaration before the type: the shipped
-// Claude Code adapter does not declare terminal workers and is refused by
-// name, and a stub carrying the mechanism without declaring it is refused
+// OpenTerminalWorker reads the declaration before the type: a shipped
+// adapter that does not declare terminal workers, the Cursor one, is refused
+// by name, and a stub carrying the mechanism without declaring it is refused
 // the same way.
 func TestOpenTerminalWorkerConsultsTheDeclarationBeforeTheMechanism(t *testing.T) {
 	term := agents.Terminal{Tmux: "/nonexistent/tmux", Socket: "/nonexistent/s"}
-	_, err := agents.OpenTerminalWorker(t.Context(), newRunner(t), term, workerSpec(t))
+	cursor, err := agents.CursorFactory(agents.WithCursorBinary(helperBinary(t))).New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("building the cursor adapter: %v", err)
+	}
+	_, err = agents.OpenTerminalWorker(t.Context(), cursor, term, workerSpec(t))
 	var refusal *agents.CapabilityError
-	if !errors.As(err, &refusal) || refusal.Capability != agents.CapabilityTerminalWorkers || refusal.Agent != agents.ClaudeName {
-		t.Fatalf("the claude adapter answered %v, want a *CapabilityError naming %s", err, agents.CapabilityTerminalWorkers)
+	if !errors.As(err, &refusal) || refusal.Capability != agents.CapabilityTerminalWorkers || refusal.Agent != agents.CursorName {
+		t.Fatalf("the cursor adapter answered %v, want a *CapabilityError naming %s", err, agents.CapabilityTerminalWorkers)
 	}
 	undeclared := &terminalStubRunner{stubRunner: &stubRunner{name: "undeclared"}}
 	if _, err := agents.OpenTerminalWorker(t.Context(), undeclared, term, workerSpec(t)); !errors.Is(err, agents.ErrUndeclaredCapability) {

@@ -61,13 +61,32 @@ const (
 	// different claims about the agent: that one is that the agent reads
 	// framed messages on a pipe; this one is that the agent reads what a
 	// person would type, in a terminal, and what is typed there reaches the
-	// conversation. Only the scripted adapter declares it, over plain lines
-	// in the terminal's line-editing mode, with a framing that refuses a
-	// line that mode would cut. The Claude Code adapter does not: started
-	// in a terminal without --print, the command line opens its interactive
-	// interface, which was observed to open with a first-run screen rather
-	// than a prompt, so text typed at it would not be guaranteed to reach a
-	// conversation, and no probe here can model that interface.
+	// conversation. The scripted adapter declares it over plain lines in
+	// the terminal's line-editing mode, with a framing that refuses a line
+	// that mode would cut. The Claude Code adapter declares it over the
+	// CLI's interactive interface, which claudeterminal.go reaches without a
+	// person and types into on screen text observed of one CLI version.
+	//
+	// That second declaration is held in two places, and how they meet is
+	// decided here, with the table, rather than at either. The conformance
+	// suite's terminal probe runs against the Claude Code adapter over the
+	// stand-in's interactive mode, a model of what that CLI version drew
+	// and read, wherever tmux is installed, which CI requires on every
+	// platform it tests; so the declaration is never left with no probe
+	// that ran, which is the rule conform applies. A second test runs the
+	// same probe, and the questions the model rests on, against an installed
+	// CLI and a local server standing in for the model, and logs the CLI
+	// version it ran against; it is the only thing tying the model to the
+	// real interface. Where no claude binary is on PATH, which is every CI
+	// runner, it skips and says the declaration rests on the model of the
+	// observed version, and ASSISTANT_REQUIRE_CLAUDE makes that skip a
+	// failure. So an absent installed-CLI probe leaves the declaration
+	// resting on a model, and that is stated rather than closed. What keeps
+	// it from failing silently at run time is the adapter's own reading of
+	// the screen: a CLI that does not draw the observed interface is
+	// refused at start, and a send is typed only into a screen that reads
+	// ready, each with ErrTerminalNotReady. A CLI that draws the same text
+	// and reads its input differently is not caught that way.
 	CapabilityTerminalWorkers Capability = "terminal_workers"
 )
 

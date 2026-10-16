@@ -115,7 +115,7 @@ func (r *scriptedRunner) StartInTerminal(ctx context.Context, t Terminal, spec W
 		env:    WorkerEnvironment(r.settings.base, spec.Env),
 		grace:  r.settings.grace,
 		maxOut: r.settings.maxOut,
-	}, spec.Instructions, terminalLines)
+	}, spec.Instructions, terminalTyping{frame: terminalLines})
 	if err != nil {
 		return nil, err
 	}

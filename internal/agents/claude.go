@@ -196,6 +196,13 @@ func (r *claudeRunner) Name() string { return r.name }
 // documentation states, and that is the whole of what the declaration rests
 // on; doc.go names what the stand-in does not establish about the real CLI.
 //
+// Terminal workers are declared because StartInTerminal, in
+// claudeterminal.go, starts the CLI's interactive interface in a terminal and
+// types into it. The conformance suite holds that to the stand-in's
+// interactive mode, which models the screen of the one CLI version it was
+// observed on; a second probe holds it to an installed CLI where there is
+// one, and capability.go says how the two and the declaration meet.
+//
 // Instruction suppression is not declared, because nothing here implements it.
 // This adapter carries a configured entry's own flags and the four the run
 // manages, and none of those tells Claude Code to ignore a repository's
@@ -204,7 +211,7 @@ func (r *claudeRunner) Name() string { return r.name }
 // Leaving it undeclared is what lets internal/pipeline refuse a run that asks
 // for suppression against this adapter before it launches one.
 func (r *claudeRunner) Capabilities() Capabilities {
-	return Declare(CapabilityResumableSessions, CapabilityWorkerSessions)
+	return Declare(CapabilityResumableSessions, CapabilityWorkerSessions, CapabilityTerminalWorkers)
 }
 
 // Run executes one invocation with no session. It resumes nothing, and the

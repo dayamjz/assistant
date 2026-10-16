@@ -144,7 +144,7 @@
         <p class="text-sm opacity-90">
           Every worker is one you can read and reach. In phase 1 the Claude Code worker runs in its
           command line's standard-input stream-json mode: you read it through the service's capture
-          and reach it through Send. A terminal-hosted mode is a later option, not a promise. If you intervene directly in a worker, that
+          and reach it through Send. Under the tmux session provider it runs in its interactive interface instead, typed into through Send; that mode is an option, not a promise. If you intervene directly in a worker, that
           intervention is authoritative and the coordinator reconciles around it.
         </p>
       </div>
@@ -1260,7 +1260,8 @@ flowchart TD
           <td><b>Message</b></td>
           <td>The program appends a message record naming the task, the attempt, and the text,
             with credentials removed, then sends the text through the terminal session provider's
-            Send, which the Claude Code adapter frames as one stream-json user message. The text is
+            Send, which the Claude Code adapter frames as one stream-json user message, or under the
+            tmux provider types as one bracketed paste once the worker's screen reads ready. The text is
             bounded by a fixed limit in the program and refused rather than truncated above it.
             Nothing resends a message.</td>
           <td>Three facts on the message record, each written once. <b>Written</b>: Send
@@ -2633,7 +2634,7 @@ flowchart TB
         <ul class="text-sm opacity-90 space-y-2.5">
           <li><b>Agent adapters beyond Claude Code.</b> Each one is a week of quirks, and agents without a native output schema need a whole parsing path. Build the interface now, the adapters when you need them.</li>
           <li><b>Extra forge adapters.</b> Same reasoning. Do not promise breadth ahead of demand.</li>
-          <li><b>Extra session providers.</b> One reference provider proves the abstraction, and tmux is now a provider beside it, chosen with <code>session_provider</code>. Running Claude Code workers under tmux is still open: the adapter declares no terminal mode, so a service resolved to Claude Code with <code>session_provider: tmux</code> launches no worker. Further providers prove nothing new.</li>
+          <li><b>Extra session providers.</b> One reference provider proves the abstraction, and tmux is now a provider beside it, chosen with <code>session_provider</code>. Claude Code workers run under tmux in the adapter's terminal mode, which section 1's Promise 1 and section 6's steering row describe. Further providers prove nothing new.</li>
           <li><b>Delegate coordinators.</b> The most complex feature in either source project. It only earns its cost at a fleet size you have not reached.</li>
           <li><b>The direct delivery mode.</b> The gate is the thesis, and this is the one mode that shares unvalidated work. When it is promoted, the program forwards the worker's pushed commit from the gate with an anchored update and the worker gains no second remote, and the merge record is its landed record. The local mode is not deferred: it shares nothing, and section 6 specifies it.</li>
           <li><b>Agent routing by model, effort, or quota.</b> Routing among adapters means nothing with one, so it is specified when a second adapter is promoted. Section 9's usage view is the measurement it will start from.</li>

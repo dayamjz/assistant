@@ -206,12 +206,13 @@ A worker can also run in a terminal you can attach to and type into: with
 hosted in a tmux server of its own, `assistant coordinator peek ID` reads its
 recent output, redacted and bounded, and names the command that attaches to
 it. That needs tmux on the service's PATH and an agent adapter that declares
-terminal workers, which in this build only the scripted test adapter does.
+terminal workers, which Claude Code does: its worker runs the CLI's
+interactive interface with a configuration directory of its own, so the
+service needs `ANTHROPIC_API_KEY` in its environment, and
+[`docs/operators.md`](docs/operators.md) says what that mode rests on.
 
-What this build does not do yet, so nothing here claims it: the Claude Code
-adapter declares no terminal mode, so a service resolved to it and configured
-for tmux launches no worker, and the pipe provider stays the default and the
-only one that runs a real agent; `direct` delivery stays deferred under
+What this build does not do yet, so nothing here claims it: the pipe
+provider stays the default; `direct` delivery stays deferred under
 PRD section 12 and is refused at parse; routing among agents waits for a
 second adapter; and interrupting a worker is refused because no adapter
 declares it.

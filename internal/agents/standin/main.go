@@ -77,6 +77,8 @@ func Main() {
 		return
 	}
 	switch {
+	case interactiveArgs(args):
+		os.Exit(serveInteractiveWorker(control, args))
 	case !slices.Contains(args, printFlag):
 		os.Exit(serveWorker(control, args))
 	case streamInput(args):
@@ -86,11 +88,13 @@ func Main() {
 }
 
 // printFlag is the flag the Claude Code adapter puts on every one-shot
-// invocation and on every worker it starts, and the scripted adapter puts on
-// no worker. Which of three things this process is follows from the command
-// line alone, which is what the wire carries: without it, a line-mode worker;
-// with it and streaming input, a stream-mode worker; with it and nothing
-// more, a one-shot invocation that reads its prompt to the end.
+// invocation and on every pipe worker it starts, and puts on no terminal
+// worker, and the scripted adapter puts on no worker. Which of four things
+// this process is follows from the command line alone, which is what the
+// wire carries: with the screen reader flag before "--" and without it, an
+// interactive worker; otherwise without it, a line-mode worker; with it and
+// streaming input, a stream-mode worker; with it and nothing more, a
+// one-shot invocation that reads its prompt to the end.
 const printFlag = "--print"
 
 // flagValue is the value of the first argument with this prefix, and whether
