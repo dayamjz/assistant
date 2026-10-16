@@ -638,6 +638,13 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	// is the same row PRD section 8 makes authoritative for it.
 	forgeRepository, forkRepository, noCodeHost, err := s.forgeRepositoryFor(ctx, record.RepositoryID)
 	if err != nil {
+		// The branch was already claimed as pending (start, rerun, or a push).
+		// Ending it here is what keeps an unsupported-host refusal from leaving
+		// an unfinished run that a later start would attach to as executing.
+		// create does the same when the submitted commit cannot be recorded.
+		if _, ended := built.runs.Terminate(ctx, record.ID); ended != nil {
+			s.log.Printf("run %s could not be ended after its code-host repository was refused: %v", record.ID, ended)
+		}
 		return machine.Run{}, err
 	}
 	start.ForgeRepository, start.ForkRepository, start.NoCodeHost = forgeRepository, forkRepository, noCodeHost
@@ -699,7 +706,8 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 // network host this build cannot talk to. The first yields a specifier. The
 // second yields an empty specifier and noCodeHost true, so the pull request
 // and checks stages skip after push and the run ends pushed. The third is
-// refused with ErrUnsupportedHost before anything is recorded as running.
+// refused with ErrUnsupportedHost; begin ends the pending record before that
+// refusal returns, so the branch is not left with an unfinished run.
 //
 // The second string result is the fork's specifier, for a record that names a
 // fork, and empty otherwise. A fork is the strict case: a run that names one

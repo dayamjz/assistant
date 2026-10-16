@@ -47,12 +47,13 @@ func (k RemoteKind) String() string {
 // code host, or a network host this build cannot talk to. An empty remote is
 // unsupported rather than local, because there is nothing to push to.
 //
-// A bare name with no scheme and no host:path form (for example "remote.git")
-// is local, the same as an explicit relative path: git accepts that shape as a
-// path, and this classifier does not invent a host for it. A typo that was
-// meant to be a network URL but lost its scheme therefore lands as no-code-host
-// rather than unsupported; naming an absolute, ./, ../, or file:// path is
-// what makes the local answer unmistakable.
+// A bare name with no slash (for example "remote.git") is local: git accepts
+// that shape as a path, and this classifier does not invent a host for it.
+// A scheme-less host/path form (for example "github.com/org/repo" or
+// "gitlab.com/org/repo") is unsupported rather than local: treating it as
+// no-code-host would end a run as pushed while claiming there is no code host
+// for a remote the operator clearly meant as one. Use an https://, ssh://,
+// file://, scp-like, or explicit filesystem path instead.
 func ClassifyRemote(remote string) RemoteKind {
 	remote = strings.TrimSpace(remote)
 	if remote == "" {
@@ -76,7 +77,14 @@ func ClassifyRemote(remote string) RemoteKind {
 	if host, _, ok := splitRemote(remote); ok && host != "" {
 		return RemoteUnsupported
 	}
-	// A bare relative path with no scheme and no host:path form.
+	if hostLookingPath(remote) {
+		// github.com/org/repo is not a GitHub remote this adapter reads
+		// (GitHubRepository requires a scheme or scp-like form), and it is
+		// not a filesystem path. Refuse rather than call it local.
+		return RemoteUnsupported
+	}
+	// A bare relative path with no scheme, no host:path form, and no slash
+	// after a DNS-looking first segment (for example "remote.git").
 	return RemoteLocal
 }
 
@@ -100,4 +108,24 @@ func localPath(remote string) bool {
 		}
 	}
 	return false
+}
+
+// hostLookingPath reports whether remote looks like a scheme-less host/path
+// remote (github.com/org/repo): a slash-separated form whose first segment
+// contains a dot the way a DNS name does. Bare names without a slash are not
+// this shape, so "remote.git" stays a local path.
+func hostLookingPath(remote string) bool {
+	host, path, found := strings.Cut(remote, "/")
+	if !found || host == "" || path == "" {
+		return false
+	}
+	if !strings.Contains(host, ".") {
+		return false
+	}
+	// A path segment that is not a host: spaces, backslashes, or a leading
+	// dot that would be an odd DNS label for a remotes we care about.
+	if strings.ContainsAny(host, " \\") || strings.HasPrefix(host, ".") {
+		return false
+	}
+	return true
 }

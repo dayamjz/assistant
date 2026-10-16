@@ -55,8 +55,10 @@ func TestTheRepositoryAPullRequestWouldLandInComesFromTheRunsOwnRecord(t *testin
 
 // TestARunWhoseUpstreamNamesAnUnsupportedHostIsRefusedAtStart holds issue
 // #283's second decision: a network host this build cannot address is refused
-// before anything is recorded as running, rather than walked to the pull
-// request stage and stalled.
+// rather than walked to the pull request stage and stalled. The branch may
+// already hold a pending row when begin learns the host is unsupported; that
+// row must end before the refusal returns, so a later start does not attach to
+// a never-executed run as executing.
 func TestARunWhoseUpstreamNamesAnUnsupportedHostIsRefusedAtStart(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -77,6 +79,19 @@ func TestARunWhoseUpstreamNamesAnUnsupportedHostIsRefusedAtStart(t *testing.T) {
 			t.Fatalf("starting a run against %q: %v, want an error naming ErrUnsupportedHost", elsewhere, err)
 		}
 	})
+
+	records := openRecords(t, h)
+	defer records.Close()
+	all, err := records.RunsForRepository(t.Context(), "subject")
+	if err != nil {
+		t.Fatalf("listing runs after the refusal: %v", err)
+	}
+	for _, run := range all {
+		switch run.Status {
+		case store.RunPending, store.RunRunning, store.RunHeld:
+			t.Fatalf("unsupported-host refusal left unfinished run %s in status %s", run.ID, run.Status)
+		}
+	}
 }
 
 // TestARunWhoseUpstreamIsALocalPathCarriesNoCodeHost is the local half of

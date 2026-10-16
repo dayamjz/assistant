@@ -29,6 +29,12 @@ func TestClassifyRemoteSeparatesGitHubLocalAndUnsupported(t *testing.T) {
 		{"https://github.example.com/dayamjz/assistant.git", forge.RemoteUnsupported},
 		{"https://notgithub.com/dayamjz/assistant.git", forge.RemoteUnsupported},
 		{"", forge.RemoteUnsupported},
+
+		// Scheme-less host/path: not a filesystem path and not a form
+		// GitHubRepository reads. Must not classify as local (#291 review).
+		{"github.com/org/repo", forge.RemoteUnsupported},
+		{"github.com/org/repo.git", forge.RemoteUnsupported},
+		{"gitlab.com/org/repo", forge.RemoteUnsupported},
 	}
 	for _, c := range cases {
 		t.Run(c.remote, func(t *testing.T) {
