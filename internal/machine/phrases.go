@@ -200,7 +200,7 @@ var phraseByState = map[taskstate.State]Phrase{
 	taskstate.Reported: {
 		Outcome:     "The worker finished and its report is in.",
 		Consequence: "Nothing more happens on its own.",
-		Decision:    "Read the report and decide what to do with it.",
+		Decision:    "Read the report with assistant --json tasks and the work's identifier, then decide whether to promote it or record that you handed its findings on.",
 	},
 	taskstate.Complete: {
 		Outcome:     "This work is finished and its local copy is gone.",
@@ -324,7 +324,10 @@ func WaitingPhrase(on string) Phrase {
 // Task.Waiting, and Unknown resolved at the event tier from a note the
 // program appended is NoWordYet. Held resolved from the hold tier is
 // phraseTaskHeld, which says how a hold naming the task is answered; Held
-// from a run or from the worker's own history keeps the table's row. A state outside the table, which the
+// from a run or from the worker's own history keeps the table's row.
+// Reported points at assistant --json tasks for the stored report and never
+// carries its summary or findings, which Task.Report holds for the
+// structured answer (P13). A state outside the table, which the
 // vocabulary test keeps from being one of internal/taskstate's, reads as the
 // Unknown row rather than as nothing.
 func TaskPhrase(t Task) Phrase {

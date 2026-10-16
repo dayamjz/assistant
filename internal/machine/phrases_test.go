@@ -8,6 +8,7 @@ import (
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
@@ -280,6 +281,27 @@ func TestHoldAndCleanupRowsFollowTheRecord(t *testing.T) {
 // regard to case, which is how vocabtest matches a term.
 func wholeWord(text, word string) bool {
 	return regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(word) + `\b`).MatchString(text)
+}
+
+// A reported investigation's person-facing row points at the structured
+// task answer for the stored report and never carries report wording (P13).
+func TestAReportedTaskPointsAtTheStructuredReport(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P13)
+	vocabtest.Control(t)
+	got := machine.TaskPhrase(machine.Task{
+		State:  taskstate.Resolution{State: taskstate.Reported, Source: taskstate.SourceReport},
+		Report: &machine.InvestigationReport{Summary: "secret summary text", Findings: nil},
+	}).String()
+	for _, want := range []string{"assistant --json tasks", "promote", "handed its findings on"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the reported row %q does not say %q", got, want)
+		}
+	}
+	if strings.Contains(got, "secret summary text") {
+		t.Errorf("the reported row relays the report summary: %q", got)
+	}
+	vocabtest.Assert(t, got)
 }
 
 // A task the hold tier resolved Held waits on a hold naming the task, which

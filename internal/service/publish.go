@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 
+	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/store"
@@ -76,7 +77,7 @@ func (s *Service) publishTaskChanges(observed []taskstate.Observed) {
 			continue
 		}
 		s.published.bases[id] = o.State.Basis
-		s.publishTaskState(taskView(o))
+		s.publishTaskState(s.taskView(context.Background(), o))
 	}
 }
 
@@ -148,25 +149,60 @@ func (s *Service) publishHoldByKey(ctx context.Context, key string) {
 }
 
 // taskView is the one composition of a task's answer from an observation: the
-// record, the state, and what a paused worker said it is waiting on. The
-// surface and the publisher both build a task through it, so the two cannot
-// disagree about what a task carries.
+// record, the state, what a paused worker said it is waiting on, and the
+// investigation's stored report when one has been filed. The surface and the
+// publisher both build a task through it, so the two cannot disagree about
+// what a task carries.
 //
 // Waiting is filled exactly when the state is Paused, which only the event
 // tier resolves, from the detail of the history entry the basis names by its
 // sequence. The entry is read out of the snapshot the state was resolved
 // from, so this is not a second read of the log and not the log's tail: the
 // resolver decided which entry decided, and this reads that entry's words.
-func taskView(o taskstate.Observed) machine.Task {
+//
+// Report is filled when the snapshot says a task_report row exists, from that
+// row and the evidence copy's path, so a coordinator reading task.get sees
+// the same body the store holds (P8) rather than inferring it from history.
+// A row that cannot be decoded is omitted rather than inventing an empty
+// report; Basis.ReportStored still says one was filed.
+func (s *Service) taskView(ctx context.Context, o taskstate.Observed) machine.Task {
 	t := machine.Task{Record: o.Snapshot.Task, State: o.State}
-	if o.State.State != taskstate.Paused {
-		return t
-	}
-	for _, e := range o.Snapshot.Events {
-		if e.Sequence == o.State.Basis.EventSequence {
-			t.Waiting = e.Detail
-			break
+	if o.State.State == taskstate.Paused {
+		for _, e := range o.Snapshot.Events {
+			if e.Sequence == o.State.Basis.EventSequence {
+				t.Waiting = e.Detail
+				break
+			}
 		}
 	}
+	if _, ok := o.Snapshot.ReportStoredAt.Get(); ok {
+		t.Report = s.investigationReport(ctx, o.Snapshot.Task.ID)
+	}
 	return t
+}
+
+// investigationReport reads one task's stored report into the shape task.get
+// carries. It returns nil when the row is missing or its parsed bytes cannot
+// be read as a findings.Report, so a caller treating absence as "no report
+// on this answer" stays honest when the store could not answer.
+func (s *Service) investigationReport(ctx context.Context, taskID string) *machine.InvestigationReport {
+	stored, err := s.store.TaskReport(ctx, taskID)
+	if err != nil {
+		return nil
+	}
+	var report findings.Report
+	if err := json.Unmarshal(stored.Report, &report); err != nil {
+		s.log.Printf("could not decode the stored report of task %s: %v", taskID, err)
+		return nil
+	}
+	out := &machine.InvestigationReport{
+		Summary:    report.Summary,
+		Findings:   report.Findings,
+		Evidence:   report.Evidence,
+		RecordedAt: stored.RecordedAt,
+	}
+	if path, err := s.home.TaskReport(taskID); err == nil {
+		out.EvidenceFile = path
+	}
+	return out
 }

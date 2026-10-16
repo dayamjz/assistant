@@ -82,6 +82,16 @@ assistant watch --once          # what waits on you, what landed, what is under 
 The state is resolved from the records each time it is read. Do not infer it
 from the last event you saw.
 
+When an investigation has filed its report, `assistant --json tasks ID`
+carries it at `report`: `summary`, `findings`, `evidence` (paths the worker
+named), `evidence_file` (the on-disk copy under the task's directory), and
+`recorded_at`. Read that field; do not ask the worker to repeat the report,
+and do not relay its wording to the person (P13). The plain `assistant tasks`
+line only says the report is in and points you at `--json`. A reported
+investigation whose decisions are still open also lists those holds; answer
+them with `assistant --task ID --answer ...` before you promote or record
+findings relayed.
+
 ## Steer a worker
 
 ```sh

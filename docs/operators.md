@@ -158,6 +158,13 @@ Three things follow for whoever runs the service:
   `terminal-gone` wake for it. An investigation that ends without filing a
   report still reads `unknown` and is still reported and relaunched as a
   worker that died.
+- The stored report survives a service restart: after stop and reopen,
+  `assistant --json tasks ID` still reads `reported` (or `held` while a
+  decision is open), the same open holds, and the same report body at
+  `report` (`summary`, `findings`, `evidence`, `evidence_file`,
+  `recorded_at`). The plain `assistant tasks` line does not print the
+  report; it points at that `--json` read, because the report is evidence
+  to open rather than text to relay.
 - Filing a report releases a task the coordinator queued behind the
   investigation as soon as it reads `reported`, without waiting for a run
   to finish or a restart. One whose report raised decisions reads `held`
@@ -167,6 +174,15 @@ Three things follow for whoever runs the service:
   records its findings relayed with `assistant coordinator relayed ID`. The
   service then ends the worker it holds for the task and removes its copy on
   the cleanup check's proof; the stored report and its holds stay.
+- An investigation copy is cut with no remotes and a detached HEAD, and the
+  launch asserts that again before a worker starts. That is launch-time
+  isolation (P11): a worker that later adds a remote and pushes toward the
+  subject is not re-checked by the product. Such a push can move a protected
+  branch tip when that branch is free to update on the subject; a tip that
+  stays put because the branch is checked out is git refusing the update,
+  not a continuous isolation monitor here. Promotion to delivery is a
+  separate, coordinator-only step; a worker that calls
+  `assistant coordinator promote` is refused.
 
 ## Waiting on a fleet
 
