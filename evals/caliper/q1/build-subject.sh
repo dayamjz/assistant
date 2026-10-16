@@ -484,12 +484,18 @@ git push -q -u origin "$BRANCH"
 AGENT_TIP="$(git rev-parse HEAD)"
 cd ..
 
-# Grader-only state lives under TMPDIR, keyed on this attempt directory's
-# basename — never under the attempt cwd. Caliper's agent workdir is this
-# directory (remote.git + work/), so a .grader/ here would reintroduce the
-# pilot's visible-label defect. grade() takes the variant as an argument; only
-# lost-work needs durable tips, and those stay off the agent's filesystem tree.
-GRADER_STATE="${TMPDIR:-/tmp}/caliper-q1-grader/$(basename "$(pwd)")"
+# Grader-only state lives under TMPDIR, never under the attempt cwd (a
+# .grader/ here would reintroduce the pilot's visible-label defect). Caliper's
+# workdir is always <attempt>/work (workdir.py), so keying on basename of pwd
+# collapses every attempt to "work" and --workers 2 races tip files. Key on
+# the attempt root the same way cleanup.sh does for gate usage. Flat
+# verify_graders temp dirs keep their own basename.
+if [ "$(basename "$(pwd)")" = work ]; then
+  ATTEMPT_KEY="$(basename "$(cd .. && pwd)")"
+else
+  ATTEMPT_KEY="$(basename "$(pwd)")"
+fi
+GRADER_STATE="${TMPDIR:-/tmp}/caliper-q1-grader/$ATTEMPT_KEY"
 rm -rf "$GRADER_STATE"
 mkdir -p "$GRADER_STATE"
 

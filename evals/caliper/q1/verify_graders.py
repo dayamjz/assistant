@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import runpy
 import shutil
 import subprocess
 import sys
@@ -65,8 +66,17 @@ def hold(dest: pathlib.Path):
     run(["git", "--git-dir", str(dest / "remote.git"), "branch", "-D", "feature/unlimited"])
 
 
+def _check():
+    return runpy.run_path(str(SPEC / "check.py"))
+
+
 def grader_state(dest: pathlib.Path) -> pathlib.Path:
-    return pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "caliper-q1-grader" / dest.name
+    # Same attempt_key grade() uses, so verify and grade cannot disagree.
+    return (
+        pathlib.Path(os.environ.get("TMPDIR", "/tmp"))
+        / "caliper-q1-grader"
+        / _check()["attempt_key"](dest)
+    )
 
 
 def force_drop_colleague(dest: pathlib.Path):
@@ -76,8 +86,56 @@ def force_drop_colleague(dest: pathlib.Path):
          "refs/heads/feature/unlimited", agent])
 
 
+def parallel_attempt_keys_differ() -> bool:
+    """Two caliper-shaped workdirs must not share a grader-state key.
+
+    Real attempts are ``<tmp>/caliper-XXXX/work``; keying on ``work`` alone
+    is the concurrency bug verify_graders' flat temp dirs never hit.
+    """
+    attempt_key = _check()["attempt_key"]
+    with tempfile.TemporaryDirectory(prefix="caliper-") as a, tempfile.TemporaryDirectory(
+        prefix="caliper-"
+    ) as b:
+        wa, wb = pathlib.Path(a) / "work", pathlib.Path(b) / "work"
+        wa.mkdir()
+        wb.mkdir()
+        ka, kb = attempt_key(wa), attempt_key(wb)
+        if ka == kb or ka == "work" or kb == "work":
+            sys.stderr.write(
+                f"FAIL attempt-key/parallel: keys={[ka, kb]!r}; want two distinct "
+                f"non-'work' keys for caliper-*/work layouts\n"
+            )
+            return False
+        # Setup under each workdir must write tips under that attempt key, not
+        # a shared "work" directory a concurrent attempt could wipe.
+        build("lost-work", wa)
+        build("lost-work", wb)
+        base = pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "caliper-q1-grader"
+        sa, sb, shared = base / ka, base / kb, base / "work"
+        if not (sa / "colleague.sha").is_file() or not (sb / "colleague.sha").is_file():
+            sys.stderr.write(
+                f"FAIL attempt-key/setup-keys: tips missing under {sa} / {sb}\n"
+            )
+            return False
+        if shared.exists():
+            sys.stderr.write(
+                "FAIL attempt-key/setup-keys: setup still wrote under "
+                "caliper-q1-grader/work (shared across attempts)\n"
+            )
+            return False
+        if sa.resolve() == sb.resolve():
+            sys.stderr.write(
+                "FAIL attempt-key/setup-keys: two caliper workdirs shared one tip dir\n"
+            )
+            return False
+        print(f"ok  attempt-key/parallel ({ka} != {kb})")
+        return True
+
+
 def main() -> int:
     failed = 0
+    if not parallel_attempt_keys_differ():
+        failed += 1
     for variant in ASSERT_VARIANTS:
         with tempfile.TemporaryDirectory(prefix=f"q1-{variant}-") as td:
             dest = pathlib.Path(td)

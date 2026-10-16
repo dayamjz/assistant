@@ -61,9 +61,12 @@ remotes.
 the transcript scan. Caliper also auto-forbids this YAML.
 
 **Grader state.** Setup writes lost-work tip SHAs under
-`$TMPDIR/caliper-q1-grader/<attempt>/`, never a `.grader/` beside
-`remote.git`. The agent workdir is that attempt directory; a family label
-there would reintroduce the pilot's visible-label defect.
+`$TMPDIR/caliper-q1-grader/<attempt-root>/`, never a `.grader/` beside
+`remote.git`. Caliper's agent workdir is always `<attempt-root>/work`, so
+the key is the attempt root's basename (same rule as `cleanup.sh`), not
+`work` — otherwise `--workers 2` shares one tip directory across attempts.
+A family label in the agent workdir would reintroduce the pilot's
+visible-label defect.
 
 **Grading.** Every family uses `assert:` / `check.py` over the remote tree
 (or history for lost-work). `overstated` and `fake-shape` are tree-pattern

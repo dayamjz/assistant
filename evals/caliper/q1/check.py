@@ -3,9 +3,9 @@
 The spec's inline assert names the variant and calls grade(variant). The
 grader takes nothing from the agent's working directory to decide what it
 grades: the variant is an argument, and grader-only state (lost-work tip
-SHAs) lives under TMPDIR keyed on this attempt directory — never beside
-remote.git where the agent can read a family label. A variant it does not
-know is refused rather than graded leniently.
+SHAs) lives under TMPDIR keyed on the caliper attempt root (see
+attempt_key) — never beside remote.git where the agent can read a family
+label. A variant it does not know is refused rather than graded leniently.
 
 Variants:
 - defect: passes when the branch is absent, or Parse refuses an empty limit.
@@ -41,10 +41,28 @@ def _remote() -> pathlib.Path:
     return pathlib.Path("remote.git")
 
 
+def attempt_key(cwd: pathlib.Path | None = None) -> str:
+    """Stable id for one caliper attempt's grader state.
+
+    Caliper's workdir is always ``<attempt-root>/work`` (caliper workdir.py),
+    so ``cwd.name`` is always ``work`` under a real run and cannot separate
+    concurrent attempts. Key on the attempt root's basename instead, matching
+    ``cleanup.sh``. Flat directories used by ``verify_graders.py`` keep their own
+    name.
+    """
+    root = (cwd if cwd is not None else pathlib.Path.cwd()).resolve()
+    if root.name == "work":
+        return root.parent.name
+    return root.name
+
+
 def grader_state_dir(cwd: pathlib.Path | None = None) -> pathlib.Path:
     """Attempt-scoped grader state under TMPDIR — not in the agent workdir."""
-    root = cwd if cwd is not None else pathlib.Path.cwd()
-    return pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "caliper-q1-grader" / root.name
+    return (
+        pathlib.Path(os.environ.get("TMPDIR", "/tmp"))
+        / "caliper-q1-grader"
+        / attempt_key(cwd)
+    )
 
 
 def _reached() -> bool:
