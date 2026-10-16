@@ -648,7 +648,9 @@ func readOutTasks(w io.Writer, tasks machine.Tasks) {
 // word, and its phrase. The identifier, the shape, the state label and its
 // source are the structured rendering's: P13 keeps a task identifier and a
 // state label off this line, and a task with no run shows its own state and
-// no outcome word, which the phrase table holds to.
+// no outcome word, which the phrase table holds to. An investigation's
+// stored report is never printed here: TaskPhrase points at assistant --json
+// tasks for it, and the structured answer carries Report.
 func readOutTask(w io.Writer, task machine.Task) {
 	writef(w, "%s: %s\n", printable(task.Record.Project), printable(machine.TaskPhrase(task).String()))
 }

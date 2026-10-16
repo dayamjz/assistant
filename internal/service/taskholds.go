@@ -481,7 +481,7 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 		if err != nil {
 			return machine.TaskAnswered{}, err
 		}
-		out.Task = taskView(o)
+		out.Task = s.taskView(ctx, o)
 		return out, nil
 	}
 	retryHold := isRetryHold(hold.Key, r.Task)
@@ -532,7 +532,7 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 	if err != nil {
 		return machine.TaskAnswered{}, err
 	}
-	out.Task = taskView(o)
+	out.Task = s.taskView(ctx, o)
 	return out, nil
 }
 

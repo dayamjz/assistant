@@ -299,7 +299,12 @@
 //     be launched later into a directory that has since changed, and none of
 //     that reaches an Isolation already returned; the second check is the
 //     only thing that runs afterwards, and it is detection by a worker that
-//     chooses to run it.
+//     chooses to run it. An investigation copy is cut with no remotes for
+//     that reason, and a worker that later adds one and pushes toward the
+//     subject is outside this package's assertion: that push can move a
+//     protected tip when the branch is free to update, and a tip that stays
+//     put because the branch is checked out is git's refusal, not a
+//     continuous isolation guarantee here.
 //   - The second check compares the remote URL as a string, after the same
 //     file:// and trailing-separator normalization AssertIsolated applies,
 //     and cannot compare by identity: a gate spelled through a symbolic link,

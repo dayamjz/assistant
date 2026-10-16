@@ -437,6 +437,33 @@ type Task struct {
 	// carries no event text, on its own terms, and the service that answers
 	// fills this from the same read the state was resolved from.
 	Waiting string `json:"waiting,omitempty"`
+	// Report is the investigation's stored report when one has been filed,
+	// and is absent otherwise. It is the coordinator's and the operator's
+	// structured read of what the worker delivered: summary, findings and
+	// evidence paths from the task_report row, plus the on-disk evidence
+	// copy's path. The person-facing rendering points at this field through
+	// TaskPhrase and never relays these words (P13).
+	Report *InvestigationReport `json:"report,omitempty"`
+}
+
+// InvestigationReport is what task.get (and every other answer that carries
+// a Task) exposes of an investigation's stored report. Summary, Findings and
+// Evidence are the worker's filed report as internal/findings decoded it from
+// the task_report row; EvidenceFile is the evidence copy under the task's
+// directory for a person to open. The row is the source (P8); the file is
+// beside it and may be missing after a crash between the two writes.
+type InvestigationReport struct {
+	// Summary is the report's account of what the investigation concluded.
+	Summary string `json:"summary"`
+	// Findings are what the investigation found, in the order filed.
+	Findings []findings.Finding `json:"findings,omitempty"`
+	// Evidence are the artifact paths the report named, as filed.
+	Evidence []findings.Evidence `json:"evidence,omitempty"`
+	// EvidenceFile is the path of the on-disk evidence copy, empty when the
+	// home could not name one for the task.
+	EvidenceFile string `json:"evidence_file,omitempty"`
+	// RecordedAt is when the task_report row was written.
+	RecordedAt time.Time `json:"recorded_at"`
 }
 
 // TaskAnswered is the answer to a task's hold. It carries the hold as the

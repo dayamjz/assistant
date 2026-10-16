@@ -13,7 +13,9 @@
 //
 // Every field that is a record another package owns is that package's type.
 // A run is a store.Run, a decision carries a graph.Decision, a stage's report
-// is a findings.Report, and a push's reference updates are gate.RefUpdate. P14
+// is a findings.Report, an investigation's stored report travels as
+// InvestigationReport composed from that findings.Report plus the evidence
+// copy's path, and a push's reference updates are gate.RefUpdate. P14
 // gives each of those one owner, and a wire shape that redeclared their fields
 // would be a second one that drifts. What this package adds is the envelope:
 // which records answer which call, and the four things a driving agent needs

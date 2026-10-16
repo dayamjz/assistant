@@ -394,7 +394,7 @@ func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
 	}
 	out := machine.Tasks{Tasks: make([]machine.Task, 0, len(observed))}
 	for _, o := range observed {
-		out.Tasks = append(out.Tasks, taskView(o))
+		out.Tasks = append(out.Tasks, s.taskView(ctx, o))
 	}
 	supervision := s.supervision(ctx)
 	out.Supervision = &supervision
@@ -436,7 +436,7 @@ func (s *Service) task(ctx context.Context, req machine.TaskRequest) (machine.Ta
 	if err != nil {
 		return machine.Task{}, err
 	}
-	return taskView(o), nil
+	return s.taskView(ctx, o), nil
 }
 
 // tasks is the resolver over the service's store, built through reader with
