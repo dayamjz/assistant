@@ -4,6 +4,7 @@ package agents_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -116,15 +117,37 @@ func TestARefusedProcessIsSetAsideOnlyWhenItSharesNoUserAndRefusesASignal(t *tes
 		}
 	}
 
-	foreign := foreignProcess(t)
-	for _, c := range []struct {
-		signal error
-		want   bool
-	}{{nil, true}, {syscall.EPERM, false}, {syscall.Kill(foreign, 0), !errors.Is(syscall.Kill(foreign, 0), syscall.EPERM)}} {
-		if blocks, err := agents.ClassifyRefused(foreign, c.signal); err != nil || blocks != c.want {
-			t.Fatalf("a refused process %d of another user with the signal answering %v: blocks %v, %v, want %v", foreign, c.signal, blocks, err, c.want)
+	// The other user's process is one this test found running on the host,
+	// not one it started, so it can end between the checks; a process that
+	// is gone reads as blocking, which would be a verdict about its exit and
+	// not about the rule. The checks are therefore judged only when the same
+	// process, by start time, stood before and after them, and a host whose
+	// candidates keep ending is a skip rather than a pass.
+	for attempt := 0; attempt < 5; attempt++ {
+		foreign := foreignProcess(t)
+		before, present, err := agents.Identify(foreign)
+		if err != nil || !present {
+			continue
 		}
+		var failure string
+		for _, c := range []struct {
+			signal error
+			want   bool
+		}{{nil, true}, {syscall.EPERM, false}, {syscall.Kill(foreign, 0), !errors.Is(syscall.Kill(foreign, 0), syscall.EPERM)}} {
+			if blocks, err := agents.ClassifyRefused(foreign, c.signal); err != nil || blocks != c.want {
+				failure = fmt.Sprintf("a refused process %d of another user with the signal answering %v: blocks %v, %v, want %v", foreign, c.signal, blocks, err, c.want)
+				break
+			}
+		}
+		if after, present, err := agents.Identify(foreign); err != nil || !present || after != before {
+			continue
+		}
+		if failure != "" {
+			t.Fatal(failure)
+		}
+		return
 	}
+	t.Skip("every process of another user this test chose ended during its checks, so the second carve-out is not established for one here")
 }
 
 // foreignProcess is a running process sharing no user with this test and
