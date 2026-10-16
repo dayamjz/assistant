@@ -79,6 +79,7 @@ func (h *history) proposalsOf(run string) []string {
 // something followed keeps it back too. The first case is the positive
 // control for the others.
 func TestTheProposalCountsOnlyPassedRunsInWhichTheCheckFired(t *testing.T) {
+	t.Parallel()
 	t.Run("ten passed runs", func(t *testing.T) {
 		h := newHistory(t)
 		var window []string

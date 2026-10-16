@@ -77,6 +77,7 @@ func waitFile(t *testing.T, path string) string {
 // which is the worker's parent and no descendant of it, is placed as
 // nobody's throughout, which is the person's control.
 func TestPlacementFollowsTheChainAndLosesItWhenTheKernelRewritesIt(t *testing.T) {
+	t.Parallel()
 	worker, dir := startedWorker(t)
 	group := worker.Group()
 	member := oneWorker(group)
@@ -157,6 +158,7 @@ func TestPlacementFollowsTheChainAndLosesItWhenTheKernelRewritesIt(t *testing.T)
 // The control is the same walk over the unchanged reads, which reaches the
 // top of the chain and places nobody.
 func TestPlacementRefusesAParentYoungerThanItsChild(t *testing.T) {
+	t.Parallel()
 	self := os.Getpid()
 	nobody := oneWorker(-1)
 	if _, ok, err := placeByAncestry(self, readLineage, nobody); err != nil || ok {
@@ -213,6 +215,7 @@ func TestPlacementRefusesAParentYoungerThanItsChild(t *testing.T) {
 // "nobody's", for the peer and for a parent alike. The identifier is one a
 // process held and released, read after that process was reaped.
 func TestPlacementRefusesAProcessItCannotRead(t *testing.T) {
+	t.Parallel()
 	gone := exec.Command("true")
 	if err := gone.Run(); err != nil {
 		t.Fatal(err)

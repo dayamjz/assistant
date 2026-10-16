@@ -29,6 +29,7 @@ import (
 // of moves into held, never off a history, and P9, because a run moved to
 // held is one of the two kinds PRD section 5 has surface always.
 func TestATasksRunMovingToHeldWakesTheCoordinator(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P9)
 	h, records := loopHome(t)
@@ -164,6 +165,7 @@ func acknowledgeQueued(t *testing.T, records *store.Store) {
 // It cites P9: what is absorbed is absorbed on the entry's own meaning, and
 // an entry that does not carry one still surfaces.
 func TestCreatingATaskQueuesNoWakeForItsOwnEntries(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P9)
 	h, records := loopHome(t)
 	ctx := t.Context()

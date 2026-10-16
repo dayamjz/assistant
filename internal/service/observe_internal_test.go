@@ -54,6 +54,7 @@ func followed(t *testing.T, s *Service, run string) map[int64][]store.DecisionFo
 // The answers about b.go and t.go are the controls: nothing touched b.go, and
 // t.go's answer was recorded by the execution that reported the finding.
 func TestWhatARunDidNextIsRecordedBesideItsExecution(t *testing.T) {
+	t.Parallel()
 	s := openDecisionService(t, nil, judgetest.New(t, judgetest.Always(judgetest.Answer(0.1))))
 	ctx := t.Context()
 	const run = "run-1"
@@ -135,6 +136,7 @@ func TestWhatARunDidNextIsRecordedBesideItsExecution(t *testing.T) {
 // paths it touched, read from the commit itself rather than from what the
 // fixer said; an answer about a path the commit did not touch is the control.
 func TestAFixRoundsCommitIsRecordedAsWhatFollowedItsPaths(t *testing.T) {
+	t.Parallel()
 	s := openDecisionService(t, nil, judgetest.New(t, judgetest.Always(judgetest.Answer(0.1))))
 	ctx := t.Context()
 	dir := t.TempDir()

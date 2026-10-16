@@ -31,6 +31,7 @@ import (
 // TestTheNoSweepHoldIsAnsweredRetryOrStop drive are the controls for the
 // answer path itself.
 func TestARetryOnARecordThatCannotBeDispatchedSaysNothingBeginsItAndNothingDoes(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	answer := func(s *Service, task string) machine.TaskAnswered {
 		t.Helper()

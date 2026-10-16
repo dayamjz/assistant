@@ -164,6 +164,7 @@ func loopHome(t *testing.T) (*home.Home, *store.Store) {
 	if err := os.WriteFile(h.ConfigFile(), []byte(loopConfig), 0o600); err != nil {
 		t.Fatalf("writing the configuration: %v", err)
 	}
+	seedDatabase(t, h.Database())
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening the store: %v", err)
@@ -351,6 +352,7 @@ func readBeacon(t *testing.T, h *home.Home) supervisor.Beacon {
 // current, and its sequence advances with every write: the one beacon
 // source is the loop, and an idle service is still read as supervised.
 func TestTheLoopWritesTheBeaconOnAnIdleFleet(t *testing.T) {
+	t.Parallel()
 	h, records := loopHome(t)
 	l := openLoop(t, h, records, nil, nil)
 	defer func() { _ = l.service.Close() }()
@@ -385,6 +387,7 @@ func TestTheLoopWritesTheBeaconOnAnIdleFleet(t *testing.T) {
 // carries the new epoch alone. The double blocks the way a blocking read of
 // a worker's output does, with no hook on the production type.
 func TestAWedgedIncarnationIsReplacedAndFencedOut(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P10)
 	h, records := loopHome(t)
 	task := plantRunning(t, records, "wedgedaaaaaa", "pane-wedged").ID
@@ -468,6 +471,12 @@ func TestAWedgedIncarnationIsReplacedAndFencedOut(t *testing.T) {
 // than waiting for a goroutine nothing can end; the unwedged goroutine then
 // meets a closed store and a closed writer. The home is free afterwards,
 // which is what the bounded wait buys.
+//
+// It does not run in parallel. It bounds how long Close takes from above,
+// at half a grace past the grace, and the package's other tests running
+// beside it would be measuring their load rather than Close. A serial test
+// runs before any parallel one resumes, so it measures an otherwise idle
+// process.
 func TestCloseReturnsWithinItsGraceWithAWedgedLoop(t *testing.T) {
 	h, records := loopHome(t)
 	plantRunning(t, records, "wedgedclosea", "pane-close")
@@ -505,6 +514,7 @@ func TestCloseReturnsWithinItsGraceWithAWedgedLoop(t *testing.T) {
 // evidence. The control is the slot: with the run claimed as advancing the
 // same pass absorbs on progress.
 func TestAStalledRunRecordSurfaces(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P9)
 	h, records := loopHome(t)
 	ctx := t.Context()
@@ -558,6 +568,7 @@ func TestAStalledRunRecordSurfaces(t *testing.T) {
 // It is the loop reading what internal/taskstate decided, in the order the
 // records first and the slot after.
 func TestASlotDisagreeingWithTheRecordSurfaces(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	h, records := loopHome(t)
 	ctx := t.Context()
@@ -612,6 +623,7 @@ func TestASlotDisagreeingWithTheRecordSurfaces(t *testing.T) {
 // terminal gone, surfaced once each with the case in the marker, and a
 // provider-wide failure is one wake across every terminal that met it.
 func TestAFailedCaptureIsTerminalGoneWithItsCase(t *testing.T) {
+	t.Parallel()
 	h, records := loopHome(t)
 	failed := plantRunning(t, records, "failedcaptur", "pane-failed").ID
 	dead := plantRunning(t, records, "deadterminal", "pane-dead").ID
@@ -688,6 +700,7 @@ func TestAFailedCaptureIsTerminalGoneWithItsCase(t *testing.T) {
 // screen. The evidence is the probe's Live, so what ends the absorb is the
 // change and never a pass count.
 func TestATerminalIshWaitSurfacesOnce(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P9)
 	h, records := loopHome(t)
 	task := plantRunning(t, records, "terminalisha", "pane-ish").ID
@@ -756,6 +769,7 @@ func TestATerminalIshWaitSurfacesOnce(t *testing.T) {
 // counts a repetition, so the surface at the inspection count is
 // surface-and-inspect. The clock is injected; nothing here waits a minute.
 func TestEscalationAtTheWindowUnderAnInjectedClock(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P9)
 	h, records := loopHome(t)
 	task := plantRunning(t, records, "escalationaa", "pane-esc").ID
@@ -827,6 +841,7 @@ func TestEscalationAtTheWindowUnderAnInjectedClock(t *testing.T) {
 // here states a liveness: every reading is the provider's, and the task
 // reads Running from the process tier while the worker runs.
 func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P9)
 	h, records := loopHome(t)
 	ctx := t.Context()
@@ -921,6 +936,7 @@ func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 // nothing here sleeps. P9's "absence of evidence surfaces" is what is
 // established for the loop: the silence is never absorbed for good.
 func TestASilentCrashSurfacesAgainOncePerEscalationWindow(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P9)
 	h, records := loopHome(t)
 	task := plantRunning(t, records, "silentcrasha", "pane-crashed").ID
@@ -1034,6 +1050,7 @@ func TestASilentCrashSurfacesAgainOncePerEscalationWindow(t *testing.T) {
 // answer surfaces terminal gone as unobservable, which is the reading a
 // survivor or a foreign reference gets rather than a dead one.
 func TestACompleteTaskProducesNoWakeAndAnUnanswerableReferenceSurfacesAsUnobservable(t *testing.T) {
+	t.Parallel()
 	h, records := loopHome(t)
 	ctx := t.Context()
 	unseen := plantRunning(t, records, "unseenaaaaaa", "pane-unseen").ID

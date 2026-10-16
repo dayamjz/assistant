@@ -24,6 +24,7 @@ import (
 // read Dead, is refused as not due, because no hold for the new attempt has
 // been answered. Run under the race detector, which make test does.
 func TestARetryPastTheBoundBeginsOneAttemptAndNoMore(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	requireSweepClearsHere(t, "that a retry past the relaunch bound begins one attempt")
 	sub := newRelaunchSubject(t)

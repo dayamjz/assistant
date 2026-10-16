@@ -16,6 +16,7 @@ import (
 // checkpoint history is intact and start again, which loses the work the
 // history still holds.
 func TestAPositionThatCannotBeReadIsRefusedRatherThanReportedAsARunThatNeverRan(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -77,6 +78,7 @@ func TestAPositionThatCannotBeReadIsRefusedRatherThanReportedAsARunThatNeverRan(
 // creation of one are a single decision rather than a check the loser of a
 // race also passes.
 func TestTwoStartsOnOneBranchLeaveOneRun(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -140,6 +142,7 @@ func branchesOf(records []store.Run) string {
 // interleaving that leaves a branch with two runs of which only the newer is
 // ever reachable.
 func TestARerunRacingAStartOnOneBranchLeavesOneRun(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -204,6 +207,7 @@ func TestARerunRacingAStartOnOneBranchLeavesOneRun(t *testing.T) {
 
 // Two reruns that arrive at once leave one run for the same reason.
 func TestTwoRerunsOnOneBranchLeaveOneRun(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

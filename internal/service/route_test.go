@@ -24,6 +24,7 @@ import (
 // same shape every answer carrying a store record has, machine.Run among
 // them, and not a route the worker paths added.
 func TestNothingTheWorkerPathsExportReachesAFixerSession(t *testing.T) {
+	t.Parallel()
 	for _, root := range []reflect.Type{
 		reflect.TypeOf(&service.Service{}),
 		reflect.TypeOf(&session.Workers{}),

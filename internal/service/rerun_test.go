@@ -16,6 +16,7 @@ import (
 // asking for a rerun would start a run of another, at another branch's head,
 // and answer with a branch that was never mentioned.
 func TestARerunIsOfTheBranchTheCallerIsStandingOnAndNotTheRepositorysNewest(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -45,6 +46,7 @@ func TestARerunIsOfTheBranchTheCallerIsStandingOnAndNotTheRepositorysNewest(t *t
 // A branch that has never been run says so about that branch. Reaching for
 // another branch's run would start work nobody asked for.
 func TestARerunOnABranchWithNoRunRefusesByThatBranchsName(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -112,6 +114,7 @@ func rerun(t *testing.T, client *ipc.Client, workingPath string) machine.Run {
 // offered without the supplied flag, so the three cases are three answers
 // rather than two answers and a default.
 func TestARunRecordsWhereItsIntentCameFrom(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

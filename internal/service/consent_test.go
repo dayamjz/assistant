@@ -195,6 +195,7 @@ func consentAnswers(t *testing.T, records *store.Store, runID string) []store.Ho
 // P1 is cited because consent here is given on purpose, per run, by the flag,
 // and is not implied by the push or the key alone.
 func TestARunUnderStandingConsentReachesChecksPassedUnattended(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P1)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -294,6 +295,7 @@ func TestARunUnderStandingConsentReachesChecksPassedUnattended(t *testing.T) {
 // run held at that decision and says it runs under standing consent, and no
 // answer is recorded for the push.
 func TestAPushRefusalStillHoldsUnderStandingConsent(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -360,6 +362,7 @@ func TestAPushRefusalStillHoldsUnderStandingConsent(t *testing.T) {
 // trusted-only, so a pushed branch cannot allow consent for itself. The
 // control is the same branch started without the flag, which runs.
 func TestStandingConsentIsRefusedWithoutTheTrustedKeyAndAPushedCopyCannotGrantIt(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P7)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -404,6 +407,7 @@ func TestStandingConsentIsRefusedWithoutTheTrustedKeyAndAPushedCopyCannotGrantIt
 // program's. The flag on an attach is the per-run flag too, so the run it
 // names is the one consent is given to, and no second run is started.
 func TestStandingConsentGivenToAHeldRunAnswersItsDecision(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P1)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)

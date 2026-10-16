@@ -48,6 +48,7 @@ import (
 // reading is what says the gate's setting reaches it, and it is paired with
 // the working copy reading neither key, which is PRD principle P1's half.
 func TestARunIsGivenAnIsolatedCopyAndGivesItBack(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P12)
 	principles.Cite(t, principles.P1)
@@ -223,6 +224,7 @@ func repositoryAndRun(in pipeline.Input) (repositoryID, runID string, err error)
 // file survives it. A run arranged to leave a file behind would demonstrate
 // the same thing through more machinery that could fail for other reasons.
 func TestACopyHoldingWorkIsNotTakenAway(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	subject := newSubject(t)
 	recordRepository(t, h, subject)
@@ -294,6 +296,7 @@ func gateRepositoryOf(t *testing.T, h *home.Home, workingPath string) string {
 // own tests drive the round, and the P5 journey walk drives one through the
 // binary.
 func TestACopyWhoseWorkHasNotLandedIsKeptAndStatusSaysSo(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P12)
 

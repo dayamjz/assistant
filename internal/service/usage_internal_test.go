@@ -17,8 +17,11 @@ import (
 // the default in its place. The call before the window is the control that
 // the window bounds what the store is asked for.
 func TestTheUsageReadTotalsTheHistoryOverTheWindowAndRefusesABadOne(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), store.WithRedactor(redact.New()))
+	database := filepath.Join(t.TempDir(), "state.db")
+	seedDatabase(t, database)
+	st, err := store.Open(ctx, database, store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

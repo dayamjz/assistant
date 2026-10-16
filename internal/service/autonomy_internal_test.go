@@ -83,7 +83,13 @@ func mergeCalls(calls []forgetest.Call) []forgetest.Call {
 // the same list under no_ci, which merges. A run that recorded no head is
 // refused before the code host is asked anything. A refusal from the forge
 // itself is reported as its own rejection and not retried.
+//
+// It stays among the package's slowest tests because each case runs the real
+// GitHub adapter against a scripted gh, and every call that adapter makes
+// starts this test binary under the race detector. The refusals share
+// nothing, so each runs as a parallel subtest.
 func TestTheProgramMergesOnlyAfterTheLiveReadOnTheObservedHead(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	calls, pr, err := mergeOver(t, readyScript(), autonomyHead, false)
 	if err != nil || pr.State != forge.PullRequestStateMerged {
@@ -146,15 +152,18 @@ func TestTheProgramMergesOnlyAfterTheLiveReadOnTheObservedHead(t *testing.T) {
 		},
 	}
 	for name, mutate := range refusals {
-		script := readyScript()
-		mutate(script)
-		calls, _, err := mergeOver(t, script, autonomyHead, false)
-		if !errors.Is(err, errMergeNotReady) {
-			t.Errorf("%s: %v, want the live read's refusal", name, err)
-		}
-		if n := len(mergeCalls(calls)); n != 0 {
-			t.Errorf("%s: the code host was asked to merge %d times", name, n)
-		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			script := readyScript()
+			mutate(script)
+			calls, _, err := mergeOver(t, script, autonomyHead, false)
+			if !errors.Is(err, errMergeNotReady) {
+				t.Errorf("%s: %v, want the live read's refusal", name, err)
+			}
+			if n := len(mergeCalls(calls)); n != 0 {
+				t.Errorf("%s: the code host was asked to merge %d times", name, n)
+			}
+		})
 	}
 
 	script := readyScript()
@@ -185,8 +194,11 @@ func TestTheProgramMergesOnlyAfterTheLiveReadOnTheObservedHead(t *testing.T) {
 // gets past the listing to the next step, the run's configuration, which this
 // record cannot give, so it is refused there instead of answered nil.
 func TestAnUnlistedRepositoryIsNeverMerged(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), store.WithRedactor(redact.New()))
+	database := filepath.Join(t.TempDir(), "state.db")
+	seedDatabase(t, database)
+	st, err := store.Open(ctx, database, store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatal(err)
 	}

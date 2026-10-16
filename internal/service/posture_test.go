@@ -41,6 +41,7 @@ func publishTrusted(t *testing.T, subject, document string) {
 // unavailable and records nothing, with no posture assumed in its place
 // (P7). Each refusal's control is the request before it that was recorded.
 func TestTaskCreateRecordsTheTrustedPostureAndOnlyTightensIt(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P7)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)

@@ -114,6 +114,7 @@ func sweepUnsupported(_ context.Context, dir string) (agents.SweepResult, error)
 // relaunch with the real sweep on a platform that has one, which proceeds
 // and raises no hold. Run under the race detector, which make test does.
 func TestAnUnsupportedSweepRefusesTheRelaunchUntilARetryAnswer(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
@@ -283,6 +284,7 @@ func TestAnUnsupportedSweepRefusesTheRelaunchUntilARetryAnswer(t *testing.T) {
 // the next hold the task is answered on; a stop there leaves the task alone,
 // so a later relaunch is not due.
 func TestTheNoSweepHoldIsAnsweredRetryOrStop(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	sub := newRelaunchSubject(t)
 	sub.restart.sweepCopy = sweepUnsupported
@@ -390,6 +392,7 @@ func dispatchRefusedOn(t *testing.T, sub *launchSubject, err error, want string,
 // with the real sweep on a platform that has one, which begins the attempt
 // and raises no hold. Run under the race detector, which make test does.
 func TestAnUnsupportedSweepHoldsTheRetriedDispatchUntilARetryAnswer(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	ctx := t.Context()
 	sub, restart := crashedDispatch(t)
@@ -519,6 +522,7 @@ func TestAnUnsupportedSweepHoldsTheRetriedDispatchUntilARetryAnswer(t *testing.T
 // and a stop leaves the task alone, so the next start's dispatch is
 // refused on the stopped hold and begins nothing.
 func TestTheDispatchNoSweepHoldIsAnsweredRetryOrStop(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	answer := func(s *Service, task, text string) (machine.TaskAnswered, error) {
 		return s.respondTask(ctx, ipc.Request{}, machine.TaskRespondRequest{Task: task, Answer: text})
@@ -583,6 +587,7 @@ func TestTheDispatchNoSweepHoldIsAnsweredRetryOrStop(t *testing.T) {
 // TestTheDispatchNoSweepHoldIsAnsweredRetryOrStop show begin an attempt and
 // report AnswerRelaunched and AnswerRedispatched.
 func TestARetryReportsTheRefusalItMetAndPromisesNoRestartItCannotKeep(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	answer := func(s *Service, task string) machine.TaskAnswered {
 		t.Helper()
@@ -690,6 +695,7 @@ func TestARetryReportsTheRefusalItMetAndPromisesNoRestartItCannotKeep(t *testing
 // the sweep's error, so the next start asks again rather than relaunching
 // into a copy a live process may still own.
 func TestAFailedSweepRefusesTheRelaunchBeforeTheClaim(t *testing.T) {
+	t.Parallel()
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	listingFailed := errors.New("reading /proc: permission denied")
@@ -717,6 +723,7 @@ func TestAFailedSweepRefusesTheRelaunchBeforeTheClaim(t *testing.T) {
 // says the copy was reclaimed from whatever was in it. The wait is on the
 // process's own exit, not on any record.
 func TestARelaunchReclaimsTheCopyFromAProcessLeftInIt(t *testing.T) {
+	t.Parallel()
 	requireSweepClearsHere(t, "a relaunch reclaiming its copy from a process left in it")
 	sub := newRelaunchSubject(t)
 	if _, err := agents.NewSweeper(sub.restart.home, 0, nil).Sweep(t.Context(), sub.copy); errors.Is(err, agents.ErrSweepUnsupported) {

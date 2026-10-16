@@ -95,6 +95,7 @@ func reapHome(t *testing.T, runIDs ...string) *home.Home {
 // or inspects what a service left behind has to.
 func openHomeStore(t *testing.T, h *home.Home) *store.Store {
 	t.Helper()
+	seedDatabase(t, h.Database())
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening the store: %v", err)
@@ -250,6 +251,7 @@ func accountFor(t *testing.T, accounts []reaped, run string, group int) reaped {
 // identity the adapter's group reads now, and the record is gone once the
 // adapter has ended the tree.
 func TestARecordStandsWhileAnInvocationRunsAndIsClearedWhenItsTreeEnds(t *testing.T) {
+	t.Parallel()
 	requiresIdentity(t)
 	h := reapHome(t, "run-live")
 	s := openReaping(t, h)
@@ -291,6 +293,7 @@ func TestARecordStandsWhileAnInvocationRunsAndIsClearedWhenItsTreeEnds(t *testin
 // The assertion that the sibling survived is therefore about scope rather
 // than about a sibling nothing could have matched.
 func TestAKilledServiceLeavesItsRecordAndTheNextOneEndsThatGroupAlone(t *testing.T) {
+	t.Parallel()
 	requiresIdentity(t)
 	h := reapHome(t, "run-orphaned")
 	agent := holdingAgent(t)
@@ -428,6 +431,7 @@ func matchingCommandLines(t *testing.T, pattern string) map[int]bool {
 // The counterfeit start time is a mutation of a real reading, since nothing
 // can make the kernel reuse a live identifier on demand.
 func TestRecoveryLeavesAloneWhatItCannotVerifyAndWhatIsActive(t *testing.T) {
+	t.Parallel()
 	requiresIdentity(t)
 	principles.Cite(t, principles.P6)
 	h := reapHome(t, "run-ended", "run-active")

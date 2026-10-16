@@ -109,11 +109,13 @@ func ended(t *testing.T, exited <-chan struct{}, after string) {
 // or a process that could never have shown one. Skips where the existing
 // sweep tests skip, with the same reasons.
 func TestARunsCopyIsSweptOnceTheRunIsFinalAndNeverBefore(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	requireSweepClearsHere(t, "the sweep of a finished run's copy")
 
 	for _, ending := range []string{"completes", "fails", "is cancelled"} {
 		t.Run(ending, func(t *testing.T) {
+			t.Parallel()
 			held := newHeldService(t)
 			s := held.service
 			asked := &sweepsAsked{sweeper: agents.NewSweeper(s.home, reapGrace, nil)}
@@ -206,6 +208,7 @@ func TestARunsCopyIsSweptOnceTheRunIsFinalAndNeverBefore(t *testing.T) {
 // is active or one this build does not recognize, and says so in the log.
 // The positive control is the same call with a final row, which asks one.
 func TestASweepIsNotAskedForARowThatIsNotFinal(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	s, _, h := cleanupService(t)
 	var dirs []string
@@ -280,6 +283,7 @@ func finishedRun(t *testing.T, records *store.Store, id, head string) store.Run 
 // sweep recorded and its answer carries none. The process ending under the
 // same recovery that leaves the other alone is the positive control.
 func TestRecoverySweepsAFinishedRunsStandingCopyAndNeverAnActiveRunsCopy(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	requireSweepClearsHere(t, "the sweep at recovery of a finished run's copy")
 
@@ -380,6 +384,7 @@ func TestRecoverySweepsAFinishedRunsStandingCopyAndNeverAnActiveRunsCopy(t *test
 // that lists and does not clear is not reached here, because no real sweep
 // in a test can be made to leave a process it may signal running.
 func TestASweepsOutcomeIsRecordedOnTheRun(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	s, records, h := cleanupService(t)
 	listingFailed := errors.New("the process table could not be read")

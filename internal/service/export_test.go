@@ -42,3 +42,12 @@ func RequireSweepClearsHere(t *testing.T, unestablished string) {
 	t.Helper()
 	requireSweepClearsHere(t, unestablished)
 }
+
+// SeedDatabase is seedDatabase for this package's external tests.
+func SeedDatabase(tb testing.TB, path string) {
+	tb.Helper()
+	seedDatabase(tb, path)
+}
+
+// RemoveDatabaseTemplate is removeDatabaseTemplate for TestMain.
+func RemoveDatabaseTemplate() { removeDatabaseTemplate() }

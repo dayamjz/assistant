@@ -51,6 +51,7 @@ func newMergeReadFixture(t *testing.T, script forgetest.Script) mergeReadFixture
 	if err := h.Create(); err != nil {
 		t.Fatalf("creating the home: %v", err)
 	}
+	seedDatabase(t, h.Database())
 	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening the store: %v", err)
@@ -220,6 +221,7 @@ func personMerged(head string) forgetest.Script {
 // after, and the passed outcome is read off the merge record alone, which is
 // the one owner of the fact (P14).
 func TestAPersonsMergeAtTheObservedHeadIsRecorded(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	principles.Cite(t, principles.P14)
 	f := newMergeReadFixture(t, personMerged(autonomyHead))
@@ -266,6 +268,7 @@ func TestAPersonsMergeAtTheObservedHeadIsRecorded(t *testing.T) {
 // and so is a run that recorded no observed head, which nothing could anchor
 // a merge to (P6).
 func TestOnlyAMergeAtTheObservedHeadIsRecorded(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	open := readyView()
 	closed := readyView()
@@ -294,6 +297,7 @@ func TestOnlyAMergeAtTheObservedHeadIsRecorded(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			f := newMergeReadFixture(t, c.script)
 			f.passRun(t, c.state)
 			results := f.s.readPersonMerges(t.Context())
@@ -327,6 +331,7 @@ func TestOnlyAMergeAtTheObservedHeadIsRecorded(t *testing.T) {
 // ErrMergeRecorded rather than written again. A merge at another head is
 // final, so the pass after the one that reported it does not read it again.
 func TestAMergeIsRecordedOnceAndReadNoMore(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	f := newMergeReadFixture(t, personMerged(autonomyHead))
 	f.passRun(t, passedRunState{repository: autonomyRepository, pushed: autonomyHead, number: "12"})
@@ -375,6 +380,7 @@ func TestAMergeIsRecordedOnceAndReadNoMore(t *testing.T) {
 // for the interval: a merge a person made while no service was serving the
 // home is recorded by the first pass.
 func TestTheFirstPassRunsWhenTheReadsStart(t *testing.T) {
+	t.Parallel()
 	f := newMergeReadFixture(t, personMerged(autonomyHead))
 	f.passRun(t, passedRunState{repository: autonomyRepository, pushed: autonomyHead, number: "12"})
 	f.s.startMergeReads()

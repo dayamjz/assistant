@@ -77,6 +77,7 @@ func workerPushes(t *testing.T, w launched, branch string) string {
 // its branch starts no run and raises the approval hold offering its commit,
 // which is the path an intake-recorded local task takes.
 func TestAPromotionInALocalProjectRecordsLocalAndItsPushAsksForApproval(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P7)
 	principles.Cite(t, principles.P14)
 	launchedWorkerOf(t, store.TaskInvestigation, "", func(w launched) {
@@ -135,6 +136,7 @@ func TestAPromotionInALocalProjectRecordsLocalAndItsPushAsksForApproval(t *testi
 // and raises no approval, so the local path above is the posture's doing
 // and not something every promoted push does.
 func TestAPromotionInAGatedProjectRunsTheFullGate(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P7)
 	launchedWorkerOf(t, store.TaskInvestigation, "", func(w launched) {
 		ctx := t.Context()
