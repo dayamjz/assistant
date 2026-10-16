@@ -34,13 +34,30 @@ OpenAI, and Grok Build.
   environment (see `docs/operators.md`); each worker gets an isolated config
   directory that does not carry your login.
 
-### 3. OpenAI
+### 3. Codex (OpenAI Codex CLI)
+
+- **Config name**: `codex`
+- **Binary**: `codex`
+- **Install**: `npm install -g @openai/codex` (or the upstream install path)
+- **Auth (CLI login only)**: `codex login`. The adapter strips `OPENAI_API_KEY`
+  from the process environment so a key in the service environment cannot
+  redirect runs onto a different path than the logged-in credentials.
+- **Invocation**: `codex exec --json` (JSONL events); resume via
+  `codex exec resume <thread_id>`
+- **Prompt delivery**: trailing argv after `--` (stdin closed empty; Codex
+  would otherwise treat a live stdin as more prompt input)
+- **Sessions**: resumable fixer sessions (`thread_id` from `thread.started`)
+- **Grants**: `--sandbox read-only` (review); `--sandbox workspace-write
+  --approve-for-me` (fix). Residual: fix grant still permits shell through
+  Codex automatic review, not a hard Bash deny.
+
+### 4. OpenAI (legacy stub)
 
 - **Binary**: `openai`
 - **Sessions**: not supported
-- Named-only; authenticate however that CLI documents.
+- Named-only Claude-shaped stub; prefer `codex` for the Codex CLI.
 
-### 4. Grok (Grok Build)
+### 5. Grok (Grok Build)
 
 - **Binary**: `grok`
 - **Install**: `curl -fsSL https://x.ai/cli/install.sh | bash`
@@ -103,7 +120,8 @@ assistant doctor
 |---------|--------|
 | Cursor | `cursor-agent --version` |
 | Claude | `claude --version` |
-| OpenAI | `openai --version` |
+| Codex | `codex --version` |
+| OpenAI | `openai --version` (legacy stub) |
 | Grok | `grok version` |
 
 ## Agent Capabilities
@@ -148,12 +166,13 @@ agent: cursor
 
 ```bash
 cursor-agent login   # Cursor
+codex login          # Codex
 grok login           # Grok (browser)
 grok login --device-auth   # Grok headless
 ```
 
-Do not set `CURSOR_API_KEY` or `XAI_API_KEY` for `assistant` runs; the adapters
-strip those variables on purpose.
+Do not set `CURSOR_API_KEY`, `OPENAI_API_KEY`, or `XAI_API_KEY` for
+`assistant` runs; the adapters strip those variables on purpose.
 
 ### Wrong agent selected
 

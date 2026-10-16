@@ -549,7 +549,7 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 
 	// Test that all adapters are in the default catalog
 	names := agents.DefaultCatalog().Names()
-	wantNames := []string{agents.ClaudeName, agents.CursorName, agents.OpenAIName, agents.GrokName}
+	wantNames := []string{agents.ClaudeName, agents.CursorName, agents.CodexName, agents.OpenAIName, agents.GrokName}
 	if !slices.Equal(names, wantNames) {
 		t.Errorf("this build ships adapters %v, want %v", names, wantNames)
 	}
@@ -564,6 +564,18 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 	wantCursor := []agents.Capability{agents.CapabilityResumableSessions}
 	if got := cursorDeclared.List(); !slices.Equal(got, wantCursor) {
 		t.Errorf("the cursor adapter declares %v, want exactly %v", got, wantCursor)
+	}
+
+	// Verify Codex declares resumable sessions
+	codexFactory := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t)))
+	codex, err := codexFactory.New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("codex factory failed: %v", err)
+	}
+	codexDeclared := codex.Capabilities()
+	wantCodex := []agents.Capability{agents.CapabilityResumableSessions}
+	if got := codexDeclared.List(); !slices.Equal(got, wantCodex) {
+		t.Errorf("the codex adapter declares %v, want exactly %v", got, wantCodex)
 	}
 
 	// Verify OpenAI declares no capabilities

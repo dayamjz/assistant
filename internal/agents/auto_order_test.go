@@ -71,10 +71,10 @@ func TestAnExplicitNamedOnlyAdapterStillResolves(t *testing.T) {
 // implies. It shows what each factory declares, not that any adapter's parsing
 // matches its real CLI: nothing in this repository drives a real CLI.
 func TestOnlyClaudeIsDeclaredAutoEligible(t *testing.T) {
-	plantOnPath(t, agents.CursorName, agents.ClaudeName, agents.OpenAIName, agents.GrokName)
+	plantOnPath(t, agents.CursorName, agents.ClaudeName, agents.CodexName, agents.OpenAIName, agents.GrokName)
 	standings := agents.DefaultCatalog().Survey(t.Context())
-	if len(standings) != 4 || standings[0].Name != agents.ClaudeName {
-		t.Fatalf("survey is %+v, want four adapters with claude first", standings)
+	if len(standings) != 5 || standings[0].Name != agents.ClaudeName {
+		t.Fatalf("survey is %+v, want five adapters with claude first", standings)
 	}
 	for _, s := range standings {
 		if !s.Runnable {

@@ -78,11 +78,10 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 	cmd.Env = spec.env
 	// Standard input carries spec.stdin and is then closed, so an agent
 	// reading it reaches EOF rather than waiting for a person who is not
-	// there. With nothing to carry it stays os.DevNull, which is EOF at once.
-	cmd.Stdin = nil
-	if spec.stdin != "" {
-		cmd.Stdin = strings.NewReader(spec.stdin)
-	}
+	// there. An empty stdin still uses a closed reader rather than inheriting
+	// the caller's stdin: Codex (and similar CLIs) treat a live inherited
+	// stdin as more prompt input.
+	cmd.Stdin = strings.NewReader(spec.stdin)
 
 	stdout := &boundedWriter{limit: spec.maxOut}
 	// Standard error is diagnostic text rather than a result, so it is kept up
