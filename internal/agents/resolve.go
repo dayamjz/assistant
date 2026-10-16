@@ -86,9 +86,11 @@ func WithCatalogRecorder(r Recorder) CatalogOption {
 // tries them: Claude, then Cursor, OpenAI, and Grok. Only Claude is
 // auto-eligible, because PRD section 12 makes it the phase-one adapter, so
 // "auto" resolves it alone; the other three are reachable by naming them in
-// the agent key. All
-// implement the core Runner interface, and Claude and Cursor additionally
-// declare resumable sessions.
+// the agent key. All implement the core Runner interface, and Claude, Cursor,
+// and Grok additionally declare resumable sessions. Cursor and Grok
+// authenticate through their CLI login paths: each strips its provider API-key
+// environment variable so a key in the service environment cannot redirect a
+// run onto API billing.
 //
 // Options apply to every adapter in the returned catalog and to nothing
 // else; DefaultCatalog with none behaves as it always has.

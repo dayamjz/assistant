@@ -27,7 +27,8 @@ type Call struct {
 	// argument list, exactly where a configured entry's own flags would be,
 	// and continues with the flags the adapter manages.
 	Args []string `json:"args"`
-	// Prompt is what reached the agent's standard input.
+	// Prompt is what reached the agent: standard input for Claude Code and
+	// Cursor, or the contents of --prompt-file for Grok Build.
 	Prompt string `json:"prompt"`
 	// Dir is the working directory the stand-in process resolved. A platform
 	// that resolves symbolic links on the way makes this differ textually from
@@ -39,9 +40,9 @@ type Call struct {
 	// is -1 for a worker, which no step answers.
 	Step int `json:"step"`
 	// Worker reports that this process was started as a worker rather than
-	// as a one-shot invocation: the adapter put no --print on its command
-	// line, or put it there with streaming input, which is the whole of how
-	// the stand-in tells the two apart.
+	// as a one-shot invocation: the adapter put neither --print nor
+	// --prompt-file on its command line, or put --print there with streaming
+	// input, which is the whole of how the stand-in tells the two apart.
 	Worker bool `json:"worker,omitempty"`
 	// Stream reports that the worker read streaming input: --print and
 	// --input-format stream-json were on its command line, so each line it

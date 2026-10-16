@@ -79,7 +79,7 @@ func Main() {
 	switch {
 	case interactiveArgs(args):
 		os.Exit(serveInteractiveWorker(control, args))
-	case !slices.Contains(args, printFlag):
+	case !oneShotArgs(args):
 		os.Exit(serveWorker(control, args))
 	case streamInput(args):
 		os.Exit(serveStreamWorker(control, args))
@@ -87,15 +87,26 @@ func Main() {
 	os.Exit(serve(control, args))
 }
 
-// printFlag is the flag the Claude Code adapter puts on every one-shot
-// invocation and on every pipe worker it starts, and puts on no terminal
-// worker, and the scripted adapter puts on no worker. Which of four things
-// this process is follows from the command line alone, which is what the
-// wire carries: with the screen reader flag before "--" and without it, an
-// interactive worker; otherwise without it, a line-mode worker; with it and
-// streaming input, a stream-mode worker; with it and nothing more, a
-// one-shot invocation that reads its prompt to the end.
-const printFlag = "--print"
+// printFlag is the flag the Claude Code and Cursor adapters put on every
+// one-shot invocation and on every pipe worker they start, and put on no
+// terminal worker. promptFileFlag is Grok Build's equivalent delivery: the
+// prompt is a file path rather than standard input. Which of four things this
+// process is follows from the command line alone, which is what the wire
+// carries: with the screen reader flag before "--" and without a one-shot
+// marker, an interactive worker; otherwise without a one-shot marker, a
+// line-mode worker; with --print and streaming input, a stream-mode worker;
+// with a one-shot marker and nothing more, a one-shot invocation that reads
+// its prompt to the end.
+const (
+	printFlag      = "--print"
+	promptFileFlag = "--prompt-file"
+)
+
+// oneShotArgs reports whether args name a one-shot invocation rather than a
+// worker: --print (Claude/Cursor) or --prompt-file (Grok).
+func oneShotArgs(args []string) bool {
+	return slices.Contains(args, printFlag) || slices.Contains(args, promptFileFlag)
+}
 
 // flagValue is the value of the first argument with this prefix, and whether
 // there was one.
@@ -106,6 +117,35 @@ func flagValue(args []string, prefix string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// flagArg is the value following name as its own argv word, empty when the
+// flag is absent or is the last word.
+func flagArg(args []string, name string) string {
+	for i, a := range args {
+		if a == name && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+// readPrompt returns the invocation prompt: the contents of --prompt-file when
+// that flag is present (Grok Build), otherwise everything on standard input
+// (Claude Code and Cursor).
+func readPrompt(args []string) (string, error) {
+	if path := flagArg(args, promptFileFlag); path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		return string(raw), nil
+	}
+	raw, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 // handshake answers New's wiring check by printing a well-formed envelope
@@ -132,7 +172,7 @@ func serve(control string, args []string) int {
 		fmt.Fprintln(os.Stderr, "standin: "+err.Error())
 		return exitNoScript
 	}
-	prompt, err := io.ReadAll(os.Stdin)
+	prompt, err := readPrompt(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "standin: reading the prompt: "+err.Error())
 		return exitNoStdin
@@ -141,7 +181,7 @@ func serve(control string, args []string) int {
 	// than refused. It is one field of the evidence, and losing the whole
 	// record of an invocation over it would hide more than it reports.
 	dir, _ := os.Getwd()
-	call := Call{Args: args, Prompt: string(prompt), Dir: dir, Step: -1}
+	call := Call{Args: args, Prompt: prompt, Dir: dir, Step: -1}
 
 	step, err := choose(control, script, call)
 	if err != nil {
