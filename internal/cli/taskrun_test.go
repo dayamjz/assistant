@@ -192,6 +192,47 @@ func TestATasksOwnHoldIsAnsweredBeforeItsRun(t *testing.T) {
 	}
 }
 
+// Issue #279: --run with --task answers a promoted delivery run while the
+// task's report holds stay open, so a coordinator does not have to clear
+// every investigation decision before moving the run.
+func TestAPromotedTasksRunIsAnsweredWhileItsReportHoldsStayOpen(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	runBefore := startTaskBranchRun(t, h, subject)
+	_, next := firstHoldingStages(t)
+	id := promotedWithDecisions(t, h, subject, taskBranch)
+	git(t, subject, "checkout", "--quiet", "main")
+	elsewhere := t.TempDir()
+
+	own := openHoldsOf(t, h, id)
+	if len(own) != 2 {
+		t.Fatalf("the promoted task holds %+v, want its report's two decisions", own)
+	}
+
+	moved := run(t, h, elsewhere, "--json", "--task", id, "--run", "--answer", string(pipeline.OutcomeApproved))
+	if moved.code != machine.ExitOK {
+		t.Fatalf("approving the task's run with --run exited %s:\n%s%s", moved.code, moved.stdout, moved.stderr)
+	}
+	after := decodeRun(t, moved.stdout)
+	if after.Record.ID != runBefore.Record.ID || after.Decision == nil || after.Decision.Stage != next.String() {
+		t.Fatalf("--run left run %s at %+v, want run %s holding at %s", after.Record.ID, after.Decision, runBefore.Record.ID, next)
+	}
+	still := openHoldsOf(t, h, id)
+	if len(still) != 2 {
+		t.Fatalf("after --run the task's own holds are %+v, want both still open", still)
+	}
+	for i := range own {
+		if still[i].Key != own[i].Key || !still[i].Open() {
+			t.Fatalf("report hold %s was disturbed: before %+v after %+v", own[i].Key, own, still)
+		}
+	}
+}
+
 // An answer given a task that neither holds itself nor has a run waiting is
 // a typed refusal carrying the row that says nothing was answered and what
 // to read: a task that names no branch, a task whose branch has no run, and

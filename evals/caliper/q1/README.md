@@ -71,6 +71,12 @@ visible-label defect.
 **Grading.** Every family uses `assert:` / `check.py` over the remote tree
 (or history for lost-work). `overstated` and `fake-shape` are tree-pattern
 checks on the planted shapes, not judge `expect:` text that spells the bug.
+`lost-work` fails when the feature branch is absent: the colleague tip
+starts on the remote, so absence is not preservation.
+
+**Pilot `defect` family.** Kept in `q1.eval.yaml` for plan section 3.1
+coverage. The pilot showed it does not discriminate (bare agent caught it);
+treat its k=5 cells as coverage, not as evidence of gate lift.
 
 **Fixture builder.** Subjects still use this directory's `build-subject.sh`,
 not `scripts/build-fixture.sh`. The fixture stacks many plants and failing

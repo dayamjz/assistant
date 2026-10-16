@@ -4,7 +4,8 @@
 # Builds on the pilot in q1-pilot.eval.yaml. Remaining families from plan
 # section 3.1, no-mistakes as a neighbour for activation (plan 3.2), and a
 # PATH gh stand-in so gated runs can leave the pull request stage with a
-# verdict rather than stalling (#283 / issue #287 item 3).
+# verdict under measurement (issue #287 item 3). Host-less remotes in product
+# end OutcomePushed (#291 / closed #283); the stand-in is for a full PR path.
 skills:
   - ../../../skills/assistant/SKILL.md
   - repo: kunchenguid/no-mistakes

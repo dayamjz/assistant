@@ -88,6 +88,37 @@ func TestResolveHoldRequiresAnExplicitResolution(t *testing.T) {
 	}
 }
 
+// ResolveHoldNoted records free text beside the resolution; ResolveHold
+// leaves ResolutionNote unknown. Who decided stays ResolvedBy either way.
+func TestResolveHoldNotedRecordsTheNote(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	if _, err := s.RegisterHold(ctx, Hold{Key: "noted", Subject: "a decision"}); err != nil {
+		t.Fatalf("RegisterHold: %v", err)
+	}
+	resolved, err := s.ResolveHoldNoted(ctx, "noted", "approved", "the floor is not decided", ResolvedByMachineInterface())
+	if err != nil {
+		t.Fatalf("ResolveHoldNoted: %v", err)
+	}
+	if note, ok := resolved.ResolutionNote.Get(); !ok || note != "the floor is not decided" {
+		t.Fatalf("ResolutionNote = %+v, want the note", resolved.ResolutionNote)
+	}
+	if by, _ := resolved.ResolvedBy.Get(); by != ResolvedByMachineInterface() {
+		t.Fatalf("ResolvedBy = %v, want the machine interface", by)
+	}
+
+	if _, err := s.RegisterHold(ctx, Hold{Key: "plain", Subject: "another"}); err != nil {
+		t.Fatalf("RegisterHold: %v", err)
+	}
+	plain, err := s.ResolveHold(ctx, "plain", "approved", ResolvedByPerson())
+	if err != nil {
+		t.Fatalf("ResolveHold: %v", err)
+	}
+	if plain.ResolutionNote.IsKnown() {
+		t.Fatalf("ResolveHold left ResolutionNote %+v, want unknown", plain.ResolutionNote)
+	}
+}
+
 func TestResolveHoldRefusesASecondAnswer(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)

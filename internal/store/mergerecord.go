@@ -125,6 +125,10 @@ type HoldClosure struct {
 	Hold Hold
 	// Resolution is what was decided, which ResolveHold refuses empty.
 	Resolution string
+	// Note is free text recorded with the resolution about what was
+	// decided. Empty leaves ResolutionNote unknown. It is not who decided:
+	// that is By.
+	Note string
 	// By is who decided, which ResolveHold refuses as the zero Resolver.
 	By Resolver
 }
@@ -215,9 +219,13 @@ func closeHold(ctx context.Context, tx *sql.Tx, closing HoldClosure, now string)
 	if err != nil {
 		return fmt.Errorf("store: resolving hold %s: %w", h.Key, err)
 	}
+	var note any
+	if strings.TrimSpace(closing.Note) != "" {
+		note = closing.Note
+	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ? WHERE key = ? AND resolution IS NULL`,
-		closing.Resolution, now, resolver, h.Key); err != nil {
+		`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE key = ? AND resolution IS NULL`,
+		closing.Resolution, now, resolver, note, h.Key); err != nil {
 		return fmt.Errorf("store: resolving hold %s: %w", h.Key, err)
 	}
 	return nil

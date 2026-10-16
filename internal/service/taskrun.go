@@ -34,15 +34,17 @@ import (
 //
 // # Which hold comes first
 //
-// A task with a hold of its own open is refused here, typed, rather than
-// having its run answered past that hold. The hold naming the task is the
-// one an answer given the task closes, as taskholds.go has always answered
-// it, and PRD section 6 puts it above every run in the task's state, so a
-// person reading the task is told about it first. The command surface sends
-// an answer to the task's own hold when it reads one open, so this refusal
-// is what a request meets when one opened after that read, or when it
-// carries a fix round, which only a run takes. Either way nothing is
-// answered, and the refusal says to answer the task's own decision first.
+// Without TargetRun, a task with a hold of its own open is refused here,
+// typed, rather than having its run answered past that hold. The hold
+// naming the task is the one an answer given the task closes, as
+// taskholds.go has always answered it, and PRD section 6 puts it above
+// every run in the task's state, so a person reading the task is told about
+// it first. The command surface sends an answer to the task's own hold when
+// it reads one open, so this refusal is what a request meets when one opened
+// after that read, or when it carries a fix round, which only a run takes.
+// With TargetRun set, the run is answered while those holds stay open: that
+// is how a coordinator reaches a promoted delivery run without clearing
+// every report hold first.
 //
 // # Standing consent given a task
 //
@@ -79,6 +81,9 @@ import (
 // ipc.ErrInvalidRequest.
 func (s *Service) respondTo(ctx context.Context, req ipc.Request, r machine.RespondRequest) (machine.Run, error) {
 	if r.Task == "" {
+		if r.TargetRun {
+			return machine.Run{}, fmt.Errorf("%w: target_run selects a task's run and needs the task", ipc.ErrInvalidRequest)
+		}
 		return s.respond(ctx, r)
 	}
 	if r.Run != "" {
@@ -87,21 +92,23 @@ func (s *Service) respondTo(ctx context.Context, req ipc.Request, r machine.Resp
 	if err := s.refuseWorker(req); err != nil {
 		return machine.Run{}, err
 	}
-	run, err := s.taskRun(ctx, r.Task)
+	run, err := s.taskRun(ctx, r.Task, r.TargetRun)
 	if err != nil {
 		return machine.Run{}, err
 	}
-	r.Run, r.Task = run.ID, ""
+	r.Run, r.Task, r.TargetRun = run.ID, "", false
 	return s.respond(ctx, r)
 }
 
 // taskRun is the task's current run, held at a decision, or a typed
-// refusal. A task with a hold of its own open, a task naming no branch, a
-// branch with no unfinished run, and a run not waiting on an answer are each
-// ipc.ErrRefused, and an unknown task is ipc.ErrRefused too; each refusal
-// carries the internal/machine row a person reads about it.
-func (s *Service) taskRun(ctx context.Context, id string) (store.Run, error) {
-	record, err := s.taskCurrentRun(ctx, id)
+// refusal. Without pastOwnHold, a task with a hold of its own open, a task
+// naming no branch, a branch with no unfinished run, and a run not waiting
+// on an answer are each ipc.ErrRefused; with pastOwnHold, the task's own
+// hold is skipped so a promoted run can be answered while report holds stay
+// open. An unknown task is ipc.ErrRefused too; each refusal carries the
+// internal/machine row a person reads about it.
+func (s *Service) taskRun(ctx context.Context, id string, pastOwnHold bool) (store.Run, error) {
+	record, err := s.taskCurrentRun(ctx, id, pastOwnHold)
 	if err != nil {
 		return store.Run{}, err
 	}
@@ -136,7 +143,7 @@ func (s *Service) startTo(ctx context.Context, req ipc.Request, r machine.StartR
 	if err := s.refuseWorker(req); err != nil {
 		return machine.Run{}, err
 	}
-	record, err := s.taskCurrentRun(ctx, r.Task)
+	record, err := s.taskCurrentRun(ctx, r.Task, false)
 	if err != nil {
 		return machine.Run{}, err
 	}
@@ -159,8 +166,9 @@ func (s *Service) startTo(ctx context.Context, req ipc.Request, r machine.StartR
 
 // taskCurrentRun is the task's current run, reconciled against its
 // checkpoint, whatever it is doing, or a typed refusal on taskRun's terms for
-// every case but a run that is not held.
-func (s *Service) taskCurrentRun(ctx context.Context, id string) (store.Run, error) {
+// every case but a run that is not held. pastOwnHold skips the task's own
+// open hold, for TargetRun.
+func (s *Service) taskCurrentRun(ctx context.Context, id string, pastOwnHold bool) (store.Run, error) {
 	if strings.TrimSpace(id) == "" {
 		return store.Run{}, fmt.Errorf("%w: an answer given a task names no task", ipc.ErrInvalidRequest)
 	}
@@ -171,13 +179,15 @@ func (s *Service) taskCurrentRun(ctx context.Context, id string) (store.Run, err
 	if err != nil {
 		return store.Run{}, err
 	}
-	own, err := s.oldestTaskHold(ctx, id)
-	switch {
-	case err == nil:
-		return store.Run{}, fmt.Errorf("%w: task %s waits on its own hold %s, which an answer given the task closes before its run's. %s",
-			ipc.ErrRefused, id, own.Key, machine.PhraseTaskOwnHoldFirst)
-	case !errors.Is(err, errNoTaskHold):
-		return store.Run{}, err
+	if !pastOwnHold {
+		own, err := s.oldestTaskHold(ctx, id)
+		switch {
+		case err == nil:
+			return store.Run{}, fmt.Errorf("%w: task %s waits on its own hold %s, which an answer given the task closes before its run's. %s",
+				ipc.ErrRefused, id, own.Key, machine.PhraseTaskOwnHoldFirst)
+		case !errors.Is(err, errNoTaskHold):
+			return store.Run{}, err
+		}
 	}
 	repository, named := task.RepositoryID.Get()
 	branch, onBranch := task.Branch.Get()

@@ -80,6 +80,21 @@ run is holding on. At a stage before push you can also ask for one fix round:
 assistant --answer fix --select ID[,ID...] [--note TEXT] [--finding TEXT]
 ```
 
+A task's own hold (an investigation report's among them) is answered with
+`--task`:
+
+```
+assistant --task ID --answer TEXT [--hold KEY|FINDING] [--note TEXT]
+assistant --task ID --run --answer TEXT
+```
+
+`--hold` names which open hold to close (the hold's key, or a finding id under
+that task); without it the oldest open one is answered. `--note` records free
+text with the resolution about what was decided; who decided stays the surface,
+never a claim made by the note. `--run` answers the task's current run even
+while the task still has holds of its own open, so a promoted delivery run is
+reachable without first clearing every report hold.
+
 The stage runs again after the round and holds again, so you see the result
 before anything is pushed. A round that changed nothing says so and returns to
 the hold. At most three rounds can be asked for at one stage in one run. The
@@ -131,10 +146,11 @@ Three things follow for whoever runs the service:
   identifies no socket peer, every call is refused that way, a worker's
   included.
 - A filed report's decisions are holds you answer with
-  `assistant --task ID --answer ...`. The investigation's copy is removed
-  only after its worker has ended, which it does when it exits on its own or
-  when the coordinator stops it, and only on the cleanup check's proof. A
-  report filed by a worker that is still running keeps its copy.
+  `assistant --task ID --answer ...` (optionally `--hold` and `--note`; see
+  Answering a hold). The investigation's copy is removed only after its
+  worker has ended, which it does when it exits on its own or when the
+  coordinator stops it, and only on the cleanup check's proof. A report
+  filed by a worker that is still running keeps its copy.
 - Once its report is stored, an investigation reads `reported` whether its
   worker is still running or has ended, and `held` only while a decision the
   report raised is open. A worker that ends after filing is not a crash: a

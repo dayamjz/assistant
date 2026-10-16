@@ -216,12 +216,16 @@ type RespondRequest struct {
 	// Task selects the run through a task, and is empty when Run names it.
 	// The run selected is the task's current run: the newest unfinished run
 	// of the task's branch in the task's repository, which is the run
-	// --answer reaches from a checkout of that branch. A task with a hold
-	// of its own open is refused rather than having its run answered past
-	// that hold, because the hold naming the task is the one an answer
-	// given the task closes first; internal/service's taskrun.go owns
-	// both rules.
+	// --answer reaches from a checkout of that branch. Without TargetRun, a
+	// task with a hold of its own open is refused rather than having its
+	// run answered past that hold; with TargetRun set, the run is answered
+	// while those holds stay open. internal/service's taskrun.go owns both
+	// rules.
 	Task string `json:"task,omitempty"`
+	// TargetRun, with Task set, answers the task's current run even while
+	// the task has a hold of its own open. It is how a coordinator reaches
+	// a promoted delivery run without first clearing every report hold.
+	TargetRun bool `json:"target_run,omitempty"`
 	// Answer is one of the options the decision offered. An answer outside
 	// them is refused by internal/graph rather than interpreted here.
 	Answer string `json:"answer"`
@@ -240,8 +244,9 @@ type RespondRequest struct {
 // which PRD section 9 has answered the same way a run's hold is, given the
 // task rather than a run: a task past relaunch_attempts, a relaunch refused
 // because the platform has no process sweep, or a decision an
-// investigation's report registered. The hold answered is the oldest one
-// open that names the task and no run; the answer names which.
+// investigation's report registered. Without Hold, the hold answered is the
+// oldest one open that names the task and no run; with Hold set, that hold
+// is named (full key, or a finding id resolved under the task).
 //
 // It carries no field saying who answered, on RespondRequest's terms: who
 // resolved a hold is derived from the surface by internal/ipc's
@@ -249,6 +254,10 @@ type RespondRequest struct {
 type TaskRespondRequest struct {
 	// Task is the task whose hold is answered.
 	Task string `json:"task"`
+	// Hold names which open hold to close: the hold's full key, or a
+	// finding id that resolves to task/<Task>/finding/<id>. Empty means the
+	// oldest open hold naming the task and no run.
+	Hold string `json:"hold,omitempty"`
 	// Answer is what was decided. A relaunch hold, the one the relaunch
 	// bound raised or the one a relaunch with no process sweep raised,
 	// offers exactly AnswerRetry and AnswerStop and refuses anything else; a
@@ -256,12 +265,11 @@ type TaskRespondRequest struct {
 	// a hold an investigation's report registered offers no closed set, and
 	// the answer is recorded as given.
 	Answer string `json:"answer"`
-	// Note is what a retry on a stop's hold tells the relaunched worker,
-	// after the relaunch note and before the text of every message the
-	// stopped attempt never acknowledged, PRD section 6's "optionally with
-	// a note". It is accepted only with a retry on a stop's hold, the one
-	// answer that starts a worker with it, and refused as an invalid request
-	// with any other answer or hold rather than dropped.
+	// Note is free text recorded with the resolution about what was
+	// decided, and on a retry of a stop's hold it is also what the
+	// relaunched worker is told, after the relaunch note and before the
+	// text of every message the stopped attempt never acknowledged. Who
+	// decided stays Request.HoldResolver; the note is not that claim.
 	Note string `json:"note,omitempty"`
 }
 
