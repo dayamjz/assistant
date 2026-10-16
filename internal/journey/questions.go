@@ -121,11 +121,11 @@ func Settlements() []Settlement {
 				"wait elapsed holds at the checks stage with a finding saying checks_timeout elapsed; a " +
 				"run whose checks settled reports their verdict. The two are different answers on the " +
 				"same surface, so nothing has to be inferred from elapsed time.",
-			Exercised: "Not driven through the binary. Every walk's run names no repository on the code " +
-				"host, so the checks stage holds on that before it reads any checks and never waits. The " +
-				"wait itself is established at package reach in internal/stages, whose checks tests drive " +
-				"the stage body against a scripted provider, a real upstream and a real store: it waits " +
-				"through unsettled checks, holds when checks_timeout elapses, and re-arms when the base " +
+			Exercised: "Not driven through the binary. Every walk's upstream is local, so no_code_host " +
+				"skips the checks stage after push and the wait never starts. The wait itself is " +
+				"established at package reach in internal/stages, whose checks tests drive the stage " +
+				"body against a scripted provider, a real upstream and a real store: it waits through " +
+				"unsettled checks, holds when checks_timeout elapses, and re-arms when the base " +
 				"advances. The verdict is driven at package reach too: an empty check list with no no_ci " +
 				"declaration evaluates to VerdictNoChecks, which is not green and is waited through.",
 		},

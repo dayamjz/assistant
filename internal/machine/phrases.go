@@ -371,6 +371,11 @@ var phraseByOutcome = map[Outcome]Phrase{
 		Consequence: "Nothing more happens to it here.",
 		Decision:    "Nothing to decide.",
 	},
+	OutcomePushed: {
+		Outcome:     "This change cleared the gate and is on the remote.",
+		Consequence: "There is no code host here, so no pull request was opened and no checks ran.",
+		Decision:    "Merge it on the remote yourself.",
+	},
 	OutcomeFailed: {
 		Outcome:     "The gate could not reach a verdict on this change.",
 		Consequence: "Nothing moves until it is picked up.",
@@ -1127,6 +1132,9 @@ const (
 	CheckNamedOnlyAgents = "named-only agents"
 	// CheckCodeHost is whether the code host's command line resolves.
 	CheckCodeHost = "code host"
+	// CheckUpstream is how this checkout's recorded upstream treats pull
+	// requests: on github.com, local with no code host, or an unsupported host.
+	CheckUpstream = "upstream"
 	// CheckStages is whether every stage has an implementation in this build.
 	CheckStages = "stages"
 )
@@ -1135,7 +1143,7 @@ const (
 // assistant doctor makes them. The result is a copy.
 func CheckNames() []string {
 	return []string{CheckHome, CheckDatabase, CheckWorkingCopy, CheckGate, CheckCommitIdentity, CheckService,
-		CheckAgent, CheckNamedOnlyAgents, CheckCodeHost, CheckStages}
+		CheckAgent, CheckNamedOnlyAgents, CheckCodeHost, CheckUpstream, CheckStages}
 }
 
 // readDoctor is the decision every row for a check that found something
@@ -1183,6 +1191,14 @@ var phraseByCheck = map[string][2]Phrase{
 	CheckCodeHost: {
 		{Outcome: "The code host's command line was found here.", Consequence: "Whether it can reach your repository is learned when a run first needs it.", Decision: "Nothing to do."},
 		{Outcome: "The code host's command line was not found here.", Consequence: "A run can still start, and a step that needs the code host stops and says so.", Decision: readDoctor},
+	},
+	CheckUpstream: {
+		{Outcome: "This checkout's upstream can open a pull request, or it has no code host and runs end after the change is on the remote.",
+			Consequence: "A run either proposes on the code host or skips that step with the reason recorded.",
+			Decision:    "Nothing to do."},
+		{Outcome: "This checkout's upstream names a host this build does not address.",
+			Consequence: "A run cannot start here until the upstream is github.com, a local path, or a file:// remote.",
+			Decision:    "Point the repository's upstream at github.com, a local path, or a file:// remote, then run assistant init again."},
 	},
 	CheckStages: {
 		{Outcome: "Every step of the gate has an implementation in this build.", Consequence: "No step stops for your decision only for want of one.", Decision: "Nothing to do."},

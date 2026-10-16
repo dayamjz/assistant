@@ -110,13 +110,13 @@ review happened. The pull request stage opens a provider for the repository
 the run's record names on the code host, and no record here names one - the
 fixture's upstream is a local repository rather than a host `internal/forge`
 addresses - so a run that reaches it fails rather than reaching one. That is
-why every test here that walks a run asks to skip both of those stages, as
-the run input P2 gives a person. Where a walk's trusted document configures
-no command, the test, document and lint stages hold rather than executing
-anything, the push stage holds because the run carries no completed review,
-and the checks stage holds because there is no code host to ask. Between
-them, that is the reason parts of the product are still not reachable from a
-run today:
+why walks used to ask to skip both of those stages as the run input P2
+gives a person; a local upstream now sets `no_code_host` at begin, so pull
+request and checks skip after push without that ask. Where a walk's trusted
+document configures no command, the test, document and lint stages hold
+rather than executing anything, and the push stage holds because the run
+carries no completed review. Between them, that is the reason parts of the
+product are still not reachable from a run today:
 
 - the three walks above and the run the task walk's push starts are the runs
   that launch an agent for review, and every review is answered from a

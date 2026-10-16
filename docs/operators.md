@@ -459,6 +459,19 @@ configuration (`config.yaml` in the home) or from `assistant.json` on the
 default branch, never from the branch under validation, unless the operator has
 set `allow_pushed_commands`. That opt-out cannot be set from a pushed branch.
 
+## Repositories with no code host
+
+A repository whose upstream is a local path or a `file://` remote has no code
+host to open a pull request on. A run of one still walks the gate through
+push; the pull request and checks stages are skipped with that reason on the
+run (`no_code_host`), and the run ends `pushed` rather than `checks-passed`
+(checks that did not run are never claimed). Merge the change on the remote
+yourself. `assistant doctor` says so up front on its upstream row.
+
+A remote that names a network host this build does not address (GitLab, GitHub
+Enterprise, an scp-style host that is not github.com) is refused when a run
+starts, with a typed error, rather than walked eight stages and stalled.
+
 ## Merge order and stacking
 
 The gate opens or updates one pull request per branch and never merges it. This

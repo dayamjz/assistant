@@ -73,8 +73,11 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 	// gives, so the clauses below can say "every stage this run did not ask to
 	// skip" and mean something a reader can hold them to. The skip semantics
 	// themselves - a skipped stage does not run and comes back skipped - are
-	// the second check's subject, not this one's.
+	// the second check's subject, not this one's. Pull request and checks are
+	// also skipped by no_code_host on this local-upstream fixture (#283).
 	forced := []string{pipeline.StageReview.String(), pipeline.StagePR.String()}
+	noHost := []string{pipeline.StagePR.String(), pipeline.StageCI.String()}
+	notTaken := append(append([]string{}, forced...), noHost...)
 
 	walked := journey.Check[machine.Run]{
 		What: "P2: a run through the binary over every stage it can take",
@@ -96,14 +99,14 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				},
 			},
 			{
-				States: "every stage this run did not ask to skip ran",
+				States: "every stage this run did not skip ran",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
-						if slices.Contains(forced, stage.Stage) {
+						if slices.Contains(notTaken, stage.Stage) {
 							continue
 						}
 						if !stage.Ran {
-							return fmt.Errorf("the %s stage did not run, and this run did not ask to skip it",
+							return fmt.Errorf("the %s stage did not run, and this run did not skip it",
 								stage.Stage)
 						}
 					}
@@ -136,14 +139,14 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				// which this cannot state in advance. What it can state is the
 				// one outcome only the asked skips may carry, which is the
 				// shape the clause above catches for the stages it covers.
-				States: "no stage but the ones this run asked to skip came back skipped",
+				States: "no stage but the ones this run skipped came back skipped",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
-						if slices.Contains(forced, stage.Stage) {
+						if slices.Contains(notTaken, stage.Stage) {
 							continue
 						}
 						if stage.Outcome == pipeline.OutcomeSkipped {
-							return fmt.Errorf("the %s stage came back %q, and this run did not ask to skip it",
+							return fmt.Errorf("the %s stage came back %q, and this run did not skip it",
 								stage.Stage, stage.Outcome)
 						}
 					}
@@ -151,10 +154,10 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				},
 			},
 			{
-				States: "the run reached the end of the gate",
+				States: "the run reached the end of the gate as pushed (local upstream, no code host)",
 				Holds: func(run machine.Run) error {
-					if run.Outcome != machine.OutcomeChecksPassed {
-						return fmt.Errorf("the run ended %s rather than reaching the end of the gate", run.Outcome)
+					if run.Outcome != machine.OutcomePushed {
+						return fmt.Errorf("the run ended %s rather than pushed", run.Outcome)
 					}
 					return nil
 				},
@@ -210,6 +213,7 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 	// the clauses hold all of them to the same answer because the surface
 	// draws no line between them.
 	asked := append([]string{pipeline.StageLint.String()}, forced...)
+	askedOrHost := append(append([]string{}, asked...), noHost...)
 	skipped := journey.Check[machine.Run]{
 		What: "P2: a skip asked for one run",
 		Clauses: []journey.Clause[machine.Run]{
@@ -254,10 +258,10 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				},
 			},
 			{
-				States: "every stage nobody asked to skip ran",
+				States: "every stage nobody skipped ran",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
-						if !slices.Contains(asked, stage.Stage) && !stage.Ran {
+						if !slices.Contains(askedOrHost, stage.Stage) && !stage.Ran {
 							return fmt.Errorf("the %s stage was not skipped and did not run", stage.Stage)
 						}
 					}
@@ -265,10 +269,10 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				},
 			},
 			{
-				States: "the run reached the end of the gate",
+				States: "the run reached the end of the gate as pushed",
 				Holds: func(run machine.Run) error {
-					if run.Outcome != machine.OutcomeChecksPassed {
-						return fmt.Errorf("the run ended %s rather than reaching the end of the gate", run.Outcome)
+					if run.Outcome != machine.OutcomePushed {
+						return fmt.Errorf("the run ended %s rather than pushed", run.Outcome)
 					}
 					return nil
 				},

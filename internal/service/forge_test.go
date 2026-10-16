@@ -2,13 +2,14 @@ package service_test
 
 import (
 	"context"
-	"errors"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/findings"
-	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -52,28 +53,44 @@ func TestTheRepositoryAPullRequestWouldLandInComesFromTheRunsOwnRecord(t *testin
 	}
 }
 
-// TestARunWhoseUpstreamIsNotOnThisHostCarriesNoRepository is the other answer
-// the same derivation gives, and the one a run of a repository this build
-// cannot address actually reaches.
-//
-// The specifier is empty rather than guessed at. A remote on another host
-// carries an owner and a name too, and reading one out of it would send a pull
-// request to the github.com repository that happens to share it, because the
-// specifier a provider is given names no host. So the run carries nothing, and
-// a provider opened on nothing refuses.
-func TestARunWhoseUpstreamIsNotOnThisHostCarriesNoRepository(t *testing.T) {
+// TestARunWhoseUpstreamNamesAnUnsupportedHostIsRefusedAtStart holds issue
+// #283's second decision: a network host this build cannot address is refused
+// before anything is recorded as running, rather than walked to the pull
+// request stage and stalled.
+func TestARunWhoseUpstreamNamesAnUnsupportedHostIsRefusedAtStart(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 
 	const elsewhere = "https://gitlab.example.invalid/dayamjz/assistant.git"
-	seen := observeForgeRepository(t, elsewhere, elsewhere)
+	h := newHome(t)
+	subject := newSubject(t)
+	local := git(t, subject, "remote", "get-url", "origin")
+	recordRepositoryWithUpstream(t, h, subject, elsewhere)
+	git(t, gateRepositoryOf(t, h, subject), "config", "url."+local+".insteadOf", elsewhere)
 
+	withService(t, h, func(under serviceUnderTest) {
+		err := under.client.Call(t.Context(), ipc.MethodRunStart, machine.StartRequest{
+			Working: machine.Working{WorkingPath: subject},
+			Intent:  "a change that should not start on an unsupported host",
+		}, &machine.Run{})
+		if err == nil || !strings.Contains(err.Error(), service.ErrUnsupportedHost.Error()) {
+			t.Fatalf("starting a run against %q: %v, want an error naming ErrUnsupportedHost", elsewhere, err)
+		}
+	})
+}
+
+// TestARunWhoseUpstreamIsALocalPathCarriesNoCodeHost is the local half of
+// #283: the run starts, carries an empty forge repository, and marks
+// no_code_host so the pull request and checks stages skip.
+func TestARunWhoseUpstreamIsALocalPathCarriesNoCodeHost(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+
+	subject := newSubject(t)
+	local := git(t, subject, "remote", "get-url", "origin")
+	seen := observeForgeRepository(t, local, local)
 	if seen != "" {
-		t.Fatalf("the run acts on %q, want nothing: an upstream on another host is not a repository "+
-			"this build can address", seen)
-	}
-	if _, err := forge.NewGitHubHost(redact.New()).Open(seen); !errors.Is(err, forge.ErrInvalidArgument) {
-		t.Fatalf("opening a provider on what that run carries returned %v, want ErrInvalidArgument", err)
+		t.Fatalf("a local-upstream run acts on %q, want nothing on the code host", seen)
 	}
 }
 

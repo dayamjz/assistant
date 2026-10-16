@@ -107,7 +107,7 @@ func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
 			{
 				States: "the same subject with nothing bounding it reaches the end of the gate",
 				Holds: func(b bounded) error {
-					if b.unbounded != machine.OutcomeChecksPassed {
+					if b.unbounded != machine.OutcomePushed {
 						return fmt.Errorf("the same subject with no budget ended %s, so nothing here shows the "+
 							"budget is what stopped the other run", b.unbounded)
 					}

@@ -74,10 +74,10 @@ func (d delivered) edited(stage pipeline.Stage, change func(*machine.Stage)) del
 // does not have, so the push stage has an update to make and the remote's
 // branch moving is the evidence it made it.
 //
-// The run is asserted to end checks-passed, which internal/machine defines as
-// the run having walked the gate to its end with each stage cleared, skipped
-// ones included. It names the run's terminal state, and no code-host checks
-// ran here because the checks stage is skipped.
+// The run is asserted to end pushed: the upstream is a local bare remote with
+// no code host, so after push the pull request and checks stages skip with
+// that reason recorded rather than stalling, and the outcome is never
+// checks-passed for checks that did not run (#283).
 //
 // The P6 cite covers the push path only: the commit forwarded from the run's
 // isolated copy to the upstream remote lands. It does not cover the lease or
@@ -85,11 +85,6 @@ func (d delivered) edited(stage pipeline.Stage, change func(*machine.Stage)) del
 // package reach. Nothing here pushes through the gate. The expected stops are
 // stages.Holding fed config.Defaults plus the two commands this test writes
 // into the home, not the service's whole resolved configuration.
-//
-// The pull request and checks stages are skipped. Both need a repository on a
-// code host, no record here names one and this fixture has no host for
-// internal/forge to address, so a run that took either would stop there
-// whatever the delivery stages did.
 func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
@@ -144,8 +139,9 @@ func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 		}
 	}
 
-	run := startRun(t, j, "--skip", pipeline.StagePR.String()+","+pipeline.StageCI.String(),
-		"--intent", "deliver a change through review, test, lint and push")
+	// No --skip: a local upstream sets no_code_host at begin, which skips
+	// pull request and checks after push (#283).
+	run := startRun(t, j, "--intent", "deliver a change through review, test, lint and push")
 	for range 20 {
 		if run.Outcome != machine.OutcomeDecision || run.Decision == nil {
 			break
@@ -212,10 +208,10 @@ func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 				},
 			},
 			{
-				States: "the run ended with its checks passed",
+				States: "the run ended pushed, not checks-passed, because there is no code host",
 				Holds: func(d delivered) error {
-					if d.outcome != machine.OutcomeChecksPassed {
-						return fmt.Errorf("the run ended %s", d.outcome)
+					if d.outcome != machine.OutcomePushed {
+						return fmt.Errorf("the run ended %s, want pushed", d.outcome)
 					}
 					return nil
 				},

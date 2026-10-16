@@ -195,19 +195,17 @@ func StagesWithoutABody() []pipeline.Stage {
 // reporting a pass it did not establish. The push stage holds with a body
 // because every run here that reaches it skipped the review stage, but for
 // the three walks that take it to the push stage's decision, and a push whose
-// run carries no completed review is an ask rather than a push. The checks
-// stage holds with a body because no record here names a repository on a code
-// host, so it has no provider to query. And the review stage has a body and
-// is not a stop, because every run this harness walks but those three skips
-// it, for the reason walkableRun states: its body launches the resolved agent
-// over the change, and a harness run may not reach whatever agent the machine
-// happens to have. The one run a task's worker starts by pushing takes the
-// review stage with the stand-in scripted clean, and no answer walks it past
-// the first hold it reaches, so it is not walked against this list.
-// The pull request stage is off the list on the same terms: it has a body,
-// that body fails when the run's record names no repository on the code host,
-// no record here names one, and every run this harness drives to the end asks
-// to skip it.
+// run carries no completed review is an ask rather than a push. The review
+// stage has a body and is not a stop, because every run this harness walks
+// but those three skips it, for the reason walkableRun states: its body
+// launches the resolved agent over the change, and a harness run may not
+// reach whatever agent the machine happens to have. The one run a task's
+// worker starts by pushing takes the review stage with the stand-in scripted
+// clean, and no answer walks it past the first hold it reaches, so it is not
+// walked against this list. The pull request and checks stages are off the
+// list because a local upstream sets no_code_host at begin (#283), so both
+// skip after push rather than holding: a run that asked to skip only the
+// pull request would still never stop at checks here.
 //
 // What holds these names to the build is the checks that walk a real run
 // against them: the kill-at-every-boundary check and the classification walk
@@ -220,7 +218,6 @@ var stops = []pipeline.Stage{
 	pipeline.StageDocument,
 	pipeline.StageLint,
 	pipeline.StagePush,
-	pipeline.StageCI,
 }
 
 // StagesARunStopsAt returns the stages declared above, in the order a run

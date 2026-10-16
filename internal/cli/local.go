@@ -411,6 +411,9 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 	add(namedOnlyAgents(ctx, catalog))
 
 	add(codeHost())
+	if records != nil && workErr == nil {
+		add(upstreamDelivery(ctx, records, working))
+	}
 	add(stageBodies())
 
 	report.CanStartRun = true
@@ -546,6 +549,44 @@ func codeHost() machine.Check {
 		}
 	}
 	return machine.Check{Name: machine.CheckCodeHost, OK: true, Detail: resolved}
+}
+
+// upstreamDelivery reports how this checkout's recorded upstream treats the
+// pull request and checks stages, from forge.ClassifyRemote over the
+// repository row. A local or file:// upstream is OK and says runs cannot open
+// a pull request here (they end pushed after push). An unsupported network
+// host blocks a run from starting, matching internal/service's begin refusal.
+func upstreamDelivery(ctx context.Context, records *store.Store, working string) machine.Check {
+	repository, err := records.RepositoryAt(ctx, working)
+	if err != nil {
+		return machine.Check{
+			Name:   machine.CheckUpstream,
+			Detail: "this working copy has no repository record yet; run assistant init",
+		}
+	}
+	switch forge.ClassifyRemote(repository.UpstreamURL) {
+	case forge.RemoteGitHub:
+		spec, _ := forge.GitHubRepository(repository.UpstreamURL)
+		return machine.Check{
+			Name:   machine.CheckUpstream,
+			OK:     true,
+			Detail: "pull requests open on " + spec,
+		}
+	case forge.RemoteLocal:
+		return machine.Check{
+			Name: machine.CheckUpstream,
+			OK:   true,
+			Detail: "no code host: runs here cannot open a pull request; after push they skip " +
+				"the pull request and checks stages and end pushed",
+		}
+	default:
+		return machine.Check{
+			Name:     machine.CheckUpstream,
+			Blocking: true,
+			Detail: fmt.Sprintf("upstream %q names a host this build does not address; "+
+				"a run is refused at start", repository.UpstreamURL),
+		}
+	}
 }
 
 // stageBodies reports how much of the gate this build actually implements. It

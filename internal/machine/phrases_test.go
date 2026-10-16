@@ -1,6 +1,7 @@
 package machine_test
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
@@ -209,6 +211,15 @@ func standingFor(outcome machine.Outcome) (machine.Standing, bool) {
 		return machine.Standing{Record: store.RunPassed}, true
 	case machine.OutcomePassed:
 		return machine.Standing{Record: store.RunPassed, PullRequestEnd: store.PullRequestMerged}, true
+	case machine.OutcomePushed:
+		raw, _ := json.Marshal(map[string]graph.Value{
+			string(pipeline.KeyNoCodeHost): graph.BoolValue(true),
+		})
+		var state graph.State
+		if err := json.Unmarshal(raw, &state); err != nil {
+			return machine.Standing{}, false
+		}
+		return machine.Standing{Record: store.RunPassed, Execution: machine.ExecutionAt(graph.StatusCompleted, state)}, true
 	case machine.OutcomeFailed:
 		return machine.Standing{Record: store.RunFailed}, true
 	case machine.OutcomeCancelled:

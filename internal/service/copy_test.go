@@ -309,8 +309,8 @@ func TestACopyWhoseWorkHasNotLandedIsKeptAndStatusSaysSo(t *testing.T) {
 		started := startRunSkipping(t, under.client, subject, afterIntent()...)
 		run = runByID(t, under.client, started.Record.ID)
 	})
-	if run.Outcome != machine.OutcomeChecksPassed {
-		t.Fatalf("the run reads %s, want checks-passed, so that the copy was reclaimed on a finished run", run.Outcome)
+	if run.Outcome != machine.OutcomePushed {
+		t.Fatalf("the run reads %s, want pushed (local upstream), so that the copy was reclaimed on a finished run", run.Outcome)
 	}
 	path := h.Worktree(repository.ID, run.Record.ID)
 	if _, err := os.Stat(path); err != nil {

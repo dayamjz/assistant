@@ -9,7 +9,7 @@ import (
 // changes exactly one thing about.
 func agreed() ([]Listed, []Built) {
 	listed := []Listed{
-		{"checks-passed", true}, {"passed", true}, {"failed", true}, {"cancelled", true},
+		{"checks-passed", true}, {"passed", true}, {"pushed", true}, {"failed", true}, {"cancelled", true},
 		{"decision", false}, {"executing", false},
 	}
 	built := make([]Built, 0, len(listed))
@@ -97,17 +97,17 @@ func TestCompareFindsEveryWayTheTwoCanDisagree(t *testing.T) {
 		},
 		{
 			name:    "the build moves one out of its group",
-			change:  func(_ *[]Listed, b *[]Built) { (*b)[3].Terminal = false },
+			change:  func(_ *[]Listed, b *[]Built) { (*b)[4].Terminal = false },
 			mention: "cancelled",
 		},
 		{
 			name:    "the PRD moves one out of its group",
-			change:  func(l *[]Listed, _ *[]Built) { (*l)[4].Terminal = true },
+			change:  func(l *[]Listed, _ *[]Built) { (*l)[5].Terminal = true },
 			mention: "decision",
 		},
 		{
 			name:    "an outcome carries no next action",
-			change:  func(_ *[]Listed, b *[]Built) { (*b)[2].Action = "  " },
+			change:  func(_ *[]Listed, b *[]Built) { (*b)[3].Action = "  " },
 			mention: "failed",
 		},
 	}

@@ -29,8 +29,9 @@ const (
 	// the run halts before the hold node runs.
 	OutcomeHeld Outcome = "held"
 	// OutcomeSkipped means the stage was passed over. It is not a failure, and
-	// it has three producers, one of which is a stage that did run: this run's
-	// skip list named it, nothing remained to change after the rebase, or a
+	// it has four producers, one of which is a stage that did run: this run's
+	// skip list named it, nothing remained to change after the rebase, the run
+	// has no code host and this is the pull request or checks stage, or a
 	// person answered skipped at its hold, which happens only after the stage
 	// ran and reported something a person had to decide.
 	//
@@ -301,6 +302,18 @@ func textOf(s graph.State, key Key) string {
 // Cancelled reports whether a person cancelled the run at a hold.
 func Cancelled(s graph.State) bool {
 	v, ok := s.Get(string(KeyCancelled))
+	if !ok {
+		return false
+	}
+	flag, _ := v.Bool()
+	return flag
+}
+
+// NoCodeHost reports whether this run's upstream has no code host, so the
+// pull request and checks stages skip and a completed run ends as pushed
+// rather than checks-passed.
+func NoCodeHost(s graph.State) bool {
+	v, ok := s.Get(string(KeyNoCodeHost))
 	if !ok {
 		return false
 	}

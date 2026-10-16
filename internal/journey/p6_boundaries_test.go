@@ -275,8 +275,8 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 			{
 				States: "the run reached the end of the gate after the kills",
 				Holds: func(s survival) error {
-					if s.ended.Outcome != machine.OutcomeChecksPassed {
-						return fmt.Errorf("the run ended %s rather than reaching the end of the gate", s.ended.Outcome)
+					if s.ended.Outcome != machine.OutcomePushed {
+						return fmt.Errorf("the run ended %s rather than pushed", s.ended.Outcome)
 					}
 					return nil
 				},

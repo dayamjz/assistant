@@ -95,8 +95,8 @@ func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
 		for run.Outcome == machine.OutcomeDecision {
 			run = answer(t, running.client, run.Record.ID, string(pipeline.OutcomeApproved))
 		}
-		if run.Outcome != machine.OutcomeChecksPassed {
-			t.Fatalf("a run approved at every stage ends as %s: %s", run.Outcome, run.Reason)
+		if run.Outcome != machine.OutcomePushed {
+			t.Fatalf("a run approved at every stage ends as %s: %s; want pushed (local upstream, no code host)", run.Outcome, run.Reason)
 		}
 		if run.Record.Status != store.RunPassed {
 			t.Fatalf("a completed run is recorded as %s", run.Record.Status)
