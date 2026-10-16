@@ -43,16 +43,41 @@ caliper validate q1.eval.yaml
 # upstream URL so the gate bare repo rewrites too; two attempts sharing this
 # machine's HOME would race that rewrite. Caliper's attempt HOME isolation
 # does not cover the setup hook's git config --global here.
+# Clear any leftover rewrite of the subject URL before either arm. A prior
+# crashed run can leave url.*.insteadOf pointing at a deleted remote.git.
+git config --global --get-regexp '^url\..*\.insteadof$' \
+	'https://github.com/dayamjz/caliper-q1.git' 2>/dev/null |
+	while read -r key _; do
+		git config --global --unset-all "$key" 2>/dev/null || true
+	done
+
+with_rc=0
 echo "running with-skill arm (model=$MODEL)" >&2
 caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
-	--output result-q1-with-skill.json
+	--output result-q1-with-skill.json || with_rc=$?
 
+# Same URL clear before the ablated arm: cleanup should have done this, but a
+# mid-arm crash must not poison the second arm.
+git config --global --get-regexp '^url\..*\.insteadof$' \
+	'https://github.com/dayamjz/caliper-q1.git' 2>/dev/null |
+	while read -r key _; do
+		git config --global --unset-all "$key" 2>/dev/null || true
+	done
+
+ablated_rc=0
 echo "running ablated arm (model=$MODEL)" >&2
 caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
-	--ablate assistant --output result-q1-ablated.json
+	--ablate assistant --output result-q1-ablated.json || ablated_rc=$?
 
-caliper compare result-q1-with-skill.json result-q1-ablated.json
+if [ -f result-q1-with-skill.json ] && [ -f result-q1-ablated.json ]; then
+	caliper compare result-q1-with-skill.json result-q1-ablated.json || true
+fi
 echo "results: result-q1-with-skill.json result-q1-ablated.json" >&2
 echo "collect gate usage from \${TMPDIR}/caliper-q1-gate/ into the write-up" >&2
+if [ "$with_rc" -ne 0 ] || [ "$ablated_rc" -ne 0 ]; then
+	echo "arm exit status: with-skill=$with_rc ablated=$ablated_rc" >&2
+	exit 1
+fi
+
