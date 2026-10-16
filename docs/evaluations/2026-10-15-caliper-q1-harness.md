@@ -65,14 +65,11 @@ planted surface:
 
 ## What this does not cover
 
-- **No full Q1 agent run.** This environment has no Claude Code credentials
-  and no provider quota check. Issue #287 items 4–5 — k = 5 both arms with
-  `--judge-model` pinned, in a disposable environment, and the write-up with
-  figures — remain. Projection from the pilot is still about 11M agent
-  tokens plus gate usage from the cleanup files.
-- **Plan section 3.3's token assumption stays falsified** until a full run
-  adds the cleanup usage files into the reported cost. The pilot record now
-  names that disagreement explicitly.
+- **Full Q1 agent run is recorded separately** in
+  `docs/evaluations/2026-10-16-caliper-q1-full.md`. That write-up still could
+  not include gate-internal usage (cleanup talked to the operator HOME);
+  plan section 3.3's token assumption stays incomplete until a later run
+  confirms the fixed `cleanup.sh`.
 - **Planted defects are ours**, as plan section 4 warns.
 
 ## Next

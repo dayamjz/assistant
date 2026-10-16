@@ -136,5 +136,6 @@ Confirm headroom with `quota-axi` first.
 
 The harness for the remaining families, the `no-mistakes` neighbour, and the
 code-host stand-in is in `evals/caliper/q1/q1.eval.yaml` and recorded in
-`docs/evaluations/2026-10-15-caliper-q1-harness.md`. What remains is the
-full agent run at k = 5 and its write-up (issue #287 items 4–5).
+`docs/evaluations/2026-10-15-caliper-q1-harness.md`. The full agent run at
+k = 5 and its write-up are in
+`docs/evaluations/2026-10-16-caliper-q1-full.md` (issue #287 items 4–5).
