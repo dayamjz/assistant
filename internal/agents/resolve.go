@@ -83,14 +83,15 @@ func WithCatalogRecorder(r Recorder) CatalogOption {
 }
 
 // DefaultCatalog returns the adapters this build ships, in the order "auto"
-// tries them: Claude, then Cursor, OpenAI, and Grok. Only Claude is
+// tries them: Claude, then Cursor, Codex, OpenAI, and Grok. Only Claude is
 // auto-eligible, because PRD section 12 makes it the phase-one adapter, so
-// "auto" resolves it alone; the other three are reachable by naming them in
-// the agent key. All implement the core Runner interface, and Claude, Cursor,
-// and Grok additionally declare resumable sessions. Cursor and Grok
-// authenticate through their CLI login paths: each strips its provider API-key
-// environment variable so a key in the service environment cannot redirect a
-// run onto API billing.
+// "auto" resolves it alone; the others are reachable by naming them in the
+// agent key. All implement the core Runner interface. Claude, Cursor, Codex,
+// and Grok additionally declare resumable sessions. OpenAI remains the
+// named-only Claude-shaped stub (no sessions). Cursor, Codex, and Grok
+// authenticate through their CLI login paths: each strips its provider
+// API-key environment variable so a key in the service environment cannot
+// redirect a run onto API billing.
 //
 // Options apply to every adapter in the returned catalog and to nothing
 // else; DefaultCatalog with none behaves as it always has.
@@ -102,18 +103,21 @@ func DefaultCatalog(opts ...CatalogOption) *Catalog {
 	var (
 		cursor []CursorOption
 		claude []ClaudeOption
+		codex  []CodexOption
 		openai []OpenAIOption
 		grok   []GrokOption
 	)
 	if s.recorder != nil {
 		cursor = append(cursor, WithCursorRecorder(s.recorder))
 		claude = append(claude, WithRecorder(s.recorder))
+		codex = append(codex, WithCodexRecorder(s.recorder))
 		openai = append(openai, WithOpenAIRecorder(s.recorder))
 		grok = append(grok, WithGrokRecorder(s.recorder))
 	}
 	return NewCatalog(
 		ClaudeFactory(claude...),
 		CursorFactory(cursor...),
+		CodexFactory(codex...),
 		OpenAIFactory(openai...),
 		GrokFactory(grok...),
 	)

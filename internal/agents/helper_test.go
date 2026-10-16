@@ -97,15 +97,15 @@ func helperMain(mode string) {
 		fmt.Print(os.Getenv(helperStdoutVar))
 		os.Exit(helperExitCode())
 	case "call":
-		// Report how this package called the agent: the command line it built
-		// and what reached the agent as its prompt (standard input, or the
-		// contents of --prompt-file for Grok Build).
-		input, err := helperReadPrompt(os.Args[1:])
+		// Report how this package called the agent: the command line it built,
+		// the raw standard-input bytes, and the resolved prompt (argv after
+		// `--`, --prompt-file contents, or stdin).
+		prompt, stdin, err := helperReadPrompt(os.Args[1:])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "reading the prompt: "+err.Error())
 			os.Exit(6)
 		}
-		encoded, err := json.Marshal(agentCall{Args: os.Args[1:], Stdin: input})
+		encoded, err := json.Marshal(agentCall{Args: os.Args[1:], Stdin: stdin, Prompt: prompt})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "encoding the call: "+err.Error())
 			os.Exit(7)
@@ -259,24 +259,37 @@ func helperSession() string {
 		if a == "--resume" && i+1 < len(args) {
 			return args[i+1]
 		}
+		// Codex: `exec … resume <thread_id> -- <prompt>`
+		if a == "resume" && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			return args[i+1]
+		}
 	}
 	return "session-opened"
 }
 
-// helperReadPrompt returns the prompt the adapter delivered: the contents of
-// --prompt-file when that flag is present, otherwise standard input.
-func helperReadPrompt(args []string) (string, error) {
+// helperReadPrompt returns the resolved prompt and the raw standard-input
+// bytes. Prompt preference: --prompt-file contents, else trailing argv after
+// `--` (Cursor / Codex), else stdin. Stdin is always read so a caller can
+// tell argv delivery from a prompt that was also (or only) on stdin.
+func helperReadPrompt(args []string) (prompt, stdin string, err error) {
+	raw, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return "", "", err
+	}
+	stdin = string(raw)
 	for i, a := range args {
 		if a == "--prompt-file" && i+1 < len(args) {
-			raw, err := os.ReadFile(args[i+1])
+			file, err := os.ReadFile(args[i+1])
 			if err != nil {
-				return "", err
+				return "", stdin, err
 			}
-			return string(raw), nil
+			return string(file), stdin, nil
+		}
+		if a == "--" && i+1 < len(args) {
+			return args[i+1], stdin, nil
 		}
 	}
-	raw, err := io.ReadAll(os.Stdin)
-	return string(raw), err
+	return stdin, stdin, nil
 }
 
 // helperEnvelope renders a result envelope of the shape the adapter reads.
@@ -326,10 +339,11 @@ func helperUsage() agents.Usage {
 }
 
 // agentCall is what the stand-in agent's "call" mode reports: the command line
-// this package built and what reached the agent's standard input.
+// this package built, the raw standard-input bytes, and the resolved prompt.
 type agentCall struct {
-	Args  []string `json:"args"`
-	Stdin string   `json:"stdin"`
+	Args   []string `json:"args"`
+	Stdin  string   `json:"stdin"`
+	Prompt string   `json:"prompt"`
 }
 
 // decodeCall reads what the "call" mode reported out of an invocation's text.
@@ -343,10 +357,14 @@ func decodeCall(t *testing.T, text string) agentCall {
 }
 
 // resumedSession is the session the command line asked to continue, empty when
-// it asked for none.
+// it asked for none. Claude/Cursor use --resume; Codex uses the exec resume
+// subcommand token.
 func (c agentCall) resumedSession() string {
 	for i, a := range c.Args {
 		if a == "--resume" && i+1 < len(c.Args) {
+			return c.Args[i+1]
+		}
+		if a == "resume" && i+1 < len(c.Args) && !strings.HasPrefix(c.Args[i+1], "-") {
 			return c.Args[i+1]
 		}
 	}

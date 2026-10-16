@@ -245,7 +245,7 @@ func TestCatalogReplacesAnAdapterRatherThanHoldingTwo(t *testing.T) {
 
 func TestDefaultCatalogHoldsTheClaudeAdapter(t *testing.T) {
 	names := agents.DefaultCatalog().Names()
-	want := []string{agents.ClaudeName, agents.CursorName, agents.OpenAIName, agents.GrokName}
+	want := []string{agents.ClaudeName, agents.CursorName, agents.CodexName, agents.OpenAIName, agents.GrokName}
 	if len(names) != len(want) {
 		t.Fatalf("the default catalog holds %d adapters, want %d", len(names), len(want))
 	}

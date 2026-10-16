@@ -162,6 +162,78 @@ func TestCursorStripsAPIKeyAndWritesGrant(t *testing.T) {
 	}
 }
 
+func TestCodexUsesExecJSONStripsAPIKeyAndWritesGrant(t *testing.T) {
+	t.Parallel()
+	factory := agents.CodexFactory(
+		agents.WithCodexBinary(helperBinary(t)),
+		agents.WithCodexBaseEnvironment([]string{
+			helperModeVar + "=call",
+			agents.CodexKeyVariable + "=should-not-reach-agent",
+		}),
+	)
+	runner, err := factory.New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	review, err := runner.Run(t.Context(), agents.PurposeReview, invocation(t, agents.ShapeText, nil))
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	call := decodeCall(t, review.Text)
+	if !slices.Contains(call.Args, "exec") || !slices.Contains(call.Args, "--json") {
+		t.Fatalf("codex did not pass exec --json: %q", call.Args)
+	}
+	if !slices.Contains(call.Args, "read-only") {
+		t.Errorf("review grant missing read-only sandbox: %q", call.Args)
+	}
+	if slices.Contains(call.Args, "workspace-write") {
+		t.Errorf("review must not use workspace-write: %q", call.Args)
+	}
+	if !slices.Contains(call.Args, "--") || !slices.Contains(call.Args, "review this change") {
+		t.Errorf("codex must pass the prompt after --: %q", call.Args)
+	}
+
+	fix, err := runner.Run(t.Context(), agents.PurposeFix, invocation(t, agents.ShapeText, nil))
+	if err != nil {
+		t.Fatalf("fix: %v", err)
+	}
+	fixArgs := decodeCall(t, fix.Text).Args
+	if !slices.Contains(fixArgs, "--approve-for-me") {
+		t.Errorf("fix grant missing --approve-for-me: %q", fixArgs)
+	}
+	if slices.Contains(fixArgs, "--sandbox") || slices.Contains(fixArgs, "workspace-write") {
+		t.Errorf("fix must not combine --sandbox with --approve-for-me: %q", fixArgs)
+	}
+
+	envFactory := agents.CodexFactory(
+		agents.WithCodexBinary(helperBinary(t)),
+		agents.WithCodexBaseEnvironment([]string{
+			helperModeVar + "=environment",
+			agents.CodexKeyVariable + "=should-not-reach-agent",
+			"KEEP=yes",
+		}),
+	)
+	envRunner, err := envFactory.New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("env New: %v", err)
+	}
+	envRes, err := envRunner.Run(t.Context(), agents.PurposeReview, invocation(t, agents.ShapeText, nil))
+	if err != nil {
+		t.Fatalf("environment run: %v", err)
+	}
+	var environ []string
+	if err := json.Unmarshal([]byte(envRes.Text), &environ); err != nil {
+		t.Fatalf("decoding environment: %v\n%s", err, envRes.Text)
+	}
+	for _, entry := range environ {
+		name, _, _ := strings.Cut(entry, "=")
+		if name == agents.CodexKeyVariable {
+			t.Fatalf("OPENAI_API_KEY reached the agent: %q", entry)
+		}
+	}
+}
+
 func TestGrokUsesPromptFileStripsAPIKeyAndWritesGrant(t *testing.T) {
 	t.Parallel()
 	factory := agents.GrokFactory(
@@ -187,8 +259,8 @@ func TestGrokUsesPromptFileStripsAPIKeyAndWritesGrant(t *testing.T) {
 	if slices.Contains(call.Args, "--print") {
 		t.Errorf("grok must not pass Claude's --print: %q", call.Args)
 	}
-	if call.Stdin != "review this change" {
-		t.Fatalf("prompt via --prompt-file = %q, want the invocation prompt", call.Stdin)
+	if call.Prompt != "review this change" {
+		t.Fatalf("prompt via --prompt-file = %q, want the invocation prompt", call.Prompt)
 	}
 	if !slices.Contains(call.Args, "--permission-mode") || !slices.Contains(call.Args, "plan") {
 		t.Errorf("review grant missing --permission-mode plan: %q", call.Args)

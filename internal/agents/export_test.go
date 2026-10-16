@@ -2,6 +2,17 @@ package agents
 
 import "context"
 
+// DecodeCodexOutput exposes decodeCodexOutput so tests can feed real
+// `codex exec --json` JSONL without going through a process that only speaks
+// the helper's Claude-shaped envelope.
+func DecodeCodexOutput(stdout []byte) (text, threadID, model string, usage Usage, agentError string, err error) {
+	decoded, err := decodeCodexOutput(stdout)
+	if err != nil {
+		return "", "", "", Usage{}, "", err
+	}
+	return decoded.text, decoded.threadID, decoded.model, decoded.usage, decoded.agentError, nil
+}
+
 // LookPathFirst exposes lookPathFirst for tests of the Cursor binary search.
 var LookPathFirst = lookPathFirst
 
