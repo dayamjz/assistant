@@ -149,7 +149,9 @@ func decodeIsolationRefusal(detail string) error {
 // Unknown from SourceNone, so the program that appends it appends
 // "dispatched" after it, in the same decision. "isolation-refused" claims
 // Failed and carries one of IsolationRefusals as its detail, checked by the
-// row's decoder before it is appended. "promoted" is a note too, appended by
+// row's decoder before it is appended. "route-refused" claims Failed when
+// worker routing covers no configured agent (GAP-02); its detail is free
+// text. "promoted" is a note too, appended by
 // store.TransitionTaskShape in the transaction that flips a task's shape,
 // and nothing follows it: the worker it tells is already running, and what
 // it is doing is the process tier's to answer, so a promoted task whose
@@ -179,6 +181,11 @@ var kinds = []Row{
 	{Kind: store.OpeningEventKind, Role: RoleState, State: Queued, Writer: WriterProgram, Routine: true},
 	{Kind: store.DispatchedEventKind, Role: RoleState, State: Dispatched, Writer: WriterProgram, Routine: true},
 	{Kind: "isolation-refused", Role: RoleState, State: Failed, Writer: WriterProgram, Detail: decodeIsolationRefusal},
+	// route-refused claims Failed when no configured agent covers the
+	// worker capability need (GAP-02). Its detail is free text naming the
+	// refusal; the attempt's adapter/route_reason columns carry a successful
+	// selection instead.
+	{Kind: "route-refused", Role: RoleState, State: Failed, Writer: WriterProgram},
 	{Kind: "relaunched", Role: RoleNote, Writer: WriterProgram},
 	{Kind: store.PromotedEventKind, Role: RoleNote, Writer: WriterProgram},
 	{Kind: store.FindingsRelayedEventKind, Role: RoleNote, Writer: WriterProgram},

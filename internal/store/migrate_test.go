@@ -471,14 +471,20 @@ const taskBlockersMigration = "task blockers, attempts and cleanup records"
 func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	var blockers migration
+	var blockers, route migration
 	for _, m := range schema {
-		if m.name == taskBlockersMigration {
+		switch m.name {
+		case taskBlockersMigration:
 			blockers = m
+		case taskAttemptRouteMigration:
+			route = m
 		}
 	}
 	if blockers.version == 0 {
 		t.Fatalf("the shipped schema has no migration named %q", taskBlockersMigration)
+	}
+	if route.version == 0 {
+		t.Fatalf("the shipped schema has no migration named %q", taskAttemptRouteMigration)
 	}
 
 	// Back to the shape migration 13 left. A migration may not do this, which
@@ -491,7 +497,11 @@ func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 			t.Fatalf("rolling the schema back: %s: %v", stmt, err)
 		}
 	}
-	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version = ?`, blockers.version); err != nil {
+	// Forget the blockers migration and every later migration that ALTERs
+	// task_attempt, so re-applying creates the table and then adds the
+	// columns the current accessors select.
+	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version IN (?, ?)`,
+		blockers.version, route.version); err != nil {
 		t.Fatalf("forgetting the migration: %v", err)
 	}
 	if _, err := s.write.ExecContext(ctx, `

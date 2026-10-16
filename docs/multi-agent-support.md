@@ -106,8 +106,35 @@ agent:
   - grok
 ```
 
-The first runnable agent in the list is used. Naming a named-only adapter is
-how you select it.
+The first runnable agent in the list is used for validation runs. Naming a
+named-only adapter is how you select it.
+
+### Worker routing (GAP-02)
+
+Task workers are routed separately from the run agent. `agents.Route` picks
+the first runnable entry whose declared capabilities cover the worker need
+(`worker_sessions`, and `terminal_workers` when `session_provider: tmux`):
+
+- A **single named** `agent` entry (not `auto`) is an operator pin: if that
+  adapter lacks the need, launch is refused with no fallthrough.
+- A **list** is ordered preference with capability filtering: a runnable
+  adapter that cannot host a worker is skipped; the next covering candidate
+  wins.
+- Every successful selection records `adapter` and `route_reason`
+  (`override` or `ordered`) on the task attempt before the process starts.
+- A routing refusal records a `route-refused` event; the task resolves
+  Failed rather than staying Dispatched. Grants stay `GrantWorker` on the
+  ordinary Create path — a miss does not widen permissions.
+
+So `agent: cursor` can still run reviews when Cursor is installed, but a
+worker launch under that pin fails until the list includes an adapter that
+declares worker sessions (today: Claude), or until you list both:
+
+```yaml
+agent:
+  - cursor
+  - claude
+```
 
 ## CLI Binary Requirements
 
@@ -141,6 +168,8 @@ assistant doctor
 2. If `"auto"`, expand to auto-eligible adapters (Claude)
 3. For each entry, resolve the binary on PATH and use the first that can run
 4. If none are available, refuse before the first stage
+5. For task workers, run the same list through capability-aware routing
+   (see above); record the winner or fail the task with `route-refused`
 
 Each adapter executes the agent CLI, passes the prompt (Cursor/Codex: trailing
 argv; Claude: stdin; Grok: `--prompt-file`), reads a structured result from
@@ -183,3 +212,10 @@ Do not set `CURSOR_API_KEY`, `OPENAI_API_KEY`, or `XAI_API_KEY` for
 ```yaml
 agent: cursor
 ```
+
+### Task stays Failed with `route-refused`
+
+The configured agent list has no adapter that declares the worker
+capabilities the session provider needs. Pin Claude, or list a covering
+adapter after your preferred run agent. A Cursor-only pin refuses workers on
+purpose; it does not fall back silently or change grants.

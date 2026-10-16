@@ -84,18 +84,22 @@ func (s *Service) peekTask(ctx context.Context, req ipc.Request, r machine.TaskR
 	if !ok || !launched {
 		return machine.TaskPeek{}, fmt.Errorf("%w: %w: task %s", ipc.ErrRefused, errNoWorker, r.Task)
 	}
-	built, err := s.driverFor(ctx)
-	if err != nil {
-		return machine.TaskPeek{}, fmt.Errorf("%w: %w", ErrTerminalsUnavailable, err)
+	host, _, held := s.sessionOf(r.Task)
+	if !held {
+		built, err := s.driverFor(ctx)
+		if err != nil {
+			return machine.TaskPeek{}, fmt.Errorf("%w: %w", ErrTerminalsUnavailable, err)
+		}
+		host = built.sessions
 	}
-	captured, err := built.sessions.CaptureReference(ctx, ref)
+	captured, err := host.CaptureReference(ctx, ref)
 	if errors.Is(err, session.ErrNotHeld) {
 		return machine.TaskPeek{}, fmt.Errorf("%w: %w (session %s)", ipc.ErrRefused, errNotPeekable, ref)
 	}
 	if err != nil {
 		return machine.TaskPeek{}, err
 	}
-	attach, err := built.sessions.AttachReference(ref)
+	attach, err := host.AttachReference(ref)
 	switch {
 	case errors.Is(err, session.ErrNotAttachable):
 		attach = nil

@@ -449,8 +449,7 @@ func (s *Service) stoppedFinished(ctx context.Context, id string) (taskstate.Obs
 func (s *Service) endHeldWorker(id, ref string) (bool, error) {
 	s.mu.Lock()
 	held, ok := s.launched[id]
-	built := s.built
-	if ok && built != nil && held.Reference().String() == ref {
+	if ok && held.session != nil && held.host != nil && held.session.Reference().String() == ref {
 		delete(s.launched, id)
 	} else {
 		ok = false
@@ -459,7 +458,7 @@ func (s *Service) endHeldWorker(id, ref string) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	if err := built.sessions.Close(held); err != nil {
+	if err := held.host.Close(held.session); err != nil {
 		return false, &stopRefused{Task: id, Session: ref, Reason: fmt.Sprintf("closing its session: %v", err)}
 	}
 	return true, nil

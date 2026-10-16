@@ -90,6 +90,11 @@ const runNoCodeHostMigration = "run no code host"
 // a constant.
 const holdResolutionNoteMigration = "hold resolution note"
 
+// taskAttemptRouteMigration names the migration that records which adapter
+// a task attempt was routed to and why, for the reason
+// sealCheckpointTableMigration is a constant.
+const taskAttemptRouteMigration = "task attempt route"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1523,6 +1528,19 @@ var schema = []migration{
 			// NULL means unknown (rows written before this column, or a
 			// resolution that carried no note).
 			`ALTER TABLE hold ADD COLUMN resolution_note TEXT`,
+		},
+	},
+	{
+		version: 36,
+		name:    taskAttemptRouteMigration,
+		statements: []string{
+			// GAP-02: every worker selection records the adapter that won
+			// and the stable reason code agents.Route returned. NULL means
+			// unknown (rows written before this column, or an attempt that
+			// never reached routing). Both are filled once by
+			// SetAttemptRoute before the process starts.
+			`ALTER TABLE task_attempt ADD COLUMN adapter TEXT`,
+			`ALTER TABLE task_attempt ADD COLUMN route_reason TEXT`,
 		},
 	},
 }

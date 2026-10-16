@@ -279,15 +279,19 @@ type Service struct {
 	// taken and not yet settled, so a relaunch cannot retake a slot that a
 	// claim in flight holds. dispatch.go owns it beside isolated.
 	claiming map[string]bool
-	// launched holds, per task, the terminal session launch.go started for
-	// the latest attempt this service launched: one session per attempt,
-	// one dispatch per task per service, and a relaunch replacing the
-	// session it superseded, so one entry per task. It is this service's
-	// memory, like the slot above: the attempt's record carries the
-	// session's reference and nothing durable carries the handle, so a
-	// service that restarts holds none of these and relaunches. Close ends
-	// every session here, and launch.go owns the map.
-	launched map[string]*session.Session
+	// launched holds, per task, the session host and terminal session
+	// launch.go started for the latest attempt this service launched: one
+	// session per attempt, one dispatch per task per service, and a
+	// relaunch replacing the session it superseded, so one entry per task.
+	// The host is built over the adapter agents.Route selected for that
+	// worker, which may differ from the run agent driverFor resolved, so
+	// Probe, Close and sessionOf answer through the entry rather than
+	// through the driver's provider alone. It is this service's memory,
+	// like the slot above: the attempt's record carries the session's
+	// reference and nothing durable carries the handle, so a service that
+	// restarts holds none of these and relaunches. Close ends every
+	// session here, and launch.go owns the map.
+	launched map[string]launchedWorker
 	// wakeBell is rung when the supervisor loop appends a wake, so an armed
 	// wakes.wait reads the queue again; wakewait.go owns it and says why it
 	// is a hint and never a record.
@@ -482,7 +486,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		advancing:  make(map[string]*slot),
 		isolated:   make(map[string]tasks.Isolation),
 		claiming:   make(map[string]bool),
-		launched:   make(map[string]*session.Session),
+		launched:   make(map[string]launchedWorker),
 		starting:   make(map[branchKey]*branchGate),
 		stopping:   make(chan struct{}),
 

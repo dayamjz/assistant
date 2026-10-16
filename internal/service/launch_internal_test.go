@@ -211,14 +211,14 @@ func TestACopyRetargetedBetweenDispatchAndLaunchIsRefusedAndNotLaunched(t *testi
 	}
 }
 
-// A service resolved to an adapter that has not declared worker sessions
-// dispatches and never launches: the launch is refused with
-// *agents.CapabilityError naming the capability, nothing is recorded, the
-// task stays Dispatched from the record with its proof in the slot, and the
-// attempt keeps no session. The Cursor adapter is such an adapter, built
-// here over the stand-in's own arguments so nothing it could start is this
-// test binary running its tests again.
-func TestARunnerWithoutWorkerSessionsLeavesTheTaskDispatched(t *testing.T) {
+// A Cursor-only operator pin refuses worker launch with a recorded
+// route-refused event: the pin is Override, missing Need is
+// *agents.CapabilityError, the task resolves Failed rather than staying
+// Dispatched, and the attempt keeps no session and no route. Grants are not
+// rewritten on the refusal path. The Cursor adapter is built here over the
+// stand-in's own arguments so nothing it could start is this test binary
+// running its tests again.
+func TestACursorOnlyPinRefusesWorkerLaunchWithRecordedReason(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	agent := standin.New(t, standin.Script{})
@@ -232,14 +232,19 @@ func TestARunnerWithoutWorkerSessionsLeavesTheTaskDispatched(t *testing.T) {
 		t.Fatalf("building the cursor adapter over the stand-in: %v", err)
 	}
 	subject.service.catalog = agents.NewCatalog(fixedRunner{runner: cursor})
+	subject.service.cfg.Agent = []string{"cursor"}
 	d, err := subject.service.dispatchTask(ctx, subject.task)
 	if err != nil {
 		t.Fatalf("dispatching: %v", err)
 	}
 	_, err = subject.service.launchTask(ctx, d)
+	var refused *routeRefused
+	if !errors.As(err, &refused) {
+		t.Fatalf("the launch answered %v, want a *routeRefused", err)
+	}
 	var undeclared *agents.CapabilityError
 	if !errors.As(err, &undeclared) || undeclared.Capability != agents.CapabilityWorkerSessions {
-		t.Fatalf("the launch answered %v, want a *agents.CapabilityError naming %s", err, agents.CapabilityWorkerSessions)
+		t.Fatalf("the cause is %v, want a *CapabilityError naming %s", err, agents.CapabilityWorkerSessions)
 	}
 	if errors.Is(err, tasks.ErrNotIsolated) {
 		t.Fatal("an adapter without a worker read as an isolation refusal")
@@ -251,24 +256,71 @@ func TestARunnerWithoutWorkerSessionsLeavesTheTaskDispatched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.State.State != taskstate.Dispatched || resolved.State.Source != taskstate.SourceEvent {
-		t.Fatalf("the task resolves %s from %s, want Dispatched from the record", resolved.State.State, resolved.State.Source)
+	if resolved.State.State != taskstate.Failed || resolved.State.Source != taskstate.SourceEvent ||
+		resolved.State.Basis.EventKind != routeRefusedKind {
+		t.Fatalf("the task resolves %+v, want Failed from route-refused", resolved.State)
 	}
 	events, err := subject.records.TaskEvents(ctx, subject.task, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var sawRoute bool
 	for _, e := range events {
 		if e.Kind == isolationRefusedKind {
 			t.Fatalf("a missing capability was recorded as an isolation refusal: %+v", e)
 		}
+		if e.Kind == routeRefusedKind {
+			sawRoute = true
+			if !strings.Contains(e.Detail, string(agents.CapabilityWorkerSessions)) {
+				t.Fatalf("route-refused detail %q does not name %s", e.Detail, agents.CapabilityWorkerSessions)
+			}
+		}
+	}
+	if !sawRoute {
+		t.Fatalf("no route-refused event in %+v", events)
 	}
 	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
-	if err != nil || len(attempts) != 1 || attempts[0].SessionRef.IsKnown() {
-		t.Fatalf("the task has attempts %+v (%v), want the dispatch's one with no session", attempts, err)
+	if err != nil || len(attempts) != 1 || attempts[0].SessionRef.IsKnown() ||
+		attempts[0].Adapter.IsKnown() || attempts[0].RouteReason.IsKnown() {
+		t.Fatalf("the task has attempts %+v (%v), want the dispatch's one with no session and no route", attempts, err)
 	}
 	if held, ok := subject.service.isolationOf(subject.task); !ok || !held.Proven() {
 		t.Fatalf("the slot holds %+v, %v, want the dispatch's proof intact", held, ok)
+	}
+}
+
+// A successful launch records the routed adapter and reason on the attempt
+// before the session reference, and still starts the worker under the
+// ordinary Create path (GrantWorker unchanged).
+func TestLaunchRecordsTheRoutedAdapterAndReason(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	subject := newLaunchSubject(t, workerStandIn(t))
+	name := subject.agent.Runner().Name()
+	subject.service.cfg.Agent = []string{name}
+	d, err := subject.service.dispatchTask(ctx, subject.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	launched, err := subject.service.launchTask(ctx, d)
+	if err != nil {
+		t.Fatalf("launching: %v", err)
+	}
+	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
+	if err != nil || len(attempts) != 1 {
+		t.Fatalf("TaskAttempts = %+v, %v", attempts, err)
+	}
+	adapter, ok := attempts[0].Adapter.Get()
+	if !ok || adapter != name {
+		t.Fatalf("adapter = %q (known=%v), want %s", adapter, ok, name)
+	}
+	reason, ok := attempts[0].RouteReason.Get()
+	if !ok || reason != agents.ReasonOverride {
+		t.Fatalf("route reason = %q (known=%v), want %s", reason, ok, agents.ReasonOverride)
+	}
+	ref, ok := attempts[0].SessionRef.Get()
+	if !ok || ref != launched.Reference().String() {
+		t.Fatalf("session = %q (known=%v), want %s", ref, ok, launched.Reference())
 	}
 }
 

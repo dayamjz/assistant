@@ -471,19 +471,19 @@
 // neither of agents.Sweeper's carve-outs sets it aside, refuses the relaunch until a
 // later start. Elsewhere there is no sweep, so the relaunch is refused and
 // holds for a person, and on a retry answer goes ahead with that process,
-// if any, an orphan this service holds no handle to and does not end. An adapter that has not declared worker sessions, which in
-// this build is every shipped adapter, dispatches every task and launches
-// none: the *agents.CapabilityError is logged, the task stays Dispatched
-// with its slot and attempt standing, and no reference is recorded, because
-// internal/taskstate's refusal tokens are about isolation and this is not an
-// isolation failure. And between Create returning and the reference being
-// written, a crash leaves a process no record names, which internal/session
-// states; the dispatch that retries the task sweeps the standing copy before
-// it claims, on sweep.go's terms, which ends that process on Linux and
-// macOS while it is still in the copy. Elsewhere there is no sweep, so the
-// retried dispatch is refused and holds for a person on a key of its own,
-// and on a retry answer starts a worker beside that process, if any, which
-// it neither finds nor ends.
+// if any, an orphan this service holds no handle to and does not end. Worker
+// routing (GAP-02) selects an adapter whose capabilities cover the worker
+// need before Create: a pin or preference that covers nothing is recorded as
+// route-refused and the task resolves Failed rather than staying Dispatched,
+// and a selection records adapter and reason on the attempt before the
+// process starts. Grants stay GrantWorker on the ordinary Create path. And
+// between Create returning and the reference being written, a crash leaves a
+// process no record names, which internal/session states; the dispatch that
+// retries the task sweeps the standing copy before it claims, on sweep.go's
+// terms, which ends that process on Linux and macOS while it is still in the
+// copy. Elsewhere there is no sweep, so the retried dispatch is refused and
+// holds for a person on a key of its own, and on a retry answer starts a
+// worker beside that process, if any, which it neither finds nor ends.
 //
 // # A restart reconciles the fleet, and relaunches a dead terminal in place
 //

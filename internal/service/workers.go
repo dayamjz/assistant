@@ -111,12 +111,38 @@ import (
 // than treating as "not a worker".
 func (s *Service) workerOf(c ipc.Credentials) (session.Membership, bool, error) {
 	s.mu.Lock()
-	built := s.built
+	var sets []*session.Workers
+	if s.built != nil && s.built.workers != nil {
+		sets = append(sets, s.built.workers)
+	}
+	for _, launched := range s.launched {
+		if launched.host != nil {
+			sets = append(sets, launched.host.Workers())
+		}
+	}
 	s.mu.Unlock()
-	if built == nil || built.workers.Empty() {
+	empty := true
+	for _, set := range sets {
+		if set != nil && !set.Empty() {
+			empty = false
+			break
+		}
+	}
+	if empty {
 		return session.Membership{}, false, nil
 	}
-	m, ok, err := placeByAncestry(c.PID, readLineage, built.workers.Member)
+	member := func(group int) (session.Membership, bool) {
+		for _, set := range sets {
+			if set == nil {
+				continue
+			}
+			if m, ok := set.Member(group); ok {
+				return m, true
+			}
+		}
+		return session.Membership{}, false
+	}
+	m, ok, err := placeByAncestry(c.PID, readLineage, member)
 	if err != nil {
 		return session.Membership{}, false, fmt.Errorf("placing %s: %w", c, err)
 	}

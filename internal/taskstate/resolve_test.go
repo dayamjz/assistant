@@ -344,8 +344,8 @@ func TestARelaunchIsANoteUntilTheDispatchFollowsIt(t *testing.T) {
 // decisions are the program's alone, and the rest are the worker's.
 func TestTheWriterColumnKeepsTheProgramsKindsFromAWorker(t *testing.T) {
 	programOnly := map[string]bool{
-		store.OpeningEventKind: true, store.DispatchedEventKind: true, "isolation-refused": true, "relaunched": true,
-		store.PromotedEventKind: true, store.FindingsRelayedEventKind: true,
+		store.OpeningEventKind: true, store.DispatchedEventKind: true, "isolation-refused": true, "route-refused": true,
+		"relaunched": true, store.PromotedEventKind: true, store.FindingsRelayedEventKind: true,
 	}
 	for _, row := range Kinds() {
 		switch {

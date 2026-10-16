@@ -288,6 +288,12 @@ func (e *TaskMovedError) Unwrap() error { return ErrTaskMoved }
 // this one's record.
 var ErrAttemptSessionRecorded = errors.New("store: the attempt already names a session")
 
+// ErrAttemptRouteRecorded is returned by SetAttemptRoute when the attempt
+// already names a routed adapter. The selection is filled once before the
+// process starts; a second selection on the same attempt would be a relaunch,
+// which is a new attempt.
+var ErrAttemptRouteRecorded = errors.New("store: the attempt already names a route")
+
 // ErrCleanupRecorded is returned by RecordTaskCleanup when the task already
 // has a cleanup record. PRD section 8 says the record is written once, so a
 // second write is refused rather than overwriting the proof the first was made

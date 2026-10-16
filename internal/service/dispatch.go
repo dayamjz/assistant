@@ -279,13 +279,13 @@ func (s *Service) dispatchDue(ctx context.Context) {
 			continue
 		}
 		launched, err := s.launchTask(ctx, d)
-		var undeclared *agents.CapabilityError
+		var refused *routeRefused
 		switch {
 		case err == nil:
 			s.log.Printf("task %s attempt %d was launched: its worker runs in terminal session %s",
 				d.id, d.attempt, launched.Reference())
-		case errors.As(err, &undeclared):
-			s.log.Printf("task %s attempt %d was dispatched and not launched, and stays dispatched: %v",
+		case errors.As(err, &refused):
+			s.log.Printf("task %s attempt %d was dispatched and not launched; routing refused and the task failed: %v",
 				d.id, d.attempt, err)
 		default:
 			s.log.Printf("task %s attempt %d was not launched: %v", d.id, d.attempt, err)

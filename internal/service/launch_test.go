@@ -348,10 +348,9 @@ func TestADispatchedInvestigationTaskIsLaunched(t *testing.T) {
 }
 
 // A service resolved to an adapter that has not declared worker sessions,
-// which the Cursor adapter is, dispatches the task and launches nothing: the task stays Dispatched from the record with its attempt
-// standing and no session recorded on it, so the probe has nothing to ask
-// and the process tier stays out of the answer, and the service holds no
-// session. The typed
+// which the Cursor adapter is, dispatches the task and refuses the launch
+// with a recorded route-refused event: the task resolves Failed, the
+// attempt keeps no session, and the service holds no session. The typed
 // refusal behind that is launch_internal_test.go's to show; this is the
 // record's view of a fleet over such an adapter.
 func TestAnAdapterWithoutWorkerSessionsDispatchesAndNeverLaunches(t *testing.T) {
@@ -363,8 +362,9 @@ func TestAnAdapterWithoutWorkerSessionsDispatchesAndNeverLaunches(t *testing.T) 
 	id := recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/one")
 
 	withServiceOptions(t, workerlessOptions(t, h), func(running serviceUnderTest) {
-		if got := taskState(t, running.client, id); got.State != taskstate.Dispatched || got.Source != taskstate.SourceEvent {
-			t.Fatalf("the task resolves %s from %s, want Dispatched from the record", got.State, got.Source)
+		if got := taskState(t, running.client, id); got.State != taskstate.Failed || got.Source != taskstate.SourceEvent ||
+			got.Basis.EventKind != "route-refused" {
+			t.Fatalf("the task resolves %+v, want Failed from route-refused", got)
 		}
 		if _, _, ok := running.service.SessionOf(id); ok {
 			t.Fatal("the service holds a session for a task its adapter cannot start a worker for")

@@ -150,6 +150,11 @@ func TestTheRelaunchBoundCountsRelaunchesFromAttemptRows(t *testing.T) {
 			t.Errorf("a Failed decided by the isolation refusal decides %+v, want a surface naming the refusal", got)
 		}
 	}
+	routed := refused
+	routed.Basis.EventKind = routeRefusedKind
+	if got := decideReconciliation(routed, attempts(1), 2, relaunchAnswers{}); got.action != reconcileSurface || got.surfaced != surfacedRouteRefused {
+		t.Errorf("a Failed decided by routing refusal decides %+v, want a surface naming the refusal", got)
+	}
 	// A stop's hold answered stop leaves the task alone whatever the count
 	// and the other answers; answered retry it changes nothing here, so a
 	// stopped task's relaunch is counted toward the bound like any other.

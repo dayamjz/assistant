@@ -257,28 +257,29 @@ type reconcileDecision struct {
 	surfaced string
 }
 
-// The two surface rules.
+// The surface rules.
 const (
 	surfacedIsolationRefused = "isolation-refused"
+	surfacedRouteRefused     = "route-refused"
 	surfacedRelaunchBound    = "relaunch-bound"
 )
 
 // decideReconciliation applies the table to a resolution and then the rules
 // that turn a relaunch into something else: a Failed decided by the
-// isolation assertion's own refusal, read off Basis.EventKind and never off
-// the log, surfaces; a task whose stop's hold (steer.go) or no-sweep hold
-// for its latest attempt is answered stop is left alone; and a task already
-// relaunched bound times,
-// counted from attempts, holds for a person unless the bound's hold for its
-// latest attempt is answered. A stop's hold answered retry is not read
-// here either: it is what lets the task resolve from its dead terminal
-// again, and the count applies to that relaunch like every other. answered
-// carries the holds' answers, which
-// taskholds.go reads: a retry on the bound's relaunches once more past the
-// bound, and a stop on either leaves the task alone. A retry on the no-sweep
-// hold is not read here, because whether the platform has a sweep is known
-// only once relaunch.go asks it; relaunch.go reads that answer itself. The
-// count is relaunches, so a task's first attempt is not one.
+// isolation assertion's own refusal, or by worker routing, read off
+// Basis.EventKind and never off the log, surfaces; a task whose stop's hold
+// (steer.go) or no-sweep hold for its latest attempt is answered stop is
+// left alone; and a task already relaunched bound times, counted from
+// attempts, holds for a person unless the bound's hold for its latest
+// attempt is answered. A stop's hold answered retry is not read here
+// either: it is what lets the task resolve from its dead terminal again,
+// and the count applies to that relaunch like every other. answered carries
+// the holds' answers, which taskholds.go reads: a retry on the bound's
+// relaunches once more past the bound, and a stop on either leaves the task
+// alone. A retry on the no-sweep hold is not read here, because whether the
+// platform has a sweep is known only once relaunch.go asks it; relaunch.go
+// reads that answer itself. The count is relaunches, so a task's first
+// attempt is not one.
 func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, bound int, answered relaunchAnswers) reconcileDecision {
 	action := reconcileRow(r.State, r.Source, r.Basis.Process)
 	if action != reconcileRelaunch {
@@ -287,6 +288,10 @@ func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, 
 	if r.State == taskstate.Failed && r.Source == taskstate.SourceEvent && r.Basis.EventKind == isolationRefusedKind {
 		return reconcileDecision{action: reconcileSurface, surfaced: surfacedIsolationRefused,
 			reason: "its copy was refused by the isolation assertion, which a relaunch would assert again"}
+	}
+	if r.State == taskstate.Failed && r.Source == taskstate.SourceEvent && r.Basis.EventKind == routeRefusedKind {
+		return reconcileDecision{action: reconcileSurface, surfaced: surfacedRouteRefused,
+			reason: "worker routing refused every configured agent, which a relaunch would ask again"}
 	}
 	if answered.stopped == boundStop {
 		return reconcileDecision{action: reconcileNothing,
