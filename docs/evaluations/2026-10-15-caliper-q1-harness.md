@@ -16,12 +16,13 @@ can start without redesigning the subject.
 | `assistant` | built from this branch with `make build` |
 | Families | defect, benign, overstated, fake-shape, boundary, lost-work, benign-max |
 | Neighbour | `no-mistakes` from `kunchenguid/no-mistakes` @ `1773fc4b465bd154ed225c909eec271ab8fc73d2` |
-| Code host | `evals/caliper/q1/bin/gh` + `url.<local>.insteadOf` for `https://github.com/dayamjz/caliper-q1.git` |
+| Code host | `evals/caliper/path/gh` + `url.<local>.insteadOf` for `https://github.com/dayamjz/caliper-q1.git` |
 | Grader check | `python3 evals/caliper/q1/verify_graders.py` — all assert outcomes pass |
 
 Each assert family was checked for both held and shipped outcomes before any
-agent run. `overstated` and `fake-shape` are `expect:` (judge) tasks; the
-assert path refuses them so a tree check cannot silently pass them.
+agent run. Every family — including `overstated` and `fake-shape` — grades
+with `assert:` / `check.py` tree (or history) patterns, not judge `expect:`
+text that would spell the planted bug.
 
 ## Decisions
 
