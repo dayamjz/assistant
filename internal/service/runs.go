@@ -187,7 +187,7 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 		Base:           repository.DefaultBranch,
 		Submitted:      record.SubmittedHead,
 		Intent:         record.Intent,
-		IntentSupplied: record.IntentSource == intentSourceSupplied,
+		IntentSupplied: intentCountsAsSupplied(record.IntentSource),
 	})
 }
 
@@ -253,7 +253,7 @@ func (s *Service) claimRerun(ctx context.Context, key branchKey, local, replacem
 		base:       previous.Base,
 		intent:     intent,
 		source:     source,
-		supplied:   source == intentSourceSupplied,
+		supplied:   intentCountsAsSupplied(source),
 	})
 }
 
@@ -1991,23 +1991,13 @@ func stageNames() []string {
 // reported run. The distinction that is acted on is supplied against not
 // supplied, and that is the whole of it.
 //
-// The residual gap is that this column is not what drives the difference
-// between offered, task and absent. All three give IntentSupplied false, so
-// the graph state a run begins from differs only in the intent text itself,
-// and a reader gets that from the Intent column rather than from this one.
-//
-// The stage that weighs a hint differently from a contract is the intent
-// stage, and it has a body. It reads the intent text and the supplied bit out
-// of graph state, never this column, and reports three cases apart: a
-// supplied intent as authoritative acceptance criteria, any other intent text
-// as a hint the change is not held to and not a defect to depart from, and no
-// intent text at all as absent. An intent taken from a task is the second of
-// those, reported as intent-offered: the stage cannot tell it from an offered
-// one, and only this column says it came from the task. It decides that from
-// the same two facts this function reads, so what it reports matches what was
-// recorded here. There is no corner where the two disagree: create refuses a
-// supplied claim with nothing behind it before a row exists, so a supplied
-// source always stands over text.
+// supplied and task both set IntentSupplied, so the intent stage holds the
+// change to either. offered and absent do not. The column is what says
+// whether the text was stated for the run or read off the task. The stage
+// reads the supplied bit out of graph state, never this column, and reports
+// a supplied intent as acceptance criteria and no intent text as absent. An
+// intent taken from a task is supplied, and only this column says it came
+// from the task. A person's push of that branch stays absent.
 //
 // The four are kept apart here anyway because the record must not say that a
 // run holds intent text and that nothing was given, nor that a person said
@@ -2028,11 +2018,17 @@ const (
 	// promoted task, the delivery intent its promotion recorded, or
 	// otherwise the instructions the coordinator wrote at intake, which
 	// workers.go's pushIntent decides from the worker group set and the
-	// task's records.
-	// Nobody stated it as acceptance criteria for this run, so it is never
-	// supplied, and a person's push of the same branch never carries it.
+	// task's records. It is the acceptance criteria of that run.
+	// A person's push of the same branch never carries it.
 	intentSourceTask = "task"
 )
+
+// intentCountsAsSupplied reports whether a recorded source is acceptance
+// criteria. A person's supplied intent and the instructions read off a task
+// both are. An offered hint and an absent intent are not.
+func intentCountsAsSupplied(source string) bool {
+	return source == intentSourceSupplied || source == intentSourceTask
+}
 
 // intentSource says where a run's intent came from.
 //

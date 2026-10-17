@@ -114,6 +114,12 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 	}), claudeConfigVariable+"="+configDir)
 
 	args := append(slices.Clone(r.extra), claudeGrantFlags(GrantWorker, spec.Route)...)
+	if spec.Model != "" {
+		args = append(args, "--model", spec.Model)
+	}
+	if spec.Effort != "" {
+		args = append(args, "--effort", spec.Effort)
+	}
 	args = append(args, "--ax-screen-reader", "--session-id", session, "--", defused(spec.Instructions))
 	worker, err := startTerminalWorker(ctx, t, procSpecTerminal{
 		bin:     r.resolved,

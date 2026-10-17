@@ -96,6 +96,12 @@ type Run struct {
 	// same conversation instead of starting the run's fixer blind. It is
 	// stored exactly as given, like every column but the repository URLs.
 	FixerSession Optional[string] `json:"fixer_session"`
+	// FixerAgent is the name of the agent that opened FixerSession, as
+	// configuration spells it. It is unknown until a session is recorded,
+	// and for a session recorded before the column existed. A resume reads
+	// it so a role that now names a different agent does not continue a
+	// conversation that agent did not hold.
+	FixerAgent Optional[string] `json:"fixer_agent"`
 	// Intent is what the run was for.
 	Intent string `json:"intent"`
 	// IntentSource says where that intent came from, so a report can say who
@@ -452,14 +458,39 @@ func (s *Store) transitionRun(ctx context.Context, id string, from []RunStatus, 
 }
 
 // SetRunFixerSession records the agent's handle for the run's durable fixer
-// session, which is what lets a later fix round of the same run continue the
-// same conversation after the process that opened it is gone.
+// session, and the name of the agent that opened it, which is what lets a
+// later fix round of the same run continue the same conversation after the
+// process that opened it is gone, and what lets that later round refuse a
+// handle that belongs to a different agent.
 //
-// It records a reference the caller was given. Nothing here opens, validates,
-// or reasons about a session: what the handle means is the agent adapter's,
-// and which invocations may carry one is internal/agents' type split.
-func (s *Store) SetRunFixerSession(ctx context.Context, id, reference string) error {
-	return s.updateRun(ctx, id, "fixer_session", reference)
+// It records a reference and a name the caller was given. Nothing here opens,
+// validates, or reasons about a session: what the handle means is the agent
+// adapter's, and which invocations may carry one is internal/agents' type
+// split. An empty reference or an empty agent is refused, so a session is
+// never recorded without the agent a resume compares.
+func (s *Store) SetRunFixerSession(ctx context.Context, id, reference, agent string) error {
+	if strings.TrimSpace(reference) == "" {
+		return fmt.Errorf("store: run %s: fixer_session is empty", id)
+	}
+	if strings.TrimSpace(agent) == "" {
+		return fmt.Errorf("store: run %s: fixer_agent is empty", id)
+	}
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx,
+			`UPDATE run SET fixer_session = ?, fixer_agent = ?, updated_at = ? WHERE id = ?`,
+			reference, agent, encodeTime(nowUTC()), id)
+		if err != nil {
+			return fmt.Errorf("store: updating run %s: %w", id, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("store: updating run %s: %w", id, err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("store: updating run %s: %w", id, ErrNotFound)
+		}
+		return nil
+	})
 }
 
 // SetRunHead records a branch tip for the run in CurrentHead. It has no
@@ -651,7 +682,7 @@ func (s *Store) updateRun(ctx context.Context, id, column, value string) error {
 
 const runColumns = `SELECT
 	id, repository_id, branch, submitted_head, base, current_head, status,
-	approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
+	approved_commit, push_binding, pull_request, fixer_session, fixer_agent, intent, intent_source,
 	build_version, build_revision, build_modified, build_go, config_digest,
 	config_rejections, resolved_agent, park, standing_consent, held_moves, no_code_host,
 	created_at, updated_at`
@@ -664,7 +695,7 @@ func scanRun(sc scanner) (Run, error) {
 	var noCodeHost Optional[int64]
 	if err := sc.Scan(
 		&r.ID, &r.RepositoryID, &r.Branch, &r.SubmittedHead, &r.Base, &r.CurrentHead, &status,
-		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.Intent, &r.IntentSource,
+		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.FixerAgent, &r.Intent, &r.IntentSource,
 		&r.Build.Version, &r.Build.Revision, &modified, &r.Build.Go, &r.ConfigDigest,
 		&rejections, &r.ResolvedAgent, &park, &consent, &r.HeldMoves, &noCodeHost,
 		&created, &updated,

@@ -134,11 +134,27 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	if err != nil {
 		return nil, err
 	}
-	selection, err := s.routeWorker(ctx)
+	task, err := s.store.Task(ctx, d.id)
+	if err != nil {
+		return nil, fmt.Errorf("service: reading task %s to route its worker: %w", d.id, err)
+	}
+	selection, role, err := s.routeWorker(ctx, task.Role)
 	if err != nil {
 		return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
 	}
-	if err := s.store.SetAttemptRoute(ctx, d.id, d.attempt, selection.Resolution.Name, selection.Reason); err != nil {
+	model := ""
+	if role.Provider != "" {
+		model, err = agents.Translate(selection.Resolution.Name, role.Provider, role.Type, role.Version)
+		if err != nil {
+			return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
+		}
+	}
+	if err := agents.AcceptsEffort(selection.Resolution.Name, role.Effort); err != nil {
+		return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
+	}
+	if err := s.store.SetAttemptRoute(ctx, d.id, d.attempt, selection.Resolution.Name, selection.Reason, store.AttemptLaunch{
+		Role: task.Role, Model: model, Effort: role.Effort,
+	}); err != nil {
 		return nil, fmt.Errorf("service: recording the route of task %s attempt %d: %w", d.id, d.attempt, err)
 	}
 	host := s.sessionHost(selection.Resolution.Runner)
@@ -147,6 +163,8 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		Isolation:    fresh,
 		Instructions: string(instructions) + d.note + s.routeSection(d.want.Shape),
 		Route:        s.workerRoute,
+		Model:        model,
+		Effort:       role.Effort,
 	})
 	if err != nil {
 		var undeclared *agents.CapabilityError
@@ -174,12 +192,33 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 }
 
 // routeWorker selects the adapter a task worker launches with, on
-// agents.Route's terms. A single named agent entry that is not auto is an
-// operator pin; a longer list is ordered preference with capability
-// filtering. Grants are not decided here.
-func (s *Service) routeWorker(ctx context.Context) (agents.Selection, error) {
+// agents.Route's terms, and the role that selection was asked for. A task
+// that names no role uses the worker role. A role that names an agent is a
+// pin of that one agent. A role that names none uses the agent list: a
+// single named entry that is not auto is an operator pin, and a longer list
+// is ordered preference with capability filtering. Grants are not decided
+// here. A role the configuration no longer has is refused, and nothing else
+// is started in its place.
+func (s *Service) routeWorker(ctx context.Context, roleName string) (agents.Selection, config.Role, error) {
+	role, err := s.cfg.Roles.ForTask(roleName)
+	if err != nil {
+		return agents.Selection{}, config.Role{}, err
+	}
+	entries := s.cfg.Agent
+	override := workerOverride(entries)
+	if role.Agent != "" {
+		// The role's agent is the pin, including a name that is not an
+		// adapter. workerOverride would treat auto as the fallback list;
+		// a role has no fallback, so the name is the override as written.
+		entries = []string{role.Agent}
+		override = role.Agent
+	}
 	tmux := s.cfg.SessionProvider == config.SessionProviderTmux
-	return agents.Route(ctx, s.catalog, s.cfg.Agent, agents.NeedForWorker(tmux), workerOverride(s.cfg.Agent))
+	selection, err := agents.Route(ctx, s.catalog, entries, agents.NeedForWorker(tmux), override)
+	if err != nil {
+		return agents.Selection{}, config.Role{}, err
+	}
+	return selection, role, nil
 }
 
 // workerOverride is the operator pin: a single named agent entry that is not

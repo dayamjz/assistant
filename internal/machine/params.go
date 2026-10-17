@@ -489,6 +489,10 @@ type TaskCreateRequest struct {
 	// intake refuses (PRD section 6's "tighten, never loosen"). It is
 	// refused on an investigation task, which has no posture.
 	Delivery string `json:"delivery,omitempty"`
+	// Role is the configured role the worker runs under. Empty means the
+	// worker role. An unknown role, and review or fix, are refused and no
+	// task is created.
+	Role string `json:"role,omitempty"`
 }
 
 // TaskPromoteRequest promotes an investigation task to delivery in place.

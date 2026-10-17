@@ -369,6 +369,7 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		Started: time.Now(),
 		Served:  inv.Served,
 	}
+	record.noteLaunch(inv)
 	// reference is what this invocation hands back to the Fixer. It is set
 	// once, from the envelope, and every exit below returns it, so the record
 	// and what the Fixer holds cannot disagree about the session.
@@ -505,8 +506,8 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 }
 
 // arguments builds the command line. The configured entry's own flags come
-// first, then the grant's flags (claudeGrantFlags), then the four this run
-// manages: --print, --output-format, --model, and --resume.
+// first, then the grant's flags (claudeGrantFlags), then the flags this run
+// manages: --print, --output-format, --model, --effort, and --resume.
 //
 // Of those four, config.ReservedAgentFlags refuses a configured entry that
 // names --output-format or --resume, so an entry cannot contradict the two
@@ -525,6 +526,9 @@ func (r *claudeRunner) arguments(grant Grant, inv Invocation, resume string) []s
 	args = append(args, "--print", "--output-format", "json")
 	if inv.Model != "" {
 		args = append(args, "--model", inv.Model)
+	}
+	if inv.Effort != "" {
+		args = append(args, "--effort", inv.Effort)
 	}
 	if resume != "" {
 		args = append(args, "--resume", resume)

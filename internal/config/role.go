@@ -1,0 +1,286 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"unicode/utf8"
+)
+
+// The three role names the program assigns. review is the review stage,
+// fix is a fix round, and worker is a task that names no other role. Any
+// other name that validRoleName accepts is a worker role a task may name.
+const (
+	RoleReview = "review"
+	RoleFix    = "fix"
+	RoleWorker = "worker"
+)
+
+// ErrTaskRole reports that a task named a role it cannot run: review or
+// fix, a name that is not a role name, or a name no configured role has.
+// Intake wraps it so the task is not created.
+var ErrTaskRole = errors.New("config: the task's role cannot be run")
+
+// Role is one configured role: the agent it runs, and the model triple and
+// effort when it names them. An empty Agent means the role uses the agent
+// list. An empty Provider means the role names no model, and the agent uses
+// its own. An empty Effort means the role names no effort.
+type Role struct {
+	Agent    string
+	Provider string
+	Type     string
+	Version  string
+	Effort   string
+}
+
+// Roles is the configured roles, keyed by role name. Nil and empty are the
+// same: every role uses the agent list and that agent's own model.
+type Roles map[string]Role
+
+// Equal reports whether a and b name the same roles. Nil and empty are equal.
+func (a Roles) Equal(b Roles) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, role := range a {
+		other, ok := b[name]
+		if !ok || role != other {
+			return false
+		}
+	}
+	return true
+}
+
+// ForTask resolves the role a task may run under. An empty name is the
+// worker role. review and fix are refused. A worker role that nobody
+// configured is the agent list, with no model and no effort. Any other
+// missing name is refused.
+func (r Roles) ForTask(name string) (Role, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = RoleWorker
+	}
+	if name == RoleReview || name == RoleFix {
+		return Role{}, fmt.Errorf("%w: a task cannot name %s", ErrTaskRole, name)
+	}
+	if err := validRoleName(name); err != nil {
+		return Role{}, fmt.Errorf("%w: %w", ErrTaskRole, err)
+	}
+	role, ok := r[name]
+	if !ok {
+		if name == RoleWorker {
+			return Role{}, nil
+		}
+		return Role{}, fmt.Errorf("%w: %q is not a configured role", ErrTaskRole, name)
+	}
+	return role, nil
+}
+
+// ModelCell is one provider, type, and version the role table allows.
+type ModelCell struct {
+	Provider string
+	Type     string
+	Version  string
+}
+
+// modelTable is the closed set a role's triple is drawn from. A provider,
+// type, or version outside it fails at parse time. Adding one is adding a
+// row here.
+var modelTable = map[string]map[string][]string{
+	"anthropic": {
+		"opus":   {"5.5", "5", "4.8", "4.7", "4.6", "4.5"},
+		"sonnet": {"5.5", "5", "4.6"},
+		"haiku":  {"5.5", "4.5"},
+	},
+	"openai": {
+		"gpt": {"6-astra", "6.1-sol", "6-luna"},
+	},
+	"google": {
+		"gemini": {"4-argon"},
+		"flash":  {"3.8", "3.6"},
+	},
+	"xai": {
+		"grok": {"4.7", "4.6", "4.5"},
+	},
+	"cursor": {
+		"composer": {"2.5", "2"},
+	},
+}
+
+// KnownModel reports whether provider, type, and version are one cell of
+// the role table. A type is known only on its provider, and a version only
+// in that type's cell.
+func KnownModel(provider, typ, version string) bool {
+	types, ok := modelTable[provider]
+	if !ok {
+		return false
+	}
+	for _, have := range types[typ] {
+		if have == version {
+			return true
+		}
+	}
+	return false
+}
+
+// ModelCatalog returns every cell of the role table, in provider, type,
+// and version order. It is the list an adapter's translation is held to.
+func ModelCatalog() []ModelCell {
+	providers := make([]string, 0, len(modelTable))
+	for provider := range modelTable {
+		providers = append(providers, provider)
+	}
+	sort.Strings(providers)
+	var out []ModelCell
+	for _, provider := range providers {
+		types := make([]string, 0, len(modelTable[provider]))
+		for typ := range modelTable[provider] {
+			types = append(types, typ)
+		}
+		sort.Strings(types)
+		for _, typ := range types {
+			versions := append([]string(nil), modelTable[provider][typ]...)
+			sort.Strings(versions)
+			for _, version := range versions {
+				out = append(out, ModelCell{Provider: provider, Type: typ, Version: version})
+			}
+		}
+	}
+	return out
+}
+
+func validRoleName(name string) error {
+	if name == "" {
+		return errors.New("a role name is required")
+	}
+	if utf8.RuneCountInString(name) > MaxRoleNameRunes {
+		return fmt.Errorf("a role name may be at most %d characters", MaxRoleNameRunes)
+	}
+	for i, r := range name {
+		switch {
+		case i == 0 && (r < 'a' || r > 'z'):
+			return fmt.Errorf("role %q must start with a lowercase letter", name)
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+		default:
+			return fmt.Errorf("role %q is not lowercase letters, digits, and hyphens", name)
+		}
+	}
+	return nil
+}
+
+func decodeRoles(k Key, v any) (any, error) {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return nil, keyErr(k, v, "expected an object whose members are roles")
+	}
+	if len(obj) == 0 {
+		return nil, keyErr(k, v, "a roles object may not be empty; omit the key to leave every role on the agent list")
+	}
+	if err := checkLen(k, v, "roles", len(obj), MaxRoles); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(obj))
+	for name := range obj {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make(Roles, len(names))
+	for _, name := range names {
+		if err := validRoleName(name); err != nil {
+			return nil, keyErr(k, v, err.Error())
+		}
+		role, err := decodeOneRole(k, v, name, obj[name])
+		if err != nil {
+			return nil, err
+		}
+		out[name] = role
+	}
+	return out, nil
+}
+
+func decodeOneRole(k Key, root any, name string, v any) (Role, error) {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return Role{}, keyErr(k, root, "role "+quote(name)+" must be an object")
+	}
+	if extra, found := unknownField(obj, "agent", "provider", "type", "version", "effort"); found {
+		return Role{}, keyErr(k, root, "role "+quote(name)+" has an unrecognized field "+quote(extra))
+	}
+	agent, err := roleString(k, root, name, obj, "agent")
+	if err != nil {
+		return Role{}, err
+	}
+	provider, err := roleString(k, root, name, obj, "provider")
+	if err != nil {
+		return Role{}, err
+	}
+	typ, err := roleString(k, root, name, obj, "type")
+	if err != nil {
+		return Role{}, err
+	}
+	version, err := roleString(k, root, name, obj, "version")
+	if err != nil {
+		return Role{}, err
+	}
+	effort, err := roleString(k, root, name, obj, "effort")
+	if err != nil {
+		return Role{}, err
+	}
+	if agent != "" {
+		if strings.Fields(agent)[0] != agent {
+			return Role{}, keyErr(k, root, "role "+quote(name)+" names an agent with arguments; a role names one agent and no arguments")
+		}
+		if agent == "auto" {
+			return Role{}, keyErr(k, root, "role "+quote(name)+" names auto; a role names one agent and has no fallback list")
+		}
+	}
+	named := 0
+	for _, part := range []string{provider, typ, version} {
+		if part != "" {
+			named++
+		}
+	}
+	if named != 0 && named != 3 {
+		return Role{}, keyErr(k, root, "role "+quote(name)+" must name a provider, a type, and a version together, or none of them")
+	}
+	if agent == "" && (named != 0 || effort != "") {
+		return Role{}, keyErr(k, root, "role "+quote(name)+" names a provider, type, version, or effort and names no agent")
+	}
+	if named == 3 && !KnownModel(provider, typ, version) {
+		return Role{}, keyErr(k, root, "role "+quote(name)+" names "+provider+" "+typ+" "+version+", which is not in the model table")
+	}
+	switch effort {
+	case "", "low", "medium", "high":
+	default:
+		return Role{}, keyErr(k, root, "role "+quote(name)+" has effort "+quote(effort)+"; effort is low, medium, or high")
+	}
+	return Role{Agent: agent, Provider: provider, Type: typ, Version: version, Effort: effort}, nil
+}
+
+func roleString(k Key, root any, name string, obj map[string]any, field string) (string, error) {
+	v, ok := obj[field]
+	if !ok {
+		return "", nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", keyErr(k, root, "role "+quote(name)+" field "+quote(field)+" must be a string")
+	}
+	if strings.TrimSpace(s) == "" {
+		return "", keyErr(k, root, "role "+quote(name)+" field "+quote(field)+" is empty; omit it instead")
+	}
+	return s, nil
+}
+
+func cloneRoles(v any) Roles {
+	in := v.(Roles)
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(Roles, len(in))
+	for name, role := range in {
+		out[name] = role
+	}
+	return out
+}

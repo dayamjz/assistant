@@ -52,6 +52,10 @@ type Request struct {
 	// of overlap: the record holds one blocker, and when both apply Release
 	// waits on whichever is still live before it dispatches.
 	Overlaps string
+	// Role is the configured role the worker runs under. Empty means the
+	// worker role. review, fix, a name that is not a role name, and a name
+	// no configured role has are refused and the task is not created.
+	Role string
 }
 
 // Cause says why a task was queued.
@@ -131,6 +135,9 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 	if strings.TrimSpace(req.Instructions) == "" {
 		return Created{}, fmt.Errorf("%w: no instructions", ErrRequest)
 	}
+	if _, err := q.roles.ForTask(req.Role); err != nil {
+		return Created{}, fmt.Errorf("%w: %w", ErrRequest, err)
+	}
 	branch := strings.TrimSpace(req.Branch)
 	switch shape {
 	case store.TaskDelivery:
@@ -173,7 +180,8 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 		return Created{}, err
 	}
 	task := store.Task{
-		ID: id, Shape: shape, Project: req.Project, Mode: req.Mode, WorktreePath: copyPath,
+		ID: id, Shape: shape, Project: req.Project, Mode: req.Mode, Role: strings.TrimSpace(req.Role),
+		WorktreePath: copyPath,
 	}
 	if req.Repository != "" {
 		task.RepositoryID = store.Known(repository.ID)

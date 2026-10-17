@@ -252,6 +252,7 @@ func (r *codexRunner) invoke(ctx context.Context, purpose Purpose, inv Invocatio
 		Started: time.Now(),
 		Served:  inv.Served,
 	}
+	record.noteLaunch(inv)
 	reference := ""
 	fail := func(res *procResult, category Failure, cause error, message string) (Result, string, error) {
 		record.Duration = time.Since(record.Started)

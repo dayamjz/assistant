@@ -86,7 +86,7 @@ func (t *Tmux) Create(ctx context.Context, spec Spec) (*Session, error) {
 	}
 	worker, err := agents.OpenTerminalWorker(ctx, t.runner,
 		agents.Terminal{Tmux: t.tmux, Socket: t.home.TerminalSocket(hex.EncodeToString(name[:]))},
-		agents.WorkerSpec{Dir: spec.Isolation.Copy, Instructions: spec.Instructions, Route: spec.Route})
+		agents.WorkerSpec{Dir: spec.Isolation.Copy, Instructions: spec.Instructions, Route: spec.Route, Model: spec.Model, Effort: spec.Effort})
 	if err != nil {
 		return nil, fmt.Errorf("session: starting the worker in a terminal: %w", err)
 	}

@@ -103,6 +103,10 @@ type Config struct {
 	// workers through. A Config from Resolve holds a member of the closed
 	// set; KeySessionProvider says why only the operator's file sets it.
 	SessionProvider SessionProvider
+	// Roles says which agent, model, and effort each role runs. Empty means
+	// every role uses Agent and that agent's own model. KeyRoles says which
+	// names the program assigns and which a task may name.
+	Roles Roles
 }
 
 // MergesIn reports whether repository, named as the code host names it, is
@@ -361,6 +365,10 @@ const FixMessagePlaceholder = "{summary}"
 const (
 	// MaxAgents is the length of an agent fallback list.
 	MaxAgents = 8
+	// MaxRoles is how many roles one document may name.
+	MaxRoles = 32
+	// MaxRoleNameRunes is the length of one role name.
+	MaxRoleNameRunes = 32
 	// MaxCommandRunes is the length of one command line.
 	MaxCommandRunes = 4096
 	// MaxIgnorePatterns is the number of ignore patterns.

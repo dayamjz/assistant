@@ -73,13 +73,13 @@ type TaskSnapshot struct {
 // of a single point in time. It returns ErrNotFound for an unknown task.
 //
 // Attribution by branch is a heuristic and says so. The cutoff is the start
-// of the task's latest attempt, which is what keeps a queued task from
-// inheriting the runs of the task it waits behind and a relaunched task from
-// being outranked by a run from before the relaunch; what it does not do is
-// tell two tasks apart whose attempts are both live on one branch, where a
-// newer run made for one is attributed to both. Two tasks on one branch at
-// once is what the intake's disposition exists to prevent, and this read does
-// not re-check it.
+// of the task's latest attempt, and a run is kept only when no other task of
+// the same repository and branch has an attempt that started after that
+// cutoff and at or before the run. That keeps a queued task from inheriting
+// the runs of the task it waits behind, a relaunched task from being
+// outranked by a run from before the relaunch, and a task whose attempt was
+// refused from reading a later task's run on the same branch. A task with no
+// attempt is attributed nothing by its branch.
 //
 // A task recorded before migration 14 has no attempt row, so after it such a
 // task is attributed nothing by its branch where it was attributed by its
@@ -176,8 +176,15 @@ func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error)
 	// not true, so a task with no branch still matches no run by branch.
 	query, args := runColumns+` FROM run WHERE id = ?`, []any{task.RunID}
 	if n := len(attempts); n > 0 {
-		query = runColumns + ` FROM run WHERE (repository_id = ? AND branch = ? AND created_at >= ?) OR id = ?`
-		args = []any{task.RepositoryID, task.Branch, encodeTime(attempts[n-1].StartedAt), task.RunID}
+		cutoff := encodeTime(attempts[n-1].StartedAt)
+		query = runColumns + ` FROM run WHERE (repository_id = ? AND branch = ? AND created_at >= ?
+			AND NOT EXISTS (
+				SELECT 1 FROM task_attempt later
+				JOIN task other ON other.id = later.task_id
+				WHERE other.repository_id = run.repository_id AND other.branch = run.branch
+					AND other.id <> ? AND later.started_at > ? AND later.started_at <= run.created_at
+			)) OR id = ?`
+		args = []any{task.RepositoryID, task.Branch, cutoff, task.ID, cutoff, task.RunID}
 	}
 	rows, err := q.QueryContext(ctx, query+` ORDER BY created_at DESC, id DESC`, args...)
 	if err != nil {

@@ -12,9 +12,11 @@ import (
 )
 
 // PRD section 8 fixes what an agent invocation record holds: purpose, agent,
-// model, timing, failure category, and token usage, and never prompts,
-// outputs, diffs, or credentials. These two tests assert that on the recorded
-// shape rather than on a call site: the first fails if a field is added that
+// the model provider, type and version the launch was asked for, the model
+// identifier started, the role and the effort, timing, failure category, and
+// token usage, and the run and stage it served, and never prompts, outputs,
+// diffs, or credentials. These two tests assert that on the recorded shape
+// rather than on a call site: the first fails if a field is added that
 // content could be written into, and the second fails if content reaches one
 // of the fields that are there.
 
@@ -23,6 +25,11 @@ func TestARecordHasNoFieldContentCouldBeWrittenInto(t *testing.T) {
 		"Purpose":  reflect.TypeFor[agents.Purpose](),
 		"Agent":    reflect.TypeFor[string](),
 		"Model":    reflect.TypeFor[string](),
+		"Role":     reflect.TypeFor[string](),
+		"Provider": reflect.TypeFor[string](),
+		"Type":     reflect.TypeFor[string](),
+		"Version":  reflect.TypeFor[string](),
+		"Effort":   reflect.TypeFor[string](),
 		"Session":  reflect.TypeFor[agents.SessionUse](),
 		"Started":  reflect.TypeFor[time.Time](),
 		"Duration": reflect.TypeFor[time.Duration](),
@@ -308,11 +315,20 @@ func TestTheRecordedModelFallsBackToTheOneAskedFor(t *testing.T) {
 		helperStdoutVar: `{"result":"done","session_id":"s"}`,
 	})
 	inv.Model = "asked-for-model"
+	inv.Role = "review"
+	inv.Provider = "anthropic"
+	inv.Type = "opus"
+	inv.Version = "5.5"
+	inv.Effort = "high"
 
 	if _, err := runner.Run(t.Context(), agents.PurposeTest, inv); err != nil {
 		t.Fatalf("invocation failed: %v", err)
 	}
-	if rec.records[0].Model != "asked-for-model" {
-		t.Errorf("model is %q, want the one the invocation asked for", rec.records[0].Model)
+	got := rec.records[0]
+	if got.Model != "asked-for-model" {
+		t.Errorf("model is %q, want the one the invocation asked for", got.Model)
+	}
+	if got.Role != "review" || got.Provider != "anthropic" || got.Type != "opus" || got.Version != "5.5" || got.Effort != "high" {
+		t.Errorf("the launch attribution is role %q provider %q type %q version %q effort %q", got.Role, got.Provider, got.Type, got.Version, got.Effort)
 	}
 }

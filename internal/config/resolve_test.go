@@ -328,7 +328,7 @@ func TestTrustOfCoversEveryKeyAndOnlyThose(t *testing.T) {
 	if _, ok := TrustOf("nope"); ok {
 		t.Error("TrustOf reported a class for a key outside the schema")
 	}
-	for _, k := range []Key{KeyCommandsTest, KeyCommandsLint, KeyCommandsFormat, KeyAgent} {
+	for _, k := range []Key{KeyCommandsTest, KeyCommandsLint, KeyCommandsFormat, KeyAgent, KeyRoles} {
 		if trust, _ := TrustOf(k); trust != TrustCommands {
 			t.Errorf("%s is %v, want the commands class", k, trust)
 		}
@@ -432,6 +432,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 	}
 	docs := map[Key]string{
 		KeyAgent:                       `{"agent": "claude"}`,
+		KeyRoles:                       `{"roles": {"worker": {"agent": "claude"}}}`,
 		KeyCommandsTest:                `{"commands": {"test": "go test ./..."}}`,
 		KeyCommandsLint:                `{"commands": {"lint": "make lint"}}`,
 		KeyCommandsFormat:              `{"commands": {"format": "gofmt -w ."}}`,

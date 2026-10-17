@@ -109,6 +109,13 @@ type Spec struct {
 	// through, on the terms agents.WorkerSpec.Route states, and empty for a
 	// worker given none.
 	Route string
+	// Model is the model identifier the worker is started with, empty to
+	// leave the choice to the agent. It is the adapter's translation of the
+	// role's provider, type, and version.
+	Model string
+	// Effort is the effort the worker is started with, empty when the role
+	// named none. It is low, medium, or high when set.
+	Effort string
 }
 
 // Session is the handle to one terminal session a provider created and

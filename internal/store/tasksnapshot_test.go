@@ -378,13 +378,14 @@ func TestAttributionIsCutOffAtTheLatestAttempt(t *testing.T) {
 		t.Fatalf("after a relaunch the task was attributed %v (%v), want only %s", runIDs(snap.Runs), err, again.ID)
 	}
 
-	// The control: the blocker's own attribution is unmoved by any of it,
-	// since its attempt is where it was.
+	// The control: runs made after the later task's attempt are that task's.
+	// The blocker keeps the run from before the later task began an attempt,
+	// and does not read the later task's runs as its own.
 	control, err := s.TaskSnapshot(ctx, blocker.ID)
 	if err != nil {
 		t.Fatalf("TaskSnapshot: %v", err)
 	}
-	if want := []string{again.ID, mine.ID, live.ID}; !slices.Equal(runIDs(control.Runs), want) {
+	if want := []string{live.ID}; !slices.Equal(runIDs(control.Runs), want) {
 		t.Fatalf("the blocker is attributed %v, want %v", runIDs(control.Runs), want)
 	}
 }

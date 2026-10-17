@@ -14,7 +14,8 @@ import (
 
 // Usage is PRD section 9's usage view: what the agent calls recorded in a
 // window cost, read from section 8's agent invocation record and totalled by
-// agent, model and purpose, and by run and stage. The person's rendering and
+// agent, model, purpose, role, model provider, type, version and effort, and
+// by run and stage. The person's rendering and
 // the machine interface are this one shape (P14), and a driving agent reaches
 // it through the open usage.read method rather than through a second model.
 //
@@ -47,8 +48,11 @@ type Usage struct {
 	Excludes []string `json:"excludes"`
 	// Total is every call in the window.
 	Total UsageTotals `json:"total"`
-	// ByAgent is the calls grouped by agent, model and purpose, in the order
-	// each group's first call was recorded.
+	// ByAgent is the calls grouped by agent, model, purpose, role, provider,
+	// type, version and effort, in the order each group's first call was
+	// recorded. A provider, type, version, role, or effort that is unknown
+	// is not the same group as one recorded as not named, and neither is a
+	// group that named a value.
 	ByAgent []UsageByAgent `json:"by_agent"`
 	// ByRun is the calls grouped by the run and stage they served, in the
 	// order each group's first call was recorded. A call whose row names
@@ -132,9 +136,11 @@ func (t *UsageTotals) add(inv store.AgentInvocation) {
 	t.CacheCreationTokens.add(inv.CacheCreationTokens)
 }
 
-// UsageByAgent is the calls one agent made with one model for one purpose.
-// Model is empty where neither the invocation nor the agent named one, which
-// is how the record holds that.
+// UsageByAgent is the calls one agent made with one model, for one purpose,
+// under one role and one model triple and effort. Model is empty where
+// neither the invocation nor the agent named one. Role, Provider, Type,
+// Version, and Effort are unknown where the row predates the column, and
+// known empty where the launch did not name that one.
 type UsageByAgent struct {
 	// Agent is the agent's name.
 	Agent string `json:"agent"`
@@ -142,6 +148,16 @@ type UsageByAgent struct {
 	Model string `json:"model"`
 	// Purpose is the role the calls played.
 	Purpose string `json:"purpose"`
+	// Role is the configured role the launch ran under.
+	Role store.Optional[string] `json:"role"`
+	// Provider is the model provider the launch was asked for.
+	Provider store.Optional[string] `json:"provider"`
+	// Type is the model type the launch was asked for.
+	Type store.Optional[string] `json:"type"`
+	// Version is the model version the launch was asked for.
+	Version store.Optional[string] `json:"version"`
+	// Effort is the effort the launch was asked for.
+	Effort store.Optional[string] `json:"effort"`
 	UsageTotals
 }
 
@@ -175,7 +191,10 @@ func UsageOf(window UsageWindow, readAt time.Time, rows []store.AgentInvocation)
 		ByAgent:  []UsageByAgent{},
 		ByRun:    []UsageByRun{},
 	}
-	type agentKey struct{ agent, model, purpose string }
+	type agentKey struct {
+		agent, model, purpose                string
+		role, provider, typ, version, effort store.Optional[string]
+	}
 	type runKey struct{ run, stage store.Optional[string] }
 	agents := map[agentKey]int{}
 	runs := map[runKey]int{}
@@ -185,12 +204,15 @@ func UsageOf(window UsageWindow, readAt time.Time, rows []store.AgentInvocation)
 		}
 		usage.Total.add(inv)
 
-		ak := agentKey{inv.Agent, inv.Model, inv.Purpose}
+		ak := agentKey{inv.Agent, inv.Model, inv.Purpose, inv.Role, inv.Provider, inv.Type, inv.Version, inv.Effort}
 		i, ok := agents[ak]
 		if !ok {
 			i = len(usage.ByAgent)
 			agents[ak] = i
-			usage.ByAgent = append(usage.ByAgent, UsageByAgent{Agent: inv.Agent, Model: inv.Model, Purpose: inv.Purpose})
+			usage.ByAgent = append(usage.ByAgent, UsageByAgent{
+				Agent: inv.Agent, Model: inv.Model, Purpose: inv.Purpose,
+				Role: inv.Role, Provider: inv.Provider, Type: inv.Type, Version: inv.Version, Effort: inv.Effort,
+			})
 		}
 		usage.ByAgent[i].add(inv)
 

@@ -39,7 +39,8 @@ type GatePath func(ctx context.Context, repository store.Repository) (string, er
 // than assuming a posture.
 type ProjectPosture func(ctx context.Context, repository store.Repository, task string) (config.Delivery, error)
 
-// Deps is what a Queue is built from. Every field is required.
+// Deps is what a Queue is built from. Every field but Roles is required.
+// Roles may be nil, which is no configured role.
 type Deps struct {
 	// Home says where a task's instructions and its copy go.
 	Home *home.Home
@@ -59,6 +60,10 @@ type Deps struct {
 	// Posture answers a repository's declared delivery posture, which a
 	// delivery task's intake and an investigation's promotion record.
 	Posture ProjectPosture
+	// Roles is the configuration a task's role is resolved against. Nil
+	// means no role is configured, so a task that names one is refused and
+	// a task that names none runs as the worker role on the agent list.
+	Roles config.Roles
 }
 
 // ErrIncomplete is returned by New when a dependency is missing.
@@ -76,6 +81,7 @@ type Queue struct {
 	inGate   BranchInGate
 	gatePath GatePath
 	posture  ProjectPosture
+	roles    config.Roles
 	// betweenReadAndWrite runs after an intake, a release or a promotion
 	// has read the records it decides from and before it writes. It is nil
 	// in production and set only by this package's tests, which use it to
@@ -108,7 +114,7 @@ func New(d Deps) (*Queue, error) {
 		return nil, fmt.Errorf("%w: no posture reader", ErrIncomplete)
 	}
 	return &Queue{home: d.Home, store: d.Store, reader: d.Reader, hold: d.Exclude, inGate: d.BranchInGate,
-		gatePath: d.GatePath, posture: d.Posture}, nil
+		gatePath: d.GatePath, posture: d.Posture, roles: d.Roles}, nil
 }
 
 // Clears reports whether a blocker in this state no longer holds the tasks

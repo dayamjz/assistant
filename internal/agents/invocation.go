@@ -143,6 +143,16 @@ type Invocation struct {
 	Env map[string]string
 	// Model names the model to run, empty to leave the choice to the agent.
 	Model string
+	// Role is the role this launch runs under, such as review or fix. Empty
+	// means the launch named no role. Provider, Type, and Version are the
+	// model triple the role named, and Effort is the effort it named. Empty
+	// means that one was not named. The adapter records them as asked and
+	// does not fill in one the launch left empty.
+	Role     string
+	Provider string
+	Type     string
+	Version  string
+	Effort   string
 	// Started, when set, is told that the invocation's process has started:
 	// it is called once, after the process exists, with the identifier of the
 	// process group the invocation leads, and the function it returns is

@@ -471,13 +471,15 @@ const taskBlockersMigration = "task blockers, attempts and cleanup records"
 func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	var blockers, route migration
+	var blockers, route, model migration
 	for _, m := range schema {
 		switch m.name {
 		case taskBlockersMigration:
 			blockers = m
 		case taskAttemptRouteMigration:
 			route = m
+		case taskAttemptModelMigration:
+			model = m
 		}
 	}
 	if blockers.version == 0 {
@@ -485,6 +487,9 @@ func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 	}
 	if route.version == 0 {
 		t.Fatalf("the shipped schema has no migration named %q", taskAttemptRouteMigration)
+	}
+	if model.version == 0 {
+		t.Fatalf("the shipped schema has no migration named %q", taskAttemptModelMigration)
 	}
 
 	// Back to the shape migration 13 left. A migration may not do this, which
@@ -499,9 +504,10 @@ func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 	}
 	// Forget the blockers migration and every later migration that ALTERs
 	// task_attempt, so re-applying creates the table and then adds the
-	// columns the current accessors select.
-	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version IN (?, ?)`,
-		blockers.version, route.version); err != nil {
+	// columns the current accessors select. taskRoleMigration alters task
+	// and is left recorded: that column is still on the table.
+	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version IN (?, ?, ?)`,
+		blockers.version, route.version, model.version); err != nil {
 		t.Fatalf("forgetting the migration: %v", err)
 	}
 	if _, err := s.write.ExecContext(ctx, `

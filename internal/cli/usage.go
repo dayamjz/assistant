@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // readOutUsage prints PRD section 9's usage view, which that section names a
@@ -29,13 +30,16 @@ func readOutUsage(w io.Writer, u machine.Usage) {
 	if u.Total.Calls == 0 {
 		return
 	}
-	writeln(w, "\nBy agent, model and purpose")
+	writeln(w, "\nBy agent, model, purpose, role, provider, type, version and effort")
 	for _, g := range u.ByAgent {
 		model := g.Model
 		if model == "" {
 			model = "(no model named)"
 		}
-		writeUsageTotals(w, fmt.Sprintf("  %s  %s  %s", printable(g.Agent), printable(model), printable(g.Purpose)), g.UsageTotals)
+		writeUsageTotals(w, fmt.Sprintf("  %s  %s  %s  role %s  %s %s %s  effort %s",
+			printable(g.Agent), printable(model), printable(g.Purpose),
+			namedDimension(g.Role), namedDimension(g.Provider), namedDimension(g.Type), namedDimension(g.Version),
+			namedDimension(g.Effort)), g.UsageTotals)
 	}
 	writeln(w, "\nBy run and stage")
 	for _, g := range u.ByRun {
@@ -73,6 +77,19 @@ func failures(byCategory map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%s %d", printable(category), byCategory[category]))
 	}
 	return fmt.Sprintf("%d (%s)", total, strings.Join(parts, ", "))
+}
+
+// namedDimension prints one role attribution: unknown when the row predates
+// the column, and not named when the launch left it empty.
+func namedDimension(v store.Optional[string]) string {
+	text, ok := v.Get()
+	if !ok {
+		return "unknown"
+	}
+	if strings.TrimSpace(text) == "" {
+		return "(not named)"
+	}
+	return printable(text)
 }
 
 // usageCount prints one token count: unreported when no call reported it, the

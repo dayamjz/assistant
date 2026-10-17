@@ -13,13 +13,13 @@ import (
 // Claude Code adapter a WorkerRunner, and Capabilities declares the same fact.
 //
 // The command line is the configured entry's own flags, then GrantWorker's
-// flags (claudeGrantFlags), then the four this mode manages: --print, --input-format stream-json, --output-format
-// stream-json, and --verbose. Those are the flags the CLI's own --help
+// flags (claudeGrantFlags), then --model and --effort when the spec names
+// them, then the four this mode manages: --print, --input-format stream-json, --output-format
+// stream-json, and --verbose. Those four are the flags the CLI's own --help
 // documents for realtime streaming input, which it offers only with --print;
 // --verbose is there because the CLI answers stream-json output under --print
-// without it with an error and no output. No --model is passed, because a
-// WorkerSpec names none, and no --resume, because a worker opens a
-// conversation rather than continuing one. config.ReservedAgentFlags refuses
+// without it with an error and no output. No --resume is passed, because a
+// worker opens a conversation rather than continuing one. config.ReservedAgentFlags refuses
 // an entry naming --input-format, --output-format or --resume, so an entry
 // cannot contradict the three that decide how the worker's input and output
 // are read and which conversation it is in.
@@ -44,7 +44,7 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 	}
 	worker, err := startWorker(ctx, procSpec{
 		bin:    r.resolved,
-		args:   r.workerArguments(spec.Route),
+		args:   r.workerArguments(spec),
 		dir:    spec.Dir,
 		env:    WorkerEnvironment(r.settings.base, spec.Env),
 		grace:  r.settings.grace,
@@ -57,9 +57,16 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 }
 
 // workerArguments builds a worker's command line: the configured entry's own
-// flags, then the worker's grant with its route, then the four Start states.
-func (r *claudeRunner) workerArguments(route string) []string {
-	args := append(slices.Clone(r.extra), claudeGrantFlags(GrantWorker, route)...)
+// flags, then the worker's grant with its route, then --model and --effort
+// when the spec names them, then the four Start states.
+func (r *claudeRunner) workerArguments(spec WorkerSpec) []string {
+	args := append(slices.Clone(r.extra), claudeGrantFlags(GrantWorker, spec.Route)...)
+	if spec.Model != "" {
+		args = append(args, "--model", spec.Model)
+	}
+	if spec.Effort != "" {
+		args = append(args, "--effort", spec.Effort)
+	}
 	return append(args,
 		"--print",
 		"--input-format", "stream-json",

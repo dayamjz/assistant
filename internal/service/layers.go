@@ -67,6 +67,13 @@ var ErrPushedConfig = errors.New("service: the pushed configuration document is 
 // in the operator's configuration, resolves it.
 var ErrRepositoryAgent = errors.New("service: this build resolves one agent per service, from the operator's configuration, and this repository's configuration asks for a different agent list")
 
+// ErrRepositoryRoles reports a repository configuration asking for a roles
+// table this build cannot honor. This build reads roles from the operator's
+// layer, the same document it reads the agent list from, and a run whose
+// resolved roles differ is refused rather than launched on a table its
+// repository did not ask for.
+var ErrRepositoryRoles = errors.New("service: this build resolves one roles table per service, from the operator's configuration, and this repository's configuration asks for a different one")
+
 // ErrForkUnresolved reports a repository record naming a fork that a run
 // cannot push to and propose from: the fork or its upstream is not a
 // repository on the code host this build addresses, or the fork names the
@@ -148,6 +155,9 @@ func (s *Service) resolveRunConfig(ctx context.Context, record store.Run) (runRe
 	if !slices.Equal(resolution.Config.Agent, s.cfg.Agent) {
 		return runResolution{}, fmt.Errorf("%w: the run resolves %v and this service resolved %v",
 			ErrRepositoryAgent, resolution.Config.Agent, s.cfg.Agent)
+	}
+	if !resolution.Config.Roles.Equal(s.cfg.Roles) {
+		return runResolution{}, ErrRepositoryRoles
 	}
 	return runResolution{
 		cfg:      resolution.Config,

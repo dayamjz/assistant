@@ -517,7 +517,7 @@ flowchart LR
         <tr><th class="w-10">#</th><th class="w-32">Stage</th><th>What it does and why it sits here</th><th class="w-24">Fix rounds</th></tr>
       </thead>
       <tbody>
-        <tr><td class="prd-num">1</td><td><b>Intent</b></td><td>Establishes what you set out to do. Supplied intent is authoritative acceptance criteria; inferred intent is a low-confidence hint, and the two are framed differently in every downstream prompt. Intent read off the task a worker was given is a source of its own and is framed as inferred intent is: a hint, never acceptance criteria. This stage never blocks a run.</td><td class="opacity-60">none</td></tr>
+        <tr><td class="prd-num">1</td><td><b>Intent</b></td><td>Establishes what you set out to do. Supplied intent is authoritative acceptance criteria; inferred intent is a low-confidence hint, and the two are framed differently in every downstream prompt. Intent read off the task a worker was given is a source of its own and is the acceptance criteria of the run that worker's push starts. A person's push of the same branch carries none of it. This stage never blocks a run.</td><td class="opacity-60">none</td></tr>
         <tr><td class="prd-num">2</td><td><b>Rebase</b></td><td>Fetches fresh upstream and the branch target, then rebases onto them, so everything after runs against current code. Stops if the branch would quietly carry commits from your local default branch that were never pushed. If nothing remains to change, the run ends successfully and the rest is skipped.</td><td class="prd-num">3</td></tr>
         <tr><td class="prd-num">3</td><td><b>Review</b></td><td>Independent review of the change against the diff and your intent. Runs before tests so it reads code the fixer has not touched. Gets one automatic fix round, restricted to <code>fix</code> findings. Any <code>ask</code> finding holds immediately and is never included in that round.</td><td class="prd-num">1</td></tr>
         <tr><td class="prd-num">4</td><td><b>Test</b></td><td>Targeted validation of this change and this intent, not a full suite. If no targeted check can establish the intent, the stage must write one, verify manually with recorded evidence, or report that sufficient evidence is not possible.</td><td class="prd-num">3</td></tr>
@@ -1086,6 +1086,14 @@ stateDiagram-v2
     </div>
   </div>
 
+  <p class="mb-8 opacity-90">
+    A task runs under a role, section 10's <code>roles</code>. Intake records the role name and
+    nothing about which agent, model provider, model type, model version, or effort that name meant: the role row is the one owner of
+    those, and a launch reads it then (P14). No role at intake is the <code>worker</code> role.
+    Promotion and relaunch keep the name. The review and the fix of a run that the task's push
+    starts are the <code>review</code> and <code>fix</code> roles, not the task's role.
+  </p>
+
   <div role="alert" class="alert alert-soft alert-warning mb-8 items-start">
     <div class="min-w-0">
       <p class="font-semibold mb-1">A report is evidence, not authorization</p>
@@ -1128,9 +1136,11 @@ stateDiagram-v2
     validation run has moved past it, the resolver reports that event as superseded.
   </p>
   <p class="mb-4 opacity-90">
-    Which run belongs to a task has no owner row. A run is attributed by repository, branch, and
-    being no older than the task, and the resolution names the run it chose, so a reader can see
-    what the answer rested on.
+    Which run belongs to a task has no owner row. A run is attributed to the task whose latest
+    attempt is the newest attempt on that repository and branch that had started by the time the
+    run was created. A later task's run is not attributed to an earlier task on the branch. A task
+    with no attempt is attributed no run by its branch. The resolution names the run it chose, so
+    a reader can see what the answer rested on.
   </p>
   <p class="mb-8 opacity-90">
     Task state is its own vocabulary and not a second rendering of a run's outcome. The outcome
@@ -1731,7 +1741,7 @@ flowchart TB
         <h4 class="card-title text-sm">The agent owns</h4>
         <ul class="text-xs opacity-90 list-disc pl-5 space-y-1">
           <li>Understanding what you asked for, and which project you meant.</li>
-          <li>Choosing a task shape, writing the instructions, and deciding when work overlaps.</li>
+          <li>Choosing a task shape, writing the instructions, deciding when work overlaps, and choosing which configured role the worker runs under.</li>
           <li>Reading a report or a finding and deciding whether it needs you.</li>
           <li>Translating internal state into the outcome you hear, per P13.</li>
           <li>Every judgment the autonomy flag permits it to make.</li>
@@ -1860,7 +1870,10 @@ flowchart TB
         refused before that adapter is launched, naming the capability that is missing, and is never
         replaced by a weaker path that would still be reported as a pass. Section 10 already
         specifies this shape for instruction suppression; this generalizes it to the rest of the
-        interface.
+        interface. The same declaration says which version cells from section 10's table the
+        adapter translates. A role whose triple that adapter has not declared is refused before
+        launch, on these terms, and the table stays the one owner of which providers, types, and
+        versions exist.
       </p>
       <p class="text-sm opacity-90 mt-2">
         The case that decides whether this is worth having is P4. A review may never resume the
@@ -1889,7 +1902,7 @@ flowchart TB
         <tr><td><b>stage result</b></td><td>Authoritative</td><td>Per stage: status, findings, duration, log path, last activity, and the effective fix limit.</td></tr>
         <tr><td><b>round</b></td><td>History</td><td>One row per stage execution. Findings, which findings were selected and by whom, the exact payload sent to the fixer, and the one-line summary. This is what the pull request narrative is generated from.</td></tr>
         <tr><td><b>checkpoint history</b></td><td>Authoritative, appended</td><td>One entry per position a run has stood in: state, the node it has not yet run, the status it stood in, the decision it is halted on when it is halted, the bound accounting, and, on an entry a fork produced, the entry it was copied from. Appended after every node and never revised. The entry with the highest sequence is where the run stands, and it is the only record that answers that.</td></tr>
-        <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, launch notation (how the worker was started), delivery posture (recorded at intake or promotion, in a field of its own), isolated copy path, session reference, linked run, linked pull request.</td></tr>
+        <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, launch notation (how the worker was started), the role it runs under (the name only, recorded at intake and kept by promotion and relaunch), delivery posture (recorded at intake or promotion, in a field of its own), isolated copy path, session reference, linked run, linked pull request.</td></tr>
         <tr><td><b>task state</b></td><td>Resolved on read</td><td>Not a stored row. A resolution with its source attached, computed on each read from the records that own its facts, as of one consistent read of them; section 6 says what it rests on. Distinct from the event log, per P8.</td></tr>
         <tr><td><b>task event</b></td><td>History</td><td>Append-only. Every append is a wake.</td></tr>
         <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write. Draining hands a row out; acknowledging closes it. The coordinator acknowledges a row after it has acted on it, and a row handed out and never acknowledged is handed out again: after a restart, and once the coordinator it was handed to is no longer attached. No row is deleted: closed rows are kept, and a row is actionable until acknowledged.</td></tr>
@@ -1899,7 +1912,7 @@ flowchart TB
         <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. One resolution the service makes itself is for the hold the checks stage raises when <code>checks_timeout</code> elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. The other is each answer section 9's standing consent gives, recorded under the resolver that consent has of its own. Every other hold keeps the rule.</td></tr>
         <tr><td><b>message</b></td><td>Authoritative, appended</td><td>One row per message sent to a worker: the task, the attempt, the text with credentials removed, and who sent it, derived from the surface. Each of written, refused, and acknowledged is recorded on it once and never revised, and it is the one place whether a message was delivered is read from. Section 6's steering says what writes each.</td></tr>
         <tr><td><b>seen mark</b></td><td>Authoritative, appended</td><td>One row per merge or cleanup record you were shown and marked seen, keyed the way that record is keyed. One per home. It is what section 9's catch-up reads to decide what landed since you last looked, and nothing else reads it.</td></tr>
-        <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, model, timing, failure category, token usage, and the run and stage it served where it served one. Never prompts, outputs, diffs, or credentials. The run and stage were added later, so a row written before them reads both as unknown, never as a guess.</td></tr>
+        <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, the model provider, model type, and model version the launch was asked for, the model identifier the adapter started, the role and the effort of the launch, timing, failure category, token usage, and the run and stage it served where it served one. Never prompts, outputs, diffs, or credentials. The run, the stage, the role, the provider, the type, the version, and the effort were added later, so a row written before one of them reads that one as unknown, never as a guess. A provider, a type, a version, or an effort that was not named is recorded as not named, and is never stored as one of the named values.</td></tr>
       </tbody>
     </table>
   </div>
@@ -2105,9 +2118,11 @@ flowchart TB
   </p>
   <p class="mb-4 opacity-90">
     The <b>usage view</b> is a flag on <code>assistant runs</code>, taking a window. It reads section
-    8's agent invocation record and totals it by agent, model, and purpose, and by run and stage
+    8's agent invocation record and totals it by agent, model provider, model type, model version, the model identifier the launch used, purpose, role, and effort, and by run and stage
     where a row names them: calls, failures by category, duration, and each token count. A count the
-    agent did not report is shown as unreported and never summed as a zero. It covers the calls a
+    agent did not report is shown as unreported and never summed as a zero. A provider, a type, a
+    version, or an effort recorded as not named is totaled on its own and never as one of the named values.
+    It covers the calls a
     stage makes and says so: a worker's turns and any price are not in it. The local protocol
     carries the same read as one open method, so a driving agent gets the same model. It is a
     detailed evidence document in P13's sense, because its rows are agent names, model identifiers,
@@ -2165,7 +2180,10 @@ flowchart TB
     Creating a task, promoting an investigation to delivery, and relaunching a task whose terminal
     is gone are the coordinator's typed commands from section 8, and each is a service method
     rather than a verb: none is a row in the table above, and each is reached through the
-    coordinator client described below. Each is coordinator-only. A caller whose process is inside a
+    coordinator client described below. Create takes an optional role, section 10's
+    <code>roles</code>. No role means the <code>worker</code> role. A role the resolved
+    configuration does not name, and either of the gate roles <code>review</code> and
+    <code>fix</code>, is refused as incorrect usage and creates no task. Each is coordinator-only. A caller whose process is inside a
     registered worker group, which the service decides from the credentials the socket reports and
     never from anything the caller says about itself, is refused, so an investigation cannot
     promote itself and no worker can create or relaunch a task. Relaunch goes through the one
@@ -2390,7 +2408,7 @@ flowchart TB
 
   push -->|"read from here"| A["Ignore patterns<br />Fix limits<br />Commit message template<br />Intent settings"]
   trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Judge paths<br />Instruction suppression<br />No-CI declaration<br />Rerun budget<br />Delivery posture"]
-  trusted -->|"read from here, unless you opt out"| C["Test, lint, and format commands<br />Agent selection"]
+  trusted -->|"read from here, unless you opt out"| C["Test, lint, and format commands<br />Agent selection and roles"]
 
   global -->|"read from here only"| D["Checks timeout<br />Session reuse<br />Decision model<br />Merge authority"]
 
@@ -2408,7 +2426,7 @@ flowchart TB
     <div class="card card-border bg-base-200 border-warning/40">
       <div class="card-body">
         <h4 class="card-title text-sm">Trusted unless you opt out</h4>
-        <p class="text-xs opacity-90">Commands and agent selection. These run shell and choose which process starts with your credentials. The opt-out exists for a single-developer repository and is itself readable only from the trusted copy, so a branch cannot enable it for itself.</p>
+        <p class="text-xs opacity-90">Commands, agent selection, and roles. These run shell and choose which process starts with your credentials. The opt-out exists for a single-developer repository and is itself readable only from the trusted copy, so a branch cannot enable it for itself.</p>
       </div>
     </div>
     <div class="card card-border bg-base-200 border-error/40">
@@ -2441,7 +2459,8 @@ flowchart TB
     <table class="table table-sm table-zebra">
       <thead><tr><th class="w-52">Key</th><th class="w-28">Default</th><th>Meaning</th></tr></thead>
       <tbody>
-        <tr><td><code>agent</code></td><td><code>auto</code></td><td>One agent or an ordered fallback list. Resolved against what is actually runnable at run start. If nothing resolves, the run fails before its first stage rather than reporting command-only validation as a pass.</td></tr>
+        <tr><td><code>agent</code></td><td><code>auto</code></td><td>One agent or an ordered fallback list. Resolved against what is actually runnable at run start. If nothing resolves, the run fails before its first stage rather than reporting command-only validation as a pass. When <code>roles</code> is empty this is the agent every role uses. A role that names its own agent does not consult this list.</td></tr>
+        <tr><td><code>roles</code></td><td>empty</td><td>Which agent, model provider, model type, model version, and effort each role runs. Empty means every role uses <code>agent</code> and that agent's own model. The program assigns <code>review</code>, <code>fix</code>, and <code>worker</code>; any other name is a worker role a task may name. Same trust class as <code>agent</code>, so a pushed branch sets it only under <code>allow_pushed_commands</code>. The rules are the section below.</td></tr>
         <tr><td><code>commands.test</code></td><td>empty</td><td>A targeted check for this change, not a full suite. Deliberately empty by default.</td></tr>
         <tr><td><code>commands.lint</code></td><td>empty</td><td>Static analysis. When empty, the document stage performs a combined pass and routes its lint findings to the lint stage.</td></tr>
         <tr><td><code>commands.format</code></td><td>empty</td><td>Run immediately before pushing.</td></tr>
@@ -2456,7 +2475,7 @@ flowchart TB
         <tr><td><code>no_ci</code></td><td><code>false</code></td><td>A positive declaration that this repository has no checks. Only this makes an empty check list count as green.</td></tr>
         <tr><td><code>delivery</code></td><td><code>gated</code></td><td>The delivery posture of this repository's delivery tasks, section 6: <code>gated</code> or <code>local</code>. Read only from the trusted copy, so a branch cannot choose a lighter path for itself. <code>direct</code> is deferred and is rejected at parse time. It never changes what a person's push to the gate does.</td></tr>
         <tr><td><code>autonomy.merge</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td>empty</td><td>The repositories, each named as the code host names it, where section 6's autonomy flag may merge a run that ended <code>checks-passed</code>, after the live read section 6 gives. Empty means the program merges nothing.</td></tr>
-        <tr><td><code>allow_pushed_commands</code></td><td><code>false</code></td><td>The opt-out that lets the pushed branch set commands and agent selection. It is itself readable only from the trusted copy, so a branch cannot enable it for itself.</td></tr>
+        <tr><td><code>allow_pushed_commands</code></td><td><code>false</code></td><td>The opt-out that lets the pushed branch set commands, agent selection, and roles. It is itself readable only from the trusted copy, so a branch cannot enable it for itself.</td></tr>
         <tr><td><code>allow_standing_consent</code></td><td><code>false</code></td><td>Whether a run of this repository may be put under section 9's standing consent. It allows and does not turn on: only the per-run flag section 9 gives puts a run under it, and that flag is refused where this is false. Read only from the trusted copy, so a pushed branch cannot allow standing consent for itself; like every trusted-only key, the operator's own file may also set it, which allows it in every repository of the home.</td></tr>
         <tr><td><code>checks_timeout</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending, and that hold is the one section 11's recovery step 3 applies to.</td></tr>
         <tr><td><code>escalation_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>30m</code></td><td>How long a terminal may stay unchanged, with positive evidence of progress, before the supervisor surfaces it anyway. It is also how often a crashed worker that is still silent surfaces again. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
@@ -2472,6 +2491,88 @@ flowchart TB
     </table>
   </div>
 
+  <h3 class="text-xl font-semibold mb-3">Roles</h3>
+  <p class="mb-4 opacity-90">
+    You assign an agent, a model provider, a model type, a model version, and an effort to a role.
+    A task names a role. The review stage and the fixer name theirs. The program does not choose
+    among agents, providers, types, or versions by remaining quota or by price. That choice stays
+    deferred, and section 9's usage view is the measurement it would start from.
+  </p>
+  <p class="mb-4 opacity-90">
+    The program assigns three roles. <code>review</code> is the review stage, and every review is
+    a fresh context (P4). <code>fix</code> is a fix round. The durable fixer session, when session
+    reuse is on, is this role's session, and a review never resumes it, even when both roles name
+    the same agent, the same provider, the same type, and the same version (P4). <code>worker</code> is a task that names no other role.
+    Any other name you define is a worker role, and a task may name it. A task that names
+    <code>review</code> or <code>fix</code> is refused at intake and is not created.
+  </p>
+  <p class="mb-4 opacity-90">
+    A role names one agent, with no arguments and no fallback list. The agent is the process that
+    starts. The model provider is who serves the model, the model type is which of that provider's
+    models runs, and the model version is which release of that type runs. Those are not the agent:
+    one process can start another provider's model. The provider, the type, and the version are a
+    triple from the table below, which is the whole set. A type is valid only on its provider's
+    rows, and a version is valid only in that type's cell. The same version token under two types
+    is two versions. The role does not name a model identifier. The adapter translates the triple
+    into the identifier it starts, and that translation is the adapter's. Effort is one of
+    <code>low</code>, <code>medium</code>, and <code>high</code>, and it is not a stand-in for the
+    type or the version.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-36">Provider</th><th class="w-32">Type</th><th>Versions</th></tr></thead>
+      <tbody>
+        <tr><td><code>anthropic</code></td><td><code>opus</code></td><td><code>5.5</code>, <code>5</code>, <code>4.8</code>, <code>4.7</code>, <code>4.6</code>, <code>4.5</code></td></tr>
+        <tr><td><code>anthropic</code></td><td><code>sonnet</code></td><td><code>5.5</code>, <code>5</code>, <code>4.6</code></td></tr>
+        <tr><td><code>anthropic</code></td><td><code>haiku</code></td><td><code>5.5</code>, <code>4.5</code></td></tr>
+        <tr><td><code>openai</code></td><td><code>gpt</code></td><td><code>6-astra</code>, <code>6.1-sol</code>, <code>6-luna</code></td></tr>
+        <tr><td><code>google</code></td><td><code>gemini</code></td><td><code>4-argon</code></td></tr>
+        <tr><td><code>google</code></td><td><code>flash</code></td><td><code>3.8</code>, <code>3.6</code></td></tr>
+        <tr><td><code>xai</code></td><td><code>grok</code></td><td><code>4.7</code>, <code>4.6</code>, <code>4.5</code></td></tr>
+        <tr><td><code>cursor</code></td><td><code>composer</code></td><td><code>2.5</code>, <code>2</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="mb-4 opacity-90">
+    A provider, a type, or a version outside that table, a type on the wrong provider, or a version
+    in the wrong type's cell, fails at parse time and names the role. Adding a provider, a type, or
+    a version is adding it to that table. A provider, a type, a version, or an effort on a role
+    that names no agent is invalid, because each belongs to one process and means nothing across
+    the <code>agent</code> fallback list. Naming the provider, the type, or the version without the
+    other two fails at parse time: part of a triple does not say which model runs. Omitting the
+    triple means that agent's own model, and the launch records that the provider, the type, and
+    the version were not named. Omitting the effort means that agent's own effort, recorded as not
+    named. Omitting the agent means the role uses <code>agent</code> as resolved for a run,
+    including its fallback list, and then the role names neither a provider, nor a type, nor a
+    version, nor an effort.
+  </p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li>A role name is lowercase letters, digits, and hyphens, starting with a letter. <code>review</code>, <code>fix</code>, and <code>worker</code> are the three the program assigns.</li>
+    <li>An effort outside <code>low</code>, <code>medium</code>, and <code>high</code> fails at parse time and names the role.</li>
+    <li>Each adapter declares which version cells of the table it translates. A triple it has not declared is refused before it is launched, naming the role, the provider, the type, and the version. The program does not start a different provider, type, or version in its place, and it does not pick a different agent because that agent declared the triple.</li>
+    <li>The limits table bounds how many roles there are and how long a name is. Those bounds are chosen, not measured. A provider, a type, and a version have no length of their own, because each is a cell of the table.</li>
+  </ul>
+  <p class="mb-4 opacity-90">
+    A role is resolved when its work is about to start, from the trusted configuration, on
+    <code>agent</code>'s terms (P7). A named agent that cannot run, a named effort the adapter
+    cannot express, a provider, type, and version the adapter has not declared, or an agent that
+    has not declared a capability that role's path requires, refuses that launch and names the
+    role. No other role's agent is started in its place. A worker role whose agent has not
+    declared worker sessions is that refusal, and the task resolves Failed from it. A review or a
+    fix that cannot start fails the run before that stage launches.
+  </p>
+  <p class="mb-4 opacity-90">
+    The role a task runs under does not follow the branch it pushes. The run that push starts
+    reviews with <code>review</code> and fixes with <code>fix</code>.
+  </p>
+  <p class="mb-8 opacity-90">
+    A relaunch, and a run that resumes, reads the role again. It does not reuse an agent, a
+    provider, a type, a version, or an effort recorded on an earlier attempt, and it does not
+    resume a session that belongs to a different agent than the role now names. The task keeps the
+    role name. The invocation records the agent, the provider, the type, the version, the model
+    identifier the adapter started, and the effort the launch actually used.
+  </p>
+
   <h3 class="text-xl font-semibold mb-3">Validation rules</h3>
   <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
     <li>Invalid configuration fails at parse time and names the offending key and value, including on a pushed branch whose fields are otherwise ignored. A broken rule should surface before it merges.</li>
@@ -2485,6 +2586,8 @@ flowchart TB
       <thead><tr><th class="w-72">Limit</th><th class="w-28">Value</th><th>Measured on</th></tr></thead>
       <tbody>
         <tr><td>Agent fallback list length</td><td><code class="prd-num">8</code></td><td>Elements of <code>agent</code>.</td></tr>
+        <tr><td>Role count</td><td><code class="prd-num">32</code></td><td>Elements of <code>roles</code>. Chosen, not measured.</td></tr>
+        <tr><td>Role name length</td><td><code class="prd-num">32</code></td><td>Runes of one role name. Chosen, not measured.</td></tr>
         <tr><td>Command line length</td><td><code class="prd-num">4096</code></td><td>Runes of one <code>commands.*</code> value.</td></tr>
         <tr><td>Ignore pattern count</td><td><code class="prd-num">512</code></td><td>Elements of <code>ignore_patterns</code>.</td></tr>
         <tr><td>Path pattern length</td><td><code class="prd-num">512</code></td><td>Runes of one pattern.</td></tr>
@@ -2644,7 +2747,7 @@ flowchart TB
           <li><b>Extra session providers.</b> One reference provider proves the abstraction, and tmux is now a provider beside it, chosen with <code>session_provider</code>. Claude Code workers run under tmux in the adapter's terminal mode, which section 1's Promise 1 and section 6's steering row describe. Further providers prove nothing new.</li>
           <li><b>Delegate coordinators.</b> The most complex feature in either source project. It only earns its cost at a fleet size you have not reached.</li>
           <li><b>The direct delivery mode.</b> The gate is the thesis, and this is the one mode that shares unvalidated work. When it is promoted, the program forwards the worker's pushed commit from the gate with an anchored update and the worker gains no second remote, and the merge record is its landed record. The local mode is not deferred: it shares nothing, and section 6 specifies it.</li>
-          <li><b>Agent routing by model, effort, or quota.</b> Routing among adapters means nothing with one, so it is specified when a second adapter is promoted. Section 9's usage view is the measurement it will start from.</li>
+          <li><b>Choosing an agent by quota.</b> Section 10's roles are how you name which agent, model provider, model type, model version, and effort each role runs. The program does not pick among them by remaining quota or by price. That choice stays deferred, and section 9's usage view is the measurement it would start from.</li>
           <li><b>Interrupting a worker's turn.</b> It needs proof the turn ended, which nothing reads yet. Stop and relaunch cover the need; an adapter offers interrupt once it declares it with a conformance probe for that proof.</li>
           <li><b>Transcript-based intent inference.</b> Supply intent explicitly first. Inference is a convenience over a mechanism that must already work.</li>
           <li><b>Away mode.</b> Requires the supervision loop to be trustworthy first.</li>
@@ -2824,7 +2927,12 @@ flowchart TB
         <tr>
           <td class="prd-num">13</td>
           <td>Agent cost is <b>measured before anything is routed</b>: a usage view now, routing when a second adapter is promoted.</td>
-          <td>Section 9's usage view, a flag on <code>runs</code> plus one read method, named an evidence document under P13; section 8's agent invocation record gains the run and stage it served, old rows reading unknown. Where routes are configured, who chooses among candidates, and what is routed first stay open, and section 12 defers routing.</td>
+          <td>Section 9's usage view, a flag on <code>runs</code> plus one read method, named an evidence document under P13; section 8's agent invocation record gains the run and stage it served, old rows reading unknown. Which agent, model provider, model type, model version, and effort a role runs is section 10's roles, which you name. Choosing among candidates by quota or by price stays deferred.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">14</td>
+          <td>A role names <b>one agent, one model provider, one model type, one model version, and one effort</b>, and a task names a role.</td>
+          <td>Section 10's <code>roles</code>. The agent is the process. The provider, the type, and the version are a triple from that section's table, and the role does not name a model identifier: the adapter translates the triple. <code>review</code>, <code>fix</code>, and <code>worker</code> are the three the program assigns; any other name is a worker role. You assign them. The program does not pick among agents, providers, types, or versions, and a role that cannot run refuses that launch with nothing started in its place. Review and fix stay separate sessions even when they name the same agent, provider, type, and version (P4). A task's role does not follow its push into the gate: that run reviews with <code>review</code> and fixes with <code>fix</code>. With <code>roles</code> empty, <code>agent</code> is still the agent every role uses, on that agent's own model. Choosing by quota or by price stays deferred in section 12.</td>
         </tr>
       </tbody>
     </table>

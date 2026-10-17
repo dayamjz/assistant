@@ -245,3 +245,65 @@ func TestTheInvocationRunAndStageMigrationKeepsEarlierRowsUnknown(t *testing.T) 
 		t.Errorf("the later row lost its run or stage: %+v", rows[1])
 	}
 }
+
+// A launch that names no provider stores that as not named, which reads back
+// known and empty, and a row written before the columns reads each of them
+// unknown. The two are not the same fact.
+func TestAnInvocationRecordsTheRoleItWasAskedFor(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	started := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	named := AgentInvocation{Purpose: "review", Agent: "claude", SessionUse: "none", Started: started,
+		Role: Known("review"), Provider: Known("anthropic"), Type: Known("opus"), Version: Known("5.5"), Effort: Known("high")}
+	unnamed := AgentInvocation{Purpose: "review", Agent: "claude", SessionUse: "none", Started: started,
+		Role: Known("review"), Provider: Known(""), Type: Known(""), Version: Known(""), Effort: Known("")}
+	for _, inv := range []AgentInvocation{named, unnamed} {
+		if _, err := s.AppendAgentInvocation(ctx, inv); err != nil {
+			t.Fatalf("AppendAgentInvocation: %v", err)
+		}
+	}
+	rows, err := s.AgentInvocations(ctx)
+	if err != nil {
+		t.Fatalf("AgentInvocations: %v", err)
+	}
+	if provider, ok := rows[0].Provider.Get(); !ok || provider != "anthropic" || rows[0].Effort.String() != "high" || rows[0].Type.String() != "opus" {
+		t.Fatalf("the named launch reads back as provider %v type %v effort %v", rows[0].Provider, rows[0].Type, rows[0].Effort)
+	}
+	if provider, ok := rows[1].Provider.Get(); !ok || provider != "" || rows[1].Effort.String() != "" {
+		t.Fatalf("the unnamed launch reads back as provider %v effort %v, want known and empty", rows[1].Provider, rows[1].Effort)
+	}
+
+	var added migration
+	for _, m := range schema {
+		if m.name == invocationRoleMigration {
+			added = m
+		}
+	}
+	if added.version == 0 {
+		t.Fatalf("the shipped schema has no migration named %q", invocationRoleMigration)
+	}
+	for _, column := range []string{"role", "provider", "model_type", "version", "effort"} {
+		if _, err := s.write.ExecContext(ctx, `ALTER TABLE agent_invocation DROP COLUMN `+column); err != nil {
+			t.Fatalf("rolling the schema back: %v", err)
+		}
+	}
+	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version = ?`, added.version); err != nil {
+		t.Fatalf("forgetting the migration: %v", err)
+	}
+	if _, err := s.write.ExecContext(ctx, `
+		INSERT INTO agent_invocation (purpose, agent, model, session_use, started, duration_ns, failure)
+		VALUES ('lint', 'claude', '', 'none', ?, 1, '')`, encodeTime(started)); err != nil {
+		t.Fatalf("writing a row the old way: %v", err)
+	}
+	if err := migrate(ctx, s.write, schema); err != nil {
+		t.Fatalf("applying the shipped migration over the old row: %v", err)
+	}
+	rows, err = s.AgentInvocations(ctx)
+	if err != nil {
+		t.Fatalf("AgentInvocations after the migration: %v", err)
+	}
+	old := rows[len(rows)-1]
+	if old.Purpose != "lint" || old.Role.IsKnown() || old.Provider.IsKnown() || old.Type.IsKnown() || old.Version.IsKnown() || old.Effort.IsKnown() {
+		t.Fatalf("the earlier row reads its role attribution as %+v, want unknown", old)
+	}
+}

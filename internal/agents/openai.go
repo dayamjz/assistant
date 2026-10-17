@@ -203,6 +203,7 @@ func (r *openaiRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		Started: time.Now(),
 		Served:  inv.Served,
 	}
+	record.noteLaunch(inv)
 
 	fail := func(res *procResult, category Failure, cause error, message string) (Result, error) {
 		record.Duration = time.Since(record.Started)

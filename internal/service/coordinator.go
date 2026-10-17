@@ -89,6 +89,7 @@ func (s *Service) createTask(ctx context.Context, req ipc.Request, r machine.Tas
 	created, err := s.queue.Create(ctx, tasks.Request{
 		Shape: r.Shape, Project: r.Project, Instructions: r.Instructions, Mode: r.Mode,
 		Repository: r.Repository, Branch: r.Branch, Overlaps: r.Overlaps, Delivery: r.Delivery,
+		Role: r.Role,
 	})
 	if err != nil {
 		return machine.TaskCreated{}, refusalOf(err)
