@@ -311,6 +311,7 @@ func (r *cursorRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		Started: time.Now(),
 		Served:  inv.Served,
 	}
+	record.noteLaunch(inv)
 	// reference is what this invocation hands back to the Fixer. It is set
 	// once, from the envelope, and every exit below returns it, so the record
 	// and what the Fixer holds cannot disagree about the session.

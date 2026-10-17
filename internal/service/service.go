@@ -806,17 +806,16 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	raw := resolution.Runner
 	contained := s.containRunner(raw)
 	resolution.Runner = contained
-	stage := contained
+	reviewRunner := stampRunner(contained, review.fields(config.RoleReview))
 	if review.pinned {
-		stage = purposeRunner{
-			base:   contained,
-			review: s.containRunner(stampRunner(review.runner, review.model, review.effort)),
-		}
+		reviewRunner = s.containRunner(stampRunner(review.runner, review.fields(config.RoleReview)))
 	}
+	stage := agents.Runner(purposeRunner{base: contained, review: reviewRunner})
 	fixResolution := resolution
+	fixResolution.Runner = stampRunner(contained, fix.fields(config.RoleFix))
 	if fix.pinned {
 		fixResolution = agents.Resolution{
-			Runner:       s.containRunner(stampRunner(fix.runner, fix.model, fix.effort)),
+			Runner:       s.containRunner(stampRunner(fix.runner, fix.fields(config.RoleFix))),
 			Name:         fix.name,
 			Capabilities: fix.caps,
 			Entry:        fix.name,

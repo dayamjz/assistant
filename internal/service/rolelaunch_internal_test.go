@@ -24,9 +24,10 @@ type recordingRunner struct {
 }
 
 type recordedCall struct {
-	purpose agents.Purpose
-	model   string
-	effort  string
+	purpose             agents.Purpose
+	model, effort       string
+	role, provider, typ string
+	version             string
 }
 
 func (r *recordingRunner) Name() string { return r.name }
@@ -37,7 +38,10 @@ func (r *recordingRunner) Capabilities() agents.Capabilities {
 
 func (r *recordingRunner) Run(_ context.Context, purpose agents.Purpose, inv agents.Invocation) (agents.Result, error) {
 	r.mu.Lock()
-	r.calls = append(r.calls, recordedCall{purpose: purpose, model: inv.Model, effort: inv.Effort})
+	r.calls = append(r.calls, recordedCall{
+		purpose: purpose, model: inv.Model, effort: inv.Effort,
+		role: inv.Role, provider: inv.Provider, typ: inv.Type, version: inv.Version,
+	})
 	r.mu.Unlock()
 	return agents.Result{}, nil
 }
@@ -154,8 +158,12 @@ func TestReviewAndFixRolesStartTheAgentTheyName(t *testing.T) {
 	}
 	got := claude.snapshot()
 	if len(got) != 2 ||
-		got[0].purpose != agents.PurposeReview || got[0].model != "claude-opus-5-5" || got[0].effort != "high" ||
-		got[1].purpose != agents.PurposeFix || got[1].model != "claude-sonnet-5" || got[1].effort != "low" {
+		got[0].purpose != agents.PurposeReview || got[0].role != "review" ||
+		got[0].provider != "anthropic" || got[0].typ != "opus" || got[0].version != "5.5" ||
+		got[0].model != "claude-opus-5-5" || got[0].effort != "high" ||
+		got[1].purpose != agents.PurposeFix || got[1].role != "fix" ||
+		got[1].provider != "anthropic" || got[1].typ != "sonnet" || got[1].version != "5" ||
+		got[1].model != "claude-sonnet-5" || got[1].effort != "low" {
 		t.Fatalf("role launches = %+v, want a review of claude-opus-5-5 at high and a fix of claude-sonnet-5 at low", got)
 	}
 }

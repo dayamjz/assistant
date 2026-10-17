@@ -112,9 +112,14 @@ type Usage struct {
 }
 
 // Record is what is kept about one invocation. PRD section 8 lists it as
-// history and fixes its contents: purpose, agent, model, timing, failure
-// category, token usage, and the run and stage it served where it served one.
-// Never prompts, outputs, diffs, or credentials.
+// history and fixes its contents: purpose, agent, the model provider, type,
+// and version the launch was asked for, the model identifier started, the
+// role and the effort, timing, failure category, token usage, and the run
+// and stage it served where it served one. Never prompts, outputs, diffs,
+// or credentials. An empty provider, type, version, role, or effort means
+// the launch did not name one. This type cannot say unknown: a row written
+// before those columns existed reads back unknown from the store, and a
+// record handed to the store names each of them, empty when it was not named.
 //
 // That is a property of the type, not of its callers. Every field here is
 // cost, and there is no field a prompt, an agent's text, a diff, or an
@@ -129,6 +134,16 @@ type Record struct {
 	// Model is the model the invocation asked for, or the one the agent
 	// reported when it reported one. It is empty when neither named a model.
 	Model string
+	// Role is the role the launch ran under. Empty means the launch named none.
+	Role string
+	// Provider, Type, and Version are the model triple the launch was asked
+	// for. Each is empty when that one was not named, which is a different
+	// fact from a row written before the store had the column.
+	Provider string
+	Type     string
+	Version  string
+	// Effort is the effort the launch was asked for. Empty means none was named.
+	Effort string
 	// Session is what the invocation did with the run's durable session.
 	Session SessionUse
 	// Started is when the agent process was started.
@@ -144,6 +159,18 @@ type Record struct {
 	// Invocation.Served as it was handed over. Each is an identifier or a
 	// name, never content.
 	Served Served
+}
+
+// noteLaunch copies the role attribution the invocation carried. Adapters
+// call it when they build a record, and they do not fill a field the launch
+// left empty: an empty provider, type, version, role, or effort is recorded
+// as not named.
+func (r *Record) noteLaunch(inv Invocation) {
+	r.Role = inv.Role
+	r.Provider = inv.Provider
+	r.Type = inv.Type
+	r.Version = inv.Version
+	r.Effort = inv.Effort
 }
 
 // Recorder receives one Record per invocation that got past Invocation.

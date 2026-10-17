@@ -236,3 +236,25 @@ func TestAUsageWindowIsAPositiveSpanAndAnythingElseIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// An effort the launch did not name is its own total, and so is an effort a
+// row written before the column cannot say. Neither is folded into a named
+// effort, and two named efforts stay apart.
+func TestUsageKeepsAnUnnamedEffortApartFromANamedOne(t *testing.T) {
+	named := call("claude", "m", "review", time.Hour)
+	named.Role, named.Provider, named.Type, named.Version, named.Effort = store.Known("review"), store.Known("anthropic"), store.Known("opus"), store.Known("5.5"), store.Known("high")
+	unnamed := call("claude", "m", "review", time.Hour)
+	unnamed.Role, unnamed.Provider, unnamed.Type, unnamed.Version, unnamed.Effort = store.Known("review"), store.Known(""), store.Known(""), store.Known(""), store.Known("")
+	unknown := call("claude", "m", "review", time.Hour)
+	low := named
+	low.Effort = store.Known("low")
+
+	usage := machine.UsageOf(window(t, "24h"), usageReadAt, []store.AgentInvocation{named, unnamed, unknown, low})
+	if len(usage.ByAgent) != 4 {
+		t.Fatalf("grouped as %+v, want four groups", usage.ByAgent)
+	}
+	if usage.ByAgent[0].Effort.String() != "high" || usage.ByAgent[1].Effort.String() != "" ||
+		usage.ByAgent[2].Effort.String() != "unknown" || usage.ByAgent[3].Effort.String() != "low" {
+		t.Fatalf("efforts grouped as %s, %s, %s, %s", usage.ByAgent[0].Effort, usage.ByAgent[1].Effort, usage.ByAgent[2].Effort, usage.ByAgent[3].Effort)
+	}
+}
