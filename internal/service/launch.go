@@ -205,11 +205,16 @@ func (s *Service) routeWorker(ctx context.Context, roleName string) (agents.Sele
 		return agents.Selection{}, config.Role{}, err
 	}
 	entries := s.cfg.Agent
+	override := workerOverride(entries)
 	if role.Agent != "" {
+		// The role's agent is the pin, including a name that is not an
+		// adapter. workerOverride would treat auto as the fallback list;
+		// a role has no fallback, so the name is the override as written.
 		entries = []string{role.Agent}
+		override = role.Agent
 	}
 	tmux := s.cfg.SessionProvider == config.SessionProviderTmux
-	selection, err := agents.Route(ctx, s.catalog, entries, agents.NeedForWorker(tmux), workerOverride(entries))
+	selection, err := agents.Route(ctx, s.catalog, entries, agents.NeedForWorker(tmux), override)
 	if err != nil {
 		return agents.Selection{}, config.Role{}, err
 	}
