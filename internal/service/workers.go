@@ -394,10 +394,10 @@ var noPushedIntent = pushedIntent{source: intentSourceAbsent}
 // as the first line, and as the body the delivery intent its promotion
 // recorded or, for a task with none, its instructions as the coordinator
 // wrote them at intake. It is recorded under intentSourceTask, never
-// intentSourceSupplied, so the run starts with pipeline.Start.IntentSupplied
-// false and every stage frames it as a hint rather than as acceptance
-// criteria a person stated, which is how PRD section 5 frames intent read off
-// a task.
+// intentSourceSupplied, and the run starts with pipeline.Start.IntentSupplied
+// set, so every stage holds the change to it. The source stays task, so the
+// record still says the text was read off the task. A person's push of the
+// same branch carries none of it.
 //
 // Everything else carries no intent, as every push did before: a person's
 // push, a push whose pusher could not be placed (followed as a person's,
@@ -405,8 +405,7 @@ var noPushedIntent = pushedIntent{source: intentSourceAbsent}
 // follow back to the worker, and a worker's update to
 // anything but its own task's branch, which admission refuses before this
 // runs. A task record that cannot be read is logged and the run carries no
-// intent, because the intent is a hint the run can do without and a push
-// already admitted cannot be refused from here.
+// intent, and a push already admitted cannot be refused from here.
 //
 // The text passes through internal/redact before it is recorded, because it
 // reaches the run record and, through the pull request stage, a code host.
@@ -417,9 +416,9 @@ var noPushedIntent = pushedIntent{source: intentSourceAbsent}
 // directory is against the worker. A promoted task's intent is read from the
 // task record instead, which no surface a worker is admitted to writes; the
 // database is still a file under the same home, so that is not a boundary
-// against a worker that writes the home's files directly. Either way the
-// intent is a hint and not a contract. And a task's intent names what the
-// coordinator asked the worker for, which PRD section 5's "what the gate
+// against a worker that writes the home's files directly. The text is the
+// acceptance criteria of the run the push starts. A task's intent names what
+// the coordinator asked the worker for, which PRD section 5's "what the gate
 // does not establish" leaves where it was: the lens measures the change
 // against that text and never asks where it came from.
 func (s *Service) pushIntent(ctx context.Context, from ipc.Request, found subject, update gate.RefUpdate) pushedIntent {

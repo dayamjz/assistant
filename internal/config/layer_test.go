@@ -79,6 +79,7 @@ func TestParseDistinguishesEmptyValueFromAbsentKey(t *testing.T) {
 func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	doc := `{
 		"agent": ["claude", "fallback"],
+		"roles": {"worker": {"agent": "claude"}},
 		"commands": {"test": "go test ./...", "lint": "make lint", "format": "gofmt -w .",
 			"document": "make docs"},
 		"fix_rounds": {"review": 0, "rebase": 1, "test": 2, "lint": 3, "checks": 4},

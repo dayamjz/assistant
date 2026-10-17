@@ -16,8 +16,17 @@ type Key string
 // package reads that table.
 const (
 	// KeyAgent is "agent": one agent, or an ordered fallback list, resolved
-	// against what is actually runnable at run start.
+	// against what is actually runnable at run start. When roles is empty,
+	// this is the agent every role uses.
 	KeyAgent Key = "agent"
+	// KeyRoles is "roles": which agent, model provider, model type, model
+	// version, and effort each role runs. Empty means every role uses
+	// KeyAgent and that agent's own model. review, fix, and worker are the
+	// three the program assigns; any other name is a worker role a task may
+	// name. It is the same trust class as KeyAgent. A provider, type, or
+	// version outside the model table, a partial triple, and an effort other
+	// than low, medium, or high fail at parse time and name the role.
+	KeyRoles Key = "roles"
 	// KeyCommandsTest is "commands.test": a targeted check for the change.
 	KeyCommandsTest Key = "commands.test"
 	// KeyCommandsLint is "commands.lint": static analysis.
@@ -244,6 +253,8 @@ type spec struct {
 var specs = []spec{
 	{KeyAgent, TrustCommands, []string{DefaultAgent}, decodeAgent,
 		func(c *Config, v any) { c.Agent = cloneSlice(v.([]string)) }},
+	{KeyRoles, TrustCommands, Roles(nil), decodeRoles,
+		func(c *Config, v any) { c.Roles = cloneRoles(v) }},
 	{KeyCommandsTest, TrustCommands, "", decodeCommand,
 		func(c *Config, v any) { c.Commands.Test = v.(string) }},
 	{KeyCommandsLint, TrustCommands, "", decodeCommand,

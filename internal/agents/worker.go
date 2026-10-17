@@ -82,6 +82,13 @@ type WorkerSpec struct {
 	// package does not check that it names the program, and an adapter
 	// writes it as given.
 	Route string
+	// Model is the model identifier the adapter starts, empty to leave the
+	// choice to the agent. It is the caller's translation of a role's
+	// provider, type, and version; this package does not translate one.
+	Model string
+	// Effort is the effort the adapter starts, empty when none was named.
+	// low, medium, and high are the values a spec may carry.
+	Effort string
 }
 
 // routeRefused is the characters a Route may not carry, because a grant's
@@ -112,6 +119,14 @@ func (s WorkerSpec) Validate() error {
 	if s.Route != "" && (strings.TrimSpace(s.Route) != s.Route || strings.IndexFunc(s.Route, routeRefused) >= 0) {
 		return &invocationFieldError{field: "Route",
 			reason: "a route may not begin or end with white space, nor carry a comma, a parenthesis or a control character"}
+	}
+	switch s.Effort {
+	case "", "low", "medium", "high":
+	default:
+		return &invocationFieldError{field: "Effort", reason: "effort is low, medium, or high"}
+	}
+	if s.Model != "" && strings.TrimSpace(s.Model) != s.Model {
+		return &invocationFieldError{field: "Model", reason: "a model identifier may not begin or end with white space"}
 	}
 	return validateEnv(s.Env)
 }

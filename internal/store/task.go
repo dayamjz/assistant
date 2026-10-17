@@ -48,6 +48,10 @@ type Task struct {
 	// PRD section 8's launch notation. It is not the delivery posture, which
 	// is Delivery.
 	Mode string `json:"mode"`
+	// Role is the role name intake recorded. Empty means the task names no
+	// role, which a launch reads as the worker role, and is also what a task
+	// recorded before the column existed holds. It is written once.
+	Role string `json:"role,omitempty"`
 	// Delivery is the delivery posture the task was dispatched under, PRD
 	// section 6, in a field of its own and never revised: this record, not a
 	// later read of the delivery key, decides the task's path. It is
@@ -138,17 +142,20 @@ type Disposition struct {
 }
 
 const taskColumns = `SELECT rowid, id, shape, project, mode, worktree_path, run_id, pull_request,
-	repository_id, branch, blocker_task, created_at, start_snapshot, delivery, delivery_intent`
+	repository_id, branch, blocker_task, created_at, start_snapshot, delivery, delivery_intent, role`
 
 func scanTask(sc scanner) (Task, error) {
 	var t Task
 	var shape, created string
-	var snapshot, delivery Optional[string]
+	var snapshot, delivery, role Optional[string]
 	if err := sc.Scan(&t.Row, &t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath, &t.RunID,
-		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created, &snapshot, &delivery, &t.DeliveryIntent); err != nil {
+		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created, &snapshot, &delivery, &t.DeliveryIntent, &role); err != nil {
 		return Task{}, err
 	}
 	t.Shape = TaskShape(shape)
+	if text, ok := role.Get(); ok {
+		t.Role = text
+	}
 	if text, ok := delivery.Get(); ok {
 		// A word outside the set was not written by CreateTask, and reading
 		// it back as gated or as unknown would turn a row nobody can account
@@ -252,12 +259,16 @@ func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, er
 		if stands != d.Observed {
 			return &TaskMovedError{Task: t.ID, Anchor: AnchoredBranch, Expected: d.Observed, Stands: stands}
 		}
+		var role any
+		if t.Role != "" {
+			role = t.Role
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO task (id, shape, project, mode, worktree_path, run_id, pull_request,
-				repository_id, branch, blocker_task, created_at, delivery)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				repository_id, branch, blocker_task, created_at, delivery, role)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.ID, string(t.Shape), t.Project, t.Mode, t.WorktreePath,
-			t.RunID, t.PullRequest, t.RepositoryID, t.Branch, d.Blocker, encodeTime(now), delivery); err != nil {
+			t.RunID, t.PullRequest, t.RepositoryID, t.Branch, d.Blocker, encodeTime(now), delivery, role); err != nil {
 			return err
 		}
 		kinds := []string{OpeningEventKind}

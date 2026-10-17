@@ -37,6 +37,7 @@ func (s *Service) newQueue() (*tasks.Queue, error) {
 		BranchInGate: s.branchInGate,
 		GatePath:     s.gatePathOf,
 		Posture:      s.projectPosture,
+		Roles:        s.cfg.Roles,
 	})
 }
 

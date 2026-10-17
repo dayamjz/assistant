@@ -83,7 +83,7 @@ func TestAccessorsRefuseAfterClose(t *testing.T) {
 		},
 		"BeginTaskAttempt":  func() error { _, err := s.BeginTaskAttempt(ctx, "taskaaaaaaab", 0); return err },
 		"SetAttemptSession": func() error { return s.SetAttemptSession(ctx, "taskaaaaaaab", 1, "pane") },
-		"SetAttemptRoute":   func() error { return s.SetAttemptRoute(ctx, "taskaaaaaaab", 1, "claude", "ordered") },
+		"SetAttemptRoute":   func() error { return s.SetAttemptRoute(ctx, "taskaaaaaaab", 1, "claude", "ordered", AttemptLaunch{}) },
 		"TaskAttempts":      func() error { _, err := s.TaskAttempts(ctx, "taskaaaaaaab"); return err },
 		"RecordTaskCleanup": func() error {
 			_, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: "taskaaaaaaab", Proof: CleanupProofRemoteBranch}, TaskDelivery)

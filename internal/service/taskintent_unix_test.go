@@ -146,15 +146,15 @@ func TestAWorkersPushCarriesItsTasksIntentAndAPersonsDoesNot(t *testing.T) {
 		}
 		body := created.Stdin
 		for _, want := range []string{
-			"offered as a hint about the change rather than as acceptance criteria",
+			"The intent below was supplied, so it is the acceptance criteria this change was held to.",
 			project,
-			"images.txt and the review traced none of it to the recorded intent",
+			"images.txt and the review traced none of it to the supplied intent",
 		} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("the pull request body does not carry %q:\n%s", want, body)
 			}
 		}
-		for _, absent := range []string{"was supplied", "The scope lens did not run", "s3cret", "written by the program"} {
+		for _, absent := range []string{"offered as a hint", "The scope lens did not run", "s3cret", "written by the program"} {
 			if strings.Contains(body, absent) {
 				t.Fatalf("the pull request body carries %q:\n%s", absent, body)
 			}

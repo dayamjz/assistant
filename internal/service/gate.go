@@ -288,8 +288,8 @@ func pushPartlyStarted(gateID string, started []machine.Started, ref string, cau
 // one the push named. Neither is read from the working copy: the working copy
 // stands wherever its owner left it, and a run recorded from its head would be
 // a run about a commit nobody pushed. The intent is the one pushIntent
-// decided, and it is never supplied: the run starts with
-// pipeline.Start.IntentSupplied false whatever it carries.
+// decided. Intent read off the task is the acceptance criteria of this run.
+// A push that carried no intent starts with it unset.
 func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, head string,
 	intent pushedIntent) (machine.Started, error) {
 	// Everything slow happens before the branch is claimed: resolving an agent
@@ -305,10 +305,11 @@ func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, 
 		return machine.Started{}, err
 	}
 	s.beginInBackground(record, pipeline.Start{
-		Branch:    record.Branch,
-		Base:      found.repository.DefaultBranch,
-		Submitted: record.SubmittedHead,
-		Intent:    record.Intent,
+		Branch:         record.Branch,
+		Base:           found.repository.DefaultBranch,
+		Submitted:      record.SubmittedHead,
+		Intent:         record.Intent,
+		IntentSupplied: intentCountsAsSupplied(intent.source),
 	})
 	return machine.Started{Branch: branch, Head: head, Run: record.ID, Superseded: superseded}, nil
 }

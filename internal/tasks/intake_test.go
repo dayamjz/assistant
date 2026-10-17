@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
@@ -379,5 +380,27 @@ func TestTheQueuedSuccessorIsNotAttributedTheBlockersRun(t *testing.T) {
 	outcomes, err := f.queue.Release(context.Background())
 	if err != nil || len(outcomes) != 1 || outcomes[0].Result != Waiting || outcomes[0].BlockerState != taskstate.Validating {
 		t.Fatalf("Release = %+v (%v), want the successor waiting on a validating blocker", outcomes, err)
+	}
+}
+
+// A task names a configured worker role, and that name is what the record
+// holds. review, fix, and a name no role has are refused before a task exists.
+func TestIntakeRecordsAWorkerRoleAndRefusesTheOthers(t *testing.T) {
+	f := newFixture(t)
+	f.queue.roles = config.Roles{"pages": {Agent: "claude"}}
+	req := delivery("")
+	req.Role = "review"
+	if _, err := f.queue.Create(context.Background(), req); !errors.Is(err, ErrRequest) {
+		t.Fatalf("a task naming review was created: %v", err)
+	}
+	req.Role = "missing"
+	if _, err := f.queue.Create(context.Background(), req); !errors.Is(err, ErrRequest) {
+		t.Fatalf("a task naming an unknown role was created: %v", err)
+	}
+	req.Branch = "task/pages"
+	req.Role = "pages"
+	got := f.create(t, req)
+	if got.Task.Role != "pages" {
+		t.Fatalf("the task records role %q, want pages", got.Task.Role)
 	}
 }

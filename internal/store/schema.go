@@ -95,6 +95,14 @@ const holdResolutionNoteMigration = "hold resolution note"
 // sealCheckpointTableMigration is a constant.
 const taskAttemptRouteMigration = "task attempt route"
 
+// taskRoleMigration names the migration that records the role a task was
+// created under.
+const taskRoleMigration = "task role"
+
+// taskAttemptModelMigration names the migration that records the model and
+// effort a launch asked for, beside the route.
+const taskAttemptModelMigration = "task attempt model"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1541,6 +1549,36 @@ var schema = []migration{
 			// SetAttemptRoute before the process starts.
 			`ALTER TABLE task_attempt ADD COLUMN adapter TEXT`,
 			`ALTER TABLE task_attempt ADD COLUMN route_reason TEXT`,
+		},
+	},
+	{
+		version: 37,
+		name:    taskRoleMigration,
+		statements: []string{
+			// A task records the role name intake was given. NULL means the
+			// task names no role, which a launch reads as the worker role,
+			// and is also what a row written before this column holds. The
+			// name is written once.
+			`ALTER TABLE task ADD COLUMN role TEXT`,
+			`CREATE TRIGGER task_role_is_written_once
+				BEFORE UPDATE OF role ON task
+				WHEN OLD.role IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s role is written once and is not updated');
+				END`,
+		},
+	},
+	{
+		version: 38,
+		name:    taskAttemptModelMigration,
+		statements: []string{
+			// The launch records the role, the model identifier the adapter
+			// was asked to start, and the effort, beside the adapter. NULL
+			// means that one was not named. They are filled once, with the
+			// route.
+			`ALTER TABLE task_attempt ADD COLUMN role TEXT`,
+			`ALTER TABLE task_attempt ADD COLUMN model TEXT`,
+			`ALTER TABLE task_attempt ADD COLUMN effort TEXT`,
 		},
 	},
 }

@@ -11,6 +11,9 @@ import (
 // block YAML, with a comment, so the two formats can be held to one result.
 const wholeSchemaYAML = `# the operator's own configuration
 agent: [claude, fallback]
+roles:
+  worker:
+    agent: claude
 commands:
   test: go test ./...
   lint: make lint
@@ -52,6 +55,7 @@ session_provider: tmux
 
 const wholeSchemaJSON = `{
 	"agent": ["claude", "fallback"],
+	"roles": {"worker": {"agent": "claude"}},
 	"commands": {"test": "go test ./...", "lint": "make lint", "format": "gofmt -w .", "document": "make docs"},
 	"fix_rounds": {"review": 0, "rebase": 1, "test": 2, "lint": 3, "checks": 4},
 	"run_budget": 12,

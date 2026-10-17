@@ -50,6 +50,8 @@ func (p *Pipe) Create(ctx context.Context, spec Spec) (*Session, error) {
 		Dir:          spec.Isolation.Copy,
 		Instructions: spec.Instructions,
 		Route:        spec.Route,
+		Model:        spec.Model,
+		Effort:       spec.Effort,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: starting the worker: %w", err)

@@ -161,19 +161,20 @@ func TestAnAttemptsRouteIsFilledOnce(t *testing.T) {
 		t.Fatalf("a new attempt carries a route: %+v", a)
 	}
 
-	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence, " ", "ordered"); err == nil {
+	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence, " ", "ordered", AttemptLaunch{}); err == nil {
 		t.Fatal("SetAttemptRoute accepted an empty adapter")
 	}
-	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence, "claude", " "); err == nil {
+	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence, "claude", " ", AttemptLaunch{}); err == nil {
 		t.Fatal("SetAttemptRoute accepted an empty reason")
 	}
-	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence+1, "claude", "ordered"); !errors.Is(err, ErrNotFound) {
+	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence+1, "claude", "ordered", AttemptLaunch{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetAttemptRoute on a missing attempt = %v, want ErrNotFound", err)
 	}
-	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence, "claude", "override"); err != nil {
+	asked := AttemptLaunch{Role: "pages", Model: "claude-opus-5-5", Effort: "high"}
+	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence, "claude", "override", asked); err != nil {
 		t.Fatalf("SetAttemptRoute: %v", err)
 	}
-	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence, "cursor", "ordered"); !errors.Is(err, ErrAttemptRouteRecorded) {
+	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence, "cursor", "ordered", AttemptLaunch{}); !errors.Is(err, ErrAttemptRouteRecorded) {
 		t.Fatalf("a second fill = %v, want ErrAttemptRouteRecorded", err)
 	}
 	got, err := s.TaskAttempts(ctx, task.ID)
@@ -187,5 +188,14 @@ func TestAnAttemptsRouteIsFilledOnce(t *testing.T) {
 	reason, ok := got[0].RouteReason.Get()
 	if !ok || reason != "override" {
 		t.Fatalf("the attempt's route reason is %q (known=%v), want override", reason, ok)
+	}
+	if role, ok := got[0].Role.Get(); !ok || role != asked.Role {
+		t.Fatalf("the attempt's role is %q (known=%v), want %s", role, ok, asked.Role)
+	}
+	if model, ok := got[0].Model.Get(); !ok || model != asked.Model {
+		t.Fatalf("the attempt's model is %q (known=%v), want %s", model, ok, asked.Model)
+	}
+	if effort, ok := got[0].Effort.Get(); !ok || effort != asked.Effort {
+		t.Fatalf("the attempt's effort is %q (known=%v), want %s", effort, ok, asked.Effort)
 	}
 }

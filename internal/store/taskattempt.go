@@ -14,11 +14,11 @@ import (
 // stated on SessionRef.
 //
 // The attempt is the boundary a run is attributed across. A run of the task's
-// branch created at or after the latest attempt's StartedAt is the task's; a
-// run from before it belongs to whatever ran the branch earlier, which may be
-// the task this one was queued behind or an earlier attempt of this task that
-// a relaunch has moved past. A task with no attempt is attributed no run by
-// its branch at all, only the run it names directly.
+// branch created at or after the latest attempt's StartedAt is the task's
+// only when no other task of that branch has an attempt that started later
+// and still at or before the run. A run from before the cutoff belongs to
+// whatever ran the branch earlier. A task with no attempt is attributed no
+// run by its branch at all, only the run it names directly.
 type TaskAttempt struct {
 	// TaskID names the task.
 	TaskID string `json:"task_id"`
@@ -43,14 +43,23 @@ type TaskAttempt struct {
 	// selection (override or ordered). It is filled with Adapter by
 	// SetAttemptRoute and unknown on the same terms.
 	RouteReason Optional[string] `json:"route_reason"`
+	// Role is the role name the launch resolved. It is unknown when the task
+	// named no role. It is filled with the route.
+	Role Optional[string] `json:"role"`
+	// Model is the model identifier the adapter was asked to start. It is
+	// unknown when the role named no model. It is filled with the route.
+	Model Optional[string] `json:"model"`
+	// Effort is the effort the role named. It is unknown when the role named
+	// none. It is filled with the route.
+	Effort Optional[string] `json:"effort"`
 }
 
-const taskAttemptColumns = `SELECT task_id, sequence, started_at, session_ref, adapter, route_reason`
+const taskAttemptColumns = `SELECT task_id, sequence, started_at, session_ref, adapter, route_reason, role, model, effort`
 
 func scanTaskAttempt(sc scanner) (TaskAttempt, error) {
 	var a TaskAttempt
 	var started string
-	if err := sc.Scan(&a.TaskID, &a.Sequence, &started, &a.SessionRef, &a.Adapter, &a.RouteReason); err != nil {
+	if err := sc.Scan(&a.TaskID, &a.Sequence, &started, &a.SessionRef, &a.Adapter, &a.RouteReason, &a.Role, &a.Model, &a.Effort); err != nil {
 		return TaskAttempt{}, err
 	}
 	var err error
@@ -139,12 +148,20 @@ func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence i
 	})
 }
 
-// SetAttemptRoute records the adapter agents.Route selected for the attempt
-// and the reason code it returned. It is filled once, before the process
-// starts: a second call is refused with ErrAttemptRouteRecorded. An empty
-// adapter or reason is refused, and an attempt that does not exist is
-// ErrNotFound, wrapped.
-func (s *Store) SetAttemptRoute(ctx context.Context, taskID string, sequence int64, adapter, reason string) error {
+// AttemptLaunch is what the launch asked for beyond the adapter. An empty
+// field was not named and is stored unknown, never as one of the named values.
+type AttemptLaunch struct {
+	Role   string
+	Model  string
+	Effort string
+}
+
+// SetAttemptRoute records the adapter agents.Route selected for the attempt,
+// the reason code it returned, and the role, model identifier, and effort the
+// launch asked for. It is filled once, before the process starts: a second
+// call is refused with ErrAttemptRouteRecorded. An empty adapter or reason is
+// refused, and an attempt that does not exist is ErrNotFound, wrapped.
+func (s *Store) SetAttemptRoute(ctx context.Context, taskID string, sequence int64, adapter, reason string, asked AttemptLaunch) error {
 	if strings.TrimSpace(adapter) == "" {
 		return fmt.Errorf("store: task %s attempt %d: the routed adapter is empty", taskID, sequence)
 	}
@@ -163,13 +180,20 @@ func (s *Store) SetAttemptRoute(ctx context.Context, taskID string, sequence int
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrAttemptRouteRecorded)
 		}
 		_, err = tx.ExecContext(ctx,
-			`UPDATE task_attempt SET adapter = ?, route_reason = ? WHERE task_id = ? AND sequence = ?`,
-			adapter, reason, taskID, sequence)
+			`UPDATE task_attempt SET adapter = ?, route_reason = ?, role = ?, model = ?, effort = ? WHERE task_id = ? AND sequence = ?`,
+			adapter, reason, namedOrNull(asked.Role), namedOrNull(asked.Model), namedOrNull(asked.Effort), taskID, sequence)
 		if err != nil {
 			return fmt.Errorf("store: task %s attempt %d: recording its route: %w", taskID, sequence, err)
 		}
 		return nil
 	})
+}
+
+func namedOrNull(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // TaskAttempts returns a task's attempts in sequence order, and nothing for a

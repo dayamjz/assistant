@@ -159,6 +159,7 @@ func coordinatorCreate(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&request.Branch, "branch", "", "the branch a delivery task works on")
 		set.StringVar(&request.Overlaps, "overlaps", "", "a task this one overlaps, or empty for a claim of independence")
 		set.StringVar(&request.Delivery, "delivery", "", `"gated" or "local" in place of the project's posture, never lighter than it`)
+		set.StringVar(&request.Role, "role", "", "the configured role the worker runs under; empty means worker")
 	})
 	if err != nil {
 		return nil, err
