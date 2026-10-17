@@ -303,6 +303,8 @@ assistant runs --usage=7d      # what the stage agents' calls cost, by agent and
 assistant host install         # print the stop guard line for the coordinator's host
 assistant --task ID --answer retry   # answer a task that is waiting on you
 assistant --task ID --answer approved   # with none of its own open, answer its run's decision instead
+assistant --task ID --hold NAME --answer approved --note TEXT   # answer one named decision, recording a note with it
+assistant --task ID --hold run/RUN --answer approved   # answer the task's run while its own decisions stay open
 assistant status               # repository, gate, service, run, branch
 assistant sync                 # how this branch stands against what the pipeline holds, and the plan
 assistant sync --confirm       # carry that plan out

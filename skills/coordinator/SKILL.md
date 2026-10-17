@@ -221,7 +221,12 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   for `terminal-gone`, relaunch it or decide to let it go; for
   `hold-opened`, a decision waits on an answer, the task's own or one its
   branch's run is held at, and `assistant --task ID --answer ...` reaches
-  either; for `message-unacknowledged`, the worker has not acknowledged a
+  either. With more than one of the task's own open, name the one you mean
+  with `--hold KEY` (or the report finding's id); an answer naming none is
+  refused with code `invalid-request` and lists them. `--hold run/RUN`
+  reaches the task's run while its own decisions stay open, and
+  `--note TEXT` records your words with an answer to the task's own hold;
+  for `message-unacknowledged`, the worker has not acknowledged a
   message. The program's own records of creating and dispatching a task
   wake nobody.
 - `acknowledge` also closes a wake `listen` printed that you dealt with
@@ -310,7 +315,9 @@ assistant --json coordinator await --timeout 5m   # blocks, then drains
   ended. The program does not relaunch it, and the wake queue does not
   report its ended terminal as gone. Decisions the report raised are holds,
   and the task reads `held` until you answer them with
-  `assistant --task ID --answer ...`. Once the worker has ended and nothing
+  `assistant --task ID --hold KEY --answer ... [--note TEXT]`, one named
+  decision at a time; `assistant --json watch --once` lists each with the
+  command that closes it. Once the worker has ended and nothing
   but the report's decisions holds the task, its copy is cleaned up and it
   can no longer be promoted. A stop's hold keeps the copy until you answer
   it. A reported investigation reads `reported`, never `complete`, even

@@ -131,7 +131,10 @@ Three things follow for whoever runs the service:
   identifies no socket peer, every call is refused that way, a worker's
   included.
 - A filed report's decisions are holds you answer with
-  `assistant --task ID --answer ...`. The investigation's copy is removed
+  `assistant --task ID --hold KEY --answer ... [--note TEXT]`, naming each
+  by its key or its finding's id when more than one is open; an answer that
+  names none of several is refused and lists them. The note is stored
+  redacted with the answer, and never changes who is recorded as answering. The investigation's copy is removed
   only after its worker has ended, which it does when it exits on its own or
   when the coordinator stops it, and only on the cleanup check's proof. A
   report filed by a worker that is still running keeps its copy.

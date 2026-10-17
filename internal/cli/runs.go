@@ -128,7 +128,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	}
 	tasked := flagWasSet(in.flags, "task")
 	noted := flagWasSet(in.flags, "note")
-	if noted && !fixing && !(tasked && answered) {
+	answeringTask := tasked && answered
+	if noted && !fixing && !answeringTask {
 		return nil, usagef("--note is told to the fixer with --answer %s, or recorded with an answer to one of a task's own "+
 			"decisions given --task; it is read with nothing else", pipeline.OutcomeFixRequested)
 	}
@@ -136,7 +137,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		return nil, usagef("--note was given no note; it takes the text recorded with the answer")
 	}
 	named := flagWasSet(in.flags, holdFlagName)
-	if named && !(tasked && answered) {
+	if named && !answeringTask {
 		return nil, usagef("--%s names which of a task's decisions --answer closes, and it is read only with --task and --answer", holdFlagName)
 	}
 	if named && strings.TrimSpace(hold) == "" {
@@ -314,8 +315,10 @@ type taskAnswer struct {
 // the run's decision, which goes to the task's run past any hold of the
 // task's own, and every other name is one of the task's own holds, which the
 // service resolves by key or by report finding and refuses when it matches
-// none or several (#279). A fix round goes to the run without a read,
-// because only a run takes one.
+// none or several (#279). A report finding whose identifier a worker wrote
+// to begin the same way is therefore named by its hold's full key, which
+// never does. A fix round goes to the run without a read, because only a
+// run takes one.
 //
 // With no name, which of the two is read off the task's resolution, whose
 // basis names the oldest open hold naming the task whichever tier decided
