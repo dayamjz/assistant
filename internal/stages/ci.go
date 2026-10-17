@@ -96,11 +96,14 @@ import (
 // # The code host and the repository
 //
 // This stage requires both. deps.Forge is the adapter and
-// pipeline.KeyForgeRepository is the repository on that host, so a run whose
-// record names no repository on a host this build talks to has nothing to open
-// and reports that rather than proceeding without one. The repository is
-// resolved from the run's upstream URL, and forge.GitHubRepository describes
-// what reaches here and what does not.
+// pipeline.KeyForgeRepository is the repository on that host. The repository
+// is resolved from the run's upstream URL through forge.ReachOf, which
+// describes what reaches here and what does not: a run whose repository has
+// no code host is passed over at the stage node with pipeline.SkipNoCodeHost,
+// issue #283's owner decision, and one whose upstream is on a host this build
+// cannot address is refused before it starts. A run that reaches this body
+// with no repository all the same has nothing to open and reports that rather
+// than proceeding without one.
 //
 // The adapter needs the pull request number, which is pipeline.KeyPullRequest.
 // The pull request stage writes it, so this stage reads what that stage

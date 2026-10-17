@@ -207,6 +207,8 @@ func standingFor(outcome machine.Outcome) (machine.Standing, bool) {
 	switch outcome {
 	case machine.OutcomeChecksPassed:
 		return machine.Standing{Record: store.RunPassed}, true
+	case machine.OutcomePushed:
+		return machine.Standing{Record: store.RunPassed, NoCodeHost: true}, true
 	case machine.OutcomePassed:
 		return machine.Standing{Record: store.RunPassed, PullRequestEnd: store.PullRequestMerged}, true
 	case machine.OutcomeFailed:

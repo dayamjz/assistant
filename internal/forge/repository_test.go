@@ -279,6 +279,50 @@ func TestGitHubRepositoryReadsAGitRemote(t *testing.T) {
 	}
 }
 
+// TestReachOfTellsNoCodeHostFromAnUnaddressableOne holds issue #283's
+// three-way split. The case that matters most is the strict one: a remote on
+// a network host this build does not address is unaddressable, never local,
+// because reading it as local would pass over the pull request and checks
+// stages of a repository that may well have a code host.
+func TestReachOfTellsNoCodeHostFromAnUnaddressableOne(t *testing.T) {
+	cases := []struct {
+		remote string
+		want   forge.Reach
+		spec   string
+	}{
+		{"https://github.com/dayamjz/assistant.git", forge.ReachHosted, "dayamjz/assistant"},
+		{"git@github.com:dayamjz/assistant.git", forge.ReachHosted, "dayamjz/assistant"},
+
+		{"/srv/repos/assistant.git", forge.ReachLocal, ""},
+		{"  /srv/repos/assistant.git  ", forge.ReachLocal, ""},
+		{"../assistant.git", forge.ReachLocal, ""},
+		{"assistant.git", forge.ReachLocal, ""},
+		{"./host:path.git", forge.ReachLocal, ""},
+		{"file:///srv/repos/assistant.git", forge.ReachLocal, ""},
+		{"FILE:///srv/repos/assistant.git", forge.ReachLocal, ""},
+		{`C:\repos\assistant`, forge.ReachLocal, ""},
+		{"C:/repos/assistant", forge.ReachLocal, ""},
+
+		{"", forge.ReachUnaddressable, ""},
+		{"   ", forge.ReachUnaddressable, ""},
+		{"https://gitlab.com/dayamjz/assistant.git", forge.ReachUnaddressable, ""},
+		{"git@gitlab.com:dayamjz/assistant.git", forge.ReachUnaddressable, ""},
+		{"ssh://git@git.example.com/assistant.git", forge.ReachUnaddressable, ""},
+		{"server:repos/assistant.git", forge.ReachUnaddressable, ""},
+		{"https://github.example.com/dayamjz/assistant.git", forge.ReachUnaddressable, ""},
+		{"https://github.com/dayamjz", forge.ReachUnaddressable, ""},
+		{"git://example.com/assistant.git", forge.ReachUnaddressable, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.remote, func(t *testing.T) {
+			got, spec := forge.ReachOf(c.remote)
+			if got != c.want || spec != c.spec {
+				t.Errorf("ReachOf(%q) = %s, %q; want %s, %q", c.remote, got, spec, c.want, c.spec)
+			}
+		})
+	}
+}
+
 // TestEveryInvocationNamesTheHostItAddresses checks the one entry in the
 // invocation environment that decides where a write lands.
 //

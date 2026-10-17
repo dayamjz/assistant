@@ -92,6 +92,13 @@ and answer again until the run is finished.
   review and merge. The gate does not merge unless the operator's
   `autonomy.merge` setting lists this repository, and even then you stop
   driving here.
+- `pushed` - the run walked the gate to its end in a repository with no code
+  host (its upstream is a path or a `file://` URL), so it pushed and skipped
+  the pull request and checks stages, each reporting `no_code_host`. No pull
+  request was opened and no checks ran. This is a finished run, not a stall:
+  stop driving and tell the user the branch is on the remote for them to
+  merge there. `assistant doctor` says up front when a repository is like
+  this.
 - `passed` - the pull request merged.
 - `failed` - the run ended without a verdict: a bound stopped it, a stage
   could not run, or the pull request was closed. Read the answer's next

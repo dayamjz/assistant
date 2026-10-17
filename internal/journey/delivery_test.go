@@ -20,7 +20,9 @@ import (
 // delivered is what a run that took the delivery path did, read off the
 // answers the binary gave and off the two repositories it acted on.
 type delivered struct {
-	// skipped is the stages the run asked to skip.
+	// skipped is the stages the run is expected to pass over: the pull
+	// request and checks stages, for want of a code host. The run asks to
+	// skip none.
 	skipped []pipeline.Stage
 	// expectedStops is where stages.Holding says the run's resolved
 	// configuration stops it, less the stages the run skipped. It is derived,
@@ -28,8 +30,13 @@ type delivered struct {
 	expectedStops []pipeline.Stage
 	// stops is the stage of every decision the run offered before it ended.
 	stops []string
-	// outcome is how the run ended.
-	outcome machine.Outcome
+	// outcome is how the run ended, and advancing whether the final answer
+	// said something was still advancing it.
+	outcome   machine.Outcome
+	advancing bool
+	// noCodeHost is whether the run's record says its repository has no code
+	// host.
+	noCodeHost bool
 	// stages is the final answer's view of every stage.
 	stages []machine.Stage
 	// reviewsAnswered counts invocations the scripted reviewer answered, and
@@ -74,10 +81,13 @@ func (d delivered) edited(stage pipeline.Stage, change func(*machine.Stage)) del
 // does not have, so the push stage has an update to make and the remote's
 // branch moving is the evidence it made it.
 //
-// The run is asserted to end checks-passed, which internal/machine defines as
-// the run having walked the gate to its end with each stage cleared, skipped
-// ones included. It names the run's terminal state, and no code-host checks
-// ran here because the checks stage is skipped.
+// The run is asserted to end pushed, with nothing left advancing it, which is
+// issue #283's owner decision for a repository with no code host: the
+// fixture's remote is a bare repository on this machine, so the run's record
+// says there is no code host, and the pull request and checks stages are
+// passed over with no_code_host as the reason the answer carries for each.
+// The run asks to skip neither. That is the issue's own test: a run against a
+// bare local remote reaches its outcome with no stall, read through --json.
 //
 // The P6 cite covers the push path only: the commit forwarded from the run's
 // isolated copy to the upstream remote lands. It does not cover the lease or
@@ -86,13 +96,12 @@ func (d delivered) edited(stage pipeline.Stage, change func(*machine.Stage)) del
 // stages.Holding fed config.Defaults plus the two commands this test writes
 // into the home, not the service's whole resolved configuration.
 //
-// The pull request and checks stages are skipped. Both need a repository on a
-// code host, no record here names one and this fixture has no host for
-// internal/forge to address, so a run that took either would stop there
-// whatever the delivery stages did.
+// It cites P2 as well: the two stages are passed over and reported, never
+// removed, and the person's skip list stays theirs.
 func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P2)
 	requireStageListMatchesThePRD(t)
 
 	// A remote of this test's own, so the push moves nothing another test
@@ -144,8 +153,7 @@ func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 		}
 	}
 
-	run := startRun(t, j, "--skip", pipeline.StagePR.String()+","+pipeline.StageCI.String(),
-		"--intent", "deliver a change through review, test, lint and push")
+	run := startRun(t, j, "--intent", "deliver a change through review, test, lint and push")
 	for range 20 {
 		if run.Outcome != machine.OutcomeDecision || run.Decision == nil {
 			break
@@ -153,7 +161,8 @@ func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 		observed.stops = append(observed.stops, run.Decision.Stage)
 		run = decodeRun(t, j.Command("--answer", "approved"))
 	}
-	observed.outcome = run.Outcome
+	observed.outcome, observed.advancing = run.Outcome, run.Advancing
+	observed.noCodeHost = run.Record.NoCodeHost
 	observed.stages = run.Stages
 	for _, call := range agent.Calls() {
 		switch {
@@ -212,10 +221,19 @@ func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 				},
 			},
 			{
-				States: "the run ended with its checks passed",
+				States: "the run ended pushed, with nothing left advancing it",
 				Holds: func(d delivered) error {
-					if d.outcome != machine.OutcomeChecksPassed {
-						return fmt.Errorf("the run ended %s", d.outcome)
+					if d.outcome != machine.OutcomePushed || d.advancing {
+						return fmt.Errorf("the run ended %s with advancing %v", d.outcome, d.advancing)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the run's record says its repository has no code host",
+				Holds: func(d delivered) error {
+					if !d.noCodeHost {
+						return errors.New("the run's record names a code host for a bare local remote")
 					}
 					return nil
 				},
@@ -263,15 +281,15 @@ func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 				},
 			},
 			{
-				States: "the stages the run asked to skip are reported skipped and did not run",
+				States: "the pull request and checks stages are reported skipped for want of a code host and did not run",
 				Holds: func(d delivered) error {
 					for _, stage := range d.skipped {
 						v, err := reached(d, stage)
 						if err != nil {
 							return err
 						}
-						if v.Ran || v.Outcome != pipeline.OutcomeSkipped {
-							return fmt.Errorf("the skipped %s stage ran=%v and ended %q", stage, v.Ran, v.Outcome)
+						if v.Ran || v.Outcome != pipeline.OutcomeSkipped || v.SkipReason != pipeline.SkipNoCodeHost {
+							return fmt.Errorf("the %s stage ran=%v, ended %q, skip reason %q", stage, v.Ran, v.Outcome, v.SkipReason)
 						}
 					}
 					return nil
@@ -338,6 +356,21 @@ func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 			{Named: "the run ended failed", Break: func(d delivered) delivered {
 				d.outcome = machine.OutcomeFailed
 				return d
+			}},
+			{Named: "the run ended checks-passed with no checks run", Break: func(d delivered) delivered {
+				d.outcome = machine.OutcomeChecksPassed
+				return d
+			}},
+			{Named: "the run stalled at the pull request stage", Break: func(d delivered) delivered {
+				d.outcome, d.advancing = machine.OutcomeExecuting, false
+				return d
+			}},
+			{Named: "the run's record names a code host", Break: func(d delivered) delivered {
+				d.noCodeHost = false
+				return d
+			}},
+			{Named: "the checks stage was skipped at a person's request", Break: func(d delivered) delivered {
+				return d.edited(pipeline.StageCI, func(v *machine.Stage) { v.SkipReason = pipeline.SkipRequested })
 			}},
 			{Named: "the reviewer was never asked", Break: func(d delivered) delivered {
 				d.reviewsAnswered = 0

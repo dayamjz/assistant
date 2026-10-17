@@ -191,6 +191,53 @@ func TestOnlyARecordedMergeReadsAsPassed(t *testing.T) {
 	}
 }
 
+// A run of a repository with no code host that reached the end reads as
+// pushed, issue #283's owner decision, whether the record has settled to
+// passed or still stands at running beside a completed checkpoint; and
+// nothing else about such a run moves. The controls are the same standings
+// without the record's fact, which read as checks-passed: checks-passed is
+// kept for runs whose checks ran, and pushed is never reached by a run whose
+// record names a code host.
+func TestARunWithNoCodeHostThatReachedTheEndReadsAsPushed(t *testing.T) {
+	t.Parallel()
+	completed := machine.ExecutionAt(graph.StatusCompleted, graph.State{})
+	cases := []struct {
+		name     string
+		standing machine.Standing
+		want     machine.Outcome
+	}{
+		{"settled", machine.Standing{Record: store.RunPassed, NoCodeHost: true}, machine.OutcomePushed},
+		{"settling", machine.Standing{Record: store.RunRunning, NoCodeHost: true, Execution: completed}, machine.OutcomePushed},
+		{"control: settled with a code host", machine.Standing{Record: store.RunPassed}, machine.OutcomeChecksPassed},
+		{"control: settling with a code host", machine.Standing{Record: store.RunRunning, Execution: completed}, machine.OutcomeChecksPassed},
+		{"held", machine.Standing{Record: store.RunHeld, NoCodeHost: true,
+			Execution: machine.ExecutionAt(graph.StatusHalted, graph.State{})}, machine.OutcomeDecision},
+		{"cancelled", machine.Standing{Record: store.RunTerminated, NoCodeHost: true}, machine.OutcomeCancelled},
+		{"failed", machine.Standing{Record: store.RunFailed, NoCodeHost: true}, machine.OutcomeFailed},
+		{"cancelled at a hold, settling", machine.Standing{Record: store.RunRunning, NoCodeHost: true,
+			Execution: machine.ExecutionAt(graph.StatusCompleted, cancelledState(t))}, machine.OutcomeCancelled},
+	}
+	for _, c := range cases {
+		if got := machine.OutcomeOf(c.standing); got != c.want {
+			t.Errorf("a run %s reports %s, want %s", c.name, got, c.want)
+		}
+	}
+	if !machine.OutcomePushed.Terminal() {
+		t.Fatal("pushed is not terminal")
+	}
+	action := machine.NextActionOf(machine.Standing{Record: store.RunPassed, NoCodeHost: true})
+	if !strings.Contains(action, "no code host") || !strings.Contains(action, "Ask the person") {
+		t.Fatalf("pushed's next action is %q; it says neither why there is no pull request nor whom to ask", action)
+	}
+	listed := machine.RecordPhrase(store.Run{Status: store.RunPassed, NoCodeHost: true})
+	if listed == machine.RecordPhrase(store.Run{Status: store.RunPassed}) {
+		t.Fatalf("a listing reads a pushed run as one whose checks ran: %q", listed)
+	}
+	if !strings.Contains(listed.String(), "no checks ran") {
+		t.Fatalf("a listing of a pushed run reads %q, which does not say no checks ran", listed)
+	}
+}
+
 // Every status internal/store defines has an answer here, so a run this
 // package cannot interpret is never one a caller is invited to drive.
 func TestEveryRecordedStatusHasAnOutcome(t *testing.T) {

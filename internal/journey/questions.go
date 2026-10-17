@@ -91,8 +91,9 @@ func Settlements() []Settlement {
 				"deliberately tells apart from an empty one, so the substitution silently doing nothing " +
 				"is the same failure as not doing it at all and is refused rather than skipped.",
 			Exercised: "Driven at package reach, against forge.ChecksReport.Evaluate. No run asks a " +
-				"provider anything in this build: the pull request stage's body would, and it fails " +
-				"because the run's record names no repository on the code host.",
+				"provider anything in this build: the pull request and checks bodies would, and every " +
+				"run passes both over with the reason no_code_host, because the fixture's upstream is " +
+				"a local repository with no code host.",
 		},
 		{
 			Question: "question-deferred-plant-timing",
@@ -121,8 +122,8 @@ func Settlements() []Settlement {
 				"wait elapsed holds at the checks stage with a finding saying checks_timeout elapsed; a " +
 				"run whose checks settled reports their verdict. The two are different answers on the " +
 				"same surface, so nothing has to be inferred from elapsed time.",
-			Exercised: "Not driven through the binary. Every walk's run names no repository on the code " +
-				"host, so the checks stage holds on that before it reads any checks and never waits. The " +
+			Exercised: "Not driven through the binary. Every walk's run has no code host, so the checks stage " +
+				"is passed over with the reason no_code_host before it reads any checks and never waits. The " +
 				"wait itself is established at package reach in internal/stages, whose checks tests drive " +
 				"the stage body against a scripted provider, a real upstream and a real store: it waits " +
 				"through unsettled checks, holds when checks_timeout elapses, and re-arms when the base " +

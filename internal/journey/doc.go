@@ -31,12 +31,11 @@
 // resolves, which the default journey scripts to answer nothing, so every walk
 // but those three asks to skip that stage rather than stopping at an ask
 // recording a review that never happened; the pushed run cannot ask, and its
-// test scripts the reviewer clean instead. The pull request body opens a
-// provider for the repository the run's record names on the code host, and no
-// record here names one, so a run that reaches it fails rather than reaching
-// a code host; every run this harness drives to the end therefore asks to
-// skip that stage too, which is the per-run surface a person would use. A run
-// therefore holds at the stages this harness declares a run stops at - among
+// test scripts the reviewer clean instead. The pull request and checks
+// bodies never run: the fixture's upstream is a local repository, which
+// internal/forge reads as a repository with no code host, so under issue
+// #283's owner decision every run here passes both over with the reason
+// no_code_host and one walked to the end ends pushed. A run therefore holds at the stages this harness declares a run stops at - among
 // them the test stage, which holds for the command nobody configures in the
 // walked scenario - and large parts of this product stay unreachable from
 // such a walk: no agent is launched, no reference is moved, and no code host

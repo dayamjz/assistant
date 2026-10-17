@@ -278,3 +278,18 @@ func TestAnAnswerThatWasNotAppliedIsSaid(t *testing.T) {
 		vocabtest.Assert(t, line)
 	}
 }
+
+// A stage passed over says why in the details view, in the skip reason's own
+// word, so a person reading a run with no code host learns the pull request
+// and checks stages did not apply rather than only that they did not run. The
+// control is a stage passed over with no reason recorded, which reads as it
+// always did.
+func TestAStagePassedOverSaysWhy(t *testing.T) {
+	passed := machine.Stage{Stage: "ci", Outcome: pipeline.OutcomeSkipped, SkipReason: pipeline.SkipNoCodeHost}
+	if got := outcomeWord(passed); got != "skipped (did not run: no_code_host)" {
+		t.Fatalf("a stage passed over for want of a code host reads %q", got)
+	}
+	if got := outcomeWord(machine.Stage{Stage: "lint", Outcome: pipeline.OutcomeSkipped}); got != "skipped (did not run)" {
+		t.Fatalf("a stage passed over with no reason recorded reads %q", got)
+	}
+}

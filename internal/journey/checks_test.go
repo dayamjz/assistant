@@ -43,9 +43,9 @@ type checked struct {
 // condition at package reach.
 //
 // The binary cannot reach it. No run asks a provider anything in this build -
-// the pull request stage's body would, and it fails because the run's record
-// names no repository on the code host - so there is no run to read a verdict
-// out of. What is driven is internal/forge over the provider command,
+// the pull request and checks bodies would, and every run here passes both
+// over because the fixture's upstream has no code host - so there is no run
+// to read a verdict out of. What is driven is internal/forge over the provider command,
 // which is a process this harness stands in for the same way it stands in for
 // the agent: a copy of this test binary on PATH, printing the prepared answer.
 //

@@ -11,11 +11,11 @@ import (
 // Outcome is what a driving agent reads to decide what to do next. The set is
 // closed, and every member is one row of the table below.
 //
-// PRD section 9's machine interface names these six, and the table below is
+// PRD section 9's machine interface names these seven, and the table below is
 // in that row's order: the two groups it divides them into by whether a run is
-// finished with, the four that say it is first. Those four - checks-passed,
-// passed, failed and cancelled - the section requires to be terminal and to
-// carry a next action, and they are the whole answer to how a run ended rather
+// finished with, the five that say it is first. Those five - checks-passed,
+// pushed, passed, failed and cancelled - the section requires to be terminal
+// and to carry a next action, and they are the whole answer to how a run ended rather
 // than the whole set a call can return. No call that advanced a run answers
 // with one still moving, because internal/graph returns at a halt, a
 // completion or a bound. Two say a run is not finished with. OutcomeDecision
@@ -41,6 +41,26 @@ const (
 	// has no body for cannot have cleared by passing: it held, so a person
 	// approved or skipped it, and the report says which stage by stage.
 	OutcomeChecksPassed Outcome = "checks-passed"
+	// OutcomePushed is a run that reached the end of the gate in a repository
+	// with no code host, issue #283's owner decision: its upstream names no
+	// network host, so the run pushed as usual and passed over the pull
+	// request and checks stages, each reporting no_code_host as why. It is
+	// terminal, and like checks-passed it means stop driving and ask the
+	// person: the branch is on the remote and merging it is theirs to do
+	// there.
+	//
+	// It is not checks-passed, because no checks ran, and the owner keeps
+	// that word for checks that did. What it claims is the rest of what
+	// checks-passed claims: every other stage cleared in one of the ways PRD
+	// section 5 allows, and which of those happened is on the stage's own
+	// report. That includes the push stage, so a run whose push a person
+	// skipped, or whose rebase found nothing left to change, ends here
+	// without having forwarded a commit, and its push stage's report is
+	// what says so; the word does not.
+	//
+	// It is decided from the run's record, store.Run.NoCodeHost, which the
+	// run wrote before it started, and never from a stage failing.
+	OutcomePushed Outcome = "pushed"
 	// OutcomePassed is a change that merged. PRD section 9's outcome row
 	// gives it that one meaning, and section 5's "Waiting on checks" gives it
 	// its one producer: a run whose pull request was read as merged while the
@@ -106,11 +126,11 @@ const (
 )
 
 // outcomes is the closed set in the order the table above declares them,
-// which is the order the PRD's outcome row declares them in: the four that say
+// which is the order the PRD's outcome row declares them in: the five that say
 // a run is finished with, then the two that say it is not. internal/outcomes
 // fails the build when the two orders come apart.
 var outcomes = []Outcome{
-	OutcomeChecksPassed, OutcomePassed, OutcomeFailed, OutcomeCancelled,
+	OutcomeChecksPassed, OutcomePushed, OutcomePassed, OutcomeFailed, OutcomeCancelled,
 	OutcomeDecision, OutcomeExecuting,
 }
 
@@ -127,7 +147,7 @@ func Outcomes() []Outcome {
 // driving agent that receives one stops driving that run.
 func (o Outcome) Terminal() bool {
 	switch o {
-	case OutcomeChecksPassed, OutcomePassed, OutcomeFailed, OutcomeCancelled:
+	case OutcomeChecksPassed, OutcomePushed, OutcomePassed, OutcomeFailed, OutcomeCancelled:
 		return true
 	case OutcomeDecision, OutcomeExecuting:
 		return false
@@ -242,6 +262,12 @@ type Standing struct {
 	// record says which bound, so a surface holding the record alone reads
 	// the same answer a surface holding the checkpoint does.
 	Park store.Optional[store.RunPark]
+	// NoCodeHost is whether the run's repository had no code host when it
+	// began, read off the run's record, store.Run.NoCodeHost. It travels
+	// beside Record for the reason PullRequestEnd does: a run that reached
+	// the end is checks-passed unless something on the record says
+	// otherwise, and this is what says the end it reached is pushed.
+	NoCodeHost bool
 	// Execution is where the run's execution stands.
 	Execution Execution
 	// Advancing is whether a segment of the run was executing when the answer
@@ -290,6 +316,9 @@ func OutcomeOf(s Standing) Outcome {
 		if s.PullRequestEnd == store.PullRequestMerged {
 			return OutcomePassed
 		}
+		if s.NoCodeHost {
+			return OutcomePushed
+		}
 		return OutcomeChecksPassed
 	case store.RunFailed:
 		return OutcomeFailed
@@ -302,7 +331,15 @@ func OutcomeOf(s Standing) Outcome {
 		}
 		return OutcomeCancelled
 	case store.RunPending, store.RunRunning, store.RunHeld:
-		return s.Execution.outcome()
+		// A record not yet moved off running can stand at a completed
+		// checkpoint for as long as the segment takes to settle it, and the
+		// end it reached is read off the same record fact the passed arm
+		// reads, so the two readings of one run cannot name different ends.
+		outcome := s.Execution.outcome()
+		if outcome == OutcomeChecksPassed && s.NoCodeHost {
+			return OutcomePushed
+		}
+		return outcome
 	default:
 		// A status this build does not define is one nothing here can
 		// interpret, so it reports a run that ended without a verdict rather
@@ -386,11 +423,13 @@ func ParkAction(p store.RunPark) string {
 // rather than a sentence for the cases somebody remembered.
 var nextActions = map[Outcome]string{
 	OutcomeChecksPassed: "The gate is done with this change. Ask the person whether to merge it.",
-	OutcomePassed:       "Nothing. The change is merged.",
-	OutcomeFailed:       "Read the reason. A run a bound parked is taken further by forking it or by giving it more budget; a run that could not proceed needs the failure fixed and a fresh run.",
-	OutcomeCancelled:    "Nothing was undone. Start a fresh run when the change is ready again.",
-	OutcomeDecision:     "Answer the decision to carry the run on.",
-	OutcomeExecuting:    "Nothing yet. Attach to carry it on - that blocks until the next decision unless this service is already advancing the run, in which case it answers at once and you should pause before asking again.",
+	OutcomePushed: "The gate is done with this change. This repository has no code host, so no pull request was opened " +
+		"and no checks ran; the push stage's report says what reached the remote. Ask the person whether to merge it there.",
+	OutcomePassed:    "Nothing. The change is merged.",
+	OutcomeFailed:    "Read the reason. A run a bound parked is taken further by forking it or by giving it more budget; a run that could not proceed needs the failure fixed and a fresh run.",
+	OutcomeCancelled: "Nothing was undone. Start a fresh run when the change is ready again.",
+	OutcomeDecision:  "Answer the decision to carry the run on.",
+	OutcomeExecuting: "Nothing yet. Attach to carry it on - that blocks until the next decision unless this service is already advancing the run, in which case it answers at once and you should pause before asking again.",
 }
 
 // NextAction is what to do about a run this outcome describes, whether it has
@@ -430,7 +469,7 @@ const (
 // whether anything is advancing it. advancing is machine.Run.Advancing, and
 // that field's contract is what it means.
 //
-// It differs from NextAction for one outcome. Five of the six describe a run
+// It differs from NextAction for one outcome. Six of the seven describe a run
 // whose position nothing is moving either way, so knowing that nothing is
 // moving it adds nothing to what to do about it. OutcomeExecuting is the one
 // that covers both a run in flight and a run standing still, and its two

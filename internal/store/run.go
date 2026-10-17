@@ -137,6 +137,14 @@ type Run struct {
 	// keeps saying so. Which decisions it answered, and that each was the
 	// program's, is the hold record ResolvedByStandingConsent names.
 	StandingConsent Optional[time.Time] `json:"standing_consent"`
+	// NoCodeHost says the run's repository had no code host when the run
+	// began: its upstream named no network host, so the run passes over the
+	// pull request and checks stages and ends with its own outcome, issue
+	// #283's owner decision. MarkRunNoCodeHost writes it once, before the run
+	// starts. It is false for a run of a repository with a code host and for
+	// a run recorded before the column existed, and it is a fact about the
+	// repository as the run read it, not about what any stage did.
+	NoCodeHost bool `json:"no_code_host,omitempty"`
 	// HeldMoves is how many times the run has moved into held, which
 	// transitionRun counts in the statement that makes each move, so the
 	// count that names a hold is durable with the hold itself. It is what
@@ -525,6 +533,45 @@ func (s *Store) SetRunResolvedAgent(ctx context.Context, id, name string) error 
 	return s.updateRun(ctx, id, "resolved_agent", name)
 }
 
+// MarkRunNoCodeHost records that the run's repository has no code host. It
+// is written while the run is still pending, which the schema enforces, so a
+// run that began with a code host cannot acquire the fact afterwards. A run
+// already marked is left as it is and answers nil, because the fact recorded
+// twice is the one fact; a run that does not exist is ErrNotFound.
+//
+// It records and decides nothing: what counts as no code host is
+// internal/forge's ReachOf, and what a run does about it is
+// internal/pipeline's.
+func (s *Store) MarkRunNoCodeHost(ctx context.Context, id string) error {
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx,
+			`UPDATE run SET no_code_host = 1, updated_at = ? WHERE id = ? AND no_code_host IS NULL`,
+			encodeTime(nowUTC()), id)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 1 {
+			return nil
+		}
+		var exists int
+		switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM run WHERE id = ?`, id).Scan(&exists); {
+		case isNoRows(err):
+			return ErrNotFound
+		case err != nil:
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("store: recording that run %s has no code host: %w", id, err)
+	}
+	return nil
+}
+
 // GiveRunStandingConsent records that the run was put under standing consent,
 // now, and returns the run as stored. A run already given it keeps the
 // instant it was first given and is returned unchanged, because consent given
@@ -595,7 +642,7 @@ const runColumns = `SELECT
 	id, repository_id, branch, submitted_head, base, current_head, status,
 	approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
 	build_version, build_revision, build_modified, build_go, config_digest,
-	config_rejections, resolved_agent, park, standing_consent, held_moves,
+	config_rejections, resolved_agent, park, standing_consent, held_moves, no_code_host,
 	created_at, updated_at`
 
 func scanRun(sc scanner) (Run, error) {
@@ -603,17 +650,21 @@ func scanRun(sc scanner) (Run, error) {
 	var status, created, updated string
 	var modified int
 	var rejections, park, consent Optional[string]
+	var noCodeHost Optional[int64]
 	if err := sc.Scan(
 		&r.ID, &r.RepositoryID, &r.Branch, &r.SubmittedHead, &r.Base, &r.CurrentHead, &status,
 		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.Intent, &r.IntentSource,
 		&r.Build.Version, &r.Build.Revision, &modified, &r.Build.Go, &r.ConfigDigest,
-		&rejections, &r.ResolvedAgent, &park, &consent, &r.HeldMoves,
+		&rejections, &r.ResolvedAgent, &park, &consent, &r.HeldMoves, &noCodeHost,
 		&created, &updated,
 	); err != nil {
 		return Run{}, err
 	}
 	r.Status = RunStatus(status)
 	r.Build.Modified = modified != 0
+	if marked, ok := noCodeHost.Get(); ok && marked == 1 {
+		r.NoCodeHost = true
+	}
 	var err error
 	if r.ConfigRejections, err = rejectionsValue(rejections); err != nil {
 		return Run{}, err

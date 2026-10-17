@@ -366,6 +366,11 @@ var phraseByOutcome = map[Outcome]Phrase{
 		Consequence: "It is not on the shared branch until it is merged.",
 		Decision:    "Decide whether to merge it.",
 	},
+	OutcomePushed: {
+		Outcome:     "This change cleared the gate as far as a repository with no code host goes.",
+		Consequence: "No pull request was opened and no checks ran, and it is not on the shared branch until it is merged.",
+		Decision:    "Decide whether to merge it.",
+	},
 	OutcomePassed: {
 		Outcome:     "This change is merged.",
 		Consequence: "Nothing more happens to it here.",
@@ -497,7 +502,7 @@ func outcomePhrase(outcome Outcome, park store.Optional[store.RunPark], advancin
 // terminated record parked before the park record existed reads as ended
 // before a verdict; those readings need the merge record and the checkpoint.
 func RecordPhrase(r store.Run) Phrase {
-	outcome := OutcomeOf(Standing{Record: r.Status, Park: r.Park, Execution: ExecutionUnrecorded()})
+	outcome := OutcomeOf(Standing{Record: r.Status, Park: r.Park, NoCodeHost: r.NoCodeHost, Execution: ExecutionUnrecorded()})
 	if p, ok := parkPhrase(outcome, r.Park); ok {
 		return p
 	}
@@ -1118,6 +1123,13 @@ const (
 	// for a commit made in the checkout's gate, which is where a run's copy
 	// takes its identity from.
 	CheckCommitIdentity = "commit identity"
+	// CheckPullRequests is whether a run of the checkout's repository can
+	// open a pull request: its upstream is a repository on the code host
+	// this build addresses, it is on this machine and so has no code host,
+	// which issue #283's owner decision makes a run that ends without a
+	// pull request or checks, or it is on a host this build cannot address,
+	// which refuses every run before it starts and so blocks.
+	CheckPullRequests = "pull requests"
 	// CheckService is whether a service answered for the home.
 	CheckService = "service"
 	// CheckAgent is whether a coding agent resolves for a run.
@@ -1134,8 +1146,8 @@ const (
 // CheckNames is every check name phraseByCheck has rows for, in the order
 // assistant doctor makes them. The result is a copy.
 func CheckNames() []string {
-	return []string{CheckHome, CheckDatabase, CheckWorkingCopy, CheckGate, CheckCommitIdentity, CheckService,
-		CheckAgent, CheckNamedOnlyAgents, CheckCodeHost, CheckStages}
+	return []string{CheckHome, CheckDatabase, CheckWorkingCopy, CheckGate, CheckCommitIdentity, CheckPullRequests,
+		CheckService, CheckAgent, CheckNamedOnlyAgents, CheckCodeHost, CheckStages}
 }
 
 // readDoctor is the decision every row for a check that found something
@@ -1171,6 +1183,13 @@ var phraseByCheck = map[string][2]Phrase{
 			Decision: `Run git config --global user.name "Your Name" and git config --global user.email "you@example.com", then run assistant doctor again; ` +
 				"if both are already set, run assistant --json doctor for what git said."},
 	},
+	CheckPullRequests: {
+		{Outcome: "Runs in this repository can open a pull request on its code host.",
+			Consequence: "A change that clears the gate is proposed there and waits on its checks.", Decision: "Nothing to do."},
+		{Outcome: "Runs in this repository cannot open a pull request, because its upstream is on this machine rather than on a code host.",
+			Consequence: "A run still validates the change and sends it to the upstream, then ends without a pull request or checks.",
+			Decision:    "Nothing to do, unless the upstream belongs on a code host; then run assistant init again with that remote."},
+	},
 	CheckService: {PhraseServiceUp, PhraseServiceAbsent},
 	CheckAgent: {
 		{Outcome: "A coding agent this build can drive is available.", Consequence: "A run has an agent to examine and fix the change with.", Decision: "Nothing to do."},
@@ -1190,6 +1209,20 @@ var phraseByCheck = map[string][2]Phrase{
 	},
 }
 
+// phraseByBlockedCheck sharpens phraseByCheck's failing row for a check whose
+// failure has two readings told apart by whether it blocks. CheckPullRequests
+// is the one: an upstream on this machine is a repository with no code host,
+// which a run walks, and an upstream on a host this build cannot address
+// refuses every run before it starts. A check with no row here reads its
+// failing row whether it blocks or not.
+var phraseByBlockedCheck = map[string]Phrase{
+	CheckPullRequests: {
+		Outcome:     "Runs in this repository cannot start, because its upstream is on a host this build cannot open a pull request on.",
+		Consequence: "No run starts until the upstream is one this build can use.",
+		Decision:    "Run assistant init again with an upstream on the code host this build uses or on this machine; " + readDoctor,
+	},
+}
+
 // phraseCheckUnfamiliar is the row for a check under a name the table has
 // none for, which internal/cli's command-line test keeps assistant doctor
 // from making.
@@ -1200,7 +1233,8 @@ var phraseCheckUnfamiliar = Phrase{
 }
 
 // CheckPhrase is what a person reads about one check: phraseByCheck's row for
-// its name and result, or the unfamiliar row for a name it has none for.
+// its name and result, sharpened by phraseByBlockedCheck for a failing check
+// that blocks, or the unfamiliar row for a name it has none for.
 func CheckPhrase(c Check) Phrase {
 	rows, ok := phraseByCheck[c.Name]
 	if !ok {
@@ -1208,6 +1242,9 @@ func CheckPhrase(c Check) Phrase {
 	}
 	if c.OK {
 		return rows[0]
+	}
+	if blocked, ok := phraseByBlockedCheck[c.Name]; ok && c.Blocking {
+		return blocked
 	}
 	return rows[1]
 }
@@ -1544,6 +1581,9 @@ func TablePhrases() []Phrase {
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
 	for _, name := range CheckNames() {
 		out = append(out, CheckPhrase(Check{Name: name, OK: true}), CheckPhrase(Check{Name: name}))
+		if _, ok := phraseByBlockedCheck[name]; ok {
+			out = append(out, CheckPhrase(Check{Name: name, Blocking: true}))
+		}
 	}
 	out = append(out, phraseCheckUnfamiliar, phraseRunCanStart, phraseRunCannotStart)
 	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}),

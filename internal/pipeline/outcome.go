@@ -114,6 +114,51 @@ func StageOutcome(s graph.State, stage Stage) Outcome {
 	return Outcome(text)
 }
 
+// SkipReason is why a stage was passed over without its body running. The
+// set is closed, and each member is one of the three things the stage node
+// reads before it runs a body.
+type SkipReason string
+
+const (
+	// SkipNothingToChange is the empty-diff short circuit: the rebase stage
+	// reported that nothing remains to change, so every stage after it is
+	// passed over and the run completes.
+	SkipNothingToChange SkipReason = "nothing_to_change"
+	// SkipNoCodeHost is a stage that needs a code host in a run whose
+	// repository has none, KeyNoCodeHost, which is issue #283's owner
+	// decision. It is a fact about the repository rather than anyone's
+	// choice.
+	SkipNoCodeHost SkipReason = "no_code_host"
+	// SkipRequested is the run's own skip list: a person passed the stage
+	// over on purpose for this run, which P2 allows.
+	SkipRequested SkipReason = "requested"
+)
+
+// SkipReasonOf returns why a stage was passed over in the run this state
+// belongs to, and false when it was not passed over: when its body ran, when
+// its outcome is not skipped, or when the state is from some other graph.
+//
+// It reads the same keys under the same rule the stage node read before it
+// passed the stage over, so the reason reported is the reason acted on. A
+// stage a person answered skipped at its hold ran its body, and is not one of
+// these: its outcome says skipped, and StageRan says it ran.
+func SkipReasonOf(s graph.State, stage Stage) (SkipReason, bool) {
+	if StageOutcome(s, stage) != OutcomeSkipped || StageRan(s, stage) {
+		return "", false
+	}
+	reason, skip, err := skipped(func(key string) (graph.Value, error) {
+		v, ok := s.Get(key)
+		if !ok {
+			return graph.Value{}, fmt.Errorf("%w: %s", ErrUndeclaredKey, key)
+		}
+		return v, nil
+	}, stage)
+	if err != nil || !skip {
+		return "", false
+	}
+	return reason, true
+}
+
 // StageRan reports whether a stage's body ran in the run this state belongs
 // to. It is the question a stage's outcome alone cannot answer, because
 // OutcomeSkipped covers both a stage that was passed over and one that ran and

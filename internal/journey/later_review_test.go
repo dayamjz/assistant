@@ -173,11 +173,14 @@ func TestCommitsAFixRoundWroteAfterReviewAreReviewedBeforeThePush(t *testing.T) 
 	succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch))
 	serve(t, j)
 
+	// The pull request and checks stages are passed over for want of a code
+	// host rather than asked to be skipped: the fixture's upstream is a local
+	// repository, issue #283's owner decision. The walk stops at the push in
+	// any case, so neither is reached.
 	skipped := []pipeline.Stage{pipeline.StagePR, pipeline.StageCI}
 	observed.expectedStops = configuredStops(test, lint, skipped)
 
-	run := startRun(t, j, "--skip", pipeline.StagePR.String()+","+pipeline.StageCI.String(),
-		"--intent", "deliver a change whose lint round writes after the review")
+	run := startRun(t, j, "--intent", "deliver a change whose lint round writes after the review")
 	observed.stops, run = walkToPush(t, j, run, func(string) {})
 	observed.stages = run.Stages
 	observed.fixerSession, _ = run.Record.FixerSession.Get()

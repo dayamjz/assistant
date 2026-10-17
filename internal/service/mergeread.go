@@ -284,7 +284,7 @@ func (s *Service) readPersonMerge(ctx context.Context, record store.Run) (mergeR
 	}
 	// Which runs are checks-passed is internal/machine's derivation, from
 	// the record and its merge record, as report composes it.
-	standing := machine.Standing{Record: record.Status}
+	standing := machine.Standing{Record: record.Status, NoCodeHost: record.NoCodeHost}
 	if ended {
 		standing.PullRequestEnd = merge.End
 	}

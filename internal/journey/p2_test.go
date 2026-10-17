@@ -21,10 +21,11 @@ import (
 // three parts are one claim: a run walks the stages in the specified order, a
 // person may skip stages for one run on purpose, and a configuration document
 // that asks for a standing skip is refused before the service serves anything.
-// Both runs here ask to skip the review and pull request stages, for the
-// reasons the paragraph below gives, so the first part is established for
-// every stage but those two: no run in this build both takes either stage and
-// reaches the end of the gate.
+// Both runs here ask to skip the review stage, for the reason the paragraph
+// below gives, and both pass over the pull request and checks stages because
+// the fixture's upstream has no code host, issue #283's owner decision. So
+// the first part is established for every stage but those three, and those
+// two are held to coming back skipped for that reason rather than run.
 //
 // The order itself is internal/pipeline's, which makes another order unsayable
 // rather than checked, and internal/service renders it by iterating that order
@@ -34,11 +35,10 @@ import (
 // that the shipped binary reaches every one of those stages, runs each it was
 // not asked to skip, and carries each away with the outcome it was given.
 //
-// Every run here, the three walks that take the review stage aside, asks to skip the review and pull request stages, for the
-// reasons walkableRun states: the review body launches this harness's agent,
-// which is scripted to answer nothing, and the pull request body fails on
-// the run's record naming no repository on the code host, so a run
-// that took either could not reach the end of the gate however it was
+// Every run here, the three walks that take the review stage aside, asks to
+// skip the review stage, for the reason walkableRun states: the review body
+// launches this harness's agent, which is scripted to answer nothing, so a
+// run that took it could not reach the end of the gate however it was
 // answered. The skip is a run input, which is the per-run surface a person
 // would use, so this drives that surface rather than weakening what the
 // stages do, and it narrows the first part's claim to the stages the run did
@@ -74,7 +74,8 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 	// skip" and mean something a reader can hold them to. The skip semantics
 	// themselves - a skipped stage does not run and comes back skipped - are
 	// the second check's subject, not this one's.
-	forced := []string{pipeline.StageReview.String(), pipeline.StagePR.String()}
+	forced := []string{pipeline.StageReview.String()}
+	passedOver := stagesNeedingACodeHost()
 
 	walked := journey.Check[machine.Run]{
 		What: "P2: a run through the binary over every stage it can take",
@@ -99,7 +100,7 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				States: "every stage this run did not ask to skip ran",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
-						if slices.Contains(forced, stage.Stage) {
+						if slices.Contains(forced, stage.Stage) || slices.Contains(passedOver, stage.Stage) {
 							continue
 						}
 						if !stage.Ran {
@@ -139,7 +140,7 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				States: "no stage but the ones this run asked to skip came back skipped",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
-						if slices.Contains(forced, stage.Stage) {
+						if slices.Contains(forced, stage.Stage) || slices.Contains(passedOver, stage.Stage) {
 							continue
 						}
 						if stage.Outcome == pipeline.OutcomeSkipped {
@@ -151,9 +152,13 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				},
 			},
 			{
+				States: "the stages that need a code host came back skipped for want of one and did not run",
+				Holds:  passedOverForNoCodeHost(passedOver),
+			},
+			{
 				States: "the run reached the end of the gate",
 				Holds: func(run machine.Run) error {
-					if run.Outcome != machine.OutcomeChecksPassed {
+					if run.Outcome != endOfTheGate {
 						return fmt.Errorf("the run ended %s rather than reaching the end of the gate", run.Outcome)
 					}
 					return nil
@@ -161,6 +166,15 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 			},
 		},
 		Counterfeits: []journey.Counterfeit[machine.Run]{
+			{Named: "the checks stage was skipped as though a person asked", Break: func(run machine.Run) machine.Run {
+				run = cloneRun(run)
+				for i, stage := range run.Stages {
+					if stage.Stage == pipeline.StageCI.String() {
+						run.Stages[i].SkipReason = pipeline.SkipRequested
+					}
+				}
+				return run
+			}},
 			// Reordering the list, dropping one entry from it and appending a
 			// tenth were counterfeits here until review found that this
 			// surface can produce none of the three, so each showed a clause
@@ -254,10 +268,10 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				},
 			},
 			{
-				States: "every stage nobody asked to skip ran",
+				States: "every stage nobody asked to skip ran, but those a run with no code host passes over",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
-						if !slices.Contains(asked, stage.Stage) && !stage.Ran {
+						if !slices.Contains(asked, stage.Stage) && !slices.Contains(passedOver, stage.Stage) && !stage.Ran {
 							return fmt.Errorf("the %s stage was not skipped and did not run", stage.Stage)
 						}
 					}
@@ -267,7 +281,7 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 			{
 				States: "the run reached the end of the gate",
 				Holds: func(run machine.Run) error {
-					if run.Outcome != machine.OutcomeChecksPassed {
+					if run.Outcome != endOfTheGate {
 						return fmt.Errorf("the run ended %s rather than reaching the end of the gate", run.Outcome)
 					}
 					return nil

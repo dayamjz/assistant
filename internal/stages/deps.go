@@ -135,9 +135,12 @@ type StageDeps struct {
 	//
 	// It is nil only where nothing wired it: internal/service builds one
 	// forge.GitHubHost and every run of that service opens through it. A run
-	// whose KeyForgeRepository is empty has no provider to open, because
-	// forge.Host.Open refuses an empty specifier; a body that needs a code
-	// host is to report that rather than proceed without one.
+	// whose repository has no code host never reaches a body that needs one:
+	// pipeline.KeyNoCodeHost passes the pull request and checks stages over
+	// at the stage node, issue #283's owner decision. A body that is reached
+	// with KeyForgeRepository empty all the same has no provider to open,
+	// because forge.Host.Open refuses an empty specifier, and it is to report
+	// that rather than proceed without one.
 	Forge forge.Host
 	// git are the options every repository opened through Copy is opened
 	// with, which is how the redactor the service configured reaches the

@@ -390,6 +390,7 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		add(gated)
 		if gated.OK {
 			add(commitIdentity(ctx, in.home.Root(), records, working))
+			add(pullRequests(ctx, records, working))
 		}
 	}
 
@@ -527,16 +528,57 @@ func commitIdentity(ctx context.Context, home string, records *store.Store, work
 	return machine.Check{Name: machine.CheckCommitIdentity, OK: true, Detail: detail}
 }
 
+// pullRequests reports whether a run of this working copy's repository can
+// open a pull request, which PRD section 9's doctor says up front rather than
+// leaving to the stage that would need one; issue #283's owner decision asks
+// for exactly that. It reads the repository record a run is resolved against
+// through forge.ReachOf, which is the reading internal/service's begin makes,
+// so the answer here is the one starting a run would act on.
+//
+// An upstream on the code host this build addresses is OK. An upstream on
+// this machine is not OK and does not block: such a run validates, pushes,
+// passes over the pull request and checks stages and ends as pushed. An
+// upstream on any other host blocks, because begin refuses that run before it
+// starts with service.ErrCodeHostUnaddressable. The record's fork is not read:
+// assistant init refuses a fork whose upstream is not on the code host, so a
+// record naming one has an upstream this row reports OK.
+//
+// It is made only when the gate check passed, because the record is what it
+// reads and that check is what establishes one.
+func pullRequests(ctx context.Context, records *store.Store, working string) machine.Check {
+	repository, err := records.RepositoryAt(ctx, working)
+	if err != nil {
+		return machine.Check{Name: machine.CheckPullRequests, Blocking: true,
+			Detail: "the repository record could not be read: " + err.Error()}
+	}
+	switch reach, specifier := forge.ReachOf(repository.UpstreamURL); reach {
+	case forge.ReachHosted:
+		return machine.Check{Name: machine.CheckPullRequests, OK: true,
+			Detail: "upstream is " + specifier + " on " + forge.GitHubHostname}
+	case forge.ReachLocal:
+		return machine.Check{Name: machine.CheckPullRequests,
+			Detail: "upstream " + repository.UpstreamURL + " names no network host, so this repository has no code host: " +
+				"a run pushes, skips the pr and ci stages with reason no_code_host, and ends as pushed"}
+	case forge.ReachUnaddressable:
+	}
+	return machine.Check{Name: machine.CheckPullRequests, Blocking: true,
+		Detail: "upstream " + repository.UpstreamURL + " is neither a repository on " + forge.GitHubHostname +
+			" nor a path or file:// URL on this machine, so a run is refused before it starts"}
+}
+
 // codeHost reports whether the code-host provider command line resolves on
 // this machine. It probes the host built the way internal/service builds the
 // one its stage bodies get, so what it answers for is the command a run would
 // invoke rather than a second spelling of it, and what the probe does and
 // does not establish is forge.GitHubHost.Probe's contract.
 //
-// It does not block, because a run can start without a code host: the stages
-// that talk to one refuse there, honestly, when they are reached. What the
-// row buys is that the operator learns here rather than from a stage partway
-// through a run.
+// It does not block, because a run can start without the command line: in a
+// repository whose upstream is on the code host, the stages that talk to it
+// refuse there, honestly, when they are reached, and in one with no code host
+// those stages are passed over and the command is never invoked. What the row
+// buys is that the operator learns here rather than from a stage partway
+// through a run; whether this repository has a code host at all is
+// pullRequests' row.
 func codeHost() machine.Check {
 	resolved, err := forge.NewGitHubHost(redact.New()).Probe()
 	if err != nil {

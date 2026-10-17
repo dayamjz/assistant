@@ -34,8 +34,8 @@
 // word executing is set in a code element there more than once and declares an
 // outcome once. The row and not the section is what is read for the same
 // reason one step further out, and because that row says it is where the set
-// is stated: a marker anywhere else in the document is a refusal rather than a
-// seventh outcome, so the sentence in the row stays true of the mechanism. The
+// is stated: a marker anywhere else in the document is a refusal rather than an
+// eighth outcome, so the sentence in the row stays true of the mechanism. The
 // rule is one a reader can apply by eye, and it is not tied to the classes on
 // the element, which are styling.
 //
@@ -73,7 +73,7 @@
 // match. Comparing membership alone would let the two drift into different
 // orders, where reading them side by side stops being how a reader checks
 // them. The two groups are compared for the same reason: the row states them
-// as two groups of four and two, and a set that alternates between the groups
+// as two groups of five and two, and a set that alternates between the groups
 // is one where that prose has come apart from the markers.
 //
 // # How it runs

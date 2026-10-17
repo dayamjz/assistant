@@ -41,10 +41,15 @@ One more walk takes the delivery path: `TestARunTakesTheDeliveryPathToAPush`
 configures `commands.test` and `commands.lint` in the home, scripts the
 stand-in to answer every review with a clean one, submits a commit the remote
 does not have, and walks the run through review, test, document, lint and push,
-skipping only the pull request and checks stages. It asserts each stage ran,
+asking to skip nothing. The remote is a bare repository on this machine, so
+the run's record says it has no code host and the pull request and checks
+stages are passed over with the reason `no_code_host`, issue #283's owner
+decision. It asserts each stage ran,
 that the run stopped only where `stages.Holding` says the defaults plus the
 two commands the test writes hold it, that the scripted reviewer was asked and nothing went unscripted, and that
-the remote's branch moved to the submitted commit. It asserts no duration.
+the remote's branch moved to the submitted commit, and that the run ended
+`pushed`, read through `--json`, with nothing left advancing it: a verdict and
+not a stall. It asserts no duration.
 That is the stage machinery reached through the binary against a local remote;
 it is not review quality, the reviewer answered what it was scripted to, and it
 still reaches no code host.
@@ -106,15 +111,15 @@ Every other walk stops short, and the same reasons bound them all. The
 review stage's body launches the agent the run resolved over the run's copy,
 and the agent these journeys resolve is the harness's own stand-in, scripted
 to answer nothing, so a taken review would stop at an ask recording that no
-review happened. The pull request stage opens a provider for the repository
-the run's record names on the code host, and no record here names one - the
-fixture's upstream is a local repository rather than a host `internal/forge`
-addresses - so a run that reaches it fails rather than reaching one. That is
-why every test here that walks a run asks to skip both of those stages, as
-the run input P2 gives a person. Where a walk's trusted document configures
-no command, the test, document and lint stages hold rather than executing
-anything, the push stage holds because the run carries no completed review,
-and the checks stage holds because there is no code host to ask. Between
+review happened. That is why every test here that walks a run asks to skip
+that stage, as the run input P2 gives a person. The pull request and checks
+stages are never asked to be skipped and never run: the fixture's upstream is
+a local repository rather than a host `internal/forge` addresses, so every
+run's record says it has no code host and both stages are passed over with
+the reason `no_code_host`, and a run walked to the end ends `pushed` rather
+than `checks-passed`. Where a walk's trusted document configures no command,
+the test, document and lint stages hold rather than executing anything, and
+the push stage holds because the run carries no completed review. Between
 them, that is the reason parts of the product are still not reachable from a
 run today:
 
@@ -130,13 +135,14 @@ run today:
   the remote; the other two are refused or held before anything is pushed. A
   run does
   reach `internal/forge`: it derives its code-host repository specifier
-  through `GitHubRepository` and its stages carry the `Host` the service
-  built, but every walk here skips the pull request stage, the one body that
-  would open a provider on that host, so no run asks a code host anything.
+  through `ReachOf` and its stages carry the `Host` the service built, but
+  every run here has no code host and passes over the pull request and checks
+  stages, the two bodies that would open a provider on that host, so no run
+  asks a code host anything.
 
 Nor does any run here give its copy back: PRD principle P12's decision
-removes a run's copy only on proof that the commit it stands on landed, every
-walk here skips the stages that would land its branch, and so every run's copy
+removes a run's copy only on proof that the commit it stands on landed, no
+walk here reaches a code host the branch could land through, and so every run's copy
 is kept on an unproven refusal, recorded on the run's cleanup record. The
 decision is driven at package reach, in `internal/tasks` for a task's copy and
 in `internal/service` for a run's.

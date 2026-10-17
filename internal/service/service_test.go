@@ -71,13 +71,13 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 }
 
 // A run answered through to the end completes, and what it ends as is one of
-// the outcomes a driving agent is written against.
+// the outcomes a driving agent is written against: pushed, because this
+// subject's upstream is a bare repository on this machine, which is a
+// repository with no code host under issue #283's owner decision. The pull
+// request and checks stages are passed over for that reason and say so, and
+// nothing is left advancing the run, so the end is a verdict and not a stall.
 //
-// The run skips the review and pull request stages. The pull request body
-// fails rather than holds on what this run cannot give it: it opens a
-// provider on the repository the run's record names on the code host, which
-// this subject's record does not name, so a run that took it could not reach
-// the end however it was answered. The review skip keeps the walk's holds to
+// The run skips the review stage. The review skip keeps the walk's holds to
 // the ones the configuration decides: taken, the stage passes on the scripted
 // agent's clean answer, so the skip costs the walk nothing it stops at and
 // keeps this test from resting on what that script happens to say. What the
@@ -91,12 +91,21 @@ func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
 	recordRepository(t, h, subject)
 
 	withService(t, h, func(running serviceUnderTest) {
-		run := startRunSkipping(t, running.client, subject, pipeline.StageReview, pipeline.StagePR)
+		run := startRunSkipping(t, running.client, subject, pipeline.StageReview)
 		for run.Outcome == machine.OutcomeDecision {
 			run = answer(t, running.client, run.Record.ID, string(pipeline.OutcomeApproved))
 		}
-		if run.Outcome != machine.OutcomeChecksPassed {
-			t.Fatalf("a run approved at every stage ends as %s: %s", run.Outcome, run.Reason)
+		if run.Outcome != machine.OutcomePushed || run.Advancing {
+			t.Fatalf("a run approved at every stage ends as %s, advancing %v: %s", run.Outcome, run.Advancing, run.Reason)
+		}
+		if !run.Record.NoCodeHost {
+			t.Fatal("the run's record does not say its repository has no code host")
+		}
+		for _, view := range run.Stages {
+			stage, _ := pipeline.ParseStage(view.Stage)
+			if stage.NeedsCodeHost() != (view.SkipReason == pipeline.SkipNoCodeHost) || (stage.NeedsCodeHost() && view.Ran) {
+				t.Fatalf("the %s stage reports ran %v, skip reason %q", view.Stage, view.Ran, view.SkipReason)
+			}
 		}
 		if run.Record.Status != store.RunPassed {
 			t.Fatalf("a completed run is recorded as %s", run.Record.Status)

@@ -80,33 +80,39 @@ type stageSpec struct {
 	// it stands here again. wire builds the back edge that path takes, bounded
 	// by RebaseAfterPushRounds, from this column and nothing else.
 	rebasesAfterPush bool
+	// needsCodeHost says this stage acts on the run's code host and so does
+	// not apply in a run whose repository has none, issue #283's owner
+	// decision. It is exactly the pull request and checks stages, the two
+	// whose bodies open a provider on KeyForgeRepository; the push stage
+	// pushes to whatever remote the record names, a code host or not.
+	needsCodeHost bool
 }
 
 // stageTable is the pipeline: nine rows, in the fixed order a run takes them.
 var stageTable = []stageSpec{
 	{StageIntent, "intent",
-		func(s *Stages) *Implementation { return &s.Intent }, nil, "", true, false},
+		func(s *Stages) *Implementation { return &s.Intent }, nil, "", true, false, false},
 	{StageRebase, "rebase",
 		func(s *Stages) *Implementation { return &s.Rebase },
-		func(r *config.FixRounds) *int { return &r.Rebase }, config.KeyFixRoundsRebase, true, false},
+		func(r *config.FixRounds) *int { return &r.Rebase }, config.KeyFixRoundsRebase, true, false, false},
 	{StageReview, "review",
 		func(s *Stages) *Implementation { return &s.Review },
-		func(r *config.FixRounds) *int { return &r.Review }, config.KeyFixRoundsReview, true, false},
+		func(r *config.FixRounds) *int { return &r.Review }, config.KeyFixRoundsReview, true, false, false},
 	{StageTest, "test",
 		func(s *Stages) *Implementation { return &s.Test },
-		func(r *config.FixRounds) *int { return &r.Test }, config.KeyFixRoundsTest, true, false},
+		func(r *config.FixRounds) *int { return &r.Test }, config.KeyFixRoundsTest, true, false, false},
 	{StageDocument, "document",
-		func(s *Stages) *Implementation { return &s.Document }, nil, "", true, false},
+		func(s *Stages) *Implementation { return &s.Document }, nil, "", true, false, false},
 	{StageLint, "lint",
 		func(s *Stages) *Implementation { return &s.Lint },
-		func(r *config.FixRounds) *int { return &r.Lint }, config.KeyFixRoundsLint, true, false},
+		func(r *config.FixRounds) *int { return &r.Lint }, config.KeyFixRoundsLint, true, false, false},
 	{StagePush, "push",
-		func(s *Stages) *Implementation { return &s.Push }, nil, "", false, false},
+		func(s *Stages) *Implementation { return &s.Push }, nil, "", false, false, false},
 	{StagePR, "pr",
-		func(s *Stages) *Implementation { return &s.PR }, nil, "", false, false},
+		func(s *Stages) *Implementation { return &s.PR }, nil, "", false, false, true},
 	{StageCI, "ci",
 		func(s *Stages) *Implementation { return &s.CI },
-		func(r *config.FixRounds) *int { return &r.Checks }, config.KeyFixRoundsChecks, false, true},
+		func(r *config.FixRounds) *int { return &r.Checks }, config.KeyFixRoundsChecks, false, true, true},
 }
 
 // spec returns the stage's row, and false when s names no stage.
@@ -235,6 +241,15 @@ func ParkedStage(p graph.Park) (Stage, bool) {
 func (s Stage) RebasesAfterPush() bool {
 	row, ok := s.spec()
 	return ok && row.rebasesAfterPush
+}
+
+// NeedsCodeHost reports whether this stage acts on the run's code host, which
+// the stage table answers: the pull request and checks stages, and no other.
+// A run whose repository has no code host passes over exactly these, with
+// SkipNoCodeHost as the reason.
+func (s Stage) NeedsCodeHost() bool {
+	row, ok := s.spec()
+	return ok && row.needsCodeHost
 }
 
 // Requestable reports whether a person may ask for a fix round at this

@@ -9,6 +9,8 @@ import (
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -44,42 +46,71 @@ func TestTheRepositoryAPullRequestWouldLandInComesFromTheRunsOwnRecord(t *testin
 		ambient  = "https://github.com/someone-else/not-this-one.git"
 		want     = "dayamjz/assistant"
 	)
-	seen := observeForgeRepository(t, recorded, ambient)
+	seen, err := observeForgeRepository(t, recorded, ambient)
+	if err != nil {
+		t.Fatalf("starting the run: %v", err)
+	}
 
-	if seen != want {
-		t.Fatalf("the run acts on %q, want %q: a pull request would be opened against a repository "+
+	if seen.repository != want || seen.none {
+		t.Fatalf("the run acts on %+v, want %q: a pull request would be opened against a repository "+
 			"the run's own record does not name", seen, want)
 	}
 }
 
-// TestARunWhoseUpstreamIsNotOnThisHostCarriesNoRepository is the other answer
-// the same derivation gives, and the one a run of a repository this build
-// cannot address actually reaches.
+// TestARunWhoseUpstreamIsOnAHostThisBuildCannotAddressIsRefused is the strict
+// answer the same derivation gives, issue #283's owner decision: a remote that
+// names a network host this build does not address is refused before the run
+// starts, as a refusal a caller can read and never as an internal error, and
+// no stage is handed anything.
 //
-// The specifier is empty rather than guessed at. A remote on another host
-// carries an owner and a name too, and reading one out of it would send a pull
-// request to the github.com repository that happens to share it, because the
-// specifier a provider is given names no host. So the run carries nothing, and
-// a provider opened on nothing refuses.
-func TestARunWhoseUpstreamIsNotOnThisHostCarriesNoRepository(t *testing.T) {
+// It is refused rather than walked without a code host because the remote
+// may well be one: reading it as none would pass over the pull request and
+// checks stages of a repository that has them. And it is refused rather than
+// given a specifier read out of it, because a remote on another host carries
+// an owner and a name too, and reading one out of it would send a pull
+// request to the github.com repository that happens to share it.
+func TestARunWhoseUpstreamIsOnAHostThisBuildCannotAddressIsRefused(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 
 	const elsewhere = "https://gitlab.example.invalid/dayamjz/assistant.git"
-	seen := observeForgeRepository(t, elsewhere, elsewhere)
-
-	if seen != "" {
-		t.Fatalf("the run acts on %q, want nothing: an upstream on another host is not a repository "+
-			"this build can address", seen)
+	seen, err := observeForgeRepository(t, elsewhere, elsewhere)
+	if !errors.Is(err, ipc.ErrRefused) || errors.Is(err, ipc.ErrInternal) {
+		t.Fatalf("the refusal crossed the wire as %v, want the refused code and never internal", err)
 	}
-	if _, err := forge.NewGitHubHost(redact.New()).Open(seen); !errors.Is(err, forge.ErrInvalidArgument) {
+	if seen != nil {
+		t.Fatalf("a refused run handed its first stage %+v", *seen)
+	}
+}
+
+// TestARunWhoseUpstreamIsOnThisMachineHasNoCodeHost is the third answer: an
+// upstream that is a path on this machine is a repository with no code host,
+// so the run carries no repository on one and carries the fact that it has
+// none, which is what passes over the pull request and checks stages. It is
+// decided from the run's record before the run starts, and the stage reads
+// it out of the run's own state.
+func TestARunWhoseUpstreamIsOnThisMachineHasNoCodeHost(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P1)
+	requiresIdentifiedPeer(t)
+
+	local := t.TempDir()
+	seen, err := observeForgeRepository(t, local, local)
+	if err != nil {
+		t.Fatalf("starting a run of a local upstream: %v", err)
+	}
+	if seen.repository != "" || !seen.none {
+		t.Fatalf("a run of a local upstream carries %+v, want no repository and no code host", *seen)
+	}
+	if _, err := forge.NewGitHubHost(redact.New()).Open(seen.repository); !errors.Is(err, forge.ErrInvalidArgument) {
 		t.Fatalf("opening a provider on what that run carries returned %v, want ErrInvalidArgument", err)
 	}
 }
 
 // observeForgeRepository starts one run of a subject repository whose record
 // names upstream and whose checkout's origin remote names remote, and returns
-// the code host repository the run's first stage was handed.
+// what the run's first stage was handed about its code host, or the error
+// starting the run returned, in which case no stage was handed anything.
 //
 // It reads the value out of a real run: the stage body is placed through the
 // service's own stage hook, so what it sees is what the service put in the
@@ -93,7 +124,7 @@ func TestARunWhoseUpstreamIsNotOnThisHostCarriesNoRepository(t *testing.T) {
 // record's URL as written, which is the fact under test; where the bytes of a
 // fetch of it come from is what the rewrite decides, and that keeps this test
 // off the network without weakening what it observes.
-func observeForgeRepository(t *testing.T, upstream, remote string) string {
+func observeForgeRepository(t *testing.T, upstream, remote string) (*codeHostSeen, error) {
 	t.Helper()
 
 	h := newHome(t)
@@ -106,7 +137,7 @@ func observeForgeRepository(t *testing.T, upstream, remote string) string {
 	recordRepositoryWithUpstream(t, h, subject, upstream)
 	git(t, gateRepositoryOf(t, h, subject), "config", "url."+local+".insteadOf", upstream)
 
-	seen := make(chan string, 1)
+	seen := make(chan codeHostSeen, 1)
 	opts := options(t, h)
 	opts.NewStages = func(deps stages.StageDeps) pipeline.Stages {
 		all := stages.All(deps)
@@ -114,29 +145,51 @@ func observeForgeRepository(t *testing.T, upstream, remote string) string {
 		return all
 	}
 
-	var got string
+	var got codeHostSeen
 	var read bool
+	var started error
 	withServiceOptions(t, opts, func(under serviceUnderTest) {
 		// Only the first stage is under test here, and every stage after it
 		// would reach for the upstream this record names, which is a real code
 		// host. Skipping them keeps this test off the network.
-		startRunSkipping(t, under.client, subject, afterIntent()...)
+		names := make([]string, 0, len(afterIntent()))
+		for _, stage := range afterIntent() {
+			names = append(names, stage.String())
+		}
+		var run machine.Run
+		started = under.client.Call(t.Context(), ipc.MethodRunStart, machine.StartRequest{
+			Working: machine.Working{WorkingPath: subject},
+			Intent:  "a change with acceptance criteria stated up front",
+			Skip:    names,
+		}, &run)
 		select {
 		case got, read = <-seen:
 		default:
 		}
 	})
+	if started != nil {
+		if read {
+			return &got, started
+		}
+		return nil, started
+	}
 	if !read {
 		t.Fatal("the run never reached the stage that reads the repository it acts on")
 	}
-	return got
+	return &got, nil
 }
 
-// observingStage is a stage body that reports the code host repository the run
-// carries and reports nothing else, so a run walks straight past it.
-func observingStage(seen chan<- string) pipeline.Implementation {
+// codeHostSeen is what a stage read about the run's code host.
+type codeHostSeen struct {
+	repository string
+	none       bool
+}
+
+// observingStage is a stage body that reports what the run carries about its
+// code host and reports nothing else, so a run walks straight past it.
+func observingStage(seen chan<- codeHostSeen) pipeline.Implementation {
 	return pipeline.Implementation{
-		Reads: []pipeline.Key{pipeline.KeyForgeRepository},
+		Reads: []pipeline.Key{pipeline.KeyForgeRepository, pipeline.KeyNoCodeHost},
 		NewBody: func() pipeline.Body {
 			return func(_ context.Context, in pipeline.Input) (pipeline.Output, error) {
 				value, err := in.State.Get(pipeline.KeyForgeRepository)
@@ -144,8 +197,13 @@ func observingStage(seen chan<- string) pipeline.Implementation {
 					return pipeline.Output{}, err
 				}
 				repository, _ := value.Text()
+				flag, err := in.State.Get(pipeline.KeyNoCodeHost)
+				if err != nil {
+					return pipeline.Output{}, err
+				}
+				none, _ := flag.Bool()
 				select {
-				case seen <- repository:
+				case seen <- codeHostSeen{repository: repository, none: none}:
 				default:
 				}
 				return pipeline.Output{Report: findings.Report{

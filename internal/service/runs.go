@@ -636,11 +636,11 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	// configuration, or from whatever remote a working copy happens to carry:
 	// it is derived from the upstream this run's repository row records, which
 	// is the same row PRD section 8 makes authoritative for it.
-	forgeRepository, forkRepository, err := s.forgeRepositoryFor(ctx, record.RepositoryID)
+	host, err := s.forgeRepositoryFor(ctx, record.RepositoryID)
 	if err != nil {
 		return machine.Run{}, err
 	}
-	start.ForgeRepository, start.ForkRepository = forgeRepository, forkRepository
+	start.ForgeRepository, start.ForkRepository, start.NoCodeHost = host.repository, host.fork, host.none
 	// The copy is built before the run is recorded as started, so a run that
 	// is walking has somewhere to walk. PRD section 8 orders the row before
 	// the directory and create wrote the row, so this is the second half of
@@ -682,6 +682,17 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	if err != nil {
 		return machine.Run{}, err
 	}
+	// A repository with no code host is written to the record before the run
+	// starts, from the same reading the state's pipeline.KeyNoCodeHost came
+	// from, so the record every surface composes and the state the stage
+	// nodes read cannot name different repositories; the record is what
+	// machine.OutcomeOf reads to answer pushed, and the schema refuses the
+	// fact once the run has started.
+	if start.NoCodeHost {
+		if err := s.store.MarkRunNoCodeHost(ctx, record.ID); err != nil {
+			return machine.Run{}, err
+		}
+	}
 	if _, err := built.runs.Start(ctx, record.ID); err != nil {
 		return machine.Run{}, err
 	}
@@ -690,53 +701,76 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	})
 }
 
-// forgeRepositoryFor returns the specifier the code host addresses this
-// repository by, read from its record's upstream URL.
+// codeHostOf is what a run's repository record says about its code host:
+// the repository a pull request is opened on, the fork it is proposed from,
+// and whether there is no code host at all. At most one of repository and
+// none is set.
+type codeHostOf struct {
+	repository string
+	fork       string
+	none       bool
+}
+
+// forgeRepositoryFor reads what the run's repository record says about its
+// code host, from its upstream URL through forge.ReachOf, which is where the
+// three cases are told apart:
 //
-// It answers with the empty string, and no error, for a repository whose
-// upstream is not on a host this build talks to. That is not the strict stance
-// relaxed: it is the difference between "this repository has no code host
-// here" and "this repository's code host could not be reached". Eight of the
-// nine stages need no code host, and a run of a repository that has none still
-// has to walk them and report; the stage that needs one is handed an empty
-// specifier, and forge.Host.Open refuses it rather than resolving a repository
-// of its own.
+//   - An upstream on the host this build addresses answers with the
+//     specifier the code host addresses the repository by.
+//   - An upstream that names no network host - a path or a file:// URL - is a
+//     repository with no code host, issue #283's owner decision: the run
+//     pushes as usual and passes over the stages that need a code host. It is
+//     decided here, before the run starts, and never from a stage failing.
+//   - Any other upstream is refused with ErrCodeHostUnaddressable before
+//     anything is recorded as running: it names a host, which may be a code
+//     host this build cannot address, and reading it as no code host would
+//     pass over the pull request and checks stages of a repository that has
+//     them. An empty upstream is refused on the same terms, because it names
+//     nowhere for the push stage to push either.
 //
-// The error it does return is the record being unreadable, which is a failure
-// of the store and not an answer about the repository.
+// The error it returns otherwise is the record being unreadable, which is a
+// failure of the store and not an answer about the repository.
 //
-// The second result is the fork's specifier, for a record that names a fork,
-// and empty otherwise. A fork is the strict case rather than the relaxed one:
-// a run that names one pushes there and proposes from there, so a record
-// naming a fork that does not resolve, or naming one while its upstream does
-// not resolve, or naming the upstream itself as its fork, is refused with
-// ErrForkUnresolved before anything is recorded as running. Pushing to the
-// upstream instead, or to the fork with no pull request to propose, would
-// each be a guess about where the run's work goes. assistant init refuses all
-// three before it records a fork, so this is the record being read as it is
-// rather than a second place the rule is decided.
-func (s *Service) forgeRepositoryFor(ctx context.Context, repositoryID string) (string, string, error) {
+// A fork is the strict case on the same footing: a run that names one pushes
+// there and proposes from there, so a record naming a fork that does not
+// resolve, or naming one while its upstream does not resolve, or naming the
+// upstream itself as its fork, is refused with ErrForkUnresolved before
+// anything is recorded as running. Pushing to the upstream instead, or to the
+// fork with no pull request to propose, would each be a guess about where the
+// run's work goes. assistant init refuses all three before it records a fork,
+// so this is the record being read as it is rather than a second place the
+// rule is decided.
+func (s *Service) forgeRepositoryFor(ctx context.Context, repositoryID string) (codeHostOf, error) {
 	repository, err := s.store.Repository(ctx, repositoryID)
 	if err != nil {
-		return "", "", fmt.Errorf("service: reading the repository a run acts on: %w", err)
+		return codeHostOf{}, fmt.Errorf("service: reading the repository a run acts on: %w", err)
 	}
-	specifier, upstreamResolved := forge.GitHubRepository(repository.UpstreamURL)
+	reach, specifier := forge.ReachOf(repository.UpstreamURL)
 	forkURL, named := repository.ForkURL.Get()
 	if !named {
-		return specifier, "", nil
+		switch reach {
+		case forge.ReachHosted:
+			return codeHostOf{repository: specifier}, nil
+		case forge.ReachLocal:
+			return codeHostOf{none: true}, nil
+		case forge.ReachUnaddressable:
+		}
+		return codeHostOf{}, fmt.Errorf("%w: %w: repository %s has an upstream that is neither a repository on %s "+
+			"nor a path or file:// URL on this machine, so this build can neither open its pull request nor say "+
+			"it has no code host", ErrCodeHostUnaddressable, ipc.ErrRefused, repositoryID, forge.GitHubHostname)
 	}
 	fork, forkResolved := forge.GitHubRepository(forkURL)
 	switch {
-	case !upstreamResolved:
-		return "", "", fmt.Errorf("%w: repository %s names a fork and an upstream that is not a repository on %s, "+
+	case reach != forge.ReachHosted:
+		return codeHostOf{}, fmt.Errorf("%w: repository %s names a fork and an upstream that is not a repository on %s, "+
 			"so there is nothing to propose its pull request to", ErrForkUnresolved, repositoryID, forge.GitHubHostname)
 	case !forkResolved:
-		return "", "", fmt.Errorf("%w: repository %s names a fork that is not a repository on %s",
+		return codeHostOf{}, fmt.Errorf("%w: repository %s names a fork that is not a repository on %s",
 			ErrForkUnresolved, repositoryID, forge.GitHubHostname)
 	case strings.EqualFold(fork, specifier):
-		return "", "", fmt.Errorf("%w: repository %s names its upstream as its fork", ErrForkUnresolved, repositoryID)
+		return codeHostOf{}, fmt.Errorf("%w: repository %s names its upstream as its fork", ErrForkUnresolved, repositoryID)
 	}
-	return specifier, fork, nil
+	return codeHostOf{repository: specifier, fork: fork}, nil
 }
 
 // submittedSubject is the subject of the commit a run was submitted, read from
@@ -1710,10 +1744,11 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 		return machine.Run{}, err
 	}
 	standing := machine.Standing{
-		Record:    record.Status,
-		Park:      record.Park,
-		Execution: machine.ExecutionUnrecorded(),
-		Advancing: result == nil && s.isAdvancing(runID),
+		Record:     record.Status,
+		Park:       record.Park,
+		NoCodeHost: record.NoCodeHost,
+		Execution:  machine.ExecutionUnrecorded(),
+		Advancing:  result == nil && s.isAdvancing(runID),
 	}
 	answer := machine.Run{Record: record}
 	if cleanup.Run != "" {
@@ -1860,6 +1895,9 @@ func stageViews(state graph.State) []machine.Stage {
 			Outcome: pipeline.StageOutcome(state, stage),
 			Ran:     pipeline.StageRan(state, stage),
 			Fix:     pipeline.FixSummary(state, stage),
+		}
+		if reason, ok := pipeline.SkipReasonOf(state, stage); ok {
+			view.SkipReason = reason
 		}
 		if view.Ran {
 			if report, err := pipeline.StageReport(state, stage); err == nil {

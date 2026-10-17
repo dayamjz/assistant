@@ -324,9 +324,10 @@ type Start struct {
 	// a code host refuses on an empty one rather than resolving a repository
 	// for itself.
 	//
-	// NewState does not require it, because eight of the nine stages need no
-	// code host and a run that cannot reach one still has to be able to walk
-	// them and report.
+	// NewState does not require it, because seven of the nine stages need no
+	// code host and a run of a repository that has none still has to be able
+	// to walk them and report; NoCodeHost is what says so, and the two stages
+	// that need one are then passed over.
 	ForgeRepository string
 	// ForkRepository names the fork the run pushes to and proposes its pull
 	// request from, in ForgeRepository's notation, and is empty when the run
@@ -334,6 +335,12 @@ type Start struct {
 	// ForgeRepository, because a fork with no repository to propose to is
 	// half of a pair.
 	ForkRepository string
+	// NoCodeHost says the run's repository has no code host, which becomes
+	// KeyNoCodeHost and passes over the stages that need one. NewState
+	// refuses it beside a ForgeRepository or a ForkRepository with
+	// ErrCodeHostContradiction, because a run cannot both have a repository
+	// on a code host and have none.
+	NoCodeHost bool
 	// Branch is the branch under validation.
 	Branch string
 	// Base is the branch target the change is rebased onto and pushed to.
@@ -369,6 +376,10 @@ func (p *Pipeline) NewState(s Start) (graph.State, error) {
 		return graph.State{}, fmt.Errorf("%w: fork %q names no repository on the code host to propose to",
 			ErrIncompleteRun, s.ForkRepository)
 	}
+	if s.NoCodeHost && (s.ForgeRepository != "" || s.ForkRepository != "") {
+		return graph.State{}, fmt.Errorf("%w: repository %q, fork %q", ErrCodeHostContradiction,
+			s.ForgeRepository, s.ForkRepository)
+	}
 	if s.IntentSupplied && strings.TrimSpace(s.Intent) == "" {
 		return graph.State{}, fmt.Errorf("%w: intent %q", ErrEmptyIntent, s.Intent)
 	}
@@ -384,6 +395,7 @@ func (p *Pipeline) NewState(s Start) (graph.State, error) {
 		string(KeyRun):              graph.TextValue(s.Run),
 		string(KeyForgeRepository):  graph.TextValue(s.ForgeRepository),
 		string(KeyForkRepository):   graph.TextValue(s.ForkRepository),
+		string(KeyNoCodeHost):       graph.BoolValue(s.NoCodeHost),
 		string(KeyBranch):           graph.TextValue(s.Branch),
 		string(KeyBase):             graph.TextValue(s.Base),
 		string(KeySubmitted):        graph.TextValue(s.Submitted),

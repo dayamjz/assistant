@@ -51,9 +51,10 @@ type bounded struct {
 // if it were taken. Drives records that the same way it records every other
 // condition out of a run's reach.
 //
-// Both runs here ask to skip the review and pull request stages, for the
-// reasons walkableRun states, and the pair only says what it says if the
-// unbounded run reaches the end of the gate.
+// Both runs here ask to skip the review stage, for the reason walkableRun
+// states, and pass over the pull request and checks stages for want of a code
+// host, and the pair only says what it says if the unbounded run reaches the
+// end of the gate, which for this fixture is endOfTheGate.
 //
 // What makes this a bound rather than a failure is the pair. The same journey
 // with the budget left alone reaches the end of the gate, so what stopped the
@@ -107,7 +108,7 @@ func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
 			{
 				States: "the same subject with nothing bounding it reaches the end of the gate",
 				Holds: func(b bounded) error {
-					if b.unbounded != machine.OutcomeChecksPassed {
+					if b.unbounded != endOfTheGate {
 						return fmt.Errorf("the same subject with no budget ended %s, so nothing here shows the "+
 							"budget is what stopped the other run", b.unbounded)
 					}

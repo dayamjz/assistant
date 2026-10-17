@@ -299,6 +299,10 @@ func TestAPushOverARemoteThatMovedUnderTheRunIsRefused(t *testing.T) {
 	succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch))
 	serve(t, j)
 
+	// The pull request and checks stages are passed over for want of a code
+	// host rather than asked to be skipped: the fixture's upstream is a local
+	// repository, issue #283's owner decision. The walk stops at the push in
+	// any case, so neither is reached.
 	skipped := []pipeline.Stage{pipeline.StagePR, pipeline.StageCI}
 	observed.expectedStops = configuredStops(command, command, skipped)
 	plantAt := ""
@@ -314,8 +318,7 @@ func TestAPushOverARemoteThatMovedUnderTheRunIsRefused(t *testing.T) {
 			"to land the advance", observed.expectedStops)
 	}
 
-	run := startRun(t, j, "--skip", pipeline.StagePR.String()+","+pipeline.StageCI.String(),
-		"--intent", "deliver a change while somebody else pushes to the branch")
+	run := startRun(t, j, "--intent", "deliver a change while somebody else pushes to the branch")
 	var stops []string
 	stops, run = walkToPush(t, j, run, func(stage string) {
 		if stage != plantAt || observed.advanced != "" {

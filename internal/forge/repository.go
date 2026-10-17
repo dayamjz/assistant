@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -139,3 +140,90 @@ func validRepositorySegment(seg string) bool {
 	}
 	return true
 }
+
+// Reach is what this build can do on a code host for a repository whose
+// upstream is a given git remote. The set is closed, and the zero value is the
+// strict answer: a remote nothing below recognizes is one a run is refused
+// over rather than one it walks without a code host.
+type Reach uint8
+
+const (
+	// ReachUnaddressable is a remote that names a host this build does not
+	// address, or no remote at all. A run of such a repository is refused
+	// before it starts: the remote may well be a code host, and treating it as
+	// none would skip the stages that need one in a repository that has one.
+	ReachUnaddressable Reach = iota
+	// ReachHosted is a remote on GitHubHostname that GitHubRepository reads a
+	// specifier out of, which is the one repository this build opens a pull
+	// request on.
+	ReachHosted
+	// ReachLocal is a remote that names no network host at all: a file:// URL
+	// or a path. Issue #283's owner decision is that a run of such a
+	// repository pushes as usual and passes over the pull request and checks
+	// stages, because there is no code host to open a pull request on.
+	ReachLocal
+)
+
+// String renders the reach for a diagnostic.
+func (r Reach) String() string {
+	switch r {
+	case ReachHosted:
+		return "hosted"
+	case ReachLocal:
+		return "local"
+	case ReachUnaddressable:
+		return "unaddressable"
+	}
+	return "reach(" + strconv.Itoa(int(r)) + ")"
+}
+
+// ReachOf answers what this build can do on a code host for the repository at
+// remote, and the specifier GitHubRepository reads out of it when the answer
+// is ReachHosted, empty otherwise.
+//
+// It tells the three apart from the remote's text alone and asks nothing over
+// a network, so what it establishes is the shape of the remote, not that a
+// repository answers there:
+//
+//   - A remote GitHubRepository reads is ReachHosted.
+//   - A remote whose scheme is file, and a remote with no scheme that is not
+//     in the scp-like host:path form, is ReachLocal: it names a place on this
+//     machine and no host. A single letter before the colon followed by a
+//     slash or a backslash is read as a drive letter and so as a path, which
+//     is the one scp-like spelling this reads as local.
+//   - Everything else is ReachUnaddressable: a remote with any other scheme,
+//     an scp-like remote on any host, a github.com remote naming something
+//     other than a repository, and an empty remote.
+//
+// The residual gap is that a remote in the local shapes may still be a mount
+// of something a code host serves; this reads the remote's shape and has no
+// way to see past it. The gap points at the safe side for P6, because a local
+// remote is still pushed to through the push stage's anchored update.
+func ReachOf(remote string) (Reach, string) {
+	if specifier, ok := GitHubRepository(remote); ok {
+		return ReachHosted, specifier
+	}
+	if localRemote(strings.TrimSpace(remote)) {
+		return ReachLocal, ""
+	}
+	return ReachUnaddressable, ""
+}
+
+// localRemote reports whether remote is in one of the shapes ReachOf reads as
+// naming no host.
+func localRemote(remote string) bool {
+	if remote == "" {
+		return false
+	}
+	if scheme, _, found := strings.Cut(remote, "://"); found && validScheme(scheme) {
+		return strings.EqualFold(scheme, "file")
+	}
+	authority, rest, found := strings.Cut(remote, ":")
+	if !found || strings.ContainsAny(authority, `/\`) {
+		return true
+	}
+	return len(authority) == 1 && isASCIILetter(authority[0]) &&
+		(strings.HasPrefix(rest, "/") || strings.HasPrefix(rest, `\`))
+}
+
+func isASCIILetter(b byte) bool { return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' }

@@ -478,10 +478,11 @@ func startRun(t *testing.T, client *ipc.Client, workingPath string) machine.Run 
 // startRunSkipping starts a run that does not take the named stages.
 //
 // It exists for the one thing these tests cannot walk a run through: a stage
-// body that fails rather than holds because what it needs is not there. The
-// subject repository's record names no repository on a code host this build
-// talks to, so the pull request stage's body fails on opening a provider. A
-// test that walks a run from one hold to the next has to go around that stage.
+// body that needs what the run cannot give it. The subject repository's
+// upstream is a bare repository on this machine, so its runs have no code
+// host and pass the pull request and checks stages over on their own, issue
+// #283's owner decision; what a test still goes around is the agent a stage
+// would call.
 //
 // The isolated copy is no longer one of those reasons. internal/service builds
 // a run one, so the review stage's body opens it like any other; what a test
@@ -493,8 +494,7 @@ func startRun(t *testing.T, client *ipc.Client, workingPath string) machine.Run 
 // weakening what the stage does or what the walk demonstrates.
 //
 // It names each stage rather than deriving it, and a name goes away when the
-// run it starts can give that stage's body what it is missing: a repository on
-// the code host for the pull request stage.
+// run it starts can give that stage's body what it is missing.
 func startRunSkipping(t *testing.T, client *ipc.Client, workingPath string, skip ...pipeline.Stage) machine.Run {
 	t.Helper()
 	names := make([]string, len(skip))

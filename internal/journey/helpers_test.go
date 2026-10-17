@@ -237,12 +237,12 @@ func startRun(t *testing.T, j *journey.Journey, args ...string) machine.Run {
 }
 
 // walkableRun starts a run a walk can carry from one hold to the next, which
-// in this build means skipping the review and pull request stages.
+// in this build means skipping the review stage.
 //
-// The pull request stage's body fails rather than holding when a run takes
-// it: it opens a provider for the repository the run's record names on the
-// code host, no record here names one, and a walk that took the stage would
-// end there however its holds were answered. The review stage's body launches
+// The pull request and checks stages need no skip: the fixture's upstream is
+// a local repository, so the run is recorded with no code host and passes
+// both over with the reason no_code_host, issue #283's owner decision, and a
+// walk answered to the end ends as pushed. The review stage's body launches
 // the agent this harness stands on the run's PATH, and the default journey
 // scripts that agent to answer nothing, so a taken review stops at an ask
 // recording that no review happened - a hold these walks are not about and
@@ -251,14 +251,12 @@ func startRun(t *testing.T, j *journey.Journey, args ...string) machine.Run {
 // choice, so this drives the surface a person would drive rather than
 // weakening the stages: the internal/cli and internal/service tests that
 // walk a run answer the review with a scripted agent for the same reason
-// this skips it. The stages are named rather than derived, and a name goes
-// away when a walk can give that stage's body what it needs: a scripted
-// review answer for the review stage, a repository on the code host for the
-// pull request stage.
+// this skips it. The stage is named rather than derived, and the name goes
+// away when a walk can give the review stage's body a scripted answer.
 func walkableRun(t *testing.T, j *journey.Journey, intent string) machine.Run {
 	t.Helper()
 	return startRun(t, j,
-		"--skip", pipeline.StageReview.String()+","+pipeline.StagePR.String(),
+		"--skip", pipeline.StageReview.String(),
 		"--intent", intent)
 }
 
@@ -500,4 +498,45 @@ func records(t *testing.T, j *journey.Journey) *store.Store {
 	}
 	t.Cleanup(func() { _ = opened.Close() })
 	return opened
+}
+
+// endOfTheGate is the outcome a run this harness drives ends with when it
+// reaches the end of the gate. The fixture's upstream is a bare repository on
+// this machine, which internal/forge reads as a repository with no code host,
+// so under issue #283's owner decision every such run passes over the pull
+// request and checks stages and ends pushed; checks-passed is kept for a run
+// whose checks ran, and no run here reaches a code host.
+const endOfTheGate = machine.OutcomePushed
+
+// stagesNeedingACodeHost is the stages a run with no code host passes over,
+// by name, read off internal/pipeline's stage table rather than listed here.
+func stagesNeedingACodeHost() []string {
+	var out []string
+	for _, stage := range pipeline.Order() {
+		if stage.NeedsCodeHost() {
+			out = append(out, stage.String())
+		}
+	}
+	return out
+}
+
+// passedOverForNoCodeHost is a clause that every stage named came back
+// skipped for want of a code host, without running, and that the list it
+// was given is not empty, so it cannot pass having looked at nothing.
+func passedOverForNoCodeHost(named []string) func(machine.Run) error {
+	return func(run machine.Run) error {
+		if len(named) == 0 {
+			return errors.New("no stage needs a code host, so nothing here is passed over for want of one")
+		}
+		for _, stage := range run.Stages {
+			if !slices.Contains(named, stage.Stage) {
+				continue
+			}
+			if stage.Ran || stage.Outcome != pipeline.OutcomeSkipped || stage.SkipReason != pipeline.SkipNoCodeHost {
+				return fmt.Errorf("the %s stage ran=%v, came back %q, skip reason %q; want it passed over "+
+					"for want of a code host", stage.Stage, stage.Ran, stage.Outcome, stage.SkipReason)
+			}
+		}
+		return nil
+	}
 }

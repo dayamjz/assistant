@@ -415,10 +415,18 @@
 //
 // # Two behaviours from PRD section 5 that are easy to miss
 //
-// A stage does not run when this run skips it or when nothing remains to
-// change. Both are read by the stage node itself rather than routed around it,
-// so a stage that does not run still records that it was skipped rather than
-// leaving the question to whoever reads the state afterwards.
+// A stage does not run when this run skips it, when nothing remains to
+// change, or, for the pull request and checks stages, when the run's
+// repository has no code host, issue #283's owner decision. All three are
+// read by the stage node itself rather than routed around it, so a stage that
+// does not run still records that it was skipped rather than leaving the
+// question to whoever reads the state afterwards, and SkipReasonOf reads back
+// which of the three it was.
+//
+// The third is not a skip list entry. KeyNoCodeHost is a run input derived
+// from the run's repository record, as KeyForgeRepository is, so it is a fact
+// about the repository rather than a choice made on anyone's behalf, and P2's
+// rule that only a person skips a stage, for one run, is left as it was.
 //
 // The skip list is a run input. P2 lets a person skip a stage on purpose for
 // one run and never lets a standing configuration skip one on their behalf,

@@ -1148,10 +1148,13 @@ Each has cost this repository more than one round of review.
   names both its body-less stages and the stages a run stops at in
   declarations checked against the build, so landing a body means writing it
   down there too. A body refusing what its run cannot give it cannot be
-  walked past either, because it fails rather than holding, so
-  `internal/service`'s answer-to-the-end test skips such a stage for the one
-  run instead of the body softening: the pull request stage fails on a record
-  naming no repository on the code host. The review stage is skipped there on
+  walked past either, because it fails rather than holding, so a test skips
+  such a stage for the one run instead of the body softening. A repository
+  with no code host is not that case: its upstream is a path or a `file://`
+  URL, `internal/service`'s `begin` records it before the run starts, and the
+  pull request and checks stages are passed over with
+  `pipeline.SkipNoCodeHost`, so such a run ends `pushed` (issue #283). The
+  review stage is skipped in `internal/service`'s answer-to-the-end test on
   different terms: its body launches the resolved agent over the run's
   isolated copy, and the tests that walk a run script that agent to answer a
   clean review, so a walk that takes the stage rests on what the script says
@@ -1198,11 +1201,11 @@ Each has cost this repository more than one round of review.
   rather than a built test binary.
 - `internal/outcomes` is that package's sibling and not a generalization of it:
   it fails the build when the PRD's outcome row and `internal/machine`'s set
-  stop declaring the same six values, in the same order, in the same two
+  stop declaring the same seven values, in the same order, in the same two
   groups. The row is the owner in the mechanism and not only in the prose: the
   whole extraction rule is a `data-outcome` attribute on a `<code>` inside
   `<tr id="outcome-set">`, and a marker anywhere else in the document is a
-  refusal rather than a seventh outcome. Where the row lives is the separate
+  refusal rather than an eighth outcome. Where the row lives is the separate
   question: it has to sit inside `<section id="surfaces">`, named by that id
   because a section inserted earlier renumbers the section and not the id. A
   set the rule cannot read is a refusal too, never a short list. Agreement is
@@ -1252,9 +1255,10 @@ Each has cost this repository more than one round of review.
   run an isolated copy and resolves its repository configuration now, so what
   keeps the reviewing agent out is the walks themselves - every one but those three asks to
   skip the review stage, whose body would launch the agent the harness
-  scripts to answer nothing - while the pull request body fails because the
-  run's record names no repository on the code host, so every walk skips that
-  stage too, and the test body holds wherever the resolved configuration
+  scripts to answer nothing - while the fixture's upstream is a local
+  repository, so every run passes the pull request and checks stages over
+  for want of a code host and a walk to the end ends `pushed`, and the test
+  body holds wherever the resolved configuration
   names no command. The one exception is the P7 branch walk, whose trusted
   document does name commands: its test stage executes the trusted command,
   the failure takes a fix round through the scripted stand-in, and the

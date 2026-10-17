@@ -22,6 +22,9 @@ import (
 // out, because it never handles it.
 func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
 	adapterReads := []Key{KeySkip, KeyDiffEmpty}
+	if stage.NeedsCodeHost() {
+		adapterReads = append(adapterReads, KeyNoCodeHost)
+	}
 	if fixed {
 		adapterReads = append(adapterReads, stage.HeldKey())
 	}
@@ -35,7 +38,7 @@ func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
 		Writes: writes,
 		NewBody: func() graph.Body {
 			return func(ctx context.Context, r graph.Reader, w graph.Writer) error {
-				skip, err := skipped(r, stage)
+				_, skip, err := skipped(r.Get, stage)
 				if err != nil {
 					return err
 				}
@@ -113,35 +116,56 @@ func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
 	}
 }
 
-// skipped reports whether this stage does not run in this run. Two things say
-// so and both are read here rather than routed around the stage, so a stage
-// that does not run still records that it was skipped rather than leaving the
-// question to whoever reads the state later.
+// skipped reports whether this stage does not run in this run, and why.
+// Three things say so and all are read here rather than routed around the
+// stage, so a stage that does not run still records that it was skipped
+// rather than leaving the question to whoever reads the state later.
 //
-// The first is the run's own skip list, which is a run input: P2 lets a person
-// skip a stage on purpose for one run and never lets a standing configuration
-// do it for them. The second is the empty-diff short circuit: once the rebase
-// stage reports that nothing remains to change, PRD section 5 ends the run
-// successfully with the rest of the stages skipped rather than failed.
-func skipped(r graph.Reader, stage Stage) (bool, error) {
-	empty, err := r.Get(string(KeyDiffEmpty))
+// The first is the empty-diff short circuit: once the rebase stage reports
+// that nothing remains to change, PRD section 5 ends the run successfully
+// with the rest of the stages skipped rather than failed. The second is issue
+// #283's owner decision: a run whose repository has no code host passes over
+// the stages the stage table marks as needing one, and it is read only for
+// those stages, so no other stage's node declares the key. The third is the
+// run's own skip list, which is a run input: P2 lets a person skip a stage on
+// purpose for one run and never lets a standing configuration do it for them.
+//
+// When more than one applies, the first in that order is the reason, because
+// each of the first two holds whatever the person asked: a stage passed over
+// for want of a code host would have been passed over without the request.
+//
+// get is how the keys are read, so the stage node and SkipReasonOf decide
+// from the one rule: the node reads through its graph.Reader, and a report
+// reads off a checkpoint's state. Every key read here is written once or is a
+// run input, so the reason read afterwards is the reason the node acted on.
+func skipped(get func(string) (graph.Value, error), stage Stage) (SkipReason, bool, error) {
+	empty, err := get(string(KeyDiffEmpty))
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	if nothingLeft, _ := empty.Bool(); nothingLeft {
-		return true, nil
+		return SkipNothingToChange, true, nil
 	}
-	requested, err := r.Get(string(KeySkip))
+	if stage.NeedsCodeHost() {
+		none, err := get(string(KeyNoCodeHost))
+		if err != nil {
+			return "", false, err
+		}
+		if absent, _ := none.Bool(); absent {
+			return SkipNoCodeHost, true, nil
+		}
+	}
+	requested, err := get(string(KeySkip))
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	list, _ := requested.List()
 	for _, name := range list {
 		if name == stage.String() {
-			return true, nil
+			return SkipRequested, true, nil
 		}
 	}
-	return false, nil
+	return "", false, nil
 }
 
 // holdNode builds the halt point a stage holds at. The engine stops before the

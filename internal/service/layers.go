@@ -76,6 +76,16 @@ var ErrRepositoryAgent = errors.New("service: this build resolves one agent per 
 // resolves it.
 var ErrForkUnresolved = errors.New("service: the repository record names a fork this run cannot push to and propose from")
 
+// ErrCodeHostUnaddressable reports a repository record whose upstream names a
+// host this build does not address: not a repository on forge.GitHubHostname,
+// and not a path or a file:// URL, which forge.ReachLocal reads as a
+// repository with no code host. The run is refused before anything is
+// recorded as running, on ErrForkUnresolved's terms, because the remote may
+// be a code host and walking the run as though it had none would pass over
+// its pull request and checks stages. It crosses the wire as ipc.ErrRefused,
+// so a caller reads a refusal rather than an internal error.
+var ErrCodeHostUnaddressable = errors.New("service: the repository's upstream names a host this build cannot open a pull request on")
+
 // trustedRef is the name the gate repository holds a run's freshly fetched
 // default-branch tip under. It is named for the run so concurrent runs cannot
 // overwrite each other's, on the same terms as submittedRef, and it is

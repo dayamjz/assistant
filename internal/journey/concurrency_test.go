@@ -75,13 +75,13 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	// stages a run holds at run consecutively: internal/pipeline gives a stage
 	// that holds a hold node as well as a stage node, and a stage that does
 	// not hold goes straight on, so a non-holding stage sitting between two
-	// holds adds a node to that transition and to no other. This run has two
-	// such stages: it skips review and the pull request stage for the reasons
-	// walkableRun states, and a skipped stage's node still executes to record
-	// the skip. The review crossing happens before the run's first hold, so
-	// nothing measured includes it; the pull request crossing sits before the
-	// last hold, so the contention stays inside the consecutive span before
-	// it. Bounding the measurement that way is what keeps the day another
+	// holds adds a node to that transition and to no other. This run has
+	// three such stages: it skips review for the reason walkableRun states,
+	// and passes the pull request and checks stages over because its
+	// repository has no code host, and a skipped stage's node still executes
+	// to record the skip. The review crossing happens before the run's first
+	// hold and the other two after its last, so nothing measured includes
+	// them, and the contention stays inside the consecutive span of holds. Bounding the measurement that way is what keeps the day another
 	// middle stage gets a body from arriving as a contention failure rather
 	// than as the measurement no longer applying.
 	holding := contendedHolds(t, stagesARunStopsAt(t))
@@ -127,7 +127,7 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 
 	observed.after = startRun(t, j)
 	observed.holdsAdvanced = holdPosition(t, holding, observed.after) - holdPosition(t, holding, observed.before)
-	observed.completed = last(answerHolds(t, j, observed.after, "approved")).Outcome == machine.OutcomeChecksPassed
+	observed.completed = last(answerHolds(t, j, observed.after, "approved")).Outcome == endOfTheGate
 
 	sound := journey.Check[contended]{
 		What: "P6: one run several callers answer at once",

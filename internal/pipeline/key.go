@@ -46,9 +46,10 @@ const (
 	// adapter would be the same repository for every run of that service.
 	//
 	// It is empty when the run's record does not name a repository on a host
-	// this build talks to. That is an answer rather than a failure of the run:
-	// most stages need no code host, and a stage that does refuses when this
-	// is empty rather than resolving one for itself.
+	// this build talks to. For a repository with no code host that is
+	// KeyNoCodeHost's case, and the stages that need one are passed over;
+	// a stage that needs one and is reached with this empty all the same
+	// refuses rather than resolving one for itself.
 	KeyForgeRepository Key = "forge.repository"
 	// KeyForkRepository names the fork a run pushes its branch to and proposes
 	// its pull request from, in KeyForgeRepository's notation. It is a run
@@ -68,6 +69,22 @@ const (
 	// before forks existed: a run that checkpointed without it resumes
 	// pushing to the upstream, which is what it observed its anchor on.
 	KeyForkRepository Key = "forge.fork"
+	// KeyNoCodeHost says the run's repository has no code host: its upstream
+	// is a path or a file:// URL, which forge.ReachLocal names. It is a run
+	// input, derived from the run's repository record where
+	// KeyForgeRepository is, and never from a stage failing.
+	//
+	// Issue #283's owner decision is what it does: every stage the stage
+	// table marks as needing a code host is passed over with SkipNoCodeHost
+	// as the reason, so the run pushes and then ends without a pull request
+	// or checks. It is not the person's skip list, which P2 reserves for a
+	// person's choice: this is a fact about the repository, read by the
+	// stage node the way the empty-diff short circuit is.
+	//
+	// Its row is late, because false is how every run behaved before it
+	// existed: a run that checkpointed without it walks the pull request and
+	// checks stages as it would have.
+	KeyNoCodeHost Key = "forge.none"
 	// KeyBranch is the branch under validation. It is a run input.
 	KeyBranch Key = "branch"
 	// KeyBase is the branch target the change is rebased onto and pushed to.
@@ -218,6 +235,7 @@ var sharedKeys = []keySpec{
 	{KeyRun, graph.KindText, graph.MergeNone, ownerRun, false},
 	{KeyForgeRepository, graph.KindText, graph.MergeNone, ownerRun, false},
 	{KeyForkRepository, graph.KindText, graph.MergeNone, ownerRun, true},
+	{KeyNoCodeHost, graph.KindBool, graph.MergeNone, ownerRun, true},
 	{KeyBranch, graph.KindText, graph.MergeNone, ownerRun, false},
 	{KeyBase, graph.KindText, graph.MergeNone, ownerRun, false},
 	{KeySubmitted, graph.KindText, graph.MergeNone, ownerRun, false},

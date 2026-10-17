@@ -24,9 +24,11 @@ const (
 	// body reads the supplied intent and launches nothing, the review body
 	// launches the agent this harness resolves - which the default journey
 	// scripts to answer nothing, so a taken review stops at an ask recording
-	// that no review happened - and the pull request body fails because the
-	// run's record names no repository on the code host, so every walk here
-	// asks to skip those two stages, and the test body holds wherever the
+	// that no review happened - so every walk here asks to skip that stage;
+	// the pull request and checks bodies never run, because the fixture's
+	// upstream is a local repository with no code host and every run passes
+	// both over with the reason no_code_host, issue #283's owner decision;
+	// and the test body holds wherever the
 	// run's resolved configuration names no command, which is every walk but
 	// the P7 branch one. The run a task's worker starts by pushing cannot ask
 	// for a skip; it takes the review stage with the stand-in scripted clean
@@ -80,11 +82,12 @@ func Coverage() []Established {
 		{principles.P2, ReachBinary,
 			"One run of the binary reaches every stage it does not ask to skip; a second run skips one " +
 				"more of them for that run only; and a home whose configuration document asks for a " +
-				"standing skip stops the service before it serves. Both runs skip review and the pull " +
-				"request stage, because the review body launches the agent this harness scripts to " +
-				"answer nothing and the pull request body fails because the run's record names no " +
-				"repository on the code host, so no run here both takes the pull request stage and reaches the end of " +
-				"the gate, and none reviews anything. Two narrow facts are what establish the third: " +
+				"standing skip stops the service before it serves. Both runs skip review, because the " +
+				"review body launches the agent this harness scripts to answer nothing, and both pass " +
+				"over the pull request and checks stages with the reason no_code_host, because the " +
+				"fixture's upstream is a local repository with no code host (issue #283's owner " +
+				"decision), so no run here takes either of those stages, each run reaching the end of " +
+				"the gate ends pushed, and none reviews anything. Two narrow facts are what establish the third: " +
 				"internal/config's key table admits no key named skip, and a key it does not admit is " +
 				"refused where the document is walked, before the service binds. A second key of another " +
 				"name is driven beside it and held to the same answer, so the refusal is not read off one " +
@@ -95,19 +98,19 @@ func Coverage() []Established {
 				"internal/service renders a run's answer by iterating that order, so a clause over the " +
 				"order could not fail from what a run reports. What the run half establishes instead is " +
 				"that a report came back for every stage, that every stage the run did not ask to skip " +
-				"ran, and that each hold carried the " +
+				"ran but the two passed over for want of a code host, which report that reason, and " +
+				"that each hold carried the " +
 				"outcome it was answered with. All three parts are one test, and it starts a run through a " +
 				"method internal/ipc restricts, so on a platform where that package reads no local socket " +
 				"peer credentials the test is skipped rather than passing and nothing about P2 is " +
 				"established there."},
 		{principles.P3, ReachBinary,
-			"A run through the binary is walked to its end, asking to skip the pull request stage " +
-				"because its body fails when the run's record names no repository on the code host, " +
+			"A run through the binary is walked to its end, passing over the pull request and " +
+				"checks stages because the fixture's upstream has no code host, " +
 				"and every hold it reaches is read: it holds " +
 				"once for each stage this harness declares a run stops at - the test, document and " +
-				"lint stages, whose bodies hold for the commands nobody configured here, the push " +
-				"stage, whose body holds because the run carries no completed review, and the checks " +
-				"stage, whose body holds because the record names no code host - every hold is relayed " +
+				"lint stages, whose bodies hold for the commands nobody configured here, and the push " +
+				"stage, whose body holds because the run carries no completed review - every hold is relayed " +
 				"with the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
@@ -159,9 +162,9 @@ func Coverage() []Established {
 				"it never block a run, and a stage that never holds offers nothing to kill at. Review " +
 				"is not among them either: the run asks to skip it, because its body launches the " +
 				"agent this harness scripts to answer nothing, and a skipped stage offers no hold. The " +
-				"pull request stage is not among them for the same reason: the driven run asks to " +
-				"skip it because its body fails when the run's record names no repository on the " +
-				"code host, so it offers no boundary either. What " +
+				"pull request and checks stages are not among them for the same reason: the driven run " +
+				"passes both over because the fixture's upstream has no code host, so they offer no " +
+				"boundary either. What " +
 				"the recovered decision is held to is " +
 				"that it stands at the same stage and still offers what it offered, which a checkpoint " +
 				"round trip can lose; that it offers something nobody was offered is not claimed, " +
@@ -180,9 +183,9 @@ func Coverage() []Established {
 				"a fast-forward, which no surface here drives a run through. Both walks need a " +
 				"service and a run, so they are skipped rather " +
 				"than passing where internal/ipc reads no peer credentials or no local socket " +
-				"transport exists. The pull request and checks stages are skipped on both, because no " +
-				"record here names a repository on a code host and this fixture has none for " +
-				"internal/forge to address. The killed run, and the contention check beside it, are " +
+				"transport exists. The pull request and checks stages are passed over on both, because " +
+				"the fixture's upstream is a local repository, which internal/forge reads as no code " +
+				"host. The killed run, and the contention check beside it, are " +
 				"driven through methods internal/ipc restricts, so on a platform where that package reads " +
 				"no local socket peer credentials both are skipped rather than passing, and the two " +
 				"package-reach observations are the whole of what is established there. The kill path " +
@@ -202,7 +205,7 @@ func Coverage() []Established {
 				"11's classification of a branch whose run is resumable, so that half of section 12's " +
 				"criterion is driven here. What no walk here drives through the binary is the class of " +
 				"a run that ended after it moved the work - recoverable, behind, and the two diverged " +
-				"rows - because no walk ends a run with its work moved and pushed to a code host: " +
+				"rows - because no walk here reaches a code host: " +
 				"internal/custody's tests establish each class over real repositories, and " +
 				"internal/service's establishes recoverable on a commit its copy holds past the last " +
 				"checkpoint, the work a kill mid-stage leaves, both at package reach. That gap is " +

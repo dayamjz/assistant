@@ -75,6 +75,11 @@ var (
 	// Start widens this without the contract here having to be re-counted.
 	ErrIncompleteRun = errors.New("pipeline: a run needs the repository and run it belongs to " +
 		"and the branch, base and submitted commit it is validating")
+	// ErrCodeHostContradiction is returned when a run is started saying its
+	// repository has no code host and naming a repository or a fork on one.
+	// The two are one fact read off the run's record, so a start carrying
+	// both was built from two readings of it, and neither is chosen here.
+	ErrCodeHostContradiction = errors.New("pipeline: a run cannot both name a repository on a code host and have none")
 	// ErrEmptyIntent is returned when a run claims its intent was supplied and
 	// supplies none. It is separate from ErrIncompleteRun because the two mean
 	// different things: that one says the run did not say what it is

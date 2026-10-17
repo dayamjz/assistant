@@ -166,8 +166,9 @@ func Drives() []Drove {
 
 		{"refusal-no-registered-checks", ReachPackage, checks,
 			"internal/forge over a provider command this harness stands in for, with the run's own head " +
-				"substituted into the recorded answer. No run reaches a code host: the pull request " +
-				"stage's body asks one and fails because the run's record names no repository there."},
+				"substituted into the recorded answer. No run reaches a code host: the fixture's upstream " +
+				"is a local repository, so every run passes the pull request and checks stages over " +
+				"with the reason no_code_host and neither body asks one anything."},
 
 		{"stage-logic-bug", ReachNone, "",
 			"Three walks take the review stage against a stand-in scripted to answer a clean review, " +

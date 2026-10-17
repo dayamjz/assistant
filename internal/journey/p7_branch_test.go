@@ -87,8 +87,9 @@ type installed struct {
 // executed the branch's script, which appends to the tripwire file, so the
 // file staying empty while a command demonstrably ran is the branch's
 // installation not being chosen rather than nothing having been looked at.
-// The run still asks to skip the review and pull request stages, for the
-// reasons walkableRun states, so the .claude hooks and the branch's agent
+// The run still asks to skip the review stage, for the reason walkableRun
+// states, and passes over the pull request and checks stages for want of a
+// code host, so the .claude hooks and the branch's agent
 // binary stay unreached by an agent this walk launches; what keeps them
 // unselected is the resolution itself, whose rejection of the branch's
 // "agent" the clauses below read. The gate's own hooks are tripwires
@@ -152,15 +153,16 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	j := open(t, scenario, func(o *journey.Options) { o.AgentArguments = agent.Arguments() })
 	succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch))
 	serve(t, j)
-	// The run asks to skip the review and pull request stages, for the
-	// reasons walkableRun states. It does not skip the test stage: executing
+	// The run asks to skip the review stage, for the reason walkableRun
+	// states; the pull request and checks stages are passed over because the
+	// fixture's upstream has no code host. It does not skip the test stage: executing
 	// the trusted command against the branch is this test's positive half.
 	// The branch plants a failing test, the do-nothing fix round changes no
 	// state, and the convergence bound then parks the run, so the command is
 	// not asserted to succeed and the walk is not asserted to finish; what
 	// the outcome establishes is that the failing check was the trusted
 	// command's and that the run did not walk past it.
-	final := decodeRun(t, j.Command("--skip", "review,pr",
+	final := decodeRun(t, j.Command("--skip", "review",
 		"--intent", "narrow the Total loop bound on purpose"))
 	observed.outcome = final.Outcome
 	for _, view := range final.Stages {
@@ -214,7 +216,7 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 						return fmt.Errorf("the test stage reports having run %v, want the default "+
 							"branch's \"go test ./...\"", i.testedCommands)
 					}
-					if i.outcome == machine.OutcomeChecksPassed {
+					if i.outcome == machine.OutcomeChecksPassed || i.outcome == endOfTheGate {
 						return errors.New("the run reached the end of the gate over a failing trusted " +
 							"check, so something walked past it")
 					}
@@ -345,7 +347,7 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 				}},
 			{Named: "the run walked past the failing trusted check to the end of the gate",
 				Break: func(i installed) installed {
-					i.outcome = machine.OutcomeChecksPassed
+					i.outcome = endOfTheGate
 					return i
 				}},
 			{Named: "a planted executable fired and left its mark in the tripwire file",

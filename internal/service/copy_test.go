@@ -309,8 +309,11 @@ func TestACopyWhoseWorkHasNotLandedIsKeptAndStatusSaysSo(t *testing.T) {
 		started := startRunSkipping(t, under.client, subject, afterIntent()...)
 		run = runByID(t, under.client, started.Record.ID)
 	})
-	if run.Outcome != machine.OutcomeChecksPassed {
-		t.Fatalf("the run reads %s, want checks-passed, so that the copy was reclaimed on a finished run", run.Outcome)
+	// The subject's upstream is a bare repository on this machine, so the
+	// finished run reads pushed, issue #283's owner decision for a
+	// repository with no code host.
+	if run.Outcome != machine.OutcomePushed {
+		t.Fatalf("the run reads %s, want pushed, so that the copy was reclaimed on a finished run", run.Outcome)
 	}
 	path := h.Worktree(repository.ID, run.Record.ID)
 	if _, err := os.Stat(path); err != nil {

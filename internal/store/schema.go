@@ -80,6 +80,11 @@ const runHeldMovesMigration = "run held moves"
 // sealCheckpointTableMigration is a constant.
 const taskRelayMigration = "task findings relayed record"
 
+// runNoCodeHostMigration names the migration that records a run whose
+// repository has no code host, for the reason sealCheckpointTableMigration is
+// a constant.
+const runNoCodeHostMigration = "run no code host"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1480,6 +1485,35 @@ var schema = []migration{
 				BEFORE DELETE ON task_relay
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a task''s findings relayed record is written once and is not deleted');
+				END`,
+		},
+	},
+	{
+		version: 34,
+		name:    runNoCodeHostMigration,
+		statements: []string{
+			// Issue #283's owner decision: a run whose repository has no
+			// code host pushes, passes over the pull request and checks
+			// stages, and ends with its own outcome. This is the run
+			// record's statement of that fact, read when the run began, so
+			// every surface that composes the record - a run listing, a
+			// state event, an answer - can say how the run ended without
+			// a second read. It sits on the run row for the reason park
+			// does: it qualifies the one status a completed run carries.
+			//
+			// It is nullable with no default, so every run written before
+			// it and every run of a repository with a code host reads back
+			// unknown. The trigger makes it written once, while the run is
+			// still pending, and only as 1: a run that began cannot acquire
+			// the fact later and none clears it. An update that does not
+			// name the column cannot change it, so it does not reach the
+			// trigger.
+			`ALTER TABLE run ADD COLUMN no_code_host INTEGER`,
+			`CREATE TRIGGER run_no_code_host_is_written_once
+				BEFORE UPDATE OF no_code_host ON run
+				WHEN OLD.no_code_host IS NOT NULL OR NEW.no_code_host IS NOT 1 OR OLD.status <> 'pending'
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run''s want of a code host is recorded once, before it starts, and is not revised');
 				END`,
 		},
 	},

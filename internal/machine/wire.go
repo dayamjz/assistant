@@ -176,6 +176,13 @@ type Stage struct {
 	// a skipped stage and one a person skipped past at its hold share an
 	// outcome and differ here.
 	Ran bool `json:"ran"`
+	// SkipReason is why a stage that never ran was passed over, which is
+	// pipeline.SkipReasonOf's answer: the run's skip list, the empty-diff
+	// short circuit, or, issue #283's owner decision, a repository with no
+	// code host. It is empty for every stage that ran, including one a
+	// person answered skipped at its hold, and for one the run has not
+	// reached.
+	SkipReason pipeline.SkipReason `json:"skip_reason,omitempty"`
 	// Report is what the stage reported, absent for a stage that never ran.
 	Report *findings.Report `json:"report,omitempty"`
 	// Fix is the summary the last fix round of this stage wrote, empty when

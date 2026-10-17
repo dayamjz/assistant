@@ -103,11 +103,11 @@ document per invocation, and beside that table the subcommands a gate's
 hooks and its remote invoke, which are what makes a push to the gate start a run.
 The twenty-second is `internal/outcomes`, the build-time check that fails when
 the PRD's outcome row and `internal/machine`'s outcome set stop declaring the
-same six values, in the same order, in the same two groups. The row owns the
+same seven values, in the same order, in the same two groups. The row owns the
 set, and it is read by a marker on that row alone, so a marker elsewhere in the
-document is a refusal rather than a seventh outcome, and a set the rule cannot
+document is a refusal rather than an eighth outcome, and a set the rule cannot
 read is a refusal too rather than a short one. What it establishes is only that
-both sides name the same set; it does not say those six are the right six, or
+both sides name the same set; it does not say those seven are the right seven, or
 that an outcome means on the wire what the row's sentence about it says.
 The twenty-third is `internal/journey`, the end-to-end harness: the binary driven
 as a process against the fixture's subject, organized by PRD principle rather
@@ -262,7 +262,7 @@ their terminal.
 | `internal/journey` | The end-to-end harness: the `assistant` binary driven as a process against `internal/fixture`'s subject, organized by PRD principle, with every check carrying the counterfeit observations it must reject, and the three tables that account for principles, planted conditions and the fixture's open questions. |
 | `internal/judge` | The decision-model client: the two fixed questions, the pinned model version, the cutoffs, and an answer that is a probability or a failed call. `internal/judge/judgetest` is its over-the-wire stand-in. |
 | `internal/machine` | The agent-facing half of the surface: the shapes an answer takes, the three exit codes, and the outcome vocabulary. |
-| `internal/outcomes` | The build-time check that the PRD's outcome row and `internal/machine`'s set declare the same six values, in the same order, in the same two groups: the marked row it reads, the comparison, and the refusal when it cannot be read. |
+| `internal/outcomes` | The build-time check that the PRD's outcome row and `internal/machine`'s set declare the same seven values, in the same order, in the same two groups: the marked row it reads, the comparison, and the refusal when it cannot be read. |
 | `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
 | `internal/principles` | The build-time check that no principle the PRD lists goes unclaimed: the constants pinned to that list, the `Cite` call a test claims a principle with, the scan that finds those calls, and the written table of what nothing claims. |
 | `internal/redact` | The one owner of credential removal, called wherever text is persisted or reported. |

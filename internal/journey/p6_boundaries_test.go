@@ -53,10 +53,11 @@ type survival struct {
 // internal/graph stops before a halt point runs, so that is where the kill
 // lands, and a stage that never holds offers none. The intent stage is such a
 // stage - it has a body and PRD section 5 has it never block a run, so every
-// finding it reports is a note - and so are the review and pull request
-// stages on this run, which skips both for the reasons walkableRun states: a
-// skipped stage runs nothing that could hold. None of the three is among the
-// boundaries here, and manufacturing a kill for any of them would be a kill
+// finding it reports is a note - and so are the review stage on this run,
+// which skips it for the reason walkableRun states, and the pull request and
+// checks stages, which a run with no code host passes over: a skipped stage
+// runs nothing that could hold. None of the four is among the boundaries
+// here, and manufacturing a kill for any of them would be a kill
 // with nothing under it.
 //
 // The kill is a kill and not a stop. A service asked to stop unwinds and
@@ -275,7 +276,7 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 			{
 				States: "the run reached the end of the gate after the kills",
 				Holds: func(s survival) error {
-					if s.ended.Outcome != machine.OutcomeChecksPassed {
+					if s.ended.Outcome != endOfTheGate {
 						return fmt.Errorf("the run ended %s rather than reaching the end of the gate", s.ended.Outcome)
 					}
 					return nil

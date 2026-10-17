@@ -222,6 +222,27 @@ func TestARunUnderStandingConsentReachesChecksPassedUnattended(t *testing.T) {
 		if !run.Record.StandingConsent.IsKnown() {
 			t.Fatal("the run record does not say the run ran under standing consent")
 		}
+		// The control for issue #283's owner decision: a repository whose
+		// upstream is on the code host is not one with no code host, so its
+		// run records none, takes the pull request and checks stages rather
+		// than passing them over, and opens its pull request.
+		if run.Record.NoCodeHost {
+			t.Fatal("the record of a run whose upstream is on the code host says it has none")
+		}
+		for _, stage := range []pipeline.Stage{pipeline.StagePR, pipeline.StageCI} {
+			if view := stageView(t, run, stage); !view.Ran || view.SkipReason != "" {
+				t.Fatalf("the %s stage ran %v with skip reason %q, want it run", stage, view.Ran, view.SkipReason)
+			}
+		}
+		created := 0
+		for _, call := range provider.Calls() {
+			if call.Op == forgetest.OpCreate {
+				created++
+			}
+		}
+		if created != 1 {
+			t.Fatalf("the code host was asked to create %d pull requests, want one", created)
+		}
 		if review := stageView(t, run, pipeline.StageReview); review.Outcome != pipeline.OutcomeApproved {
 			t.Fatalf("the review stage ended %s, want approved after the round", review.Outcome)
 		}
