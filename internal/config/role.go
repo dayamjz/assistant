@@ -65,7 +65,7 @@ func (r Roles) ForTask(name string) (Role, error) {
 		return Role{}, fmt.Errorf("%w: a task cannot name %s", ErrTaskRole, name)
 	}
 	if err := validRoleName(name); err != nil {
-		return Role{}, fmt.Errorf("%w: %s", ErrTaskRole, err)
+		return Role{}, fmt.Errorf("%w: %w", ErrTaskRole, err)
 	}
 	role, ok := r[name]
 	if !ok {
