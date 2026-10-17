@@ -112,7 +112,15 @@ func (s *Service) Fixer(ctx context.Context, id string) (*Fixer, error) {
 		// A run configured for no session reuse carries no session, whatever a
 		// record written under other configuration happens to hold. Reading it
 		// there would resume a conversation this run was told not to keep.
-		f.reference, _ = r.FixerSession.Get()
+		//
+		// A session recorded for a different agent than the one this role now
+		// names is not resumed either: the reference is that agent's handle,
+		// and handing it to another agent would continue a conversation the
+		// role does not hold.
+		session, hasSession := r.FixerSession.Get()
+		agent, hasAgent := r.FixerAgent.Get()
+		resolved, hasResolved := r.ResolvedAgent.Get()
+		f.reference = fixerResume(session, agent, resolved, s.agent.Name, hasSession, hasAgent, hasResolved)
 	}
 	s.fixers[id] = f
 	return f, nil
@@ -188,14 +196,38 @@ func (f *Fixer) Reference() string {
 	return f.reference
 }
 
+// fixerResume is the session reference a fixer may open, or empty when there
+// is nothing to resume. A recorded agent that is not the agent opening the
+// session now is empty: that handle belongs to the other agent. A session
+// recorded before the agent column existed is resumed when the run's resolved
+// agent is the one opening it, or when that name is unknown too, and refused
+// when the resolved agent is known and differs.
+func fixerResume(session, sessionAgent, resolved, current string, hasSession, hasAgent, hasResolved bool) string {
+	if !hasSession {
+		return ""
+	}
+	if hasAgent {
+		if sessionAgent == current {
+			return session
+		}
+		return ""
+	}
+	if hasResolved && resolved != current {
+		return ""
+	}
+	return session
+}
+
 // record writes a reference the run does not already carry, and moves this
 // Fixer onto it only once the record holds it. A round that reported nothing,
-// and one that reported what is already recorded, write nothing.
+// and one that reported what is already recorded, write nothing. The agent
+// written beside it is the one this fixer opens, so a later role that names
+// another agent can tell the handle is not its own.
 func (f *Fixer) record(ctx context.Context, reference string) error {
 	if reference == "" || reference == f.reference {
 		return nil
 	}
-	if err := f.service.store.SetRunFixerSession(ctx, f.run, reference); err != nil {
+	if err := f.service.store.SetRunFixerSession(ctx, f.run, reference, f.service.agent.Name); err != nil {
 		return fmt.Errorf("runs: recording the fixer session of run %s: %w", f.run, err)
 	}
 	f.reference = reference

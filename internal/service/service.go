@@ -373,7 +373,23 @@ type Service struct {
 // configuration that may refuse to resolve.
 type driver struct {
 	agent agents.Resolution
-	runs  *runs.Service
+	// stages is the runner a stage body calls. A review invocation goes to
+	// the review role's agent when that role names one; every other purpose
+	// goes to agent. It is a separate runner from the fixer even when both
+	// roles name the same adapter, so a review cannot resume the fixer
+	// session.
+	stages agents.Runner
+	// reviewPinned and fixPinned say the corresponding role named its own
+	// agent. The capabilities and the name are that agent's, and they are
+	// what a run checks before the role launches. Zero capabilities with
+	// pinned false means the role uses agent.
+	reviewPinned bool
+	reviewName   string
+	reviewCaps   agents.Capabilities
+	fixPinned    bool
+	fixName      string
+	fixCaps      agents.Capabilities
+	runs         *runs.Service
 	// sessions is the terminal session provider launch.go starts a task's
 	// worker through, and the one heldTerminals probes, captures and attaches
 	// through, held as a session.Host because a capture and an attach by
@@ -770,17 +786,45 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	if err != nil {
 		return nil, err
 	}
+	review, err := s.gateRole(ctx, config.RoleReview)
+	if err != nil {
+		return nil, err
+	}
+	fix, err := s.gateRole(ctx, config.RoleFix)
+	if err != nil {
+		return nil, err
+	}
 	// The session provider is built over the agent as resolved, before the
 	// wrapper below takes its worker arm away; driver.sessions says why.
+	// A review or fix role's agent is not a worker, so the provider stays
+	// on the service agent.
 	sessions := s.sessionHost(resolution.Runner)
 	// Every invocation of a run passes through the resolved runner or the
 	// fixer it opens, so wrapping here is what registers each one's process
 	// group with the containment registry for as long as it runs; contain.go
 	// owns the wrapper and StageStarted's doc owns what registration buys.
-	resolution.Runner = s.containRunner(resolution.Runner)
+	raw := resolution.Runner
+	contained := s.containRunner(raw)
+	resolution.Runner = contained
+	stage := contained
+	if review.pinned {
+		stage = purposeRunner{
+			base:   contained,
+			review: s.containRunner(stampRunner(review.runner, review.model, review.effort)),
+		}
+	}
+	fixResolution := resolution
+	if fix.pinned {
+		fixResolution = agents.Resolution{
+			Runner:       s.containRunner(stampRunner(fix.runner, fix.model, fix.effort)),
+			Name:         fix.name,
+			Capabilities: fix.caps,
+			Entry:        fix.name,
+		}
+	}
 	runService, err := runs.New(runs.Options{
 		Store:        s.store,
-		Agent:        resolution,
+		Agent:        fixResolution,
 		SessionReuse: s.cfg.SessionReuse,
 		// Every ending of a run is a move of internal/runs, so the sweep of
 		// its copy is decided there from the row the ending wrote rather than
@@ -790,7 +834,19 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.built = &driver{agent: resolution, runs: runService, sessions: sessions, workers: sessions.Workers()}
+	s.built = &driver{
+		agent:        resolution,
+		stages:       stage,
+		reviewPinned: review.pinned,
+		reviewName:   review.name,
+		reviewCaps:   review.caps,
+		fixPinned:    fix.pinned,
+		fixName:      fix.name,
+		fixCaps:      fix.caps,
+		runs:         runService,
+		sessions:     sessions,
+		workers:      sessions.Workers(),
+	}
 	s.log.Printf("resolved agent %s for runs of this service", resolution.Name)
 	return s.built, nil
 }
@@ -829,9 +885,12 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 	if topo, ok := s.topologies[resolved.digest]; ok {
 		return topo, nil
 	}
+	if err := built.roleCapabilities(resolved.cfg); err != nil {
+		return nil, err
+	}
 	redactor := redact.New()
 	deps := stages.NewStageDeps(
-		agents.NewStageAgent(built.agent.Runner),
+		agents.NewStageAgent(built.stages),
 		s.home,
 		resolved.cfg,
 		s.forge,
@@ -859,7 +918,7 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		Fixer:                       s.observeFixer(s.newFixer(fixDeps), fixDeps.Copy),
 		Rounds:                      resolved.cfg.FixRounds,
 		Budget:                      resolved.cfg.RunBudget,
-		Adapter:                     built.agent.Capabilities,
+		Adapter:                     built.adapterCapabilities(),
 		SuppressProjectInstructions: resolved.cfg.SuppressProjectInstructions,
 	})
 	if err != nil {

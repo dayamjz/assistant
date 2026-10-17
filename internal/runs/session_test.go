@@ -105,6 +105,39 @@ func TestTheFixerSessionCrossesAProcessRestart(t *testing.T) {
 	}
 }
 
+// A session recorded for another agent is not the conversation this role
+// holds, so the fixer opens a new one rather than handing that agent the
+// other agent's handle.
+func TestAFixerDoesNotResumeASessionThatBelongsToAnotherAgent(t *testing.T) {
+	ctx := t.Context()
+	ag := standin.New(t, standin.Script{Steps: []standin.Step{
+		{Reply: answering("opened", "sess-new")},
+	}})
+	s, _ := openStore(t)
+	svc := service(t, s, resolution(ag), true)
+	run := seedRun(t, s, svc, "run-1")
+	if err := s.SetRunFixerSession(ctx, run.ID, "sess-old", "cursor"); err != nil {
+		t.Fatalf("SetRunFixerSession: %v", err)
+	}
+	fixer, err := svc.Fixer(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Fixer: %v", err)
+	}
+	if got := fixer.Reference(); got != "" {
+		t.Fatalf("the fixer would resume %q, and that session belongs to cursor", got)
+	}
+	if _, err := fixer.Apply(ctx, fixInvocation(t, "first round")); err != nil {
+		t.Fatalf("first round: %v", err)
+	}
+	calls := ag.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("the agent saw %d invocations, want 1", len(calls))
+	}
+	if got := calls[0].Session(); got != "" {
+		t.Fatalf("the round resumed %q, want a new session", got)
+	}
+}
+
 // A caller holding a round's result holds one whose conversation the run
 // already knows about. There is no window in which the two disagree, so this
 // asserts the record the moment Apply has returned.

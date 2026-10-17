@@ -103,6 +103,11 @@ const taskRoleMigration = "task role"
 // effort a launch asked for, beside the route.
 const taskAttemptModelMigration = "task attempt model"
 
+// fixerAgentMigration names the migration that records which agent opened a
+// run's fixer session, so a later role that names a different agent does not
+// resume it.
+const fixerAgentMigration = "run fixer agent"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1579,6 +1584,18 @@ var schema = []migration{
 			`ALTER TABLE task_attempt ADD COLUMN role TEXT`,
 			`ALTER TABLE task_attempt ADD COLUMN model TEXT`,
 			`ALTER TABLE task_attempt ADD COLUMN effort TEXT`,
+		},
+	},
+	{
+		version: 39,
+		name:    fixerAgentMigration,
+		statements: []string{
+			// The agent that opened the fixer session. NULL means unknown:
+			// a row written before this column, whose session belongs to the
+			// agent the run resolved, when that name is known. A later open
+			// resumes the session only when this names the agent that would
+			// open it.
+			`ALTER TABLE run ADD COLUMN fixer_agent TEXT`,
 		},
 	},
 }

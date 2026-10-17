@@ -143,6 +143,11 @@ type Invocation struct {
 	Env map[string]string
 	// Model names the model to run, empty to leave the choice to the agent.
 	Model string
+	// Effort is the effort the launch was asked for: low, medium, or high.
+	// Empty means the role named none, and the agent uses its own. A named
+	// effort is refused before anything starts for an adapter that has not
+	// declared one, which AcceptsEffort decides.
+	Effort string
 	// Started, when set, is told that the invocation's process has started:
 	// it is called once, after the process exists, with the identifier of the
 	// process group the invocation leads, and the function it returns is

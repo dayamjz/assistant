@@ -257,6 +257,7 @@ func TestTheRunManagesItsFlagsAndDeliversThePromptOnStandardInput(t *testing.T) 
 	inv := invocation(t, agents.ShapeText, map[string]string{helperModeVar: "call"})
 	inv.Prompt = "--not-a-flag but a prompt"
 	inv.Model = "a-model"
+	inv.Effort = "high"
 
 	got, err := runner.Run(t.Context(), agents.PurposeReview, inv)
 	if err != nil {
@@ -264,7 +265,7 @@ func TestTheRunManagesItsFlagsAndDeliversThePromptOnStandardInput(t *testing.T) 
 	}
 	call := decodeCall(t, got.Text)
 	joined := strings.Join(call.Args, " ")
-	for _, want := range []string{"--print", "--output-format json", "--model a-model"} {
+	for _, want := range []string{"--print", "--output-format json", "--model a-model", "--effort high"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("command line %q does not carry %q", joined, want)
 		}

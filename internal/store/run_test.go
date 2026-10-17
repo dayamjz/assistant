@@ -161,7 +161,7 @@ func TestRunUpdatesRefuseAMissingRun(t *testing.T) {
 	if err := s.SetRunHead(ctx, "no-such-run", "aaaa"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetRunHead on a missing run: %v", err)
 	}
-	if err := s.SetRunFixerSession(ctx, "no-such-run", "sess-1"); !errors.Is(err, ErrNotFound) {
+	if err := s.SetRunFixerSession(ctx, "no-such-run", "sess-1", "claude"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetRunFixerSession on a missing run: %v", err)
 	}
 }
@@ -330,10 +330,10 @@ func TestRunFixerSessionIsUnknownUntilItIsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	if r.FixerSession.IsKnown() {
-		t.Fatalf("a new run reports a known fixer session: %q", r.FixerSession)
+	if r.FixerSession.IsKnown() || r.FixerAgent.IsKnown() {
+		t.Fatalf("a new run reports a fixer session %q or agent %q", r.FixerSession, r.FixerAgent)
 	}
-	if err := s.SetRunFixerSession(ctx, r.ID, "sess-1"); err != nil {
+	if err := s.SetRunFixerSession(ctx, r.ID, "sess-1", "claude"); err != nil {
 		t.Fatalf("SetRunFixerSession: %v", err)
 	}
 	got, err := s.Run(ctx, r.ID)
@@ -343,9 +343,12 @@ func TestRunFixerSessionIsUnknownUntilItIsRecorded(t *testing.T) {
 	if value, known := got.FixerSession.Get(); !known || value != "sess-1" {
 		t.Fatalf("the fixer session came back as %q (known=%v), want sess-1", value, known)
 	}
+	if value, known := got.FixerAgent.Get(); !known || value != "claude" {
+		t.Fatalf("the fixer agent came back as %q (known=%v), want claude", value, known)
+	}
 	// A later round reports a different reference and it replaces the first,
 	// which is what makes the column answer where a restart would resume.
-	if err := s.SetRunFixerSession(ctx, r.ID, "sess-2"); err != nil {
+	if err := s.SetRunFixerSession(ctx, r.ID, "sess-2", "claude"); err != nil {
 		t.Fatalf("SetRunFixerSession again: %v", err)
 	}
 	if got, err = s.Run(ctx, r.ID); err != nil {
@@ -354,8 +357,11 @@ func TestRunFixerSessionIsUnknownUntilItIsRecorded(t *testing.T) {
 	if value, _ := got.FixerSession.Get(); value != "sess-2" {
 		t.Fatalf("the fixer session came back as %q, want sess-2", value)
 	}
-	if err := s.SetRunFixerSession(ctx, r.ID, ""); err == nil {
+	if err := s.SetRunFixerSession(ctx, r.ID, "", "claude"); err == nil {
 		t.Fatal("SetRunFixerSession accepted an empty reference")
+	}
+	if err := s.SetRunFixerSession(ctx, r.ID, "sess-3", ""); err == nil {
+		t.Fatal("SetRunFixerSession accepted an empty agent")
 	}
 }
 
@@ -406,7 +412,7 @@ func TestTheFixerSessionMigrationReachesAnOlderDatabase(t *testing.T) {
 	if got.FixerSession.IsKnown() {
 		t.Fatalf("a run recorded before the column existed reports a fixer session: %q", got.FixerSession)
 	}
-	if err := s.SetRunFixerSession(ctx, "run-1", "sess-1"); err != nil {
+	if err := s.SetRunFixerSession(ctx, "run-1", "sess-1", "claude"); err != nil {
 		t.Fatalf("SetRunFixerSession after the migration: %v", err)
 	}
 }
