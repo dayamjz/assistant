@@ -37,6 +37,18 @@ type AgentInvocation struct {
 	// Model is the model the invocation asked for or the agent reported,
 	// empty when neither named one.
 	Model string
+	// Role is the role the launch ran under. Unknown means the row predates
+	// the column. A known empty value means the launch named no role.
+	Role Optional[string]
+	// Provider, Type, and Version are the model triple the launch was asked
+	// for. Each is unknown when the row predates the column, and known empty
+	// when the launch did not name that one.
+	Provider Optional[string]
+	Type     Optional[string]
+	Version  Optional[string]
+	// Effort is the effort the launch was asked for, on the same terms as
+	// Provider.
+	Effort Optional[string]
 	// SessionUse is what the invocation did with the run's durable session.
 	SessionUse string
 	// Started is when the agent process was started.
@@ -96,12 +108,13 @@ func (s *Store) AppendAgentInvocation(ctx context.Context, inv AgentInvocation) 
 			INSERT INTO agent_invocation (
 				purpose, agent, model, session_use, started, duration_ns, failure,
 				input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, turns,
-				run, stage)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				run, stage, role, provider, model_type, version, effort)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			inv.Purpose, inv.Agent, inv.Model, inv.SessionUse,
 			encodeTime(inv.Started), int64(inv.Duration), inv.Failure,
 			inv.InputTokens, inv.OutputTokens, inv.CacheReadTokens,
-			inv.CacheCreationTokens, inv.Turns, inv.Run, inv.Stage)
+			inv.CacheCreationTokens, inv.Turns, inv.Run, inv.Stage,
+			inv.Role, inv.Provider, inv.Type, inv.Version, inv.Effort)
 		if err != nil {
 			return err
 		}
@@ -138,7 +151,7 @@ func (s *Store) agentInvocations(ctx context.Context, where string, args []any) 
 	rows, err := s.read.QueryContext(ctx, `
 		SELECT seq, purpose, agent, model, session_use, started, duration_ns, failure,
 			input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, turns,
-			run, stage
+			run, stage, role, provider, model_type, version, effort
 		FROM agent_invocation `+where+` ORDER BY seq`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading agent invocations: %w", err)
@@ -153,7 +166,8 @@ func (s *Store) agentInvocations(ctx context.Context, where string, args []any) 
 		if err := rows.Scan(&inv.Seq, &inv.Purpose, &inv.Agent, &inv.Model,
 			&inv.SessionUse, &started, &durationNS, &inv.Failure,
 			&inv.InputTokens, &inv.OutputTokens, &inv.CacheReadTokens,
-			&inv.CacheCreationTokens, &inv.Turns, &inv.Run, &inv.Stage); err != nil {
+			&inv.CacheCreationTokens, &inv.Turns, &inv.Run, &inv.Stage,
+			&inv.Role, &inv.Provider, &inv.Type, &inv.Version, &inv.Effort); err != nil {
 			return nil, fmt.Errorf("store: reading agent invocations: %w", err)
 		}
 		if inv.Started, err = decodeTime(started); err != nil {

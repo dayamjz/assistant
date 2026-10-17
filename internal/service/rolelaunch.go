@@ -12,12 +12,24 @@ import (
 // pinned is false when the role names no agent, which means the service
 // agent list, with no model and no effort.
 type gateLaunch struct {
-	pinned bool
-	runner agents.Runner
-	caps   agents.Capabilities
-	name   string
-	model  string
-	effort string
+	pinned   bool
+	runner   agents.Runner
+	caps     agents.Capabilities
+	name     string
+	provider string
+	typ      string
+	version  string
+	model    string
+	effort   string
+}
+
+// fields is the attribution a launch of roleName carries. An unpinned role
+// names the role and nothing else, which the record keeps as not named.
+func (g gateLaunch) fields(roleName string) roleFields {
+	return roleFields{
+		role: roleName, provider: g.provider, typ: g.typ, version: g.version,
+		model: g.model, effort: g.effort,
+	}
 }
 
 // gateRole resolves one program role from the operator's roles table.
@@ -53,12 +65,15 @@ func (s *Service) gateRole(ctx context.Context, roleName string) (gateLaunch, er
 		return gateLaunch{}, fmt.Errorf("service: the %s role: %w", roleName, err)
 	}
 	return gateLaunch{
-		pinned: true,
-		runner: selection.Resolution.Runner,
-		caps:   selection.Resolution.Capabilities,
-		name:   selection.Resolution.Name,
-		model:  model,
-		effort: role.Effort,
+		pinned:   true,
+		runner:   selection.Resolution.Runner,
+		caps:     selection.Resolution.Capabilities,
+		name:     selection.Resolution.Name,
+		provider: role.Provider,
+		typ:      role.Type,
+		version:  role.Version,
+		model:    model,
+		effort:   role.Effort,
 	}, nil
 }
 
@@ -118,15 +133,30 @@ func (p purposeRunner) Run(ctx context.Context, purpose agents.Purpose, inv agen
 	return p.base.Run(ctx, purpose, inv)
 }
 
-// stampRunner returns next with model and effort set on every invocation it
-// runs and every fix round it opens. An empty model and an empty effort
-// return next unchanged. A session runner stays a session runner, so the
-// fixer path still opens through agents.OpenFixer.
-func stampRunner(next agents.Runner, model, effort string) agents.Runner {
-	if model == "" && effort == "" {
-		return next
+// roleFields is what a review or fix launch records about the role: the
+// role name, the triple and effort it named, and the model identifier the
+// adapter was asked to start. Empty text is not named.
+type roleFields struct {
+	role, provider, typ, version, model, effort string
+}
+
+func (f roleFields) apply(inv agents.Invocation) agents.Invocation {
+	inv.Role = f.role
+	inv.Provider = f.provider
+	inv.Type = f.typ
+	inv.Version = f.version
+	inv.Effort = f.effort
+	if f.model != "" {
+		inv.Model = f.model
 	}
-	stamped := stampedRunner{next: next, model: model, effort: effort}
+	return inv
+}
+
+// stampRunner returns next with the role's attribution set on every
+// invocation it runs and every fix round it opens. A session runner stays a
+// session runner, so the fixer path still opens through agents.OpenFixer.
+func stampRunner(next agents.Runner, fields roleFields) agents.Runner {
+	stamped := stampedRunner{next: next, fields: fields}
 	if sessions, ok := next.(agents.SessionRunner); ok {
 		return stampedSession{stampedRunner: stamped, sessions: sessions}
 	}
@@ -134,8 +164,8 @@ func stampRunner(next agents.Runner, model, effort string) agents.Runner {
 }
 
 type stampedRunner struct {
-	next          agents.Runner
-	model, effort string
+	next   agents.Runner
+	fields roleFields
 }
 
 func (s stampedRunner) Name() string { return s.next.Name() }
@@ -147,13 +177,7 @@ func (s stampedRunner) Run(ctx context.Context, purpose agents.Purpose, inv agen
 }
 
 func (s stampedRunner) stamp(inv agents.Invocation) agents.Invocation {
-	if s.model != "" {
-		inv.Model = s.model
-	}
-	if s.effort != "" {
-		inv.Effort = s.effort
-	}
-	return inv
+	return s.fields.apply(inv)
 }
 
 type stampedSession struct {
@@ -166,22 +190,16 @@ func (s stampedSession) Fixer(ctx context.Context, resume string) (agents.Fixer,
 	if err != nil {
 		return nil, err
 	}
-	return stampedFixer{inner: fixer, model: s.model, effort: s.effort}, nil
+	return stampedFixer{inner: fixer, fields: s.fields}, nil
 }
 
 type stampedFixer struct {
-	inner         agents.Fixer
-	model, effort string
+	inner  agents.Fixer
+	fields roleFields
 }
 
 func (s stampedFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Result, error) {
-	if s.model != "" {
-		inv.Model = s.model
-	}
-	if s.effort != "" {
-		inv.Effort = s.effort
-	}
-	return s.inner.Apply(ctx, inv)
+	return s.inner.Apply(ctx, s.fields.apply(inv))
 }
 
 func (s stampedFixer) Reference() string { return s.inner.Reference() }

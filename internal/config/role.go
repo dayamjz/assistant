@@ -231,6 +231,9 @@ func decodeOneRole(k Key, root any, name string, v any) (Role, error) {
 		if strings.Fields(agent)[0] != agent {
 			return Role{}, keyErr(k, root, "role "+quote(name)+" names an agent with arguments; a role names one agent and no arguments")
 		}
+		if agent == "auto" {
+			return Role{}, keyErr(k, root, "role "+quote(name)+" names auto; a role names one agent and has no fallback list")
+		}
 	}
 	named := 0
 	for _, part := range []string{provider, typ, version} {

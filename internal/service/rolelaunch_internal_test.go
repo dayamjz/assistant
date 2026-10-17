@@ -1,70 +1,41 @@
 package service
 
 import (
-	"context"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
-// recordingRunner keeps the invocation it was handed, so a test can see the
-// model and effort a role launch stamped. It declares resumable sessions and
-// carries the mechanism, which is what Resolve and Route hold an adapter to.
-type recordingRunner struct {
-	name string
-
-	mu    sync.Mutex
-	calls []recordedCall
+// roleRecorder is the adapter's own account of an invocation, attached with
+// agents.WithRecorder. The stand-in's Calls are the wire; this is what the
+// adapter recorded from that invocation.
+type roleRecorder struct {
+	mu      sync.Mutex
+	records []agents.Record
 }
 
-type recordedCall struct {
-	purpose agents.Purpose
-	model   string
-	effort  string
-}
-
-func (r *recordingRunner) Name() string { return r.name }
-
-func (r *recordingRunner) Capabilities() agents.Capabilities {
-	return agents.Declare(agents.CapabilityResumableSessions)
-}
-
-func (r *recordingRunner) Run(_ context.Context, purpose agents.Purpose, inv agents.Invocation) (agents.Result, error) {
+func (r *roleRecorder) RecordInvocation(rec agents.Record) {
 	r.mu.Lock()
-	r.calls = append(r.calls, recordedCall{purpose: purpose, model: inv.Model, effort: inv.Effort})
+	r.records = append(r.records, rec)
 	r.mu.Unlock()
-	return agents.Result{}, nil
 }
 
-func (r *recordingRunner) Fixer(context.Context, string) (agents.Fixer, error) {
-	return &recordingFixer{runner: r}, nil
-}
-
-func (r *recordingRunner) snapshot() []recordedCall {
+func (r *roleRecorder) snapshot() []agents.Record {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]recordedCall, len(r.calls))
-	copy(out, r.calls)
+	out := make([]agents.Record, len(r.records))
+	copy(out, r.records)
 	return out
 }
 
-type recordingFixer struct {
-	runner *recordingRunner
-}
-
-func (f *recordingFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Result, error) {
-	return f.runner.Run(ctx, agents.PurposeFix, inv)
-}
-
-func (f *recordingFixer) Reference() string { return "" }
-
-func roleService(t *testing.T, scripted, claude *recordingRunner) *Service {
+func roleService(t *testing.T, runner agents.Runner) *Service {
 	t.Helper()
 	ctx := t.Context()
 	h, err := home.Open(t.TempDir())
@@ -86,24 +57,37 @@ func roleService(t *testing.T, scripted, claude *recordingRunner) *Service {
 	}
 	t.Cleanup(func() { _ = log.Close() })
 	cfg := config.Defaults()
-	cfg.Agent = []string{scripted.Name()}
+	cfg.Agent = []string{runner.Name()}
 	return &Service{
 		home:     h,
 		store:    records,
 		log:      log,
 		cfg:      cfg,
-		catalog:  agents.NewCatalog(fixedRunner{runner: scripted}, fixedRunner{runner: claude}),
+		catalog:  agents.NewCatalog(fixedRunner{runner: runner}),
 		registry: newRegistry(),
 	}
 }
 
+func flagValue(args []string, name string) string {
+	for i, arg := range args {
+		if arg == name && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
 // A review role and a fix role name the agent, the model, and the effort
-// those launches start. Another stage keeps the service agent, with neither.
+// those launches start. The stand-in sees the model and the effort on the
+// command line, and another stage keeps the service agent with neither.
 func TestReviewAndFixRolesStartTheAgentTheyName(t *testing.T) {
 	ctx := t.Context()
-	scripted := &recordingRunner{name: "scripted"}
-	claude := &recordingRunner{name: agents.ClaudeName}
-	s := roleService(t, scripted, claude)
+	rec := &roleRecorder{}
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{{
+		Times: standin.Always,
+		Reply: standin.Text("done"),
+	}}}, agents.WithRecorder(rec))
+	s := roleService(t, agent.Runner())
 	s.cfg.Roles = config.Roles{
 		config.RoleReview: {
 			Agent: agents.ClaudeName, Provider: "anthropic", Type: "opus", Version: "5.5", Effort: "high",
@@ -148,15 +132,25 @@ func TestReviewAndFixRolesStartTheAgentTheyName(t *testing.T) {
 		t.Fatalf("fix: %v", err)
 	}
 
-	gotLint := scripted.snapshot()
-	if len(gotLint) != 1 || gotLint[0].purpose != agents.PurposeLint || gotLint[0].model != "" || gotLint[0].effort != "" {
-		t.Fatalf("lint launch = %+v, want the service agent with no model and no effort", gotLint)
+	calls := agent.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("the stand-in saw %d launches, want review, lint, and fix: %v", len(calls), calls)
 	}
-	got := claude.snapshot()
-	if len(got) != 2 ||
-		got[0].purpose != agents.PurposeReview || got[0].model != "claude-opus-5-5" || got[0].effort != "high" ||
-		got[1].purpose != agents.PurposeFix || got[1].model != "claude-sonnet-5" || got[1].effort != "low" {
-		t.Fatalf("role launches = %+v, want a review of claude-opus-5-5 at high and a fix of claude-sonnet-5 at low", got)
+	if calls[0].Model() != "claude-opus-5-5" || flagValue(calls[0].Args, "--effort") != "high" {
+		t.Fatalf("review command line = %q, want --model claude-opus-5-5 and --effort high", calls[0].Args)
+	}
+	if calls[1].Model() != "" || flagValue(calls[1].Args, "--effort") != "" {
+		t.Fatalf("lint command line = %q, want no model and no effort", calls[1].Args)
+	}
+	if calls[2].Model() != "claude-sonnet-5" || flagValue(calls[2].Args, "--effort") != "low" {
+		t.Fatalf("fix command line = %q, want --model claude-sonnet-5 and --effort low", calls[2].Args)
+	}
+	got := rec.snapshot()
+	if len(got) != 3 ||
+		got[0].Role != "review" || got[0].Provider != "anthropic" || got[0].Type != "opus" || got[0].Version != "5.5" || got[0].Effort != "high" ||
+		got[1].Role != "" || got[1].Provider != "" || got[1].Effort != "" ||
+		got[2].Role != "fix" || got[2].Provider != "anthropic" || got[2].Type != "sonnet" || got[2].Version != "5" || got[2].Effort != "low" {
+		t.Fatalf("recorded launches = %+v", got)
 	}
 }
 
@@ -165,9 +159,8 @@ func TestReviewAndFixRolesStartTheAgentTheyName(t *testing.T) {
 // the next run resolves.
 func TestAReviewRoleThatCannotStartRefusesTheDriver(t *testing.T) {
 	ctx := t.Context()
-	scripted := &recordingRunner{name: "scripted"}
-	claude := &recordingRunner{name: agents.ClaudeName}
-	s := roleService(t, scripted, claude)
+	agent := standin.New(t, standin.Script{})
+	s := roleService(t, agent.Runner())
 	s.cfg.Roles = config.Roles{config.RoleReview: {Agent: "missing"}}
 	if _, err := s.driverFor(ctx); err == nil || !strings.Contains(err.Error(), "review") || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("driverFor = %v, want a refusal naming the review role and missing", err)
@@ -184,5 +177,20 @@ func TestAReviewRoleThatCannotStartRefusesTheDriver(t *testing.T) {
 	s.cfg.Roles = nil
 	if _, err := s.driverFor(ctx); err != nil {
 		t.Fatalf("driverFor after the role was cleared: %v", err)
+	}
+}
+
+// A worker role that names auto is a pin of that word, not the fallback
+// list. An adapter that is runnable is not started in its place.
+func TestAWorkerRoleNamedAutoDoesNotFallThrough(t *testing.T) {
+	ctx := t.Context()
+	agent := standin.New(t, standin.Script{})
+	s := roleService(t, agent.Runner())
+	s.cfg.Roles = config.Roles{config.RoleWorker: {Agent: "auto"}}
+	if _, _, err := s.routeWorker(ctx, ""); err == nil {
+		t.Fatal("a worker role named auto resolved an agent")
+	}
+	if len(agent.Calls()) != 0 {
+		t.Fatalf("the stand-in was started: %v", agent.Calls())
 	}
 }

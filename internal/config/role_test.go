@@ -46,6 +46,7 @@ func TestAPartialOrUnknownModelTripleFailsAtParse(t *testing.T) {
 		`{"roles": {"pages": {"provider": "anthropic", "type": "opus", "version": "5.5"}}}`,
 		`{"roles": {"pages": {"effort": "high"}}}`,
 		`{"roles": {"pages": {"agent": "claude --model x"}}}`,
+		`{"roles": {"worker": {"agent": "auto"}}}`,
 		`{"roles": {"Pages": {"agent": "claude"}}}`,
 		`{"roles": {"review": {"agent": "claude", "effort": "max"}}}`,
 	} {

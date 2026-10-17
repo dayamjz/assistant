@@ -193,7 +193,8 @@ const (
 	MethodCatchUpMark Method = "catchup.mark"
 	// MethodUsageRead is PRD section 9's usage view: what the agent calls
 	// recorded in a window cost, totalled from section 8's agent invocation
-	// record by agent, model and purpose and by run and stage, which
+	// record by agent, model, purpose, role, provider, type, version and
+	// effort, and by run and stage, which
 	// assistant runs --usage prints. It is open, because it reads and
 	// changes nothing, so a driving agent gets the same model a person does.
 	MethodUsageRead Method = "usage.read"

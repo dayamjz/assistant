@@ -203,8 +203,8 @@ func writePointed(w io.Writer, row rendering, value any) {
 //     exact names, locations and text, which section 9's relay-verbatim row
 //     requires and says is an evidence document in P13's sense.
 //   - usage is the usage view, runs --usage's answer: what the agent calls
-//     in a window cost, grouped by agent, model and purpose and by run and
-//     stage, under those exact names.
+//     in a window cost, grouped by agent, model, purpose, role, provider,
+//     type, version and effort, and by run and stage, under those exact names.
 //   - log is the log view, runs RUN --log=STAGE's answer: the end of one
 //     stage's log, with each agent call's account and reply as the log
 //     holds them. It is an answer of its own and not part of the detail
