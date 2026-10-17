@@ -295,6 +295,59 @@ func TestANamedTaskHoldIsAnsweredWithANote(t *testing.T) {
 	}
 }
 
+// A note is free text a person types, so a credential pasted into one is
+// removed before it is stored, the way a message to a worker's is: an
+// answer given --note through the command line reads back, in its own
+// answer and in the record, with the words kept and the credential gone.
+func TestATaskHoldsNoteIsStoredRedacted(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	serve(t, h)
+
+	id := "redactnote23"
+	records := openStore(t, h)
+	if _, err := records.CreateTask(t.Context(), store.Task{
+		ID: id, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: "/worktrees/redact",
+	}, store.Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	raw := `{"summary":"one decision","findings":[{"severity":"warning","action":"ask","description":"Whether the mirror may move."}]}`
+	report, err := findings.ParseReport(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := report.Held()[0]
+	key := tasks.HoldKey(id, f.ID)
+	if _, _, err := records.StoreTaskReport(t.Context(), store.TaskReport{TaskID: id, Body: raw, Report: encoded},
+		[]store.Hold{{Key: key, TaskID: store.Known(id), Subject: f.Description, Detail: f.Description}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = records.Close()
+
+	got := run(t, h, t.TempDir(), "--json", "--task", id, "--hold", f.ID, "--answer", "approved",
+		"--note", "move it to https://mirror:hunter2@example.invalid/repo.git next week")
+	if got.code != machine.ExitOK {
+		t.Fatalf("the answer exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	if strings.Contains(got.stdout, "hunter2") {
+		t.Fatalf("the answer printed the credential:\n%s", got.stdout)
+	}
+	var answered machine.TaskAnswered
+	if err := json.Unmarshal([]byte(got.stdout), &answered); err != nil {
+		t.Fatalf("decoding: %v\n%s", err, got.stdout)
+	}
+	for _, hold := range []store.Hold{answered.Hold, holdOf(t, h, key)} {
+		note, ok := hold.ResolutionNote.Get()
+		if !ok || strings.Contains(note, "hunter2") || !strings.Contains(note, "example.invalid/repo.git next week") {
+			t.Fatalf("the hold reads back the note %q (known %v), want the words kept and the credential removed", note, ok)
+		}
+	}
+}
+
 // --task is read only with --answer or --standing-consent and takes a task,
 // and it acts on one thing at a time. Each is incorrect usage, decided before
 // any service is asked. A fix round given --task is not among them: it goes

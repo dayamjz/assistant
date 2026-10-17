@@ -95,6 +95,10 @@ const holdResolutionNoteMigration = "hold resolution note"
 // sealCheckpointTableMigration is a constant.
 const taskAttemptRouteMigration = "task attempt route"
 
+// sealHoldNoteMigration names the migration that holds a hold's note to its
+// resolution, for the reason sealCheckpointTableMigration is a constant.
+const sealHoldNoteMigration = "seal hold resolution note"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1541,6 +1545,25 @@ var schema = []migration{
 			// SetAttemptRoute before the process starts.
 			`ALTER TABLE task_attempt ADD COLUMN adapter TEXT`,
 			`ALTER TABLE task_attempt ADD COLUMN route_reason TEXT`,
+		},
+	},
+	{
+		version: 37,
+		name:    sealHoldNoteMigration,
+		statements: []string{
+			// The note an answer records (migration 35) is part of the
+			// resolution, never something written beside it later: an
+			// update naming the column is refused unless the same statement
+			// moves the hold from open to resolved. A resolution is written
+			// once, so the note is too, and no note stands on a hold nobody
+			// answered. An update that does not name the column cannot
+			// change it, so it does not reach the trigger.
+			`CREATE TRIGGER hold_note_is_written_with_its_resolution
+				BEFORE UPDATE OF resolution_note ON hold
+				WHEN OLD.resolution IS NOT NULL OR NEW.resolution IS NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a hold''s note is written with its resolution and at no other time');
+				END`,
 		},
 	},
 }

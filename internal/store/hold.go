@@ -46,9 +46,11 @@ type Hold struct {
 	// is recorded for: ResolveHold refuses to create one of those.
 	ResolvedBy Optional[Resolver]
 	// ResolutionNote is free text recorded with the resolution about what
-	// was decided. It is unknown while the hold is open, when no note was
-	// given, and for a hold resolved before the column existed. It is not
-	// who decided: that is ResolvedBy.
+	// was decided, as the store's redactor left it, so a credential in a
+	// shape the redactor recognizes is not stored. It is unknown while the
+	// hold is open, when no note was given, and for a hold resolved before
+	// the column existed. It is written with the resolution and at no other
+	// time. It is not who decided: that is ResolvedBy.
 	ResolutionNote Optional[string] `json:"resolution_note,omitempty"`
 }
 
@@ -100,8 +102,10 @@ func (s *Store) ResolveHold(ctx context.Context, key, resolution string, by Reso
 }
 
 // ResolveHoldNoted is ResolveHold with free text recorded beside the
-// resolution. An empty note leaves ResolutionNote unknown. The note is not
-// who decided: that remains by.
+// resolution, in the same statement and on ResolveHold's terms. The note
+// passes the store's redactor before it is written, and a note that is empty
+// or only white space leaves ResolutionNote unknown. The note is not who
+// decided: that remains by.
 func (s *Store) ResolveHoldNoted(ctx context.Context, key, resolution, note string, by Resolver) (Hold, error) {
 	if strings.TrimSpace(resolution) == "" {
 		return Hold{}, fmt.Errorf("%w: hold %s", ErrNoResolution, key)
@@ -110,10 +114,7 @@ func (s *Store) ResolveHoldNoted(ctx context.Context, key, resolution, note stri
 	if err != nil {
 		return Hold{}, fmt.Errorf("store: resolving hold %s: %w", key, err)
 	}
-	var noteCol any
-	if strings.TrimSpace(note) != "" {
-		noteCol = note
-	}
+	noteCol := s.holdNote(note)
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx,
 			`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE key = ? AND resolution IS NULL`,
@@ -169,7 +170,7 @@ func (s *Store) RecordHoldResolution(ctx context.Context, closing HoldClosure) (
 		return Hold{}, fmt.Errorf("store: resolving hold %s: %w", key, err)
 	}
 	if err := s.inTx(ctx, func(tx *sql.Tx) error {
-		return closeHold(ctx, tx, closing, encodeTime(nowUTC()))
+		return s.closeHold(ctx, tx, closing, encodeTime(nowUTC()))
 	}); err != nil {
 		return Hold{}, err
 	}
@@ -213,6 +214,18 @@ func (s *Store) OpenHolds(ctx context.Context) ([]Hold, error) {
 		return nil, fmt.Errorf("store: listing open holds: %w", err)
 	}
 	return out, nil
+}
+
+// holdNote is what the resolution_note column is given for note: NULL for a
+// note that is empty or only white space, and otherwise the note as the
+// store's redactor leaves it. Both accessors that resolve a hold write the
+// column through it and nothing else does, so no note reaches the column
+// the redactor has not seen.
+func (s *Store) holdNote(note string) any {
+	if strings.TrimSpace(note) == "" {
+		return nil
+	}
+	return s.redact.Redact(note)
 }
 
 const holdColumns = `SELECT key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by, resolution_note`

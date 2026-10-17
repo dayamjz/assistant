@@ -412,18 +412,20 @@
 // would need synchronous FULL and would pay an fsync per commit for it; this
 // package does not make that claim.
 //
-// # Four columns are stored redacted
+// # Five columns are stored redacted
 //
 // PRD section 8 stores repository URLs with credentials removed and recovers
 // the credentialed URL from the gate at run time. P14 gives credential removal
 // one owner, so this package does not implement it: Open requires a
 // [vcs.Redactor] and fails with ErrNoRedactor without one.
 //
-// What the redactor covers is four columns, and three accessors reach it.
-// UpsertRepository runs it on repository.upstream_url and
-// repository.fork_url, the columns PRD section 8 designates for repository
-// URLs. AppendMessage runs it on message.text, what was sent to a worker, and
-// MarkMessageRefused runs it on message.refusal, why a send failed.
+// What the redactor covers is five columns. UpsertRepository runs it on
+// repository.upstream_url and repository.fork_url, the columns PRD section 8
+// designates for repository URLs. AppendMessage runs it on message.text, what
+// was sent to a worker, and MarkMessageRefused runs it on message.refusal, why
+// a send failed. hold.resolution_note, the free text an answer records with a
+// hold's resolution, is written only through holdNote, which runs it, so
+// ResolveHoldNoted and every HoldClosure store it redacted.
 //
 // Every other column holds exactly what the caller passed. A push binding, a
 // pull request reference, a run's intent, a promoted task's delivery intent,

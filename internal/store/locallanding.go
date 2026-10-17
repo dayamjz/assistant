@@ -93,7 +93,7 @@ func (s *Store) RecordLocalLanding(ctx context.Context, l LocalLanding, closing 
 			return err
 		}
 		if closing.Hold.Key != "" {
-			if err := closeHold(ctx, tx, closing, encodeTime(now)); err != nil {
+			if err := s.closeHold(ctx, tx, closing, encodeTime(now)); err != nil {
 				return err
 			}
 		}
