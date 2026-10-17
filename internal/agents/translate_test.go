@@ -35,3 +35,24 @@ func TestClaudeTranslatesEveryAnthropicCellAndNothingElse(t *testing.T) {
 		t.Errorf("an unnamed effort was refused: %v", err)
 	}
 }
+
+func TestCodexTranslatesOnlyOpenAICells(t *testing.T) {
+	for _, cell := range config.ModelCatalog() {
+		id, err := Translate(CodexName, cell.Provider, cell.Type, cell.Version)
+		if cell.Provider == "openai" {
+			if err != nil || id != "gpt-"+cell.Version {
+				t.Errorf("%+v: %q, %v", cell, id, err)
+			}
+		} else if !errors.Is(err, ErrUndeclaredModel) {
+			t.Errorf("translated %+v: %q, %v", cell, id, err)
+		}
+	}
+	for _, effort := range []string{"", "low", "medium", "high"} {
+		if err := AcceptsEffort(CodexName, effort); err != nil {
+			t.Errorf("%q: %v", effort, err)
+		}
+	}
+	if err := AcceptsEffort(CodexName, "max"); !errors.Is(err, ErrUndeclaredModel) {
+		t.Fatalf("accepted unsupported effort: %v", err)
+	}
+}
