@@ -565,9 +565,12 @@ set `allow_pushed_commands`. That opt-out cannot be set from a pushed branch.
 A repository whose upstream is a local path or a `file://` remote has no code
 host to open a pull request on. A run of one still walks the gate through
 push; the pull request and checks stages are skipped with that reason on the
-run (`no_code_host`), and the run ends `pushed` rather than `checks-passed`
+run (`no_code_host`) and on each of the two stages (`skip_reason:
+no-code-host`, shown in a run's stage list as `skipped (did not run:
+no-code-host)`), and the run ends `pushed` rather than `checks-passed`
 (checks that did not run are never claimed). Merge the change on the remote
-yourself. `assistant doctor` says so up front on its upstream row.
+yourself. Once the checkout is set up, `assistant doctor` says so up front on
+its upstream row (`reading: no-code-host`).
 
 A remote that names a network host this build does not address (GitLab, GitHub
 Enterprise, an scp-style host that is not github.com) is refused when a run

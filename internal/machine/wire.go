@@ -176,6 +176,10 @@ type Stage struct {
 	// a skipped stage and one a person skipped past at its hold share an
 	// outcome and differ here.
 	Ran bool `json:"ran"`
+	// SkipReason is why the stage was passed over without its body running,
+	// pipeline.SkipReasonOf's answer, and is absent for a stage that ran, one
+	// not yet reached, and one a person skipped past at its hold.
+	SkipReason pipeline.SkipReason `json:"skip_reason,omitempty"`
 	// Report is what the stage reported, absent for a stage that never ran.
 	Report *findings.Report `json:"report,omitempty"`
 	// Fix is the summary the last fix round of this stage wrote, empty when
@@ -993,6 +997,11 @@ type Check struct {
 	// a run from starting. A check that is not blocking is reported and does
 	// not decide.
 	Blocking bool `json:"blocking"`
+	// Reading is which of its readings a check with more than a pass and a
+	// fail found, one of CheckReadings for its name, and is empty for every
+	// other check. CheckPhrase reads it, so a person is told which reading
+	// was found rather than only whether a run may proceed from it.
+	Reading string `json:"reading,omitempty"`
 }
 
 // Doctor is what assistant doctor reports. PRD section 9 asks it to check

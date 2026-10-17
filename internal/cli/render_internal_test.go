@@ -114,7 +114,9 @@ func TestAControlCharacterInAFixSummaryDoesNotReachTheTerminal(t *testing.T) {
 
 // A stage's executions are rendered as how long they took, one execution as
 // its duration and several as their total and their count; a stage that
-// executed nothing says nothing about time, which is the control.
+// executed nothing says nothing about time, which is the control. A stage the
+// run passed over says why in the skip reason's own word, and one with no
+// reason says only that it did not run.
 func TestAStagesDurationIsRenderedFromItsExecutions(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
@@ -129,10 +131,12 @@ func TestAStagesDurationIsRenderedFromItsExecutions(t *testing.T) {
 				{Stage: "review", Started: at, Ended: at.Add(2 * time.Second)},
 				{Stage: "review", Started: at.Add(time.Minute), Ended: at.Add(time.Minute + 3*time.Second)}}},
 			{Stage: "test", Outcome: pipeline.OutcomeSkipped},
+			{Stage: "pr", Outcome: pipeline.OutcomeSkipped, SkipReason: pipeline.SkipNoCodeHost},
 		},
 	})
 	rendered := out.String()
-	for _, want := range []string{"passed in 1.5s\n", "passed in 5s over 2 executions\n", "skipped (did not run)\n"} {
+	for _, want := range []string{"passed in 1.5s\n", "passed in 5s over 2 executions\n", "test      skipped (did not run)\n",
+		"pr        skipped (did not run: no-code-host)\n"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("the rendering does not say %q:\n%s", want, rendered)
 		}

@@ -1215,18 +1215,71 @@ var phraseByCheck = map[string][2]Phrase{
 		{Outcome: "The code host's command line was found here.", Consequence: "Whether it can reach your repository is learned when a run first needs it.", Decision: "Nothing to do."},
 		{Outcome: "The code host's command line was not found here.", Consequence: "A run can still start, and a step that needs the code host stops and says so.", Decision: readDoctor},
 	},
-	CheckUpstream: {
-		{Outcome: "This checkout's upstream can open a pull request, or it has no code host and runs end after the change is on the remote.",
-			Consequence: "A run either proposes on the code host or skips that step with the reason recorded.",
-			Decision:    "Nothing to do."},
-		{Outcome: "This checkout's upstream names a host this build does not address.",
-			Consequence: "A run cannot start here until the upstream is github.com, a local path, or a file:// remote.",
-			Decision:    "Point the repository's upstream at github.com, a local path, or a file:// remote, then run assistant init again."},
-	},
 	CheckStages: {
 		{Outcome: "Every step of the gate has an implementation in this build.", Consequence: "No step stops for your decision only for want of one.", Decision: "Nothing to do."},
 		{Outcome: "Some steps of the gate have no implementation in this build.", Consequence: "A run stops for your decision at each of them, and what they would check is not checked.", Decision: "Answer each as it comes, and run assistant --json doctor for which they are."},
 	},
+}
+
+// The upstream check's readings: what this checkout's recorded upstream means
+// for the pull request and checks stages, which is more than a pass and a
+// fail, because two of the readings let a run start and say different things
+// about what it will do.
+const (
+	// UpstreamOnCodeHost is an upstream on the code host this build
+	// addresses, where a run opens a pull request.
+	UpstreamOnCodeHost = "on-code-host"
+	// UpstreamNoCodeHost is a local path or file:// upstream, where a run
+	// opens no pull request, runs no checks, and ends pushed.
+	UpstreamNoCodeHost = "no-code-host"
+	// UpstreamUnaddressable is an upstream on a network host this build does
+	// not address, which a run is refused for at start.
+	UpstreamUnaddressable = "unaddressable"
+	// UpstreamUnread is a checkout whose upstream could not be read from its
+	// repository record.
+	UpstreamUnread = "unread"
+)
+
+// readingRow is one reading of a check and what a person reads about it.
+type readingRow struct {
+	reading string
+	phrase  Phrase
+}
+
+// phraseByReading is the table for the checks whose result has more readings
+// than a pass and a fail, from a check's name to its readings in order and
+// what a person reads about each. A check named here is never looked up in
+// phraseByCheck, and a reading it has no row for is phraseCheckUnfamiliar's.
+var phraseByReading = map[string][]readingRow{
+	CheckUpstream: {
+		{UpstreamOnCodeHost, Phrase{Outcome: "This checkout's upstream is on github.com.",
+			Consequence: "A run opens a pull request there after the change is on the remote, and waits on its checks.",
+			Decision:    "Nothing to do."}},
+		{UpstreamNoCodeHost, Phrase{Outcome: "This checkout's upstream has no code host: it is a path or a file:// remote on this machine.",
+			Consequence: "A run here cannot open a pull request, so after the change is on the remote it skips the pull request and checks steps, and merging it is yours to do.",
+			Decision:    "Nothing to do, unless you meant changes from here to be proposed on github.com; then point the upstream there and run assistant init again."}},
+		{UpstreamUnaddressable, Phrase{Outcome: "This checkout's upstream names a host this build does not address.",
+			Consequence: "A run cannot start here until the upstream is github.com, a local path, or a file:// remote.",
+			Decision:    "Point the repository's upstream at github.com, a local path, or a file:// remote, then run assistant init again."}},
+		{UpstreamUnread, Phrase{Outcome: "This checkout's upstream could not be read from what this home records about it.",
+			Consequence: "Whether a run here can open a pull request is not known, and a run cannot start until it is.",
+			Decision:    readDoctor}},
+	},
+}
+
+// CheckReadings is the readings a check has rows for, in the order the table
+// above lists them, and nothing for a check whose result is only a pass or a
+// fail. The result is a copy.
+func CheckReadings(name string) []string {
+	rows := phraseByReading[name]
+	if len(rows) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.reading)
+	}
+	return out
 }
 
 // phraseCheckUnfamiliar is the row for a check under a name the table has
@@ -1238,9 +1291,19 @@ var phraseCheckUnfamiliar = Phrase{
 	Decision:    readDoctor,
 }
 
-// CheckPhrase is what a person reads about one check: phraseByCheck's row for
-// its name and result, or the unfamiliar row for a name it has none for.
+// CheckPhrase is what a person reads about one check: phraseByReading's row
+// for its name and reading when the check has readings, otherwise
+// phraseByCheck's row for its name and result, and the unfamiliar row for a
+// name or a reading neither table has.
 func CheckPhrase(c Check) Phrase {
+	if readings, ok := phraseByReading[c.Name]; ok {
+		for _, row := range readings {
+			if row.reading == c.Reading {
+				return row.phrase
+			}
+		}
+		return phraseCheckUnfamiliar
+	}
 	rows, ok := phraseByCheck[c.Name]
 	if !ok {
 		return phraseCheckUnfamiliar
@@ -1582,6 +1645,12 @@ func TablePhrases() []Phrase {
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
 	for _, name := range CheckNames() {
+		if readings := CheckReadings(name); readings != nil {
+			for _, reading := range readings {
+				out = append(out, CheckPhrase(Check{Name: name, Reading: reading}))
+			}
+			continue
+		}
 		out = append(out, CheckPhrase(Check{Name: name, OK: true}), CheckPhrase(Check{Name: name}))
 	}
 	out = append(out, phraseCheckUnfamiliar, phraseRunCanStart, phraseRunCannotStart)

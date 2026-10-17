@@ -348,6 +348,61 @@ func TestDoctorDecidesWhetherARunCanStart(t *testing.T) {
 	}
 }
 
+// doctor says up front which reading of the upstream it found, in the words a
+// person reads and not only in the structured detail, which is #283's owner
+// decision: a checkout whose upstream is a path on this machine is told a run
+// here cannot open a pull request, one on a host this build does not address
+// is told a run cannot start, and the two say different things. Before init
+// there is no record to read an upstream from, so the row is not made at all
+// rather than reporting a reading it never took.
+func TestDoctorSaysWhichUpstreamReadingItFound(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+
+	before := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	if row, found := findCheck(before, machine.CheckUpstream); found {
+		t.Fatalf("doctor reports an upstream reading %q before init recorded any upstream: %s", row.Reading, row.Detail)
+	}
+
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	local := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found := findCheck(local, machine.CheckUpstream)
+	if !found {
+		t.Fatal("doctor does not report the upstream once init recorded one")
+	}
+	if row.Reading != machine.UpstreamNoCodeHost || !row.OK {
+		t.Fatalf("a path upstream reads %q (ok %v), want %q and OK: %s", row.Reading, row.OK, machine.UpstreamNoCodeHost, row.Detail)
+	}
+	plain := run(t, h, subject, "doctor").stdout
+	said := machine.CheckPhrase(row).String()
+	if !strings.Contains(plain, said) || !strings.Contains(said, "cannot open a pull request") {
+		t.Fatalf("doctor's rendering does not say a run here cannot open a pull request:\n%s", plain)
+	}
+
+	// The control: the same checkout re-recorded with an upstream on a host
+	// this build does not address reads differently and blocks, so the row
+	// above is not one sentence every upstream gets.
+	git(t, subject, "remote", "set-url", "origin", "https://gitlab.com/example/subject.git")
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init with a gitlab upstream exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	elsewhere := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(elsewhere, machine.CheckUpstream)
+	if !found {
+		t.Fatal("doctor does not report the upstream after it moved")
+	}
+	if row.Reading != machine.UpstreamUnaddressable || row.OK || !row.Blocking {
+		t.Fatalf("a gitlab upstream reads %q (ok %v, blocking %v), want %q, not OK and blocking",
+			row.Reading, row.OK, row.Blocking, machine.UpstreamUnaddressable)
+	}
+	if strings.Contains(run(t, h, subject, "doctor").stdout, said) {
+		t.Fatal("doctor tells a checkout on an unaddressable host what it tells one with no code host")
+	}
+}
+
 // doctor reports whether the code-host provider command line resolves, and
 // the row does not decide: a run can start without a code host and the stages
 // that talk to one refuse there, so the row informs before a stage does. The
@@ -1047,6 +1102,39 @@ func TestStatusReportsARefusalRatherThanAServiceThatIsNotRunning(t *testing.T) {
 	}
 	if strings.Contains(failure.Error, "not running") {
 		t.Fatalf("status reports a running service as not running: %s", failure.Error)
+	}
+}
+
+// A --skip naming something that is not a stage is the caller's mistake, so
+// it is incorrect usage that names the stages, never an internal error, and
+// no run is started for it. The control, a correct name on the same
+// checkout, starts one, so the refusal is about the name and not the run.
+func TestSkippingAStageThatDoesNotExistIsIncorrectUsage(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	standingOnChange(t, subject, "work")
+	serve(t, h)
+
+	got := run(t, h, subject, "--skip", "docs", "--intent", "a change with acceptance criteria")
+	if got.code != machine.ExitUsage {
+		t.Fatalf("assistant --skip docs exited %s, want incorrect usage:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	said := got.stdout + got.stderr
+	if strings.Contains(said, "(internal)") || !strings.Contains(said, "document") {
+		t.Fatalf("the refusal is internal or does not name the stages:\n%s", said)
+	}
+	if listed := run(t, h, subject, "--json", "runs"); !strings.Contains(listed.stdout, `"runs":[]`) && !strings.Contains(listed.stdout, `"runs":null`) {
+		t.Fatalf("a refused skip started a run:\n%s", listed.stdout)
+	}
+
+	started := run(t, h, subject, "--json", "--skip", "document", "--intent", "a change with acceptance criteria")
+	if started.code == machine.ExitUsage {
+		t.Fatalf("a correct stage name was refused as incorrect usage:\n%s%s", started.stdout, started.stderr)
 	}
 }
 

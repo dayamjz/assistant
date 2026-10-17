@@ -39,7 +39,7 @@ func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
 				if err != nil {
 					return err
 				}
-				if skip {
+				if skip != "" {
 					return w.Set(string(stage.OutcomeKey()), graph.TextValue(string(OutcomeSkipped)))
 				}
 				// Constructing here rather than in the enclosing closure is
@@ -113,48 +113,65 @@ func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
 	}
 }
 
-// skipped reports whether this stage does not run in this run. Three things
-// say so and all are read here rather than routed around the stage, so a stage
+// skipped reports whether this stage does not run in this run, as the
+// SkipReason that applies, or the empty reason when it runs. Three things say
+// so and all are read here rather than routed around the stage, so a stage
 // that does not run still records that it was skipped rather than leaving the
 // question to whoever reads the state later.
 //
-// The first is the run's own skip list, which is a run input: P2 lets a person
-// skip a stage on purpose for one run and never lets a standing configuration
-// do it for them. The second is the empty-diff short circuit: once the rebase
-// stage reports that nothing remains to change, PRD section 5 ends the run
-// successfully with the rest of the stages skipped rather than failed. The
-// third is a run with no code host: the pull request and checks stages skip
-// after push. The reason is KeyNoCodeHost on the run, not a stage report:
+// The first is the empty-diff short circuit: once the rebase stage reports
+// that nothing remains to change, PRD section 5 ends the run successfully with
+// the rest of the stages skipped rather than failed. The second is the run's
+// own skip list, which is a run input: P2 lets a person skip a stage on
+// purpose for one run and never lets a standing configuration do it for them.
+// The third is a run with no code host: the pull request and checks stages
+// skip after push. The reason is KeyNoCodeHost on the run, not a stage report:
 // StageRan treats a recorded report as the body having run, so a skip must
 // leave the report empty.
-func skipped(r graph.Reader, stage Stage) (bool, error) {
-	empty, err := r.Get(string(KeyDiffEmpty))
-	if err != nil {
-		return false, err
+//
+// SkipReasonOf answers the same question of a run's state afterwards through
+// the same skipReason, so what a surface says about a skip and what decided
+// it are one rule.
+func skipped(r graph.Reader, stage Stage) (SkipReason, error) {
+	return skipReason(r.Get, stage, true)
+}
+
+// skipReason is skipped's rule over a lookup, in the order skipped applies
+// it. emptyDiff says whether the empty-diff short circuit is read: the stage
+// node always reads it, which is the rule, and SkipReasonOf reads it only for
+// a stage after rebase. KeyDiffEmpty is written by rebase's body, after intent
+// and rebase have been decided, so read afterwards it would name a reason the
+// decision about those two never saw.
+func skipReason(get func(string) (graph.Value, error), stage Stage, emptyDiff bool) (SkipReason, error) {
+	if emptyDiff {
+		empty, err := get(string(KeyDiffEmpty))
+		if err != nil {
+			return "", err
+		}
+		if nothingLeft, _ := empty.Bool(); nothingLeft {
+			return SkipEmptyDiff, nil
+		}
 	}
-	if nothingLeft, _ := empty.Bool(); nothingLeft {
-		return true, nil
-	}
-	requested, err := r.Get(string(KeySkip))
+	requested, err := get(string(KeySkip))
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	list, _ := requested.List()
 	for _, name := range list {
 		if name == stage.String() {
-			return true, nil
+			return SkipRequested, nil
 		}
 	}
 	if stage == StagePR || stage == StageCI {
-		flag, err := r.Get(string(KeyNoCodeHost))
+		flag, err := get(string(KeyNoCodeHost))
 		if err != nil {
-			return false, err
+			return "", err
 		}
 		if noHost, _ := flag.Bool(); noHost {
-			return true, nil
+			return SkipNoCodeHost, nil
 		}
 	}
-	return false, nil
+	return "", nil
 }
 
 // holdNode builds the halt point a stage holds at. The engine stops before the

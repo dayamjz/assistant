@@ -321,6 +321,52 @@ func NoCodeHost(s graph.State) bool {
 	return flag
 }
 
+// SkipReason is why a stage was passed over without its body running. It is
+// a closed set, one value for each of the three facts the stage node reads
+// before it runs a body, and the empty reason means none of them applied.
+type SkipReason string
+
+const (
+	// SkipEmptyDiff is a stage after rebase in a run where rebase found
+	// nothing left to change (KeyDiffEmpty).
+	SkipEmptyDiff SkipReason = "empty-diff"
+	// SkipRequested is a stage the run's own skip list named (KeySkip).
+	SkipRequested SkipReason = "requested"
+	// SkipNoCodeHost is the pull request or checks stage of a run whose
+	// upstream has no code host (KeyNoCodeHost).
+	SkipNoCodeHost SkipReason = "no-code-host"
+)
+
+// SkipReasons is every SkipReason, in the order the stage node reads them.
+// The result is a copy.
+func SkipReasons() []SkipReason {
+	return []SkipReason{SkipEmptyDiff, SkipRequested, SkipNoCodeHost}
+}
+
+// SkipReasonOf is why a stage was passed over by the stage node itself, read
+// off a run's state through the rule the node decided with. It is empty for a
+// stage whose outcome is not skipped, for one whose body ran, and for one a
+// person skipped past at its hold, which is an answer rather than a skip.
+//
+// The three facts it reads are what the node read: KeySkip and KeyNoCodeHost
+// are run inputs nothing writes after the run starts, and KeyDiffEmpty is read
+// only for a stage after rebase, the only stages decided after rebase wrote
+// it. The gap is a run that took the checks stage's path back to rebase and
+// stopped before deciding a later stage again: that stage's outcome is from
+// the earlier pass while KeyDiffEmpty is as the later rebase left it, and
+// this function cannot tell the passes apart.
+func SkipReasonOf(s graph.State, stage Stage) SkipReason {
+	if StageOutcome(s, stage) != OutcomeSkipped || StageRan(s, stage) {
+		return ""
+	}
+	get := func(key string) (graph.Value, error) {
+		v, _ := s.Get(key)
+		return v, nil
+	}
+	reason, _ := skipReason(get, stage, stage > StageRebase)
+	return reason
+}
+
 // decodeReport reads a recorded report. The empty string is the key's zero
 // value and means the stage recorded nothing, which is not a decoding failure.
 func decodeReport(text string, stage Stage) (findings.Report, error) {

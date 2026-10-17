@@ -388,9 +388,11 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		add(machine.Check{Name: machine.CheckWorkingCopy, OK: true, Blocking: true, Detail: working})
 	}
 
+	gatedOK := false
 	if records != nil && workErr == nil {
 		gated := gateCheck(ctx, records, working)
 		add(gated)
+		gatedOK = gated.OK
 		if gated.OK {
 			add(commitIdentity(ctx, in.home.Root(), records, working))
 		}
@@ -415,7 +417,7 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 	add(sessionProvider(ctx, in.home.ConfigFile(), catalog))
 
 	add(codeHost())
-	if records != nil && workErr == nil {
+	if gatedOK {
 		add(upstreamDelivery(ctx, records, working))
 	}
 	add(stageBodies())
@@ -614,35 +616,50 @@ func codeHost() machine.Check {
 
 // upstreamDelivery reports how this checkout's recorded upstream treats the
 // pull request and checks stages, from forge.ClassifyRemote over the
-// repository row. A local or file:// upstream is OK and says runs cannot open
-// a pull request here (they end pushed after push). An unsupported network
-// host blocks a run from starting, matching internal/service's begin refusal.
+// repository row, and names which of machine.CheckReadings it found, so a
+// person reads which one rather than only whether a run may start. An
+// upstream on the code host and one with no code host are both OK, and the
+// second says a run here cannot open a pull request, which #283's owner
+// decision asks doctor to say up front. An upstream on a host this build does
+// not address blocks, matching internal/service's begin refusal, and a record
+// that cannot be read blocks too, because begin reads the same record.
+//
+// doctor makes it only once the gate check passed, because that check is what
+// establishes the record it reads: before init there is no upstream recorded
+// to report on, and the gate row already says what to do.
 func upstreamDelivery(ctx context.Context, records *store.Store, working string) machine.Check {
 	repository, err := records.RepositoryAt(ctx, working)
 	if err != nil {
 		return machine.Check{
-			Name:   machine.CheckUpstream,
-			Detail: "this working copy has no repository record yet; run assistant init",
+			Name:     machine.CheckUpstream,
+			Reading:  machine.UpstreamUnread,
+			Blocking: true,
+			Detail:   "the repository record could not be read: " + err.Error(),
 		}
 	}
 	switch forge.ClassifyRemote(repository.UpstreamURL) {
 	case forge.RemoteGitHub:
 		spec, _ := forge.GitHubRepository(repository.UpstreamURL)
 		return machine.Check{
-			Name:   machine.CheckUpstream,
-			OK:     true,
-			Detail: "pull requests open on " + spec,
+			Name:     machine.CheckUpstream,
+			Reading:  machine.UpstreamOnCodeHost,
+			OK:       true,
+			Blocking: true,
+			Detail:   "pull requests open on " + spec,
 		}
 	case forge.RemoteLocal:
 		return machine.Check{
-			Name: machine.CheckUpstream,
-			OK:   true,
+			Name:     machine.CheckUpstream,
+			Reading:  machine.UpstreamNoCodeHost,
+			OK:       true,
+			Blocking: true,
 			Detail: "no code host: runs here cannot open a pull request; after push they skip " +
 				"the pull request and checks stages and end pushed",
 		}
 	default:
 		return machine.Check{
 			Name:     machine.CheckUpstream,
+			Reading:  machine.UpstreamUnaddressable,
 			Blocking: true,
 			Detail: fmt.Sprintf("upstream %q names a host this build does not address; "+
 				"a run is refused at start", repository.UpstreamURL),

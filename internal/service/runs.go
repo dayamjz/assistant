@@ -1881,10 +1881,11 @@ func stageViews(state graph.State) []machine.Stage {
 	views := make([]machine.Stage, 0, len(pipeline.Order()))
 	for _, stage := range pipeline.Order() {
 		view := machine.Stage{
-			Stage:   stage.String(),
-			Outcome: pipeline.StageOutcome(state, stage),
-			Ran:     pipeline.StageRan(state, stage),
-			Fix:     pipeline.FixSummary(state, stage),
+			Stage:      stage.String(),
+			Outcome:    pipeline.StageOutcome(state, stage),
+			Ran:        pipeline.StageRan(state, stage),
+			SkipReason: pipeline.SkipReasonOf(state, stage),
+			Fix:        pipeline.FixSummary(state, stage),
 		}
 		if view.Ran {
 			if report, err := pipeline.StageReport(state, stage); err == nil {
@@ -1957,13 +1958,15 @@ func (s *Service) repositoryAt(ctx context.Context, workingPath string) (store.R
 }
 
 // parseStages reads the stage names a run asks to skip, refusing a name that
-// is not one of the nine rather than skipping nothing and saying it did.
+// is not one of the nine rather than skipping nothing and saying it did. The
+// refusal is ipc.ErrInvalidRequest, because the name is the caller's and a
+// misspelt one is not a fault inside the service.
 func parseStages(names []string) ([]pipeline.Stage, error) {
 	out := make([]pipeline.Stage, 0, len(names))
 	for _, name := range names {
 		stage, ok := pipeline.ParseStage(name)
 		if !ok {
-			return nil, fmt.Errorf("service: %q is not one of the stages: %s", name, strings.Join(stageNames(), ", "))
+			return nil, fmt.Errorf("%w: %q is not one of the stages: %s", ipc.ErrInvalidRequest, name, strings.Join(stageNames(), ", "))
 		}
 		out = append(out, stage)
 	}

@@ -155,12 +155,13 @@ func TestAHoldAcceptsOnlyTheOutcomesAPersonMayGive(t *testing.T) {
 // to make and the outcome key cannot.
 func TestSkippedDoesNotSayWhetherTheStageRan(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		stage Stage
-		ran   bool
-		run   func(t *testing.T) graph.State
+		name   string
+		stage  Stage
+		ran    bool
+		reason SkipReason
+		run    func(t *testing.T) graph.State
 	}{
-		{"named by this run's skip list", StageTest, false, func(t *testing.T) graph.State {
+		{"named by this run's skip list", StageTest, false, SkipRequested, func(t *testing.T) graph.State {
 			t.Helper()
 			c := newCalls()
 			stages := recordingStages(c)
@@ -176,7 +177,7 @@ func TestSkippedDoesNotSayWhetherTheStageRan(t *testing.T) {
 			}
 			return result.State
 		}},
-		{"passed over by the empty-diff short circuit", StageTest, false, func(t *testing.T) graph.State {
+		{"passed over by the empty-diff short circuit", StageTest, false, SkipEmptyDiff, func(t *testing.T) graph.State {
 			t.Helper()
 			c := newCalls()
 			stages := recordingStages(c)
@@ -196,7 +197,7 @@ func TestSkippedDoesNotSayWhetherTheStageRan(t *testing.T) {
 			}
 			return result.State
 		}},
-		{"no code host skips the pull request stage", StagePR, false, func(t *testing.T) graph.State {
+		{"no code host skips the pull request stage", StagePR, false, SkipNoCodeHost, func(t *testing.T) graph.State {
 			t.Helper()
 			c := newCalls()
 			stages := recordingStages(c)
@@ -215,7 +216,7 @@ func TestSkippedDoesNotSayWhetherTheStageRan(t *testing.T) {
 			}
 			return result.State
 		}},
-		{"answered skipped by a person at its hold", StageTest, true, func(t *testing.T) graph.State {
+		{"answered skipped by a person at its hold", StageTest, true, "", func(t *testing.T) graph.State {
 			t.Helper()
 			c := newCalls()
 			stages := recordingStages(c)
@@ -243,6 +244,64 @@ func TestSkippedDoesNotSayWhetherTheStageRan(t *testing.T) {
 			if got := StageRan(state, tc.stage); got != tc.ran {
 				t.Errorf("StageRan %v, want %v: it answers what the outcome cannot", got, tc.ran)
 			}
+			if got := SkipReasonOf(state, tc.stage); got != tc.reason {
+				t.Errorf("SkipReasonOf %q, want %q: the reason is the one the stage node decided with", got, tc.reason)
+			}
 		})
 	}
+}
+
+// TestASkipReasonIsTheOneTheStageNodeDecidedWith runs the cases where two of
+// the three facts hold at once, through the real executor, so the reason read
+// afterwards is the one the node applied first rather than any that holds. A
+// stage decided before rebase wrote KeyDiffEmpty keeps the reason it was
+// passed over for, and a stage that ran has no reason.
+func TestASkipReasonIsTheOneTheStageNodeDecidedWith(t *testing.T) {
+	t.Run("a stage before rebase is not credited to the empty diff", func(t *testing.T) {
+		c := newCalls()
+		stages := recordingStages(c)
+		set(&stages, StageRebase, recording(c, nil, []Key{KeyDiffEmpty}, func(Input, int) (Output, error) {
+			return Output{
+				Report: passing(),
+				Writes: map[Key]graph.Value{KeyDiffEmpty: graph.BoolValue(true)},
+			}, nil
+		}))
+		p := build(t, Options{Stages: stages, Budget: 100})
+		begin := complete()
+		begin.Skip = []Stage{StageIntent}
+		_, result := start(t, p, begin)
+		if result.Status != graph.StatusCompleted {
+			t.Fatalf("status %s, reason %q, want completed", result.Status, result.Reason)
+		}
+		for stage, want := range map[Stage]SkipReason{
+			StageIntent: SkipRequested,
+			StageRebase: "",
+			StageReview: SkipEmptyDiff,
+			StageCI:     SkipEmptyDiff,
+		} {
+			if got := SkipReasonOf(result.State, stage); got != want {
+				t.Errorf("%s: SkipReasonOf %q, want %q", stage, got, want)
+			}
+		}
+	})
+	t.Run("a requested skip of the pull request stage outranks no code host", func(t *testing.T) {
+		c := newCalls()
+		p := build(t, Options{Stages: recordingStages(c), Budget: 100})
+		begin := complete()
+		begin.NoCodeHost = true
+		begin.Skip = []Stage{StagePR}
+		_, result := start(t, p, begin)
+		if result.Status != graph.StatusCompleted {
+			t.Fatalf("status %s, reason %q, want completed", result.Status, result.Reason)
+		}
+		for stage, want := range map[Stage]SkipReason{
+			StagePush: "",
+			StagePR:   SkipRequested,
+			StageCI:   SkipNoCodeHost,
+		} {
+			if got := SkipReasonOf(result.State, stage); got != want {
+				t.Errorf("%s: SkipReasonOf %q, want %q", stage, got, want)
+			}
+		}
+	})
 }

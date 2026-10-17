@@ -805,8 +805,12 @@ func positionOf(r machine.Run) string {
 
 // outcomeWord is what became of one stage, said in a way that distinguishes a
 // stage that ran from one that was passed over, which the outcome alone does
-// not.
+// not, and for a stage the run passed over, why, in the skip reason's own
+// word, because this is the record in the exact terms it was kept in.
 func outcomeWord(stage machine.Stage) string {
+	if !stage.Ran && stage.SkipReason != "" {
+		return string(stage.Outcome) + " (did not run: " + string(stage.SkipReason) + ")"
+	}
 	if !stage.Ran && stage.Outcome != "" {
 		return string(stage.Outcome) + " (did not run)"
 	}
