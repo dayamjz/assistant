@@ -109,6 +109,31 @@ agent:
 The first runnable agent in the list is used for validation runs. Naming a
 named-only adapter is how you select it.
 
+### GPT review roles
+
+Codex translates the configured `openai` / `gpt` versions `6-astra`,
+`6.1-sol`, and `6-luna` into `gpt-<version>`. A named effort (`low`,
+`medium`, or `high`) is passed as a `model_reasoning_effort` configuration
+override on both fresh and resumed invocations. Omitting it leaves the CLI's
+configured effort in effect. Translation does not establish model access in
+an installed CLI or account.
+
+For example, in the global `config.yaml`:
+
+```yaml
+roles:
+  review:
+    agent: codex
+    provider: openai
+    type: gpt
+    version: "6.1-sol"
+    effort: high
+```
+
+The review uses a fresh context, separate from the fix role's session.
+Codex still declares no worker capability; this setting enables review,
+not task workers.
+
 ### Worker routing (GAP-02)
 
 Task workers are routed separately from the run agent. `agents.Route` picks

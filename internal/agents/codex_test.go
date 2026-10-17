@@ -1,6 +1,7 @@
 package agents_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -137,4 +138,63 @@ func indexOf(ss []string, want string) int {
 		}
 	}
 	return -1
+}
+
+func TestCodexPassesRoleModelAndEffortOnFreshAndResumedCalls(t *testing.T) {
+	for _, effort := range []string{"", "low", "medium", "high"} {
+		t.Run(effort, func(t *testing.T) {
+			factory := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t)), agents.WithCodexBaseEnvironment([]string{helperModeVar + "=call"}))
+			runner, err := factory.New(t.Context(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inv := invocation(t, agents.ShapeText, nil)
+			inv.Model = "gpt-6.1-sol"
+			inv.Effort = effort
+			check := func(result agents.Result, err error) {
+				t.Helper()
+				if err != nil {
+					t.Fatal(err)
+				}
+				args := decodeCall(t, result.Text).Args
+				modelAt := indexOf(args, "--model")
+				if modelAt < 0 || modelAt+1 >= len(args) || args[modelAt+1] != inv.Model {
+					t.Fatalf("missing model: %q", args)
+				}
+				configAt := indexOf(args, "--config")
+				if effort == "" {
+					if configAt >= 0 {
+						t.Fatalf("unnamed effort overrides config: %q", args)
+					}
+					return
+				}
+				if configAt < 0 || configAt+1 >= len(args) || args[configAt+1] != "model_reasoning_effort=\""+effort+"\"" {
+					t.Fatalf("missing effort: %q", args)
+				}
+				if resumeAt := indexOf(args, "resume"); resumeAt >= 0 && configAt > resumeAt {
+					t.Fatalf("config follows resume: %q", args)
+				}
+			}
+			check(runner.Run(t.Context(), agents.PurposeIntent, inv))
+			fixer, err := agents.OpenFixer(t.Context(), runner, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(fixer.Apply(t.Context(), inv))
+			check(fixer.Apply(t.Context(), inv))
+		})
+	}
+}
+
+func TestCodexRefusesUnsupportedEffortBeforeStarting(t *testing.T) {
+	factory := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t)), agents.WithCodexBaseEnvironment([]string{helperModeVar + "=call"}))
+	runner, err := factory.New(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := invocation(t, agents.ShapeText, nil)
+	inv.Effort = "max"
+	if _, err := runner.Run(t.Context(), agents.PurposeReview, inv); !errors.Is(err, agents.ErrUndeclaredModel) {
+		t.Fatalf("unsupported effort: %v", err)
+	}
 }

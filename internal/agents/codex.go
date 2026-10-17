@@ -244,6 +244,10 @@ func (r *codexRunner) invoke(ctx context.Context, purpose Purpose, inv Invocatio
 		return Result{}, "", err
 	}
 
+	if err := AcceptsEffort(CodexName, inv.Effort); err != nil {
+		return Result{}, "", err
+	}
+
 	record := Record{
 		Purpose: purpose,
 		Agent:   CodexName,
@@ -361,7 +365,7 @@ func (r *codexRunner) invoke(ctx context.Context, purpose Purpose, inv Invocatio
 // arguments builds the command line for `codex exec`.
 //
 // Layout for a new session: configured entry flags, then `exec`, then managed
-// flags (--json, --color never, grant flags, --model), then the prompt after
+// flags (--json, --color never, grant flags, --model, effort config), then the prompt after
 // `--`. Layout for a resume: the same managed flags, then the `resume`
 // subcommand and thread id, then the prompt after `--`. Grant and color flags
 // stay before `resume` because Codex's clap schema marks only some exec flags
@@ -380,6 +384,9 @@ func (r *codexRunner) arguments(grant Grant, inv Invocation, resume string) []st
 	args = append(args, codexGrantFlags(grant)...)
 	if inv.Model != "" {
 		args = append(args, "--model", inv.Model)
+	}
+	if inv.Effort != "" {
+		args = append(args, "--config", "model_reasoning_effort=\""+inv.Effort+"\"")
 	}
 	if resume != "" {
 		args = append(args, "resume", resume)

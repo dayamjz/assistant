@@ -19,8 +19,8 @@ var ErrUndeclaredModel = errors.New("agents: the adapter has not declared a tran
 //
 // Claude translates every anthropic cell to claude-<type>-<version>, with a
 // dot in the version written as a hyphen. That identifier is what this
-// adapter passes to the CLI. It is not a claim that the installed CLI accepts
-// the cell.
+// adapter passes to the CLI. Codex translates every openai cell to
+// gpt-<version>. Neither translation establishes installed CLI model access.
 func Translate(adapter, provider, typ, version string) (string, error) {
 	if !config.KnownModel(provider, typ, version) {
 		return "", fmt.Errorf("%w: %s %s %s is not in the model table", ErrUndeclaredModel, provider, typ, version)
@@ -28,13 +28,16 @@ func Translate(adapter, provider, typ, version string) (string, error) {
 	if adapter == ClaudeName && provider == "anthropic" {
 		return "claude-" + typ + "-" + strings.ReplaceAll(version, ".", "-"), nil
 	}
+	if adapter == CodexName && provider == "openai" {
+		return "gpt-" + version, nil
+	}
 	return "", fmt.Errorf("%w: %s does not translate %s %s %s", ErrUndeclaredModel, adapter, provider, typ, version)
 }
 
 // AcceptsEffort reports whether adapter can start effort. An empty effort is
 // accepted for every adapter, because the role named none. A named effort is
-// accepted for Claude, which passes it as --effort, and refused for every
-// other adapter.
+// accepted for Claude (--effort) and Codex (model_reasoning_effort), and
+// refused for every other adapter.
 func AcceptsEffort(adapter, effort string) error {
 	if effort == "" {
 		return nil
@@ -44,7 +47,7 @@ func AcceptsEffort(adapter, effort string) error {
 	default:
 		return fmt.Errorf("%w: effort %q is not low, medium, or high", ErrUndeclaredModel, effort)
 	}
-	if adapter == ClaudeName {
+	if adapter == ClaudeName || adapter == CodexName {
 		return nil
 	}
 	return fmt.Errorf("%w: %s does not translate effort %s", ErrUndeclaredModel, adapter, effort)
