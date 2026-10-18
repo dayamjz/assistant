@@ -215,6 +215,22 @@ func TestSkippedDoesNotSayWhetherTheStageRan(t *testing.T) {
 			}
 			return result.State
 		}},
+		{"no code host skips the checks stage", StageCI, false, func(t *testing.T) graph.State {
+			t.Helper()
+			c := newCalls()
+			stages := recordingStages(c)
+			p := build(t, Options{Stages: stages, Budget: 100})
+			begin := complete()
+			begin.NoCodeHost = true
+			_, result := start(t, p, begin)
+			if result.Status != graph.StatusCompleted {
+				t.Fatalf("status %s, reason %q, want completed", result.Status, result.Reason)
+			}
+			if n := c.stageCount(StageCI); n != 0 {
+				t.Fatalf("checks ran %d times, want 0: this case is the never-ran one", n)
+			}
+			return result.State
+		}},
 		{"answered skipped by a person at its hold", StageTest, true, func(t *testing.T) graph.State {
 			t.Helper()
 			c := newCalls()
@@ -244,5 +260,31 @@ func TestSkippedDoesNotSayWhetherTheStageRan(t *testing.T) {
 				t.Errorf("StageRan %v, want %v: it answers what the outcome cannot", got, tc.ran)
 			}
 		})
+	}
+}
+
+// TestNoCodeHostSkipNamesTheReason drives the no-code-host skip through the
+// real executor and checks the reason the pull request and checks stages
+// carry. Removing StageSkipReason's guard for KeyNoCodeHost leaves this green
+// while a person still reads a generic skip.
+func TestNoCodeHostSkipNamesTheReason(t *testing.T) {
+	c := newCalls()
+	stages := recordingStages(c)
+	p := build(t, Options{Stages: stages, Budget: 100})
+	begin := complete()
+	begin.NoCodeHost = true
+	_, result := start(t, p, begin)
+	if result.Status != graph.StatusCompleted {
+		t.Fatalf("status %s, reason %q, want completed", result.Status, result.Reason)
+	}
+	for _, stage := range []Stage{StagePR, StageCI} {
+		if got := StageSkipReason(result.State, stage); got != SkipReasonNoCodeHost {
+			t.Errorf("%s skip reason %q, want %q", stage, got, SkipReasonNoCodeHost)
+		}
+	}
+	for _, stage := range []Stage{StageIntent, StagePush} {
+		if got := StageSkipReason(result.State, stage); got != "" {
+			t.Errorf("%s skip reason %q, want empty", stage, got)
+		}
 	}
 }

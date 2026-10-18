@@ -503,7 +503,7 @@ func readOutDetails(w io.Writer, r machine.Run) {
 	if len(r.Stages) > 0 {
 		writeln(w, "\nStages")
 		for _, stage := range r.Stages {
-			writef(w, "  %-9s %s%s%s\n", stage.Stage, outcomeWord(stage), timing(stage), fixNote(stage))
+			writef(w, "  %-9s %s%s%s\n", stage.Stage, machine.StageOutcomeLabel(stage), timing(stage), fixNote(stage))
 		}
 	}
 	if len(r.Proposals) > 0 {
@@ -801,19 +801,6 @@ func positionOf(r machine.Run) string {
 		return "completed"
 	}
 	return r.Position
-}
-
-// outcomeWord is what became of one stage, said in a way that distinguishes a
-// stage that ran from one that was passed over, which the outcome alone does
-// not.
-func outcomeWord(stage machine.Stage) string {
-	if !stage.Ran && stage.Outcome != "" {
-		return string(stage.Outcome) + " (did not run)"
-	}
-	if stage.Outcome == "" {
-		return "pending"
-	}
-	return string(stage.Outcome)
 }
 
 // timing says how long a stage's executions took, from the run's record of

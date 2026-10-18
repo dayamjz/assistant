@@ -1881,10 +1881,11 @@ func stageViews(state graph.State) []machine.Stage {
 	views := make([]machine.Stage, 0, len(pipeline.Order()))
 	for _, stage := range pipeline.Order() {
 		view := machine.Stage{
-			Stage:   stage.String(),
-			Outcome: pipeline.StageOutcome(state, stage),
-			Ran:     pipeline.StageRan(state, stage),
-			Fix:     pipeline.FixSummary(state, stage),
+			Stage:      stage.String(),
+			Outcome:    pipeline.StageOutcome(state, stage),
+			Ran:        pipeline.StageRan(state, stage),
+			Fix:        pipeline.FixSummary(state, stage),
+			SkipReason: pipeline.StageSkipReason(state, stage),
 		}
 		if view.Ran {
 			if report, err := pipeline.StageReport(state, stage); err == nil {
@@ -1963,7 +1964,7 @@ func parseStages(names []string) ([]pipeline.Stage, error) {
 	for _, name := range names {
 		stage, ok := pipeline.ParseStage(name)
 		if !ok {
-			return nil, fmt.Errorf("service: %q is not one of the stages: %s", name, strings.Join(stageNames(), ", "))
+			return nil, fmt.Errorf("%w: %q is not one of the stages: %s", ipc.ErrInvalidRequest, name, strings.Join(stageNames(), ", "))
 		}
 		out = append(out, stage)
 	}

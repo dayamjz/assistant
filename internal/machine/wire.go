@@ -186,6 +186,10 @@ type Stage struct {
 	// stage taking fix rounds has one per execution; a stage that never ran a
 	// body has none.
 	Executions []store.StageExecution `json:"executions,omitempty"`
+	// SkipReason is why a stage that did not run was passed over, when there
+	// is a reason to name beyond the outcome alone. The pull request and
+	// checks stages carry no-code-host when the run has no code host.
+	SkipReason string `json:"skip_reason,omitempty"`
 }
 
 // Run is one run as a surface reports it: the record, where its execution
@@ -993,6 +997,9 @@ type Check struct {
 	// a run from starting. A check that is not blocking is reported and does
 	// not decide.
 	Blocking bool `json:"blocking"`
+	// Kind names a sub-result when one check has several readings. CheckUpstream
+	// uses the UpstreamKind constants.
+	Kind string `json:"kind,omitempty"`
 }
 
 // Doctor is what assistant doctor reports. PRD section 9 asks it to check
