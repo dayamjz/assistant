@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -188,6 +189,54 @@ func TestAHoldResolutionNoteIsStoredRedacted(t *testing.T) {
 	closureNote, ok := recorded.ResolutionNote.Get()
 	if !ok || strings.Contains(closureNote, "secret") {
 		t.Fatalf("RecordHoldResolution stored %+v, want the note redacted", recorded.ResolutionNote)
+	}
+}
+
+// holdResolutionSealVersion is the shipped migration that seals a hold's
+// resolution. A shipped version never moves, so pinning to it holds the test
+// below to its subject as the list grows.
+const holdResolutionSealVersion = 42
+
+// Notes written before every path redacted can still carry credentials until
+// the seal migration runs. Opening redacts them in the same transaction that
+// installs the trigger.
+func TestTheHoldResolutionSealMigrationRedactsExistingNotes(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	credNote := "see https://user:secret@example.test/repo.git for context"
+
+	older, err := openPool(ctx, poolDSN(path, true), true)
+	if err != nil {
+		t.Fatalf("open the older database: %v", err)
+	}
+	if err := migrate(ctx, older, schemaBefore(t, holdResolutionSealVersion)); err != nil {
+		t.Fatalf("migrate to the older schema: %v", err)
+	}
+	opened, resolved := encodeTime(nowUTC()), encodeTime(nowUTC())
+	if _, err := older.ExecContext(ctx, `
+		INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolution_note)
+		VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+		"older", "a decision", "", opened, "approved", resolved, credNote); err != nil {
+		t.Fatalf("write a resolved hold with an unredacted note: %v", err)
+	}
+	if err := older.Close(); err != nil {
+		t.Fatalf("close the older database: %v", err)
+	}
+
+	s := openStoreAt(t, path)
+	held, err := s.Hold(ctx, "older")
+	if err != nil {
+		t.Fatalf("Hold: %v", err)
+	}
+	note, ok := held.ResolutionNote.Get()
+	if !ok {
+		t.Fatal("the note did not survive the migration")
+	}
+	if strings.Contains(note, "secret") {
+		t.Fatalf("the note is still %q, want credentials removed", note)
+	}
+	if !strings.Contains(note, "REDACTED") {
+		t.Fatalf("the note is %q, want the userinfo redacted", note)
 	}
 }
 

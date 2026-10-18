@@ -425,7 +425,9 @@
 // URLs. AppendMessage runs it on message.text, what was sent to a worker, and
 // MarkMessageRefused runs it on message.refusal, why a send failed.
 // ResolveHoldNoted and the HoldClosure paths run it on hold.resolution_note,
-// free text recorded with an answer.
+// free text recorded with an answer. Opening runs the same redactor over notes
+// already stored when the hold resolution seal migration applies, before that
+// migration seals resolved rows.
 //
 // Every other column holds exactly what the caller passed. A push binding, a
 // pull request reference, a run's intent, a promoted task's delivery intent,

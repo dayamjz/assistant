@@ -1638,7 +1638,9 @@ var schema = []migration{
 		statements: []string{
 			// AGE-330: a hold's resolution and the note beside it are recorded
 			// once. The accessors refuse a second answer; this holds the record
-			// at the database against a direct rewrite.
+			// at the database against a direct rewrite. Open redacts any
+			// existing resolution_note through the supplied redactor in the
+			// same transaction, before this trigger is installed.
 			`CREATE TRIGGER hold_resolution_is_recorded_once
 				BEFORE UPDATE OF resolution, resolved_at, resolved_by, resolution_note ON hold
 				WHEN OLD.resolution IS NOT NULL

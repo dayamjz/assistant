@@ -109,7 +109,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	}
 	s := &Store{path: abs, redact: o.redact, write: write, read: read}
 
-	if err := migrate(ctx, write, schema); err != nil {
+	if err := migrateForOpen(ctx, write, schema, o.redact); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
