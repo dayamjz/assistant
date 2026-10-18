@@ -118,6 +118,28 @@ func isWorkerFallbackHold(key, id string) bool {
 	return strings.HasPrefix(key, "task/"+id+workerFallbackHoldPrefix)
 }
 
+// handoffNotStarted reports a relaunch refusal that stopped before the backup
+// was asked. The sealed selection is the record of the handoff, and the next
+// relaunch reads it. A refusal that already registered its own hold, the
+// no-sweep hold among them, is included so this path does not open a second.
+func handoffNotStarted(err error) bool {
+	var unswept *copyUnswept
+	var held *relaunchHeld
+	var platform *relaunchUnswept
+	return errors.As(err, &unswept) || errors.As(err, &held) || errors.As(err, &platform) ||
+		errors.Is(err, errRelaunchNotDead) || errors.Is(err, errRelaunchNotDue) || errors.Is(err, errRelaunchInFlight)
+}
+
+// forgetLaunched drops a session this service closed and did not replace.
+func (s *Service) forgetLaunched(id string, session *session.Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	held, ok := s.launched[id]
+	if ok && held.session == session {
+		delete(s.launched, id)
+	}
+}
+
 func (s *Service) holdWorkerFallback(ctx context.Context, id string, cause error) error {
 	attempts, err := s.store.TaskAttempts(ctx, id)
 	if err != nil {
@@ -186,8 +208,19 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 		if err = host.Close(worker); err != nil {
 			return fail(err)
 		}
+		// The session is ended. Forgetting it here keeps a refused relaunch
+		// from being closed a second time, and from being read as a worker
+		// this service still holds.
+		s.forgetLaunched(task.ID, worker)
 		var next relaunched
-		next, err = s.relaunchClaimed(ctx, task.ID, "")
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			next, err = s.relaunchClaimed(ctx, task.ID, "")
+			if err == nil || !errors.Is(err, errRelaunchNotDead) || ctx.Err() != nil || !time.Now().Before(deadline) {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 		launch = next.launch
 		if err == nil {
 			s.releaseSuperseded(task.ID, next.superseded)
@@ -195,6 +228,16 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 	}
 	proof = launch.proof
 	if err != nil {
+		// A sweep that did not clear, a terminal that did not read dead, and
+		// a task the relaunch table leaves alone have not asked the backup.
+		// Holding here would resolve the task as held, and the next start
+		// would leave that hold alone instead of trying the backup. The
+		// sealed selection stays, and the next relaunch reads it.
+		if handoffNotStarted(err) {
+			s.log.Printf("task %s worker fallback from %s to %s was recorded and the backup was not started: %v",
+				task.ID, role.Agent, role.Fallback.Agent, err)
+			return nil, err
+		}
 		return fail(err)
 	}
 	pending, err := s.unacknowledgedOf(ctx, task.ID, attempt)
