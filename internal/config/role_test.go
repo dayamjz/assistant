@@ -6,6 +6,31 @@ import (
 	"testing"
 )
 
+func TestRoleHasOneExplicitBackup(t *testing.T) {
+	l := mustParse(t, OriginGlobal, `{"roles":{"worker":{"agent":"claude","fallback":{"agent":"cursor"}}}}`)
+	r, err := Resolve(l, Absent(OriginTrusted))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Config.Roles[RoleWorker].Fallback == nil || r.Config.Roles[RoleWorker].Fallback.Agent != "cursor" {
+		t.Fatal("backup was lost")
+	}
+	other := mustParse(t, OriginGlobal, `{"roles":{"worker":{"agent":"claude","fallback":{"agent":"cursor"}}}}`)
+	if !r.Config.Roles.Equal(other.values[KeyRoles].(Roles)) {
+		t.Fatal("equal backups compare unequal")
+	}
+	for _, doc := range []string{
+		`{"roles":{"worker":{"fallback":{"agent":"cursor"}}}}`,
+		`{"roles":{"worker":{"agent":"claude","fallback":{}}}}`,
+		`{"roles":{"worker":{"agent":"claude","fallback":{"agent":"auto"}}}}`,
+		`{"roles":{"worker":{"agent":"claude","fallback":{"agent":"cursor","fallback":{"agent":"claude"}}}}}}`,
+	} {
+		if _, err := Parse(OriginGlobal, []byte(doc)); err == nil {
+			t.Errorf("accepted %s", doc)
+		}
+	}
+}
+
 func TestARoleNamesOneAgentAndAWholeModelTriple(t *testing.T) {
 	doc := `{
 		"roles": {

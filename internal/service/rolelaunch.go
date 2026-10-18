@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -37,33 +38,81 @@ func (g gateLaunch) fields(roleName string) roleFields {
 // A role that is absent, and a role that names no agent, uses the service
 // agent. A role that names an agent is a pin of that one name: an agent that
 // cannot run, a model the adapter has not declared, and an effort it has not
-// declared are refused here, and no other agent is returned in its place.
+// declared are refused here. An explicit backup is resolved lazily only
+// after a recognized availability failure; it cannot cover invalid settings.
 // The worker role is not resolved here; launch.go owns that path.
 func (s *Service) gateRole(ctx context.Context, roleName string) (gateLaunch, error) {
 	role, ok := s.cfg.Roles[roleName]
 	if !ok {
 		return gateLaunch{}, nil
 	}
+	return s.gateRoleChoice(ctx, roleName, role)
+}
+
+func (s *Service) gateRoleChoice(ctx context.Context, roleName string, role config.Role) (gateLaunch, error) {
 	if role.Agent == "" {
 		if role.Provider != "" || role.Effort != "" {
 			return gateLaunch{}, fmt.Errorf("service: the %s role names a model or an effort and no agent", roleName)
 		}
 		return gateLaunch{}, nil
 	}
-	selection, err := agents.Route(ctx, s.catalog, nil, agents.Capabilities{}, role.Agent)
-	if err != nil {
-		return gateLaunch{}, fmt.Errorf("service: the %s role names %s, which cannot start: %w", roleName, role.Agent, err)
-	}
-	var model string
+	var requestedModel string
 	if role.Provider != "" {
-		model, err = agents.Translate(selection.Resolution.Name, role.Provider, role.Type, role.Version)
+		var err error
+		requestedModel, err = agents.Translate(role.Agent, role.Provider, role.Type, role.Version)
 		if err != nil {
 			return gateLaunch{}, fmt.Errorf("service: the %s role: %w", roleName, err)
 		}
 	}
-	if err := agents.AcceptsEffort(selection.Resolution.Name, role.Effort); err != nil {
-		return gateLaunch{}, fmt.Errorf("service: the %s role: %w", roleName, err)
+	if err := agents.AcceptsEffort(role.Agent, role.Effort); err != nil {
+		return gateLaunch{}, err
 	}
+	backup := role.Fallback
+	role.Fallback = nil
+	if backup != nil {
+		primary, err := s.gateRoleChoice(ctx, roleName, role)
+		openBackup := func(ctx context.Context) (agents.Runner, error) {
+			next, err := s.gateRoleChoice(ctx, roleName, *backup)
+			if err != nil {
+				return nil, err
+			}
+			return s.readyGateRole(next, roleName)
+		}
+		if err != nil {
+			if !agents.FallbackAllowed(err) {
+				return gateLaunch{}, err
+			}
+			ready, backupErr := s.gateRoleChoice(ctx, roleName, *backup)
+			if backupErr != nil {
+				return gateLaunch{}, errors.Join(err, backupErr)
+			}
+			var caps []agents.Capability
+			for _, c := range ready.caps.List() {
+				if c != agents.CapabilityWorkerSessions && c != agents.CapabilityTerminalWorkers {
+					caps = append(caps, c)
+				}
+			}
+			deferred := deferredRoleRunner{name: role.Agent, caps: agents.Declare(caps...), open: func(ctx context.Context) (agents.Runner, error) {
+				available, err := s.gateRoleChoice(ctx, roleName, role)
+				if err != nil {
+					return nil, err
+				}
+				return s.readyGateRole(available, roleName)
+			}}
+			var runner agents.Runner = &deferred
+			if deferred.caps.Has(agents.CapabilityResumableSessions) {
+				runner = &deferredRoleSessions{deferredRoleRunner: deferred}
+			}
+			primary = gateLaunch{pinned: true, runner: runner, caps: deferred.caps, name: role.Agent, provider: role.Provider, typ: role.Type, version: role.Version, model: requestedModel, effort: role.Effort}
+		}
+		primary.runner = agents.WithFallback(stampRunner(primary.runner, primary.fields(roleName)), openBackup)
+		return primary, nil
+	}
+	selection, err := agents.Route(ctx, s.catalog, nil, agents.Capabilities{}, role.Agent)
+	if err != nil {
+		return gateLaunch{}, fmt.Errorf("service: the %s role names %s, which cannot start: %w", roleName, role.Agent, err)
+	}
+
 	return gateLaunch{
 		pinned:   true,
 		runner:   selection.Resolution.Runner,
@@ -72,7 +121,7 @@ func (s *Service) gateRole(ctx context.Context, roleName string) (gateLaunch, er
 		provider: role.Provider,
 		typ:      role.Type,
 		version:  role.Version,
-		model:    model,
+		model:    requestedModel,
 		effort:   role.Effort,
 	}, nil
 }
@@ -83,17 +132,27 @@ func (s *Service) gateRole(ctx context.Context, roleName string) (gateLaunch, er
 // agent does. The fix agent's suppression is checked only when a fix round
 // would be built, which is when a limit is above zero.
 func (d *driver) roleCapabilities(cfg config.Config) error {
-	if !cfg.SuppressProjectInstructions {
-		return nil
+	if d.reviewPinned {
+		if err := requireRoleSuppression(d.reviewName, d.reviewCaps, "review", cfg.SuppressProjectInstructions); err != nil {
+			return err
+		}
 	}
-	need := agents.CapabilitySuppressProjectInstructions
-	if d.reviewPinned && !d.reviewCaps.Has(need) {
-		return &agents.CapabilityError{Agent: d.reviewName, Capability: need, Path: "the review role"}
-	}
-	if d.fixPinned && fixRoundsConfigured(cfg.FixRounds) && !d.fixCaps.Has(need) {
-		return &agents.CapabilityError{Agent: d.fixName, Capability: need, Path: "the fix role"}
+	if d.fixPinned && fixRoundsConfigured(cfg.FixRounds) {
+		return requireRoleSuppression(d.fixName, d.fixCaps, "fix", cfg.SuppressProjectInstructions)
 	}
 	return nil
+}
+func requireRoleSuppression(name string, caps agents.Capabilities, roleName string, required bool) error {
+	if required && !caps.Has(agents.CapabilitySuppressProjectInstructions) {
+		return &agents.CapabilityError{Agent: name, Capability: agents.CapabilitySuppressProjectInstructions, Path: roleName + " role"}
+	}
+	return nil
+}
+func (s *Service) readyGateRole(next gateLaunch, roleName string) (agents.Runner, error) {
+	if err := requireRoleSuppression(next.name, next.caps, roleName, s.cfg.SuppressProjectInstructions); err != nil {
+		return nil, err
+	}
+	return stampRunner(next.runner, next.fields(roleName)), nil
 }
 
 // adapterCapabilities is the declaration pipeline.New checks. It is the
@@ -203,3 +262,43 @@ func (s stampedFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.
 }
 
 func (s stampedFixer) Reference() string { return s.inner.Reference() }
+
+// SessionAgent forwards session ownership without exposing a runner or session.
+func (s stampedRunner) SessionAgent(reference string) string {
+	return agents.SessionAgent(s.next, reference)
+}
+
+// A missing primary is re-resolved at each fresh review or fixer open. The
+// placeholder advertises the available backup path's role capabilities; the
+// real primary's declaration is checked before it is ever invoked.
+type deferredRoleRunner struct {
+	name string
+	caps agents.Capabilities
+	open func(context.Context) (agents.Runner, error)
+}
+
+// Name keeps the configured primary identity while its binary is unavailable.
+func (r *deferredRoleRunner) Name() string { return r.name }
+
+// Capabilities describes the verified backup path while resolution is deferred.
+func (r *deferredRoleRunner) Capabilities() agents.Capabilities { return r.caps }
+
+// Run resolves the configured primary anew before a fresh invocation.
+func (r *deferredRoleRunner) Run(ctx context.Context, p agents.Purpose, inv agents.Invocation) (agents.Result, error) {
+	runner, err := r.open(ctx)
+	if err != nil {
+		return agents.Result{}, err
+	}
+	return runner.Run(ctx, p, inv)
+}
+
+type deferredRoleSessions struct{ deferredRoleRunner }
+
+// Fixer verifies the recovered primary before opening its own session.
+func (r *deferredRoleSessions) Fixer(ctx context.Context, resume string) (agents.Fixer, error) {
+	runner, err := r.open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return agents.OpenFixer(ctx, runner, resume)
+}

@@ -188,7 +188,8 @@ The fleet runs through the same service. A coordinator agent creates work over
 the local protocol's restricted `task.create` method; there is no person-facing
 create verb, by PRD section 9's design. Each delivery task is cut its own copy,
 asserted isolated before its worker starts, and the worker is started through
-the resolved adapter's worker sessions, which the Claude Code adapter declares.
+the resolved adapter's worker sessions, declared by Claude Code and Cursor
+(Cursor uses ACP pipe sessions; attachable terminals remain Claude's).
 A supervisor loop keeps a durable wake queue for the coordinator and pushes
 each wake to a coordinator holding `assistant coordinator listen`; a drain
 hands out what is queued, and only the coordinator's acknowledgement after it

@@ -139,8 +139,19 @@ type Session struct {
 // attempt's session reference.
 func (s *Session) Reference() Reference { return s.ref }
 
+// AvailabilityFailure reads this held process's adapter-owned failure without
+// copying its transcript. None is absence of failure evidence, not liveness.
+func (s *Session) AvailabilityFailure() agents.Failure {
+	if s == nil {
+		return agents.FailureNone
+	}
+	return agents.CurrentWorkerFailure(s.worker)
+}
+
 // Capture is what Provider.Capture hands back.
 type Capture struct {
+	// Failure is the adapter-owned availability state, independent of history.
+	Failure agents.Failure
 	// Text is the retained output, the most recent of it, interleaved from
 	// both streams in the order it was read, within the agents runner's
 	// output limit.

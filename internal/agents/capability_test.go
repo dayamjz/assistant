@@ -561,7 +561,7 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 		t.Fatalf("cursor factory failed: %v", err)
 	}
 	cursorDeclared := cursor.Capabilities()
-	wantCursor := []agents.Capability{agents.CapabilityResumableSessions}
+	wantCursor := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}
 	if got := cursorDeclared.List(); !slices.Equal(got, wantCursor) {
 		t.Errorf("the cursor adapter declares %v, want exactly %v", got, wantCursor)
 	}
@@ -831,4 +831,9 @@ func TestListIsStableWhateverOrderWasDeclared(t *testing.T) {
 	if !slices.Equal(forwards.List(), table) {
 		t.Errorf("List returned %v, want the table order %v", forwards.List(), table)
 	}
+}
+
+func TestCursorWorkerCapabilityConformsThroughACP(t *testing.T) {
+	agent := standin.NewCursor(t, standin.Script{})
+	conform(t, agent.Runner())
 }

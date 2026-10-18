@@ -260,6 +260,10 @@ func (r *codexRunner) invoke(ctx context.Context, purpose Purpose, inv Invocatio
 	reference := ""
 	fail := func(res *procResult, category Failure, cause error, message string) (Result, string, error) {
 		record.Duration = time.Since(record.Started)
+		if message == "" && res != nil {
+			message = res.stderr
+		}
+		category = availabilityCategory(category, message)
 		record.Failure = category
 		r.report(record)
 		code := -1

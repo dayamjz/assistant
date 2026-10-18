@@ -44,7 +44,8 @@ const (
 	//
 	// The Claude Code adapter declares it, over the CLI's stream-json input
 	// mode, and the scripted adapter the tests run against declares it over
-	// plain lines. The conformance suite holds both declarations to the
+	// plain lines. Cursor declares it over ACP session/prompt messages.
+	// The conformance suite holds these declarations to the
 	// mechanism against the stand-in, which is all it can hold them to: the
 	// package documentation states what that does not establish about the
 	// real CLI.

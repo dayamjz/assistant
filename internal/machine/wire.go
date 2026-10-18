@@ -530,7 +530,7 @@ const (
 	// hold is answered retry.
 	// NotRelaunched says why and names the hold.
 	AnswerRetryHeld AnswerEffect = "retry-held"
-	// AnswerRetryAtBound is a retry on a stop's hold whose relaunch would
+	// AnswerRetryAtBound is a retry on a stop or worker-fallback hold whose relaunch would
 	// pass relaunch_attempts, which raised the bound's hold for the attempt;
 	// it begins nothing until that hold is answered retry. NotRelaunched
 	// says why and names the hold.

@@ -11,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // A task's holds: the one the relaunch bound raises, the ones a relaunch
@@ -282,12 +283,12 @@ func isDispatchUnswept(key, task string) bool {
 	return strings.HasPrefix(key, "task/"+task+dispatchUnsweptPrefix)
 }
 
-// isRetryHold reports whether key is one of the four holds of the task
+// isRetryHold reports whether key is one of the retry-or-stop holds of the task
 // whose answer is retry or stop: the two relaunch holds and a stop's, whose
 // retry asks relaunchTask, and the dispatch's no-sweep hold, whose retry
 // asks redispatchTask.
 func isRetryHold(key, task string) bool {
-	return isRelaunchHold(key, task) || isStopped(key, task) || isDispatchUnswept(key, task)
+	return isRelaunchHold(key, task) || isStopped(key, task) || isDispatchUnswept(key, task) || isWorkerFallbackHold(key, task)
 }
 
 // boundAnswer is what a relaunch hold for a task's latest attempt says: the
@@ -320,7 +321,7 @@ type relaunchAnswers struct {
 	bound boundAnswer
 	// unswept is the answer to the hold a relaunch with no sweep raised.
 	unswept boundAnswer
-	// stopped is the answer to the hold a stop raised, steer.go's.
+	// stopped is a stop decision, including a failed worker handoff.
 	stopped boundAnswer
 }
 
@@ -341,6 +342,13 @@ func (s *Service) relaunchAnswersOf(ctx context.Context, id string, attempts []s
 	stopped, err := s.relaunchAnswerOf(ctx, stoppedKey(id, attempts[len(attempts)-1].Sequence))
 	if err != nil {
 		return relaunchAnswers{}, err
+	}
+	fallback, err := s.relaunchAnswerOf(ctx, workerFallbackHoldKey(id, attempts[len(attempts)-1].Sequence))
+	if err != nil {
+		return relaunchAnswers{}, err
+	}
+	if fallback == boundStop || (fallback == boundRetry && stopped == boundUnanswered) {
+		stopped = fallback
 	}
 	return relaunchAnswers{bound: bound, unswept: unswept, stopped: stopped}, nil
 }
@@ -489,6 +497,13 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 		return machine.TaskAnswered{}, fmt.Errorf("%w: task %s holds on %s, which is answered %q or %q, not %q",
 			ipc.ErrInvalidRequest, r.Task, hold.Key, machine.AnswerRetry, machine.AnswerStop, r.Answer)
 	}
+	if isWorkerFallbackHold(hold.Key, r.Task) && r.Answer == machine.AnswerStop {
+		if host, worker, ok := s.sessionOf(r.Task); ok && host.Probe(ctx, worker.Reference().String()).Liveness != taskstate.Dead {
+			if err := host.Close(worker); err != nil {
+				return machine.TaskAnswered{}, err
+			}
+		}
+	}
 	resolved, err := s.store.ResolveHoldNoted(ctx, hold.Key, r.Answer, r.Note, req.HoldResolver())
 	if errors.Is(err, store.ErrHoldResolved) {
 		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
@@ -503,6 +518,8 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 	case r.Answer == machine.AnswerStop:
 		out.Effect = machine.AnswerStopped
 		s.log.Printf("task %s is left where it stopped: hold %s was answered %q", r.Task, hold.Key, r.Answer)
+	case isWorkerFallbackHold(hold.Key, r.Task):
+		s.answerWorkerFallbackRetry(ctx, r, hold, &out)
 	case isDispatchUnswept(hold.Key, r.Task):
 		s.answerDispatchRetry(ctx, r, hold, &out)
 	case isStopped(hold.Key, r.Task):

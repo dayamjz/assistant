@@ -2494,8 +2494,8 @@ flowchart TB
   <h3 class="text-xl font-semibold mb-3">Roles</h3>
   <p class="mb-4 opacity-90">
     You assign an agent, a model provider, a model type, a model version, and an effort to a role.
-    A task names a role. The review stage and the fixer name theirs. The program does not choose
-    among agents, providers, types, or versions by remaining quota or by price. That choice stays
+    A task names a role. The review stage and the fixer name theirs. The program does not rank
+    agents, providers, types, or versions by remaining quota or by price. That choice stays
     deferred, and section 9's usage view is the measurement it would start from.
   </p>
   <p class="mb-4 opacity-90">
@@ -2507,7 +2507,7 @@ flowchart TB
     <code>review</code> or <code>fix</code> is refused at intake and is not created.
   </p>
   <p class="mb-4 opacity-90">
-    A role names one agent, with no arguments and no fallback list. The agent is the process that
+    A role names one primary agent, with no arguments, and may name one <code>fallback</code> object with its own agent, optional complete model triple, and effort. A backup cannot contain another backup and must name a different agent. The agent is the process that
     starts. The model provider is who serves the model, the model type is which of that provider's
     models runs, and the model version is which release of that type runs. Those are not the agent:
     one process can start another provider's model. The provider, the type, and the version are a
@@ -2557,9 +2557,15 @@ flowchart TB
     <code>agent</code>'s terms (P7). A named agent that cannot run, a named effort the adapter
     cannot express, a provider, type, and version the adapter has not declared, or an agent that
     has not declared a capability that role's path requires, refuses that launch and names the
-    role. No other role's agent is started in its place. A worker role whose agent has not
+    role. Only an explicitly configured backup may replace an unavailable primary, on the terms below. A missing capability or an invalid configuration never selects a backup. A worker role whose agent has not
     declared worker sessions is that refusal, and the task resolves Failed from it. A review or a
     fix that cannot start fails the run before that stage launches.
+  </p>
+  <p class="mb-4 opacity-90">
+    A role with a backup tries its primary first and the backup only after a missing executable or a recognized agent-reported quota, authentication, or service-availability failure. Unknown errors, invalid reports, timeouts, cancellation, and context-window exhaustion do not select a backup. No live quota polling or ranking is involved. A review remains a fresh context on either agent. A fixer switching agents starts a separate session in the same working copy and durably records which agent owns it; it never passes the primary's session to the backup. Each invocation tries at most those two candidates, within the graph's existing bounds.
+  </p>
+  <p class="mb-4 opacity-90">
+    A worker handoff records a written-once selection anchored to the attempt observed, stops the primary, and uses the existing bounded relaunch path to sweep and reassert the same copy before starting the backup. Uncommitted work remains in that copy. The selected backup remains selected for that task across service restarts; changing its configured identity refuses rather than guessing. A recorded handoff is current selection, never inferred from an event log. If the copy cannot be proven safe, the relaunch bound is exhausted, or the backup cannot run with the chosen provider, the existing refusal or hold is reported. A handoff failure raises an attempt-anchored retry/stop hold rather than remaining only in a log. A retry with no recorded session uses the existing standing-copy dispatch sweep and the same relaunch bound. Worker backup capabilities are checked before the primary starts. Cursor workers use its ACP pipe interface; Cursor does not declare attachable terminal workers, so a tmux selection is refused rather than silently replaced with a pipe.
   </p>
   <p class="mb-4 opacity-90">
     The role a task runs under does not follow the branch it pushes. The run that push starts
@@ -2747,7 +2753,7 @@ flowchart TB
           <li><b>Extra session providers.</b> One reference provider proves the abstraction, and tmux is now a provider beside it, chosen with <code>session_provider</code>. Claude Code workers run under tmux in the adapter's terminal mode, which section 1's Promise 1 and section 6's steering row describe. Further providers prove nothing new.</li>
           <li><b>Delegate coordinators.</b> The most complex feature in either source project. It only earns its cost at a fleet size you have not reached.</li>
           <li><b>The direct delivery mode.</b> The gate is the thesis, and this is the one mode that shares unvalidated work. When it is promoted, the program forwards the worker's pushed commit from the gate with an anchored update and the worker gains no second remote, and the merge record is its landed record. The local mode is not deferred: it shares nothing, and section 6 specifies it.</li>
-          <li><b>Choosing an agent by quota.</b> Section 10's roles are how you name which agent, model provider, model type, model version, and effort each role runs. The program does not pick among them by remaining quota or by price. That choice stays deferred, and section 9's usage view is the measurement it would start from.</li>
+          <li><b>Ranking agents by remaining quota.</b> Section 10's roles are how you name which agent, model provider, model type, model version, and effort each role runs. The program does not rank them by remaining quota or by price. Explicit failover after a recognized availability failure is section 10's separate rule. Ranking stays deferred, and section 9's usage view is the measurement it would start from.</li>
           <li><b>Interrupting a worker's turn.</b> It needs proof the turn ended, which nothing reads yet. Stop and relaunch cover the need; an adapter offers interrupt once it declares it with a conformance probe for that proof.</li>
           <li><b>Transcript-based intent inference.</b> Supply intent explicitly first. Inference is a convenience over a mechanism that must already work.</li>
           <li><b>Away mode.</b> Requires the supervision loop to be trustworthy first.</li>
@@ -2932,7 +2938,7 @@ flowchart TB
         <tr>
           <td class="prd-num">14</td>
           <td>A role names <b>one agent, one model provider, one model type, one model version, and one effort</b>, and a task names a role.</td>
-          <td>Section 10's <code>roles</code>. The agent is the process. The provider, the type, and the version are a triple from that section's table, and the role does not name a model identifier: the adapter translates the triple. <code>review</code>, <code>fix</code>, and <code>worker</code> are the three the program assigns; any other name is a worker role. You assign them. The program does not pick among agents, providers, types, or versions, and a role that cannot run refuses that launch with nothing started in its place. Review and fix stay separate sessions even when they name the same agent, provider, type, and version (P4). A task's role does not follow its push into the gate: that run reviews with <code>review</code> and fixes with <code>fix</code>. With <code>roles</code> empty, <code>agent</code> is still the agent every role uses, on that agent's own model. Choosing by quota or by price stays deferred in section 12.</td>
+          <td>Section 10's <code>roles</code>. The agent is the process. The provider, the type, and the version are a triple from that section's table, and the role does not name a model identifier: the adapter translates the triple. <code>review</code>, <code>fix</code>, and <code>worker</code> are the three the program assigns; any other name is a worker role. You assign them. The program does not rank agents, providers, types, or versions, and a role without a configured backup that cannot run refuses that launch with nothing started in its place. An explicit backup is allowed only on section 10's availability-failure terms. Review and fix stay separate sessions even when they name the same agent, provider, type, and version (P4). A task's role does not follow its push into the gate: that run reviews with <code>review</code> and fixes with <code>fix</code>. With <code>roles</code> empty, <code>agent</code> is still the agent every role uses, on that agent's own model. Choosing by quota or by price stays deferred in section 12.</td>
         </tr>
       </tbody>
     </table>

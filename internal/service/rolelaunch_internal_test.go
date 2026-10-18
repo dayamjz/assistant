@@ -1,6 +1,9 @@
 package service
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -192,5 +195,131 @@ func TestAWorkerRoleNamedAutoDoesNotFallThrough(t *testing.T) {
 	}
 	if len(agent.Calls()) != 0 {
 		t.Fatalf("the stand-in was started: %v", agent.Calls())
+	}
+}
+
+func TestReviewFallsBackWithoutInheritingThePrimaryModel(t *testing.T) {
+	primary := standin.New(t, standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: standin.Failed("quota exceeded")}}})
+	backup := standin.NewCursor(t, standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: standin.Text("backup review")}}})
+	s := roleService(t, primary.Runner())
+	s.catalog = agents.NewCatalog(fixedRunner{runner: primary.Runner()}, fixedRunner{runner: backup.Runner()})
+	s.cfg.Roles = config.Roles{config.RoleReview: {Agent: "claude", Provider: "anthropic", Type: "opus", Version: "5.5", Effort: "high", Fallback: &config.Role{Agent: "cursor"}}}
+	built, err := s.driverFor(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := agents.Invocation{Prompt: "review", Shape: agents.ShapeText, Dir: t.TempDir()}
+	result, err := built.stages.Run(t.Context(), agents.PurposeReview, inv)
+	if err != nil || result.Text != "backup review" {
+		t.Fatalf("review: %q %v", result.Text, err)
+	}
+	calls := backup.Calls()
+	if len(calls) != 1 || calls[0].Model() != "" || flagValue(calls[0].Args, "--effort") != "" || calls[0].Session() != "" {
+		t.Fatalf("backup inherited primary settings or session: %v", calls)
+	}
+}
+
+func TestFallbackFixerRecordsAndRestoresTheActualSessionOwner(t *testing.T) {
+	primary := standin.New(t, standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: standin.Failed("quota exceeded")}}})
+	backup := standin.NewCursor(t, standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: standin.Text("fixed")}}})
+	s := roleService(t, primary.Runner())
+	s.catalog = agents.NewCatalog(fixedRunner{runner: primary.Runner()}, fixedRunner{runner: backup.Runner()})
+	s.cfg.SessionReuse = true
+	s.cfg.Roles = config.Roles{config.RoleFix: {Agent: "claude", Fallback: &config.Role{Agent: "cursor"}}}
+	built, err := s.driverFor(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if _, err = s.store.UpsertRepository(t.Context(), store.Repository{ID: "fallback-repo", WorkingPath: dir, UpstreamURL: "https://example.test/fallback.git", DefaultBranch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	build, err := store.CurrentBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := s.store.CreateRun(t.Context(), store.Run{ID: "fallback-run", RepositoryID: "fallback-repo", Branch: "topic", SubmittedHead: "abc", Intent: "work", IntentSource: "push", Build: build, ConfigDigest: "cfg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixer, err := built.runs.Fixer(t.Context(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := agents.Invocation{Prompt: "fix", Shape: agents.ShapeText, Dir: dir}
+	if _, err = fixer.Apply(t.Context(), inv); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.store.Run(t.Context(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.FixerAgent.Or("") != "cursor" || !saved.FixerSession.IsKnown() {
+		t.Fatalf("stored owner: %+v", saved)
+	}
+	// Rebuild the service driver, which reconstructs its runs service from
+	// durable state rather than using the existing in-memory Fixer.
+	s.built = nil
+	rebuilt, err := s.driverFor(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := rebuilt.runs.Fixer(t.Context(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = again.Apply(t.Context(), inv); err != nil {
+		t.Fatal(err)
+	}
+	calls := backup.Calls()
+	if len(primary.Calls()) != 1 || len(calls) != 2 || calls[1].Session() == "" {
+		t.Fatalf("session was not restored on backup: primary=%v backup=%v", primary.Calls(), calls)
+	}
+}
+
+type argumentFactory struct {
+	inner agents.Factory
+	args  []string
+}
+
+func (f argumentFactory) Name() string       { return f.inner.Name() }
+func (f argumentFactory) AutoEligible() bool { return false }
+func (f argumentFactory) New(ctx context.Context, args []string) (agents.Runner, error) {
+	return f.inner.New(ctx, append(args, f.args...))
+}
+
+func TestAReviewPrimaryIsRetriedAfterItsExecutableReturns(t *testing.T) {
+	primary := standin.New(t, standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: standin.Text("primary")}}})
+	backup := standin.NewCursor(t, standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: standin.Text("backup")}}})
+	path := filepath.Join(t.TempDir(), "claude-later")
+	s := roleService(t, backup.Runner())
+	s.catalog = agents.NewCatalog(argumentFactory{inner: agents.ClaudeFactory(agents.WithBinary(path)), args: primary.Arguments()}, fixedRunner{runner: backup.Runner()})
+	s.cfg.Roles = config.Roles{config.RoleReview: {Agent: "claude", Fallback: &config.Role{Agent: "cursor"}}}
+	built, err := s.driverFor(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := agents.Invocation{Prompt: "review", Shape: agents.ShapeText, Dir: t.TempDir()}
+	result, err := built.stages.Run(t.Context(), agents.PurposeReview, inv)
+	if err != nil || result.Text != "backup" {
+		t.Fatalf("missing primary: %q %v", result.Text, err)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bytes, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path, bytes, 0700); err != nil {
+		t.Fatal(err)
+	}
+	result, err = built.stages.Run(t.Context(), agents.PurposeReview, inv)
+	if err != nil || result.Text != "primary" {
+		t.Fatalf("recovered primary: %q %v", result.Text, err)
+	}
+	if len(primary.Calls()) != 1 || len(backup.Calls()) != 1 {
+		t.Fatal("recovered primary was not selected")
 	}
 }

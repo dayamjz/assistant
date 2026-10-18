@@ -25,7 +25,8 @@ const (
 	// three the program assigns; any other name is a worker role a task may
 	// name. It is the same trust class as KeyAgent. A provider, type, or
 	// version outside the model table, a partial triple, and an effort other
-	// than low, medium, or high fail at parse time and name the role.
+	// than low, medium, or high fail at parse time and name the role. Each
+	// role may name one explicit fallback, with its own agent and model.
 	KeyRoles Key = "roles"
 	// KeyCommandsTest is "commands.test": a targeted check for the change.
 	KeyCommandsTest Key = "commands.test"

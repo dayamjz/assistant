@@ -138,7 +138,7 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	if err != nil {
 		return nil, fmt.Errorf("service: reading task %s to route its worker: %w", d.id, err)
 	}
-	selection, role, err := s.routeWorker(ctx, task.Role)
+	selection, role, err := s.routeTaskWorker(ctx, task, d.attempt)
 	if err != nil {
 		return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
 	}
@@ -167,6 +167,14 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		Effort:       role.Effort,
 	})
 	if err != nil {
+		if role.Fallback != nil && ctx.Err() == nil && agents.FallbackAllowed(err) {
+			failure := agents.FailureUnavailable
+			var protocol *agents.WorkerError
+			if errors.As(err, &protocol) {
+				failure = protocol.Failure
+			}
+			return s.switchWorker(ctx, task, d.attempt, nil, nil, selection.Resolution.Name, role, failure)
+		}
 		var undeclared *agents.CapabilityError
 		if errors.As(err, &undeclared) {
 			return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
@@ -188,6 +196,7 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	s.launched[d.id] = launchedWorker{host: host, session: launched}
 	s.mu.Unlock()
 	s.log.Printf("task %s attempt %d was routed to %s (%s)", d.id, d.attempt, selection.Resolution.Name, selection.Reason)
+	s.watchWorkerFallback(task, d.attempt, host, launched, selection.Resolution.Name)
 	return launched, nil
 }
 

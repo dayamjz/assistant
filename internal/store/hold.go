@@ -60,22 +60,10 @@ func (h Hold) Open() bool { return !h.Resolution.IsKnown() }
 // resolved or not, because the key is what says these are the same decision.
 // A genuinely different decision gets a different key.
 func (s *Store) RegisterHold(ctx context.Context, h Hold) (Hold, error) {
-	if strings.TrimSpace(h.Key) == "" {
-		return Hold{}, fmt.Errorf("store: hold has no key")
+	if err := validateHold(h); err != nil {
+		return Hold{}, err
 	}
-	if strings.TrimSpace(h.Subject) == "" {
-		return Hold{}, fmt.Errorf("store: hold %s has no subject", h.Key)
-	}
-
-	now := nowUTC()
-	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by)
-			VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
-			ON CONFLICT(key) DO NOTHING`,
-			h.Key, h.RunID, h.TaskID, h.Subject, h.Detail, encodeTime(now))
-		return err
-	})
+	err := s.inTx(ctx, func(tx *sql.Tx) error { return insertHold(ctx, tx, h) })
 	if err != nil {
 		return Hold{}, fmt.Errorf("store: registering hold %s: %w", h.Key, err)
 	}
@@ -236,4 +224,41 @@ func scanHold(sc scanner) (Hold, error) {
 	}
 	h.ResolutionNote = resolutionNote
 	return h, nil
+}
+
+func validateHold(h Hold) error {
+	if strings.TrimSpace(h.Key) == "" {
+		return fmt.Errorf("store: hold has no key")
+	}
+	if strings.TrimSpace(h.Subject) == "" {
+		return fmt.Errorf("store: hold %s has no subject", h.Key)
+	}
+	return nil
+}
+func insertHold(ctx context.Context, tx *sql.Tx, h Hold) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO hold (key,run_id,task_id,subject,detail,opened_at,resolution,resolved_at,resolved_by) VALUES(?,?,?,?,?,?,NULL,NULL,NULL) ON CONFLICT(key) DO NOTHING`, h.Key, h.RunID, h.TaskID, h.Subject, h.Detail, encodeTime(nowUTC()))
+	return err
+}
+
+// RegisterTaskAttemptHold records a decision only while the task is still on
+// the attempt observed. It refuses a stale handoff instead of holding a newer
+// worker that somebody else already started.
+func (s *Store) RegisterTaskAttemptHold(ctx context.Context, id string, attempt int64, h Hold) (Hold, error) {
+	if err := validateHold(h); err != nil {
+		return Hold{}, err
+	}
+	if h.RunID.IsKnown() {
+		return Hold{}, fmt.Errorf("store: a task-attempt hold cannot name a run")
+	}
+	h.TaskID = Known(id)
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		if err := checkLatestTaskAttempt(ctx, tx, id, attempt); err != nil {
+			return err
+		}
+		return insertHold(ctx, tx, h)
+	})
+	if err != nil {
+		return Hold{}, err
+	}
+	return s.Hold(ctx, h.Key)
 }

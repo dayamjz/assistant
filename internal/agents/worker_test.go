@@ -41,22 +41,22 @@ func awaitWorkerOutput(t *testing.T, w agents.Worker, want string) string {
 }
 
 // OpenWorker reads the declaration before the type, so a shipped adapter
-// that declares no worker sessions, the Cursor one, is refused by name and no
+// that declares no worker sessions, the Codex one, is refused by name and no
 // process is started; and a stub that carries the mechanism without declaring
 // it is refused the same way rather than served.
 func TestOpenWorkerConsultsTheDeclarationBeforeTheMechanism(t *testing.T) {
-	cursor, err := agents.CursorFactory(agents.WithCursorBinary(helperBinary(t))).New(t.Context(), nil)
+	codex, err := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t))).New(t.Context(), nil)
 	if err != nil {
-		t.Fatalf("building the cursor adapter: %v", err)
+		t.Fatalf("building the codex adapter: %v", err)
 	}
-	_, err = agents.OpenWorker(t.Context(), cursor, workerSpec(t))
+	_, err = agents.OpenWorker(t.Context(), codex, workerSpec(t))
 	var refusal *agents.CapabilityError
 	if !errors.As(err, &refusal) {
-		t.Fatalf("OpenWorker on the cursor adapter answered %v, want a *CapabilityError", err)
+		t.Fatalf("OpenWorker on the codex adapter answered %v, want a *CapabilityError", err)
 	}
-	if refusal.Capability != agents.CapabilityWorkerSessions || refusal.Agent != agents.CursorName {
+	if refusal.Capability != agents.CapabilityWorkerSessions || refusal.Agent != agents.CodexName {
 		t.Errorf("the refusal names %q on %q, want %q on %q",
-			refusal.Capability, refusal.Agent, agents.CapabilityWorkerSessions, agents.CursorName)
+			refusal.Capability, refusal.Agent, agents.CapabilityWorkerSessions, agents.CodexName)
 	}
 
 	undeclared := &workerStubRunner{stubRunner: &stubRunner{name: "undeclared"}}

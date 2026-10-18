@@ -218,7 +218,7 @@ func TestACopyRetargetedBetweenDispatchAndLaunchIsRefusedAndNotLaunched(t *testi
 // rewritten on the refusal path. The Cursor adapter is built here over the
 // stand-in's own arguments so nothing it could start is this test binary
 // running its tests again.
-func TestACursorOnlyPinRefusesWorkerLaunchWithRecordedReason(t *testing.T) {
+func TestACodexOnlyPinRefusesWorkerLaunchWithRecordedReason(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	agent := standin.New(t, standin.Script{})
@@ -227,12 +227,12 @@ func TestACursorOnlyPinRefusesWorkerLaunchWithRecordedReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cursor, err := agents.CursorFactory(agents.WithCursorBinary(self)).New(ctx, agent.Arguments())
+	codex, err := agents.CodexFactory(agents.WithCodexBinary(self)).New(ctx, agent.Arguments())
 	if err != nil {
-		t.Fatalf("building the cursor adapter over the stand-in: %v", err)
+		t.Fatalf("building the codex adapter over the stand-in: %v", err)
 	}
-	subject.service.catalog = agents.NewCatalog(fixedRunner{runner: cursor})
-	subject.service.cfg.Agent = []string{"cursor"}
+	subject.service.catalog = agents.NewCatalog(fixedRunner{runner: codex})
+	subject.service.cfg.Agent = []string{"codex"}
 	d, err := subject.service.dispatchTask(ctx, subject.task)
 	if err != nil {
 		t.Fatalf("dispatching: %v", err)

@@ -1618,4 +1618,13 @@ var schema = []migration{
 			`ALTER TABLE agent_invocation ADD COLUMN effort TEXT`,
 		},
 	},
+	{
+		version: 41,
+		name:    "task worker fallback selections",
+		statements: []string{
+			`CREATE TABLE task_agent_fallback (task_id TEXT PRIMARY KEY REFERENCES task(id), primary_agent TEXT NOT NULL, backup_agent TEXT NOT NULL, reason TEXT NOT NULL CHECK(reason IN ('quota','unavailable')), attempt INTEGER NOT NULL CHECK(attempt>0))`,
+			`CREATE TRIGGER task_fallback_no_update BEFORE UPDATE ON task_agent_fallback BEGIN SELECT RAISE(ABORT,'task fallback is sealed'); END`,
+			`CREATE TRIGGER task_fallback_no_delete BEFORE DELETE ON task_agent_fallback BEGIN SELECT RAISE(ABORT,'task fallback is sealed'); END`,
+		},
+	},
 }

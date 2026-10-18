@@ -301,18 +301,10 @@ func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, 
 		return reconcileDecision{action: reconcileNothing,
 			reason: "this platform has no process sweep, and its hold for a relaunch without one was answered not to retry it"}
 	}
-	if relaunches := max(len(attempts)-1, 0); relaunches >= bound {
-		past := fmt.Sprintf("it has been relaunched %d times and relaunch_attempts is %d", relaunches, bound)
-		switch answered.bound {
-		case boundRetry:
-			return reconcileDecision{action: reconcileRelaunch,
-				reason: past + ", and its hold at the bound was answered " + machine.AnswerRetry}
-		case boundStop:
-			return reconcileDecision{action: reconcileNothing,
-				reason: past + ", and its hold at the bound was answered not to retry it"}
-		}
-		return reconcileDecision{action: reconcileHold, surfaced: surfacedRelaunchBound, reason: past}
+	if decision, limited := relaunchBoundDecision(attempts, bound, answered); limited {
+		return decision
 	}
+
 	return reconcileDecision{action: reconcileRelaunch,
 		reason: fmt.Sprintf("its terminal is gone and it resolves %s from its %s", r.State, r.Source)}
 }
@@ -444,6 +436,9 @@ func (s *Service) launchInBackground(d dispatched) {
 		defer s.work.Done()
 		launched, err := s.launchTask(s.stopCtx, d)
 		if err != nil {
+			if _, selected, readErr := s.store.TaskFallback(s.stopCtx, d.id); readErr == nil && selected && s.stopCtx.Err() == nil {
+				err = s.holdWorkerFallbackAttempt(s.stopCtx, d.id, d.attempt, err)
+			}
 			s.log.Printf("task %s attempt %d was not launched: %v", d.id, d.attempt, err)
 			return
 		}
@@ -458,4 +453,22 @@ func (s *Service) launchInBackground(d dispatched) {
 // matched and stays queued.
 func supersededBy(w store.Wake, id, ref string) bool {
 	return w.TaskID == id && w.Kind == string(supervisor.KindTerminalGone) && terminalGoneAbout(w.Marker, ref)
+}
+
+// relaunchBoundDecision is shared by reconciliation and an explicit retry
+// after a backup failed before recording a session.
+func relaunchBoundDecision(attempts []store.TaskAttempt, bound int, answered relaunchAnswers) (reconcileDecision, bool) {
+	if relaunches := max(len(attempts)-1, 0); relaunches >= bound {
+		past := fmt.Sprintf("it has been relaunched %d times and relaunch_attempts is %d", relaunches, bound)
+		switch answered.bound {
+		case boundRetry:
+			return reconcileDecision{action: reconcileRelaunch,
+				reason: past + ", and its hold at the bound was answered " + machine.AnswerRetry}, true
+		case boundStop:
+			return reconcileDecision{action: reconcileNothing,
+				reason: past + ", and its hold at the bound was answered not to retry it"}, true
+		}
+		return reconcileDecision{action: reconcileHold, surfaced: surfacedRelaunchBound, reason: past}, true
+	}
+	return reconcileDecision{}, false
 }

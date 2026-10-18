@@ -198,3 +198,19 @@ func TestCodexRefusesUnsupportedEffortBeforeStarting(t *testing.T) {
 		t.Fatalf("unsupported effort: %v", err)
 	}
 }
+
+func TestCodexQuotaErrorHasATypedFallbackCategory(t *testing.T) {
+	factory := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t)), agents.WithCodexBaseEnvironment([]string{
+		helperModeVar + "=raw",
+		helperStdoutVar + "=" + `{"type":"error","message":"You've hit your usage limit. Try again later."}` + "\n",
+	}))
+	runner, err := factory.New(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.Run(t.Context(), agents.PurposeReview, invocation(t, agents.ShapeText, nil))
+	var failed *agents.InvocationError
+	if !errors.As(err, &failed) || failed.Failure != agents.FailureQuota || !agents.FallbackAllowed(err) {
+		t.Fatalf("quota category: %v", err)
+	}
+}

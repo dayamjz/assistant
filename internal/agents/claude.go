@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -376,6 +377,10 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	reference := ""
 	fail := func(res *procResult, category Failure, cause error, message string) (Result, string, error) {
 		record.Duration = time.Since(record.Started)
+		if message == "" && res != nil {
+			message = res.stderr
+		}
+		category = availabilityCategory(category, message)
 		record.Failure = category
 		r.report(record)
 		code := -1
@@ -604,11 +609,12 @@ func (r *claudeRunner) sweep(ctx context.Context, dir string) {
 // This describes what the adapter reads, not what the agent guarantees to
 // write. An envelope this adapter cannot read is FailureOutput.
 type claudeEnvelope struct {
-	Subtype   string `json:"subtype"`
-	IsError   bool   `json:"is_error"`
-	Result    string `json:"result"`
-	SessionID string `json:"session_id"`
-	Model     string `json:"model"`
+	Subtype   string   `json:"subtype"`
+	IsError   bool     `json:"is_error"`
+	Errors    []string `json:"errors"`
+	Result    string   `json:"result"`
+	SessionID string   `json:"session_id"`
+	Model     string   `json:"model"`
 	// Every count is a pointer so that a counter the agent omitted stays
 	// distinguishable from one it reported as zero. Decoding into a number
 	// would collapse the two here, where the difference is still knowable.
@@ -645,6 +651,9 @@ func reportedCount(n *int64) Count {
 // failureText is what the agent said about its own failure. It is content, so
 // it reaches an *InvocationError and never a Record.
 func (e claudeEnvelope) failureText() string {
+	if len(e.Errors) > 0 {
+		return strings.Join(e.Errors, "\n")
+	}
 	if e.Result != "" {
 		return e.Result
 	}
