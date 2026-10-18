@@ -100,7 +100,7 @@
 //
 // # The worker modes, and what a worker's Call proves
 //
-// A stand-in is started as a worker in one of three modes, each chosen by the
+// A stand-in is started as a worker in one of four modes, each chosen by the
 // command line the adapter built, which is what the wire carries.
 //
 // Stream mode is the Claude Code adapter's pipe worker: --print with --input-format
@@ -121,6 +121,17 @@
 // with three lines per turn where the CLI prints more kinds of line than
 // that; a reader of a worker's output that relied on exactly three would be
 // relying on the stand-in.
+//
+// App-server mode is the Codex adapter's pipe worker: the argument
+// app-server. NewCodex builds that adapter. The worker reads one JSON
+// message per line and answers a turn/start's text as Script.Worker says.
+// The frames are the ones Codex CLI 0.163.0 emitted for initialize,
+// thread/start, an in-progress turn/start result, item/completed
+// agentMessage, and thread/status/changed idle, recorded in
+// internal/agents/testdata. A command a Run exchange names is asked as
+// item/commandExecution/requestApproval and run only after accept. A
+// handshake that is not that recorded order is refused, so an adapter that
+// drifts from it fails here.
 //
 // Line mode is the scripted adapter's: no --print at all, and no screen
 // reader flag. NewWorker builds

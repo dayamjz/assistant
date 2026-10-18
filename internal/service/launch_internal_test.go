@@ -211,14 +211,14 @@ func TestACopyRetargetedBetweenDispatchAndLaunchIsRefusedAndNotLaunched(t *testi
 	}
 }
 
-// A Cursor-only operator pin refuses worker launch with a recorded
+// An OpenAI-only operator pin refuses worker launch with a recorded
 // route-refused event: the pin is Override, missing Need is
 // *agents.CapabilityError, the task resolves Failed rather than staying
 // Dispatched, and the attempt keeps no session and no route. Grants are not
-// rewritten on the refusal path. The Cursor adapter is built here over the
+// rewritten on the refusal path. The adapter is built here over the
 // stand-in's own arguments so nothing it could start is this test binary
 // running its tests again.
-func TestACodexOnlyPinRefusesWorkerLaunchWithRecordedReason(t *testing.T) {
+func TestAnOpenAIPinRefusesWorkerLaunchWithRecordedReason(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	agent := standin.New(t, standin.Script{})
@@ -227,12 +227,12 @@ func TestACodexOnlyPinRefusesWorkerLaunchWithRecordedReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	codex, err := agents.CodexFactory(agents.WithCodexBinary(self)).New(ctx, agent.Arguments())
+	openai, err := agents.OpenAIFactory(agents.WithOpenAIBinary(self)).New(ctx, agent.Arguments())
 	if err != nil {
-		t.Fatalf("building the codex adapter over the stand-in: %v", err)
+		t.Fatalf("building the openai adapter over the stand-in: %v", err)
 	}
-	subject.service.catalog = agents.NewCatalog(fixedRunner{runner: codex}, cursorFactory{runner: codex})
-	subject.service.cfg.Agent = []string{"codex"}
+	subject.service.catalog = agents.NewCatalog(fixedRunner{runner: openai}, cursorFactory{runner: openai})
+	subject.service.cfg.Agent = []string{"openai"}
 	d, err := subject.service.dispatchTask(ctx, subject.task)
 	if err != nil {
 		t.Fatalf("dispatching: %v", err)

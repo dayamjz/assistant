@@ -132,8 +132,9 @@ roles:
 ```
 
 The review uses a fresh context, separate from the fix role's session.
-Codex still declares no worker capability; this setting enables review,
-not task workers.
+Codex pipe workers are a separate `codex app-server` thread and are not
+that review session. Terminal workers are not declared, so a tmux session
+provider still refuses a Codex pin.
 
 ### Worker routing (GAP-02)
 

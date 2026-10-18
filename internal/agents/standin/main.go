@@ -77,6 +77,8 @@ func Main() {
 		return
 	}
 	switch {
+	case slices.Contains(args, "app-server"):
+		os.Exit(serveAppServer(control, args))
 	case slices.Contains(args, "acp"):
 		os.Exit(serveACP(control, args))
 	case interactiveArgs(args):

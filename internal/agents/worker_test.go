@@ -41,22 +41,22 @@ func awaitWorkerOutput(t *testing.T, w agents.Worker, want string) string {
 }
 
 // OpenWorker reads the declaration before the type, so a shipped adapter
-// that declares no worker sessions, the Codex one, is refused by name and no
+// that declares no worker sessions, the OpenAI one, is refused by name and no
 // process is started; and a stub that carries the mechanism without declaring
 // it is refused the same way rather than served.
 func TestOpenWorkerConsultsTheDeclarationBeforeTheMechanism(t *testing.T) {
-	codex, err := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t))).New(t.Context(), nil)
+	openai, err := agents.OpenAIFactory(agents.WithOpenAIBinary(helperBinary(t))).New(t.Context(), nil)
 	if err != nil {
-		t.Fatalf("building the codex adapter: %v", err)
+		t.Fatalf("building the openai adapter: %v", err)
 	}
-	_, err = agents.OpenWorker(t.Context(), codex, workerSpec(t))
+	_, err = agents.OpenWorker(t.Context(), openai, workerSpec(t))
 	var refusal *agents.CapabilityError
 	if !errors.As(err, &refusal) {
-		t.Fatalf("OpenWorker on the codex adapter answered %v, want a *CapabilityError", err)
+		t.Fatalf("OpenWorker on the openai adapter answered %v, want a *CapabilityError", err)
 	}
-	if refusal.Capability != agents.CapabilityWorkerSessions || refusal.Agent != agents.CodexName {
+	if refusal.Capability != agents.CapabilityWorkerSessions || refusal.Agent != agents.OpenAIName {
 		t.Errorf("the refusal names %q on %q, want %q on %q",
-			refusal.Capability, refusal.Agent, agents.CapabilityWorkerSessions, agents.CodexName)
+			refusal.Capability, refusal.Agent, agents.CapabilityWorkerSessions, agents.OpenAIName)
 	}
 
 	undeclared := &workerStubRunner{stubRunner: &stubRunner{name: "undeclared"}}
