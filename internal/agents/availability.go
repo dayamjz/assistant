@@ -74,6 +74,12 @@ func FallbackAllowed(err error) bool {
 // availabilityMessage recognizes the failure strings the supported CLIs
 // report. It is called only on an error envelope or a failed process's stderr,
 // never on successful output, file contents, or an ordinary transcript.
+//
+// A line matches a marker when the line is that marker, or starts with it
+// followed by a space, a period, or a colon. A shorter marker does not cover
+// a sentence that puts other words in front of the rest of it, so Claude's
+// monthly spend-limit sentence is its own quota marker rather than a match
+// for "you've hit your limit".
 func availabilityMessage(message string) Failure {
 	s := strings.ToLower(strings.TrimSpace(message))
 	for _, prefix := range []string{"error: ", "api error: "} {
@@ -103,7 +109,7 @@ func availabilityMessage(message string) Failure {
 	}
 	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimSpace(line)
-		for _, marker := range []string{"rate_limit_error", "rate_limit_exceeded", "429", "quota exceeded", "insufficient_quota", "usage limit reached", "your usage limit has been reached", "usage limit has been reached", "you've hit your usage limit", "you've hit your limit", "you have hit your limit", "you have hit your chatgpt usage limit", "you have hit your codex usage limit", "exceeded your current quota", "credit balance is too low"} {
+		for _, marker := range []string{"rate_limit_error", "rate_limit_exceeded", "429", "quota exceeded", "insufficient_quota", "usage limit reached", "your usage limit has been reached", "usage limit has been reached", "you've hit your usage limit", "you've hit your monthly spend limit", "you've hit your limit", "you have hit your limit", "you have hit your chatgpt usage limit", "you have hit your codex usage limit", "exceeded your current quota", "credit balance is too low"} {
 			if line == marker || strings.HasPrefix(line, marker+" ") || strings.HasPrefix(line, marker+".") || strings.HasPrefix(line, marker+":") {
 				return FailureQuota
 			}
