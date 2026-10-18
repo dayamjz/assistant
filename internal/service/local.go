@@ -73,8 +73,9 @@ import (
 //     recorded before the column existed, or promoted before promotion
 //     recorded a posture. Nothing writes one onto such a task afterwards.
 //   - Each push of a local task's branch offers its commit on a hold of its
-//     own, and an answer closes the oldest open one, so a worker that pushed
-//     twice is approved or stopped one offer at a time, oldest first.
+//     own. An answer that names one closes that offer. An answer that names
+//     none closes the offer when it is the only one open, and is refused
+//     while more than one is open, listing them.
 //   - Between the landing's move and its record a crash leaves the branch
 //     moved with no record; the hold stays open, and an approve answered
 //     again is refused as moved, because the anchor no longer describes the

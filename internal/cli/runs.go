@@ -53,7 +53,8 @@ import (
 // reaches from a checkout of the task's branch, so a coordinator answers a
 // task's run without checking that branch out anywhere. --hold names which
 // of the task's own holds to close (full key, or a finding id under the
-// task); without it the oldest open one is answered. --run with --task
+// task); without it the only open one is answered, and more than one open
+// is refused and listed. --run with --task
 // answers the task's current run even while the task still has holds of its
 // own open, so a promoted delivery run is reachable without first clearing
 // every report hold. It is read only with --answer or --standing-consent,
@@ -91,7 +92,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&task, "task", "", "with --answer: the task whose hold is answered, or with none of its own open, the hold on the task's current run; "+
 			"with --standing-consent: the task whose current run is put under standing consent")
 		set.StringVar(&hold, "hold", "", "with --task --answer: which of the task's own holds to close "+
-			"(the hold's key, or a finding id under that task); without it the oldest open one is answered")
+			"(the hold's key, or a finding id under that task); without it the only open one is answered, and more than one open is refused")
 		set.BoolVar(&targetRun, "run", false, "with --task --answer: answer the task's current run even while "+
 			"the task still has holds of its own open")
 		set.Var(&cancel, cancelFlagName, "end this branch's run, wherever it stands; written --"+cancelFlagName+

@@ -89,7 +89,8 @@ assistant --task ID --run --answer TEXT
 ```
 
 `--hold` names which open hold to close (the hold's key, or a finding id under
-that task); without it the oldest open one is answered. `--note` records free
+that task); without it the only open one is answered, and more than one open
+is refused and listed. `--note` records free
 text with the resolution about what was decided; who decided stays the surface,
 never a claim made by the note. `--run` answers the task's current run even
 while the task still has holds of its own open, so a promoted delivery run is

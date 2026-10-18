@@ -245,8 +245,9 @@ type RespondRequest struct {
 // task rather than a run: a task past relaunch_attempts, a relaunch refused
 // because the platform has no process sweep, or a decision an
 // investigation's report registered. Without Hold, the hold answered is the
-// oldest one open that names the task and no run; with Hold set, that hold
-// is named (full key, or a finding id resolved under the task).
+// only one open that names the task and no run; when more than one is open
+// the answer is refused and lists them. With Hold set, that hold is named
+// (full key, or a finding id resolved under the task).
 //
 // It carries no field saying who answered, on RespondRequest's terms: who
 // resolved a hold is derived from the surface by internal/ipc's
@@ -255,8 +256,9 @@ type TaskRespondRequest struct {
 	// Task is the task whose hold is answered.
 	Task string `json:"task"`
 	// Hold names which open hold to close: the hold's full key, or a
-	// finding id that resolves to task/<Task>/finding/<id>. Empty means the
-	// oldest open hold naming the task and no run.
+	// finding id that resolves to task/<Task>/finding/<id>. Empty answers
+	// the only open hold naming the task and no run, and is refused when
+	// more than one is open.
 	Hold string `json:"hold,omitempty"`
 	// Answer is what was decided. A relaunch hold, the one the relaunch
 	// bound raised or the one a relaunch with no process sweep raised,

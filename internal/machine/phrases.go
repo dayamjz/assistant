@@ -281,6 +281,14 @@ var (
 		Consequence: "Nothing changed.",
 		Decision:    "Read where the work stands with assistant tasks, and answer when it waits on you.",
 	}
+	// PhraseSeveralHoldsUnnamed is the row for an answer that named no
+	// decision when the task has more than one of its own open. The keys
+	// and finding ids are the refusal's, not this row's.
+	PhraseSeveralHoldsUnnamed = Phrase{
+		Outcome:     "Nothing was answered, because more than one decision is open and the answer named none of them.",
+		Consequence: "Every one of them stays open.",
+		Decision:    "Name the one to answer with --hold. The refusal lists each one.",
+	}
 )
 
 // NoWordYet is the row for a task whose newest history entry is a note the
@@ -1604,7 +1612,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
-	out = append(out, phraseTaskHeld, NoWordYet, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting)
+	out = append(out, phraseTaskHeld, NoWordYet, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
 	for _, outcome := range Outcomes() {
 		if p, ok := phraseByOutcome[outcome]; ok {
 			out = append(out, p)
