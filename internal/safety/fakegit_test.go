@@ -38,6 +38,8 @@ type fakeGit struct {
 	// mergeBaseErr and commitsErr fail those comparisons when set.
 	mergeBaseErr error
 	commitsErr   error
+	// resolveCommitErr fails every ResolveCommit when set.
+	resolveCommitErr error
 	// incorporated is the answer Incorporated gives once both sides resolve,
 	// and incorporatedErr fails it instead when set. The real mechanism
 	// returns an answer or an error wrapping vcs.ErrInconclusive and never
@@ -150,6 +152,9 @@ func matchesTail(name, pattern string) bool {
 }
 
 func (f *fakeGit) ResolveCommit(_ context.Context, rev string) (string, error) {
+	if f.resolveCommitErr != nil {
+		return "", f.resolveCommitErr
+	}
 	commit, ok := f.revs[rev]
 	if !ok {
 		commit = rev

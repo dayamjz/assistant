@@ -130,13 +130,15 @@ func (g *Guard) Incorporation(ctx context.Context, commits []string, into string
 	}
 	tip, err := g.git.ResolveCommit(ctx, into)
 	if err != nil {
-		return refuse("the tip "+into+" does not resolve locally, so nothing can be checked against it", err)
+		return refuse(resolveCommitDetail("the tip "+into, "locally", err,
+			"so nothing can be checked against it"), err)
 	}
 	ids := make([]string, 0, len(commits))
 	for _, c := range commits {
 		id, err := g.git.ResolveCommit(ctx, c)
 		if err != nil {
-			return refuse("the commit "+c+" does not resolve locally, so whether it is in "+tip+" cannot be checked", err)
+			return refuse(resolveCommitDetail("the commit "+c, "locally", err,
+				"so whether it is in "+tip+" cannot be checked"), err)
 		}
 		ids = append(ids, id)
 	}

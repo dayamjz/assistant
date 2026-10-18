@@ -192,6 +192,9 @@ func TestInitOffersTheCommandsACheckoutDeclaresAndWritesNothingWithoutConsent(t 
 			}
 
 			plain := run(t, h, subject, "init")
+			if plain.code != machine.ExitOK {
+				t.Fatalf("init exited %s:\n%s%s", plain.code, plain.stdout, plain.stderr)
+			}
 			if !strings.Contains(plain.stdout, machine.CommandsPhrase(answer).String()) ||
 				!strings.Contains(plain.stdout, machine.PhraseNoProseCommand.String()) {
 				t.Errorf("init does not read the offer out:\n%s", plain.stdout)
