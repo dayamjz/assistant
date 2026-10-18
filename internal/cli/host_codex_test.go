@@ -225,14 +225,17 @@ func TestHostStopBlocksCodexTurnEndWhenNothingWatches(t *testing.T) {
 
 	got := hostStopWith(t, h, nil, strings.NewReader(codexTurnEnd(t, false)), "--json")
 	answer := decodeHostStop(t, got)
-	if answer.Allowed || answer.ReEntered || got.code == machine.ExitOK {
-		t.Fatalf("the answer is %+v and exited %s, want blocked", answer, got.code)
+	if answer.Allowed || answer.ReEntered || got.code != machine.ExitUsage {
+		t.Fatalf("the answer is %+v and exited %s, want blocked with status 2", answer, got.code)
 	}
 	if !strings.HasPrefix(got.stderr, machine.PhraseTurnBlocked) {
 		t.Fatalf("standard error does not say the turn cannot end:\n%s", got.stderr)
 	}
 	vocabtest.Assert(t, got.stderr)
 	plain := hostStopWith(t, h, nil, strings.NewReader(codexTurnEnd(t, false)))
+	if plain.code != machine.ExitUsage {
+		t.Fatalf("blocked codex stop exited %s, want status 2:\n%s%s", plain.code, plain.stdout, plain.stderr)
+	}
 	if plain.stdout != "" {
 		t.Fatalf("blocked codex stop wrote %q on standard output, want nothing for the host hook", plain.stdout)
 	}

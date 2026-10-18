@@ -311,10 +311,7 @@ func TestAWorkerReportsBackThroughTheRouteItsGrantAllows(t *testing.T) {
 		t.Fatalf("with the report's decisions open the task reads %s from %s, want held", held.State.State, held.State.Source)
 	}
 	for _, hold := range holds {
-		got := run(t, h, subject, "--json", "--task", id, "--hold", hold.Key, "--answer", "approved")
-		if got.code != machine.ExitOK {
-			t.Fatalf("answering hold %s exited %s:\n%s%s", hold.Key, got.code, got.stdout, got.stderr)
-		}
+		answerNamedTask(t, h, subject, id, hold.Key, "approved")
 	}
 	// The worker still runs, and the stored report outranks its live
 	// terminal.
