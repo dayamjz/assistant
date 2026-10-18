@@ -103,6 +103,11 @@ var (
 		Consequence: "Nothing was written, so the file is as it was; adding a second check would judge another binary or another home.",
 		Decision:    "Decide which of the two the host should run, edit the file yourself, and run this again with --write if you still want the line below.",
 	}
+	phraseHostInstallAsync = Phrase{
+		Outcome:     "The line was not added, because the settings file named below already runs this program's turn-end check in the background, and a background check cannot keep the turn open.",
+		Consequence: "Nothing was written, so the file is as it was.",
+		Decision:    "Edit that check so it is not marked to run in the background, and run this again with --write if you still want the line below.",
+	}
 	phraseHostInstallUnreadable = Phrase{
 		Outcome:     "The line was not added, because the settings file named below could not be read as settings the line can be merged into.",
 		Consequence: "Nothing was written, so the file is as it was.",
@@ -131,6 +136,9 @@ func HostInstallPhrase(h HostInstall) Phrase {
 	}
 	switch h.Refusal {
 	case HostInstallConflict:
+		if h.Command != "" && h.Conflict == h.Command {
+			return phraseHostInstallAsync
+		}
 		return phraseHostInstallConflict
 	case HostInstallChanged:
 		return phraseHostInstallChanged
@@ -1574,7 +1582,8 @@ var PhraseNoReading = Phrase{
 // NoWordYet, the local landing row and the two rows for an answer given a
 // task that reached no decision, a row per outcome and the three OutcomeExecuting splits into,
 // the three hold rows (open, answered, and open naming a task), the six
-// rows for an answer to a task's hold and the two cleanup rows, the
+// rows for an answer to a task's hold and the two cleanup rows, the row for
+// a turn-end check that would run in the background, the
 // stream's four, the status rows, and the rows for the rest of the command
 // surface: a decision and a fix round's offer, a row per doctor check and
 // result and the verdict, the service lifecycle, the two rows for a command
@@ -1607,6 +1616,7 @@ func TablePhrases() []Phrase {
 	for _, refusal := range HostInstallRefusals() {
 		out = append(out, HostInstallPhrase(HostInstall{Result: HostInstallRefused, Refusal: refusal}))
 	}
+	out = append(out, phraseHostInstallAsync)
 	for _, state := range taskstate.States() {
 		if p, ok := phraseByState[state]; ok {
 			out = append(out, p)

@@ -137,8 +137,8 @@ func TestHostInstallWritesNothingWithoutTheExplicitFlag(t *testing.T) {
 		t.Fatalf("the default created the host's settings directory: %v", err)
 	}
 	asDocument := decodeInstall(t, i.run(t, i.env(), "--json"))
-	if asDocument.Result != machine.HostInstallPrinted || asDocument.Settings != i.settings() || asDocument.Command != i.command() {
-		t.Fatalf("the default answered %+v, want the line for %s printed", asDocument, i.settings())
+	if asDocument.Result != machine.HostInstallPrinted || asDocument.Settings != i.settings() || asDocument.Command != i.command() || asDocument.Host != "claude" {
+		t.Fatalf("the default answered %+v, want the line for %s printed for claude", asDocument, i.settings())
 	}
 	// The line is the settings document the host needs, holding exactly the
 	// one entry, and it is printed as it is, after the file it belongs in.

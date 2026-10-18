@@ -36,8 +36,11 @@ never from anything the caller sends. A refusal of that kind arrives as code
   to start or restart the service. Do not create work while it is not live.
 - The stop guard keeps your turn from ending while work is under way and
   nothing is watching it. `assistant host install` prints the line your host
-  needs, and `assistant host install --write` adds it. Ask the user before
-  writing it.
+  needs, and `assistant host install --write` adds it. For Codex use
+  `--host codex` (writes `~/.codex/hooks.json` or `$CODEX_HOME/hooks.json`);
+  the default `--host claude` writes Claude Code's settings. A Codex hook
+  written this way does not run until you review that exact hook in `/hooks`
+  and trust it. Ask the user before writing it.
 
 ## Create a task
 

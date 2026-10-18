@@ -63,14 +63,15 @@ const HostReentryVar = "ASSISTANT_HOST_REENTRY"
 // hostReentryField is the re-entry signal as the coordinator's host
 // hostInstall configures puts it on the hook's standard input: a JSON object
 // whose stop_hook_active member is true. The name and its meaning are what
-// that host documents about itself, not something this package verified by
-// running it: the 2.1.299 build of Claude Code carries, among its own
-// messages, "For Stop/SubagentStop hooks, check stop_hook_active in the input
-// and return success while it's true", and its documentation's "Hook Input
-// (stdin JSON)" heading says where a command hook's input arrives; the Agent
-// SDK for Python, 0.2.159, declares StopHookInput with "stop_hook_active:
-// bool". The owner's decision on #95 is that this member is re-entry, read
-// exactly as HostReentryVar is.
+// both Claude Code and the Codex CLI document for their Stop hooks, not
+// something this package verified by running them: the 2.1.299 build of
+// Claude Code carries, among its own messages, "For Stop/SubagentStop hooks,
+// check stop_hook_active in the input and return success while it's true",
+// and its documentation's "Hook Input (stdin JSON)" heading says where a
+// command hook's input arrives; the Agent SDK for Python, 0.2.159, declares
+// StopHookInput with "stop_hook_active: bool"; Codex names the same member on
+// Stop input in its hook documentation. The owner's decision on #95 is that
+// this member is re-entry, read exactly as HostReentryVar is.
 //
 // That gives the member a gap the variable does not have. Nothing the host
 // documents says the member names which hook blocked, so a turn another
@@ -139,7 +140,7 @@ var hostHooks = []struct {
 	run     func(context.Context, *invocation) (any, error)
 }{
 	{"stop", true, "Decide whether the coordinator's turn may end, from the hook the host fires at turn end.", hostStop},
-	{"install", false, "Print the line the host's settings need to run stop; --write adds it to that file.", hostInstall},
+	{"install", false, "Print the line the host's settings need to run stop; --host names claude or codex; --write adds it to that file.", hostInstall},
 }
 
 // hostVerb runs the hook subcommand the command line names, which has to be
