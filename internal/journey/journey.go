@@ -279,11 +279,15 @@ func (j *Journey) WriteConfiguration(document map[string]any) error {
 		whole["agent"] = entry
 	}
 	// The product default fixer is cursor. This harness's stand-in is the
-	// claude shim, so a document that does not name roles pins the fixer to
-	// that shim. The default would start whatever cursor is on the machine.
+	// service agent: the claude shim plus the arguments the stand-in reports.
+	// A role that names an agent starts that agent with no arguments, and the
+	// shim exits unprepared without those arguments, so a document that does
+	// not name roles opts the fix role out of the default. Naming no agent is
+	// what keeps fix rounds on the service agent. The default would start
+	// whatever cursor is on the machine.
 	if _, taken := whole["roles"]; !taken {
 		whole["roles"] = map[string]any{
-			"fix": map[string]any{"agent": AgentShimName},
+			"fix": map[string]any{},
 		}
 	}
 	body, err := json.Marshal(whole)
