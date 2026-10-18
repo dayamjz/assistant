@@ -260,6 +260,10 @@ effort. A missing executable or a recognized quota/authentication/service
 failure reaches that backup. Ordinary errors, invalid reports, cancellation,
 deadlines, context exhaustion, invalid settings, and missing capabilities
 refuse rather than changing agents. Unknown quota wording also refuses.
+Claude's monthly spend-limit sentence is a quota line. A line is recognized
+when it is a known line, or begins with one and then a space, a period, or a
+colon. The shorter limit sentence does not cover the monthly spend-limit
+sentence, and a mention later in a line stays unrecognized.
 There is no dependency on a quota-reporting CLI or live quota polling.
 
 ```yaml

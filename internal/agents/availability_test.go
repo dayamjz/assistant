@@ -17,6 +17,8 @@ func TestWorkerAvailabilityNeedsAnExplicitError(t *testing.T) {
 		want       agents.Failure
 	}{
 		{"quota", `{"type":"result","is_error":true,"errors":["You've hit your limit. Resets tomorrow."]}` + "\n", agents.FailureQuota},
+		{"spend", `{"type":"result","is_error":true,"result":"You've hit your monthly spend limit. Resets Monday."}` + "\n", agents.FailureQuota},
+		{"spend-later", `{"type":"result","is_error":true,"result":"see you've hit your monthly spend limit in the notes"}` + "\n", agents.FailureNone},
 		{"rejected", `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}` + "\n" + `{"type":"result","is_error":true,"result":"error_during_execution"}` + "\n", agents.FailureQuota},
 		{"success", `{"type":"result","is_error":false,"result":"quota exceeded"}` + "\n", agents.FailureNone},
 		{"unrelated-error", `{"type":"result","is_error":true,"result":"could not read quota exceeded.md"}` + "\n", agents.FailureNone},
