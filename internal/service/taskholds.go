@@ -792,6 +792,10 @@ func severalHoldsUnnamed(taskID string, holds []store.Hold) error {
 // task. An empty Hold answers the only such hold, and is
 // ipc.ErrInvalidRequest when more than one is open. A named hold that is
 // missing, closed, names another task, or names a run is ipc.ErrInvalidRequest.
+//
+// docs/prd.html still says that without --hold the oldest open hold is
+// answered. Issue #331's owner chose this refusal instead. That document
+// was not changed.
 func (s *Service) taskHoldToAnswer(ctx context.Context, taskID, holdFlag string) (store.Hold, error) {
 	name := strings.TrimSpace(holdFlag)
 	if name == "" {
