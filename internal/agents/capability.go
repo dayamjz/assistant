@@ -45,6 +45,8 @@ const (
 	// The Claude Code adapter declares it, over the CLI's stream-json input
 	// mode, and the scripted adapter the tests run against declares it over
 	// plain lines. Cursor declares it over ACP session/prompt messages.
+	// Codex declares it over the app-server protocol recorded from CLI
+	// 0.163.0: initialize, initialized, thread/start, and turn/start.
 	// The conformance suite holds these declarations to the
 	// mechanism against the stand-in, which is all it can hold them to: the
 	// package documentation states what that does not establish about the

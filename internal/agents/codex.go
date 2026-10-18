@@ -172,11 +172,15 @@ func (r *codexRunner) Name() string { return CodexName }
 // arguments and invoke build, and the Fixer method below is what makes that
 // reachable.
 //
+// Worker sessions are declared because Start runs `codex app-server` and
+// speaks the pipe protocol recorded from CLI 0.163.0. That thread is not
+// the fixer session. Terminal workers are not declared.
+//
 // Instruction suppression is not declared, because nothing here implements
 // it. Leaving it undeclared is what lets internal/pipeline refuse a run that
 // asks for suppression against this adapter before it launches one.
 func (r *codexRunner) Capabilities() Capabilities {
-	return Declare(CapabilityResumableSessions)
+	return Declare(CapabilityResumableSessions, CapabilityWorkerSessions)
 }
 
 // Run executes one invocation with no session. It resumes nothing, and the
@@ -409,7 +413,10 @@ func (r *codexRunner) arguments(grant Grant, inv Invocation, resume string) []st
 //     review rather than being denied outright, and this package does not pass
 //     --dangerously-bypass-approvals-and-sandbox (reserved; wider than an
 //     edit grant).
-//   - GrantWorker is GrantRead's: this adapter declares no worker capability.
+//   - GrantWorker is not a flag on this command line. A pipe worker's
+//     app-server thread is started workspace-write with on-request approval,
+//     and codexworker.go decides each approval. `codex exec` is review and
+//     fix, which are never GrantWorker.
 //
 // An unrecognized grant is GrantRead's.
 func codexGrantFlags(g Grant) []string {

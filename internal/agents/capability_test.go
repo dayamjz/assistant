@@ -566,14 +566,15 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 		t.Errorf("the cursor adapter declares %v, want exactly %v", got, wantCursor)
 	}
 
-	// Verify Codex declares resumable sessions
+	// Verify Codex declares resumable sessions and pipe workers, and not
+	// terminal workers.
 	codexFactory := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t)))
 	codex, err := codexFactory.New(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("codex factory failed: %v", err)
 	}
 	codexDeclared := codex.Capabilities()
-	wantCodex := []agents.Capability{agents.CapabilityResumableSessions}
+	wantCodex := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}
 	if got := codexDeclared.List(); !slices.Equal(got, wantCodex) {
 		t.Errorf("the codex adapter declares %v, want exactly %v", got, wantCodex)
 	}
@@ -835,5 +836,10 @@ func TestListIsStableWhateverOrderWasDeclared(t *testing.T) {
 
 func TestCursorWorkerCapabilityConformsThroughACP(t *testing.T) {
 	agent := standin.NewCursor(t, standin.Script{})
+	conform(t, agent.Runner())
+}
+
+func TestCodexWorkerCapabilityConformsThroughAppServer(t *testing.T) {
+	agent := standin.NewCodex(t, standin.Script{})
 	conform(t, agent.Runner())
 }
