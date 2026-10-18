@@ -22,6 +22,7 @@ import (
 // custody of the same copy. An uncommitted file survives the handoff, and the
 // second attempt records Cursor rather than attributing its work to Claude.
 func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
+	requireSweepClearsHere(t, "that a quota handoff relaunches the backup in the same copy")
 	principles.Cite(t, principles.P6)
 	primary := standin.New(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{{Contains: "work", Recorded: []string{`{"type":"result","is_error":true,"result":"quota exceeded"}`}}}}})
 	backup := standin.NewCursor(t, standin.Script{})
@@ -74,6 +75,63 @@ func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
 	f, has, err := s.store.TaskFallback(t.Context(), sub.task)
 	if err != nil || !has || f.Reason != "quota" {
 		t.Fatalf("handoff record %+v %v %v", f, has, err)
+	}
+}
+
+// A sweep that cannot prove the copy empty must not turn a quota handoff
+// into a hold. The backup was not asked. A hold would resolve the task as
+// held, and the next start would leave it there instead of trying the backup
+// once a sweep can clear.
+func TestABlockedSweepLeavesAQuotaHandoffRetryable(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	primary := standin.New(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{{Contains: "work", Recorded: []string{`{"type":"result","is_error":true,"result":"quota exceeded"}`}}}}})
+	backup := standin.NewCursor(t, standin.Script{})
+	sub := newLaunchSubject(t, primary)
+	s := sub.service
+	s.catalog = agents.NewCatalog(fixedRunner{runner: primary.Runner()}, fixedRunner{runner: backup.Runner()})
+	s.cfg.Roles = config.Roles{config.RoleWorker: {Agent: "claude", Fallback: &config.Role{Agent: "cursor"}}}
+	s.terminals = heldTerminals{s}
+	s.stopCtx, s.stopCancel = context.WithCancel(t.Context())
+	t.Cleanup(func() { s.stopCancel(); s.stopWork(); s.work.Wait() })
+	d, err := s.dispatchTask(t.Context(), sub.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.sweepCopy = func(context.Context, string) (agents.SweepResult, error) {
+		return agents.SweepResult{}, nil
+	}
+	if _, err = s.launchTask(t.Context(), d); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		f, has, readErr := s.store.TaskFallback(t.Context(), sub.task)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if has && f.Reason == "quota" {
+			if _, _, held := s.sessionOf(sub.task); !held {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the quota handoff was not recorded")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	hold, err := s.store.Hold(t.Context(), workerFallbackHoldKey(sub.task, d.attempt))
+	if err == nil && hold.Open() {
+		t.Fatalf("a sweep that did not clear opened %s", hold.Key)
+	}
+	attempts, err := s.store.TaskAttempts(t.Context(), sub.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("attempts = %d, want the primary only", len(attempts))
+	}
+	if len(backup.Calls()) != 0 {
+		t.Fatal("the backup was started without a sweep that cleared")
 	}
 }
 
