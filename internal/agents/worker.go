@@ -153,7 +153,9 @@ type Worker interface {
 	// messages belong to the adapter, not to the caller.
 	// It returns once the text has been written, or ErrWorkerEnded when the
 	// process is no longer running, so nothing is reported delivered to a
-	// process that is gone. ctx bounds the wait: a worker that is not
+	// process that is gone. A Codex turn returns when turn/start is
+	// accepted, not when that turn goes idle; the next Send waits for the
+	// idle before it writes. ctx bounds the wait: a worker that is not
 	// reading its input holds the write until it does, and a caller that
 	// cannot wait that long ends its wait through ctx.
 	//

@@ -194,7 +194,10 @@ func (w *codexWorker) failure(message string) error {
 	return &WorkerError{Agent: CodexName, Failure: category, Message: message}
 }
 
-// Send queues one turn, preserving its order even if the caller stops waiting for the write.
+// Send writes one turn/start and returns when that request is accepted.
+// The turn's idle arrives later. The next Send waits for it before writing,
+// so two turns do not overlap, and a caller that stops waiting is not told
+// the text was refused after the server has already taken it.
 func (w *codexWorker) Send(ctx context.Context, text string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -210,6 +213,9 @@ func (w *codexWorker) Send(ctx context.Context, text string) error {
 		return ErrWorkerEnded
 	}
 	defer func() { <-w.send }()
+	if err := w.finishTurn(ctx); err != nil {
+		return err
+	}
 	w.mu.Lock()
 	w.awaitingIdle = true
 	w.mu.Unlock()
@@ -225,14 +231,25 @@ func (w *codexWorker) Send(ctx context.Context, text string) error {
 		params["effort"] = w.effort
 	}
 	if _, err := w.call(ctx, "turn/start", params); err != nil {
-		w.mu.Lock()
-		w.awaitingIdle = false
-		w.mu.Unlock()
+		w.stopWaiting()
+		return err
+	}
+	return nil
+}
+
+// finishTurn waits for the turn a previous Send accepted. A turn that is
+// already idle has cleared awaitingIdle and left its signal buffered, and
+// that signal is drained so it cannot finish a later turn.
+func (w *codexWorker) finishTurn(ctx context.Context) error {
+	w.mu.Lock()
+	waiting := w.awaitingIdle
+	w.mu.Unlock()
+	if !waiting {
 		select {
 		case <-w.idle:
 		default:
 		}
-		return err
+		return nil
 	}
 	select {
 	case <-w.idle:
@@ -244,11 +261,27 @@ func (w *codexWorker) Send(ctx context.Context, text string) error {
 	}
 }
 
+func (w *codexWorker) stopWaiting() {
+	w.mu.Lock()
+	w.awaitingIdle = false
+	w.mu.Unlock()
+	select {
+	case <-w.idle:
+	default:
+	}
+}
+
 func (w *codexWorker) emitText(text string) {
 	if text == "" {
 		return
 	}
-	encoded := []byte(text)
+	encoded, err := json.Marshal(map[string]any{
+		"type":    "assistant",
+		"message": map[string]any{"content": []any{map[string]string{"type": "text", "text": text}}},
+	})
+	if err != nil {
+		return
+	}
 	w.availability.observe(encoded)
 	_, _ = w.out.Write(append(encoded, '\n'))
 }

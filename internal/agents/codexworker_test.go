@@ -46,6 +46,52 @@ func TestCodexAppServerWorkerPreservesMessagesAndProcess(t *testing.T) {
 	if group <= 0 || worker.Group() != group {
 		t.Fatal("worker process changed between messages")
 	}
+	transcript := agents.ReadTranscript(worker.Capture().Text, agents.OutputStreamJSON, false)
+	var saw bool
+	for _, event := range transcript.Events {
+		if event.Kind == agents.TranscriptUnrecognized {
+			t.Fatalf("a worker reply was unrecognized: %+v", event)
+		}
+		if event.Text == "second response" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("the transcript of %q has no second response", worker.Capture().Text)
+	}
+}
+
+func TestCodexWorkerJSONReplyStaysText(t *testing.T) {
+	const reply = `{"ok":true}`
+	agent := standin.NewCodex(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{{Contains: "json", Reply: reply}}}})
+	worker, err := agents.OpenWorker(t.Context(), agent.Runner(), agents.WorkerSpec{Dir: t.TempDir(), Instructions: "initial"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	if err = worker.Send(t.Context(), "json please"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(worker.Capture().Text, `ok`) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the JSON reply never arrived: %s", worker.Capture().Text)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	transcript := agents.ReadTranscript(worker.Capture().Text, agents.OutputStreamJSON, false)
+	var saw bool
+	for _, event := range transcript.Events {
+		if event.Kind == agents.TranscriptUnrecognized {
+			t.Fatalf("the JSON reply was unrecognized: %+v\n%s", event, worker.Capture().Text)
+		}
+		if event.Kind == agents.TranscriptText && event.Text == reply {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("the transcript of %q did not keep the JSON reply as text", worker.Capture().Text)
+	}
 }
 
 func TestCodexAppServerPermissionRepliesAreAppliedOnTheWire(t *testing.T) {

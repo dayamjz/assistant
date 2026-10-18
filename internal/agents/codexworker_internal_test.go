@@ -41,8 +41,18 @@ func TestRecordedCodexAppServerFramesDriveTheWorker(t *testing.T) {
 	if thread == "" {
 		t.Fatal("the recorded thread/start result carried no thread id")
 	}
-	if got := w.Capture().Text; got != "ready\n" {
-		t.Fatalf("the recorded agent message captured %q, want %q", got, "ready\n")
+	transcript := ReadTranscript(w.Capture().Text, OutputStreamJSON, false)
+	var saw bool
+	for _, event := range transcript.Events {
+		if event.Kind == TranscriptUnrecognized {
+			t.Fatalf("the recorded reply was unrecognized: %+v", event)
+		}
+		if event.Kind == TranscriptText && event.Text == "ready" {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("the recorded agent message captured %q, want assistant text ready", w.Capture().Text)
 	}
 	select {
 	case <-w.idle:
