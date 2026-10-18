@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/principles"
@@ -57,9 +58,21 @@ func TestIncorporationFailsClosedOnAnUnreadableFact(t *testing.T) {
 	g := safety.New(incorporationGit())
 	if r := refusedIncorporation(t, g, []string{"feature"}, "nowhere"); !errors.Is(r, vcs.ErrRefNotFound) {
 		t.Errorf("an unresolvable tip: cause %v, want ErrRefNotFound", r.Cause)
+	} else if !strings.Contains(r.Detail, "does not resolve locally") {
+		t.Errorf("an unresolvable tip: detail %q, want it to say the tip does not resolve locally", r.Detail)
 	}
 	if r := refusedIncorporation(t, g, []string{"f1", "ghost"}, "main"); !errors.Is(r, vcs.ErrRefNotFound) {
 		t.Errorf("an unresolvable commit: cause %v, want ErrRefNotFound", r.Cause)
+	} else if !strings.Contains(r.Detail, "does not resolve locally") {
+		t.Errorf("an unresolvable commit: detail %q, want it to say the commit does not resolve locally", r.Detail)
+	}
+
+	unreadable := incorporationGit()
+	unreadable.resolveCommitErr = errBroken
+	if r := refusedIncorporation(t, safety.New(unreadable), []string{"feature"}, "main"); !errors.Is(r, errBroken) {
+		t.Errorf("a tip that could not be read: cause %v, want the git failure", r.Cause)
+	} else if !strings.Contains(r.Detail, "could not be read") || strings.Contains(r.Detail, "does not resolve") {
+		t.Errorf("a tip that could not be read: detail %q, want it to say the tip could not be read", r.Detail)
 	}
 	if r := refusedIncorporation(t, g, nil, "main"); r.Cause != nil {
 		t.Errorf("an empty commit set: cause %v, want none", r.Cause)

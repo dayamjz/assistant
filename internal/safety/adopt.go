@@ -139,11 +139,13 @@ func (a *Adoption) Prove(ctx context.Context, target Target, current, proposed s
 	}
 	cur, err := a.git.ResolveCommit(ctx, current)
 	if err != nil {
-		return refuse(ReasonUnverifiable, "the branch's commit "+current+" does not resolve here, so its content cannot be compared", err)
+		return refuse(ReasonUnverifiable, resolveCommitDetail("the branch's commit "+current, "here", err,
+			"so its content cannot be compared"), err)
 	}
 	prop, err := a.git.ResolveCommit(ctx, proposed)
 	if err != nil {
-		return refuse(ReasonUnverifiable, "the proposed commit "+proposed+" does not resolve here, so its content cannot be compared", err)
+		return refuse(ReasonUnverifiable, resolveCommitDetail("the proposed commit "+proposed, "here", err,
+			"so its content cannot be compared"), err)
 	}
 	bases, err := a.git.MergeBases(ctx, cur, prop)
 	switch {

@@ -165,8 +165,9 @@ func (g *Guard) Decide(ctx context.Context, u Update) (Decision, error) {
 			Reason: ReasonUnverifiable,
 			Target: u.Target,
 			Anchor: u.Anchor,
-			Detail: "the proposed commit " + u.Proposed + " does not resolve locally, so what it contains cannot be established",
-			Cause:  err,
+			Detail: resolveCommitDetail("the proposed commit "+u.Proposed, "locally", err,
+				"so what it contains cannot be established"),
+			Cause: err,
 		}
 	}
 

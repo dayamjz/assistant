@@ -398,6 +398,42 @@ func TestDecideRefusesAProposedCommitThatDoesNotResolve(t *testing.T) {
 	if !errors.Is(refusal, vcs.ErrRefNotFound) {
 		t.Fatalf("refusal = %v, want it to carry vcs.ErrRefNotFound", refusal)
 	}
+	if !strings.Contains(refusal.Detail, "does not resolve locally") {
+		t.Fatalf("Detail = %q, want it to say the commit does not resolve locally", refusal.Detail)
+	}
+	if strings.Contains(refusal.Detail, "could not be read") {
+		t.Fatalf("Detail = %q, want a missing revision named as unresolvable, not unreadable", refusal.Detail)
+	}
+}
+
+// A rev-parse that fails for a reason other than a missing revision is
+// reported as unreadable, not as a revision that does not resolve.
+func TestDecideRefusesAProposedCommitThatCouldNotBeRead(t *testing.T) {
+	t.Parallel()
+	git := &fakeGit{
+		parents:    linear("c1", "c2"),
+		advertised: map[string][][]advert{remote: {{branch(ref, "c2")}}},
+		resolveCommitErr: &vcs.CommandError{
+			Op:       "resolve-commit",
+			ExitCode: 128,
+			Stderr:   "fatal: unable to read tree",
+		},
+	}
+	guard := safety.New(git)
+	obs := observe(t, guard)
+	refusal := refusalFor(t, guard, safety.Update{Target: target, Proposed: "c2", Anchor: obs})
+	if refusal.Reason != safety.ReasonUnverifiable {
+		t.Fatalf("Reason = %v, want %v", refusal.Reason, safety.ReasonUnverifiable)
+	}
+	if errors.Is(refusal, vcs.ErrRefNotFound) {
+		t.Fatalf("refusal = %v, want a git failure rather than ErrRefNotFound", refusal)
+	}
+	if !strings.Contains(refusal.Detail, "could not be read") {
+		t.Fatalf("Detail = %q, want it to say the commit could not be read", refusal.Detail)
+	}
+	if strings.Contains(refusal.Detail, "does not resolve") {
+		t.Fatalf("Detail = %q, want a git failure named as unreadable, not unresolvable", refusal.Detail)
+	}
 }
 
 // A creation makes no reachability comparison, so nothing downstream of the
