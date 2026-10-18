@@ -127,7 +127,7 @@ type HoldClosure struct {
 	Resolution string
 	// Note is free text recorded with the resolution about what was
 	// decided. Empty leaves ResolutionNote unknown. It is not who decided:
-	// that is By.
+	// that is By. Non-empty text is redacted before it is stored.
 	Note string
 	// By is who decided, which ResolveHold refuses as the zero Resolver.
 	By Resolver
@@ -190,7 +190,7 @@ func (s *Store) TransitionRunOnPullRequest(ctx context.Context, id string, from 
 	}
 	return s.transitionRun(ctx, id, from, to, func(tx *sql.Tx, now string) error {
 		if closing.Hold.Key != "" {
-			if err := closeHold(ctx, tx, closing, now); err != nil {
+			if err := s.closeHold(ctx, tx, closing, now); err != nil {
 				return err
 			}
 		}
@@ -205,8 +205,9 @@ func (s *Store) TransitionRunOnPullRequest(ctx context.Context, id string, from 
 }
 
 // closeHold registers and resolves a hold inside a transaction, on
-// HoldClosure's terms.
-func closeHold(ctx context.Context, tx *sql.Tx, closing HoldClosure, now string) error {
+// HoldClosure's terms. Non-empty note text passes through the redactor Open
+// was given before it is stored.
+func (s *Store) closeHold(ctx context.Context, tx *sql.Tx, closing HoldClosure, now string) error {
 	h := closing.Hold
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by)
@@ -221,7 +222,7 @@ func closeHold(ctx context.Context, tx *sql.Tx, closing HoldClosure, now string)
 	}
 	var note any
 	if strings.TrimSpace(closing.Note) != "" {
-		note = closing.Note
+		note = s.redact.Redact(closing.Note)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE key = ? AND resolution IS NULL`,

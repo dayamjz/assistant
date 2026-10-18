@@ -46,9 +46,9 @@ type Hold struct {
 	// is recorded for: ResolveHold refuses to create one of those.
 	ResolvedBy Optional[Resolver]
 	// ResolutionNote is free text recorded with the resolution about what
-	// was decided. It is unknown while the hold is open, when no note was
-	// given, and for a hold resolved before the column existed. It is not
-	// who decided: that is ResolvedBy.
+	// was decided, stored redacted. It is unknown while the hold is open,
+	// when no note was given, and for a hold resolved before the column
+	// existed. It is not who decided: that is ResolvedBy.
 	ResolutionNote Optional[string] `json:"resolution_note,omitempty"`
 }
 
@@ -89,7 +89,8 @@ func (s *Store) ResolveHold(ctx context.Context, key, resolution string, by Reso
 
 // ResolveHoldNoted is ResolveHold with free text recorded beside the
 // resolution. An empty note leaves ResolutionNote unknown. The note is not
-// who decided: that remains by.
+// who decided: that remains by. Non-empty text passes through the redactor
+// Open was given before it is stored.
 func (s *Store) ResolveHoldNoted(ctx context.Context, key, resolution, note string, by Resolver) (Hold, error) {
 	if strings.TrimSpace(resolution) == "" {
 		return Hold{}, fmt.Errorf("%w: hold %s", ErrNoResolution, key)
@@ -100,7 +101,7 @@ func (s *Store) ResolveHoldNoted(ctx context.Context, key, resolution, note stri
 	}
 	var noteCol any
 	if strings.TrimSpace(note) != "" {
-		noteCol = note
+		noteCol = s.redact.Redact(note)
 	}
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx,
@@ -157,7 +158,7 @@ func (s *Store) RecordHoldResolution(ctx context.Context, closing HoldClosure) (
 		return Hold{}, fmt.Errorf("store: resolving hold %s: %w", key, err)
 	}
 	if err := s.inTx(ctx, func(tx *sql.Tx) error {
-		return closeHold(ctx, tx, closing, encodeTime(nowUTC()))
+		return s.closeHold(ctx, tx, closing, encodeTime(nowUTC()))
 	}); err != nil {
 		return Hold{}, err
 	}
