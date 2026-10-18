@@ -3,7 +3,11 @@ package store
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/dayamjz/assistant/internal/redact"
 )
 
 func TestRegisterHoldIsIdempotent(t *testing.T) {
@@ -116,6 +120,141 @@ func TestResolveHoldNotedRecordsTheNote(t *testing.T) {
 	}
 	if plain.ResolutionNote.IsKnown() {
 		t.Fatalf("ResolveHold left ResolutionNote %+v, want unknown", plain.ResolutionNote)
+	}
+}
+
+// A hold answer's note passes through the redactor before it is stored, on
+// every path that writes resolution_note. The test uses the same URL userinfo
+// and bearer shapes message_test uses for message.text.
+func TestAHoldResolutionNoteIsStoredRedacted(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	if _, err := s.RegisterHold(ctx, Hold{Key: "noted-url", Subject: "a decision"}); err != nil {
+		t.Fatalf("RegisterHold: %v", err)
+	}
+	urlNote := "push to https://user:secret@example.com/x.git when done"
+	resolved, err := s.ResolveHoldNoted(ctx, "noted-url", "approved", urlNote, ResolvedByPerson())
+	if err != nil {
+		t.Fatalf("ResolveHoldNoted: %v", err)
+	}
+	note, ok := resolved.ResolutionNote.Get()
+	if !ok {
+		t.Fatal("ResolutionNote is unknown")
+	}
+	if strings.Contains(note, "secret") {
+		t.Fatalf("the stored note still carries the credential: %q", note)
+	}
+	if !strings.Contains(note, "REDACTED@") {
+		t.Fatalf("the stored note is %q, want the userinfo redacted", note)
+	}
+	stored, err := s.Hold(ctx, "noted-url")
+	if err != nil {
+		t.Fatalf("Hold: %v", err)
+	}
+	if got, _ := stored.ResolutionNote.Get(); got != note {
+		t.Fatalf("Hold returned note %q, want %q", got, note)
+	}
+
+	bearerStore := openStore(t, WithRedactor(redact.New()))
+	if _, err := bearerStore.RegisterHold(ctx, Hold{Key: "noted-bearer", Subject: "another"}); err != nil {
+		t.Fatalf("RegisterHold: %v", err)
+	}
+	bearerNote := "the token is Bearer abcdefgh123456"
+	bearerResolved, err := bearerStore.ResolveHoldNoted(ctx, "noted-bearer", "retry", bearerNote, ResolvedByPerson())
+	if err != nil {
+		t.Fatalf("ResolveHoldNoted bearer: %v", err)
+	}
+	bearerStored, ok := bearerResolved.ResolutionNote.Get()
+	if !ok {
+		t.Fatal("bearer ResolutionNote is unknown")
+	}
+	if strings.Contains(bearerStored, "abcdefgh123456") {
+		t.Fatalf("the stored note still carries the bearer token: %q", bearerStored)
+	}
+	if !strings.Contains(bearerStored, redact.Marker) {
+		t.Fatalf("the stored note is %q, want the bearer redacted", bearerStored)
+	}
+
+	run := seedRun(t, s)
+	closing := HoldClosure{
+		Hold:       Hold{Key: "run/" + run.ID + "/closure", RunID: Known(run.ID), Subject: "a decision"},
+		Resolution: "approved",
+		Note:       urlNote,
+		By:         ResolvedByStandingConsent(),
+	}
+	recorded, err := s.RecordHoldResolution(ctx, closing)
+	if err != nil {
+		t.Fatalf("RecordHoldResolution: %v", err)
+	}
+	closureNote, ok := recorded.ResolutionNote.Get()
+	if !ok || strings.Contains(closureNote, "secret") {
+		t.Fatalf("RecordHoldResolution stored %+v, want the note redacted", recorded.ResolutionNote)
+	}
+}
+
+// holdResolutionSealVersion is the shipped migration that seals a hold's
+// resolution. A shipped version never moves, so pinning to it holds the test
+// below to its subject as the list grows.
+const holdResolutionSealVersion = 42
+
+// Notes written before every path redacted can still carry credentials until
+// the seal migration runs. Opening redacts them in the same transaction that
+// installs the trigger.
+func TestTheHoldResolutionSealMigrationRedactsExistingNotes(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+	credNote := "see https://user:secret@example.test/repo.git for context"
+
+	older, err := openPool(ctx, poolDSN(path, true), true)
+	if err != nil {
+		t.Fatalf("open the older database: %v", err)
+	}
+	if err := migrate(ctx, older, schemaBefore(t, holdResolutionSealVersion)); err != nil {
+		t.Fatalf("migrate to the older schema: %v", err)
+	}
+	opened, resolved := encodeTime(nowUTC()), encodeTime(nowUTC())
+	if _, err := older.ExecContext(ctx, `
+		INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolution_note)
+		VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+		"older", "a decision", "", opened, "approved", resolved, credNote); err != nil {
+		t.Fatalf("write a resolved hold with an unredacted note: %v", err)
+	}
+	if err := older.Close(); err != nil {
+		t.Fatalf("close the older database: %v", err)
+	}
+
+	s := openStoreAt(t, path)
+	held, err := s.Hold(ctx, "older")
+	if err != nil {
+		t.Fatalf("Hold: %v", err)
+	}
+	note, ok := held.ResolutionNote.Get()
+	if !ok {
+		t.Fatal("the note did not survive the migration")
+	}
+	if strings.Contains(note, "secret") {
+		t.Fatalf("the note is still %q, want credentials removed", note)
+	}
+	if !strings.Contains(note, "REDACTED") {
+		t.Fatalf("the note is %q, want the userinfo redacted", note)
+	}
+}
+
+// The seal holds at the database: a resolved hold's note is not rewritten.
+func TestAHoldResolutionIsSealed(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	if _, err := s.RegisterHold(ctx, Hold{Key: "sealed", Subject: "a decision"}); err != nil {
+		t.Fatalf("RegisterHold: %v", err)
+	}
+	if _, err := s.ResolveHoldNoted(ctx, "sealed", "approved", "the floor is not decided", ResolvedByPerson()); err != nil {
+		t.Fatalf("ResolveHoldNoted: %v", err)
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE hold SET resolution_note = 'rewritten' WHERE key = ?`, "sealed"); err == nil {
+		t.Fatal("the database let a hold's resolution note be rewritten")
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE hold SET resolution = 'changed' WHERE key = ?`, "sealed"); err == nil {
+		t.Fatal("the database let a hold's resolution be rewritten")
 	}
 }
 

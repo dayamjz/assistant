@@ -268,21 +268,30 @@ func TestTheHoldResolverMigrationReachesAnOlderDatabase(t *testing.T) {
 func TestAResolverOutsideTheClosedSetIsRefusedOnRead(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	if _, err := s.RegisterHold(ctx, Hold{Key: "k", Subject: "a decision"}); err != nil {
-		t.Fatalf("RegisterHold: %v", err)
-	}
-	if _, err := s.ResolveHold(ctx, "k", "ship it", ResolvedByProgram()); err != nil {
-		t.Fatalf("ResolveHold: %v", err)
-	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE hold SET resolved_by = ? WHERE key = ?`, "a committee", "k"); err != nil {
-		t.Fatalf("writing a resolver outside the set: %v", err)
+	opened, resolved := encodeTime(nowUTC()), encodeTime(nowUTC())
+	// Hand-edited rows are inserted directly so the read path is exercised
+	// without rewriting a sealed resolution column.
+	if err := s.inTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by)
+			VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?)`,
+			"resolved", "a decision", "", opened, "ship it", resolved, "a committee")
+		return err
+	}); err != nil {
+		t.Fatalf("writing a resolver outside the set on a resolved hold: %v", err)
 	}
 
-	if _, err := s.Hold(ctx, "k"); !errors.Is(err, ErrUnknownResolver) {
+	if _, err := s.Hold(ctx, "resolved"); !errors.Is(err, ErrUnknownResolver) {
 		t.Fatalf("Hold on a row outside the set: %v, want ErrUnknownResolver", err)
 	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE hold SET resolution = NULL, resolved_at = NULL WHERE key = ?`, "k"); err != nil {
-		t.Fatalf("reopening the hold: %v", err)
+	if err := s.inTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by)
+			VALUES (?, NULL, NULL, ?, ?, ?, NULL, NULL, ?)`,
+			"open", "another decision", "", opened, "a committee")
+		return err
+	}); err != nil {
+		t.Fatalf("writing a resolver outside the set on an open hold: %v", err)
 	}
 	if _, err := s.OpenHolds(ctx); !errors.Is(err, ErrUnknownResolver) {
 		t.Fatalf("OpenHolds over a row outside the set: %v, want ErrUnknownResolver", err)

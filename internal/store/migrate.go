@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // createMigrationTable records which migrations have been applied. It is one of
@@ -51,6 +53,13 @@ type columnFact struct {
 // there is no state in which a migration is half-applied, and a later call
 // resumes at the same point.
 func migrate(ctx context.Context, db *sql.DB, ms []migration) error {
+	return migrateForOpen(ctx, db, ms, nil)
+}
+
+// migrateForOpen is migrate with the redactor Open was given. Only the hold
+// resolution seal migration reads it, to redact resolution_note on rows
+// written before every path stored notes redacted.
+func migrateForOpen(ctx context.Context, db *sql.DB, ms []migration, redact vcs.Redactor) error {
 	if err := checkMigrationList(ms); err != nil {
 		return err
 	}
@@ -71,7 +80,7 @@ func migrate(ctx context.Context, db *sql.DB, ms []migration) error {
 		if _, ok := applied[m.version]; ok {
 			continue
 		}
-		if err := applyMigration(ctx, db, m); err != nil {
+		if err := applyMigration(ctx, db, m, redact); err != nil {
 			return &MigrationError{Version: m.version, Name: m.name, Err: err}
 		}
 	}
@@ -239,7 +248,7 @@ func appliedMigrations(ctx context.Context, db *sql.DB) (map[int]migrationRecord
 // applyMigration runs one migration and records it, in one transaction. The
 // additive check runs inside that transaction against the catalog the
 // statements just produced, so a migration that fails it changes nothing.
-func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
+func applyMigration(ctx context.Context, db *sql.DB, m migration, redact vcs.Redactor) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -249,6 +258,11 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 	before, err := columnFacts(ctx, tx)
 	if err != nil {
 		return err
+	}
+	if m.name == holdResolutionSealMigration && redact != nil {
+		if err := redactExistingHoldResolutionNotes(ctx, tx, redact); err != nil {
+			return err
+		}
 	}
 	for i, statement := range m.statements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {

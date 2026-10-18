@@ -112,6 +112,11 @@ const fixerAgentMigration = "run fixer agent"
 // model triple, and the effort an invocation was asked for.
 const invocationRoleMigration = "agent invocation role"
 
+// holdResolutionSealMigration names the migration that seals a hold's
+// resolution and note once recorded, for the reason sealCheckpointTableMigration
+// is a constant.
+const holdResolutionSealMigration = "hold resolution seal"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1625,6 +1630,23 @@ var schema = []migration{
 			`CREATE TABLE task_agent_fallback (task_id TEXT PRIMARY KEY REFERENCES task(id), primary_agent TEXT NOT NULL, backup_agent TEXT NOT NULL, reason TEXT NOT NULL CHECK(reason IN ('quota','unavailable')), attempt INTEGER NOT NULL CHECK(attempt>0))`,
 			`CREATE TRIGGER task_fallback_no_update BEFORE UPDATE ON task_agent_fallback BEGIN SELECT RAISE(ABORT,'task fallback is sealed'); END`,
 			`CREATE TRIGGER task_fallback_no_delete BEFORE DELETE ON task_agent_fallback BEGIN SELECT RAISE(ABORT,'task fallback is sealed'); END`,
+		},
+	},
+	{
+		version: 42,
+		name:    holdResolutionSealMigration,
+		statements: []string{
+			// AGE-330: a hold's resolution and the note beside it are recorded
+			// once. The accessors refuse a second answer; this holds the record
+			// at the database against a direct rewrite. Open redacts any
+			// existing resolution_note through the supplied redactor in the
+			// same transaction, before this trigger is installed.
+			`CREATE TRIGGER hold_resolution_is_recorded_once
+				BEFORE UPDATE OF resolution, resolved_at, resolved_by, resolution_note ON hold
+				WHEN OLD.resolution IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a hold''s resolution is recorded once and is not rewritten');
+				END`,
 		},
 	},
 }

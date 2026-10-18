@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // Hold is a decision waiting on a person, keyed by a stable key so that
@@ -46,9 +48,9 @@ type Hold struct {
 	// is recorded for: ResolveHold refuses to create one of those.
 	ResolvedBy Optional[Resolver]
 	// ResolutionNote is free text recorded with the resolution about what
-	// was decided. It is unknown while the hold is open, when no note was
-	// given, and for a hold resolved before the column existed. It is not
-	// who decided: that is ResolvedBy.
+	// was decided, stored redacted. It is unknown while the hold is open,
+	// when no note was given, and for a hold resolved before the column
+	// existed. It is not who decided: that is ResolvedBy.
 	ResolutionNote Optional[string] `json:"resolution_note,omitempty"`
 }
 
@@ -89,7 +91,8 @@ func (s *Store) ResolveHold(ctx context.Context, key, resolution string, by Reso
 
 // ResolveHoldNoted is ResolveHold with free text recorded beside the
 // resolution. An empty note leaves ResolutionNote unknown. The note is not
-// who decided: that remains by.
+// who decided: that remains by. Non-empty text passes through the redactor
+// Open was given before it is stored.
 func (s *Store) ResolveHoldNoted(ctx context.Context, key, resolution, note string, by Resolver) (Hold, error) {
 	if strings.TrimSpace(resolution) == "" {
 		return Hold{}, fmt.Errorf("%w: hold %s", ErrNoResolution, key)
@@ -100,7 +103,7 @@ func (s *Store) ResolveHoldNoted(ctx context.Context, key, resolution, note stri
 	}
 	var noteCol any
 	if strings.TrimSpace(note) != "" {
-		noteCol = note
+		noteCol = s.redact.Redact(note)
 	}
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx,
@@ -157,7 +160,7 @@ func (s *Store) RecordHoldResolution(ctx context.Context, closing HoldClosure) (
 		return Hold{}, fmt.Errorf("store: resolving hold %s: %w", key, err)
 	}
 	if err := s.inTx(ctx, func(tx *sql.Tx) error {
-		return closeHold(ctx, tx, closing, encodeTime(nowUTC()))
+		return s.closeHold(ctx, tx, closing, encodeTime(nowUTC()))
 	}); err != nil {
 		return Hold{}, err
 	}
@@ -235,6 +238,41 @@ func validateHold(h Hold) error {
 	}
 	return nil
 }
+
+// redactExistingHoldResolutionNotes runs the supplied redactor over every
+// resolved hold's note before the seal migration installs its trigger. Rows
+// written when only some paths redacted can still carry credentials in
+// resolution_note; this is the one upgrade pass that brings them in line with
+// what ResolveHoldNoted and HoldClosure store today.
+func redactExistingHoldResolutionNotes(ctx context.Context, tx *sql.Tx, r vcs.Redactor) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT key, resolution_note FROM hold
+		WHERE resolution IS NOT NULL AND resolution_note IS NOT NULL`)
+	if err != nil {
+		return fmt.Errorf("store: listing hold notes to redact: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var key, note string
+		if err := rows.Scan(&key, &note); err != nil {
+			return fmt.Errorf("store: reading a hold note to redact: %w", err)
+		}
+		redacted := r.Redact(note)
+		if redacted == note {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE hold SET resolution_note = ? WHERE key = ?`, redacted, key); err != nil {
+			return fmt.Errorf("store: redacting hold %s resolution note: %w", key, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: listing hold notes to redact: %w", err)
+	}
+	return nil
+}
+
 func insertHold(ctx context.Context, tx *sql.Tx, h Hold) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO hold (key,run_id,task_id,subject,detail,opened_at,resolution,resolved_at,resolved_by) VALUES(?,?,?,?,?,?,NULL,NULL,NULL) ON CONFLICT(key) DO NOTHING`, h.Key, h.RunID, h.TaskID, h.Subject, h.Detail, encodeTime(nowUTC()))
 	return err
