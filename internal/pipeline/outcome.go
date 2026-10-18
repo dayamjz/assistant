@@ -309,6 +309,23 @@ func Cancelled(s graph.State) bool {
 	return flag
 }
 
+// SkipReasonNoCodeHost is why the pull request and checks stages skipped when
+// the run's upstream has no code host.
+const SkipReasonNoCodeHost = "no-code-host"
+
+// StageSkipReason says why a stage was passed over without running, when there
+// is a reason beyond the run's skip list or the empty-diff short circuit.
+// Empty when the skip has no named reason or the stage ran.
+func StageSkipReason(s graph.State, stage Stage) string {
+	if StageRan(s, stage) || StageOutcome(s, stage) != OutcomeSkipped {
+		return ""
+	}
+	if (stage == StagePR || stage == StageCI) && NoCodeHost(s) {
+		return SkipReasonNoCodeHost
+	}
+	return ""
+}
+
 // NoCodeHost reports whether this run's upstream has no code host, so the
 // pull request and checks stages skip and a completed run ends as pushed
 // rather than checks-passed.

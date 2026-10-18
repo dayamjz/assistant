@@ -1147,9 +1147,22 @@ const (
 	CheckSessionProvider = "session provider"
 	// CheckCodeHost is whether the code host's command line resolves.
 	CheckCodeHost = "code host"
-	// CheckUpstream is how this checkout's recorded upstream treats pull
+	// CheckUpstream is how this checkout's upstream treats pull
 	// requests: on github.com, local with no code host, or an unsupported host.
 	CheckUpstream = "upstream"
+
+	// UpstreamKindGitHub is a Check.Kind for CheckUpstream when pull requests
+	// open on github.com.
+	UpstreamKindGitHub = "upstream-github"
+	// UpstreamKindLocal is a Check.Kind for CheckUpstream when the upstream
+	// has no code host and a run cannot open a pull request.
+	UpstreamKindLocal = "upstream-local"
+	// UpstreamKindUnsupported is a Check.Kind for CheckUpstream when the
+	// upstream names a host this build does not address.
+	UpstreamKindUnsupported = "upstream-unsupported"
+	// UpstreamKindUnrecorded is a Check.Kind for CheckUpstream when neither
+	// a repository record nor origin names where validated changes go.
+	UpstreamKindUnrecorded = "upstream-unrecorded"
 	// CheckStages is whether every stage has an implementation in this build.
 	CheckStages = "stages"
 )
@@ -1215,18 +1228,43 @@ var phraseByCheck = map[string][2]Phrase{
 		{Outcome: "The code host's command line was found here.", Consequence: "Whether it can reach your repository is learned when a run first needs it.", Decision: "Nothing to do."},
 		{Outcome: "The code host's command line was not found here.", Consequence: "A run can still start, and a step that needs the code host stops and says so.", Decision: readDoctor},
 	},
-	CheckUpstream: {
-		{Outcome: "This checkout's upstream can open a pull request, or it has no code host and runs end after the change is on the remote.",
-			Consequence: "A run either proposes on the code host or skips that step with the reason recorded.",
-			Decision:    "Nothing to do."},
-		{Outcome: "This checkout's upstream names a host this build does not address.",
-			Consequence: "A run cannot start here until the upstream is github.com, a local path, or a file:// remote.",
-			Decision:    "Point the repository's upstream at github.com, a local path, or a file:// remote, then run assistant init again."},
-	},
 	CheckStages: {
 		{Outcome: "Every step of the gate has an implementation in this build.", Consequence: "No step stops for your decision only for want of one.", Decision: "Nothing to do."},
 		{Outcome: "Some steps of the gate have no implementation in this build.", Consequence: "A run stops for your decision at each of them, and what they would check is not checked.", Decision: "Answer each as it comes, and run assistant --json doctor for which they are."},
 	},
+}
+
+// The upstream check's rows, one per kind assistant doctor reports.
+var (
+	phraseUpstreamGitHub = Phrase{
+		Outcome:     "This checkout's upstream can open a pull request.",
+		Consequence: "A run proposes on the code host after the change is on the remote.",
+		Decision:    "Nothing to do.",
+	}
+	phraseUpstreamLocal = Phrase{
+		Outcome:     "This checkout's upstream has no code host, so a run cannot open a pull request.",
+		Consequence: "The pull request and checks stages are passed over with the reason recorded, and the run ends once the change is on the remote.",
+		Decision:    "Nothing to do.",
+	}
+	phraseUpstreamUnsupported = Phrase{
+		Outcome:     "This checkout's upstream names a host this build does not address.",
+		Consequence: "A run cannot start here until the upstream is github.com, a local path, or a file:// remote.",
+		Decision:    "Point the repository's upstream at github.com, a local path, or a file:// remote, then run assistant init again.",
+	}
+	phraseUpstreamUnrecorded = Phrase{
+		Outcome:     "This checkout has no repository record yet and no remote named origin to learn where validated changes go from.",
+		Consequence: "A run cannot start from it until assistant init records the upstream.",
+		Decision:    "Run assistant init here.",
+	}
+)
+
+// phraseByUpstreamKind is the one table from an upstream check's kind to what
+// a person reads.
+var phraseByUpstreamKind = map[string]Phrase{
+	UpstreamKindGitHub:      phraseUpstreamGitHub,
+	UpstreamKindLocal:       phraseUpstreamLocal,
+	UpstreamKindUnsupported: phraseUpstreamUnsupported,
+	UpstreamKindUnrecorded:  phraseUpstreamUnrecorded,
 }
 
 // phraseCheckUnfamiliar is the row for a check under a name the table has
@@ -1241,6 +1279,12 @@ var phraseCheckUnfamiliar = Phrase{
 // CheckPhrase is what a person reads about one check: phraseByCheck's row for
 // its name and result, or the unfamiliar row for a name it has none for.
 func CheckPhrase(c Check) Phrase {
+	if c.Name == CheckUpstream {
+		if p, ok := phraseByUpstreamKind[c.Kind]; ok {
+			return p
+		}
+		return phraseCheckUnfamiliar
+	}
 	rows, ok := phraseByCheck[c.Name]
 	if !ok {
 		return phraseCheckUnfamiliar
@@ -1582,6 +1626,12 @@ func TablePhrases() []Phrase {
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
 	for _, name := range CheckNames() {
+		if name == CheckUpstream {
+			for _, kind := range []string{UpstreamKindGitHub, UpstreamKindLocal, UpstreamKindUnsupported, UpstreamKindUnrecorded} {
+				out = append(out, CheckPhrase(Check{Name: name, Kind: kind}))
+			}
+			continue
+		}
 		out = append(out, CheckPhrase(Check{Name: name, OK: true}), CheckPhrase(Check{Name: name}))
 	}
 	out = append(out, phraseCheckUnfamiliar, phraseRunCanStart, phraseRunCannotStart)

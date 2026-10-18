@@ -621,30 +621,32 @@ func codeHost() machine.Check {
 	return machine.Check{Name: machine.CheckCodeHost, OK: true, Detail: resolved}
 }
 
-// upstreamDelivery reports how this checkout's recorded upstream treats the
-// pull request and checks stages, from forge.ClassifyRemote over the
-// repository row. A local or file:// upstream is OK and says runs cannot open
-// a pull request here (they end pushed after push). An unsupported network
-// host blocks a run from starting, matching internal/service's begin refusal.
+// upstreamDelivery reports how this checkout's upstream treats the pull request
+// and checks stages. It reads the repository record when init has run, and
+// otherwise reads origin from the working copy, so doctor can say whether a run
+// can open a pull request before anything is recorded.
 func upstreamDelivery(ctx context.Context, records *store.Store, working string) machine.Check {
-	repository, err := records.RepositoryAt(ctx, working)
+	upstream, err := upstreamURL(ctx, records, working)
 	if err != nil {
 		return machine.Check{
 			Name:   machine.CheckUpstream,
-			Detail: "this working copy has no repository record yet; run assistant init",
+			Kind:   machine.UpstreamKindUnrecorded,
+			Detail: err.Error(),
 		}
 	}
-	switch forge.ClassifyRemote(repository.UpstreamURL) {
+	switch forge.ClassifyRemote(upstream) {
 	case forge.RemoteGitHub:
-		spec, _ := forge.GitHubRepository(repository.UpstreamURL)
+		spec, _ := forge.GitHubRepository(upstream)
 		return machine.Check{
 			Name:   machine.CheckUpstream,
+			Kind:   machine.UpstreamKindGitHub,
 			OK:     true,
 			Detail: "pull requests open on " + spec,
 		}
 	case forge.RemoteLocal:
 		return machine.Check{
 			Name: machine.CheckUpstream,
+			Kind: machine.UpstreamKindLocal,
 			OK:   true,
 			Detail: "no code host: runs here cannot open a pull request; after push they skip " +
 				"the pull request and checks stages and end pushed",
@@ -652,11 +654,36 @@ func upstreamDelivery(ctx context.Context, records *store.Store, working string)
 	default:
 		return machine.Check{
 			Name:     machine.CheckUpstream,
+			Kind:     machine.UpstreamKindUnsupported,
 			Blocking: true,
 			Detail: fmt.Sprintf("upstream %q names a host this build does not address; "+
-				"a run is refused at start", repository.UpstreamURL),
+				"a run is refused at start", upstream),
 		}
 	}
+}
+
+// upstreamURL is the upstream assistant init would record for this working
+// copy: the repository row when one exists, otherwise origin.
+func upstreamURL(ctx context.Context, records *store.Store, working string) (string, error) {
+	repository, err := records.RepositoryAt(ctx, working)
+	if err == nil {
+		return repository.UpstreamURL, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return "", err
+	}
+	repo, err := vcs.OpenWorktree(ctx, working, vcs.WithRedactor(redact.New()))
+	if err != nil {
+		return "", fmt.Errorf("reading this working copy's upstream: %w", err)
+	}
+	upstream, err := repo.RemoteURL(ctx, "origin")
+	if errors.Is(err, vcs.ErrRemoteNotFound) {
+		return "", fmt.Errorf("this working copy has no remote named origin and no repository record yet; run assistant init")
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading this working copy's origin: %w", err)
+	}
+	return upstream, nil
 }
 
 // stageBodies reports how much of the gate this build actually implements. It
