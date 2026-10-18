@@ -348,6 +348,95 @@ func TestDoctorDecidesWhetherARunCanStart(t *testing.T) {
 	}
 }
 
+// doctor reports the agent the operator's file names, not the agent auto
+// would choose when that file names another. Claude and Codex are both on
+// PATH, and a repository document naming Claude is present in the working
+// copy; the home names Codex. The agent row is Codex.
+func TestDoctorReportsTheConfiguredAgentRatherThanAuto(t *testing.T) {
+	principles.Cite(t, principles.P7)
+	h := newHome(t)
+	subject := newSubject(t)
+	if err := os.WriteFile(h.ConfigFile(), []byte("agent: codex\n"), 0o600); err != nil {
+		t.Fatalf("writing the home configuration: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(subject, "assistant.json"), []byte("{\"agent\":\"claude\"}\n"), 0o644); err != nil {
+		t.Fatalf("writing the repository document: %v", err)
+	}
+	bin := agentPATH(t, "claude", "codex")
+	t.Setenv("PATH", bin)
+
+	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found := findCheck(report, machine.CheckAgent)
+	if !found {
+		t.Fatal("doctor made no agent check")
+	}
+	if !row.OK || row.Detail != "codex" {
+		t.Fatalf("doctor agent row = ok:%v %q, want ok and codex", row.OK, row.Detail)
+	}
+}
+
+// A configured Codex stays available when Claude is not on PATH. auto would
+// fail closed there, and that failure must not block a run whose operator
+// file names Codex. The reverse, Claude configured and Codex absent, reports
+// Claude.
+func TestDoctorFollowsTheConfiguredAgentWhenTheOtherIsAbsent(t *testing.T) {
+	h := newHome(t)
+	subject := newSubject(t)
+	if err := os.WriteFile(h.ConfigFile(), []byte("agent: codex\n"), 0o600); err != nil {
+		t.Fatalf("writing the home configuration: %v", err)
+	}
+	t.Setenv("PATH", agentPATH(t, "codex"))
+
+	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found := findCheck(report, machine.CheckAgent)
+	if !found || !row.OK || row.Detail != "codex" {
+		t.Fatalf("doctor agent row = found:%v ok:%v %q, want codex", found, row.OK, row.Detail)
+	}
+	if blocksOn(report, machine.CheckAgent) {
+		t.Fatalf("doctor blocks on the agent check for a configured Codex: %s", report.Detail)
+	}
+
+	if err := os.WriteFile(h.ConfigFile(), []byte("agent: claude\n"), 0o600); err != nil {
+		t.Fatalf("writing the home configuration: %v", err)
+	}
+	t.Setenv("PATH", agentPATH(t, "claude"))
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, machine.CheckAgent)
+	if !found || !row.OK || row.Detail != "claude" {
+		t.Fatalf("doctor agent row = found:%v ok:%v %q, want claude", found, row.OK, row.Detail)
+	}
+}
+
+// A home configuration that cannot be read is a refusal. Doctor does not
+// substitute auto and then report whichever agent that resolves.
+func TestDoctorRefusesAnUnreadableAgentConfiguration(t *testing.T) {
+	h := newHome(t)
+	subject := newSubject(t)
+	if err := os.WriteFile(h.ConfigFile(), []byte("agent: codex\n"), 0o600); err != nil {
+		t.Fatalf("writing the home configuration: %v", err)
+	}
+	if err := os.Chmod(h.ConfigFile(), 0); err != nil {
+		t.Fatalf("removing permission to read the home configuration: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(h.ConfigFile(), 0o600) })
+	if _, err := os.ReadFile(h.ConfigFile()); err == nil {
+		t.Skip("this process can still read a mode 0 file, so the refusal cannot be shown")
+	}
+	t.Setenv("PATH", agentPATH(t, "claude", "codex"))
+
+	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found := findCheck(report, machine.CheckAgent)
+	if !found || row.OK || !row.Blocking {
+		t.Fatalf("doctor agent row = found:%v %+v, want a blocking refusal", found, row)
+	}
+	if row.Detail == "claude" || row.Detail == "codex" || row.Detail == "auto" {
+		t.Fatalf("doctor named an agent for a configuration it could not read: %q", row.Detail)
+	}
+	if !blocksOn(report, machine.CheckAgent) {
+		t.Fatalf("doctor does not count the unreadable configuration as stopping a run: %s", report.Detail)
+	}
+}
+
 // doctor reports whether the code-host provider command line resolves, and
 // the row does not decide: a run can start without a code host and the stages
 // that talk to one refuse there, so the row informs before a stage does. The
@@ -515,6 +604,38 @@ func findCheck(report machine.Doctor, name string) (machine.Check, bool) {
 		}
 	}
 	return machine.Check{}, false
+}
+
+// blocksOn reports whether doctor's verdict names one blocking check.
+func blocksOn(report machine.Doctor, name string) bool {
+	const prefix = "a run cannot start: "
+	rest, ok := strings.CutPrefix(report.Detail, prefix)
+	if !ok {
+		return false
+	}
+	return slices.Contains(strings.Split(rest, ", "), name)
+}
+
+// agentPATH is a PATH whose only agent binaries are the names given, each a
+// script LookPath can execute, plus git so the working-copy check can run.
+// The caller sets PATH to the returned directory.
+func agentPATH(t *testing.T, names ...string) string {
+	t.Helper()
+	bin := t.TempDir()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolving git: %v", err)
+	}
+	if err := os.Symlink(realGit, filepath.Join(bin, "git")); err != nil {
+		t.Fatalf("planting git: %v", err)
+	}
+	script := []byte("#!/bin/sh\nexit 0\n")
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(bin, name), script, 0o755); err != nil {
+			t.Fatalf("planting %s: %v", name, err)
+		}
+	}
+	return bin
 }
 
 // Every method the protocol serves has to be reachable from this surface, or

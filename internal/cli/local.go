@@ -405,8 +405,17 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 	})
 
 	catalog := agents.DefaultCatalog()
-	resolution, err := agents.Resolve(ctx, in.resolvedAgents(), catalog)
-	if err != nil {
+	configured, cfgErr := in.configuredAgents()
+	if cfgErr != nil {
+		// The operator file is what a run's agent is resolved from. A file
+		// that cannot be read or parsed is not a default, and substituting
+		// auto here is what reported Claude for a home configured as Codex.
+		add(machine.Check{
+			Name:     machine.CheckAgent,
+			Blocking: true,
+			Detail:   "the home's configuration could not be read, so the agent a run would use is unknown: " + cfgErr.Error(),
+		})
+	} else if resolution, err := agents.Resolve(ctx, configured, catalog); err != nil {
 		add(machine.Check{Name: machine.CheckAgent, Blocking: true, Detail: err.Error()})
 	} else {
 		add(machine.Check{Name: machine.CheckAgent, OK: true, Blocking: true, Detail: resolution.Name})
@@ -670,11 +679,23 @@ func stageBodies() machine.Check {
 	return machine.Check{Name: machine.CheckStages, Detail: detail}
 }
 
-// resolvedAgents is the agent list this machine would resolve a run against.
-// The service reads its own configuration, so what doctor answers here is
-// about the agents that are runnable rather than about a resolved
-// configuration this process does not hold.
-func (in *invocation) resolvedAgents() []string { return []string{agents.AutoEntry} }
+// configuredAgents is the agent list the service resolves at start, read
+// through service.GlobalConfig: the operator's file alone, with the schema
+// defaults for everything it leaves unset. A missing file is those defaults,
+// which include auto. A file that cannot be read or parsed is an error, and
+// doctor refuses the agent check rather than substituting auto.
+//
+// The repository document is not read, from the working copy or from a
+// branch. This build resolves one agent list per service from the operator
+// file, and a repository that names another list is refused at start rather
+// than selected.
+func (in *invocation) configuredAgents() ([]string, error) {
+	cfg, err := service.GlobalConfig(in.home.ConfigFile())
+	if err != nil {
+		return nil, err
+	}
+	return cfg.Agent, nil
+}
 
 // serviceDetail says what the service check found.
 func serviceDetail(state machine.Service) string {
