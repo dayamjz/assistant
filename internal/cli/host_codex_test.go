@@ -138,7 +138,7 @@ func TestHostInstallCodexKeepsUnrelatedHooks(t *testing.T) {
 	merged := decodeAny(t, content)
 	want := decodeAny(t, []byte(codexExisting))
 	stop := want["hooks"].(map[string]any)["Stop"].([]any)
-	want["hooks"].(map[string]any)["Stop"] = append(stop, wantEntry(i.command()))
+	want["hooks"].(map[string]any)["Stop"] = append(stop, wantCodexEntry(i.command()))
 	if !reflect.DeepEqual(merged, want) {
 		t.Fatalf("merged hooks.json is\n%s\nwant the original plus exactly the one entry", content)
 	}
@@ -159,6 +159,59 @@ func TestHostInstallCodexKeepsUnrelatedHooks(t *testing.T) {
 	}
 	if _, err := os.Stat(fresh.hooks()); !os.IsNotExist(err) {
 		t.Fatalf("wrote under CODEX_HOME but also under the default ~/.codex path")
+	}
+}
+
+// wantCodexEntry is the Stop entry Codex install writes, with async false so
+// the hook runs synchronously and can block a turn.
+func wantCodexEntry(command string) any {
+	return map[string]any{"hooks": []any{map[string]any{"type": "command", "command": command, "async": false}}}
+}
+
+// A Stop hook with this program's command marked async cannot block a turn;
+// install refuses rather than reporting present.
+func TestHostInstallCodexRefusesAsyncStopGuard(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P1)
+	vocabtest.Control(t)
+
+	i := newCodexInstaller(t)
+	i.plant(t, `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"`+i.command()+`","async":true}]}]}}`)
+	answer := decodeInstall(t, i.run(t, i.env(), "--json", "--host", "codex", "--write"))
+	if answer.Result != machine.HostInstallRefused || answer.Refusal != machine.HostInstallConflict {
+		t.Fatalf("answered %+v, want conflict refusal", answer)
+	}
+	if answer.Conflict != i.command() {
+		t.Fatalf("conflict %q, want %q", answer.Conflict, i.command())
+	}
+	if strings.Contains(answer.Detail, "different command") {
+		t.Fatalf("detail calls an identical command a different one: %s", answer.Detail)
+	}
+	plain := i.run(t, i.env(), "--host", "codex", "--write")
+	vocabtest.Assert(t, plain.stdout)
+	if !strings.Contains(plain.stdout, machine.HostInstallPhrase(answer).Outcome) {
+		t.Fatalf("stdout does not say the check runs in the background:\n%s", plain.stdout)
+	}
+}
+
+// A synchronous copy of the stop command does not hide a later background
+// copy of the same command in the same Stop entry.
+func TestHostInstallCodexRefusesABackgroundCopyBesideASynchronousOne(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P1)
+
+	i := newCodexInstaller(t)
+	command := i.command()
+	i.plant(t, `{"hooks":{"Stop":[{"hooks":[`+
+		`{"type":"command","command":"`+command+`","async":false},`+
+		`{"type":"command","command":"`+command+`","async":true}`+
+		`]}]}}`)
+	answer := decodeInstall(t, i.run(t, i.env(), "--json", "--host", "codex", "--write"))
+	if answer.Result != machine.HostInstallRefused || answer.Refusal != machine.HostInstallConflict || answer.Conflict != command {
+		t.Fatalf("answered %+v, want a conflict on %s", answer, command)
+	}
+	if strings.Contains(answer.Detail, "different command") {
+		t.Fatalf("detail calls an identical command a different one: %s", answer.Detail)
 	}
 }
 
@@ -229,12 +282,13 @@ func TestHostStopAllowsCodexTurnWhenSupervisorHoldsTheHome(t *testing.T) {
 	}
 }
 
-// TestObservedCodexStopProtocol records the installed CLI version and verifies
-// the Stop hook command blocks with exit status 2 when given Codex-shaped
-// input over an unwatched home. Set ASSISTANT_CODEX_HOST_LIVE=1 to run it.
-func TestObservedCodexStopProtocol(t *testing.T) {
+// TestRecordsInstalledCodexVersionWhenLive logs the installed Codex CLI
+// version when ASSISTANT_CODEX_HOST_LIVE=1. It does not drive a Codex turn or
+// invoke hooks through the CLI; Stop behaviour is covered by the unit tests
+// above that call host stop with Codex-shaped stdin.
+func TestRecordsInstalledCodexVersionWhenLive(t *testing.T) {
 	if os.Getenv("ASSISTANT_CODEX_HOST_LIVE") != "1" {
-		t.Skip("set ASSISTANT_CODEX_HOST_LIVE=1 to probe the installed Codex CLI")
+		t.Skip("set ASSISTANT_CODEX_HOST_LIVE=1 to record the installed Codex CLI version")
 	}
 	binary, err := exec.LookPath("codex")
 	if err != nil {
@@ -248,15 +302,5 @@ func TestObservedCodexStopProtocol(t *testing.T) {
 	if version == "" {
 		t.Fatal("codex --version produced no output")
 	}
-	t.Logf("observed Codex CLI: %s", version)
-	t.Log("observed Stop protocol: exit 2 with reason on standard error blocks turn end; stop_hook_active true on stdin is re-entry")
-
-	h := unwatchedHome(t)
-	got := hostStopWith(t, h, nil, strings.NewReader(codexTurnEnd(t, false)))
-	if got.code == machine.ExitOK {
-		t.Fatalf("hook allowed the turn with codex-shaped input; stdout=%q stderr=%q", got.stdout, got.stderr)
-	}
-	if !strings.HasPrefix(got.stderr, machine.PhraseTurnBlocked) {
-		t.Fatalf("standard error does not carry the block message:\n%s", got.stderr)
-	}
+	t.Logf("installed Codex CLI: %s", version)
 }

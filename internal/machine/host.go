@@ -166,7 +166,11 @@ type HostInstallRefusal string
 const (
 	// HostInstallConflict is a file that already holds a turn-end hook
 	// running this program's stop guard with a different command line, which
-	// would be a second guard over another binary or another home.
+	// would be a second guard over another binary or another home, or the
+	// same command marked to run in the background. Conflict equals Command
+	// in the background case and differs from it when the command line does.
+	// HostInstallPhrase reads that equality so the two cases do not share a
+	// sentence.
 	HostInstallConflict HostInstallRefusal = "conflict"
 	// HostInstallUnreadable is a file that could not be read, or whose
 	// content is not a settings document the line can be merged into

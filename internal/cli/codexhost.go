@@ -32,6 +32,8 @@ package cli
 //   - Multiple matching Stop hooks run concurrently; another hook cannot be
 //     prevented from also running beside this one.
 //   - The observation above was checked against published documentation and
-//     hook-shaped stdin in tests; a full turn driven through `codex exec` is
-//     gated on ASSISTANT_CODEX_HOST_LIVE in host_codex_test.go and is not
-//     required for merge or stop-guard unit tests.
+//     hook-shaped stdin in tests. ASSISTANT_CODEX_HOST_LIVE only records the
+//     installed CLI version; it does not exercise a turn through Codex.
+//   - Codex command hooks may set async; Stop must run synchronously, so the
+//     installer writes async false and refuses an existing hook with the same
+//     command marked async.

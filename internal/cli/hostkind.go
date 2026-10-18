@@ -54,9 +54,9 @@ func hostHooksFile(kind HostKind, getenv func(string) string) (string, error) {
 }
 
 // codexHooksPath is the Codex CLI's user hooks file. CODEX_HOME names the
-// directory when set and must be absolute and exist as a directory; otherwise
-// the file is HOME/.codex/hooks.json, which is what the CLI's own
-// documentation names as ~/.codex/hooks.json.
+// directory when set and must be an absolute path; otherwise the file is
+// HOME/.codex/hooks.json, which is what the CLI's own documentation names as
+// ~/.codex/hooks.json. A missing directory is created when the hook is written.
 const (
 	codexHomeVar     = "CODEX_HOME"
 	codexHomeDirName = ".codex"

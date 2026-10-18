@@ -105,7 +105,7 @@ func hostInstall(_ context.Context, in *invocation) (any, error) {
 		return nil, fmt.Errorf("the path of this binary is not known as an absolute path, so the hook could not name it")
 	}
 	command := shellQuote(in.env.Executable) + " --" + homeFlagName + " " + shellQuote(in.home.Root()) + " " + hostVerbName + " stop"
-	entry, err := hostEntry(command)
+	entry, err := hostEntry(kind, command)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func hostInstall(_ context.Context, in *invocation) (any, error) {
 	if !write {
 		return answer, nil
 	}
-	return mergeHostSettings(answer, entry, in.env.Executable), nil
+	return mergeHostSettings(kind, answer, entry, in.env.Executable), nil
 }
 
 // hostSettingsPath is the host's user settings file, from the environment
@@ -146,14 +146,20 @@ func hostSettingsPath(getenv func(string) string) (string, error) {
 }
 
 // hostEntry is the one entry the line adds under the turn-end event.
-func hostEntry(command string) (json.RawMessage, error) {
+func hostEntry(kind HostKind, command string) (json.RawMessage, error) {
 	type hook struct {
 		Type    string `json:"type"`
 		Command string `json:"command"`
+		Async   *bool  `json:"async,omitempty"`
+	}
+	h := hook{Type: hostCommandType, Command: command}
+	if kind == HostCodex {
+		sync := false
+		h.Async = &sync
 	}
 	text, err := compactJSON(struct {
 		Hooks []hook `json:"hooks"`
-	}{Hooks: []hook{{Type: hostCommandType, Command: command}}})
+	}{Hooks: []hook{h}})
 	return json.RawMessage(text), err
 }
 
@@ -172,7 +178,7 @@ func compactJSON(v any) (string, error) {
 // mergeHostSettings adds entry to the settings file answer names, under the
 // explicit flag, and says what became of it. Every path through it either
 // writes the merged file or leaves the file as it was.
-func mergeHostSettings(answer machine.HostInstall, entry json.RawMessage, executable string) machine.HostInstall {
+func mergeHostSettings(kind HostKind, answer machine.HostInstall, entry json.RawMessage, executable string) machine.HostInstall {
 	refuse := func(refusal machine.HostInstallRefusal, detail string) machine.HostInstall {
 		answer.Result, answer.Refusal, answer.Detail = machine.HostInstallRefused, refusal, detail
 		return answer
@@ -192,13 +198,18 @@ func mergeHostSettings(answer machine.HostInstall, entry json.RawMessage, execut
 	if exists {
 		merged = observed
 	}
-	next, present, conflict, err := mergeHostEntry(merged, entry, answer.Command, executable)
+	requireSyncHooks := kind == HostCodex
+	next, present, conflict, err := mergeHostEntry(merged, entry, answer.Command, executable, requireSyncHooks)
 	switch {
 	case err != nil:
 		return refuse(machine.HostInstallUnreadable, err.Error())
 	case conflict != "":
 		answer.Conflict = conflict
-		return refuse(machine.HostInstallConflict, "a turn-end hook runs this program's stop guard with a different command line")
+		detail := "a turn-end hook runs this program's stop guard with a different command line"
+		if conflict == answer.Command {
+			detail = "a turn-end hook runs this program's stop guard in the background, which cannot block a turn"
+		}
+		return refuse(machine.HostInstallConflict, detail)
 	case present:
 		answer.Result = machine.HostInstallPresent
 		return answer
@@ -280,7 +291,7 @@ type member struct {
 // reports instead that the list already holds exactly command, or the command
 // line of a hook there that runs this program's stop guard differently. An
 // error is a document the merge cannot read without guessing.
-func mergeHostEntry(document, entry json.RawMessage, command, executable string) (merged json.RawMessage, present bool, conflict string, err error) {
+func mergeHostEntry(document, entry json.RawMessage, command, executable string, requireSyncHooks bool) (merged json.RawMessage, present bool, conflict string, err error) {
 	top, err := objectMembers(document)
 	if err != nil {
 		return nil, false, "", fmt.Errorf("the settings file is not a settings document: %w", err)
@@ -307,6 +318,16 @@ func mergeHostEntry(document, entry json.RawMessage, command, executable string)
 		for _, c := range commands {
 			switch {
 			case c == command:
+				if requireSyncHooks {
+					async, err := commandHookIsAsync(existing, c)
+					if err != nil {
+						return nil, false, "", fmt.Errorf("an entry under %q.%q: %w", hostHooksKey, hostTurnEndEvent, err)
+					}
+					if async {
+						conflict = c
+						continue
+					}
+				}
 				present = true
 			case runsThisStopGuard(c, executable):
 				conflict = c
@@ -336,6 +357,60 @@ func mergeHostEntry(document, entry json.RawMessage, command, executable string)
 	}
 	merged, err = encodeObject(top)
 	return merged, false, "", err
+}
+
+// commandHookIsAsync reports whether any command hook named command in entry
+// is marked async. A missing async member is synchronous. Every matching
+// handler is inspected, so an earlier synchronous copy does not hide a later
+// background one.
+func commandHookIsAsync(entry json.RawMessage, command string) (bool, error) {
+	fields, err := objectMembers(entry)
+	if err != nil {
+		return false, err
+	}
+	at := find(fields, hostHooksKey)
+	if at < 0 {
+		return false, nil
+	}
+	var hooks []json.RawMessage
+	if err := json.Unmarshal(fields[at].value, &hooks); err != nil || hooks == nil {
+		return false, fmt.Errorf("%q is not a list of hooks", hostHooksKey)
+	}
+	for _, raw := range hooks {
+		hook, err := objectMembers(raw)
+		if err != nil {
+			return false, err
+		}
+		var kind, cmd string
+		if at := find(hook, "type"); at >= 0 {
+			if err := json.Unmarshal(hook[at].value, &kind); err != nil {
+				return false, fmt.Errorf("a hook's type is not a string")
+			}
+		}
+		if kind != hostCommandType {
+			continue
+		}
+		if at := find(hook, "command"); at >= 0 {
+			if err := json.Unmarshal(hook[at].value, &cmd); err != nil {
+				return false, fmt.Errorf("a command hook's command is not a string")
+			}
+		}
+		if cmd != command {
+			continue
+		}
+		asyncAt := find(hook, "async")
+		if asyncAt < 0 {
+			continue
+		}
+		var async bool
+		if err := json.Unmarshal(hook[asyncAt].value, &async); err != nil {
+			return false, fmt.Errorf("a command hook's async is not a boolean")
+		}
+		if async {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // entryCommands is the command lines of an entry's command hooks. An entry
