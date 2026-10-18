@@ -58,7 +58,6 @@ func (r *codexRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error
 	w := &codexWorker{
 		route: spec.Route, model: spec.Model, effort: spec.Effort,
 		pending: map[uint64]chan codexMessage{}, send: make(chan struct{}, 1),
-		idle: make(chan struct{}, 1),
 	}
 	w.procWorker = &procWorker{
 		cmd: cmd, availability: &workerAvailability{}, stdin: input,
@@ -113,8 +112,7 @@ type codexWorker struct {
 	next          uint64
 	pending       map[uint64]chan codexMessage
 	send          chan struct{}
-	idle          chan struct{}
-	awaitingIdle  bool
+	settled       chan struct{}
 	thread, route string
 	model, effort string
 }
@@ -217,7 +215,7 @@ func (w *codexWorker) Send(ctx context.Context, text string) error {
 		return err
 	}
 	w.mu.Lock()
-	w.awaitingIdle = true
+	w.settled = make(chan struct{})
 	w.mu.Unlock()
 	w.availability.set(FailureNone)
 	params := map[string]any{
@@ -231,28 +229,25 @@ func (w *codexWorker) Send(ctx context.Context, text string) error {
 		params["effort"] = w.effort
 	}
 	if _, err := w.call(ctx, "turn/start", params); err != nil {
-		w.stopWaiting()
+		w.markIdle()
 		return err
 	}
 	return nil
 }
 
-// finishTurn waits for the turn a previous Send accepted. A turn that is
-// already idle has cleared awaitingIdle and left its signal buffered, and
-// that signal is drained so it cannot finish a later turn.
+// finishTurn waits for the turn a previous Send accepted. The channel is
+// taken under the same lock that markIdle closes it with, so an idle that
+// arrives as this starts cannot be observed as both finished and still
+// pending, and its close cannot complete a later turn.
 func (w *codexWorker) finishTurn(ctx context.Context) error {
 	w.mu.Lock()
-	waiting := w.awaitingIdle
+	settled := w.settled
 	w.mu.Unlock()
-	if !waiting {
-		select {
-		case <-w.idle:
-		default:
-		}
+	if settled == nil {
 		return nil
 	}
 	select {
-	case <-w.idle:
+	case <-settled:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -261,13 +256,14 @@ func (w *codexWorker) finishTurn(ctx context.Context) error {
 	}
 }
 
-func (w *codexWorker) stopWaiting() {
+// markIdle closes the accepted turn's channel and forgets it, once.
+func (w *codexWorker) markIdle() {
 	w.mu.Lock()
-	w.awaitingIdle = false
+	settled := w.settled
+	w.settled = nil
 	w.mu.Unlock()
-	select {
-	case <-w.idle:
-	default:
+	if settled != nil {
+		close(settled)
 	}
 }
 
@@ -316,18 +312,7 @@ func (w *codexWorker) receive(line []byte) {
 		if json.Unmarshal(message.Params, &status) != nil || status.Status.Type != "idle" {
 			return
 		}
-		w.mu.Lock()
-		waiting := w.awaitingIdle
-		if waiting {
-			w.awaitingIdle = false
-		}
-		w.mu.Unlock()
-		if waiting {
-			select {
-			case w.idle <- struct{}{}:
-			default:
-			}
-		}
+		w.markIdle()
 		return
 	}
 	if message.Method != "" || len(message.ID) == 0 {

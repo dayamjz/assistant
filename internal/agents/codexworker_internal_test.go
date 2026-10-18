@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -17,11 +18,11 @@ func TestRecordedCodexAppServerFramesDriveTheWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	settled := make(chan struct{})
 	w := &codexWorker{
 		procWorker: &procWorker{out: &tailWriter{limit: 1 << 20}, availability: &workerAvailability{}},
-		idle:       make(chan struct{}, 1),
+		settled:    settled,
 	}
-	w.awaitingIdle = true
 	var thread string
 	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
 		w.receive([]byte(line))
@@ -55,8 +56,34 @@ func TestRecordedCodexAppServerFramesDriveTheWorker(t *testing.T) {
 		t.Fatalf("the recorded agent message captured %q, want assistant text ready", w.Capture().Text)
 	}
 	select {
-	case <-w.idle:
+	case <-settled:
 	default:
 		t.Fatal("the recorded idle status did not finish the turn")
+	}
+}
+
+// An idle that arrives as the next Send checks the outstanding turn must
+// finish that turn and no later one. The two run together so the check and
+// the close meet in either order.
+func TestAnIdleCannotFinishALaterTurn(t *testing.T) {
+	w := &codexWorker{procWorker: &procWorker{done: make(chan struct{})}}
+	for range 100 {
+		w.mu.Lock()
+		w.settled = make(chan struct{})
+		w.mu.Unlock()
+		go w.markIdle()
+		if err := w.finishTurn(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		w.mu.Lock()
+		w.settled = make(chan struct{})
+		fresh := w.settled
+		w.mu.Unlock()
+		select {
+		case <-fresh:
+			t.Fatal("an earlier idle closed the next turn's channel")
+		default:
+		}
+		w.markIdle()
 	}
 }
