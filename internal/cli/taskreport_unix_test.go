@@ -131,8 +131,8 @@ func TestAWorkersReportIsStoredAndAnsweredWithoutItsCredentials(t *testing.T) {
 	_, documents := catchUpOnce(t, h, subject)
 	requireRedacted(t, "watch --once", strings.Join(documents, "\n"), marked...)
 
-	for range holds {
-		answered := run(t, h, subject, "--json", "--task", id, "--answer", "approved")
+	for _, hold := range holds {
+		answered := run(t, h, subject, "--json", "--task", id, "--hold", hold.Key, "--answer", "approved")
 		if answered.code != machine.ExitOK {
 			t.Fatalf("answering the task's hold exited %s:\n%s%s", answered.code, answered.stdout, answered.stderr)
 		}

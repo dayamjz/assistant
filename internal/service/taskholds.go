@@ -438,15 +438,16 @@ func (s *Service) holdAtBound(ctx context.Context, id string, attempts []store.T
 }
 
 // respondTask answers an open hold naming the task and no run, on the terms
-// this file's opening comment states. Without Hold, it is the oldest such
-// hold; with Hold set, that hold is named (full key or finding id). A task's
+// this file's opening comment states. Without Hold, it is the only such
+// hold; when more than one is open the answer is refused and lists them.
+// With Hold set, that hold is named (full key or finding id). A task's
 // worker is refused with ipc.ErrWorker, from the caller's credentials. A
 // request naming no task or giving no answer, an answer a retry hold does
-// not offer, a Hold that is not an open hold of the task, and a note over
-// machine.MaxMessageBytes are ipc.ErrInvalidRequest; a task with no such
-// hold is errNoTaskHold and a hold another caller answered first is
-// store.ErrHoldResolved, each wrapped in ipc.ErrRefused. None of those
-// records anything. A note is recorded with the resolution; on a retry of a
+// not offer, a Hold that is not an open hold of the task, an empty Hold
+// when more than one is open, and a note over machine.MaxMessageBytes are
+// ipc.ErrInvalidRequest; a task with no such hold is errNoTaskHold and a
+// hold another caller answered first is store.ErrHoldResolved, each wrapped
+// in ipc.ErrRefused. None of those records anything. A note is recorded with the resolution; on a retry of a
 // stop's hold it is also what the relaunched worker is told. A retry on a
 // relaunch hold asks relaunchTask, one on a stop's hold asks
 // relaunchTaskWith with the note, through answerStopRetry, and one on the
@@ -727,28 +728,85 @@ func retryNotBegun(err error) machine.AnswerEffect {
 }
 
 // oldestTaskHold is the oldest open hold naming the task and no run, in the
-// order internal/store lists open holds, or errNoTaskHold.
+// order internal/store lists open holds, or errNoTaskHold. It is the read
+// that asks whether the task has a hold of its own. An answer that names
+// no hold uses taskHoldToAnswer, which refuses when more than one is open.
 func (s *Service) oldestTaskHold(ctx context.Context, id string) (store.Hold, error) {
-	open, err := s.store.OpenHolds(ctx)
+	holds, err := s.openTaskHolds(ctx, id)
 	if err != nil {
 		return store.Hold{}, err
 	}
+	if len(holds) == 0 {
+		return store.Hold{}, fmt.Errorf("%w: task %s", errNoTaskHold, id)
+	}
+	return holds[0], nil
+}
+
+// openTaskHolds is every open hold naming the task and no run, in the order
+// internal/store lists open holds.
+func (s *Service) openTaskHolds(ctx context.Context, id string) ([]store.Hold, error) {
+	open, err := s.store.OpenHolds(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var holds []store.Hold
 	for _, h := range open {
 		if task, ok := h.TaskID.Get(); ok && task == id && !h.RunID.IsKnown() {
-			return h, nil
+			holds = append(holds, h)
 		}
 	}
-	return store.Hold{}, fmt.Errorf("%w: task %s", errNoTaskHold, id)
+	return holds, nil
+}
+
+// findingID is the finding identifier a report hold's key was built from.
+// It is the inverse of tasks.HoldKey for this task, so only a key that
+// function would produce yields one.
+func findingID(taskID, key string) (string, bool) {
+	prefix := tasks.HoldKey(taskID, "")
+	id := strings.TrimPrefix(key, prefix)
+	if id == key || id == "" {
+		return "", false
+	}
+	return id, true
+}
+
+// severalHoldsUnnamed refuses an answer that named no hold when the task
+// has more than one open. The text lists each key and, for a report hold,
+// the finding id, then the phrase a person reads.
+func severalHoldsUnnamed(taskID string, holds []store.Hold) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "task %s has %d open holds and the answer named none:\n", taskID, len(holds))
+	for _, h := range holds {
+		if id, ok := findingID(taskID, h.Key); ok {
+			fmt.Fprintf(&b, "%s finding %s\n", h.Key, id)
+		} else {
+			fmt.Fprintf(&b, "%s\n", h.Key)
+		}
+	}
+	b.WriteString(machine.PhraseSeveralHoldsUnnamed.String())
+	return fmt.Errorf("%w: %s", ipc.ErrInvalidRequest, b.String())
 }
 
 // taskHoldToAnswer is the open hold naming the task and no run that an
-// answer closes: the one Hold names (full key, or a finding id under the
-// task), or the oldest when Hold is empty. A named hold that is missing,
-// closed, names another task, or names a run is ipc.ErrInvalidRequest.
+// answer closes. Hold names it by full key or by a finding id under the
+// task. An empty Hold answers the only such hold, and is
+// ipc.ErrInvalidRequest when more than one is open. A named hold that is
+// missing, closed, names another task, or names a run is ipc.ErrInvalidRequest.
 func (s *Service) taskHoldToAnswer(ctx context.Context, taskID, holdFlag string) (store.Hold, error) {
 	name := strings.TrimSpace(holdFlag)
 	if name == "" {
-		return s.oldestTaskHold(ctx, taskID)
+		holds, err := s.openTaskHolds(ctx, taskID)
+		if err != nil {
+			return store.Hold{}, err
+		}
+		switch len(holds) {
+		case 0:
+			return store.Hold{}, fmt.Errorf("%w: task %s", errNoTaskHold, taskID)
+		case 1:
+			return holds[0], nil
+		default:
+			return store.Hold{}, severalHoldsUnnamed(taskID, holds)
+		}
 	}
 	key := name
 	if !strings.Contains(name, "/") {

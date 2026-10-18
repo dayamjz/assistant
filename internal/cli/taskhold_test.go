@@ -157,10 +157,13 @@ func TestATaskPastItsRelaunchBoundHoldsUntilAnAnswerRetriesItOnce(t *testing.T) 
 
 // PRD section 11's "Recovering an investigation": a decision an
 // investigation's report registered is closed by the same answer that
-// closes a run's hold, given the task, with no run anywhere. Two holds are
-// answered oldest first, each recorded as given and by the machine
-// interface, and with both closed a third answer is refused. No working
-// copy is needed: the answer is given from a directory that is not one.
+// closes a run's hold, given the task, with no run anywhere. An answer
+// that names neither hold while both are open is refused and lists them,
+// and nothing is closed. Each is then answered, the last of them without
+// a name once it is the only one open, recorded as given and by the
+// machine interface, and with both closed a further answer is refused. No
+// working copy is needed: the answer is given from a directory that is
+// not one.
 func TestAnInvestigationsHoldIsAnsweredGivenTheTask(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -197,9 +200,38 @@ func TestAnInvestigationsHoldIsAnsweredGivenTheTask(t *testing.T) {
 	}
 	_ = records.Close()
 
+	open := openHoldsOf(t, h, id)
+	unnamed := run(t, h, elsewhere, "--json", "--task", id, "--answer", "approved")
+	refusedAs(t, unnamed, ipc.CodeInvalidRequest, machine.ExitUsage)
+	var failure machine.Failure
+	if err := json.Unmarshal([]byte(unnamed.stdout), &failure); err != nil {
+		t.Fatalf("decoding the refusal: %v\n%s", err, unnamed.stdout)
+	}
+	if !strings.Contains(failure.Error, machine.PhraseSeveralHoldsUnnamed.String()) {
+		t.Fatalf("the refusal does not carry the phrase:\n%s", failure.Error)
+	}
+	vocabtest.Assert(t, machine.PhraseSeveralHoldsUnnamed.String())
+	for _, hold := range open {
+		if !strings.Contains(failure.Error, hold.Key) {
+			t.Fatalf("the refusal does not list %s:\n%s", hold.Key, failure.Error)
+		}
+		finding, ok := strings.CutPrefix(hold.Key, "task/"+id+"/finding/")
+		if !ok || finding == "" || !strings.Contains(failure.Error, finding) {
+			t.Fatalf("the refusal does not list the finding id of %s:\n%s", hold.Key, failure.Error)
+		}
+	}
+	if still := openHoldsOf(t, h, id); len(still) != len(open) {
+		t.Fatalf("the refused answer closed a hold: %+v", still)
+	}
+
 	var answered []string
-	for _, answer := range []string{"approved", "skipped"} {
-		got := answerTask(t, h, elsewhere, id, answer)
+	for i, answer := range []string{"approved", "skipped"} {
+		var got machine.TaskAnswered
+		if i == 0 {
+			got = answerNamedTask(t, h, elsewhere, id, open[0].Key, answer)
+		} else {
+			got = answerTask(t, h, elsewhere, id, answer)
+		}
 		if got.Effect != machine.AnswerRecorded || got.Hold.Resolution.Or("") != answer {
 			t.Fatalf("answering %q reports %+v, want the hold recorded as answered", answer, got)
 		}
@@ -384,6 +416,19 @@ func taskOf(t *testing.T, h *home.Home, dir, id string) machine.Task {
 
 // answerTask answers a task's hold through the surface and decodes what it
 // reported.
+func answerNamedTask(t *testing.T, h *home.Home, dir, id, hold, answer string) machine.TaskAnswered {
+	t.Helper()
+	got := run(t, h, dir, "--json", "--task", id, "--hold", hold, "--answer", answer)
+	if got.code != machine.ExitOK {
+		t.Fatalf("answering task %s hold %s %q exited %s:\n%s%s", id, hold, answer, got.code, got.stdout, got.stderr)
+	}
+	var answered machine.TaskAnswered
+	if err := json.Unmarshal([]byte(got.stdout), &answered); err != nil {
+		t.Fatalf("decoding: %v\n%s", err, got.stdout)
+	}
+	return answered
+}
+
 func answerTask(t *testing.T, h *home.Home, dir, id, answer string) machine.TaskAnswered {
 	t.Helper()
 	got := run(t, h, dir, "--json", "--task", id, "--answer", answer)
