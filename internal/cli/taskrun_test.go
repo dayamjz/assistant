@@ -171,14 +171,18 @@ func TestATasksOwnHoldIsAnsweredBeforeItsRun(t *testing.T) {
 	vocabtest.Assert(t, machine.PhraseTaskOwnHoldFirst.String())
 	assertHeldAt(t, h, elsewhere, runBefore.Record.ID, holds)
 
-	// Each answer closes the task's own oldest hold, and the run stays put.
-	for _, answer := range []string{"approved", "skipped"} {
-		got := answerTask(t, h, elsewhere, id, answer)
-		if got.Effect != machine.AnswerRecorded || got.Hold.Resolution.Or("") != answer {
-			t.Fatalf("answering %q given the task reports %+v, want the task's own hold recorded", answer, got)
-		}
-		assertHeldAt(t, h, elsewhere, runBefore.Record.ID, holds)
+	// Two decisions are open, so the first answer names one. The one that
+	// remains is answered without a name. Neither reaches the run.
+	named := answerNamedTask(t, h, elsewhere, id, own[0].Key, "approved")
+	if named.Effect != machine.AnswerRecorded || named.Hold.Key != own[0].Key || named.Hold.Resolution.Or("") != "approved" {
+		t.Fatalf("naming the first decision reports %+v, want hold %s recorded approved", named, own[0].Key)
 	}
+	assertHeldAt(t, h, elsewhere, runBefore.Record.ID, holds)
+	remaining := answerTask(t, h, elsewhere, id, "skipped")
+	if remaining.Effect != machine.AnswerRecorded || remaining.Hold.Key != own[1].Key || remaining.Hold.Resolution.Or("") != "skipped" {
+		t.Fatalf("the remaining decision reports %+v, want hold %s recorded skipped", remaining, own[1].Key)
+	}
+	assertHeldAt(t, h, elsewhere, runBefore.Record.ID, holds)
 
 	// With none of its own open, the same flag reaches the run.
 	moved := run(t, h, elsewhere, "--json", "--task", id, "--answer", string(pipeline.OutcomeApproved))
