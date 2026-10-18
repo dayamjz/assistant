@@ -96,8 +96,9 @@ func HostStopOf(v supervisor.StopVerdict, reEntered bool) HostStop {
 // prints the exact line the host's configuration needs and writes it only
 // when given an explicit flag, so without that flag nothing in the host's
 // configuration changes (P1). This shape is what that installer found and
-// did, and nothing about how it found it: which file the host reads and how
-// the line merges into it are internal/cli's adapter.
+// did, and nothing about how it found it: which file the host reads, which
+// host was selected, and how the line merges into it are internal/cli's
+// adapter.
 //
 // Settings and Line are machine text a person copies exactly, so they are
 // carried as they are and printed beside the phrase rather than in it.
@@ -112,6 +113,9 @@ type HostInstall struct {
 	// Command is the command line the hook runs, which is the part of Line
 	// this program owns.
 	Command string `json:"command"`
+	// Host is which coordinator host the request targeted, one of claude or
+	// codex, empty when the answer predates host selection.
+	Host string `json:"host,omitempty"`
 	// Result is what became of the request, one of HostInstallResults.
 	Result HostInstallResult `json:"result"`
 	// Refusal is why the line was not written, set exactly when Result is

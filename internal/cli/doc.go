@@ -164,14 +164,15 @@
 // file it belongs in and writes nothing; only --write merges the line into
 // that file, keeping every other setting, and a file holding this program's
 // stop guard under another command line, or one it cannot read as settings,
-// is refused as a typed result with the file left as it was. The host is
-// Claude Code, and the settings shape is what that host documents about
-// itself; hostInstall names the source and its three gaps. The line sets no
-// re-entry signal of its own, because that host documents one on the hook's
-// standard input and stop reads it there. PRD section 9's row for this verb
-// says a person never types it, which predates the installer, so that is a
-// finding against the specification rather than a precedent for typed
-// subcommands here.
+// is refused as a typed result with the file left as it was. --host selects
+// Claude Code (settings.json under CLAUDE_CONFIG_DIR or ~/.claude) or Codex
+// (hooks.json under CODEX_HOME or ~/.codex); codexhost.go records what was
+// observed of Codex's Stop hook and the gaps that remain. The line sets no
+// re-entry signal of its own, because both hosts document stop_hook_active on
+// the hook's standard input and stop reads it there. PRD section 9's row for
+// this verb says a person never types it, which predates the installer, so
+// that is a finding against the specification rather than a precedent for
+// typed subcommands here.
 //
 // Three gaps are deliberate and written down rather than rounded off. The
 // block status coincides with the usage status, so a host that runs a

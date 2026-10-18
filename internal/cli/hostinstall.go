@@ -17,9 +17,10 @@ import (
 )
 
 // The host's settings: where they live and the names the line is built
-// from. The coordinator's host this adapter knows is Claude Code, and every
-// name here is one its own documentation states, as the 2.1.299 build
-// carries it: settings cascade from "~/.claude/settings.json (user)", hooks
+// from. Claude Code is the default host; Codex uses hooks.json under
+// CODEX_HOME instead, on hostHooksFile's terms. Every name here for Claude
+// is one its own documentation states, as the 2.1.299 build carries it:
+// settings cascade from "~/.claude/settings.json (user)", hooks
 // are the "hooks" key, each event maps to a list of entries whose "hooks"
 // list holds {"type": "command", "command": ...}, and the event that runs
 // "right before Claude concludes its response" is "Stop", with "Exit code 2 -
@@ -44,9 +45,10 @@ const (
 // hostInstall is the installer PRD section 6's stop guard row asks for: it
 // prints the exact line the host's configuration needs, and writes it only
 // when given --write, so without that flag nothing in the host's
-// configuration changes (P1). A push never consented to a change in the
-// host's configuration, and neither did running this command without the
-// flag.
+// configuration changes (P1). --host selects Claude Code or Codex; each
+// writes only its own file and never the other's. A push never consented to
+// a change in the host's configuration, and neither did running this command
+// without the flag.
 //
 // The line's command is this binary's absolute path with the home this
 // invocation resolved, so the hook judges the home it was installed for
@@ -81,15 +83,21 @@ const (
 // applies to and not only the coordinator's.
 func hostInstall(_ context.Context, in *invocation) (any, error) {
 	write := false
+	hostName := string(HostClaude)
 	if err := in.parseFlags("host install", func(set *flag.FlagSet) {
 		set.BoolVar(&write, hostInstallWriteFl, false, "write the line into the host's settings file; without it nothing is written")
+		set.StringVar(&hostName, hostInstallHostFl, string(HostClaude), "coordinator host to install for: "+hostKindNames())
 	}); err != nil {
 		return nil, err
+	}
+	kind, err := parseHostKind(hostName)
+	if err != nil {
+		return nil, usageError{err: err}
 	}
 	if err := in.resolveHome(); err != nil {
 		return nil, err
 	}
-	settings, err := hostSettingsPath(in.env.Getenv)
+	settings, err := hostHooksFile(kind, in.env.Getenv)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +113,13 @@ func hostInstall(_ context.Context, in *invocation) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	answer := machine.HostInstall{Settings: settings, Line: line, Command: command, Result: machine.HostInstallPrinted}
+	answer := machine.HostInstall{
+		Settings: settings,
+		Line:     line,
+		Command:  command,
+		Host:     string(kind),
+		Result:   machine.HostInstallPrinted,
+	}
 	if !write {
 		return answer, nil
 	}
