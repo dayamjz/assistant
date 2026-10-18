@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -203,7 +204,7 @@ func (r *cursorRunner) Name() string { return CursorName }
 // Leaving it undeclared is what lets internal/pipeline refuse a run that asks
 // for suppression against this adapter before it launches one.
 func (r *cursorRunner) Capabilities() Capabilities {
-	return Declare(CapabilityResumableSessions)
+	return Declare(CapabilityResumableSessions, CapabilityWorkerSessions)
 }
 
 // Run executes one invocation with no session. It resumes nothing, and the
@@ -318,6 +319,10 @@ func (r *cursorRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	reference := ""
 	fail := func(res *procResult, category Failure, cause error, message string) (Result, string, error) {
 		record.Duration = time.Since(record.Started)
+		if message == "" && res != nil {
+			message = res.stderr
+		}
+		category = availabilityCategory(category, message)
 		record.Failure = category
 		r.report(record)
 		code := -1
@@ -488,8 +493,8 @@ func (r *cursorRunner) arguments(grant Grant, inv Invocation, resume string) []s
 //     "force allow commands unless explicitly denied"); this package does not
 //     pass a deny list to narrow that, so the grant is wider than "edits
 //     only".
-//   - GrantWorker is GrantRead's: this adapter declares no worker capability,
-//     so a worker grant is not a path a run reaches here.
+//   - Workers use the separate ACP Start path and its permission-request
+//     policy; no worker is launched through this one-shot argument builder.
 //
 // An unrecognized grant is GrantRead's.
 func cursorGrantFlags(g Grant) []string {
@@ -528,11 +533,12 @@ func (r *cursorRunner) sweep(ctx context.Context, dir string) {
 // This describes what the adapter reads, not what the agent guarantees to
 // write. An envelope this adapter cannot read is FailureOutput.
 type cursorEnvelope struct {
-	Subtype   string `json:"subtype"`
-	IsError   bool   `json:"is_error"`
-	Result    string `json:"result"`
-	SessionID string `json:"session_id"`
-	Model     string `json:"model"`
+	Subtype   string   `json:"subtype"`
+	IsError   bool     `json:"is_error"`
+	Errors    []string `json:"errors"`
+	Result    string   `json:"result"`
+	SessionID string   `json:"session_id"`
+	Model     string   `json:"model"`
 	// Every count is a pointer so that a counter the agent omitted stays
 	// distinguishable from one it reported as zero. Decoding into a number
 	// would collapse the two here, where the difference is still knowable.
@@ -560,6 +566,9 @@ func (e cursorEnvelope) usage() Usage {
 // failureText is what the agent said about its own failure. It is content, so
 // it reaches an *InvocationError and never a Record.
 func (e cursorEnvelope) failureText() string {
+	if len(e.Errors) > 0 {
+		return strings.Join(e.Errors, "\n")
+	}
 	if e.Result != "" {
 		return e.Result
 	}

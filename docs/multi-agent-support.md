@@ -21,6 +21,7 @@ OpenAI, and Grok Build.
   `prompt...` argument; not stdin). Large prompts are still bounded by
   `MaxPromptBytes`; there is no Cursor `--prompt-file`.
 - **Sessions**: resumable fixer sessions (`--resume`)
+- **Workers**: persistent ACP pipe sessions; attachable terminal workers are not declared.
 - **Note**: Grok’s installer also links `agent`. That name is **not** a Cursor
   candidate here, so a machine with only Grok’s `agent` will not resolve as
   `cursor`. Put `cursor-agent` on PATH.
@@ -159,15 +160,10 @@ the first runnable entry whose declared capabilities cover the worker need
   Failed rather than staying Dispatched. Grants stay `GrantWorker` on the
   ordinary Create path — a miss does not widen permissions.
 
-So `agent: cursor` can still run reviews when Cursor is installed, but a
-worker launch under that pin fails until the list includes an adapter that
-declares worker sessions (today: Claude), or until you list both:
-
-```yaml
-agent:
-  - cursor
-  - claude
-```
+`agent: cursor` supports reviews and ACP pipe workers. Attachable tmux
+workers require an adapter declaring terminal workers, currently Claude.
+A Cursor pin with `session_provider: tmux` refuses instead of changing the
+session provider. An explicit role backup is described below.
 
 ## CLI Binary Requirements
 
@@ -193,6 +189,7 @@ assistant doctor
 | Structured output | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Resumable sessions | ✅ | ✅ | ✅ | ❌ | ✅ |
 | CLI login (no API key) | ✅ | ✅ (print mode) | ✅ | TBD | ✅ |
+| Pipe workers | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Terminal workers | ❌ | ✅ | ❌ | ❌ | ❌ |
 
 ## How It Works
@@ -250,5 +247,62 @@ agent: cursor
 
 The configured agent list has no adapter that declares the worker
 capabilities the session provider needs. Pin Claude, or list a covering
-adapter after your preferred run agent. A Cursor-only pin refuses workers on
-purpose; it does not fall back silently or change grants.
+adapter after your preferred run agent. Cursor supports pipe workers, but a
+Cursor-only pin with tmux is refused. A backup never changes the chosen
+session provider or widens grants.
+
+## Explicit availability fallback
+
+Each role may name one `fallback` with its own agent and optional model and
+effort. A missing executable or a recognized quota/authentication/service
+failure reaches that backup. Ordinary errors, invalid reports, cancellation,
+deadlines, context exhaustion, invalid settings, and missing capabilities
+refuse rather than changing agents. Unknown quota wording also refuses.
+There is no dependency on a quota-reporting CLI or live quota polling.
+
+```yaml
+agent: cursor
+roles:
+  worker:
+    agent: claude
+    fallback:
+      agent: cursor
+  fix:
+    agent: claude
+    fallback:
+      agent: cursor
+  review:
+    agent: codex
+    provider: openai
+    type: gpt
+    version: "6.1-sol"
+    effort: high
+    fallback:
+      agent: cursor
+```
+
+`agent: cursor` handles general stages while the named worker and fixer
+roles still try Claude first. Backups do not inherit the primary's model or
+effort. Each review is fresh. A fixer handoff starts a new conversation on
+the backup and keeps its agent-qualified reference across resume.
+
+A quota-limited pipe worker is stopped before its backup starts. The existing
+ bounded relaunch sweeps and reasserts its same copy, preserving committed and
+ uncommitted work. Its written-once handoff selection survives service restart;
+it does not switch back within that task. A new task tries its primary again.
+Fresh reviews also re-resolve a primary that was missing at service startup.
+A failed safety proof or an exhausted relaunch bound follows the existing
+ refusal/hold path. A backup outage raises a retry/stop decision; it does not start a third agent.
+A retry that failed before a session was recorded reuses dispatch's existing
+standing-copy sweep and the same relaunch bound.
+
+Cursor workers require `session_provider: pipe` (the default). Worker backup capabilities are checked before any worker starts. A tmux provider
+is refused for Cursor rather than replaced, because Cursor terminal support
+ is not declared. Its ACP client grants only read/edit/search requests and
+literal git or worker-route commands without shell operators; other permission
+requests are cancelled. The CLI's own preapproved tools remain outside that
+client policy. No API key is added; Cursor uses its CLI login.
+
+`ASSISTANT_CURSOR_WORKER_LIVE=1 go test ./internal/agents -run TestInstalledCursorACPWorker`
+checks an installed Cursor CLI with a real model call. Without the explicit
+opt-in it skips, so ordinary CI proves the scripted wire, not model access.

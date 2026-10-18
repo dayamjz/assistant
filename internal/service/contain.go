@@ -291,3 +291,8 @@ func (r *registry) Contained(_ context.Context, c ipc.Credentials) (ipc.Containm
 	}
 	return ipc.Containment{Contained: true, Run: found.run, Stage: found.stage}, nil
 }
+
+// SessionAgent forwards only the primitive owner of a stored fixer reference.
+func (c containedRunner) SessionAgent(reference string) string {
+	return agents.SessionAgent(c.inner, reference)
+}

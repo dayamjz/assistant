@@ -174,18 +174,18 @@ func TestCreateRefusesBeforeStarting(t *testing.T) {
 		t.Errorf("a refused Create started a worker: %s", calls)
 	}
 
-	// The Cursor adapter declares no worker sessions, so OpenWorker refuses
+	// The Codex adapter declares no worker sessions, so OpenWorker refuses
 	// it before anything starts and this package passes that refusal on. It
 	// is built over this test binary, which it never runs here.
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cursor, err := agents.CursorFactory(agents.WithCursorBinary(self)).New(context.Background(), nil)
+	codex, err := agents.CodexFactory(agents.WithCodexBinary(self)).New(context.Background(), nil)
 	if err != nil {
-		t.Fatalf("building the cursor adapter: %v", err)
+		t.Fatalf("building the codex adapter: %v", err)
 	}
-	undeclared := session.NewPipe(sub.home, cursor)
+	undeclared := session.NewPipe(sub.home, codex)
 	var capErr *agents.CapabilityError
 	if _, err := undeclared.Create(context.Background(), sub.spec("begin")); !errors.As(err, &capErr) {
 		t.Errorf("an adapter without worker sessions answered %v, want a *agents.CapabilityError", err)

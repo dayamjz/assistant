@@ -390,7 +390,7 @@ func scriptedAgent(t *testing.T) *agents.Catalog {
 }
 
 // workerlessAgent is a catalog holding a shipped adapter that declares no
-// worker sessions, the Cursor one, for a test whose subject is what a service
+// worker sessions, the Codex one, for a test whose subject is what a service
 // does before a worker launches or when none can: the Claude Code adapter
 // declares them, so a service over scriptedAgent launches every task it
 // dispatches. It is built over the stand-in's own arguments, so anything that
@@ -399,12 +399,12 @@ func scriptedAgent(t *testing.T) *agents.Catalog {
 func workerlessAgent(t *testing.T) *agents.Catalog {
 	t.Helper()
 	agent := standin.New(t, standin.Script{})
-	runner, err := agents.CursorFactory(agents.WithCursorBinary(testCommand(t))).New(t.Context(), agent.Arguments())
+	runner, err := agents.CodexFactory(agents.WithCodexBinary(testCommand(t))).New(t.Context(), agent.Arguments())
 	if err != nil {
-		t.Fatalf("building the cursor adapter over the stand-in: %v", err)
+		t.Fatalf("building the codex adapter over the stand-in: %v", err)
 	}
 	if runner.Capabilities().Has(agents.CapabilityWorkerSessions) {
-		t.Fatalf("the cursor adapter declares %s, so it cannot stand for an adapter without them", agents.CapabilityWorkerSessions)
+		t.Fatalf("the codex adapter declares %s, so it cannot stand for an adapter without them", agents.CapabilityWorkerSessions)
 	}
 	return agents.NewCatalog(fixedFactory{runner: runner})
 }

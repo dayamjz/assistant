@@ -120,8 +120,8 @@ its identifier, under `active_run.stages[].report.findings`.
 A task's worker tells the program about its work with one command,
 `assistant worker`, run from its own copy. The service starts every worker
 with that command's full prefix: this binary's absolute path, `--home`
-naming the service's home, and `worker`. That prefix is what the Claude
-Code adapter's worker is allowed to run besides git without asking, and what
+naming the service's home, and `worker`. That prefix is what Claude Code
+and Cursor ACP workers are allowed to run besides git without asking, and what
 its instructions tell it to type. Through it a worker acknowledges a
 coordinator's message by the number it arrived under, files an
 investigation's report once, and records how its work stands. The

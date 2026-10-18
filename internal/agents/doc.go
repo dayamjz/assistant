@@ -417,8 +417,22 @@
 // builds the topology; nothing here would refuse such a run, because nothing
 // here is asked to suppress anything.
 //
-// It does not retry. PRD section 8 lists retries alongside fallback ordering
-// for this module, and a run's own fix rounds and bounds are the only
-// repetition today; adding a second, invisible one underneath them would put
-// two owners on the question of how often something is attempted.
+// It has no retry loop. An explicit fallback tries the primary once and
+// its configured backup once; subsequent fix rounds and run bounds remain
+// owned by the graph. A worker switch spends the existing relaunch bound.
+//
+// Cursor pipe workers use ACP protocol version 1 over a persistent process:
+// initialize, cursor_login authentication, session/new, and session/prompt.
+// The stand-in models this documented wire, not Cursor's implementation.
+// ASSISTANT_CURSOR_WORKER_LIVE=1 probes an installed CLI with a real model
+// call; CI skips that probe explicitly. Cursor declares no terminal workers.
+// Permission replies cover only requests the CLI emits, not tools its own
+// settings already permit. Unknown client requests are refused.
+//
+// Explicit role fallback recognizes a bounded set of agent error signatures.
+// Unknown quota wording therefore fails rather than guessing. It never uses
+// successful output as evidence of exhaustion and never polls quota vendors.
+// Fallback fixer references bind the agent and its session together; reviews
+// never consume those references. The service owns durable worker handoffs.
+
 package agents

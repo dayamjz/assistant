@@ -32,6 +32,8 @@ type Role struct {
 	Type     string
 	Version  string
 	Effort   string
+	// Fallback names one backup with its own agent, model and effort.
+	Fallback *Role
 }
 
 // Roles is the configured roles, keyed by role name. Nil and empty are the
@@ -45,11 +47,17 @@ func (a Roles) Equal(b Roles) bool {
 	}
 	for name, role := range a {
 		other, ok := b[name]
-		if !ok || role != other {
+		if !ok || !role.equal(other) {
 			return false
 		}
 	}
 	return true
+}
+
+func (r Role) equal(other Role) bool {
+	a, b := r.Fallback, other.Fallback
+	r.Fallback, other.Fallback = nil, nil
+	return r == other && ((a == nil && b == nil) || (a != nil && b != nil && a.equal(*b)))
 }
 
 // ForTask resolves the role a task may run under. An empty name is the
@@ -194,7 +202,7 @@ func decodeRoles(k Key, v any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		out[name] = role
+		out[name] = role.clone()
 	}
 	return out, nil
 }
@@ -204,7 +212,7 @@ func decodeOneRole(k Key, root any, name string, v any) (Role, error) {
 	if !ok {
 		return Role{}, keyErr(k, root, "role "+quote(name)+" must be an object")
 	}
-	if extra, found := unknownField(obj, "agent", "provider", "type", "version", "effort"); found {
+	if extra, found := unknownField(obj, "agent", "provider", "type", "version", "effort", "fallback"); found {
 		return Role{}, keyErr(k, root, "role "+quote(name)+" has an unrecognized field "+quote(extra))
 	}
 	agent, err := roleString(k, root, name, obj, "agent")
@@ -232,7 +240,7 @@ func decodeOneRole(k Key, root any, name string, v any) (Role, error) {
 			return Role{}, keyErr(k, root, "role "+quote(name)+" names an agent with arguments; a role names one agent and no arguments")
 		}
 		if agent == "auto" {
-			return Role{}, keyErr(k, root, "role "+quote(name)+" names auto; a role names one agent and has no fallback list")
+			return Role{}, keyErr(k, root, "role "+quote(name)+" names auto; name one adapter explicitly for each primary or backup")
 		}
 	}
 	named := 0
@@ -255,7 +263,28 @@ func decodeOneRole(k Key, root any, name string, v any) (Role, error) {
 	default:
 		return Role{}, keyErr(k, root, "role "+quote(name)+" has effort "+quote(effort)+"; effort is low, medium, or high")
 	}
-	return Role{Agent: agent, Provider: provider, Type: typ, Version: version, Effort: effort}, nil
+	role := Role{Agent: agent, Provider: provider, Type: typ, Version: version, Effort: effort}
+	if value, ok := obj["fallback"]; ok {
+		backup, valid := value.(map[string]any)
+		if !valid {
+			return Role{}, keyErr(k, root, "role "+quote(name)+" fallback must be an object")
+		}
+		if _, nested := backup["fallback"]; nested {
+			return Role{}, keyErr(k, root, "role "+quote(name)+" allows only one backup")
+		}
+		parsed, err := decodeOneRole(k, root, name+" fallback", value)
+		if err != nil {
+			return Role{}, err
+		}
+		if agent == "" || parsed.Agent == "" {
+			return Role{}, keyErr(k, root, "a fallback requires an explicit primary and backup agent")
+		}
+		if parsed.Agent == agent {
+			return Role{}, keyErr(k, root, "the backup must name a different agent")
+		}
+		role.Fallback = &parsed
+	}
+	return role, nil
 }
 
 func roleString(k Key, root any, name string, obj map[string]any, field string) (string, error) {
@@ -280,7 +309,15 @@ func cloneRoles(v any) Roles {
 	}
 	out := make(Roles, len(in))
 	for name, role := range in {
-		out[name] = role
+		out[name] = role.clone()
 	}
 	return out
+}
+
+func (r Role) clone() Role {
+	if r.Fallback != nil {
+		b := r.Fallback.clone()
+		r.Fallback = &b
+	}
+	return r
 }

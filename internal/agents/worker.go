@@ -148,7 +148,9 @@ type Worker interface {
 	// adapter writes text itself, followed by a newline when it does not end
 	// in one, and the Claude Code adapter writes one stream-json user message
 	// carrying text exactly, on the terms its Start states. Either way the
-	// worker reads lines, and one Send is one unit of what it reads.
+	// worker reads lines, and one Send is one unit of what it reads. Cursor
+	// workers use one ACP session/prompt request per Send; control and permission
+	// messages belong to the adapter, not to the caller.
 	// It returns once the text has been written, or ErrWorkerEnded when the
 	// process is no longer running, so nothing is reported delivered to a
 	// process that is gone. ctx bounds the wait: a worker that is not
@@ -194,6 +196,9 @@ type Worker interface {
 
 // Capture is what Worker.Capture hands back.
 type Capture struct {
+	// Failure is the worker adapter's current recognized availability failure.
+	// It is reset when a new message is queued, independently of old output.
+	Failure Failure
 	// Text is the retained output, which is the most recent of it.
 	Text string
 	// Dropped is how many bytes of earlier output were discarded to keep Text
@@ -242,10 +247,12 @@ func OpenWorker(ctx context.Context, r Runner, spec WorkerSpec) (Worker, error) 
 // that the tree is ended by Close or by the leader's own exit rather than by
 // the return of a call.
 type procWorker struct {
-	cmd   *exec.Cmd
-	stdin io.WriteCloser
-	out   *tailWriter
-	grace time.Duration
+	availability *workerAvailability
+	clearOnWrite bool
+	cmd          *exec.Cmd
+	stdin        io.WriteCloser
+	out          *tailWriter
+	grace        time.Duration
 	// done is closed by the wait goroutine once the leader has been reaped
 	// and whatever it left in its group has been terminated.
 	done chan struct{}
@@ -296,7 +303,12 @@ func startWorker(ctx context.Context, spec procSpec, instructions string, frame 
 	out := &tailWriter{limit: spec.maxOut}
 	// One writer for both streams, guarded by its own mutex, so what Capture
 	// reports is the order the writes reached it.
-	cmd.Stdout = out
+	availability := &workerAvailability{}
+	if format == OutputStreamJSON {
+		cmd.Stdout = &availabilityStream{out: out, state: availability, limit: spec.maxOut}
+	} else {
+		cmd.Stdout = out
+	}
 	cmd.Stderr = out
 	cmd.WaitDelay = spec.grace
 	setProcessGroup(cmd)
@@ -308,15 +320,17 @@ func startWorker(ctx context.Context, spec procSpec, instructions string, frame 
 		return nil, err
 	}
 	w := &procWorker{
-		cmd:       cmd,
-		stdin:     stdin,
-		out:       out,
-		grace:     spec.grace,
-		done:      make(chan struct{}),
-		slot:      make(chan struct{}, 1),
-		frame:     frame,
-		format:    format,
-		stdinOpen: true,
+		cmd:          cmd,
+		availability: availability,
+		clearOnWrite: format == OutputStreamJSON,
+		stdin:        stdin,
+		out:          out,
+		grace:        spec.grace,
+		done:         make(chan struct{}),
+		slot:         make(chan struct{}, 1),
+		frame:        frame,
+		format:       format,
+		stdinOpen:    true,
 	}
 	go func() {
 		defer close(w.done)
@@ -376,6 +390,9 @@ func (w *procWorker) write(ctx context.Context, text string) error {
 	if err != nil {
 		return err
 	}
+	if w.clearOnWrite && w.availability != nil {
+		w.availability.set(FailureNone)
+	}
 	written := make(chan error, 1)
 	go func() {
 		_, err := w.stdin.Write(framed)
@@ -413,7 +430,11 @@ func (w *procWorker) write(ctx context.Context, text string) error {
 // Capture returns the retained output.
 func (w *procWorker) Capture() Capture {
 	text, dropped := w.out.snapshot()
-	return Capture{Text: text, Dropped: dropped, Format: w.format}
+	var failure Failure
+	if w.availability != nil {
+		failure = w.availability.get()
+	}
+	return Capture{Text: text, Dropped: dropped, Format: w.format, Failure: failure}
 }
 
 // Group is the leader's process identifier, which names the group everywhere
@@ -502,4 +523,13 @@ func plainLine(text string) ([]byte, error) {
 		text += "\n"
 	}
 	return []byte(text), nil
+}
+
+// AvailabilityFailure is the current protocol state, independent of output
+// retained from earlier turns. Text workers provide no such evidence.
+func (w *procWorker) AvailabilityFailure() Failure {
+	if w.availability == nil {
+		return FailureNone
+	}
+	return w.availability.get()
 }

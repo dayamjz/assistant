@@ -120,7 +120,7 @@ func (s *Service) Fixer(ctx context.Context, id string) (*Fixer, error) {
 		session, hasSession := r.FixerSession.Get()
 		agent, hasAgent := r.FixerAgent.Get()
 		resolved, hasResolved := r.ResolvedAgent.Get()
-		f.reference = fixerResume(session, agent, resolved, s.agent.Name, hasSession, hasAgent, hasResolved)
+		f.reference = fixerResume(session, agent, resolved, agents.SessionAgent(s.agent.Runner, session), hasSession, hasAgent, hasResolved)
 	}
 	s.fixers[id] = f
 	return f, nil
@@ -227,7 +227,7 @@ func (f *Fixer) record(ctx context.Context, reference string) error {
 	if reference == "" || reference == f.reference {
 		return nil
 	}
-	if err := f.service.store.SetRunFixerSession(ctx, f.run, reference, f.service.agent.Name); err != nil {
+	if err := f.service.store.SetRunFixerSession(ctx, f.run, reference, agents.SessionAgent(f.service.agent.Runner, reference)); err != nil {
 		return fmt.Errorf("runs: recording the fixer session of run %s: %w", f.run, err)
 	}
 	f.reference = reference

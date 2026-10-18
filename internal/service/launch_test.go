@@ -348,7 +348,7 @@ func TestADispatchedInvestigationTaskIsLaunched(t *testing.T) {
 }
 
 // A service resolved to an adapter that has not declared worker sessions,
-// which the Cursor adapter is, dispatches the task and refuses the launch
+// which the Codex adapter is, dispatches the task and refuses the launch
 // with a recorded route-refused event: the task resolves Failed, the
 // attempt keeps no session, and the service holds no session. The typed
 // refusal behind that is launch_internal_test.go's to show; this is the
