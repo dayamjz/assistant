@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
@@ -95,7 +94,7 @@ func TestAReviewAndItsFixRoundAreReadableInTheStageLogWithNoCredential(t *testin
 	h := newHome(t)
 	subject := newSubject(t)
 	agent := logScript(t, "logged")
-	serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: agent.Runner()}))
+	serveCatalog(t, h, stages.All, agentCatalog(agent.Runner()))
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
@@ -254,7 +253,7 @@ func TestStatusShowsTheRunningStagesRoundAndHowLongItHasRun(t *testing.T) {
 		}
 		return fixer
 	}
-	serveFixing(t, h, stages.All, held, agents.NewCatalog(fixedFactory{runner: agent.Runner()}))
+	serveFixing(t, h, stages.All, held, agentCatalog(agent.Runner()))
 	t.Cleanup(let)
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)

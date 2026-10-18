@@ -57,7 +57,7 @@ func streamWorkerAgent(t *testing.T) (*agents.Catalog, *standin.Agent) {
 			},
 		},
 	}, agents.WithTerminationGrace(2*time.Second))
-	return agents.NewCatalog(fixedFactory{runner: agent.Runner()}), agent
+	return agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()}), agent
 }
 
 // streamWorker records and dispatches a delivery task, serves a service

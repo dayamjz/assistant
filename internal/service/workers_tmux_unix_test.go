@@ -305,7 +305,7 @@ func twoTmuxWorkers(t *testing.T, body func(a, b launched, h *home.Home)) {
 			},
 		},
 	}, agents.WithTerminationGrace(2*time.Second))
-	o.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()})
+	o.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
 	gateRepo := gateRepositoryOf(t, h, subject)
 	withServiceOptions(t, o, func(running serviceUnderTest) {
 		workerOf := func(id string) launched {

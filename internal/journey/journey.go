@@ -278,6 +278,14 @@ func (j *Journey) WriteConfiguration(document map[string]any) error {
 		}
 		whole["agent"] = entry
 	}
+	// The product default fixer is cursor. This harness's stand-in is the
+	// claude shim, so a document that does not name roles pins the fixer to
+	// that shim. The default would start whatever cursor is on the machine.
+	if _, taken := whole["roles"]; !taken {
+		whole["roles"] = map[string]any{
+			"fix": map[string]any{"agent": AgentShimName},
+		}
+	}
 	body, err := json.Marshal(whole)
 	if err != nil {
 		return fmt.Errorf("journey: rendering the home's configuration: %w", err)

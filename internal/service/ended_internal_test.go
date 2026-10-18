@@ -236,12 +236,13 @@ func newHeldService(t *testing.T) *heldService {
 		return nine
 	}
 
+	runner := standin.New(t, standin.Script{}).Runner()
 	running, err := Open(t.Context(), Options{
 		Home:      h,
 		NewStages: served,
 		NewFixer:  stages.Fix,
 		Build:     build,
-		Catalog:   agents.NewCatalog(fixedRunner{runner: standin.New(t, standin.Script{}).Runner()}),
+		Catalog:   agents.NewCatalog(fixedRunner{runner: runner}, cursorFactory{runner: runner}),
 		LockWait:  -1,
 	})
 	if err != nil {
@@ -353,6 +354,16 @@ func heldGit(t *testing.T, dir string, args ...string) string {
 // fixedRunner hands back a Runner somebody else built, so nothing here can
 // produce an adapter the production path could not.
 type fixedRunner struct{ runner agents.Runner }
+
+// cursorFactory is the default fixer for a hand-built catalog. It returns the
+// runner the test already scripts, and it is not auto-eligible.
+type cursorFactory struct{ runner agents.Runner }
+
+func (cursorFactory) Name() string { return agents.CursorName }
+
+func (cursorFactory) AutoEligible() bool { return false }
+
+func (f cursorFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 
 func (f fixedRunner) Name() string { return f.runner.Name() }
 

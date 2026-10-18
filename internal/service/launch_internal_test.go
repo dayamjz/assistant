@@ -32,7 +32,7 @@ type launchSubject struct {
 func newLaunchSubject(t *testing.T, agent *standin.Agent) *launchSubject {
 	t.Helper()
 	sub := newDispatchSubject(t)
-	sub.service.catalog = agents.NewCatalog(fixedRunner{runner: agent.Runner()})
+	sub.service.catalog = agents.NewCatalog(fixedRunner{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
 	sub.service.cfg = config.Defaults()
 	sub.service.registry = newRegistry()
 	t.Cleanup(func() {
@@ -231,7 +231,7 @@ func TestACodexOnlyPinRefusesWorkerLaunchWithRecordedReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("building the codex adapter over the stand-in: %v", err)
 	}
-	subject.service.catalog = agents.NewCatalog(fixedRunner{runner: codex})
+	subject.service.catalog = agents.NewCatalog(fixedRunner{runner: codex}, cursorFactory{runner: codex})
 	subject.service.cfg.Agent = []string{"codex"}
 	d, err := subject.service.dispatchTask(ctx, subject.task)
 	if err != nil {

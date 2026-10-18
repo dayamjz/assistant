@@ -120,12 +120,13 @@ func openReaping(t *testing.T, h *home.Home) *Service {
 	if err != nil {
 		t.Fatalf("reading the build: %v", err)
 	}
+	runner := standin.New(t, standin.Script{}).Runner()
 	running, err := Open(t.Context(), Options{
 		Home:      h,
 		NewStages: stages.All,
 		NewFixer:  stages.Fix,
 		Build:     build,
-		Catalog:   agents.NewCatalog(fixedRunner{runner: standin.New(t, standin.Script{}).Runner()}),
+		Catalog:   agents.NewCatalog(fixedRunner{runner: runner}, cursorFactory{runner: runner}),
 		LockWait:  -1,
 	})
 	if err != nil {

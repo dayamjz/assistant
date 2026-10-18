@@ -36,8 +36,21 @@ type Role struct {
 	Fallback *Role
 }
 
+// defaultFixAgent is the fixer used when no document names the fix role.
+// It is the name configuration spells the Cursor adapter with.
+const defaultFixAgent = "cursor"
+
+// defaultRoles is the roles table a configuration resolves to when no
+// document sets the key. The fixer is Cursor. Review and worker are unnamed,
+// so they use the agent list.
+func defaultRoles() Roles {
+	return Roles{RoleFix: {Agent: defaultFixAgent}}
+}
+
 // Roles is the configured roles, keyed by role name. Nil and empty are the
-// same: every role uses the agent list and that agent's own model.
+// same before resolution: every role uses the agent list and that agent's
+// own model. A resolved configuration names the fixer as Cursor unless the
+// winning document named the fix role.
 type Roles map[string]Role
 
 // Equal reports whether a and b name the same roles. Nil and empty are equal.
@@ -183,7 +196,7 @@ func decodeRoles(k Key, v any) (any, error) {
 		return nil, keyErr(k, v, "expected an object whose members are roles")
 	}
 	if len(obj) == 0 {
-		return nil, keyErr(k, v, "a roles object may not be empty; omit the key to leave every role on the agent list")
+		return nil, keyErr(k, v, "a roles object may not be empty; omit the key to keep the default, which names the fixer as cursor")
 	}
 	if err := checkLen(k, v, "roles", len(obj), MaxRoles); err != nil {
 		return nil, err
@@ -300,6 +313,22 @@ func roleString(k Key, root any, name string, obj map[string]any, field string) 
 		return "", keyErr(k, root, "role "+quote(name)+" field "+quote(field)+" is empty; omit it instead")
 	}
 	return s, nil
+}
+
+// resolvedRoles is the roles value that lands in a Config. A document that
+// names the fix role keeps that role, including one that names no agent and
+// so uses the agent list. A document that does not name it keeps the default
+// fixer.
+func resolvedRoles(v any) Roles {
+	roles := cloneRoles(v)
+	if _, ok := roles[RoleFix]; ok {
+		return roles
+	}
+	if roles == nil {
+		return defaultRoles()
+	}
+	roles[RoleFix] = defaultRoles()[RoleFix]
+	return roles
 }
 
 func cloneRoles(v any) Roles {

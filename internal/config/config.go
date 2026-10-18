@@ -103,8 +103,9 @@ type Config struct {
 	// workers through. A Config from Resolve holds a member of the closed
 	// set; KeySessionProvider says why only the operator's file sets it.
 	SessionProvider SessionProvider
-	// Roles says which agent, model, and effort each role runs. Empty means
-	// every role uses Agent and that agent's own model. KeyRoles says which
+	// Roles says which agent, model, and effort each role runs. A Config from
+	// Resolve names the fixer as cursor unless the winning document named the
+	// fix role. A role that names no agent uses Agent. KeyRoles says which
 	// names the program assigns and which a task may name.
 	Roles Roles
 }

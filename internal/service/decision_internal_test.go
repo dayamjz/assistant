@@ -32,12 +32,13 @@ func openDecisionService(t *testing.T, env map[string]string, provider *judgetes
 	if err != nil {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
+	runner := standin.New(t, standin.Script{}).Runner()
 	running, err := Open(t.Context(), Options{
 		Home:        h,
 		NewStages:   func(stages.StageDeps) pipeline.Stages { return pipeline.ConstantStages("unused") },
 		NewFixer:    stages.Fix,
 		Build:       build,
-		Catalog:     agents.NewCatalog(fixedRunner{runner: standin.New(t, standin.Script{}).Runner()}),
+		Catalog:     agents.NewCatalog(fixedRunner{runner: runner}, cursorFactory{runner: runner}),
 		LockWait:    -1,
 		Environment: func(name string) (string, bool) { v, ok := env[name]; return v, ok },
 		Judge:       []judge.Option{judge.WithEndpoint(provider.URL())},

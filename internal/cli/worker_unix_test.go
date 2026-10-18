@@ -64,7 +64,7 @@ func serveRouted(t *testing.T, h *home.Home) (*standin.Agent, string) {
 	route := cli.WorkerRoute(executable, h.Root())
 	serveOptions(t, service.Options{
 		Home: h, NewStages: stages.All, NewFixer: stages.Fix,
-		Catalog:     agents.NewCatalog(fixedFactory{runner: agent.Runner()}),
+		Catalog:     agentCatalog(agent.Runner()),
 		WorkerRoute: route,
 	})
 	return agent, route

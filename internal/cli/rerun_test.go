@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/gate"
@@ -188,7 +187,7 @@ func TestARerunValidatesWhatTheRunPushedAndBehindItNamesSync(t *testing.T) {
 		{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly")},
 		{Times: standin.Always, Reply: standin.Text("added " + fixedFile + ", which the test stage asked for")},
 	}})
-	serveFixing(t, h, fixedByARound(h), fixWritingTheFile(h), agents.NewCatalog(fixedFactory{runner: agent.Runner()}))
+	serveFixing(t, h, fixedByARound(h), fixWritingTheFile(h), agentCatalog(agent.Runner()))
 
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)

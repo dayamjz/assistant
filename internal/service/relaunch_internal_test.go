@@ -71,7 +71,7 @@ func restartedService(t *testing.T, sub *launchSubject) (*Service, *standin.Agen
 	agent := workerStandIn(t)
 	s := &Service{
 		home: sub.service.home, store: sub.service.store, log: sub.service.log,
-		catalog: agents.NewCatalog(fixedRunner{runner: agent.Runner()}), registry: newRegistry(),
+		catalog: agents.NewCatalog(fixedRunner{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()}), registry: newRegistry(),
 	}
 	s.cfg = sub.service.cfg
 	s.terminals = heldTerminals{s}

@@ -150,9 +150,11 @@ the first runnable entry whose declared capabilities cover the worker need
   task's launch. A role that names a provider, type, and version is
   translated by the adapter into the model identifier it starts, and an
   adapter that has not declared that translation is refused with nothing
-  else started. An empty `roles` leaves every task on the `agent` list. A
-  task that names `review` or `fix`, or a role that is not configured, is
-  refused at intake and not created.
+  else started. An empty `roles` leaves every task on the `agent` list. The
+  default `fix` role is `cursor`; a table that omits `fix` keeps that fixer,
+  and a `fix` entry with no agent uses the `agent` list. A task that names
+  `review` or `fix`, or a role that is not configured, is refused at intake
+  and not created.
 - Every successful selection records `adapter` and `route_reason`
   (`override` or `ordered`) on the task attempt before the process starts,
   and the role, model identifier, and effort when the launch named them.
