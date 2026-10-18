@@ -56,3 +56,9 @@ func TestCodexTranslatesOnlyOpenAICells(t *testing.T) {
 		t.Fatalf("accepted unsupported effort: %v", err)
 	}
 }
+
+func TestTheDefaultFixerIsTheCursorAdapter(t *testing.T) {
+	if got := config.Defaults().Roles[config.RoleFix].Agent; got != CursorName {
+		t.Fatalf("default fixer %q, want %s", got, CursorName)
+	}
+}

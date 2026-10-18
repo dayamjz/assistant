@@ -51,7 +51,7 @@ func serveCoordinated(t *testing.T, h *home.Home) func() {
 			},
 		},
 	}, agents.WithTerminationGrace(2*time.Second))
-	return serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: agent.Runner()}))
+	return serveCatalog(t, h, stages.All, agentCatalog(agent.Runner()))
 }
 
 // coordinate runs the coordinator's client through cli.Run in this process,

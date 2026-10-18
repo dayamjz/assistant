@@ -52,7 +52,7 @@ func streamWorkerOf(t *testing.T, shape store.TaskShape, branch string, exchange
 		)},
 	}, agents.WithTerminationGrace(2*time.Second))
 	o := options(t, h)
-	o.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()})
+	o.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
 	withServiceOptions(t, o, func(running serviceUnderTest) {
 		provider, session := launchedSession(t, running.service, id)
 		waitCapture(t, provider, session, "the instructions were read")

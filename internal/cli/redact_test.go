@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -50,7 +49,7 @@ func TestAFindingsCredentialsReachNeitherTheCheckpointNorAnyAnswer(t *testing.T)
 
 	h := newHome(t)
 	subject := newSubject(t)
-	serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: reviewer}))
+	serveCatalog(t, h, stages.All, agentCatalog(reviewer))
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}

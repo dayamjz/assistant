@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/home"
@@ -214,7 +213,7 @@ func TestARoundLimitParkIsNamedOnEverySurface(t *testing.T) {
 	subject := newSubject(t)
 	serveFixing(t, h, alwaysFixable, fixerWritingSummaries(func(round int64) string {
 		return fmt.Sprintf("round %d rewrote the conflicting hunk again", round)
-	}), agents.NewCatalog(fixedFactory{runner: reviewingRunner(t)}))
+	}), agentCatalog(reviewingRunner(t)))
 	mustOK(t, run(t, h, subject, "init"))
 	standingOnChange(t, subject, "round-limit")
 
@@ -239,7 +238,7 @@ func TestAConvergenceParkIsNamedOnEverySurface(t *testing.T) {
 	subject := newSubject(t)
 	serveFixing(t, h, alwaysFixable, fixerWritingSummaries(func(int64) string {
 		return "nothing this fixer did changed the hunk"
-	}), agents.NewCatalog(fixedFactory{runner: reviewingRunner(t)}))
+	}), agentCatalog(reviewingRunner(t)))
 	mustOK(t, run(t, h, subject, "init"))
 	standingOnChange(t, subject, "convergence")
 
@@ -294,7 +293,7 @@ func TestACancelledRunAndAParkedRunReadApartOnEverySurface(t *testing.T) {
 	parkedSubject := newSubject(t)
 	serveFixing(t, parkedHome, alwaysFixable, fixerWritingSummaries(func(int64) string {
 		return "nothing changed"
-	}), agents.NewCatalog(fixedFactory{runner: reviewingRunner(t)}))
+	}), agentCatalog(reviewingRunner(t)))
 	mustOK(t, run(t, parkedHome, parkedSubject, "init"))
 	standingOnChange(t, parkedSubject, "parked")
 	parked := readSurfaces(t, parkedHome, parkedSubject)

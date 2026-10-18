@@ -69,7 +69,7 @@ func EarlierServiceMain() {
 		NewStages: stages.All,
 		NewFixer:  stages.Fix,
 		Build:     build,
-		Catalog:   agents.NewCatalog(fixedRunner{runner: runner}),
+		Catalog:   agents.NewCatalog(fixedRunner{runner: runner}, cursorFactory{runner: runner}),
 		LockWait:  -1,
 	})
 	if err != nil {

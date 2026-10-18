@@ -16,7 +16,9 @@ func TestRoleHasOneExplicitBackup(t *testing.T) {
 		t.Fatal("backup was lost")
 	}
 	other := mustParse(t, OriginGlobal, `{"roles":{"worker":{"agent":"claude","fallback":{"agent":"cursor"}}}}`)
-	if !r.Config.Roles.Equal(other.values[KeyRoles].(Roles)) {
+	want := cloneRoles(other.values[KeyRoles])
+	want[RoleFix] = defaultRoles()[RoleFix]
+	if !r.Config.Roles.Equal(want) {
 		t.Fatal("equal backups compare unequal")
 	}
 	for _, doc := range []string{
@@ -101,5 +103,36 @@ func TestTheModelCatalogMatchesTheRoleTable(t *testing.T) {
 	}
 	if len(seen) == 0 {
 		t.Fatal("the catalog is empty")
+	}
+}
+
+func TestTheFixerDefaultsToCursor(t *testing.T) {
+	absent := resolve(t, Absent(OriginGlobal), Absent(OriginTrusted)).Config.Roles
+	if got := absent[RoleFix]; got != (Role{Agent: defaultFixAgent}) {
+		t.Fatalf("an omitted roles table resolved the fixer to %+v", got)
+	}
+	if _, ok := absent[RoleReview]; ok {
+		t.Fatal("the default names a review role")
+	}
+	if _, ok := absent[RoleWorker]; ok {
+		t.Fatal("the default names a worker role")
+	}
+
+	partial := resolve(t, mustParse(t, OriginGlobal, `{"roles":{"review":{"agent":"codex"}}}`), Absent(OriginTrusted)).Config.Roles
+	if partial[RoleFix].Agent != defaultFixAgent {
+		t.Fatalf("a table that omits fix resolved the fixer to %+v", partial[RoleFix])
+	}
+	if partial[RoleReview].Agent != "codex" {
+		t.Fatalf("review resolved to %+v", partial[RoleReview])
+	}
+
+	named := resolve(t, mustParse(t, OriginGlobal, `{"roles":{"fix":{"agent":"claude"}}}`), Absent(OriginTrusted)).Config.Roles
+	if named[RoleFix].Agent != "claude" {
+		t.Fatalf("a named fixer resolved to %+v", named[RoleFix])
+	}
+
+	unpinned := resolve(t, mustParse(t, OriginGlobal, `{"roles":{"fix":{}}}`), Absent(OriginTrusted)).Config.Roles
+	if unpinned[RoleFix] != (Role{}) {
+		t.Fatalf("a fix role that names no agent resolved to %+v", unpinned[RoleFix])
 	}
 }

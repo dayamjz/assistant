@@ -259,7 +259,7 @@ func serve(t *testing.T, h *home.Home) {
 // reached.
 func serveStages(t *testing.T, h *home.Home, served func(stages.StageDeps) pipeline.Stages) {
 	t.Helper()
-	serveCatalog(t, h, served, agents.NewCatalog(fixedFactory{runner: reviewingRunner(t)}))
+	serveCatalog(t, h, served, agentCatalog(reviewingRunner(t)))
 }
 
 // serveUntilStopped is serve for a test whose subject is what happens with the
@@ -268,7 +268,7 @@ func serveStages(t *testing.T, h *home.Home, served func(stages.StageDeps) pipel
 // test called it.
 func serveUntilStopped(t *testing.T, h *home.Home) func() {
 	t.Helper()
-	return serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: reviewingRunner(t)}))
+	return serveCatalog(t, h, stages.All, agentCatalog(reviewingRunner(t)))
 }
 
 // reviewingRunner is the stand-in these tests serve as the resolved agent. It
@@ -352,6 +352,21 @@ func (f fixedFactory) Name() string { return f.runner.Name() }
 func (f fixedFactory) AutoEligible() bool { return true }
 
 func (f fixedFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
+
+// cursorFactory is the default fixer. It returns the runner the test already
+// scripts, and it is not auto-eligible, so "auto" still resolves that
+// runner's own adapter.
+type cursorFactory struct{ runner agents.Runner }
+
+func (cursorFactory) Name() string { return agents.CursorName }
+
+func (cursorFactory) AutoEligible() bool { return false }
+
+func (f cursorFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
+
+func agentCatalog(runner agents.Runner) *agents.Catalog {
+	return agents.NewCatalog(fixedFactory{runner: runner}, cursorFactory{runner: runner})
+}
 
 // unrunnableFactory is an adapter this build has and this machine cannot run,
 // which is the shape agents.Resolve reports as no configured agent being

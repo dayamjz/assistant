@@ -37,7 +37,7 @@ func requestedRound(t *testing.T, path string) (machine.Run, pipeline.Stage, []s
 		{Times: standin.Always, Reply: standin.Text(fixerAccount)},
 	}})
 	o := options(t, h)
-	o.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()})
+	o.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
 
 	stage := holdingStage(t, 0)
 	var after machine.Run

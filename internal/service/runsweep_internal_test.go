@@ -319,12 +319,13 @@ func TestRecoverySweepsAFinishedRunsStandingCopyAndNeverAnActiveRunsCopy(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
+	runner := standin.New(t, standin.Script{}).Runner()
 	reopened, err := Open(ctx, Options{
 		Home:      s.home,
 		NewStages: stages.All,
 		NewFixer:  stages.Fix,
 		Build:     build,
-		Catalog:   agents.NewCatalog(fixedRunner{runner: standin.New(t, standin.Script{}).Runner()}),
+		Catalog:   agents.NewCatalog(fixedRunner{runner: runner}, cursorFactory{runner: runner}),
 		LockWait:  -1,
 	})
 	if err != nil {

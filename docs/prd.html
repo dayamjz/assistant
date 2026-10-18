@@ -2459,8 +2459,8 @@ flowchart TB
     <table class="table table-sm table-zebra">
       <thead><tr><th class="w-52">Key</th><th class="w-28">Default</th><th>Meaning</th></tr></thead>
       <tbody>
-        <tr><td><code>agent</code></td><td><code>auto</code></td><td>One agent or an ordered fallback list. Resolved against what is actually runnable at run start. If nothing resolves, the run fails before its first stage rather than reporting command-only validation as a pass. When <code>roles</code> is empty this is the agent every role uses. A role that names its own agent does not consult this list.</td></tr>
-        <tr><td><code>roles</code></td><td>empty</td><td>Which agent, model provider, model type, model version, and effort each role runs. Empty means every role uses <code>agent</code> and that agent's own model. The program assigns <code>review</code>, <code>fix</code>, and <code>worker</code>; any other name is a worker role a task may name. Same trust class as <code>agent</code>, so a pushed branch sets it only under <code>allow_pushed_commands</code>. The rules are the section below.</td></tr>
+        <tr><td><code>agent</code></td><td><code>auto</code></td><td>One agent or an ordered fallback list. Resolved against what is actually runnable at run start. If nothing resolves, the run fails before its first stage rather than reporting command-only validation as a pass. A role that names no agent uses this list. The default fixer names <code>cursor</code> and does not. A role that names its own agent does not consult this list.</td></tr>
+        <tr><td><code>roles</code></td><td><code>fix</code> names <code>cursor</code></td><td>Which agent, model provider, model type, model version, and effort each role runs. The default names <code>fix</code> as <code>cursor</code>, with no model and no effort, and names no other role, so review and worker use <code>agent</code>. A <code>roles</code> table you set replaces that default, except that a table which does not name <code>fix</code> keeps this fixer. A <code>fix</code> role that names no agent leaves the fixer on <code>agent</code>. The program assigns <code>review</code>, <code>fix</code>, and <code>worker</code>; any other name is a worker role a task may name. Same trust class as <code>agent</code>, so a pushed branch sets it only under <code>allow_pushed_commands</code>. The rules are the section below.</td></tr>
         <tr><td><code>commands.test</code></td><td>empty</td><td>A targeted check for this change, not a full suite. Deliberately empty by default.</td></tr>
         <tr><td><code>commands.lint</code></td><td>empty</td><td>Static analysis. When empty, the document stage performs a combined pass and routes its lint findings to the lint stage.</td></tr>
         <tr><td><code>commands.format</code></td><td>empty</td><td>Run immediately before pushing.</td></tr>
@@ -2497,6 +2497,12 @@ flowchart TB
     A task names a role. The review stage and the fixer name theirs. The program does not rank
     agents, providers, types, or versions by remaining quota or by price. That choice stays
     deferred, and section 9's usage view is the measurement it would start from.
+  </p>
+  <p class="mb-4 opacity-90">
+    The default configuration names <code>fix</code> as <code>cursor</code>, with no model and no effort,
+    and names no other role. Review and worker use <code>agent</code> until a document names them.
+    A <code>roles</code> table that does not mention <code>fix</code> keeps that fixer. A <code>fix</code>
+    role that names no agent uses <code>agent</code>.
   </p>
   <p class="mb-4 opacity-90">
     The program assigns three roles. <code>review</code> is the review stage, and every review is
@@ -2938,7 +2944,7 @@ flowchart TB
         <tr>
           <td class="prd-num">14</td>
           <td>A role names <b>one agent, one model provider, one model type, one model version, and one effort</b>, and a task names a role.</td>
-          <td>Section 10's <code>roles</code>. The agent is the process. The provider, the type, and the version are a triple from that section's table, and the role does not name a model identifier: the adapter translates the triple. <code>review</code>, <code>fix</code>, and <code>worker</code> are the three the program assigns; any other name is a worker role. You assign them. The program does not rank agents, providers, types, or versions, and a role without a configured backup that cannot run refuses that launch with nothing started in its place. An explicit backup is allowed only on section 10's availability-failure terms. Review and fix stay separate sessions even when they name the same agent, provider, type, and version (P4). A task's role does not follow its push into the gate: that run reviews with <code>review</code> and fixes with <code>fix</code>. With <code>roles</code> empty, <code>agent</code> is still the agent every role uses, on that agent's own model. Choosing by quota or by price stays deferred in section 12.</td>
+          <td>Section 10's <code>roles</code>. The agent is the process. The provider, the type, and the version are a triple from that section's table, and the role does not name a model identifier: the adapter translates the triple. <code>review</code>, <code>fix</code>, and <code>worker</code> are the three the program assigns; any other name is a worker role. You assign them. The program does not rank agents, providers, types, or versions, and a role without a configured backup that cannot run refuses that launch with nothing started in its place. An explicit backup is allowed only on section 10's availability-failure terms. Review and fix stay separate sessions even when they name the same agent, provider, type, and version (P4). A task's role does not follow its push into the gate: that run reviews with <code>review</code> and fixes with <code>fix</code>. The default fixer is <code>cursor</code>. Review and worker use <code>agent</code> until a role names them, and a <code>fix</code> role that names no agent uses <code>agent</code> too, on that agent's own model. Choosing by quota or by price stays deferred in section 12.</td>
         </tr>
       </tbody>
     </table>

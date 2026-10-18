@@ -847,7 +847,7 @@ func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 	ctx := t.Context()
 	id, _ := plantLaunchable(t, h, records)
 	agent := workerStandIn(t)
-	l := openLoopWith(t, h, records, nil, nil, agents.NewCatalog(fixedRunner{runner: agent.Runner()}))
+	l := openLoopWith(t, h, records, nil, nil, agents.NewCatalog(fixedRunner{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()}))
 	defer func() { _ = l.service.Close() }()
 
 	provider, launched, ok := l.service.sessionOf(id)

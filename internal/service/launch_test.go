@@ -60,7 +60,7 @@ func workerAgent(t *testing.T) (*agents.Catalog, *standin.Agent) {
 			},
 		},
 	}, agents.WithTerminationGrace(2*time.Second))
-	return agents.NewCatalog(fixedFactory{runner: agent.Runner()}), agent
+	return agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()}), agent
 }
 
 // shellMarker begins a line workerAgent's worker runs the rest of as a

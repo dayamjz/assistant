@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -26,7 +25,7 @@ func TestAFixRoundIsAskedForWithFlagsOnTheAnswer(t *testing.T) {
 		{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly")},
 		{Times: standin.Always, Reply: standin.Text("did what was asked")},
 	}})
-	serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: agent.Runner()}))
+	serveCatalog(t, h, stages.All, agentCatalog(agent.Runner()))
 
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
@@ -108,7 +107,7 @@ func TestAStaleFindingIdentifierIsRefusedAsUsageNamingTheReportedOnes(t *testing
 	agent := standin.New(t, standin.Script{Steps: []standin.Step{
 		{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly")},
 	}})
-	serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: agent.Runner()}))
+	serveCatalog(t, h, stages.All, agentCatalog(agent.Runner()))
 
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)

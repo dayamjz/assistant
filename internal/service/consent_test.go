@@ -106,7 +106,7 @@ func fixRounds(agent *standin.Agent) []standin.Call {
 func consentOptions(t *testing.T, h *home.Home, agent *standin.Agent, provider *forgetest.Provider, lint *pipeline.Implementation) service.Options {
 	t.Helper()
 	o := options(t, h)
-	o.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()})
+	o.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
 	o.Forge = provider.Host()
 	o.NewStages = func(deps stages.StageDeps) pipeline.Stages {
 		all := pipeline.ConstantStages("nothing to report")

@@ -386,7 +386,7 @@ func scriptedAgent(t *testing.T) *agents.Catalog {
 		Times: standin.Always,
 		Reply: standin.Reviewed("the change reads cleanly"),
 	}}}).Runner()
-	return agents.NewCatalog(fixedFactory{runner: runner})
+	return agents.NewCatalog(fixedFactory{runner: runner}, cursorFactory{runner: runner})
 }
 
 // workerlessAgent is a catalog holding a shipped adapter that declares no
@@ -406,7 +406,7 @@ func workerlessAgent(t *testing.T) *agents.Catalog {
 	if runner.Capabilities().Has(agents.CapabilityWorkerSessions) {
 		t.Fatalf("the codex adapter declares %s, so it cannot stand for an adapter without them", agents.CapabilityWorkerSessions)
 	}
-	return agents.NewCatalog(fixedFactory{runner: runner})
+	return agents.NewCatalog(fixedFactory{runner: runner}, cursorFactory{runner: runner})
 }
 
 // workerlessOptions is options with workerlessAgent in place of the shipped
@@ -422,6 +422,17 @@ func workerlessOptions(t *testing.T, h *home.Home) service.Options {
 // its own, so nothing here can produce an adapter the production path could
 // not.
 type fixedFactory struct{ runner agents.Runner }
+
+// cursorFactory is the default fixer. It returns the runner the test already
+// scripts, and it is not auto-eligible, so "auto" still resolves that
+// runner's own adapter.
+type cursorFactory struct{ runner agents.Runner }
+
+func (cursorFactory) Name() string { return agents.CursorName }
+
+func (cursorFactory) AutoEligible() bool { return false }
+
+func (f cursorFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 
 func (f fixedFactory) Name() string { return f.runner.Name() }
 

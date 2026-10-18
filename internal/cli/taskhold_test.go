@@ -410,7 +410,7 @@ func serveWorkers(t *testing.T, h *home.Home) func() {
 			Exchanges: []standin.Exchange{{Contains: "This is attempt", Reply: "the relaunch note was read"}},
 		},
 	}, agents.WithTerminationGrace(2*time.Second))
-	return serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: agent.Runner()}))
+	return serveCatalog(t, h, stages.All, agentCatalog(agent.Runner()))
 }
 
 // recordDispatchedTask writes, where a coordinator's intake would have, a

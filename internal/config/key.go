@@ -16,12 +16,14 @@ type Key string
 // package reads that table.
 const (
 	// KeyAgent is "agent": one agent, or an ordered fallback list, resolved
-	// against what is actually runnable at run start. When roles is empty,
-	// this is the agent every role uses.
+	// against what is actually runnable at run start. A role that names no
+	// agent uses this list. The default fixer names cursor and does not.
 	KeyAgent Key = "agent"
 	// KeyRoles is "roles": which agent, model provider, model type, model
-	// version, and effort each role runs. Empty means every role uses
-	// KeyAgent and that agent's own model. review, fix, and worker are the
+	// version, and effort each role runs. The default names fix as cursor
+	// and names no other role, so review and worker use KeyAgent. A document
+	// that sets this key and does not name fix keeps that fixer. A fix role
+	// that names no agent uses KeyAgent. review, fix, and worker are the
 	// three the program assigns; any other name is a worker role a task may
 	// name. It is the same trust class as KeyAgent. A provider, type, or
 	// version outside the model table, a partial triple, and an effort other
@@ -254,8 +256,8 @@ type spec struct {
 var specs = []spec{
 	{KeyAgent, TrustCommands, []string{DefaultAgent}, decodeAgent,
 		func(c *Config, v any) { c.Agent = cloneSlice(v.([]string)) }},
-	{KeyRoles, TrustCommands, Roles(nil), decodeRoles,
-		func(c *Config, v any) { c.Roles = cloneRoles(v) }},
+	{KeyRoles, TrustCommands, defaultRoles(), decodeRoles,
+		func(c *Config, v any) { c.Roles = resolvedRoles(v) }},
 	{KeyCommandsTest, TrustCommands, "", decodeCommand,
 		func(c *Config, v any) { c.Commands.Test = v.(string) }},
 	{KeyCommandsLint, TrustCommands, "", decodeCommand,
