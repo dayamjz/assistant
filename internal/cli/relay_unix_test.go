@@ -93,9 +93,9 @@ func queuedUnlaunched(t *testing.T, h *home.Home, subject, id string) {
 // with no attempt, so the release followed the stored report and not the
 // passing of time or another task's launch (P8).
 func TestFilingAReportReleasesTheTaskQueuedBehindIt(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	requiresIdentifiedPeer(t)
-	quietGit(t)
 	h := newHome(t)
 	subject := newSubject(t)
 	if err := h.Create(); err != nil {
@@ -163,11 +163,11 @@ func TestFilingAReportReleasesTheTaskQueuedBehindIt(t *testing.T) {
 // already Complete. The successful relay from this test's process is the
 // positive control for all four.
 func TestARelayCompletesAReportedInvestigationAndNothingElse(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P12)
 	requiresIdentifiedPeer(t)
 	requireSweepClears(t)
-	quietGit(t)
 	h := newHome(t)
 	subject := newSubject(t)
 	if err := h.Create(); err != nil {

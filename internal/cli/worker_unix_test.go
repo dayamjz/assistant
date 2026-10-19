@@ -225,12 +225,12 @@ func historyKinds(t *testing.T, h *home.Home, id string) map[string]int {
 // from the credentials and the parent chain the service reads and not from
 // anything the command says, and the history does not grow.
 func TestAWorkerReportsBackThroughTheRouteItsGrantAllows(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P3)
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P12)
 	requiresIdentifiedPeer(t)
 	requireSweepClears(t)
-	quietGit(t)
 	h := newHome(t)
 	subject := newSubject(t)
 	if err := h.Create(); err != nil {

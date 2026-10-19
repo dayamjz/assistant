@@ -44,6 +44,7 @@ func graphCheckpointPayloads(t *testing.T, s *Store, run string) []string {
 }
 
 func TestAnAcceptedAppendIsAssignedTheSequenceOnePastItsAnchor(t *testing.T) {
+	t.Parallel()
 	s := openStore(t)
 
 	// This is the property a caller whose payload carries its own sequence
@@ -65,6 +66,7 @@ func TestAnAcceptedAppendIsAssignedTheSequenceOnePastItsAnchor(t *testing.T) {
 }
 
 func TestAClaimOnARunThatAlreadyHasAHistoryIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	appendGraphCheckpoint(t, s, "run", 0, "cp-1")
@@ -80,6 +82,7 @@ func TestAClaimOnARunThatAlreadyHasAHistoryIsRefused(t *testing.T) {
 }
 
 func TestAnAppendAnchoredToAPositionTheRunHasLeftIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	appendGraphCheckpoint(t, s, "run", 0, "cp-1")
@@ -120,6 +123,7 @@ func TestAnAppendAnchoredToAPositionTheRunHasLeftIsRefused(t *testing.T) {
 }
 
 func TestConcurrentAppendsAtOneTipLandExactlyOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	appendGraphCheckpoint(t, s, "run", 0, "cp-1")
@@ -214,6 +218,7 @@ func queuedForTheWriter(t *testing.T, s *Store, baseline, want int64) {
 }
 
 func TestTheAnchorIsDecidedInsideTheWriteThatActsOnIt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	appendGraphCheckpoint(t, s, "run", 0, "cp-1")
@@ -265,6 +270,7 @@ func TestTheAnchorIsDecidedInsideTheWriteThatActsOnIt(t *testing.T) {
 }
 
 func TestTheRunClaimIsDecidedInsideTheWriteThatActsOnIt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -304,6 +310,7 @@ func TestTheRunClaimIsDecidedInsideTheWriteThatActsOnIt(t *testing.T) {
 }
 
 func TestConcurrentClaimsOfOneRunLandExactlyOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -341,6 +348,7 @@ func TestConcurrentClaimsOfOneRunLandExactlyOnce(t *testing.T) {
 }
 
 func TestCopyingIntoARunClaimsItWholeAndOnlyOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -367,6 +375,7 @@ func TestCopyingIntoARunClaimsItWholeAndOnlyOnce(t *testing.T) {
 }
 
 func TestConcurrentCopiesIntoOneRunLandExactlyOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -413,6 +422,7 @@ func TestConcurrentCopiesIntoOneRunLandExactlyOnce(t *testing.T) {
 }
 
 func TestTheLatestCheckpointIsTheHighestSequence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -445,6 +455,7 @@ func TestTheLatestCheckpointIsTheHighestSequence(t *testing.T) {
 }
 
 func TestACheckpointDoesNotRequireARunRecord(t *testing.T) {
+	t.Parallel()
 	s := openStore(t)
 
 	// A fork names a destination run that has no row of its own and cannot be
@@ -458,6 +469,7 @@ func TestACheckpointDoesNotRequireARunRecord(t *testing.T) {
 }
 
 func TestTheCheckpointHistoryHoldsNoAnchor(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -493,6 +505,7 @@ func TestTheCheckpointHistoryHoldsNoAnchor(t *testing.T) {
 }
 
 func TestACheckpointHistorySurvivesReopening(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := t.TempDir() + "/state.db"
 	s := openStoreAt(t, path)

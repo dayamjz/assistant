@@ -117,6 +117,7 @@ func taskStates(t *testing.T, stream *ipc.Stream, ids ...string) []ipc.Event {
 // note is no word from the worker; and the identifiers and labels the
 // payloads carry reach no line.
 func TestWatchRendersEventsRecordedFromTheServicesPublisher(t *testing.T) {
+	t.Parallel()
 	vocabtest.Control(t)
 	h, records := watchedHome(t)
 	stream := subscribed(t, h, 0)
@@ -173,6 +174,7 @@ func TestWatchRendersEventsRecordedFromTheServicesPublisher(t *testing.T) {
 // more arrives; with one entry appended, exactly that task's state arrives
 // again, with a newer revision.
 func TestATasksStateIsPublishedOncePerChangeAndNotPerPass(t *testing.T) {
+	t.Parallel()
 	h, records := watchedHome(t)
 	stream := subscribed(t, h, 0)
 	investigation(t, records, "oncepertaska", "the parser")
@@ -227,6 +229,7 @@ func TestATasksStateIsPublishedOncePerChangeAndNotPerPass(t *testing.T) {
 // consumer read the fleet back in full; this is the overflow case the class
 // table promises for state.
 func TestAStreamThatFallsBehindRendersTheGapMarker(t *testing.T) {
+	t.Parallel()
 	vocabtest.Control(t)
 	h, records := watchedHome(t)
 	behind := subscribed(t, h, 2)
@@ -285,6 +288,7 @@ func TestAStreamThatFallsBehindRendersTheGapMarker(t *testing.T) {
 // every line through the phrase table, and ends cleanly when interrupted.
 // With --json the same view writes documents that keep the identifiers.
 func TestWatchSpeaksThePhraseTableAndEndsWhenInterrupted(t *testing.T) {
+	t.Parallel()
 	vocabtest.Control(t)
 	h, records := watchedHome(t)
 	const waiting = "a sign-off from the security team"

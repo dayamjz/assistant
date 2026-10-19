@@ -12,6 +12,7 @@ import (
 // a no-op so a begin that failed after the first write can retry, a flip is
 // refused, and a run that does not exist is ErrNotFound.
 func TestARunsCodeHostSettlementIsWrittenOnceAndReadBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -93,6 +94,7 @@ func TestARunsCodeHostSettlementIsWrittenOnceAndReadBack(t *testing.T) {
 // migration applied over the rows leaves every run as it stood with no
 // settlement, and the trigger refuses again. It is found by name.
 func TestTheRunNoCodeHostMigrationKeepsEarlierRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	var added migration

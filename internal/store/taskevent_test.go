@@ -15,6 +15,7 @@ import (
 // read here. seedTask creates an independent task, so the disposition is a
 // dispatch.
 func TestANewTaskOpensItsHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
@@ -33,6 +34,7 @@ func TestANewTaskOpensItsHistory(t *testing.T) {
 }
 
 func TestTaskEventsPaginateInAppendOrder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
@@ -63,6 +65,7 @@ func TestTaskEventsPaginateInAppendOrder(t *testing.T) {
 }
 
 func TestTaskAccessorsRefuseIncompleteRecords(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -100,6 +103,7 @@ func TestTaskAccessorsRefuseIncompleteRecords(t *testing.T) {
 }
 
 func TestTaskLinksStartUnknown(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -129,6 +133,7 @@ func TestTaskLinksStartUnknown(t *testing.T) {
 // Concurrent writers must not lose a write or hand two of them the same
 // position. Run under the race detector, which `make test` does.
 func TestConcurrentWritersKeepEveryWrite(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
@@ -203,6 +208,7 @@ func assertDense(t *testing.T, what string, got <-chan int64, count int, first i
 // stands. An anchor of zero names a position no history stands at, because
 // every task opens with an event.
 func TestAnAnchoredAppendIsRefusedOnceTheHistoryMoved(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
 	s := openStore(t)
@@ -237,6 +243,7 @@ func TestAnAnchoredAppendIsRefusedOnceTheHistoryMoved(t *testing.T) {
 // in the transaction that assigns the sequence. The positive control is the
 // unanchored append, where both land. Run under the race detector.
 func TestTwoAnchoredAppendsAfterOneTipLandOne(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
 	s := openStore(t)

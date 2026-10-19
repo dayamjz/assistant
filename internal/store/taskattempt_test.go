@@ -13,6 +13,7 @@ import (
 // anchors to zero, the next to the first, and an anchor the attempts have
 // moved past is refused with a *TaskMovedError that names where they stand.
 func TestAttemptsAreAnchoredToTheLatestSeen(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
 	s := openStore(t)
@@ -59,6 +60,7 @@ func TestAttemptsAreAnchoredToTheLatestSeen(t *testing.T) {
 // decided in the transaction that assigns the sequence. Run under the race
 // detector, which `make test` does.
 func TestTwoCallersCannotBothBeginTheNextAttempt(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
 	s := openStore(t)
@@ -117,6 +119,7 @@ func raceTwo(t *testing.T, write func() error) (wins, losses int) {
 // refused and the first stands, an empty reference is refused, and an attempt
 // that does not exist is not found.
 func TestAnAttemptsSessionIsFilledOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
@@ -150,6 +153,7 @@ func TestAnAttemptsSessionIsFilledOnce(t *testing.T) {
 // refused and the first stands, an empty adapter or reason is refused, and
 // an attempt that does not exist is not found.
 func TestAnAttemptsRouteIsFilledOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")

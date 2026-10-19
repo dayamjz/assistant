@@ -91,6 +91,7 @@ func TestInitDoctorAndEjectSpeakInPhrasesThroughTheCommandLine(t *testing.T) {
 // the table beside a branch or reference name, with the run, the gate and the
 // commit left to the structured rendering.
 func TestAPushIsSpokenInPhrasesThroughTheGatesHooks(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P13)
 	requiresIdentifiedPeer(t)
 	vocabtest.Control(t)

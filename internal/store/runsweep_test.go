@@ -15,6 +15,7 @@ import (
 // ErrNotFound, which is the control that the row read afterwards was written
 // by the call and not found standing.
 func TestARunCopySweepRecordIsTheLatestSweep(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	ctx := context.Background()
 	s := openStore(t)
@@ -72,6 +73,7 @@ func TestARunCopySweepRecordIsTheLatestSweep(t *testing.T) {
 // ErrNotFound. The positive control is the one valid record written last,
 // which is accepted, so the refusals are not a store that refuses everything.
 func TestARunCopySweepRecordOutsideTheSetIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -110,6 +112,7 @@ func TestARunCopySweepRecordOutsideTheSetIsRefused(t *testing.T) {
 // migration is found by name, so the test does not spell a version the
 // shipped list may grow past.
 func TestTheRunCopySweepMigrationKeepsEarlierRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	var added migration

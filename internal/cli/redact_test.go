@@ -25,6 +25,7 @@ import (
 // that never reached the review, cannot pass as one that removed the
 // credential.
 func TestAFindingsCredentialsReachNeitherTheCheckpointNorAnyAnswer(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	const (
 		urlSecret    = "hunter2-url-password"

@@ -220,6 +220,7 @@ func TestInitOffersTheCommandsACheckoutDeclaresAndWritesNothingWithoutConsent(t 
 // still names nothing, which is derived from stages.Holding rather than
 // named.
 func TestAcceptedCommandsReachARunOnlyFromTheDefaultBranch(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P1)
 	principles.Cite(t, principles.P7)
 	requiresIdentifiedPeer(t)
@@ -341,6 +342,7 @@ func assertEstablishedNothing(t *testing.T, held machine.Run, stage pipeline.Sta
 // whose every answer is no writes nothing and leaves a run holding at the
 // test stage with a report saying what was not checked.
 func TestInitAsksAtATerminalAndWritesOnlyWhatWasAccepted(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P1)
 	requiresIdentifiedPeer(t)
 

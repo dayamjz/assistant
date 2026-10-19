@@ -124,6 +124,7 @@ var keyedThroughAKind = map[string]string{
 // passing over an empty table and a table a later migration adds fails here
 // until it is seeded and handled.
 func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := runningRun(t, s)
@@ -231,6 +232,7 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 // finds the run's oldest dependants and a table found only through a refused
 // one is not derived, so the comparison is not over an empty or unbounded set.
 func TestEveryRunKeyedTableIsForgottenOrRefusedOver(t *testing.T) {
+	t.Parallel()
 	s := openStore(t)
 	derived := runKeyedTables(t, s, refusedRunTables())
 	for table := range keyedThroughAKind {
@@ -279,6 +281,7 @@ func TestEveryRunKeyedTableIsForgottenOrRefusedOver(t *testing.T) {
 // verified the group gone does, is the control: the same removal then
 // completes, so what was refused was the record and not the repository.
 func TestForgettingARepositoryIsRefusedWhileARunProcessIsRecorded(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -317,6 +320,7 @@ func TestForgettingARepositoryIsRefusedWhileARunProcessIsRecorded(t *testing.T) 
 // statement. The forget test above is the control that the
 // same rows do go once their run does.
 func TestWrittenOnceRunRecordsAreNotDeletedWhileTheirRunStands(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := runningRun(t, s)

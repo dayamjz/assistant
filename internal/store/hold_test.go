@@ -11,6 +11,7 @@ import (
 )
 
 func TestRegisterHoldIsIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -50,6 +51,7 @@ func TestRegisterHoldIsIdempotent(t *testing.T) {
 
 // A hold is closed only by an explicit resolution.
 func TestResolveHoldRequiresAnExplicitResolution(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRun(t, s)
@@ -95,6 +97,7 @@ func TestResolveHoldRequiresAnExplicitResolution(t *testing.T) {
 // ResolveHoldNoted records free text beside the resolution; ResolveHold
 // leaves ResolutionNote unknown. Who decided stays ResolvedBy either way.
 func TestResolveHoldNotedRecordsTheNote(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	if _, err := s.RegisterHold(ctx, Hold{Key: "noted", Subject: "a decision"}); err != nil {
@@ -127,6 +130,7 @@ func TestResolveHoldNotedRecordsTheNote(t *testing.T) {
 // every path that writes resolution_note. The test uses the same URL userinfo
 // and bearer shapes message_test uses for message.text.
 func TestAHoldResolutionNoteIsStoredRedacted(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	if _, err := s.RegisterHold(ctx, Hold{Key: "noted-url", Subject: "a decision"}); err != nil {
@@ -201,6 +205,7 @@ const holdResolutionSealVersion = 42
 // the seal migration runs. Opening redacts them in the same transaction that
 // installs the trigger.
 func TestTheHoldResolutionSealMigrationRedactsExistingNotes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
 	credNote := "see https://user:secret@example.test/repo.git for context"
@@ -242,6 +247,7 @@ func TestTheHoldResolutionSealMigrationRedactsExistingNotes(t *testing.T) {
 
 // The seal holds at the database: a resolved hold's note is not rewritten.
 func TestAHoldResolutionIsSealed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	if _, err := s.RegisterHold(ctx, Hold{Key: "sealed", Subject: "a decision"}); err != nil {
@@ -259,6 +265,7 @@ func TestAHoldResolutionIsSealed(t *testing.T) {
 }
 
 func TestResolveHoldRefusesASecondAnswer(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	if _, err := s.RegisterHold(ctx, Hold{Key: "k", Subject: "a decision"}); err != nil {
@@ -289,6 +296,7 @@ func TestResolveHoldRefusesASecondAnswer(t *testing.T) {
 
 // PRD section 8: a hold is never closed by the surrounding work finishing.
 func TestFinishingTheWorkDoesNotCloseAHold(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -324,6 +332,7 @@ func TestFinishingTheWorkDoesNotCloseAHold(t *testing.T) {
 }
 
 func TestRegisterHoldRefusesIncompleteRecords(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	if _, err := s.RegisterHold(ctx, Hold{Subject: "a decision"}); err == nil {

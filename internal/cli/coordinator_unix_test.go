@@ -167,10 +167,10 @@ func taskCountOf(t *testing.T, h *home.Home, dir string) int {
 // arm verification answers that the loop is live; and an investigation
 // created through the client is promoted to a delivery on a branch.
 func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	requireSweepClears(t)
 	vocabtest.Control(t)
-	quietGit(t)
 	h := newHome(t)
 	subject := newSubject(t)
 	if err := h.Create(); err != nil {

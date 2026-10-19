@@ -33,6 +33,7 @@ func intentOf(t *testing.T, s *Store, id string) Optional[string] {
 // promoted task's delivery is to do, so no later write may make it say
 // something else.
 func TestTheDeliveryIntentIsWrittenOnceByPromotion(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P14)
 	ctx := context.Background()
 	s := openStore(t)
@@ -122,6 +123,7 @@ func TestTheDeliveryIntentIsWrittenOnceByPromotion(t *testing.T) {
 // found by name, so the test spells no version the shipped list may grow
 // past.
 func TestThePromotedIntentMigrationKeepsEarlierTasks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	var added migration

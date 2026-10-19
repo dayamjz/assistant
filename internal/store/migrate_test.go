@@ -59,6 +59,7 @@ func runNotes(t *testing.T, s *Store, runID string) Optional[string] {
 }
 
 func TestMigrationPreservesRowsAndAddsUnknownColumn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -109,6 +110,7 @@ func TestMigrationPreservesRowsAndAddsUnknownColumn(t *testing.T) {
 }
 
 func TestMigrationRefusesNonAdditiveChanges(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		m    migration
@@ -187,6 +189,7 @@ func TestMigrationRefusesNonAdditiveChanges(t *testing.T) {
 // A guard that refuses everything is not a guard. This is the accepting path
 // for the same check the refusals above exercise.
 func TestMigrationAcceptsAnAdditiveChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -211,6 +214,7 @@ func TestMigrationAcceptsAnAdditiveChange(t *testing.T) {
 }
 
 func TestMigrateTwiceIsANoOp(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -268,6 +272,7 @@ func schemaSnapshot(t *testing.T, s *Store) string {
 }
 
 func TestInterruptedMigrationReopensAndResumes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -317,6 +322,7 @@ func TestInterruptedMigrationReopensAndResumes(t *testing.T) {
 }
 
 func TestOpenRefusesADatabaseAheadOfThisBuild(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := t.TempDir() + "/state.db"
 	s := openStoreAt(t, path)
@@ -334,6 +340,7 @@ func TestOpenRefusesADatabaseAheadOfThisBuild(t *testing.T) {
 }
 
 func TestMigrateRefusesAnEditedMigration(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -348,6 +355,7 @@ func TestMigrateRefusesAnEditedMigration(t *testing.T) {
 }
 
 func TestMigrateRefusesAMalformedList(t *testing.T) {
+	t.Parallel()
 	cases := map[string][]migration{
 		"a gap in the versions": {schema[0], versioned(3, addColumn("gap", "notes TEXT"))},
 		"a version out of order": {
@@ -369,6 +377,7 @@ func TestMigrateRefusesAMalformedList(t *testing.T) {
 // The shipped list has to satisfy the same rule the tests impose on invented
 // ones, so a bad migration cannot ship by never being exercised here.
 func TestShippedSchemaIsWellFormed(t *testing.T) {
+	t.Parallel()
 	if err := checkMigrationList(schema); err != nil {
 		t.Fatalf("the shipped migration list is malformed: %v", err)
 	}
@@ -386,6 +395,7 @@ func editStatements(m migration, statements ...string) migration {
 }
 
 func TestMigrateRefusesAMigrationEditedInPlace(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -425,6 +435,7 @@ func TestMigrateRefusesAMigrationEditedInPlace(t *testing.T) {
 // migration applied after it is recorded with one, so the rows the guard cannot
 // speak for are the ones already there rather than a growing set.
 func TestMigrateAcceptsADatabaseRecordedWithoutDigests(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -469,6 +480,7 @@ const taskBlockersMigration = "task blockers, attempts and cleanup records"
 // session_ref is not read. The control is a task this build creates with a
 // blocker, which reads it back.
 func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	var blockers, route, model migration

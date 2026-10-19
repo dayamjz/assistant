@@ -219,6 +219,7 @@ func TestHostInstallCodexRefusesABackgroundCopyBesideASynchronousOne(t *testing.
 // arrives on standard input, using exit status 2 and a message on standard
 // error, which is the block path Codex documents for Stop hooks.
 func TestHostStopBlocksCodexTurnEndWhenNothingWatches(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P10)
 	vocabtest.Control(t)
 	h := unwatchedHome(t)
@@ -244,6 +245,7 @@ func TestHostStopBlocksCodexTurnEndWhenNothingWatches(t *testing.T) {
 // Re-entry through stop_hook_active on Codex-shaped input allows exactly one
 // invocation, judged afresh on the next.
 func TestHostStopAllowsCodexReEntry(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P10)
 	vocabtest.Control(t)
 	h := unwatchedHome(t)
@@ -267,6 +269,7 @@ func TestHostStopAllowsCodexReEntry(t *testing.T) {
 // on standard output, which is what the Stop hook expects when the turn may
 // end.
 func TestHostStopAllowsCodexTurnWhenSupervisorHoldsTheHome(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P10)
 	h := createdHome(t)
 	oneTaskInFlight(t, h)
@@ -290,6 +293,7 @@ func TestHostStopAllowsCodexTurnWhenSupervisorHoldsTheHome(t *testing.T) {
 // invoke hooks through the CLI; Stop behaviour is covered by the unit tests
 // above that call host stop with Codex-shaped stdin.
 func TestRecordsInstalledCodexVersionWhenLive(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("ASSISTANT_CODEX_HOST_LIVE") != "1" {
 		t.Skip("set ASSISTANT_CODEX_HOST_LIVE=1 to record the installed Codex CLI version")
 	}

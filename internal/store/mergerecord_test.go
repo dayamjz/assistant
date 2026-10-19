@@ -17,6 +17,7 @@ const mergeRecordVersion = 13
 // value in particular is not, so a transition asked to record "no end" as an
 // end is refused rather than writing an empty word.
 func TestPullRequestEndsAreAClosedSet(t *testing.T) {
+	t.Parallel()
 	for _, end := range PullRequestEnds() {
 		if !end.Recognized() {
 			t.Errorf("%s is in the set and not recognized", end)
@@ -66,6 +67,7 @@ var closedRead = PullRequestRead{PullRequest: 7, Head: "0123abc", End: PullReque
 // is TransitionRun on the same run: an ordinary move leaves no record, so a
 // record read back after the other transition is that transition's write.
 func TestTransitionRunOnPullRequestWritesTheMergeRecordWithTheStatus(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	running := runningRun(t, s)
@@ -97,6 +99,7 @@ func TestTransitionRunOnPullRequestWritesTheMergeRecordWithTheStatus(t *testing.
 // saw. The write itself is the control, because the refusal would otherwise
 // be indistinguishable from a table nothing can write.
 func TestAMergeRecordIsWrittenOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	running := runningRun(t, s)
@@ -127,6 +130,7 @@ func TestAMergeRecordIsWrittenOnce(t *testing.T) {
 // a status its merge record does not account for or a record the read would
 // refuse.
 func TestTransitionRunOnPullRequestRefusesWhatItCannotRecord(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	running := runningRun(t, s)
@@ -163,6 +167,7 @@ func TestTransitionRunOnPullRequestRefusesWhatItCannotRecord(t *testing.T) {
 // not see report what that commit established rather than writing a second
 // record the table would refuse.
 func TestTransitionRunOnPullRequestToTheStatusTheRunAlreadyHoldsWritesNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	running := runningRun(t, s)
@@ -190,6 +195,7 @@ func TestTransitionRunOnPullRequestToTheStatusTheRunAlreadyHoldsWritesNothing(t 
 // while the move still happens, which is the repair for a record left that
 // way by any other path.
 func TestAHoldClosureIsWrittenWithTheMoveOrNotAtAll(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	running := runningRun(t, s)
@@ -276,6 +282,7 @@ func TestAHoldClosureIsWrittenWithTheMoveOrNotAtAll(t *testing.T) {
 // recorded then reads as having no merge record rather than a fabricated one,
 // and the migrated database then takes the transition.
 func TestTheMergeRecordMigrationReachesAnOlderDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
 
@@ -330,6 +337,7 @@ func TestTheMergeRecordMigrationReachesAnOlderDatabase(t *testing.T) {
 // refuse before any hold write; a closure written in a second transaction
 // would pass them and fail here.
 func TestTheHoldClosureRollsBackWithARefusedMergeRecord(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	running := runningRun(t, s)

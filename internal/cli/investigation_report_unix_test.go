@@ -35,10 +35,10 @@ import (
 // stop and reopen, the task still reads Held from the report's open decision,
 // the same open holds, and the same report body.
 func TestAnInvestigationsReportIsVisibleAndSurvivesRestart(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P13)
 	requiresIdentifiedPeer(t)
-	quietGit(t)
 	const (
 		summary = "The importer retries on a closed connection."
 		ask     = "Should the old retry budget be kept?"
@@ -147,8 +147,8 @@ func TestAnInvestigationsReportIsVisibleAndSurvivesRestart(t *testing.T) {
 // investigation files nothing; the refusal is decided from the caller's
 // credentials before Promote runs, so no promoted entry is written.
 func TestAnInvestigationWorkerCannotPromoteThroughTheCoordinatorClient(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
-	quietGit(t)
 	h := newHome(t)
 	subject := newSubject(t)
 	if err := h.Create(); err != nil {

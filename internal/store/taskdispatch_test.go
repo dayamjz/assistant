@@ -11,6 +11,7 @@ import (
 // was written, and is rewritten by the next dispatch: the column holds the
 // latest proven copy and not a history of them.
 func TestStartSnapshotIsUnknownUntilWrittenAndHoldsTheLatest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
@@ -56,6 +57,7 @@ func TestStartSnapshotIsUnknownUntilWrittenAndHoldsTheLatest(t *testing.T) {
 // attempt to exist, reads back what was written, and a second write for the
 // same attempt is refused with the first standing.
 func TestPrimarySnapshotIsWrittenOncePerAttempt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")

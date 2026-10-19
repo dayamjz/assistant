@@ -9,6 +9,7 @@ import (
 
 // P6: a stale observer cannot change the next worker attempt's selection.
 func TestTaskFallbackIsAnchoredAndWrittenOnce(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	s := openStore(t)
 	ctx := t.Context()
@@ -48,6 +49,7 @@ func TestTaskFallbackIsAnchoredAndWrittenOnce(t *testing.T) {
 }
 
 func TestHandoffHoldCannotBlockANewerAttempt(t *testing.T) {
+	t.Parallel()
 	s := openStore(t)
 	ctx := t.Context()
 	task := seedTask(t, s, "taskaaaaaaab")

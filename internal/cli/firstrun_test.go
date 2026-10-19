@@ -271,6 +271,7 @@ func TestDoctorQuotesABranchNameInTheSendCommand(t *testing.T) {
 // doctor reads the send it made, so the command is shown to do what its row
 // says rather than only to read like it.
 func TestDoctorReadsTheGateAfterASendAndItsCommandsDoWhatTheySay(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

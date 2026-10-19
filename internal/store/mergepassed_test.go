@@ -11,6 +11,7 @@ import (
 // a merge, a second record, and a run whose own move already wrote one are
 // each refused, and none writes a row; the first write is the control.
 func TestAMergeOfAPassedRunIsRecordedOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	running := runningRun(t, s)

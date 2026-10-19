@@ -54,6 +54,7 @@ func cleanedTask(t *testing.T, s *Store, id string, removed bool) {
 // each refusal is the same call naming the landed record beside it, which
 // is accepted, so the refusals are the records' and not the call's.
 func TestASeenMarkNamesOnlyLandedRecords(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	endedRun(t, s, "run-merged", PullRequestMerged)
@@ -107,6 +108,7 @@ func TestASeenMarkNamesOnlyLandedRecords(t *testing.T) {
 // refuses to rewrite or remove a row. The control is the first mark itself,
 // which a direct insert of a second record shows the table takes.
 func TestASeenMarkIsWrittenOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	endedRun(t, s, "run-merged", PullRequestMerged)
@@ -142,6 +144,7 @@ func TestASeenMarkIsWrittenOnce(t *testing.T) {
 // The kinds are a closed set, and writing to the result of SeenKinds does
 // not change it.
 func TestSeenKindsAreAClosedSet(t *testing.T) {
+	t.Parallel()
 	for _, k := range SeenKinds() {
 		if !k.Recognized() {
 			t.Errorf("%s is in the set and not recognized", k)

@@ -8,6 +8,7 @@ import (
 )
 
 func TestGateBindingIsReadableAndEnumerable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -44,6 +45,7 @@ func TestGateBindingIsReadableAndEnumerable(t *testing.T) {
 // back whole. That state is what a working copy that moved without being
 // unbound leaves behind.
 func TestOneGateCanBeNamedByMoreThanOneWorkingCopy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -77,6 +79,7 @@ func TestOneGateCanBeNamedByMoreThanOneWorkingCopy(t *testing.T) {
 // A working copy is bound to at most one gate, so binding it again moves it
 // rather than leaving it named by two gates at once.
 func TestRebindingAWorkingCopyReplacesItsGateAndKeepsBoundAt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -107,6 +110,7 @@ func TestRebindingAWorkingCopyReplacesItsGateAndKeepsBoundAt(t *testing.T) {
 }
 
 func TestUnbindGateRemovesTheBindingAndSaysWhenThereWasNone(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -133,6 +137,7 @@ func TestUnbindGateRemovesTheBindingAndSaysWhenThereWasNone(t *testing.T) {
 // distinguishable from a failed read, because it is the state that lets an
 // initialization adopt a repository.
 func TestAGateNothingIsBoundToListsNothingWithoutFailing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -149,6 +154,7 @@ func TestAGateNothingIsBoundToListsNothingWithoutFailing(t *testing.T) {
 }
 
 func TestBindGateRefusesABindingThatNamesNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -164,6 +170,7 @@ func TestBindGateRefusesABindingThatNamesNothing(t *testing.T) {
 }
 
 func TestGateBindingAccessorsFailAfterClose(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	if _, err := s.BindGate(ctx, "/checkouts/one", "aaaa"); err != nil {
@@ -221,6 +228,7 @@ func schemaBefore(t *testing.T, v int) []migration {
 // one. This builds a database at the schema an older build left, with a row in
 // it, and then opens it the way this build does.
 func TestTheOwnershipIndexMigrationReachesAnOlderDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
 

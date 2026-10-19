@@ -206,6 +206,7 @@ func reportCarries(report *findings.Report, id string) bool {
 // phrase with an outcome, a consequence and a decision, which is P13. The
 // findings the stage stopped on stay readable after the run has ended.
 func TestARoundLimitParkIsNamedOnEverySurface(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P13)
 	requiresIdentifiedPeer(t)
@@ -231,6 +232,7 @@ func TestARoundLimitParkIsNamedOnEverySurface(t *testing.T) {
 // round, so the second round leaves the run's state where the first left it,
 // well inside the stage's round limit.
 func TestAConvergenceParkIsNamedOnEverySurface(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P13)
 	requiresIdentifiedPeer(t)
@@ -252,6 +254,7 @@ func TestAConvergenceParkIsNamedOnEverySurface(t *testing.T) {
 // The budget is the trusted copy's, the one place a repository may set it,
 // and one step lets the intent stage run and nothing after it.
 func TestAStepBudgetParkIsNamedOnEverySurface(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P13)
 	requiresIdentifiedPeer(t)
@@ -285,6 +288,7 @@ func TestAStepBudgetParkIsNamedOnEverySurface(t *testing.T) {
 // it rather than inferred from where execution stopped, and P13 because what a
 // person reads differs in words and not only in a field.
 func TestACancelledRunAndAParkedRunReadApartOnEverySurface(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P13)
 	requiresIdentifiedPeer(t)

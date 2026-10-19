@@ -119,6 +119,7 @@ func (anyAncestry) Contained(context.Context, ipc.Credentials) (ipc.Containment,
 // which is also the control showing the first half is decided by observation
 // and not by the ended connection being taken as success.
 func TestAStopWithNoAnswerIsDecidedByWhetherTheServiceStoppedAnswering(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	t.Run("the service went down", func(t *testing.T) {
 		t.Parallel()

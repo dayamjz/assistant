@@ -12,6 +12,7 @@ import (
 // refused with the first standing, a clear removes it, and a second clear is
 // told it cleared nothing rather than reading as a clear.
 func TestAProcessRecordIsWrittenListedAndClearedOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -66,6 +67,7 @@ func TestAProcessRecordIsWrittenListedAndClearedOnce(t *testing.T) {
 // record with no run, no stage, or no positive group, and one naming a run
 // the home has no row for, are refused and leave nothing behind.
 func TestRecordProcessRefusesWhatRecoveryCouldNeverActOn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)

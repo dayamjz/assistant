@@ -14,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 )
 
 // A restart is not over until the replacement is serving. The outgoing service
@@ -22,6 +23,7 @@ import (
 // service on its way out, and the command reports readiness before the
 // successor exists.
 func TestReadinessIsNotSatisfiedByTheServiceItWasToldToReplace(t *testing.T) {
+	t.Parallel()
 	h := newTestHome(t)
 	in := &invocation{
 		env:  Environment{Stdout: io.Discard, Stderr: io.Discard, Getenv: func(string) string { return "" }},
@@ -101,6 +103,7 @@ func serveForTest(t *testing.T, h *home.Home) *service.Service {
 	if err != nil {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
+	storetest.Seed(t, h.Database())
 	running, err := service.Open(t.Context(), service.Options{
 		Home:      h,
 		NewStages: stages.All,

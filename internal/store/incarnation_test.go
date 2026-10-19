@@ -13,6 +13,7 @@ import (
 // closed and reopened, so a beacon written by an earlier process reads
 // behind the current one rather than equal to it.
 func TestIncarnationEpochGrowsAndSurvivesReopen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
 	s := openStoreAt(t, path)
@@ -45,6 +46,7 @@ func TestIncarnationEpochGrowsAndSurvivesReopen(t *testing.T) {
 // nobody began is refused the same way. The control is the current
 // incarnation's identical write, which lands.
 func TestAReplacedIncarnationsWritesAreRefusedWhole(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID

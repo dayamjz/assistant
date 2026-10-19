@@ -48,13 +48,13 @@ import (
 // the answer good for one attempt; P13 is the human rendering of the answer
 // and of the held task, held to the derived forbidden set.
 func TestATaskPastItsRelaunchBoundHoldsUntilAnAnswerRetriesItOnce(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P13)
 	requiresIdentifiedPeer(t)
 	requireSweepClears(t)
 	vocabtest.Control(t)
-	quietGit(t)
 	h := newHome(t)
 	subject := newSubject(t)
 	if err := h.Create(); err != nil {
@@ -165,6 +165,7 @@ func TestATaskPastItsRelaunchBoundHoldsUntilAnAnswerRetriesItOnce(t *testing.T) 
 // working copy is needed: the answer is given from a directory that is
 // not one.
 func TestAnInvestigationsHoldIsAnsweredGivenTheTask(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	serve(t, h)
@@ -258,6 +259,7 @@ func TestAnInvestigationsHoldIsAnsweredGivenTheTask(t *testing.T) {
 // name (finding id), with a note, and the note is on the hold's record.
 // Oldest-first is no longer the only path.
 func TestANamedTaskHoldIsAnsweredWithANote(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	serve(t, h)
@@ -571,18 +573,6 @@ func lastRelaunched(t *testing.T, h *home.Home, id string) string {
 	}
 	t.Fatalf("task %s has no relaunched note: %+v", id, events)
 	return ""
-}
-
-// quietGit turns git's automatic maintenance off for every repository the
-// test's processes touch, so a background gc never races a copy the sweep
-// is asked to clear.
-func quietGit(t *testing.T) {
-	t.Helper()
-	cfg := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(cfg, []byte("[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
 }
 
 // requireSweepClears skips where a relaunch cannot clear a copy at all: the

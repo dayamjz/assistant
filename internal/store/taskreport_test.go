@@ -15,6 +15,7 @@ import (
 // stored report whose decisions were never registered, nor a history saying
 // a report is ready with no report behind it (P8).
 func TestStoreTaskReportRegistersTheHoldsOrStoresNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
@@ -144,6 +145,7 @@ func countKind(t *testing.T, s *Store, task, kind string) int {
 // ForgetHoldForTest is the counterfeit builder and nothing more: it deletes
 // the one row it is given, refuses a key with no row, and takes the test.
 func TestForgetHoldForTestDeletesOneRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	for _, key := range []string{"keep", "drop"} {

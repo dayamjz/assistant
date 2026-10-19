@@ -20,6 +20,7 @@ var roundLimitPark = RunPark{Bound: ParkRoundLimit, Stage: "review", Node: "fix:
 // park from, written once at the ending rather than reconstructed later from a
 // history's last entry.
 func TestAParkIsRecordedWithTheMoveThatEndsTheRun(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	ctx := context.Background()
 	s := openStore(t)
@@ -62,6 +63,7 @@ func TestAParkIsRecordedWithTheMoveThatEndsTheRun(t *testing.T) {
 // the move finds it already terminated and writes nothing, so the record goes
 // on reading as the cancellation it was.
 func TestACancelledRunIsNotGivenAPark(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -81,6 +83,7 @@ func TestACancelledRunIsNotGivenAPark(t *testing.T) {
 // never ended on a record nobody can read; and a run in a status the caller
 // did not name is refused as the status error every move gives.
 func TestAParkOfNoKnownShapeIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -110,6 +113,7 @@ func TestAParkOfNoKnownShapeIsRefused(t *testing.T) {
 // second writer: revising a park, clearing one, and giving one to a run that
 // is not terminated. An update that does not name the column is not refused.
 func TestAParkIsWrittenOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -141,6 +145,7 @@ func TestAParkIsWrittenOnce(t *testing.T) {
 // it stood, with no park, and the trigger refuses again. The migration is
 // found by name, so the test spells no version the shipped list may grow past.
 func TestTheRunParkMigrationKeepsEarlierRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	var added migration

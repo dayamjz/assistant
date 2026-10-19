@@ -30,6 +30,7 @@ func seedRepository(t *testing.T, s *Store) {
 // Every run records the build that produced it, so a surprising verdict can be
 // traced to the software that reached it. This is the refusing side.
 func TestCreateRunRefusesAnUntraceableRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRepository(t, s)
@@ -64,6 +65,7 @@ func TestCreateRunRefusesAnUntraceableRun(t *testing.T) {
 // accepted. Without this the refusals above would also pass if CreateRun
 // refused everything.
 func TestCreateRunAcceptsEitherHalfOfTheBuildIdentity(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for name, build := range map[string]Build{
 		"version only":  {Version: "v1.2.3", Go: "go1.25.0"},
@@ -90,6 +92,7 @@ func TestCreateRunAcceptsEitherHalfOfTheBuildIdentity(t *testing.T) {
 }
 
 func TestCurrentBuildIsUsable(t *testing.T) {
+	t.Parallel()
 	b, err := CurrentBuild()
 	if err != nil {
 		t.Fatalf("CurrentBuild: %v", err)
@@ -103,6 +106,7 @@ func TestCurrentBuildIsUsable(t *testing.T) {
 }
 
 func TestRunOptionalFieldsStartUnknown(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRepository(t, s)
@@ -153,6 +157,7 @@ func TestRunOptionalFieldsStartUnknown(t *testing.T) {
 }
 
 func TestRunUpdatesRefuseAMissingRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	if _, err := s.TransitionRun(ctx, "no-such-run", []RunStatus{RunPending}, RunPassed); !errors.Is(err, ErrNotFound) {
@@ -167,6 +172,7 @@ func TestRunUpdatesRefuseAMissingRun(t *testing.T) {
 }
 
 func TestRunsForRepository(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRepository(t, s)
@@ -198,6 +204,7 @@ func TestRunsForRepository(t *testing.T) {
 }
 
 func TestRunRequiresItsRepository(t *testing.T) {
+	t.Parallel()
 	s := openStore(t)
 	if _, err := s.CreateRun(context.Background(), completeRun()); err == nil {
 		t.Fatal("CreateRun accepted a run whose repository does not exist")
@@ -205,6 +212,7 @@ func TestRunRequiresItsRepository(t *testing.T) {
 }
 
 func TestStageResultKeepsUnknownApart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -253,6 +261,7 @@ func TestStageResultKeepsUnknownApart(t *testing.T) {
 }
 
 func TestRoundsAreHistoryInAppendOrder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -292,6 +301,7 @@ func TestRoundsAreHistoryInAppendOrder(t *testing.T) {
 // An empty payload is a fact somebody recorded. It must not read back the way
 // an absent one would.
 func TestRoundPayloadsAreNeverNull(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -322,6 +332,7 @@ func TestRoundPayloadsAreNeverNull(t *testing.T) {
 // The fixer session is one of the fields a run does not have when it is
 // created, and it comes back the way every other one does.
 func TestRunFixerSessionIsUnknownUntilItIsRecorded(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRepository(t, s)
@@ -373,6 +384,7 @@ const runFixerSessionVersion = 4
 // A run recorded before the column existed reads back unknown rather than as a
 // session of the empty string, which is the promise Optional exists to keep.
 func TestTheFixerSessionMigrationReachesAnOlderDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
 
@@ -420,6 +432,7 @@ func TestTheFixerSessionMigrationReachesAnOlderDatabase(t *testing.T) {
 // A transition is anchored to the status the caller expected, so a run that
 // has moved since is refused rather than written over.
 func TestTransitionRunHoldsTheRunToTheStatusTheCallerExpected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRepository(t, s)
@@ -461,6 +474,7 @@ func TestTransitionRunHoldsTheRunToTheStatusTheCallerExpected(t *testing.T) {
 // transition retried after a failure that had already committed reports the
 // state it established.
 func TestTransitionRunToTheStatusTheRunAlreadyHoldsWritesNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRepository(t, s)
@@ -488,6 +502,7 @@ func TestTransitionRunToTheStatusTheRunAlreadyHoldsWritesNothing(t *testing.T) {
 
 // The refusals that are about the request rather than about the run.
 func TestTransitionRunRefusesARequestItCannotActOn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRepository(t, s)
@@ -515,6 +530,7 @@ func TestTransitionRunRefusesARequestItCannotActOn(t *testing.T) {
 
 // Every status this package defines is recognized, and nothing else is.
 func TestRunStatusesAreAClosedSet(t *testing.T) {
+	t.Parallel()
 	for _, status := range RunStatuses() {
 		if !status.Recognized() {
 			t.Fatalf("%q is in the set and not recognized", status)
@@ -539,6 +555,7 @@ func TestRunStatusesAreAClosedSet(t *testing.T) {
 // a known empty list, which is a different fact from the unknown a run keeps
 // until its own resolution exists.
 func TestSetRunConfigResolutionReplacesThePlaceholder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRepository(t, s)
@@ -590,6 +607,7 @@ func TestSetRunConfigResolutionReplacesThePlaceholder(t *testing.T) {
 // and never fabricated: a run refused before an agent answered for it keeps
 // the unknown.
 func TestSetRunResolvedAgentRecordsTheName(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRepository(t, s)

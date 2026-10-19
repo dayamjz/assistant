@@ -12,6 +12,7 @@ import (
 // after, and refuses on TaskCleanup's terms: a proof outside the set, a run
 // that does not exist, a first write carrying a removal, and a second proof.
 func TestARunCleanupRecordIsWrittenOnceWithItsProof(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -83,6 +84,7 @@ func TestARunCleanupRecordIsWrittenOnceWithItsProof(t *testing.T) {
 // A refusal is the one state a row is revised out of: a later refusal
 // rewrites it, a proof replaces it, and a refusal is never a proof.
 func TestARunCleanupRefusalIsRewrittenUntilAProofReplacesIt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -124,6 +126,7 @@ func TestARunCleanupRefusalIsRewrittenUntilAProofReplacesIt(t *testing.T) {
 // A row carrying a proof outside the set is refused on read rather than
 // read back as some proof it is not.
 func TestARunCleanupRowOutsideTheSetIsRefusedOnRead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -143,6 +146,7 @@ func TestARunCleanupRowOutsideTheSetIsRefusedOnRead(t *testing.T) {
 // directly, because no accessor changes a shape in this build and the
 // promotion that will (#109) is what the anchor exists to refuse.
 func TestRecordTaskCleanupIsAnchoredToTheShape(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")

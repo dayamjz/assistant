@@ -36,6 +36,7 @@ func recordValues(document any, key string) []any {
 // the commit the checkout stood on, read from git rather than from the
 // product, so the search is shown to reach the record it says is clean.
 func TestNoJSONRunRecordCarriesCurrentHead(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P14)
 	h := newHome(t)

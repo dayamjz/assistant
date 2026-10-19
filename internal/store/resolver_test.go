@@ -14,6 +14,7 @@ import (
 // absence tests elsewhere from passing on a build where nothing can record a
 // person at all.
 func TestEveryResolverRecordsAndReadsBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -47,6 +48,7 @@ func TestEveryResolverRecordsAndReadsBack(t *testing.T) {
 // PRD section 8: a resolution records who made it, so one that names nobody is
 // refused rather than stored with an empty who.
 func TestResolveHoldRefusesAResolutionThatNamesNobody(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	if _, err := s.RegisterHold(ctx, Hold{Key: "k", Subject: "a decision"}); err != nil {
@@ -77,6 +79,7 @@ func TestResolveHoldRefusesAResolutionThatNamesNobody(t *testing.T) {
 // kind of hold succeeds identically for every member of the set, and the only
 // difference afterwards is the record.
 func TestWhoResolvedDoesNotDecideWhetherAResolutionMayProceed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -107,6 +110,7 @@ func TestWhoResolvedDoesNotDecideWhetherAResolutionMayProceed(t *testing.T) {
 // section 8 rests on: an agent reaches this program with bytes, and no decoding
 // of bytes anywhere produces the value meaning a person decided.
 func TestAResolverIsNotSomethingDecodingProduces(t *testing.T) {
+	t.Parallel()
 	person := ResolvedByPerson()
 
 	// A bare value, whatever a caller writes on the wire. The decode goes
@@ -154,6 +158,7 @@ func TestAResolverIsNotSomethingDecodingProduces(t *testing.T) {
 // which is a different fact from a resolution nobody was recorded for: this
 // package refuses to write one of those.
 func TestAHoldResolvedBeforeTheColumnExistedReadsBackUnknown(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -195,6 +200,7 @@ const holdResolverVersion = 3
 // resolved hold already in it, which is the first time this package adds a
 // column to a populated table.
 func TestTheHoldResolverMigrationReachesAnOlderDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
 
@@ -266,6 +272,7 @@ func TestTheHoldResolverMigrationReachesAnOlderDatabase(t *testing.T) {
 // reporting it as "nobody was recorded" would turn a row nobody can account for
 // into a fact about the resolution.
 func TestAResolverOutsideTheClosedSetIsRefusedOnRead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	opened, resolved := encodeTime(nowUTC()), encodeTime(nowUTC())
@@ -301,6 +308,7 @@ func TestAResolverOutsideTheClosedSetIsRefusedOnRead(t *testing.T) {
 // The zero Resolver renders as a who rather than as an empty string, so a
 // formatted record cannot print nothing where a name belongs.
 func TestResolverRenders(t *testing.T) {
+	t.Parallel()
 	if got := (Resolver{}).String(); got != "nobody" {
 		t.Errorf("the zero Resolver rendered as %q", got)
 	}

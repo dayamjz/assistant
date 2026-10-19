@@ -37,6 +37,7 @@ func sealTaskStateVersion(t *testing.T) int {
 // lands, so the first half is not a malformed statement refused for some other
 // reason.
 func TestTheTaskStateTableTakesNoRows(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P14)
 	ctx := context.Background()
 	s := openStore(t)
@@ -61,6 +62,7 @@ func TestTheTaskStateTableTakesNoRows(t *testing.T) {
 // A database migrated forward from a build that wrote task_state arrives at the
 // seal holding rows. The shipped migration is replayed against that state.
 func TestTheTaskStateSealEmptiesARowAnEarlierBuildWrote(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P14)
 	ctx := context.Background()
 	s := openStore(t)
@@ -188,6 +190,7 @@ func extraRun(t *testing.T, s *Store, id, repo, branch string) Run {
 // branch-less task is the positive control for the NULL comparison: it matches
 // no run by branch, with or without an attempt.
 func TestASnapshotAttributesRunsByBranchAndAge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	before := seedRun(t, s) // repo-1, topic, run-1: older than the task below
@@ -241,6 +244,7 @@ func runIDs(runs []Run) []string {
 // Holds come with the snapshot when they name the task or one of its runs, open
 // or resolved, and a hold naming something else does not.
 func TestASnapshotCarriesTheHoldsThatNameTheTaskOrItsRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedBranchTask(t, s, "taskaaaaaaab")
@@ -275,6 +279,7 @@ func TestASnapshotCarriesTheHoldsThatNameTheTaskOrItsRuns(t *testing.T) {
 }
 
 func TestTaskSnapshotsListNewestFirstAndRefuseUnknownTasks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	if _, err := s.TaskSnapshot(ctx, "missing"); !errors.Is(err, ErrNotFound) {
@@ -297,6 +302,7 @@ func TestTaskSnapshotsListNewestFirstAndRefuseUnknownTasks(t *testing.T) {
 // even though the task names no run. The control is that the same removal
 // succeeds once nothing names the repository.
 func TestForgettingARepositoryIsRefusedWhileATaskWorksOnOne(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -328,6 +334,7 @@ func TestForgettingARepositoryIsRefusedWhileATaskWorksOnOne(t *testing.T) {
 // a run newer than that is its and a run older than its latest attempt is
 // not. The control is the blocker, whose attribution does not move.
 func TestAttributionIsCutOffAtTheLatestAttempt(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	ctx := context.Background()
 	s := openStore(t)
@@ -393,6 +400,7 @@ func TestAttributionIsCutOffAtTheLatestAttempt(t *testing.T) {
 // The snapshot carries the cleanup record once one is written and reports it
 // unknown before, and the resolver reads nothing from it in this build.
 func TestASnapshotCarriesTheCleanupRecord(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
@@ -426,6 +434,7 @@ func TestASnapshotCarriesTheCleanupRecord(t *testing.T) {
 // carries none for a run that ended any other way or for a run that is not
 // the task's.
 func TestASnapshotCarriesTheMergeRecordsOfItsRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRun(t, s)

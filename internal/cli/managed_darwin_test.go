@@ -22,6 +22,11 @@ import (
 // the control that it was the folder that refused it. That the grant itself
 // reaches the process launchd starts is not something this test, or anything
 // in this build, establishes; internal/managed's doc says so.
+//
+// It runs serially, unlike most tests here: it starts a service as a process
+// of its own and waits on a bound for it to answer, which the load of the
+// package's parallel tests could exhaust, and serial tests run before any
+// parallel test resumes.
 func TestAManagedInstallOnMacOSRefusesACheckoutInAProtectedFolder(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)

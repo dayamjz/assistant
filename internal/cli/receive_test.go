@@ -45,6 +45,7 @@ import (
 // lets the cut finish only after it has read that line, so the push it then
 // sees succeed is one that waited rather than one that arrived after the cut.
 func TestAPushArrivingWhileARunsCopyIsBeingCutWaitsForItAndIsReceived(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -105,6 +106,9 @@ func TestAPushArrivingWhileARunsCopyIsBeingCutWaitsForItAndIsReceived(t *testing
 // git would have advertised its capabilities there the moment it started; the
 // positive control receives with the lock free and sees that advertisement, so an empty output is evidence of a refusal before git and
 // not of a check that cannot see output.
+//
+// It runs serially, unlike most tests here, because ShortenReceiveWait
+// changes a variable every receive in this process reads.
 func TestAReceivePastTheBoundIsRefusedNamingTheCopyAndReceivesNothing(t *testing.T) {
 	h := newHome(t)
 	subject := newSubject(t)
@@ -147,6 +151,7 @@ func TestAReceivePastTheBoundIsRefusedNamingTheCopyAndReceivesNothing(t *testing
 // gate.ErrCopyInTransit, through internal/gate's own lock rather than a value
 // stated here.
 func TestTheReceiveRefusalStaysTyped(t *testing.T) {
+	t.Parallel()
 	repository := t.TempDir()
 	lock, err := gate.LockCopies(t.Context(), repository)
 	if err != nil {
@@ -165,6 +170,7 @@ func TestTheReceiveRefusalStaysTyped(t *testing.T) {
 // receive command is written on the assistant remote, naming this binary, the
 // gate and the home, and origin's configuration is left exactly as it was.
 func TestInitializeWritesTheReceiveCommandOnTheAssistantRemoteOnly(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	subject := newSubject(t)
 	before := git(t, subject, "config", "--get-regexp", `^remote\.origin\.`)

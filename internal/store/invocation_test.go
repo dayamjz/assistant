@@ -11,6 +11,7 @@ import (
 // count the agent reported, a reported zero, and a count nothing was reported
 // for are three different rows, and reading them back tells them apart.
 func TestAgentInvocationsKeepReportedAndUnreportedCountsApart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	started := time.Date(2026, 9, 19, 18, 30, 0, 123456789, time.UTC)
@@ -92,6 +93,7 @@ func TestAgentInvocationsKeepReportedAndUnreportedCountsApart(t *testing.T) {
 // A cost attributed to nothing answers no question the history exists for, so
 // the append refuses it rather than storing it.
 func TestAppendAgentInvocationRefusesAnUnattributedCost(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -117,6 +119,7 @@ func TestAppendAgentInvocationRefusesAnUnattributedCost(t *testing.T) {
 // known but blank name is refused, because unknown is the one spelling of a
 // call that served none.
 func TestAnAgentInvocationKeepsTheRunAndStageItServed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	started := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
@@ -160,6 +163,7 @@ func TestAnAgentInvocationKeepsTheRunAndStageItServed(t *testing.T) {
 // control that the filter filters; the one started exactly at it pins the
 // boundary as inclusive.
 func TestAgentInvocationsSinceReadsTheWindowByWhenACallStarted(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	since := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
@@ -190,6 +194,7 @@ func TestAgentInvocationsSinceReadsTheWindowByWhenACallStarted(t *testing.T) {
 // The migration is found by name, so the test does not spell a version the
 // shipped list may grow past.
 func TestTheInvocationRunAndStageMigrationKeepsEarlierRowsUnknown(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	var added migration
@@ -250,6 +255,7 @@ func TestTheInvocationRunAndStageMigrationKeepsEarlierRowsUnknown(t *testing.T) 
 // known and empty, and a row written before the columns reads each of them
 // unknown. The two are not the same fact.
 func TestAnInvocationRecordsTheRoleItWasAskedFor(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	started := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)

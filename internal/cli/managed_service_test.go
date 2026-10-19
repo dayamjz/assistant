@@ -194,6 +194,11 @@ func removeCalls(m *managed.Manager) []string {
 // The control for the one-service rule is the first step: an install while
 // a service launched the ordinary way is up is refused, and writes and asks
 // nothing.
+//
+// It runs serially, unlike most tests here: it starts a service as a process
+// of its own and waits on a bound for it to answer, which the load of the
+// package's parallel tests could exhaust, and serial tests run before any
+// parallel test resumes.
 func TestAManagedServiceIsInstalledStartedAndRemovedThroughTheManager(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	vocabtest.Control(t)
@@ -284,6 +289,7 @@ func TestAManagedServiceIsInstalledStartedAndRemovedThroughTheManager(t *testing
 // A flag only the managed service takes is refused as incorrect usage where
 // it does not belong, before anything is asked of anyone.
 func TestTheManagedFlagsAreRefusedWhereTheyDoNotBelong(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	w := newManagedWorld(t, h)
 	for _, args := range [][]string{
@@ -308,6 +314,11 @@ func TestTheManagedFlagsAreRefusedWhereTheyDoNotBelong(t *testing.T) {
 // nothing answers and the restart's own wait for a successor fails. A
 // successor launched here would answer, which is what a service started
 // without --managed does on the same request.
+//
+// It runs serially, unlike most tests here: it starts a service as a process
+// of its own and waits on a bound for it to answer, which the load of the
+// package's parallel tests could exhaust, and serial tests run before any
+// parallel test resumes.
 func TestARestartUnderAManagerEndsTheServiceAndLaunchesNothing(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)

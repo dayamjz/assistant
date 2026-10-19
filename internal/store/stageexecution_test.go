@@ -10,6 +10,7 @@ import (
 // reads back with the start and end it was given, so a stage that ran twice
 // has two durations rather than the last one.
 func TestEveryStageExecutionKeepsItsOwnStartAndEnd(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	at := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
@@ -40,6 +41,7 @@ func TestEveryStageExecutionKeepsItsOwnStartAndEnd(t *testing.T) {
 // An execution nobody observed is refused: no run, no stage, a missing time,
 // or an end before its start. The positive control is the well-formed row.
 func TestAStageExecutionNobodyObservedIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	at := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
