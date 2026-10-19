@@ -113,6 +113,7 @@ var modelTable = map[string]map[string][]string{
 		"opus":   {"5.5", "5", "4.8", "4.7", "4.6", "4.5"},
 		"sonnet": {"5.5", "5", "4.6"},
 		"haiku":  {"5.5", "4.5"},
+		"fable":  {"5.1", "5"},
 	},
 	"openai": {
 		"gpt": {"6-astra", "6.1-sol", "6-luna"},

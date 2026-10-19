@@ -10,6 +10,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/config"
 )
 
 // The Claude Code adapter's worker is told exactly what it was sent. The
@@ -63,6 +64,67 @@ func TestTheClaudeWorkerIsToldExactlyWhatItIsSent(t *testing.T) {
 	}
 	if call.Session() != "" {
 		t.Errorf("the worker was asked to resume %q, and a worker continues no conversation", call.Session())
+	}
+}
+
+// A worker role on Claude Fable 5.1 reaches the Claude Code CLI as
+// --model claude-fable-5-1. The role is the operator's YAML document read by
+// the real parser and resolver, the identifier is Translate's, which is the
+// call internal/service's launch makes, and the command line is what the
+// stand-in recorded off the process the adapter started, so no step states the
+// identifier the next one reads.
+func TestAFableWorkerRoleReachesTheClaudeCommandLine(t *testing.T) {
+	t.Parallel()
+	doc := "roles:\n  worker-hard:\n    agent: claude\n    provider: anthropic\n    type: fable\n    version: \"5.1\"\n    effort: high\n"
+	layer, err := config.ParseYAML(config.OriginGlobal, []byte(doc))
+	if err != nil {
+		t.Fatalf("parsing the roles: %v", err)
+	}
+	res, err := config.Resolve(layer, config.Absent(config.OriginTrusted))
+	if err != nil {
+		t.Fatalf("resolving the roles: %v", err)
+	}
+	role, err := res.Config.Roles.ForTask("worker-hard")
+	if err != nil {
+		t.Fatalf("resolving the task's role: %v", err)
+	}
+	model, err := agents.Translate(agents.ClaudeName, role.Provider, role.Type, role.Version)
+	if err != nil {
+		t.Fatalf("translating %s %s %s: %v", role.Provider, role.Type, role.Version, err)
+	}
+	if err := agents.AcceptsEffort(agents.ClaudeName, role.Effort); err != nil {
+		t.Fatalf("the Claude adapter refused effort %q: %v", role.Effort, err)
+	}
+
+	agent := standin.New(t, standin.Script{Worker: &standin.WorkerScript{
+		Exchanges: []standin.Exchange{{Contains: "Work on the task", Reply: "started"}},
+	}}, agents.WithTerminationGrace(300*time.Millisecond))
+	worker, err := agents.OpenWorker(t.Context(), agent.Runner(), agents.WorkerSpec{
+		Dir: t.TempDir(), Instructions: "Work on the task in this copy.", Model: model, Effort: role.Effort,
+	})
+	if err != nil {
+		t.Fatalf("starting the worker: %v", err)
+	}
+	defer worker.Close()
+	if got := waitForResult(t, worker); got != "started" {
+		t.Fatalf("the worker answered %q, want the scripted reply", got)
+	}
+	worker.Close()
+
+	var call standin.Call
+	for _, c := range agent.Calls() {
+		if c.Worker {
+			call = c
+		}
+	}
+	if !call.Worker {
+		t.Fatalf("no worker was recorded: %s", agent.Calls())
+	}
+	if call.Model() != "claude-fable-5-1" {
+		t.Errorf("the worker was started with --model %q, want claude-fable-5-1: %q", call.Model(), call.Args)
+	}
+	if i := slices.Index(call.Args, "--effort"); i < 0 || i+1 >= len(call.Args) || call.Args[i+1] != "high" {
+		t.Errorf("the worker was started without --effort high: %q", call.Args)
 	}
 }
 

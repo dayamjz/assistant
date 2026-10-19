@@ -136,6 +136,30 @@ Codex pipe workers are a separate `codex app-server` thread and are not
 that review session. Terminal workers are not declared, so a tmux session
 provider still refuses a Codex pin.
 
+### Claude roles
+
+Claude translates every `anthropic` cell of the role table (`opus`,
+`sonnet`, `haiku`, and `fable`) into `claude-<type>-<version>`, with a dot
+in the version written as a hyphen, and passes it as `--model`. A named
+effort is passed as `--effort`. As with Codex, translation does not
+establish model access in an installed CLI or account.
+
+For example, a worker role on Claude Fable 5.1 starts the worker with
+`--model claude-fable-5-1 --effort high`:
+
+```yaml
+roles:
+  worker-hard:
+    agent: claude
+    provider: anthropic
+    type: fable
+    version: "5.1"
+    effort: high
+```
+
+A version outside the table, such as `fable` `9`, fails at parse time and
+names the role.
+
 ### Worker routing (GAP-02)
 
 Task workers are routed separately from the run agent. `agents.Route` picks
