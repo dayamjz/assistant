@@ -95,6 +95,11 @@ const holdResolutionNoteMigration = "hold resolution note"
 // sealCheckpointTableMigration is a constant.
 const taskAttemptRouteMigration = "task attempt route"
 
+// delegationMigration names the migration that records a subordinate home's
+// grant, the parent's delegation of a task, and the once-only delivery of
+// that task, for the reason sealCheckpointTableMigration is a constant.
+const delegationMigration = "subordinate delegation"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1541,6 +1546,99 @@ var schema = []migration{
 			// SetAttemptRoute before the process starts.
 			`ALTER TABLE task_attempt ADD COLUMN adapter TEXT`,
 			`ALTER TABLE task_attempt ADD COLUMN route_reason TEXT`,
+		},
+	},
+	{
+		version: 37,
+		name:    delegationMigration,
+		statements: []string{
+			// A subordinate home is a second assistant home. The grant is the
+			// one row that says which parent started it, which tasks it may
+			// run, and which of the parent's working copies it may not bind
+			// a gate to. Merge and parent-gate ownership are not columns: a
+			// grant that permitted either could not be written here. The row
+			// is written once. A second insert is the accessor's
+			// ErrGrantRecorded, and an update or a delete is the trigger, so
+			// the child cannot widen the list it was given.
+			`CREATE TABLE delegation_grant (
+				singleton       INTEGER PRIMARY KEY CHECK (singleton = 1),
+				parent_home     TEXT NOT NULL,
+				tasks           TEXT NOT NULL CHECK (tasks <> ''),
+				parent_branches TEXT NOT NULL,
+				parent_pid      INTEGER NOT NULL CHECK (parent_pid > 0),
+				parent_uid      INTEGER NOT NULL CHECK (parent_uid >= 0),
+				parent_gid      INTEGER NOT NULL CHECK (parent_gid >= 0),
+				recorded_at     TEXT NOT NULL
+			) STRICT`,
+			`CREATE TRIGGER delegation_grant_is_written_once
+				BEFORE UPDATE ON delegation_grant
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a subordinate grant is written once and is not updated');
+				END`,
+			`CREATE TRIGGER delegation_grant_is_not_removed
+				BEFORE DELETE ON delegation_grant
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a subordinate grant is written once and is not deleted');
+				END`,
+			// The parent's record that a task runs in a child home. Delivery
+			// of the task stays in this store; the row does not itself
+			// deliver anything. recovery is the closed set
+			// DelegationRecovery names. Written once, so a restart cannot
+			// retarget the task by rewriting the row.
+			`CREATE TABLE delegation (
+				task_id     TEXT PRIMARY KEY REFERENCES task(id),
+				child_home  TEXT NOT NULL,
+				recovery    TEXT NOT NULL CHECK (recovery IN ('none', 'relaunch-if-dead')),
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TRIGGER delegation_is_written_once
+				BEFORE UPDATE ON delegation
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task delegation is written once and is not updated');
+				END`,
+			`CREATE TRIGGER delegation_is_not_removed
+				BEFORE DELETE ON delegation
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task delegation is written once and is not deleted');
+				END`,
+			// The parent's once-only record that delivery of a delegated
+			// task was accepted. It is not a merge record and not a local
+			// landing: internal/taskstate does not read it, and a second
+			// insert is ErrDelegationDelivered.
+			`CREATE TABLE delegation_delivery (
+				task_id     TEXT PRIMARY KEY REFERENCES task(id),
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TRIGGER delegation_delivery_is_written_once
+				BEFORE UPDATE ON delegation_delivery
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a delegated delivery is written once and is not updated');
+				END`,
+			`CREATE TRIGGER delegation_delivery_is_not_removed
+				BEFORE DELETE ON delegation_delivery
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a delegated delivery is written once and is not deleted');
+				END`,
+			// Presence of a row is the record that the named attempt was
+			// proven dead. Absence is not death. A dropped connection does
+			// not write one. Written once per attempt.
+			`CREATE TABLE delegation_attempt_end (
+				task_id     TEXT NOT NULL,
+				sequence    INTEGER NOT NULL,
+				recorded_at TEXT NOT NULL,
+				PRIMARY KEY (task_id, sequence),
+				FOREIGN KEY (task_id, sequence) REFERENCES task_attempt(task_id, sequence)
+			) STRICT`,
+			`CREATE TRIGGER delegation_attempt_end_is_written_once
+				BEFORE UPDATE ON delegation_attempt_end
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a delegated attempt end is written once and is not updated');
+				END`,
+			`CREATE TRIGGER delegation_attempt_end_is_not_removed
+				BEFORE DELETE ON delegation_attempt_end
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a delegated attempt end is written once and is not deleted');
+				END`,
 		},
 	},
 }

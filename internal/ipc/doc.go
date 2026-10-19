@@ -157,6 +157,12 @@
 // unidentified peer rather than a guess, and every restricted method refuses
 // there.
 //
+// A subordinate home's parent is checked the same way, by internal/service,
+// against the credentials this read produced. No frame carries a parent
+// identity a caller could write. This package does not open a network
+// listener, and a subordinate is another home on this machine rather than
+// a remote host.
+//
 // MarkerVar is the other half of the same rule, stated as the thing it is not.
 // A process inside a stage carries an environment marker, a client may send it,
 // and a handler may report it. It is never consulted to allow or refuse

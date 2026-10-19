@@ -6,6 +6,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/session"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // SessionOf exposes to this package's external tests the terminal session
@@ -51,3 +52,35 @@ func SeedDatabase(tb testing.TB, path string) {
 
 // RemoveDatabaseTemplate is removeDatabaseTemplate for TestMain.
 func RemoveDatabaseTemplate() { removeDatabaseTemplate() }
+
+// AttemptDelegatedMerge runs the program-merge path for a fixed pull
+// request. A subordinate returns ErrDelegationMerge before a code host is
+// asked. It exists so a test can reach mergeUnderAutonomy; the product
+// reaches that function from a run settling passed.
+func (s *Service) AttemptDelegatedMerge(ctx context.Context) error {
+	return s.mergeUnderAutonomy(ctx, nil, store.Run{ID: "delegated"}, passedPullRequest{
+		specifier: "owner/name",
+		number:    1,
+		observed:  "0123456789abcdef0123456789abcdef01234567",
+	})
+}
+
+// TasksForTest reads the home's tasks. It exists so a restart test can see
+// whether a second task was recorded. The product lists tasks through the
+// protocol.
+func (s *Service) TasksForTest(ctx context.Context) ([]store.Task, error) {
+	return s.store.Tasks(ctx)
+}
+
+// AttemptsForTest reads one task's attempts. It exists so a restart test
+// can see whether a second attempt was begun.
+func (s *Service) AttemptsForTest(ctx context.Context, id string) ([]store.TaskAttempt, error) {
+	return s.store.TaskAttempts(ctx, id)
+}
+
+// RelaunchForTest runs the relaunch path. A delegated task whose recovery
+// does not allow it returns ErrDelegationOwns and begins no attempt.
+func (s *Service) RelaunchForTest(ctx context.Context, id string) error {
+	_, err := s.relaunchTask(ctx, id)
+	return err
+}

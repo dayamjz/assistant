@@ -236,6 +236,11 @@
 //     pasted content; a Send waits for a running turn to end, under its
 //     caller's bound; and all of it rests on screen text observed of one CLI
 //     version. internal/agents' terminal.go states each.
+//   - A subordinate home reached over the local socket is not a session this
+//     package probes. A dropped connection is internal/service's observation
+//     and reads Unobserved there; nothing here turns it into Dead or removes
+//     a copy. This is not a multi-host deployment, and nothing here opens a
+//     network listener.
 //   - The route walk over the handle types reads exported fields and the
 //     results of exported methods, so what Pipe holds in its unexported
 //     fields, the agents.Runner among them, is outside what it inspects, and

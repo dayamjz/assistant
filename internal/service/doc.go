@@ -604,6 +604,49 @@
 // for the publisher and for the task surface alike, so a paused worker's
 // declared wait reaches both the same way.
 //
+// # A subordinate is a second home on this machine
+//
+// delegate.go starts a child home for a list of the parent's tasks. The
+// child has its own store and its own lock. The parent store keeps the
+// delegation, the once-only delivery record, and the attempt-end record.
+// The child's grant names those tasks, the parent's working copies it may
+// not bind, and the pid, uid and gid of the process that wrote it. Merge is
+// not a field of the grant, so mergeUnderAutonomy on a subordinate returns
+// ErrDelegationMerge before the autonomy list and before any code host.
+// ClaimGate binds a working copy to the child's own gate and refuses one
+// the grant names as the parent's. DeliverDelegated on the child returns
+// ErrDeliveryNotOwned and writes nothing; on the parent the second record
+// is refused.
+//
+// The parent reaches the child by dialing the child's local socket.
+// refuseDelegatedPeer compares the kernel credentials internal/ipc already
+// reads with the grant. A connection that has dropped is Unobserved, the
+// same word internal/taskstate uses, and it is not a failed task. Observe
+// does not remove the copy. A restart of the parent does not begin another
+// attempt unless the recorded recovery is relaunch-if-dead and the latest
+// attempt has an end record. An unobserved child is not that record.
+//
+// This is not a multi-host deployment. Nothing here opens a network
+// listener, speaks SSH, or binds a public address. There is no section 9
+// verb and no protocol method for it. A no-mistakes daemon is not part of
+// it. The gate a home binds is that home's own internal/gate.
+//
+// What this does not do is part of the same limit. A process identifier is
+// reusable after the parent exits, and Credentials carries no start time, so
+// the comparison narrows the peer to the connection and does not close
+// reuse. A parent that has restarted is a different pid and is refused by
+// the grant, which still names the process that wrote it; the task is not
+// taken back by that refusal. A start that fails after the grant is written
+// does not rewrite it, so a second start of that home is refused. RefuseGate compares cleaned paths and does
+// not resolve a symlink into a parent branch. The delivery row does not
+// resolve Landed or Complete; internal/taskstate does not read it. A caller
+// that opens the child database itself can write a delivery row the parent
+// never sees; the child service refuses before it calls the accessor. Log
+// lines pass through internal/redact, and the copy's files are not read
+// into them; a secret in a shape that package does not recognize is outside
+// what a line here removes. MayRelaunchLocally is the decision; it does not
+// itself begin the attempt.
+//
 // # What this package does not do
 //
 // It does not implement a stage. The nine bodies are internal/stages', and

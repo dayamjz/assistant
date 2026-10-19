@@ -198,6 +198,9 @@ func (s *Service) relaunchTask(ctx context.Context, id string) (relaunched, erro
 // it is added only when the superseded attempt's stop hold is answered
 // retry, the one relaunch a stop's note is for.
 func (s *Service) relaunchTaskWith(ctx context.Context, id, stopNote string) (relaunched, error) {
+	if err := s.refuseLocalRelaunch(ctx, id); err != nil {
+		return relaunched{}, err
+	}
 	settle, err := s.claimRelaunch(id)
 	if err != nil {
 		return relaunched{}, err

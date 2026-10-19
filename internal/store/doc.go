@@ -509,6 +509,22 @@
 // pool is unbounded and may open more connections later, and those are outside
 // what the check speaks for.
 //
+// # A subordinate's records
+//
+// The subordinate-delegation migration holds four tables a parent and a
+// child do not share a meaning for, because they do not share a database. delegation_grant is the one
+// grant in a child home: the parent that wrote it, the tasks, the parent's
+// working copies, and that process's pid, uid and gid. There is no column
+// that permits a merge or a gate on those working copies. delegation is the
+// parent's record that a task runs in a child home, with a recovery of none
+// or relaunch-if-dead. delegation_delivery is the parent's once-only note
+// that delivery was accepted. It is not a merge record and not a local
+// landing, and internal/taskstate does not read it. delegation_attempt_end
+// is the record that one attempt was proven dead. A missing row is not
+// death. All four are written once. This is not a multi-host deployment:
+// the tables name a home path and a process on this machine, and nothing
+// here opens a socket.
+//
 // # What this package does not do
 //
 // It does not interpret what it stores. A finding set, a graph state, a graph

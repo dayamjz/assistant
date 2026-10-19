@@ -249,6 +249,11 @@ type Service struct {
 	cleaner *tasks.Cleaner
 	// workerRoute is Options.WorkerRoute, fixed when the service opens.
 	workerRoute string
+	// grant is the subordinate grant loaded once from the store at Open.
+	// hasGrant is false when the home has no row, which is a parent.
+	// delegate.go owns both. A parent does not consult grant.
+	grant    store.DelegationGrant
+	hasGrant bool
 
 	// stageLogMu serializes appends to the per-stage logs and the reads of
 	// them, so a section stagelog.go writes is never interleaved with another
@@ -559,6 +564,9 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 		return err
 	}
 	s.store = records
+	if err := s.loadGrant(ctx); err != nil {
+		return err
+	}
 	s.checkpoints = checkpoints.New(records)
 	if s.queue, err = s.newQueue(); err != nil {
 		return err

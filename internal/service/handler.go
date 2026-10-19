@@ -39,6 +39,9 @@ import (
 // branch.sync. wakes.subscribe is a stream, so internal/ipc asks this only
 // whether the caller may hold it, and an error here is its refusal.
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
+	if err := s.refuseDelegatedPeer(req); err != nil {
+		return nil, err
+	}
 	switch req.Method {
 	case ipc.MethodHealth:
 		return answer(machine.Health{Ready: true, Home: s.home.Root(), Build: s.build, Instance: s.instance})

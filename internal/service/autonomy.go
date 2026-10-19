@@ -116,11 +116,17 @@ func mergeAfterLiveRead(ctx context.Context, provider forge.Provider, number int
 
 // mergeUnderAutonomy is called for a run settle moved to passed with no pull
 // request read ending it, and merges it on this file's terms when its
-// repository is listed. It returns nil for a run it does not act on, before
+// repository is listed. A subordinate home is refused first, with
+// ErrDelegationMerge, before the list is consulted and before a code host is
+// asked: the grant has no field that permits a merge. It returns nil for a
+// run it does not act on, before
 // anything is read, and the refusal, which settle logs, for one it refused;
 // on a recorded merge it cleans up what the merge landed and releases what it
 // cleared, as settle does for a run its pull request's merge ended.
 func (s *Service) mergeUnderAutonomy(ctx context.Context, built *driver, record store.Run, facts passedPullRequest) error {
+	if err := s.refuseDelegatedMerge(); err != nil {
+		return err
+	}
 	if !s.cfg.MergesIn(facts.specifier) {
 		return nil
 	}
