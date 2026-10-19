@@ -26,7 +26,8 @@ import (
 // process cannot state, and it survives a new process group: a command the
 // CLI runs in a group of its own is still the CLI's descendant. So placement walks
 // the parent chain from the peer upward and stops at the first process whose
-// group is a worker group the set holds, or that is itself a worker the set
+// group is a worker group the set holds, that is itself a worker the set
+// holds, or whose identity is the host of a worker's terminal the set
 // holds. A process inside a worker's group is placed as before, whoever its
 // parent is, because the peer is the first process the walk looks at.
 //
@@ -57,19 +58,30 @@ import (
 //
 // A tmux-hosted worker is not this service's child: it is the process of a
 // tmux pane, a child of a tmux server that is nobody's descendant here, and
-// it leads its own process group, which is what joins the worker set. The
-// walk needs nothing more than that, because it reads from the peer upward
-// and never needs the worker's own parent: a command the worker runs, in
-// its group or one of its own, descends from the pane's process. Everything
-// else on the same server descends from the server and not from the pane,
-// so a window a person opens there, the client a person attaches with, and
-// a person's shell that types into the pane from outside are placed as no
-// worker, while a command the person's typing makes the worker run is the
-// worker's. placement_tmux_internal_test.go reads each of those off a real
-// tmux server, and workers_tmux_unix_test.go reaches the same answers
-// through the socket's credentials. Had the server's process been the
-// member, every one of those would have been placed as the worker's, which
-// is why session.Tmux registers the pane's.
+// it leads its own process group, which is what joins the worker set. A
+// command the worker runs, in its group or one of its own, descends from
+// the pane's process and is placed by the group as a pipe worker's is. The
+// server is placed too, as the worker's host: the membership carries the
+// server's identity, which internal/agents read as the pane's parent and
+// checked against the server's own report, and the walk asks the set about
+// each ancestor's identity beside its group. That is needed because the
+// worker can reach its own server. tmux sets TMUX and TMUX_PANE in the
+// pane's environment, naming the socket, so a "tmux new-window" the worker
+// runs opens a shell that is the server's child and not the pane's, and a
+// walk that stopped at the pane placed a push from that shell as a
+// person's: #301 (c) named the risk and
+// placement_tmux_internal_test.go reads it off a real server. So every
+// process descended from the server is the worker's, whoever opened the
+// window: the worker's own, a person's window on the same socket, and a
+// run-shell the server runs. What does not descend from the server stays
+// nobody's: the client a person attaches with, and a person's shell that
+// types into the pane from outside, while a command the person's typing
+// makes the worker run is the worker's. The host is matched by identity
+// and not by number, so a process given the server's identifier after the
+// server is gone is not the host. Removing the variables tmux sets was not
+// taken instead: the socket is a path under the home the worker is told,
+// so their absence would be a tripwire and not a boundary, and an
+// environment is what a process states, as the alternatives above say.
 //
 // # What it does not cover
 //
@@ -79,7 +91,10 @@ import (
 //     still records names the worker. A
 //     worker's command that backgrounds a push and lets its shell exit,
 //     double-forks, or daemonizes is placed as a person, and the walk cannot
-//     tell that from a person's process, whose chain also ends at init. That
+//     tell that from a person's process, whose chain also ends at init. A
+//     second tmux server the worker starts on a socket of its own is that
+//     shape, since a tmux server daemonizes: the host above is the worker's
+//     own server and no other. That
 //     is the one shape here that places a worker as a person rather than
 //     refusing, and workers.go says which way each rule then goes. A
 //     subreaper this service started as each worker's parent could keep such
@@ -128,25 +143,37 @@ const maxAncestry = 1024
 // errAncestry is a chain the walk could not read to its end.
 var errAncestry = errors.New("the process ancestry could not be read")
 
+// placer is what the walk asks about each process it reads: the worker a
+// process group leads, and the worker whose terminal a process hosts.
+// *session.Workers is one, and workers.go composes one over every set the
+// service holds.
+type placer interface {
+	Member(group int) (session.Membership, bool)
+	Hosted(host agents.Identity) (session.Membership, bool)
+}
+
 // placeByAncestry walks the parent chain from pid on the terms above, reading
-// each process with read and asking member about each process's group and,
-// where it differs, its own identifier. It returns the first membership
-// member answers, or false once a process with no parent is reached; an error
-// wraps errAncestry and means no answer, which a caller refuses on.
-func placeByAncestry(pid int, read func(int) (agents.Lineage, error),
-	member func(int) (session.Membership, bool)) (session.Membership, bool, error) {
+// each process with read and asking set about each process's group, where
+// it differs its own identifier, and its identity as a host. It returns the
+// first membership set answers, or false once a process with no parent is
+// reached; an error wraps errAncestry and means no answer, which a caller
+// refuses on.
+func placeByAncestry(pid int, read func(int) (agents.Lineage, error), set placer) (session.Membership, bool, error) {
 	current, err := read(pid)
 	if err != nil {
 		return session.Membership{}, false, fmt.Errorf("%w: reading process %d: %w", errAncestry, pid, err)
 	}
 	for range maxAncestry {
-		if m, ok := member(current.Group); ok {
+		if m, ok := set.Member(current.Group); ok {
 			return m, true, nil
 		}
 		if current.PID != current.Group {
-			if m, ok := member(current.PID); ok {
+			if m, ok := set.Member(current.PID); ok {
 				return m, true, nil
 			}
+		}
+		if m, ok := set.Hosted(current.Identity); ok {
+			return m, true, nil
 		}
 		if current.Parent <= 0 || current.Parent == current.PID {
 			return session.Membership{}, false, nil

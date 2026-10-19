@@ -164,17 +164,28 @@
 //
 // Placement. The pane's process is the agent, the server's child and the
 // leader of its own process group, and that group is what joins Workers, for
-// exactly the process's lifetime as Pipe's worker's does. The server is not a
-// member. internal/service places a peer by walking its parent chain to a
-// member, and that walk was tested over a real tmux server: a command the
-// worker runs in a process group of its own is the pane process's
-// descendant and is placed as the worker's, and so is a command a person
-// types into the worker's window, which the worker runs; a shell a person
-// opens in a new window of the same server, the client a person attaches
-// with, a person's shell typing in from outside, and the server itself are
-// placed as no worker, because none of them descends from the pane's
-// process. Registering the server instead would have placed every one of
-// them as the worker's.
+// exactly the process's lifetime as Pipe's worker's does, with the server
+// recorded as the membership's host: its identity, read by internal/agents
+// as the pane's parent and checked against the server's own report, which
+// Workers.Hosted answers for. internal/service places a peer by walking its
+// parent chain to a member or a host, and that walk was tested over a real
+// tmux server: a command the worker runs in a process group of its own is
+// the pane process's descendant and is placed as the worker's, and so is a
+// command a person types into the worker's window, which the worker runs;
+// the client a person attaches with and a person's shell typing in from
+// outside are placed as no worker, because neither descends from the pane
+// or the server. A shell in a new window of the same server descends from
+// the server and not from the pane, and it is placed as the worker's
+// through the host, whoever opened it. The host exists because the worker
+// can open that window itself: tmux sets TMUX in the pane's environment,
+// naming the socket, so "tmux new-window" run by the agent opens a shell
+// the chain alone reads as nobody's, and a push from it was admitted as a
+// person's, unconfined, which #301 (c) named and
+// internal/service's placement_tmux_internal_test.go reads off a real
+// server as its control. Placing the server's descendants as the worker's
+// is the direction that admits less: a person loses nothing but the use of
+// the worker's server as a shell of their own, and a worker gains no way
+// through it.
 //
 // Containment. A tmux-hosted worker's group is registered nowhere else:
 // internal/service's containment registry has no worker arm under either
@@ -186,7 +197,15 @@
 // Nothing here arranges for the worker to end with the service. A survivor
 // after a hard kill is an orphan the new service holds no handle to, and
 // "terminal gone with the copy preserved" is the normal answer for it rather
-// than an error. Two windows are stated rather than closed. The record-first
+// than an error: it probes Unobserved for as long as it stands, is never
+// relaunched beside, and is surfaced to a person as internal/service's
+// terminal-gone wake with the unobservable case, at once and again per
+// escalation window, then as the dead case once it is gone, after which a
+// restart relaunches it. That package's tmuxkill_unix_test.go drives both
+// halves under tmux, the server killed outright and the service's worker
+// outliving the service, and nothing re-adopts a survivor: a session this
+// provider did not create is not one it can capture, type into or attach
+// to, so there is no handle to hold again. Two windows are stated rather than closed. The record-first
 // order PRD section 8 gives a launch means the attempt row is written before
 // the process starts and the reference is filled after Create returns, so a
 // crash between the two leaves a process no record names. And an orphan
@@ -229,6 +248,10 @@
 //   - Under the tmux provider, nothing records what a person types into an
 //     attached window: it reaches the worker as its own input and is
 //     indistinguishable from a Send once it has.
+//   - The host is the worker's own server and no other. A second tmux
+//     server the worker starts on a socket of its own daemonizes away from
+//     the pane, as any daemon it starts does, and what runs there is placed
+//     as a person's; internal/service's placement.go owns that gap.
 //   - Under the tmux provider with Claude Code, a person attached to the
 //     pane can still type "!" or "/" into an empty input and run a shell or
 //     a slash command, since only a Send is given the leading space that

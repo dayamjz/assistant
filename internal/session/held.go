@@ -31,10 +31,11 @@ func newHeld(marker string, owner any) *held {
 }
 
 // adopt makes worker a held session of task: it reads the worker's identity,
-// joins its group to the set for the process's lifetime, and records the
-// session under its reference. A worker whose identity cannot be read is
-// ended and refused with ErrIdentity, as Provider.Create states.
-func (h *held) adopt(task string, worker agents.Worker, attach []string) (*Session, error) {
+// joins its group, and its host when the provider names one, to the set for
+// the process's lifetime, and records the session under its reference. A
+// worker whose identity cannot be read is ended and refused with
+// ErrIdentity, as Provider.Create states.
+func (h *held) adopt(task string, worker agents.Worker, attach []string, host agents.Identity) (*Session, error) {
 	pid := worker.Group()
 	// The identity is internal/agents' PID-reuse check, read once here and
 	// carried in the reference; a platform with no read records zero.
@@ -58,7 +59,7 @@ func (h *held) adopt(task string, worker agents.Worker, attach []string) (*Sessi
 	// The group is a member from here until the process ends: Member reads
 	// the done signal itself, and the goroutine takes the entry out once it
 	// has closed, so the set does not grow with workers that have gone.
-	s.leave = h.workers.join(Membership{Task: task, Group: pid}, worker.Done())
+	s.leave = h.workers.join(Membership{Task: task, Group: pid, Host: host}, worker.Done())
 	go func() {
 		<-worker.Done()
 		s.leave()

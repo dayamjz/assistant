@@ -19,6 +19,20 @@ func (s *Service) SessionOf(id string) (session.Provider, *session.Session, bool
 	return s.sessionOf(id)
 }
 
+// AbandonSessionsForTest forgets every session this service launched
+// without ending it, so Close ends none of them. It is the shape a service
+// killed with SIGKILL leaves, which a test cannot produce of its own
+// process: the worker, its terminal and the attempt's recorded reference
+// stand, and no service holds a handle to any of them. It exists only in
+// the tests and models nothing a running service does; the test that calls
+// it ends the worker itself.
+func (s *Service) AbandonSessionsForTest(tb testing.TB) {
+	tb.Helper()
+	s.mu.Lock()
+	s.launched = make(map[string]launchedWorker)
+	s.mu.Unlock()
+}
+
 // ReconcileProbeBound is the bound one read of the fleet at reconciliation
 // is held to, exposed so a test can hold Open to it.
 const ReconcileProbeBound = reconcileProbeBound

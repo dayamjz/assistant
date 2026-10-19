@@ -65,6 +65,24 @@ import (
 // and reports ErrIdentityUnreadable, since nothing could then tell the agent
 // from a later process given its number.
 //
+// # The server is the worker's host
+//
+// Host is the identity of the tmux server, read at start from the pane
+// process's own parent and refused unless that parent is the process the
+// server reports itself as, so a handle never names a host the kernel did
+// not attribute the pane to. It is read because the server is reachable
+// from inside the pane: tmux sets TMUX and TMUX_PANE in the pane's
+// environment, naming the socket, and the socket is a path under the home
+// the worker's route names, so the agent can run "tmux new-window" on its own server
+// and the shell that opens is the server's child and not the pane's. A
+// caller that places a process by walking its parents to the pane, which
+// internal/service's placement does, would reach the server and stop
+// short, placing what the worker opened as nobody's; it places the
+// server's descendants as the worker's instead, by this identity, which
+// internal/session carries in the worker set for that. Nothing here
+// removes the variables tmux sets, because an environment is what a
+// process states and the socket's path is discoverable without them.
+//
 // Close ends the group through EndGroup, which signals only after the
 // identity verifies the leader, politely and then forcefully after the
 // runner's grace, and then ends the server, which also ends any window a
@@ -117,6 +135,11 @@ import (
 //   - A descendant that moved itself to another process group is not reached
 //     by EndGroup, as for a pipe worker; ending the server does not promise
 //     to reach it either.
+//   - Host names this worker's server and no other. A second tmux server
+//     the agent starts on a socket of its own daemonizes away from the
+//     pane, as any daemon the agent starts does, and neither this handle
+//     nor a placement by ancestry reaches what runs there;
+//     internal/service's placement.go names that shape.
 //   - A process the agent started that outlives it in its group is left
 //     running when the agent exits on its own, for the reason above.
 //   - Text typed by a person and text sent through Send arrive on one input,
@@ -215,6 +238,15 @@ type TerminalWorker interface {
 	// terminal, the tmux binary first. What they type there reaches the
 	// worker as a Send does, which the mechanism's documentation states.
 	Attach() []string
+
+	// Host is the identity of the tmux server hosting the worker: the pane
+	// process's parent, read at start and checked against the process the
+	// server reports itself as. Every window opened on the server, by the
+	// worker through the socket its environment names or by a person, is
+	// the server's child, so a caller placing a process by its ancestry
+	// places the server's descendants as this worker's; the mechanism's
+	// documentation says why.
+	Host() Identity
 }
 
 // OpenTerminalWorker starts a terminal worker on r, hosted on t. It is the
@@ -306,6 +338,7 @@ type terminalTyping struct {
 type tmuxWorker struct {
 	terminal Terminal
 	identity Identity
+	host     Identity
 	grace    time.Duration
 	maxOut   int64
 	typing   terminalTyping
@@ -384,7 +417,7 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 
 	args := append([]string{"-S", t.Socket, "-f", os.DevNull,
 		"new-session", "-d", "-s", terminalTarget, "-x", "200", "-y", "50", "-c", spec.dir,
-		"-P", "-F", "#{pane_pid}", "--", spec.bin}, spec.args...)
+		"-P", "-F", "#{pane_pid} #{pid}", "--", spec.bin}, spec.args...)
 	if size := commandSize(args); size > terminalCommandLimit {
 		return nil, &invocationFieldError{
 			field: "command",
@@ -401,11 +434,12 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 		killTerminalServer(t)
 		return nil, fmt.Errorf("starting the terminal worker's server: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(stdout.String()))
-	if err != nil || pid <= 0 {
+	// The server answers the pane's process and its own in one line, so the
+	// two numbers describe one creation.
+	pid, server, err := parseTerminalAnswer(stdout.String())
+	if err != nil {
 		killTerminalServer(t)
-		return nil, fmt.Errorf("the terminal server answered %q for the worker's process, not a process identifier",
-			strings.TrimSpace(stdout.String()))
+		return nil, err
 	}
 	identity, found, err := Identify(pid)
 	switch {
@@ -416,14 +450,33 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 		killTerminalServer(t)
 		return nil, fmt.Errorf("terminal worker process %d was not running when looked for", pid)
 	}
-	if err := awaitGroupLeader(ctx, identity); err != nil {
+	lineage, err := awaitGroupLeader(ctx, identity)
+	if err != nil {
 		killTerminalServer(t)
 		return nil, err
+	}
+	// The host is the parent the kernel attributes the pane to, and it must
+	// be the server that answered, or the handle would name as host a
+	// process whose descendants are not this server's windows.
+	if lineage.Parent != server {
+		killTerminalServer(t)
+		return nil, fmt.Errorf("terminal worker process %d has parent %d, and the terminal server answering on %s is process %d",
+			pid, lineage.Parent, t.Socket, server)
+	}
+	host, found, err := Identify(server)
+	switch {
+	case err != nil:
+		killTerminalServer(t)
+		return nil, fmt.Errorf("reading the identity of terminal server process %d: %w", server, err)
+	case !found:
+		killTerminalServer(t)
+		return nil, fmt.Errorf("terminal server process %d was not running when looked for", server)
 	}
 
 	w := &tmuxWorker{
 		terminal: t,
 		identity: identity,
+		host:     host,
 		grace:    spec.grace,
 		maxOut:   spec.maxOut,
 		typing:   typing,
@@ -496,8 +549,25 @@ func (w *tmuxWorker) screen(ctx context.Context) (string, error) {
 	return string(out), err
 }
 
-// awaitGroupLeader returns once the process id names leads its own process
-// group, which is what Group reports and what EndGroup signals. tmux answers
+// parseTerminalAnswer reads the line the server prints for a new session,
+// the pane's process identifier and the server's own, and refuses anything
+// else: a line that is not two identifiers is not a creation this package
+// can hold a handle over.
+func parseTerminalAnswer(answer string) (pane, server int, err error) {
+	fields := strings.Fields(answer)
+	if len(fields) == 2 {
+		pane, perr := strconv.Atoi(fields[0])
+		server, serr := strconv.Atoi(fields[1])
+		if perr == nil && serr == nil && pane > 0 && server > 0 {
+			return pane, server, nil
+		}
+	}
+	return 0, 0, fmt.Errorf("the terminal server answered %q for the worker's process and its own, not two process identifiers",
+		strings.TrimSpace(answer))
+}
+
+// awaitGroupLeader returns the process's lineage once the process id names
+// leads its own process group, which is what Group reports and what EndGroup signals. tmux answers
 // with the pane's process identifier once that process exists, and the
 // answer has been observed to arrive while the process was still in the
 // server's group (#273), so a handle returned then would name a group that
@@ -508,7 +578,7 @@ func (w *tmuxWorker) screen(ctx context.Context) (string, error) {
 // Linux and macOS, when ctx ends, or when terminalCommandTimeout passes
 // without it leading one, since an agent that put itself in another group
 // is not a worker Group could answer for.
-func awaitGroupLeader(ctx context.Context, id Identity) error {
+func awaitGroupLeader(ctx context.Context, id Identity) (Lineage, error) {
 	bound := time.NewTimer(terminalCommandTimeout)
 	defer bound.Stop()
 	tick := time.NewTicker(time.Millisecond)
@@ -517,17 +587,17 @@ func awaitGroupLeader(ctx context.Context, id Identity) error {
 		lineage, found, err := ReadLineage(id.PID)
 		switch {
 		case err != nil:
-			return fmt.Errorf("reading the process group of terminal worker process %d: %w", id.PID, err)
+			return Lineage{}, fmt.Errorf("reading the process group of terminal worker process %d: %w", id.PID, err)
 		case !found || lineage.Identity != id:
-			return fmt.Errorf("terminal worker process %d ended before it led its own process group", id.PID)
+			return Lineage{}, fmt.Errorf("terminal worker process %d ended before it led its own process group", id.PID)
 		case lineage.Group == id.PID:
-			return nil
+			return lineage, nil
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return Lineage{}, ctx.Err()
 		case <-bound.C:
-			return fmt.Errorf("terminal worker process %d was still in process group %d after %v, not leading its own",
+			return Lineage{}, fmt.Errorf("terminal worker process %d was still in process group %d after %v, not leading its own",
 				id.PID, lineage.Group, terminalCommandTimeout)
 		case <-tick.C:
 		}
@@ -680,6 +750,9 @@ func (w *tmuxWorker) Capture() Capture {
 
 // Group is the pane process's identifier, which leads its own group.
 func (w *tmuxWorker) Group() int { return w.identity.PID }
+
+// Host is the server's identity, on TerminalWorker's terms.
+func (w *tmuxWorker) Host() Identity { return w.host }
 
 // Done is closed once the poll has read the process gone and the server has
 // been ended, or once Close stopped waiting for that read, as Close states.
