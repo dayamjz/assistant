@@ -574,11 +574,13 @@
 // Options.Terminals is the seam the terminal reading arrives through, which
 // the product leaves to this service's own session provider, on
 // terminals.go's terms, so the loop absorbs an unchanged live worker on the
-// handle's evidence and surfaces a dead one. The exception is a task that
-// resolves Reported: internal/supervisor's TerminalWatched leaves its
-// terminal unread, so an investigation whose worker ends after filing its
-// report raises no terminal-gone wake, while one that never reported still
-// does; supervise.go's header says why.
+// handle's evidence and surfaces a dead one. The exceptions are a task that
+// resolves Reported, Landed or Complete: internal/supervisor's
+// TerminalWatched leaves its terminal unread, so an investigation whose
+// worker ends after filing its report, or a task whose worker ends after it
+// landed, raises no terminal-gone wake, while one that never reported or
+// landed still does; supervise.go's header says why, and what landed.go
+// still reads of such a terminal.
 //
 // # Four state events have a producer here, and publish.go owns two
 //

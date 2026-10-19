@@ -69,7 +69,8 @@ import (
 // classified then.
 //
 // A watched task's terminal is read only where supervisor.TerminalWatched
-// says so, which is every state but Reported. A task that resolves Reported
+// says so, which is every state but Reported, Landed and Complete. A task
+// that resolves Reported
 // from its stored report is watched while it has a queued wake, so its
 // events past the marker are still read, but its terminal is not: PRD
 // section 6 has the report outrank the terminal, so a worker that ends after
@@ -77,6 +78,17 @@ import (
 // nor a terminal-unchanged one for a worker still running after it filed.
 // What the report raised reaches the queue as its holds, which the first
 // detection above makes for every task.
+//
+// A task in internal/taskstate's terminal tier, Landed or Complete, is left
+// unread on the same terms, by the owner's decision on #320: its work is
+// finished and it is owed no relaunch, so a worker that ends then is not a
+// crash, and a queued wake a coordinator never acknowledges no longer turns
+// that ending into terminal-gone noise (#268). This loop still probes such a
+// terminal: the probe is inside the resolution, taskstate.Reader.Observe's,
+// and landed.go reads that resolution's Basis.Process to end the worker and
+// ask the cleanup decision. What the table removes is this loop's own reading
+// of the terminal, the capture and the gone case, and every wake made from
+// them.
 //
 // # Terminal gone is three facts
 //
@@ -618,8 +630,9 @@ type observation struct {
 	// terminal is whether the task's terminal is read at all, which
 	// supervisor.TerminalWatched decides from the resolved state: false for
 	// a task that resolves Reported, whose stored report outranks its
-	// terminal, so no terminal-gone or terminal-unchanged wake is made for
-	// it however its terminal reads.
+	// terminal, and for one that resolves Landed or Complete, whose terminal
+	// tier record does, so no terminal-gone or terminal-unchanged wake is
+	// made for it however its terminal reads.
 	terminal bool
 	// ref is the latest attempt's session reference, empty when it has
 	// none.

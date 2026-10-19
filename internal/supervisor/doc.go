@@ -99,10 +99,12 @@
 // through store.OpenReadOnly.
 //
 // Which watched tasks have their terminal read is a second closed table, in
-// terminal.go, on the same terms: every state but Reported, because PRD
-// section 6 has a stored report outrank the terminal, so a worker that ends
-// after filing is not a terminal gone. A state the table does not decide is
-// answered watched.
+// terminal.go, on the same terms: every state but Reported, Landed and
+// Complete, because PRD section 6 has a stored report outrank the terminal,
+// so a worker that ends after filing is not a terminal gone, and the terminal
+// tier outranks it the same way, so a worker that ends after its task landed
+// or completed is not one either (the owner's decision on #320). A state the
+// table does not decide is answered watched.
 //
 // # What the matrix establishes and what it does not
 //
