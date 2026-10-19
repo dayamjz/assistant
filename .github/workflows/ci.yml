@@ -49,6 +49,14 @@ jobs:
           fi
           tmux -V
 
+      # The Linux Test step runs its tests under tini in a process namespace
+      # of their own; the Test step says why.
+      - name: Install tini
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update && sudo apt-get install -y tini
+          tini --version
+
       - name: Verify formatting
         run: |
           unformatted=$(gofmt -l .)
@@ -89,13 +97,41 @@ jobs:
       # Verbose output goes to a file so a skipped test leaves a trace: a
       # package that skipped its assertions still reads ok, and the step
       # after this one lists every skip with its message.
+      # On Linux the tests run in a PID namespace of their own, as this
+      # runner's user, with tini as its first process so an orphan is reaped
+      # as it is on the host. tini stays root, so the namespace still holds
+      # one process whose working directory the tests cannot read: the
+      # tests that need a real refused read find it there, and it is the
+      # ancestor of every test, which the sweep sets aside. A sleep of the
+      # nobody user stands beside the tests for the ones that need another
+      # user's process off their parent chain, which the sweep sets aside
+      # because it shares no user and refuses a signal. The runner holds processes of its own user
+      # whose working directory cannot be read (its systemd user manager,
+      # (sd-pam) and a running sudo, #152), and agents.Sweeper refuses to
+      # clear while such a process runs, as P6 requires and the owner kept,
+      # so on the bare host every test asserting a clear sweep can only skip.
+      # In the namespace the process table is the test run's own, so those
+      # tests run, and ASSISTANT_REQUIRE_SWEEP_CLEAR turns a skip of theirs
+      # into a failure. macOS has no PID namespace and its runner holds the
+      # same kind of sudo, so there those tests skip naming it, and the
+      # Skipped tests step lists them: a green macOS lane establishes nothing
+      # about a relaunch or a sweep that has to clear.
       - name: Test
         shell: bash
         env:
           ASSISTANT_REQUIRE_TMUX: "1"
         run: |
           set -o pipefail
-          go test -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
+          run=()
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            export ASSISTANT_REQUIRE_SWEEP_CLEAR=1
+            run=(sudo --preserve-env env "PATH=$PATH" "HOME=$HOME"
+              unshare --pid --fork --mount-proc tini --
+              bash -c 'setpriv --reuid=65534 --regid=65534 --clear-groups sleep infinity &
+                uid=$1 gid=$2; shift 2
+                exec setpriv --reuid="$uid" --regid="$gid" --init-groups "$@"' bash "$(id -u)" "$(id -g)")
+          fi
+          "${run[@]}" go test -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
           grep -E '^(ok|FAIL|--- FAIL|panic:|\?)[[:space:]]' test.log || true
           if [ -n "${status:-}" ]; then
             echo "::group::full test output"
