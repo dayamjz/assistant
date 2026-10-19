@@ -57,7 +57,7 @@ var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "wa
 var unspecified = []string{
 	"start", "attach", "respond", "answer", "cancel", "stop", "restart",
 	"machine", "agent", "push", "version", "help", "config", "logs", "stage",
-	"task", "fleet", "create", "message", "relaunch", "promote", "wakes", "await", "listen", "acknowledge", "supervision",
+	"task", "fleet", "digest", "create", "message", "relaunch", "promote", "wakes", "await", "listen", "acknowledge", "supervision",
 	"peek", "report", "event",
 }
 

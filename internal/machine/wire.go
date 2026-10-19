@@ -602,6 +602,11 @@ type RelaunchBegun struct {
 type Tasks struct {
 	// Tasks are the records with their resolved states.
 	Tasks []Task `json:"tasks"`
+	// Digest is one reading of this listing: counts by resolved state, which
+	// tasks are in flight, which holds are open, and which wakes are
+	// unacknowledged. It is absent only on a value a test built without one;
+	// the service always sets it. It authorizes nothing.
+	Digest FleetDigest `json:"digest,omitempty"`
 	// Supervision is the pull guard's finding over the fleet listed, computed
 	// by the service that answered. A command that lists fleet work reads it
 	// from the service, so with the service down there is no answer and no

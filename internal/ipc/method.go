@@ -52,6 +52,9 @@ const (
 	// exactly what such a caller is there to do.
 	MethodStageReport Method = "stage.report"
 	// MethodTasksList reports fleet work with its resolved current state.
+	// The answer carries a fleet digest of that reading: counts, the tasks
+	// in flight, the open holds and the unacknowledged wakes. The digest
+	// authorizes nothing.
 	MethodTasksList Method = "tasks.list"
 	// MethodTaskGet reports one task with its resolved current state and the
 	// revision that state is current as of.

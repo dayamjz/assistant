@@ -632,11 +632,20 @@ func readOutRuns(w io.Writer, runs machine.Runs) {
 	}
 }
 
-// readOutTasks prints the pull guard's warning and then one line per task.
+// readOutTasks prints the pull guard's warning, the fleet digest's row when
+// the answer carries one, and then one line per task. The digest's counts,
+// identifiers and records stay in the structured answer; the row names none
+// of them. A listing a test built with no digest and no tasks keeps the
+// empty-fleet row.
 func readOutTasks(w io.Writer, tasks machine.Tasks) {
 	readOutSupervision(w, tasks.Supervision)
+	if tasks.Digest.Counts != nil {
+		writeln(w, machine.DigestPhrase(tasks.Digest))
+	}
 	if len(tasks.Tasks) == 0 {
-		writeln(w, machine.PhraseNoFleetWork)
+		if tasks.Digest.Counts == nil {
+			writeln(w, machine.PhraseNoFleetWork)
+		}
 		return
 	}
 	for _, task := range tasks.Tasks {

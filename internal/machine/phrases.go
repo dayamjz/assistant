@@ -1537,7 +1537,8 @@ var PhraseNoReading = Phrase{
 // at a run's evidence
 // and the three notices beside it, and the catch-up read's: a heading and an
 // empty row per part, a row per kind of landed record, the row for what a
-// read left out, and the two rows for a mark, and custody's: a row per class
+// read left out, and the two rows for a mark, and the fleet digest's two
+// rows, and custody's: a row per class
 // planned and carried out and as status prints it, a row per refusal, and a
 // row per step, and the coordinator client's: a created task begun and one
 // recorded behind other work, a promotion, a relaunch, a drain with and
@@ -1598,6 +1599,7 @@ func TablePhrases() []Phrase {
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)
 	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
 		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
+	out = append(out, DigestPhrases()...)
 	out = append(out, defaultBranchRows()...)
 	out = append(out, upstreamRows()...)
 	out = append(out, forkRows()...)

@@ -29,6 +29,13 @@
 // package has no assignment site for one that disagrees with the outcome
 // beside it. Run.Decide and the fields it writes say the rest.
 //
+// The fleet digest on Tasks is a reading of that listing, not a second
+// command. It counts resolved task states, names which tasks
+// internal/supervisor's in-flight rule counts, and carries the open holds
+// and the unacknowledged wakes, each list bounded by DigestLimit. It is
+// composed by DigestOf from records the caller already read, and it
+// authorizes nothing: no field of it is an answer or an acknowledgement.
+//
 // # The five parts of the contract, and where each of them is
 //
 // PRD section 9 states the machine interface as five parts. Two are here.

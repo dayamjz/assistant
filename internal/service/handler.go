@@ -376,7 +376,8 @@ func (s *Service) parkedReport(ctx context.Context, runID string, park store.Run
 	return out
 }
 
-// listTasks reports fleet work with its resolved current state.
+// listTasks reports fleet work with its resolved current state, and with a
+// fleet digest of that reading.
 //
 // The state is resolved by internal/taskstate from the records that own the
 // facts, not read from a stored copy and not taken from the event log, which
@@ -387,6 +388,13 @@ func (s *Service) parkedReport(ctx context.Context, runID string, park store.Run
 // composed through taskView, which is also what the supervisor loop
 // publishes, so a paused worker's declared wait reaches the answer here on
 // the same terms it reaches the stream.
+//
+// The digest is machine.DigestOf over those resolved tasks, the open holds
+// and the unacknowledged wakes, each read from the record that owns it. It
+// is not one transaction: a hold or a wake written between the reads can
+// appear in one part and not another. It changes nothing. A task resolved
+// Running without progress is a terminal that was not observed live, and the
+// digest counts it that way rather than as a worker seen succeeding.
 func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
 	observed, err := s.tasks().Observe(ctx)
 	if err != nil {
@@ -396,9 +404,46 @@ func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
 	for _, o := range observed {
 		out.Tasks = append(out.Tasks, s.taskView(ctx, o))
 	}
+	digest, err := s.fleetDigest(ctx, out.Tasks)
+	if err != nil {
+		return machine.Tasks{}, err
+	}
+	out.Digest = digest
 	supervision := s.supervision(ctx)
 	out.Supervision = &supervision
 	return out, nil
+}
+
+// fleetDigest reads the open holds and the unacknowledged wakes and composes
+// the listing's digest from them and from tasks, which are the resolved
+// tasks this answer is already returning. The wake rows are the oldest
+// queued ones, at most machine.DigestLimit, and the total is the count
+// UnacknowledgedWakes summed, so the rest are counted rather than dropped.
+func (s *Service) fleetDigest(ctx context.Context, tasks []machine.Task) (machine.FleetDigest, error) {
+	holds, err := s.store.OpenHolds(ctx)
+	if err != nil {
+		return machine.FleetDigest{}, err
+	}
+	counts, err := s.store.UnacknowledgedWakes(ctx)
+	if err != nil {
+		return machine.FleetDigest{}, err
+	}
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+	var queued []store.Wake
+	if total > 0 {
+		limit := total
+		if limit > machine.DigestLimit {
+			limit = machine.DigestLimit
+		}
+		queued, err = s.store.QueuedWakes(ctx, limit)
+		if err != nil {
+			return machine.FleetDigest{}, err
+		}
+	}
+	return machine.DigestOf(tasks, counts, holds, queued, total), nil
 }
 
 // supervision is the pull guard over this home, computed for an answer the

@@ -59,6 +59,15 @@
 // neither does this surface; answering a decision the read lists is the
 // --answer above, and the read names it rather than offering a second way.
 //
+// The fleet digest is a field of the tasks listing, not a verb and not a
+// flag. Section 9 names that listing and names no command for a separate
+// digest, and it names no flag on tasks for one, so assistant digest is
+// refused as incorrect usage. The structured answer carries the digest and
+// the line a person reads is the phrase table's row for it. It is a reading:
+// it starts nothing and answers nothing. Resource usage stays the usage view
+// on runs, which is where section 9 puts it, and what landed since a person
+// last marked it stays the catch-up read, which is where section 9 puts that.
+//
 // The usage view is --usage on runs, which is where section 9 puts it, taking
 // a window as --usage=WINDOW (24h, 90m, 7d) and the seven-day default alone.
 // It reads the agent invocation record of the whole home, so it names no run

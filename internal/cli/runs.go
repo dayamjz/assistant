@@ -726,7 +726,11 @@ func rerun(ctx context.Context, in *invocation) (any, error) {
 }
 
 // listTasks reports fleet work with its resolved current state, or one task
-// when it is named, on the same terms as runs.
+// when it is named, on the same terms as runs. The listing's answer carries
+// a fleet digest of that reading. Section 9 names no command and no flag for
+// a digest, so this is a field of the listing and not a verb: assistant
+// digest is refused as incorrect usage. Naming one task returns that task
+// and no digest. The digest authorizes nothing.
 func listTasks(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseArgs("tasks", 1, func(*flag.FlagSet) {}); err != nil {
 		return nil, err

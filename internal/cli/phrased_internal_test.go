@@ -199,10 +199,18 @@ func fixtures(t *testing.T) map[string]any {
 	withDetails.Activity = &machine.Activity{Stage: "test", Round: 1, Limit: 3,
 		Since: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Active: 90 * time.Second}
 	return map[string]any{
-		"status":  status,
-		"run":     run,
-		"runs":    machine.Runs{Runs: []store.Run{run.Record}},
-		"tasks":   machine.Tasks{Tasks: []machine.Task{task}},
+		"status": status,
+		"run":    run,
+		"runs":   machine.Runs{Runs: []store.Run{run.Record}},
+		"tasks": machine.Tasks{
+			Tasks: []machine.Task{task},
+			Digest: machine.FleetDigest{
+				Counts:   []machine.StateCount{{State: taskstate.Paused, Count: 1}},
+				InFlight: []machine.DigestTask{{Task: task.Record.ID, State: taskstate.Paused}},
+				Holds:    []store.Hold{{Key: "task/" + task.Record.ID + "/report/1", Subject: "whether the finding is real"}},
+				Wakes:    []store.Wake{{ID: 1, TaskID: task.Record.ID, Kind: "hold-opened", Marker: "m"}},
+			},
+		},
 		"task":    task,
 		"service": withManaged(status.Service),
 		"managed removal": machine.ManagedRemoval{
