@@ -241,9 +241,13 @@ type Finding struct {
 	// existed, carry false whatever the stage said.
 	ActionDefaulted bool `json:"action_defaulted,omitempty"`
 	// RemedyOutsideChange records that what resolves this finding lies
-	// outside the change under validation: a configuration key, which the
-	// branch under validation cannot set for itself, or a stage body this
-	// build does not have. No edit a fix round makes to the change can
+	// outside the change under validation, beyond an agent's reach: a
+	// configuration key, which the branch under validation cannot set for
+	// itself; a stage body this build does not have; or a review that did
+	// not happen, because the change was too large to put in front of a
+	// reviewer in one piece or the reviewer came back with nothing usable,
+	// where splitting the change or approving past the missing review is a
+	// person's decision. No edit a fix round makes to the change can
 	// resolve it, so a round asked for it is spent on nothing.
 	//
 	// The program sets it where it builds such a finding, and the finding

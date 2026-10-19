@@ -340,6 +340,10 @@ func TestAnAgentThatDidNotReviewHoldsTheRunRatherThanPassingIt(t *testing.T) {
 				t.Fatalf("%s was not recorded as a review that established nothing: %+v",
 					c.name, got.report().Findings)
 			}
+			if !beyondAnAgentsReach(got.report(), "review-not-established") {
+				t.Fatalf("%s holds on a finding that does not say no fix round can resolve it: %+v",
+					c.name, got.report().Findings)
+			}
 		})
 	}
 }
@@ -611,6 +615,10 @@ func TestAChangeWhoseDiffIsTooLargeToReadHoldsForAPersonRatherThanFailing(t *tes
 		t.Fatalf("a change whose diff could not be read was not recorded as too large to "+
 			"review: %+v", got.report().Findings)
 	}
+	if !beyondAnAgentsReach(got.report(), "review-change-too-large") {
+		t.Fatalf("a change whose diff could not be read holds on a finding that does not say "+
+			"no fix round can resolve it: %+v", got.report().Findings)
+	}
 }
 
 // A body wired with no agent is a defect in this build and not a review that
@@ -689,6 +697,10 @@ func TestAChangeTooLargeToReviewHoldsForAPersonRatherThanFailing(t *testing.T) {
 	if !hasFinding(got.report(), "review-change-too-large") {
 		t.Fatalf("a change too large to review was not recorded as too large: %+v",
 			got.report().Findings)
+	}
+	if !beyondAnAgentsReach(got.report(), "review-change-too-large") {
+		t.Fatalf("a change too large to review holds on a finding that does not say no fix "+
+			"round can resolve it: %+v", got.report().Findings)
 	}
 }
 
@@ -989,6 +1001,19 @@ func hasFinding(report findings.Report, id string) bool {
 	for _, f := range report.Findings {
 		if f.ID == id {
 			return true
+		}
+	}
+	return false
+}
+
+// beyondAnAgentsReach reports whether the report, normalized the way the
+// stage node records it, holds on the finding id and says on the finding
+// that no fix round can resolve it, which is what standing consent reads to
+// leave the hold for a person (#320 item 5b).
+func beyondAnAgentsReach(report findings.Report, id string) bool {
+	for _, f := range report.Normalize().Findings {
+		if f.ID == id {
+			return f.Holds() && f.RemedyOutsideChange
 		}
 	}
 	return false

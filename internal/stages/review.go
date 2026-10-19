@@ -629,6 +629,10 @@ func tooLargeToReview(change reviewChangeSet, crossed string) pipeline.Output {
 			ID:       "review-change-too-large",
 			Severity: findings.SeverityError,
 			Action:   findings.ActionAsk,
+			// Splitting the change is a decision about its shape rather
+			// than an edit a fix round makes to it, so no round can
+			// resolve this; standing consent leaves it for a person.
+			RemedyOutsideChange: true,
 			Description: crossed + " " + scale +
 				"Nothing was reviewed, so nothing here says whether this change is good. " +
 				"Splitting it into changes that can each be reviewed is the usual answer; " +
@@ -685,6 +689,10 @@ func unreviewed(ctx context.Context, f reviewFacts, err error) (pipeline.Output,
 			ID:       "review-not-established",
 			Severity: findings.SeverityError,
 			Action:   findings.ActionAsk,
+			// What is missing is a review, and a fix round edits the
+			// change without reviewing it, so no round can resolve this;
+			// standing consent leaves it for a person.
+			RemedyOutsideChange: true,
 			Description: "The review of " + f.head + " produced no usable report (" +
 				string(invocation.Failure) + "): " + invocation.Error() + ". Nothing was reviewed, " +
 				"so nothing here says whether this change is good. Approving records that the run " +

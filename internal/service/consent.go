@@ -58,11 +58,15 @@ import (
 // says which finding and why. An ask whose action was P3's default rather
 // than the stage's, findings.Finding.ActionDefaulted, because P3's point is
 // that an action nobody could read waits for a human. And an ask whose remedy
-// lies outside the change, findings.Finding.RemedyOutsideChange, such as a
-// command stage with no command configured, because a fix round edits the
-// change and so cannot resolve it. Both facts are the finding's own, set
-// where the report is normalized or built, so nothing here matches an
-// identifier.
+// lies outside the change, findings.Finding.RemedyOutsideChange, because a
+// fix round edits the change and so cannot resolve it: a command stage with
+// no command configured, a stage with no body, and the review stage's two
+// findings that say no review happened, review-change-too-large, whose answer
+// is splitting the change, and review-not-established, whose answer is a
+// review a fix round does not perform (#320 item 5b). Both facts are the
+// finding's own, set where the report is normalized or built, so nothing here
+// matches an identifier, and a finding is added to either kind by marking it
+// where it is built.
 //
 // # What it never answers
 //
@@ -120,7 +124,10 @@ import (
 //     false for every finding, so an ask P3 supplied there reads as stated
 //     and is sent to a round. The same holds for a finding a stage built by
 //     hand and never normalized; every stage report is normalized by the
-//     stage node before it is recorded.
+//     stage node before it is recorded. A review report recorded before
+//     review-change-too-large and review-not-established were marked
+//     RemedyOutsideChange says false for them too, so consent given to a run
+//     already held on one sends it to a round.
 //   - What PRD section 5 has the decision-model record keep about a person's
 //     answer at a hold is not written for a consent answer, because it is not
 //     a person's: the follow-up kind that record keeps is a person's answer.
