@@ -186,7 +186,9 @@ const (
 	// waiting on the person, what landed since they last marked what they
 	// had seen, what is under way, and what stopped without a decision,
 	// which assistant watch starts with. It is open, because it reads, and
-	// it marks nothing: a read alone never moves the seen mark.
+	// it marks nothing: a read alone never moves the seen mark. The answer
+	// carries the read's digest, its parts in counts, which machine.CatchUp
+	// computes from those parts as it is encoded.
 	MethodCatchUpRead Method = "catchup.read"
 	// MethodCatchUpMark moves the seen mark: it records as seen exactly the
 	// landed records the request names, which are the ones a read showed,

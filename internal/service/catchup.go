@@ -41,6 +41,8 @@ import (
 //
 // Only Landed is filtered. The other three are never filtered by anything
 // but what they are, so an open decision is shown until it is answered.
+// The digest is not composed here: machine.CatchUp computes it from the
+// parts this function fills, so nothing in this file can make it disagree.
 //
 // Two consequences of reading the PRD's rows as written are left as they
 // are rather than settled here. A task resolved Unknown is in flight under

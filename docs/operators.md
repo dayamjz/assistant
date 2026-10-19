@@ -233,6 +233,41 @@ Three things follow for whoever runs the service:
   separate, coordinator-only step; a worker that calls
   `assistant coordinator promote` is refused.
 
+## Catching up on a fleet
+
+`assistant watch` starts with one read of the fleet and then follows the
+service's updates; `assistant watch --once` prints that read and exits. The
+read opens with a digest, one line counting what follows it:
+
+- the decisions waiting on you, every open hold and every run held at a
+  decision;
+- what was merged or cleared away since you last marked what you had seen;
+- the work under way, and the changes being validated right now;
+- the work that stopped without asking you anything.
+
+The four parts follow, each with its own line per item. The digest counts
+those parts and nothing else, so it can never disagree with them; it starts
+nothing, answers nothing, and acknowledges no wake.
+
+A task whose worker last said it is at work, while no live terminal was seen
+for it on this read, is not counted as moving: the digest says how many such
+tasks there are, and the task's own line says the worker was not seen at it.
+That line is the same in `assistant tasks`. Only a worker whose terminal was
+observed live reads as a worker on the work.
+
+`assistant watch --once --mark-seen` marks as seen exactly the merged and
+cleared-away work that read showed, so the next read, and every read after
+it, counts only what landed since. Nothing else is filtered: a decision is
+counted until it is answered, and what is under way or stopped is counted for
+as long as it is true.
+
+`assistant --json watch --once` carries the same counts under `digest`
+(`waiting`, `landed`, `under_way`, `unconfirmed`, `advancing`, `stopped`),
+computed from the parts in the same document. A task that resolves as unknown
+is both under way and stopped, so it is counted in both, and the counts are
+not meant to be summed. Agent usage is not in the read: it stays the usage
+view, `assistant runs --usage`.
+
 ## Waiting on a fleet
 
 A coordinator agent running tasks through `assistant coordinator` does not

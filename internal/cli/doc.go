@@ -58,6 +58,11 @@
 // The section says no verb is added for it and status does not carry it, so
 // neither does this surface; answering a decision the read lists is the
 // --answer above, and the read names it rather than offering a second way.
+// The read opens with its digest, machine.DigestPhrase over
+// machine.CatchUp.Digest: the four parts in counts and the tasks under way
+// whose worker was not seen live, which --json carries under digest because
+// the read encodes its own digest. It is the read in counts and not a fifth
+// part, so it takes no flag of its own and owns no fact the parts do not.
 //
 // The usage view is --usage on runs, which is where section 9 puts it, taking
 // a window as --usage=WINDOW (24h, 90m, 7d) and the seven-day default alone.

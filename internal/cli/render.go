@@ -660,8 +660,11 @@ func readOutTask(w io.Writer, task machine.Task) {
 }
 
 // readOutCatchUp prints PRD section 9's catching up: the pull guard's
-// warning when there is one, and then the four parts in the read's order,
-// each under its row from the phrase table, or that part's empty row. A
+// warning when there is one, the digest's row over the read's own parts,
+// and then the four parts in the read's order, each under its row from the
+// phrase table, or that part's empty row. The digest is CatchUp.Digest over
+// the read this prints, the same counts the structured rendering carries
+// under digest, so the two renderings cannot count differently. A
 // task's line is the fleet listing's, the person's project and the task's
 // phrase, so the two cannot read differently; a run's is its branch and its
 // phrase, the decision's row for a run held at one; a hold's is its row,
@@ -671,6 +674,8 @@ func readOutTask(w io.Writer, task machine.Task) {
 // which the rows that need one point at.
 func readOutCatchUp(w io.Writer, c machine.CatchUp) {
 	readOutSupervision(w, c.Supervision)
+	writeln(w, machine.DigestPhrase(c.Digest()))
+	writeln(w)
 	waiting, landed, underWay, stopped := machine.CatchUpPhrases(c)
 	writeln(w, waiting)
 	for _, item := range c.Waiting {
