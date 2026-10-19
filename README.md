@@ -302,17 +302,21 @@ archive per platform, `assistant_VERSION_OS_ARCH.tar.gz` for `darwin` and
 the archive against it before unpacking:
 
 ```sh
+set -e
 VERSION=v0.1.0 OS=darwin ARCH=arm64   # the release, and this machine's platform
+archive="assistant_${VERSION}_${OS}_${ARCH}.tar.gz"
 base=https://github.com/dayamjz/assistant/releases/download/$VERSION
-curl -fLO "$base/assistant_${VERSION}_${OS}_${ARCH}.tar.gz"
+curl -fLO "$base/$archive"
 curl -fLO "$base/SHA256SUMS"
-shasum -a 256 --ignore-missing -c SHA256SUMS   # on Linux: sha256sum --ignore-missing -c SHA256SUMS
-tar -xzf "assistant_${VERSION}_${OS}_${ARCH}.tar.gz"
+grep -F "$archive" SHA256SUMS | shasum -a 256 -c -   # on Linux: grep -F "$archive" SHA256SUMS | sha256sum -c -
+tar -xzf "$archive"
 install -m 0755 "assistant_${VERSION}_${OS}_${ARCH}/assistant" /usr/local/bin/   # or any directory on PATH
 assistant --version   # assistant v0.1.0 COMMIT GO_VERSION
 ```
 
-The check passes only when the line for the archive you downloaded matches.
+The check passes only when the digest line for that archive matches the file
+you downloaded; if the manifest has no line for it, or the digest differs,
+nothing after it runs.
 It shows the archive is the one published beside that `SHA256SUMS`, not who
 published it: both come from the same release, and nothing is signed yet.
 The binaries are built without cgo, so each is one static file with nothing

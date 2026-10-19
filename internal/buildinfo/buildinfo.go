@@ -29,8 +29,8 @@
 // outside a checkout or under -buildvcs=false.
 //
 // The stamp is taken as given once surrounding space is trimmed. Whether it
-// is a well-formed release tag is the release workflow's check, made on the
-// tag before it builds; nothing here validates it.
+// is a well-formed release tag is WellFormedReleaseTag, which the release
+// workflow invokes on the tag before it builds; nothing else here validates it.
 package buildinfo
 
 import (

@@ -45,6 +45,13 @@ jobs:
       version: ${{ steps.settle.outputs.version }}
       prerelease: ${{ steps.settle.outputs.prerelease }}
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
       - id: settle
         name: Settle the version
         shell: bash
@@ -66,9 +73,8 @@ jobs:
             workflow_dispatch) version="$INPUT_VERSION" ;;
             *) version="v0.0.0-dryrun.$RUN_NUMBER" ;;
           esac
-          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
-          if ! printf '%s' "$version" | grep -Eq "$semver"; then
-            echo "::error::$version is not a release version (vMAJOR.MINOR.PATCH with an optional -PRERELEASE)"
+          if ! go run ./cmd/releasetag "$version"; then
+            echo "::error::$version is not a release version (vMAJOR.MINOR.PATCH with an optional -PRERELEASE of dot-separated identifiers)"
             exit 1
           fi
           prerelease=false
