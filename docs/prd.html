@@ -2436,7 +2436,8 @@ flowchart TB
   <h2 class="text-3xl font-bold tracking-tight mb-3">Configuration</h2>
   <p class="mb-6 opacity-80 max-w-3xl">
     Two layers. Global settings live in your home; per-repository settings live in a file at the
-    repository root. The repository layer overrides the global one field by field.
+    repository root. The repository layer overrides the global one field by field, except for a
+    global-only-to-loosen key, which a repository layer may only tighten.
   </p>
 
   <h3 class="text-xl font-semibold mb-3">The trust boundary</h3>
