@@ -26,12 +26,13 @@
 //
 // internal/stages has bodies for all nine stages, and no run here carries the
 // pull request body through a launch; only the three walks that reach the push
-// stage's decision, and the run a task's worker starts by pushing, carry the
-// review body through one. The review body launches the agent this harness
-// resolves, which the default journey scripts to answer nothing, so every walk
-// but those three asks to skip that stage rather than stopping at an ask
-// recording a review that never happened; the pushed run cannot ask, and its
-// test scripts the reviewer clean instead. The pull request body opens a
+// stage's decision, the run a task's worker starts by pushing, and the usage
+// ceiling walk's control run carry the review body through one. The review
+// body launches the agent this harness resolves, which the default journey
+// scripts to answer nothing, so every walk but those asks to skip that stage
+// rather than stopping at an ask recording a review that never happened; the
+// pushed run cannot ask, and its test and the ceiling walk script the
+// reviewer clean instead. The pull request body opens a
 // provider for the repository the run's record names on the code host, and no
 // record here names one, so a run that reaches it fails rather than reaching
 // a code host; every run this harness drives to the end therefore asks to
@@ -53,6 +54,14 @@
 // that a real CLI answers in that mode, and the commit and the push are made
 // by the test from inside the worker's process group because the stand-in
 // runs nothing.
+//
+// One walk holds a run on the operator's usage ceiling: the home sets
+// usage_ceiling.input_tokens to what the stand-in reports one review costs,
+// the service's own recorder brings the record there from the adapter's
+// counts, and the next run holds at review on the ceiling's ask without the
+// stand-in being asked, its detail read as a person reads it. A branch naming
+// the ceiling's key in its own document is refused there before anything
+// launches.
 //
 // Where a mechanism cannot be reached through the binary, this harness drives
 // it through the package that owns it against the same fixture, and every row

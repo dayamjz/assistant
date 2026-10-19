@@ -202,7 +202,9 @@ func StagesWithoutABody() []pipeline.Stage {
 // reach whatever agent the machine happens to have. The one run a task's
 // worker starts by pushing takes the review stage with the stand-in scripted
 // clean, and no answer walks it past the first hold it reaches, so it is not
-// walked against this list. The pull request and checks stages are off the
+// walked against this list; nor are the usage ceiling walk's runs, whose
+// control takes the review stage the same way and whose held run stops at
+// review on the ceiling. The pull request and checks stages are off the
 // list because a local upstream sets no_code_host at begin (#283), so both
 // skip after push rather than holding: a run that asked to skip only the
 // pull request would still never stop at checks here.

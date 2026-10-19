@@ -18,8 +18,10 @@ a real fix would have been correct.
 Whether the gate catches real bugs needs a corpus of real changes with known
 verdicts, judged against those verdicts. The PRD defers that, and this harness
 does not stand in for it. A green run of this package says the mechanisms
-behave as specified on inputs we chose. It says nothing about review quality,
-and no report built on this may claim otherwise.
+behave as specified on inputs we chose, and that includes the usage ceiling
+holding a run on counts the stand-in reported rather than counts a real agent
+spent. It says nothing about review quality, and no report built on this may
+claim otherwise.
 
 ## The second limit: how far a run here reaches
 
@@ -102,6 +104,26 @@ the run after it. It does not reach a worker following its instructions, the
 second isolation check those instructions carry, the task's run going on to a
 push or a pull request, or the task's copy being removed.
 
+One walk holds a run on the operator's usage ceiling (#372).
+`TestARunPastTheUsageCeilingHoldsThroughTheBinary` sets
+`usage_ceiling.input_tokens` in the home's own configuration to what the
+stand-in reports one review costs, so the record reaches the ceiling through
+the service's own recorder reading the adapter's counts off the wire, and
+drives three runs on branches of their own. A branch whose own document names
+`usage_ceiling.input_tokens` is refused naming the pushed copy and the key,
+launches nothing, and leaves its run's record ended (P7). The control run's
+review starts under the ceiling, is answered clean and passes, and the run
+holds later where every run here holds. The run after it holds at the review
+stage on the ceiling's ask, for a person and with its remedy outside the
+change, without the stand-in being asked, and `assistant runs RUN` read
+without `--json` relays the ceiling's row with the exact figures
+`runs --usage` reports. The counts are the stand-in's, never a real agent's,
+so the walk establishes that the service weighs what the adapter recorded and
+renders the hold, not that a real CLI reports its usage the way the stand-in
+does; nothing walks the held run past its hold, and the other two refusing
+standings (a count unreported, a record unread) are held at package reach by
+`internal/machine`, and the unread one by `internal/service` as well.
+
 Every other walk stops short, and the same reasons bound them all. The
 review stage's body launches the agent the run resolved over the run's copy,
 and the agent these journeys resolve is the harness's own stand-in, scripted
@@ -118,9 +140,10 @@ rather than executing anything, and the push stage holds because the run
 carries no completed review. Between them, that is the reason parts of the
 product are still not reachable from a run today:
 
-- the three walks above and the run the task walk's push starts are the runs
-  that launch an agent for review, and every review is answered from a
-  script, so no run parses a report a real reviewer wrote; the other agents
+- the three walks above, the run the task walk's push starts and the ceiling
+  walk's control run are the runs that launch an agent for review, and every
+  review is answered from a script, so no run parses a report a real reviewer
+  wrote; the other agents
   launched here are a fix round's, scripted to change nothing, and the task
   walk's worker, scripted to answer its instructions and nothing more;
 - no run opens a pull request or reads checks, and only the three walks above
