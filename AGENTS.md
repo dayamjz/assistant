@@ -379,7 +379,10 @@ Each has cost this repository more than one round of review.
   and `capability.go` owns how the two meet. Reading agent output is `internal/findings`' job and
   never a second parser here; the one choice this package makes is `Shape`, and
   `ShapeReview` is the only one carrying a `findings.Demand`, which
-  `Invocation.Validate` requires there and refuses everywhere else. It also owns
+  `Invocation.Validate` requires there and refuses everywhere else. `ReadLineage`
+  is the one read of a process's parent, group and its terminal's foreground
+  group, and `Lineage.Foreground` is the predicate `internal/service`'s
+  foreground relation decides from. It also owns
   the one PID-reuse check, `Identity`, which `internal/session` and the run
   process record carry rather than reading a start time of their own, and
   `EndGroup`, the only way to end a group it started from outside the
@@ -434,7 +437,11 @@ Each has cost this repository more than one round of review.
   set and never a third access class: the rows whose answer turns on it
   (`task.event`, `wakes.*`, `supervision.assert`, `catchup.mark`, `gate.admit`,
   and the coordinator's `task.*` methods) say so, and
-  `ErrWorker` and `ErrNotWorker` are its two refusals. Read its `doc.go` for
+  `ErrWorker` and `ErrNotWorker` are its two refusals. Whether a peer is in
+  the foreground of its controlling terminal is a third relation over the
+  same `Credentials`, read off the peer's own `agents.Lineage` for one
+  request, `task.respond` on a local landing's approval hold, and
+  `ErrNotAtTerminal` is its refusal. Read its `doc.go` for
   where state may still be collapsed into a gap marker and why that is not the
   strict rule relaxed. Four state types have a
   producer, all in `internal/service`; two the table names have none, and the
@@ -870,7 +877,11 @@ Each has cost this repository more than one round of review.
   task's branch, forward, never a deletion - and why that is admission's
   decision and not `internal/safety`'s; `local.go` owns what a local task's
   own push does instead of starting a run, the approval hold it raises, and
-  the anchored fast-forward an approve answer makes; a person's push meets
+  the anchored fast-forward an approve answer makes, and `foreground.go`
+  owns the relation that hold alone is held to: the peer must be in the
+  foreground of its controlling terminal, read off its own lineage, which
+  keeps a host agent's tool command out and witnesses a terminal, never a
+  person, so the resolver recorded stays the derived one; a person's push meets
   neither, always starting its run, and
   on Windows no peer is placed at all, which `workers.go` states as a limit.
   The run a worker's push of its own task's branch starts takes the task's

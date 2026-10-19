@@ -239,7 +239,13 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   silence, not a second relaunch. Case `unobservable` means probe or wait;
   never `task.relaunch` on it — only `dead` is a crashed worker the program
   relaunches. For `hold-opened`, answer with
-  `assistant --task ID --answer ...`. For `message-unacknowledged`, the
+  `assistant --task ID --answer ...`, with one exception: a local delivery
+  task's approval hold, keyed `task/ID/local-approval/...`, is the person's
+  ("You approve", PRD section 6). The service takes an answer to it only
+  from a command in the foreground of a terminal, and a command you run is
+  refused with code `not-at-terminal`, recording nothing. Tell the person
+  the task waits on their approval and leave the hold open. For
+  `message-unacknowledged`, the
   worker has not acknowledged a message. The program's own records of
   creating and dispatching a task wake nobody.
 - `acknowledge` also closes a wake `listen` printed that you dealt with
@@ -344,6 +350,11 @@ assistant --json coordinator await --timeout 5m   # blocks, then drains
   exited, so the kernel moved it under another process: that call is placed
   as the coordinator's and served. A worker's grant allows git and its own
   `assistant worker` route without asking, and denies nothing else.
+- **A local landing is approved at a terminal, and the service checks the
+  terminal, not the person.** The one hold you cannot answer, a local task's
+  approval, is refused to any command outside the foreground of a terminal,
+  and your host runs your commands outside one. That is the whole of the
+  check: it does not name you, and it does not know who is at a terminal.
 - **No interrupt.** The service refuses `task.interrupt` on every call,
   because no adapter declares what it needs, so the client offers none.
   Stop the worker instead.

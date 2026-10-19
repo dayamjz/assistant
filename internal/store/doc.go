@@ -321,7 +321,13 @@
 // is a claim the caller writes about itself. internal/ipc answers
 // ResolvedByMachineInterface for every resolution that arrives there. The
 // record therefore understates who decided rather than overstating it, which
-// is the direction that keeps it worth reading.
+// is the direction that keeps it worth reading. One hold is served only to
+// a peer the kernel reports in the foreground of its controlling terminal,
+// the local landing's approval that internal/service's foreground.go holds
+// to that relation; it is still recorded as the machine interface's, because
+// a terminal's foreground is a fact about the peer's terminal and not a
+// terminal the recording process holds, and a program that allocates a
+// terminal of its own can put any command in its foreground.
 //
 // What keeps the person value out of a record is where a resolver may be
 // written rather than anything checked at the write. ResolveHold records the

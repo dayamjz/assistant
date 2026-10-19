@@ -41,7 +41,31 @@ import (
 // internal/safety, and a hold naming the task is registered whose key carries
 // the commit pushed and the tip that observation found. The hold is what the
 // task resolves Held from, so the task waits on the person, and it is
-// answered through task.respond like every hold a task raises.
+// answered through task.respond like every hold a task raises, with one
+// rule more.
+//
+// # The approval is answered only from the foreground of a terminal
+//
+// PRD section 6 gives the local landing to the person: "You approve". Every
+// other hold a task raises is the coordinator's to answer, and the
+// coordinator reaches task.respond through the same binary and the same
+// socket a person does, so for this hold respondTask asks foreground.go's
+// relation first: the peer the kernel named must be in the foreground
+// process group of its controlling terminal, as its lineage reads, which a
+// shell gives a person's command and a host agent's tool does not give the
+// command it runs. Anything else is refused with ipc.ErrNotAtTerminal, a
+// lineage that cannot be read with ipc.ErrUnavailable, and in both nothing
+// is read of the answer, nothing is recorded, and the hold stays open.
+// Approve and stop are both held to it, so the offer is closed by nobody
+// but a peer at a terminal. A worker is refused as before, first.
+//
+// What that establishes is a terminal's foreground, not a person: a program
+// that allocates a terminal of its own can run the command in its
+// foreground, which foreground.go names as the gap. So the resolver
+// recorded on the approval stays the one ipc.Request.HoldResolver derives,
+// ResolvedByMachineInterface, which understates who decided; a producer of
+// store.ResolvedByPerson needs a surface that holds the terminal itself, and
+// this build has none.
 //
 // # Approving fast-forwards, anchored to what was offered
 //
@@ -83,6 +107,11 @@ import (
 //   - The copy is cleaned up after the landing only when the worker's
 //     terminal is already gone; a worker still running keeps its copy, on
 //     cleanup.go's terms for a landed delivery task, and nothing asks again.
+//   - The foreground relation's own gaps, which foreground.go states: a
+//     command in the foreground of a terminal a program allocated for it is
+//     served, a person's command run in the background or with no terminal
+//     is refused, and the peer's lineage is read at the request rather than
+//     at the connection.
 
 // localApprovalPrefix is the key space of the holds a local task's push
 // raises.
@@ -166,7 +195,8 @@ func (s *Service) offerLocal(ctx context.Context, task store.Task, update gate.R
 		TaskID:  store.Known(task.ID),
 		Subject: "whether to move your local " + repository.DefaultBranch + " to this work's change, which nothing validated",
 		Detail: fmt.Sprintf("task %s pushed %s to %s. Answer %q to fast-forward %s in %s from %s to it, or %q to leave "+
-			"%s where it is. Nothing leaves this machine either way.",
+			"%s where it is. Nothing leaves this machine either way. The answer is taken only from a command in the "+
+			"foreground of a terminal, so it is yours and not the coordinator's.",
 			task.ID, update.New, update.Branch(), machine.AnswerApprove, repository.DefaultBranch, repository.WorkingPath,
 			observed.State().Commit, machine.AnswerStop, repository.DefaultBranch),
 	})

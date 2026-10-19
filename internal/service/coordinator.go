@@ -72,7 +72,11 @@ import (
 //     service has no relation that names the coordinator positively, so a
 //     person's own client on the socket, which is the same user, is
 //     admitted on the same terms; PRD section 9's rule is that no worker can
-//     call these, and that is what is enforced.
+//     call these, and that is what is enforced. The one request decided the
+//     other way round, the local landing's approval hold that PRD section 6
+//     gives the person, is not here: taskholds.go's task.respond holds it to
+//     foreground.go's relation, which keeps a host's tool command out
+//     without naming the coordinator either.
 //   - task.create and task.relaunch answer once their records are written:
 //     the copy a created task is cut and the worker a relaunch starts are
 //     the service's work afterwards, so their outcome is read from the

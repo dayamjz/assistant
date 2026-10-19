@@ -96,8 +96,11 @@ func commandName(id Identity) (string, error) {
 	return name, nil
 }
 
-// lineage reads the parent and the process group from the same stat entry
-// startTime reads: field 4 and field 5, after the command name.
+// lineage reads the parent, the process group and the controlling
+// terminal's foreground group from the same stat entry startTime reads:
+// fields 4, 5 and 8 after the command name. proc(5) documents field 8,
+// tpgid, as -1 for a process with no controlling terminal, which is read as
+// zero.
 func lineage(pid int) (Lineage, bool, error) {
 	fields, found, err := statFields(pid)
 	if err != nil || !found {
@@ -115,5 +118,11 @@ func lineage(pid int) (Lineage, bool, error) {
 	if err != nil {
 		return Lineage{}, false, fmt.Errorf("agents: /proc/%d/stat process group %q: %w", pid, fields[2], err)
 	}
-	return Lineage{Identity: Identity{PID: pid, Start: start}, Parent: parent, Group: group}, true, nil
+	terminalGroup, err := strconv.Atoi(fields[5])
+	if err != nil {
+		return Lineage{}, false, fmt.Errorf("agents: /proc/%d/stat terminal process group %q: %w", pid, fields[5], err)
+	}
+	return Lineage{
+		Identity: Identity{PID: pid, Start: start}, Parent: parent, Group: group, TerminalGroup: max(terminalGroup, 0),
+	}, true, nil
 }

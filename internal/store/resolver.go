@@ -49,7 +49,13 @@ type Resolver struct{ name string }
 // connection separates them and everything that would separate them is a claim
 // the caller writes about itself. So internal/ipc answers
 // ResolvedByMachineInterface for every resolution that arrives on it, and no
-// path from a frame reaches this value.
+// path from a frame reaches this value. That holds for the one hold the
+// service serves only to a peer in the foreground of its controlling
+// terminal, the local landing's approval: the kernel attributes the
+// terminal's foreground to the peer, which keeps a host agent's tool command
+// out, but it is another process's terminal and a program can allocate one
+// and put any command in its foreground, so it does not witness a person
+// and the resolution stays the machine interface's.
 func ResolvedByPerson() Resolver { return Resolver{name: "person"} }
 
 // ResolvedByMachineInterface is a resolution that arrived over the machine

@@ -113,6 +113,8 @@ var nextActions = []struct {
 		"This process is inside a validation stage. It may inspect, fix, and return its own stage, and nothing else."},
 	{func(err error) bool { return errors.Is(err, ipc.ErrWorker) },
 		"This process is inside a task's worker group, and only the coordinator may make this request."},
+	{func(err error) bool { return errors.Is(err, ipc.ErrNotAtTerminal) },
+		"This hold is answered only from the foreground of a terminal. Run the command yourself at a terminal, in the foreground, not from a script, a background job or an agent's tool."},
 	{func(err error) bool { return errors.Is(err, ipc.ErrUnidentifiedPeer) },
 		"This platform does not let the service identify who is calling, so it refuses every request that drives a run."},
 	{func(err error) bool { return errors.Is(err, ipc.ErrUnavailable) },

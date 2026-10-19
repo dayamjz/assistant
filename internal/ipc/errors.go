@@ -46,6 +46,17 @@ var (
 	// worker may make and the peer is placed as no task's worker, so there is
 	// no task to attribute it to.
 	ErrNotWorker = sentinelFor(CodeNotWorker)
+	// ErrNotAtTerminal reports a request refused because it is one answered
+	// only from the foreground of a terminal and the peer is not there: the
+	// kernel reports it with no controlling terminal, or in a process group
+	// that is not its terminal's foreground group, which is how a host
+	// agent's tool runs a command and how a shell runs a background job. The
+	// one request held to it is the local landing's approval hold, PRD
+	// section 6's "You approve", decided by the service's foreground relation
+	// over the peer's credentials and never from anything the caller sends.
+	// The message says what to do: run the command at a terminal, in the
+	// foreground.
+	ErrNotAtTerminal = sentinelFor(CodeNotAtTerminal)
 	// ErrRefused reports a request the handler decided against the records
 	// and refused: a task a coordinator method may not act on as it stands,
 	// such as one not in a state the method is made from, a branch another
@@ -109,6 +120,8 @@ const (
 	CodeWorker Code = "worker"
 	// CodeNotWorker maps to ErrNotWorker.
 	CodeNotWorker Code = "not-worker"
+	// CodeNotAtTerminal maps to ErrNotAtTerminal.
+	CodeNotAtTerminal Code = "not-at-terminal"
 	// CodeRefused maps to ErrRefused.
 	CodeRefused Code = "refused"
 	// CodeUnavailable maps to ErrUnavailable.
@@ -167,6 +180,7 @@ var codeRows = []struct {
 	{CodeContained, "ipc: refused, caller is contained by an active validation stage"},
 	{CodeWorker, "ipc: refused, caller is a task's worker"},
 	{CodeNotWorker, "ipc: refused, caller is not a task's worker"},
+	{CodeNotAtTerminal, "ipc: refused, caller is not in the foreground of a terminal"},
 	{CodeRefused, "ipc: refused by the records the request was decided against"},
 	{CodeUnavailable, "ipc: a fact this request depends on could not be established"},
 	{CodeSubscriberStalled, "ipc: subscriber stalled"},
