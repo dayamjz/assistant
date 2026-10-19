@@ -16,9 +16,19 @@ import (
 //
 // Only a run that ended checks-passed - passed, with no pull request read
 // ending it - in a repository the operator's global-only autonomy.merge
-// lists, by the specifier the code host names it with. Nothing else reaches
-// the code host here: a repository nobody listed is never asked anything,
-// and a run that passed with no pull request recorded has nothing to merge.
+// lists, by the specifier internal/forge names it with: owner/name for a
+// repository on GitHub, gitlab.com/group/project for a project on GitLab.
+// The two forms never match each other (internal/forge/specifier), so an
+// entry reaches only the host it names. Nothing else reaches the code host
+// here: a repository nobody listed is never asked anything, and a run that
+// passed with no pull request recorded has nothing to merge.
+//
+// The provider is opened through the service's forge.Hosts, the one choice
+// of adapter every other read of the run makes, so a GitLab project's merge
+// request is read and merged by the GitLab adapter on the terms below: what
+// this file calls a pull request is a merge request there, and the binding
+// is that adapter's sha parameter where it is gh's --match-head-commit on
+// GitHub.
 //
 // # The live read, bound to the observed head
 //
@@ -56,13 +66,13 @@ import (
 //     person's merge.
 //   - The outcome line is the service log's; no surface phrases it from the
 //     record yet.
-//   - Which merge method is used is internal/forge's GitHub adapter's
-//     choice among those the repository permits, stated there.
-//   - Nothing on gitlab.com is merged here. autonomy.merge names a
-//     repository as owner/name, internal/config refuses any other shape, and
-//     internal/forge writes a GitLab specifier with its host in front, so no
-//     entry is ever the specifier of a GitLab run and MergesIn is false for
-//     every one of them.
+//   - Which merge method is used is the adapter's to state: the GitHub
+//     adapter chooses among those the repository permits, and the GitLab
+//     adapter sends none, so the project's own settings decide. Neither is
+//     this file's choice.
+//   - A refusal is reported in the service log only, with the code host's
+//     status and message as internal/forge carries them; nothing on the run's
+//     record says the program tried.
 
 // errMergeNotReady is the class of every refusal the live read makes.
 var errMergeNotReady = errors.New("service: the pull request is not ready for the program to merge")

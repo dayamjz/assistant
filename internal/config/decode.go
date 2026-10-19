@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/dayamjz/assistant/internal/forge/specifier"
 )
 
 // The decoders below turn one JSON value into one typed configuration value.
@@ -395,15 +397,18 @@ func decodeDecisionModel(k Key, v any) (any, error) {
 	}
 }
 
-// decodeFixMessage accepts the fix commit subject template. It must contain
-// the summary placeholder, because a template without it renders the same
-// subject for every fix, which makes a history of fix commits unreadable.
 // decodeAutonomyMerge reads the repositories merge authority is on in. Each
-// entry is owner/name, the form the code host names a repository in: two
-// non-empty segments of printable characters with no whitespace, neither
-// beginning with a dash. A repeated entry, compared as MergesIn compares, is
-// refused rather than kept, because a list that names one repository twice
-// says nothing more and reads as two.
+// entry is a repository as internal/forge names it, in one of the two forms
+// internal/forge/specifier owns: owner/name for a repository on GitHub, or
+// gitlab.com/group/project for a project on GitLab, its host written in
+// front of it exactly. An entry whose first segment is the GitLab hostname
+// in any letter case is held to the GitLab form alone, so a malformed GitLab
+// entry is refused rather than read as a GitHub repository whose owner is
+// called gitlab.com; any other entry is held to the GitHub form. An entry no
+// run could carry is refused rather than kept, because a list entry that can
+// never match reads as authority the operator does not have. A repeated
+// entry, compared as MergesIn compares, is refused too, because a list that
+// names one repository twice says nothing more and reads as two.
 func decodeAutonomyMerge(k Key, v any) (any, error) {
 	items, err := asList(k, v)
 	if err != nil {
@@ -417,15 +422,20 @@ func decodeAutonomyMerge(k Key, v any) (any, error) {
 		entry := listEntry{key: k, noun: "repository", index: i, value: item}
 		name, ok := item.(string)
 		if !ok {
-			return nil, entry.err("must be a string naming a repository as owner/name")
+			return nil, entry.err("must be a string naming a repository as owner/name or " +
+				specifier.GitLabPrefix + "group/project")
 		}
 		if err := checkPrintable(k, item, entry.of("name"), name); err != nil {
 			return nil, err
 		}
-		owner, repo, found := strings.Cut(name, "/")
-		if !found || owner == "" || repo == "" || strings.Contains(repo, "/") || strings.ContainsAny(name, " \t") ||
-			strings.HasPrefix(owner, "-") || strings.HasPrefix(repo, "-") {
-			return nil, entry.err("names " + quote(name) + ", which is not a repository as the code host names one, owner/name")
+		if first, _, _ := strings.Cut(name, "/"); strings.EqualFold(first, specifier.GitLabHostname) {
+			if _, ok := specifier.GitLab(name); !ok {
+				return nil, entry.err("names " + quote(name) + ", which is not a project as the code host names one, " +
+					specifier.GitLabPrefix + "group/project, with the host written in lower case")
+			}
+		} else if !specifier.GitHub(name) {
+			return nil, entry.err("names " + quote(name) + ", which is not a repository as the code host names one, " +
+				"owner/name on GitHub or " + specifier.GitLabPrefix + "group/project on GitLab")
 		}
 		for _, seen := range out {
 			if strings.EqualFold(seen, name) {
@@ -487,6 +497,9 @@ func decodeSessionProvider(k Key, v any) (any, error) {
 	return nil, keyErr(k, v, `expected "pipe" or "tmux"`)
 }
 
+// decodeFixMessage accepts the fix commit subject template. It must contain
+// the summary placeholder, because a template without it renders the same
+// subject for every fix, which makes a history of fix commits unreadable.
 func decodeFixMessage(k Key, v any) (any, error) {
 	s, err := asString(k, v)
 	if err != nil {

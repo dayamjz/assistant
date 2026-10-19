@@ -81,11 +81,13 @@ func TestAGitLabRunsMergeIsReadOnGitLabAndNowhereElse(t *testing.T) {
 	}
 }
 
-// The program merges nothing on GitLab, even where autonomy.merge lists the
-// project's path: a list entry is owner/name and a GitLab run's specifier
-// names its host, so the two never match and neither code host is asked
-// anything. The control is the same entry matching a GitHub specifier.
-func TestAutonomyMergesNothingOnGitLab(t *testing.T) {
+// A GitHub entry never reaches a GitLab run, even where it is the project's
+// path: an owner/name entry is a GitHub repository's specifier and a GitLab
+// run's specifier names its host, so the two never match and neither code
+// host is asked anything. The control is the same entry matching a GitHub
+// specifier; a GitLab project listed by its own specifier is merged, which
+// gitlabautonomy_test.go walks through the service.
+func TestAGitHubEntryNeverReachesAGitLabRun(t *testing.T) {
 	t.Parallel()
 	f, lab := newGitLabFixture(t, labtest.Script{})
 	f.s.cfg.AutonomyMerge = []string{gitLabProject}

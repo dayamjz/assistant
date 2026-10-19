@@ -2,6 +2,8 @@ package forge
 
 import (
 	"strings"
+
+	"github.com/dayamjz/assistant/internal/forge/specifier"
 )
 
 // GitHubHostname is the code host the GitHub adapter addresses. It is one
@@ -12,7 +14,7 @@ import (
 // PRD section 8 asks for one adapter per provider, and this is that provider.
 // A GitHub Enterprise installation is a different host and this adapter does
 // not address one; what that costs is stated in GitHubRepository.
-const GitHubHostname = "github.com"
+const GitHubHostname = specifier.GitHubHostname
 
 // GitLabHostname is the code host the GitLab adapter addresses, and it is one
 // constant for the reason GitHubHostname is: it is the host every GitLab
@@ -20,12 +22,12 @@ const GitHubHostname = "github.com"
 // specifier out of. A self-managed GitLab installation is a different host
 // and this adapter does not address one; a run whose upstream is on one
 // carries no specifier, and the run is refused before it starts.
-const GitLabHostname = "gitlab.com"
+const GitLabHostname = specifier.GitLabHostname
 
 // gitLabPrefix is what every GitLab specifier begins with. A GitLab
 // specifier names its host and a GitHub one does not, and GitLabRepository
 // says why.
-const gitLabPrefix = GitLabHostname + "/"
+const gitLabPrefix = specifier.GitLabPrefix
 
 // GitHubRepository returns the specifier the GitHub adapter addresses the
 // repository at remote by, and reports whether remote named one.
@@ -70,7 +72,7 @@ func GitHubRepository(remote string) (string, bool) {
 // It reads only a remote on GitLabHostname, on GitHubRepository's terms, and
 // the two shapes a remote takes, with a trailing ".git" and a trailing slash
 // removed. A GitLab project path may name a group under a group, so it is two
-// or more segments, each held to the characters validRepositorySegment
+// or more segments, each held to the characters specifier.Segment
 // allows and none of them "." or "..". A web address pointing inside a
 // project, which GitLab writes with a "-" segment, is not read as the project
 // above it, because a segment that begins with "-" is refused.
@@ -181,57 +183,14 @@ func validScheme(s string) bool {
 	return true
 }
 
-// validRepository reports whether spec is owner/name written in the characters
-// GitHub allows in each, and nothing else. A scheme, userinfo, a host, or a
-// third path segment all fail it, and so does a segment that would be read as
-// an option.
-func validRepository(spec string) bool {
-	owner, name, ok := strings.Cut(spec, "/")
-	if !ok {
-		return false
-	}
-	return validRepositorySegment(owner) && validRepositorySegment(name)
-}
+// validRepository reports whether spec is owner/name, on
+// specifier.GitHub's terms, which owns the grammar.
+func validRepository(spec string) bool { return specifier.GitHub(spec) }
 
-// validGitLabPath reports whether path is a GitLab project path: two or more
-// segments, each a repository segment and none of them "." or "..". One
-// segment names a user or a group and not a project, so it is refused.
-func validGitLabPath(path string) bool {
-	parts := strings.Split(path, "/")
-	if len(parts) < 2 {
-		return false
-	}
-	for _, part := range parts {
-		if part == "." || part == ".." || !validRepositorySegment(part) {
-			return false
-		}
-	}
-	return true
-}
+// validGitLabPath reports whether path is a GitLab project path, on
+// specifier.GitLabProjectPath's terms.
+func validGitLabPath(path string) bool { return specifier.GitLabProjectPath(path) }
 
 // gitLabPath returns the project path a GitLab specifier names, and reports
-// whether spec is one: GitLabHostname, a slash, and a path validGitLabPath
-// accepts. The host is compared exactly rather than ignoring letter case,
-// because GitLabRepository writes it and nothing else does.
-func gitLabPath(spec string) (string, bool) {
-	path, found := strings.CutPrefix(spec, gitLabPrefix)
-	if !found || !validGitLabPath(path) {
-		return "", false
-	}
-	return path, true
-}
-
-func validRepositorySegment(seg string) bool {
-	if seg == "" || len(seg) > 100 || strings.HasPrefix(seg, "-") {
-		return false
-	}
-	for _, r := range seg {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '.', r == '_', r == '-':
-		default:
-			return false
-		}
-	}
-	return true
-}
+// whether spec is one, on specifier.GitLab's terms.
+func gitLabPath(spec string) (string, bool) { return specifier.GitLab(spec) }

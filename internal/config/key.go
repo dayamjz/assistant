@@ -158,9 +158,10 @@ const (
 	// and what the PRD still owes is a schema row, not a rename.
 	KeyAllowPushedCommands Key = "allow_pushed_commands"
 	// KeyAutonomyMerge is "autonomy.merge": PRD section 10's merge half of
-	// section 6's autonomy flag, the repositories - each named as the code
-	// host names it, owner/name - where the program may merge a run that
-	// ended checks-passed, after the live read section 6 gives. It is
+	// section 6's autonomy flag, the repositories - each named as
+	// internal/forge names it, owner/name on GitHub or
+	// gitlab.com/group/project on GitLab - where the program may merge a run
+	// that ended checks-passed, after the live read section 6 gives. It is
 	// global-only, so a repository can never grant itself merge authority,
 	// and empty by default, so the program merges nothing until the operator
 	// lists a repository. What the live read requires is internal/service's;
