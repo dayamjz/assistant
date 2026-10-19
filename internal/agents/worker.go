@@ -155,9 +155,12 @@ type Worker interface {
 	// process is no longer running, so nothing is reported delivered to a
 	// process that is gone. A Codex turn returns when turn/start is
 	// accepted, not when that turn goes idle; the next Send waits for the
-	// idle before it writes. ctx bounds the wait: a worker that is not
-	// reading its input holds the write until it does, and a caller that
-	// cannot wait that long ends its wait through ctx.
+	// idle, or for the failed turn/completed that ends a turn with none,
+	// before it writes, and an app-server that exited mid-turn makes it
+	// refuse with a *WorkerError matching ErrWorkerEnded. ctx bounds the
+	// wait: a worker that is not reading its input holds the write until it
+	// does, and a caller that cannot wait that long ends its wait through
+	// ctx.
 	//
 	// A send ctx ended returns ctx's error and leaves the write pending,
 	// because the bytes already in the pipe cannot be taken back and the
@@ -534,4 +537,14 @@ func (w *procWorker) AvailabilityFailure() Failure {
 		return FailureNone
 	}
 	return w.availability.get()
+}
+
+// AvailabilityError is AvailabilityFailure's typed account: the
+// *WorkerError an adapter recorded with its cause, or nil when it recorded
+// none or only the category.
+func (w *procWorker) AvailabilityError() error {
+	if w.availability == nil {
+		return nil
+	}
+	return w.availability.error()
 }

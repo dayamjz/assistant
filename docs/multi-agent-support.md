@@ -218,8 +218,22 @@ assistant doctor
 | Structured output | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Resumable sessions | ✅ | ✅ | ✅ | ❌ | ✅ |
 | CLI login (no API key) | ✅ | ✅ (print mode) | ✅ | TBD | ✅ |
-| Pipe workers | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Pipe workers | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Terminal workers | ❌ | ✅ | ❌ | ❌ | ❌ |
+| Suppress project instructions | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+The resumable sessions, pipe workers, terminal workers, and suppress
+project instructions rows are each adapter's declaration
+(`Capabilities()` in `internal/agents`, the capabilities
+`resumable_sessions`, `worker_sessions`, `terminal_workers`, and
+`suppress_project_instructions`), and `Resolve` refuses an adapter whose
+declaration and type disagree. The other rows describe behaviour this
+table does not derive from a declaration.
+
+A missing or rejected Codex login reaches a caller as an unavailable
+failure that names the credential: a fix or review reads it from the
+`turn.failed` line `codex exec --json` prints, and a pipe worker reads it
+from the structured `codexErrorInfo` its app-server reports.
 
 ## How It Works
 

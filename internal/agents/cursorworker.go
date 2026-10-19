@@ -158,8 +158,8 @@ func (w *acpWorker) call(ctx context.Context, method string, params any) (acpMes
 	}
 }
 func (w *acpWorker) failure(message string) error {
-	category := availabilityCategory(FailureAgent, message)
-	return &WorkerError{Agent: CursorName, Failure: category, Message: message}
+	category, cause := availabilityCategory(FailureAgent, message)
+	return &WorkerError{Agent: CursorName, Failure: category, Message: message, Err: cause}
 }
 
 // Send queues one prompt, preserving its turn even if the caller stops waiting for the write.

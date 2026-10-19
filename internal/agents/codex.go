@@ -267,7 +267,8 @@ func (r *codexRunner) invoke(ctx context.Context, purpose Purpose, inv Invocatio
 		if message == "" && res != nil {
 			message = res.stderr
 		}
-		category = availabilityCategory(category, message)
+		category, typed := availabilityCategory(category, message)
+		cause = withCause(cause, typed)
 		record.Failure = category
 		r.report(record)
 		code := -1
@@ -508,9 +509,19 @@ func decodeCodexOutput(stdout []byte) (codexDecoded, error) {
 	return out, nil
 }
 
+// decodeCodexJSONL reads the events of one `codex exec --json` turn. The
+// turn's own outcome decides its failure: a turn.failed's message is the
+// agent's error, and a turn.completed means the error events before it were
+// the retries Codex CLI 0.163.0 announces as "Reconnecting... N/5" and
+// recovered from. Only a stream that reports neither outcome falls back on
+// the last error event, which is the shape a CLI that stopped mid-turn
+// leaves. The failing half is recorded in testdata/codex-exec-*-0.163.0.jsonl;
+// a turn that recovered after a retry was not observed, and is read this way
+// because a turn.completed is the CLI saying the turn finished.
 func decodeCodexJSONL(stdout []byte) (codexDecoded, error) {
 	var out codexDecoded
 	sawEvent := false
+	lastError, failed, completed := "", "", false
 	for _, line := range bytes.Split(stdout, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
@@ -530,7 +541,14 @@ func decodeCodexJSONL(stdout []byte) (codexDecoded, error) {
 			if ev.Item != nil && ev.Item.Type == "agent_message" && ev.Item.Text != "" {
 				out.text = ev.Item.Text
 			}
+		case "turn.failed":
+			message := ""
+			if ev.Error != nil {
+				message = ev.Error.Message
+			}
+			failed = firstNonEmpty(message, ev.Type)
 		case "turn.completed":
+			completed = true
 			if ev.Usage != nil {
 				out.usage = Usage{
 					InputTokens:         reportedCount(ev.Usage.InputTokens),
@@ -540,11 +558,17 @@ func decodeCodexJSONL(stdout []byte) (codexDecoded, error) {
 				}
 			}
 		case "error":
-			out.agentError = firstNonEmpty(ev.Message, ev.Type)
+			lastError = firstNonEmpty(ev.Message, ev.Type)
 		}
 	}
 	if !sawEvent {
 		return codexDecoded{}, errors.New("no JSONL events")
+	}
+	switch {
+	case failed != "":
+		out.agentError = failed
+	case !completed:
+		out.agentError = lastError
 	}
 	return out, nil
 }
@@ -554,7 +578,10 @@ type codexEvent struct {
 	Type     string `json:"type"`
 	ThreadID string `json:"thread_id"`
 	Message  string `json:"message"`
-	Item     *struct {
+	Error    *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+	Item *struct {
 		ID   string `json:"id"`
 		Type string `json:"type"`
 		Text string `json:"text"`

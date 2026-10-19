@@ -28,7 +28,8 @@ type Call struct {
 	// and continues with the flags the adapter manages.
 	Args []string `json:"args"`
 	// Prompt is what reached the agent: standard input for Claude Code and
-	// Cursor, or the contents of --prompt-file for Grok Build.
+	// Cursor, the contents of --prompt-file for Grok Build, or the one word
+	// after "--" for Codex exec.
 	Prompt string `json:"prompt"`
 	// Dir is the working directory the stand-in process resolved. A platform
 	// that resolves symbolic links on the way makes this differ textually from
@@ -94,10 +95,16 @@ type Call struct {
 func (c Call) Answered() bool { return c.Step >= 0 }
 
 // Session is the session the invocation asked the agent to continue, empty
-// when it asked for none. It is the value of --resume, so it is empty for
+// when it asked for none. It is the value of --resume, or for a Codex exec
+// command line the thread after its resume subcommand, so it is empty for
 // every invocation agents.Runner.Run makes, and it is what a test asserts P4
 // on from the wire.
-func (c Call) Session() string { return c.flag("--resume") }
+func (c Call) Session() string {
+	if codexExecArgs(c.Args) {
+		return codexResume(c.Args)
+	}
+	return c.flag("--resume")
+}
 
 // Model is the model the invocation asked for, empty when it named none.
 func (c Call) Model() string { return c.flag("--model") }

@@ -131,7 +131,17 @@
 // internal/agents/testdata. A command a Run exchange names is asked as
 // item/commandExecution/requestApproval and run only after accept. A
 // handshake that is not that recorded order is refused, so an adapter that
-// drifts from it fails here.
+// drifts from it fails here. An exchange's Recorded frames replace the
+// agent message and the idle, which is how a test plays back the failed
+// turns recorded beside that fixture, and with Ends a partial turn is an
+// app-server that dies mid-turn.
+//
+// The same runner's one-shot invocations are `codex exec --json`, which
+// carries no --print: the stand-in tells it apart by exec and --json before
+// the "--", reads the prompt as the one word after it, and writes a
+// scripted envelope as Codex JSONL events rather than as one result object,
+// on the terms serveCodexExec and codexWire state. Call.Session reads the
+// thread after its resume subcommand.
 //
 // Line mode is the scripted adapter's: no --print at all, and no screen
 // reader flag. NewWorker builds

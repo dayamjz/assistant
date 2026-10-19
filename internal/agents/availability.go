@@ -16,18 +16,26 @@ const FailureQuota Failure = "quota"
 // FailureUnavailable is an agent-reported service or authentication outage.
 const FailureUnavailable Failure = "unavailable"
 
-// WorkerError is a failed worker protocol request. It has no invocation
-// purpose or session parameter, preserving the worker side of the role split.
+// WorkerError is a failed worker protocol request or turn. It has no
+// invocation purpose or session parameter, preserving the worker side of the
+// role split.
 type WorkerError struct {
 	Agent   string
 	Failure Failure
 	Message string
+	// Err is the typed cause where the adapter read one, such as
+	// ErrCredentialRefused or ErrWorkerEnded, and nil otherwise. It stays
+	// matchable with errors.Is.
+	Err error
 }
 
 // Error describes the failed worker request without inventing an invocation purpose.
 func (e *WorkerError) Error() string {
 	return "agents: " + e.Agent + " worker failed (" + string(e.Failure) + "): " + strings.ReplaceAll(e.Message, "\n", "; ")
 }
+
+// Unwrap returns the typed cause, nil when there is none.
+func (e *WorkerError) Unwrap() error { return e.Err }
 
 // CurrentWorkerFailure reads an adapter-owned failure without copying captured
 // output. None means no recognized failure, not proof of provider availability.
@@ -36,6 +44,19 @@ func CurrentWorkerFailure(w Worker) Failure {
 		return reporter.AvailabilityFailure()
 	}
 	return FailureNone
+}
+
+// CurrentWorkerError is CurrentWorkerFailure's typed account: the
+// *WorkerError behind a failure the adapter recognized, carrying its cause,
+// or nil when there is none or the adapter keeps only the category. Its
+// caller is internal/session, which internal/service's worker handoff reads
+// it through, so the refusal a person reads when the backup fails too names
+// a missing credential rather than only an outage.
+func CurrentWorkerError(w Worker) error {
+	if reporter, ok := w.(interface{ AvailabilityError() error }); ok {
+		return reporter.AvailabilityError()
+	}
+	return nil
 }
 
 // FallbackAllowed reports only recognized quota/availability failures. A bad
@@ -79,8 +100,8 @@ func FallbackAllowed(err error) bool {
 // followed by a space, a period, or a colon. A shorter marker does not cover
 // a sentence that puts other words in front of the rest of it, so Claude's
 // monthly spend-limit sentence is its own quota marker rather than a match
-// for "you've hit your limit".
-func availabilityMessage(message string) Failure {
+// for "you've hit your limit". The rows are availabilityMarkers.
+func availabilityMessage(message string) (Failure, error) {
 	s := strings.ToLower(strings.TrimSpace(message))
 	for _, prefix := range []string{"error: ", "api error: "} {
 		s = strings.TrimPrefix(s, prefix)
@@ -109,28 +130,89 @@ func availabilityMessage(message string) Failure {
 	}
 	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimSpace(line)
-		for _, marker := range []string{"rate_limit_error", "rate_limit_exceeded", "429", "quota exceeded", "insufficient_quota", "usage limit reached", "your usage limit has been reached", "usage limit has been reached", "you've hit your usage limit", "you've hit your monthly spend limit", "you've hit your limit", "you have hit your limit", "you have hit your chatgpt usage limit", "you have hit your codex usage limit", "exceeded your current quota", "credit balance is too low"} {
-			if line == marker || strings.HasPrefix(line, marker+" ") || strings.HasPrefix(line, marker+".") || strings.HasPrefix(line, marker+":") {
-				return FailureQuota
-			}
-		}
-		for _, marker := range []string{"authentication required", "not logged in", "authentication_error", "service unavailable", "overloaded_error"} {
-			if line == marker || strings.HasPrefix(line, marker+" ") || strings.HasPrefix(line, marker+".") || strings.HasPrefix(line, marker+":") {
-				return FailureUnavailable
+		for _, row := range availabilityMarkers {
+			if line == row.marker || strings.HasPrefix(line, row.marker+" ") || strings.HasPrefix(line, row.marker+".") || strings.HasPrefix(line, row.marker+":") {
+				return row.failure, row.cause
 			}
 		}
 	}
-	return FailureNone
+	return FailureNone, nil
 }
 
-func availabilityCategory(category Failure, message string) Failure {
+// availabilityMarker is one line availabilityMessage recognizes: the
+// lower-case marker, the failure it is, and the typed cause it carries, nil
+// where the category is the whole of what is known.
+type availabilityMarker struct {
+	marker  string
+	failure Failure
+	cause   error
+}
+
+// availabilityMarkers is the one table of failure text this package
+// recognizes, in the order a line is tried against it, every quota row
+// before every outage row. It is a text match and nothing more: a CLI that
+// rewords a line drops out of it into the category the adapter already
+// had, which never allows a fallback.
+//
+// Most rows predate this table and carry no recorded output in this
+// repository. The Codex credential row does: "unexpected status 401
+// unauthorized" is the line Codex CLI 0.163.0 printed, as the turn.failed
+// message of `codex exec --json`, both with no credential at all and with a
+// key the provider rejected, recorded in
+// testdata/codex-exec-unauthenticated-0.163.0.jsonl and
+// testdata/codex-exec-rejected-0.163.0.jsonl. That command prints no
+// structured status beside the text, so the text is the signal there, pinned
+// to that version. The Codex app-server does carry one, and codexworker.go
+// reads it instead of this table.
+var availabilityMarkers = []availabilityMarker{
+	{"rate_limit_error", FailureQuota, nil},
+	{"rate_limit_exceeded", FailureQuota, nil},
+	{"429", FailureQuota, nil},
+	{"quota exceeded", FailureQuota, nil},
+	{"insufficient_quota", FailureQuota, nil},
+	{"usage limit reached", FailureQuota, nil},
+	{"your usage limit has been reached", FailureQuota, nil},
+	{"usage limit has been reached", FailureQuota, nil},
+	{"you've hit your usage limit", FailureQuota, nil},
+	{"you've hit your monthly spend limit", FailureQuota, nil},
+	{"you've hit your limit", FailureQuota, nil},
+	{"you have hit your limit", FailureQuota, nil},
+	{"you have hit your chatgpt usage limit", FailureQuota, nil},
+	{"you have hit your codex usage limit", FailureQuota, nil},
+	{"exceeded your current quota", FailureQuota, nil},
+	{"credit balance is too low", FailureQuota, nil},
+	{"authentication required", FailureUnavailable, ErrCredentialRefused},
+	{"not logged in", FailureUnavailable, ErrCredentialRefused},
+	{"authentication_error", FailureUnavailable, ErrCredentialRefused},
+	{"unexpected status 401 unauthorized", FailureUnavailable, ErrCredentialRefused},
+	{"service unavailable", FailureUnavailable, nil},
+	{"overloaded_error", FailureUnavailable, nil},
+}
+
+// availabilityCategory reclassifies an agent-reported failure or a non-zero
+// exit by availabilityMessage, and returns the category with the typed cause
+// the matched row carries. Any other category is returned as it is, with no
+// cause.
+func availabilityCategory(category Failure, message string) (Failure, error) {
 	if category != FailureAgent && category != FailureExit {
-		return category
+		return category, nil
 	}
-	if classified := availabilityMessage(message); classified != FailureNone {
-		return classified
+	if classified, cause := availabilityMessage(message); classified != FailureNone {
+		return classified, cause
 	}
-	return category
+	return category, nil
+}
+
+// withCause joins a typed availability cause onto the cause a failure
+// already had, so both stay matchable with errors.Is.
+func withCause(err, cause error) error {
+	switch {
+	case cause == nil:
+		return err
+	case err == nil:
+		return cause
+	}
+	return errors.Join(err, cause)
 }
 
 // WorkerAvailability reads only explicit error results and rejected rate-limit
@@ -161,7 +243,7 @@ func WorkerAvailability(c Capture) Failure {
 		if e.Type == "result" {
 			if !e.IsError {
 				failure = FailureNone
-			} else if classified := availabilityMessage(e.Result + "\n" + strings.Join(e.Errors, "\n")); classified != FailureNone {
+			} else if classified, _ := availabilityMessage(e.Result + "\n" + strings.Join(e.Errors, "\n")); classified != FailureNone {
 				failure = classified
 			}
 		}
@@ -178,10 +260,28 @@ func WorkerAvailability(c Capture) Failure {
 type workerAvailability struct {
 	mu      sync.Mutex
 	failure Failure
+	err     *WorkerError
 }
 
-func (s *workerAvailability) set(f Failure) { s.mu.Lock(); s.failure = f; s.mu.Unlock() }
+func (s *workerAvailability) set(f Failure) { s.mu.Lock(); s.failure, s.err = f, nil; s.mu.Unlock() }
 func (s *workerAvailability) get() Failure  { s.mu.Lock(); defer s.mu.Unlock(); return s.failure }
+
+// fail records a recognized failure with its typed account, which
+// AvailabilityError hands back until the next set clears both.
+func (s *workerAvailability) fail(e *WorkerError) {
+	s.mu.Lock()
+	s.failure, s.err = e.Failure, e
+	s.mu.Unlock()
+}
+
+func (s *workerAvailability) error() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err == nil {
+		return nil
+	}
+	return s.err
+}
 func (s *workerAvailability) observe(line []byte) {
 	var header struct {
 		Type    string `json:"type"`

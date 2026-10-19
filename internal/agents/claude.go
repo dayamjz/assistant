@@ -380,7 +380,8 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		if message == "" && res != nil {
 			message = res.stderr
 		}
-		category = availabilityCategory(category, message)
+		category, typed := availabilityCategory(category, message)
+		cause = withCause(cause, typed)
 		record.Failure = category
 		r.report(record)
 		code := -1

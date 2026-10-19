@@ -148,6 +148,15 @@ func (s *Session) AvailabilityFailure() agents.Failure {
 	return agents.CurrentWorkerFailure(s.worker)
 }
 
+// AvailabilityError is AvailabilityFailure's typed account on the terms
+// agents.CurrentWorkerError states: nil when the adapter recorded none.
+func (s *Session) AvailabilityError() error {
+	if s == nil {
+		return nil
+	}
+	return agents.CurrentWorkerError(s.worker)
+}
+
 // Capture is what Provider.Capture hands back.
 type Capture struct {
 	// Failure is the adapter-owned availability state, independent of history.

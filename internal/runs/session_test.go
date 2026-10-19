@@ -2,6 +2,7 @@ package runs_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -102,6 +103,71 @@ func TestTheFixerSessionCrossesAProcessRestart(t *testing.T) {
 	}
 	if got := calls[1].Session(); got != "sess-1" {
 		t.Errorf("the round after the restart asked to resume %q, want sess-1", got)
+	}
+}
+
+// The same restart for a Codex fixer, whose adapter declares
+// resumable_sessions and opens its session with `codex exec` and continues
+// it with `codex exec resume <thread_id>`. The thread the first round's
+// thread.started event reported is what the run's record keeps, and a
+// service built over the reopened database resumes exactly that thread,
+// which the stand-in reads off the command line it was given.
+func TestACodexFixerSessionCrossesAProcessRestart(t *testing.T) {
+	ctx := t.Context()
+	ag := standin.NewCodex(t, standin.Script{Steps: []standin.Step{
+		{Match: standin.Match{Resumed: standin.Fresh()}, Reply: answering("opened", "codex-thread-1")},
+		{Match: standin.Match{Resumed: standin.Resumed()}, Reply: standin.Text("continued")},
+	}})
+	if !ag.Runner().Capabilities().Has(agents.CapabilityResumableSessions) {
+		t.Fatal("the Codex adapter no longer declares resumable_sessions; this test asks for the refusal instead")
+	}
+	before, path := openStore(t)
+	svc := service(t, before, resolution(ag), true)
+	run := seedRun(t, before, svc, "run-1")
+
+	fixer, err := svc.Fixer(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Fixer: %v", err)
+	}
+	if _, err := fixer.Apply(ctx, fixInvocation(t, "first round")); err != nil {
+		t.Fatalf("first round: %v", err)
+	}
+	if got, ok := sessionOf(t, before, run.ID); !ok || got != "codex-thread-1" {
+		t.Fatalf("the run records the fixer session %q (%v), want codex-thread-1", got, ok)
+	}
+	if err := before.Close(); err != nil {
+		t.Fatalf("closing the store: %v", err)
+	}
+
+	after := openStoreAt(t, path)
+	restarted := service(t, after, resolution(ag), true)
+	revived, err := restarted.Fixer(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Fixer after the restart: %v", err)
+	}
+	if got := revived.Reference(); got != "codex-thread-1" {
+		t.Fatalf("the restarted fixer would resume %q, want codex-thread-1", got)
+	}
+	result, err := revived.Apply(ctx, fixInvocation(t, "second round"))
+	if err != nil {
+		t.Fatalf("round after the restart: %v", err)
+	}
+	if result.Text != "continued" || result.Record.Session != agents.SessionResumed {
+		t.Fatalf("the round after the restart answered %q with session %q, want the resumed step", result.Text, result.Record.Session)
+	}
+
+	calls := ag.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("the agent saw %d invocations, want 2: %v", len(calls), calls)
+	}
+	if got := calls[0].Session(); got != "" {
+		t.Errorf("the round that opened the session resumed %q", got)
+	}
+	if got := calls[1].Session(); got != "codex-thread-1" {
+		t.Errorf("the round after the restart resumed %q, want codex-thread-1", got)
+	}
+	if !slices.Contains(calls[1].Args, "resume") || !slices.Contains(calls[1].Args, "exec") {
+		t.Errorf("the round after the restart ran %q, want codex exec resume", calls[1].Args)
 	}
 }
 

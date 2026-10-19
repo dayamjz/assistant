@@ -131,6 +131,7 @@ func serveAppServer(control string, args []string) int {
 			}
 			reply := "standin: message received"
 			ends := false
+			var recorded []string
 			for _, exchange := range worker.Exchanges {
 				if !exchange.answers(text) {
 					continue
@@ -142,19 +143,35 @@ func serveAppServer(control string, args []string) int {
 						break
 					}
 				}
+				ends = exchange.Ends
+				if len(exchange.Recorded) > 0 {
+					recorded = exchange.Recorded
+					break
+				}
 				var err error
 				reply, err = exchange.answer(text)
 				if err != nil {
 					return exitNoOutput
 				}
-				ends = exchange.Ends
 				break
 			}
-			if encoder.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"item": map[string]any{"type": "agentMessage", "text": reply}, "threadId": threadID}}) != nil {
-				return exitNoOutput
-			}
-			if encoder.Encode(map[string]any{"method": "thread/status/changed", "params": map[string]any{"threadId": threadID, "status": map[string]string{"type": "idle"}}}) != nil {
-				return exitNoOutput
+			if recorded != nil {
+				// Recorded frames replace the agent message and the idle,
+				// so a turn plays back what a real app-server was recorded
+				// emitting after it accepted one, a failure or a partial
+				// turn among them.
+				for _, line := range recorded {
+					if _, err := fmt.Fprintln(os.Stdout, line); err != nil {
+						return exitNoOutput
+					}
+				}
+			} else {
+				if encoder.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"item": map[string]any{"type": "agentMessage", "text": reply}, "threadId": threadID}}) != nil {
+					return exitNoOutput
+				}
+				if encoder.Encode(map[string]any{"method": "thread/status/changed", "params": map[string]any{"threadId": threadID, "status": map[string]string{"type": "idle"}}}) != nil {
+					return exitNoOutput
+				}
 			}
 			if ends {
 				return worker.Exit
