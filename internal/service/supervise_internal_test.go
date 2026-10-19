@@ -153,6 +153,13 @@ func (c *fakeClock) Advance(d time.Duration) {
 // opens.
 func loopHome(t *testing.T) (*home.Home, *store.Store) {
 	t.Helper()
+	return loopHomeConfigured(t, loopConfig)
+}
+
+// loopHomeConfigured is loopHome with the home's configuration document
+// stated, for a test that needs the loop's windows apart.
+func loopHomeConfigured(t *testing.T, document string) (*home.Home, *store.Store) {
+	t.Helper()
 	root, err := os.MkdirTemp("", "h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
@@ -165,7 +172,7 @@ func loopHome(t *testing.T) (*home.Home, *store.Store) {
 	if err := h.Create(); err != nil {
 		t.Fatalf("creating the home: %v", err)
 	}
-	if err := os.WriteFile(h.ConfigFile(), []byte(loopConfig), 0o600); err != nil {
+	if err := os.WriteFile(h.ConfigFile(), []byte(document), 0o600); err != nil {
 		t.Fatalf("writing the configuration: %v", err)
 	}
 	seedDatabase(t, h.Database())
