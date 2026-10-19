@@ -146,6 +146,9 @@ type MergeRequestView struct {
 	MergeStatus     string
 	HasConflicts    bool
 	WebURL          string
+	// HeadPipeline is GitLab's head_pipeline for the merge request, when the
+	// test needs one; nil omits the field.
+	HeadPipeline *PipelineView
 }
 
 // MergeRequest is GitLab's merge request object, the answer to a read, a
@@ -172,33 +175,45 @@ func MergeRequests(views ...MergeRequestView) Response {
 // shows it, with the fields that would need a user or a milestone left as
 // GitLab writes them for a merge request that has neither.
 type mergeRequestBody struct {
-	ID                        int      `json:"id"`
-	IID                       int      `json:"iid"`
-	ProjectID                 int      `json:"project_id"`
-	Title                     string   `json:"title"`
-	Description               string   `json:"description"`
-	State                     string   `json:"state"`
-	CreatedAt                 string   `json:"created_at"`
-	UpdatedAt                 string   `json:"updated_at"`
-	MergedBy                  *string  `json:"merged_by"`
-	MergedAt                  *string  `json:"merged_at"`
-	TargetBranch              string   `json:"target_branch"`
-	SourceBranch              string   `json:"source_branch"`
-	SourceProjectID           int      `json:"source_project_id"`
-	TargetProjectID           int      `json:"target_project_id"`
-	Labels                    []string `json:"labels"`
-	Draft                     bool     `json:"draft"`
-	WorkInProgress            bool     `json:"work_in_progress"`
-	MergeWhenPipelineSucceeds bool     `json:"merge_when_pipeline_succeeds"`
-	MergeStatus               string   `json:"merge_status"`
-	DetailedMergeStatus       string   `json:"detailed_merge_status"`
-	SHA                       string   `json:"sha"`
-	MergeCommitSHA            *string  `json:"merge_commit_sha"`
-	Reference                 string   `json:"reference"`
-	WebURL                    string   `json:"web_url"`
-	Squash                    bool     `json:"squash"`
-	HasConflicts              bool     `json:"has_conflicts"`
-	BlockingDiscussions       bool     `json:"blocking_discussions_resolved"`
+	ID                        int               `json:"id"`
+	IID                       int               `json:"iid"`
+	ProjectID                 int               `json:"project_id"`
+	Title                     string            `json:"title"`
+	Description               string            `json:"description"`
+	State                     string            `json:"state"`
+	CreatedAt                 string            `json:"created_at"`
+	UpdatedAt                 string            `json:"updated_at"`
+	MergedBy                  *string           `json:"merged_by"`
+	MergedAt                  *string           `json:"merged_at"`
+	TargetBranch              string            `json:"target_branch"`
+	SourceBranch              string            `json:"source_branch"`
+	SourceProjectID           int               `json:"source_project_id"`
+	TargetProjectID           int               `json:"target_project_id"`
+	Labels                    []string          `json:"labels"`
+	Draft                     bool              `json:"draft"`
+	WorkInProgress            bool              `json:"work_in_progress"`
+	MergeWhenPipelineSucceeds bool              `json:"merge_when_pipeline_succeeds"`
+	MergeStatus               string            `json:"merge_status"`
+	DetailedMergeStatus       string            `json:"detailed_merge_status"`
+	SHA                       string            `json:"sha"`
+	MergeCommitSHA            *string           `json:"merge_commit_sha"`
+	Reference                 string            `json:"reference"`
+	WebURL                    string            `json:"web_url"`
+	Squash                    bool              `json:"squash"`
+	HasConflicts              bool              `json:"has_conflicts"`
+	BlockingDiscussions       bool              `json:"blocking_discussions_resolved"`
+	HeadPipeline              *headPipelineBody `json:"head_pipeline"`
+}
+
+type headPipelineBody struct {
+	ID        int    `json:"id"`
+	IID       int    `json:"iid"`
+	ProjectID int    `json:"project_id"`
+	SHA       string `json:"sha"`
+	Ref       string `json:"ref"`
+	Status    string `json:"status"`
+	Source    string `json:"source"`
+	WebURL    string `json:"web_url"`
 }
 
 func mergeRequestOf(v MergeRequestView) mergeRequestBody {
@@ -223,7 +238,7 @@ func mergeRequestOf(v MergeRequestView) mergeRequestBody {
 		sha := strings.Repeat("e", 40)
 		mergeCommit = &sha
 	}
-	return mergeRequestBody{
+	body := mergeRequestBody{
 		ID: v.IID + 1000, IID: v.IID, ProjectID: v.ProjectID, Title: v.Title,
 		Description: "a description the adapter does not read back",
 		State:       v.State, CreatedAt: "2026-04-01T10:00:00.000Z", UpdatedAt: "2026-04-01T10:05:00.000Z",
@@ -234,6 +249,15 @@ func mergeRequestOf(v MergeRequestView) mergeRequestBody {
 		MergeCommitSHA: mergeCommit, Reference: "!" + strconv.Itoa(v.IID), WebURL: v.WebURL,
 		HasConflicts: v.HasConflicts, BlockingDiscussions: true,
 	}
+	if v.HeadPipeline != nil {
+		p := *v.HeadPipeline
+		body.HeadPipeline = &headPipelineBody{
+			ID: p.ID, IID: 1, ProjectID: v.ProjectID, SHA: p.SHA, Ref: p.Ref, Status: p.Status,
+			Source: "merge_request_event",
+			WebURL: "https://gitlab.com/group/name/-/pipelines/" + strconv.Itoa(p.ID),
+		}
+	}
+	return body
 }
 
 // PipelineView is one pipeline in a merge request's pipeline list, in

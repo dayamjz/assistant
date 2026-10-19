@@ -499,9 +499,9 @@ func TestGitLabMergeAsksOnlyForABoundMergeNow(t *testing.T) {
 }
 
 // Checks reads the pipelines on the head and only those: a pipeline on an
-// earlier head is not a check on this one, merged-result pipelines on the
-// temporary merge commit count, and a skipped pipeline ran nothing, so a head
-// whose only pipeline was skipped has no checks and is not green.
+// earlier head is not a check on this one, and a skipped pipeline ran
+// nothing, so a head whose only pipeline was skipped has no checks and is
+// not green.
 func TestGitLabChecksReadsOnlyThePipelinesThatRanOnTheHead(t *testing.T) {
 	older := strings.Repeat("a", 40)
 	_, adapter := openGitLab(t, labtest.Script{
@@ -538,29 +538,35 @@ func TestGitLabChecksReadsOnlyThePipelinesThatRanOnTheHead(t *testing.T) {
 
 const gitLabMergedResultRef = "refs/merge-requests/12/merge"
 
-// Checks counts merged-result pipelines GitLab runs on the temporary merge
-// commit, not only pipelines whose sha matches the source head.
+const gitLabMergeRequestHeadRef = "refs/merge-requests/12/head"
+
+// Checks counts a merged-result pipeline only when head_pipeline names it,
+// because GitLab documents that field as the pipeline for the current head.
 func TestGitLabChecksCountsMergedResultPipelines(t *testing.T) {
 	mergedSHA := strings.Repeat("c", 40)
+	headPipe := labtest.PipelineView{ID: 10, SHA: mergedSHA, Ref: gitLabMergedResultRef, Status: "success"}
+	mr := openMR(12)
+	mr.HeadPipeline = &headPipe
 	_, adapter := openGitLab(t, labtest.Script{
-		labtest.OpView: {labtest.MergeRequest(openMR(12))},
-		labtest.OpPipelines: {labtest.Pipelines(
-			labtest.PipelineView{ID: 10, SHA: mergedSHA, Ref: gitLabMergedResultRef, Status: "success"},
-		)},
+		labtest.OpView:      {labtest.MergeRequest(mr)},
+		labtest.OpPipelines: {labtest.Pipelines(headPipe)},
 	})
 	report, err := adapter.Checks(context.Background(), 12)
 	if err != nil {
 		t.Fatalf("Checks: %v", err)
 	}
 	if result := report.Evaluate(forge.NoCIDeclaration{}); result.Verdict != forge.VerdictPassed {
-		t.Fatalf("only a successful merged-result pipeline evaluated as %s, want passed", result)
+		t.Fatalf("head_pipeline naming a successful merged-result pipeline evaluated as %s, want passed", result)
 	}
 
+	headPipe = labtest.PipelineView{ID: 10, SHA: mergedSHA, Ref: gitLabMergedResultRef, Status: "failed"}
+	mr = openMR(12)
+	mr.HeadPipeline = &headPipe
 	_, adapter = openGitLab(t, labtest.Script{
-		labtest.OpView: {labtest.MergeRequest(openMR(12))},
+		labtest.OpView: {labtest.MergeRequest(mr)},
 		labtest.OpPipelines: {labtest.Pipelines(
 			labtest.PipelineView{ID: 9, SHA: conformanceHead, Ref: "fm/work", Status: "success"},
-			labtest.PipelineView{ID: 10, SHA: mergedSHA, Ref: gitLabMergedResultRef, Status: "failed"},
+			headPipe,
 		)},
 	})
 	report, err = adapter.Checks(context.Background(), 12)
@@ -568,7 +574,80 @@ func TestGitLabChecksCountsMergedResultPipelines(t *testing.T) {
 		t.Fatalf("Checks: %v", err)
 	}
 	if result := report.Evaluate(forge.NoCIDeclaration{}); result.Verdict != forge.VerdictFailed {
-		t.Fatalf("a failed merged-result pipeline with a passing branch pipeline evaluated as %s, want failed", result)
+		t.Fatalf("head_pipeline naming a failed merged-result pipeline evaluated as %s, want failed", result)
+	}
+}
+
+// Checks does not treat a historical merged-result pipeline as a check on a
+// new head when head_pipeline names nothing and no branch pipeline matches.
+func TestGitLabChecksIgnoresHistoricalPipelineWhenHeadAdvanced(t *testing.T) {
+	olderHead := strings.Repeat("a", 40)
+	_, adapter := openGitLab(t, labtest.Script{
+		labtest.OpView: {labtest.MergeRequest(openMR(12))},
+		labtest.OpPipelines: {labtest.Pipelines(
+			labtest.PipelineView{ID: 10, SHA: olderHead, Ref: gitLabMergeRequestHeadRef, Status: "success"},
+		)},
+	})
+	report, err := adapter.Checks(context.Background(), 12)
+	if err != nil {
+		t.Fatalf("Checks: %v", err)
+	}
+	if result := report.Evaluate(forge.NoCIDeclaration{}); result.Verdict != forge.VerdictNoChecks {
+		t.Fatalf("only a previous head's pipeline evaluated as %s, want no checks", result)
+	}
+
+	_, adapter = openGitLab(t, labtest.Script{
+		labtest.OpView: {labtest.MergeRequest(openMR(12))},
+		labtest.OpPipelines: {labtest.Pipelines(
+			labtest.PipelineView{ID: 10, SHA: olderHead, Ref: gitLabMergeRequestHeadRef, Status: "success"},
+			labtest.PipelineView{ID: 9, SHA: conformanceHead, Ref: "fm/work", Status: "running"},
+		)},
+	})
+	report, err = adapter.Checks(context.Background(), 12)
+	if err != nil {
+		t.Fatalf("Checks: %v", err)
+	}
+	if len(report.Runs) != 1 || report.Runs[0].Name != "pipeline 9" {
+		t.Fatalf("Checks answered %+v, want the branch pipeline on the current head", report.Runs)
+	}
+}
+
+// Checks follows head_pipeline on the current head, not a failed merged-result
+// pipeline GitLab still lists from an earlier head.
+func TestGitLabChecksFollowsHeadPipelinePastHistoricalFailure(t *testing.T) {
+	olderHead := strings.Repeat("a", 40)
+	mergedSHA := strings.Repeat("c", 40)
+	headPipe := labtest.PipelineView{ID: 11, SHA: mergedSHA, Ref: gitLabMergedResultRef, Status: "success"}
+	mr := openMR(12)
+	mr.HeadPipeline = &headPipe
+	_, adapter := openGitLab(t, labtest.Script{
+		labtest.OpView: {labtest.MergeRequest(mr)},
+		labtest.OpPipelines: {labtest.Pipelines(
+			labtest.PipelineView{ID: 10, SHA: olderHead, Ref: gitLabMergedResultRef, Status: "failed"},
+			headPipe,
+		)},
+	})
+	report, err := adapter.Checks(context.Background(), 12)
+	if err != nil {
+		t.Fatalf("Checks: %v", err)
+	}
+	if result := report.Evaluate(forge.NoCIDeclaration{}); result.Verdict != forge.VerdictPassed {
+		t.Fatalf("head_pipeline naming a passing pipeline evaluated as %s, want passed despite an older failure in the list", result)
+	}
+
+	headPipe = labtest.PipelineView{ID: 10, SHA: olderHead, Ref: gitLabMergedResultRef, Status: "failed"}
+	mr = openMR(12)
+	mr.HeadPipeline = &headPipe
+	_, adapter = openGitLab(t, labtest.Script{
+		labtest.OpView:      {labtest.MergeRequest(mr)},
+		labtest.OpPipelines: {labtest.Pipelines(headPipe)},
+	})
+	report, err = adapter.Checks(context.Background(), 12)
+	if err != nil {
+		t.Fatalf("Checks: %v", err)
+	}
+	if result := report.Evaluate(forge.NoCIDeclaration{}); result.Verdict != forge.VerdictFailed {
+		t.Fatalf("head_pipeline naming a failed pipeline evaluated as %s, want failed", result)
 	}
 }
 

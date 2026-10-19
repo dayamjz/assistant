@@ -464,10 +464,10 @@ func (g *gitLab) UpdateBody(ctx context.Context, number int, body string) (PullR
 // whether GitLab files every status an external system posts under such a
 // pipeline is not verified here. A pipeline a person replaced with a newer
 // one on the same commit is still read, so a failed one keeps the verdict
-// failed until the head moves. Merged-result pipelines are kept by ref
-// rather than by sha, because GitLab runs them on the temporary merge
-// commit; an earlier pipeline on the source branch is still dropped when its
-// ref is that branch and its sha is not the head.
+// failed until the head moves. A pipeline whose sha is not the head counts
+// only when the merge request's head_pipeline field names it, which is how
+// GitLab documents tying a pipeline to the current head; an earlier pipeline
+// left in the list does not count on its ref alone.
 func (g *gitLab) Checks(ctx context.Context, number int) (ChecksReport, error) {
 	const op = "checks"
 	mr, err := g.mergeRequest(ctx, op, number)
@@ -829,18 +829,27 @@ type gitLabMerge struct {
 // adapter reads. The fields it does not read are absent here, and the
 // decoder skips them on the wire.
 type gitLabMergeRequest struct {
-	IID             int    `json:"iid"`
-	SourceProjectID int    `json:"source_project_id"`
-	TargetProjectID int    `json:"target_project_id"`
-	Title           string `json:"title"`
-	State           string `json:"state"`
-	Draft           bool   `json:"draft"`
-	WebURL          string `json:"web_url"`
-	SourceBranch    string `json:"source_branch"`
-	TargetBranch    string `json:"target_branch"`
-	SHA             string `json:"sha"`
-	MergeStatus     string `json:"merge_status"`
-	HasConflicts    bool   `json:"has_conflicts"`
+	IID             int                 `json:"iid"`
+	SourceProjectID int                 `json:"source_project_id"`
+	TargetProjectID int                 `json:"target_project_id"`
+	Title           string              `json:"title"`
+	State           string              `json:"state"`
+	Draft           bool                `json:"draft"`
+	WebURL          string              `json:"web_url"`
+	SourceBranch    string              `json:"source_branch"`
+	TargetBranch    string              `json:"target_branch"`
+	SHA             string              `json:"sha"`
+	MergeStatus     string              `json:"merge_status"`
+	HasConflicts    bool                `json:"has_conflicts"`
+	HeadPipeline    *gitLabHeadPipeline `json:"head_pipeline"`
+}
+
+// gitLabHeadPipeline is the part of the merge request's head_pipeline field
+// this adapter reads. GitLab documents head_pipeline on GET
+// /projects/:id/merge_requests/:iid as the pipeline for the merge request's
+// current head.
+type gitLabHeadPipeline struct {
+	ID int `json:"id"`
 }
 
 // pullRequest maps the wire shape onto this package's model. An unrecognized
@@ -909,10 +918,12 @@ func gitLabMergeability(status string, conflicts bool) Mergeability {
 
 // gitLabPipelineCounts reports whether a pipeline from the merge request's
 // pipeline list is a check this head owes. Skipped pipelines ran nothing.
-// A pipeline on the source branch's current head counts; an earlier commit
-// on that branch in the same list does not. Merged-result pipelines run on
-// a temporary merge commit GitLab names under refs/merge-requests/, not on
-// the head sha, and count when their ref is not the source branch.
+// A pipeline whose sha is the merge request's head counts, and so does one
+// named by the merge request's head_pipeline field; GitLab documents that
+// field on GET /projects/:id/merge_requests/:iid as the pipeline for the
+// current head. Every other list entry is dropped, including an earlier
+// commit on the source branch and a pipeline GitLab still lists from a
+// previous head.
 func gitLabPipelineCounts(mr gitLabMergeRequest, p gitLabPipeline) bool {
 	if p.Status == "skipped" {
 		return false
@@ -920,10 +931,10 @@ func gitLabPipelineCounts(mr gitLabMergeRequest, p gitLabPipeline) bool {
 	if p.SHA == mr.SHA {
 		return true
 	}
-	if p.Ref == mr.SourceBranch {
-		return false
+	if mr.HeadPipeline != nil && p.ID == mr.HeadPipeline.ID {
+		return true
 	}
-	return true
+	return false
 }
 
 // gitLabPipeline is the part of a pipeline list entry this adapter reads.
