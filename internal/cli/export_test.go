@@ -61,3 +61,15 @@ const (
 // ShellWords splits a printed command line on a POSIX shell's quoting rules,
 // so a test can run a line doctor printed exactly as a person would copy it.
 var ShellWords = shellWords
+
+// InitMachineTextLabels is every label init's human rendering prints machine
+// text after, each followed by a space, so a test holds every other line to
+// P13's rule and leaves out only the lines carrying a person's own branch
+// names, file names, keys and commands.
+func InitMachineTextLabels() []string {
+	return []string{
+		initPreviousBranchLabel + " ", initDefaultBranchLabel + " ",
+		commandsFileLabel + " ", commandsProposedLabel + " ", commandsWrittenLabel + " ",
+		commandsConfiguredLabel + " ", commandsBranchKeyLabel + " ",
+	}
+}

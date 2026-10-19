@@ -284,6 +284,29 @@
 // and the gate's branch is read when doctor runs and not when the person
 // sends.
 //
+// # Registration is init and doctor, run until they agree
+//
+// Registering a checkout adds no verb either. init records the repository
+// and sets up its gate, and running it again is how a registration is
+// repaired or changed: machine.Init.Created from internal/gate is true only
+// when it newly created the gate repository at this path; a checkout that
+// already had its gate here reads Created false with Reattached false, and
+// one whose gate was reattached after a move or copy reads Created false with
+// Reattached true. machine.Init.Changed names every field of the record this
+// run replaced with a different value, including a fork dropped because
+// --fork-url was not given again (After empty), and carries the upstream row
+// doctor makes from the same record, so a host a run is refused on is
+// reported when it is recorded. The command offer reads the default
+// branch's copy of the configuration file beside the checkout's and offers
+// nothing for a key that copy names (machine.BranchCopy). init refuses before
+// anything is set up when origin sends a push to another repository than the
+// one it fetches from, naming --upstream, and every verb that reads the
+// checkout says so when git cannot be run rather than that the directory is
+// not a checkout; doctor reports that as a git row of its own, ahead of the
+// rows that read the checkout through git. Every sentence is a row in
+// internal/machine's registration.go, commands.go or phrases.go, and --json
+// carries the same facts.
+//
 // # Exit codes and where output goes
 //
 // Three codes, per PRD section 9, and internal/machine owns them: success and
@@ -294,8 +317,9 @@
 // a command line refused here and a request the service answered
 // invalid-request are both incorrect usage, whatever method answered, as is
 // init's refusal when the working copy holds no default branch to read, or
-// no origin to take the upstream from and no --upstream naming one, or a fork
-// it cannot propose from, and a removal of a managed service with none set
+// no origin to take the upstream from and no --upstream naming one, or an
+// origin whose push and fetch addresses name two repositories, or a fork it
+// cannot propose from, and a removal of a managed service with none set
 // up, and every other failure is operational. A run that
 // stopped to ask something is a success, because the answer goes back through
 // the same surface and an agent that read a decision as a failure would stop

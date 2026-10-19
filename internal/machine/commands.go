@@ -42,6 +42,103 @@ type CommandProposals struct {
 	// Detail says what was wrong with the file when Result is
 	// CommandsUnreadable or CommandsRefused, and is empty otherwise.
 	Detail string `json:"detail,omitempty"`
+	// Branch is what init read of the same file on the default branch, as
+	// this checkout last learned that branch, before deciding what to offer.
+	Branch BranchCopy `json:"branch"`
+}
+
+// BranchCopy is init's reading of the configuration file on the default
+// branch beside the checkout's own copy. A run reads its commands from that
+// branch (P7), so a key it names is not offered into the checkout, and a key
+// both copies name differently is reported, because what the checkout's
+// copy says for it reaches no run.
+//
+// It is read from what the checkout already holds and fetches nothing:
+// origin's copy of the default branch as last fetched, or the local branch
+// of that name when there is no such copy. A run reads the branch at a fresh
+// fetch, so a branch that moved since is compared as it was.
+type BranchCopy struct {
+	// Reading is what the read came to, one of BranchReadings.
+	Reading BranchReading `json:"reading"`
+	// Ref is the reference the copy was read at, empty when neither
+	// reference resolves.
+	Ref string `json:"ref,omitempty"`
+	// Named are the keys init considers that the default branch's copy
+	// names and the checkout's does not, which are not offered: writing one
+	// would make the two copies disagree.
+	Named []string `json:"named,omitempty"`
+	// Differs are the keys both copies name with different commands.
+	Differs []string `json:"differs,omitempty"`
+	// Detail says what could not be read, set exactly when Reading is
+	// BranchUnreadable.
+	Detail string `json:"detail,omitempty"`
+}
+
+// BranchReading is what init's read of the default branch's configuration
+// file came to. It is a closed set, BranchReadings.
+type BranchReading string
+
+// The four readings, in the order BranchReadings lists them.
+const (
+	// BranchRead is a copy read and compared.
+	BranchRead BranchReading = "read"
+	// BranchAbsent is a default branch whose commit holds no configuration
+	// file, which is the ordinary state before one is first committed.
+	BranchAbsent BranchReading = "absent"
+	// BranchNotHere is a default branch this checkout holds neither origin's
+	// copy of nor a local branch for, so there was nothing to read.
+	BranchNotHere BranchReading = "not_here"
+	// BranchUnreadable is a copy that could not be read or that
+	// internal/config refuses, so nothing was compared against it.
+	BranchUnreadable BranchReading = "unreadable"
+)
+
+// BranchReadings is every reading, so a test walks the set rather than a
+// list of its own.
+func BranchReadings() []BranchReading {
+	return []BranchReading{BranchRead, BranchAbsent, BranchNotHere, BranchUnreadable}
+}
+
+// The rows for what init's read of the default branch's copy found, printed
+// after the offer's own row and only when they say something: a key the
+// branch names, a key the two copies disagree on, or a copy that could not be
+// read. Which keys, and the reference read, are machine text beside them.
+var (
+	// PhraseCommandsOnDefaultBranch is BranchCopy.Named's row.
+	PhraseCommandsOnDefaultBranch = Phrase{
+		Outcome:     "Nothing is offered for the keys named below, because the default branch's copy of the configuration file already names a command for each.",
+		Consequence: "A run uses what that branch names for them, whether or not this checkout's copy says the same.",
+		Decision:    "Nothing to decide; bring this checkout up to date with its default branch so its copy says the same.",
+	}
+	// PhraseCommandsDiffer is BranchCopy.Differs' row.
+	PhraseCommandsDiffer = Phrase{
+		Outcome:     "This checkout's configuration file and the default branch's copy name different commands for the keys named below.",
+		Consequence: "A run uses the default branch's copy, so what this checkout's file names for them reaches no run until it lands there.",
+		Decision:    "Land this checkout's file on the default branch if its commands are the ones you want, or bring this checkout up to date with that branch.",
+	}
+	// PhraseCommandsBranchUnread is BranchUnreadable's row.
+	PhraseCommandsBranchUnread = Phrase{
+		Outcome:     "The default branch's copy of the configuration file could not be read, so what it names was not compared with this checkout's copy.",
+		Consequence: "A command offered here may be one that branch already names, and a run refuses a copy on that branch it cannot read.",
+		Decision:    "Run assistant --json init for what could not be read, and repair the copy on the default branch.",
+	}
+)
+
+// BranchCopyPhrases is every row a person reads about the default branch's
+// copy, in the order they are printed, and none when the read found nothing
+// worth saying.
+func BranchCopyPhrases(b BranchCopy) []Phrase {
+	var out []Phrase
+	if b.Reading == BranchUnreadable {
+		out = append(out, PhraseCommandsBranchUnread)
+	}
+	if len(b.Named) > 0 {
+		out = append(out, PhraseCommandsOnDefaultBranch)
+	}
+	if len(b.Differs) > 0 {
+		out = append(out, PhraseCommandsDiffer)
+	}
+	return out
 }
 
 // ProposedCommand is one command init offered for one key.
@@ -127,7 +224,7 @@ const commandsStillStop = "Nothing was written, so a check with no command confi
 
 var phraseByCommandsResult = map[CommandsResult]Phrase{
 	CommandsNone: {
-		Outcome:     "No commands were offered, because none was found in this checkout beyond what its configuration file already names.",
+		Outcome:     "No commands were offered, because none was found in this checkout beyond what is already configured.",
 		Consequence: "A check with no command configured on the default branch still stops each run for your decision.",
 		Decision:    "Nothing to decide here; name a command yourself in that file on the default branch when a check should run one.",
 	},
@@ -215,5 +312,6 @@ func commandsRows() []Phrase {
 	for _, refusal := range CommandsRefusals() {
 		out = append(out, CommandsPhrase(CommandProposals{Result: CommandsRefused, Refusal: refusal}))
 	}
-	return append(out, PhraseCommandsConsent, PhraseNoProseCommand)
+	return append(out, PhraseCommandsConsent, PhraseNoProseCommand,
+		PhraseCommandsOnDefaultBranch, PhraseCommandsDiffer, PhraseCommandsBranchUnread)
 }

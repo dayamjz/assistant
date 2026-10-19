@@ -38,6 +38,21 @@ import (
 // was. Ordering it the other way is what left a gate standing beside no
 // repository record, a half-state a run cannot start from and no verb here
 // repairs.
+//
+// Running it again is the repair PRD section 9 names. Given the same inputs
+// as before it rewrites the gate as it stood and records the same repository;
+// Init.Created from internal/gate is false when the checkout already had its
+// gate here, Init.Reattached is false, Init.Changed is empty, and InitPhrase
+// is the row for a gate set up again where it stood. After a move or copy
+// internal/gate may reattach instead: Init.Created is false, Init.Reattached
+// is true, and InitPhrase is the reattachment row. Init.Created is true only
+// when internal/gate newly created the gate repository at this path. Other
+// inputs are recorded because the flags are what init is for; Init.Changed
+// lists every recorded field this run wrote to a different value, including
+// a fork dropped because --fork-url was omitted (an entry whose After is
+// empty), so a re-run never changes where runs send their work without saying so.
+// It also carries the upstream row doctor makes from the same record, so an
+// upstream a run is refused on is reported when it is recorded.
 func initGate(ctx context.Context, in *invocation) (any, error) {
 	var upstream, fork, defaultBranch string
 	var acceptCommands bool
@@ -72,25 +87,61 @@ func initGate(ctx context.Context, in *invocation) (any, error) {
 		return nil, err
 	}
 	intended.ID = built.ID()
+	// What the record held before is read by the gate's identifier, which
+	// internal/gate keeps across a move, so a reattached checkout is
+	// compared with the record its runs were made under. It is read for the
+	// answer and decides nothing: init records what it was given, and the
+	// answer says what that replaced.
+	previous, err := records.Repository(ctx, built.ID())
+	hadRecord := err == nil
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
 	repository, err := records.UpsertRepository(ctx, intended)
 	if err != nil {
 		return nil, err
 	}
+	var changed []machine.RecordChange
+	if hadRecord {
+		changed = recordChanges(previous, repository)
+	}
+	upstreamRow, _ := upstreamDelivery(ctx, records, working)
 	// The offer comes after the gate and the record, because both are what
 	// init is for and neither depends on it: a person who declines every
 	// command, or whose configuration file cannot take one, still has a
 	// gate. propose.go owns what is offered and where it is written.
-	commands := proposeCommands(working, acceptCommands, in.env.Interactive && !in.json, in.env.Stderr, in.env.Stdin)
+	branchCopy := readBranchCopy(ctx, working, repository.DefaultBranch)
+	commands := proposeCommands(working, branchCopy, acceptCommands, in.env.Interactive && !in.json, in.env.Stderr, in.env.Stdin)
 	return machine.Init{
 		Commands:   commands,
 		Gate:       machine.Gate{Present: true, ID: built.ID(), Repository: built.Repository()},
 		Reattached: built.Reattached(),
+		Created:    built.Created(),
 		Repository: repository,
+		Changed:    changed,
+		Upstream:   &upstreamRow,
 		// The source travels with the answer so that a wrong default branch
 		// is visible when it is written, and not first when a run reads
 		// trusted configuration from it.
 		DefaultBranchSource: source,
 	}, nil
+}
+
+// recordChanges is every field of the repository record the write replaced
+// with a different value, in machine.RecordFields' order. Both records are as
+// internal/store returned them, so the URLs compared are the redacted forms
+// on both sides and a credential cannot read as a change or reach the answer.
+func recordChanges(before, after store.Repository) []machine.RecordChange {
+	var out []machine.RecordChange
+	add := func(field machine.RecordField, was, now string) {
+		if was != now {
+			out = append(out, machine.RecordChange{Field: field, Before: was, After: now})
+		}
+	}
+	add(machine.RecordUpstream, before.UpstreamURL, after.UpstreamURL)
+	add(machine.RecordFork, before.ForkURL.Or(""), after.ForkURL.Or(""))
+	add(machine.RecordDefaultBranch, before.DefaultBranch, after.DefaultBranch)
+	return out
 }
 
 // intendedRepository is the repository record the gate will validate, filling
@@ -119,6 +170,9 @@ func intendedRepository(ctx context.Context, working, upstream, fork, defaultBra
 			return store.Repository{}, "", upstreamRefused{cause: err}
 		} else if err != nil {
 			return store.Repository{}, "", fmt.Errorf("reading this working copy's origin to take the upstream from: %w", err)
+		}
+		if err := originSettled(ctx, repo, upstream); err != nil {
+			return store.Repository{}, "", err
 		}
 	}
 	forkURL := store.Unknown[string]()
@@ -264,6 +318,52 @@ func (e upstreamRefused) Error() string { return machine.PhraseInitNoUpstream.St
 // survives the rewording.
 func (e upstreamRefused) Unwrap() error { return e.cause }
 
+// originSettled refuses with originAmbiguous when init is about to take the
+// upstream from origin and origin sends a push to another repository than
+// the one it fetches from. Your own push to origin goes to the push address
+// and a run would go to the fetch address, so recording either is a guess
+// about where your changes go, which --upstream settles instead.
+//
+// Two addresses name the same repository when they are the same text, or
+// when forge.RepositoryOf reads both as one repository on one code host, so
+// an origin fetched over HTTPS and pushed over SSH to the same repository is
+// not refused. Anything else that differs is, a local path included, because
+// nothing here can tell that two spellings of a path or of an unrecognized
+// host are one repository. It reads the configured addresses and contacts
+// neither.
+func originSettled(ctx context.Context, repo *vcs.Repository, fetch string) error {
+	push, err := repo.PushURL(ctx, "origin")
+	if err != nil {
+		return fmt.Errorf("reading where this working copy's origin sends a push: %w", err)
+	}
+	if sameRepository(fetch, push) {
+		return nil
+	}
+	return originAmbiguous{}
+}
+
+// sameRepository reports whether two remote addresses name one repository on
+// the terms originSettled states.
+func sameRepository(a, b string) bool {
+	if a == b {
+		return true
+	}
+	aSpec, aKind, aKnown := forge.RepositoryOf(a)
+	bSpec, bKind, bKnown := forge.RepositoryOf(b)
+	return aKnown && bKnown && aKind == bKind && strings.EqualFold(aSpec, bSpec)
+}
+
+// originAmbiguous is init's refusal of an origin whose push and fetch
+// addresses name different repositories, read out as internal/machine's
+// PhraseInitOriginAmbiguous. Its remedy is --upstream, which the caller
+// supplies, so failureExit reads it as incorrect usage.
+type originAmbiguous struct{}
+
+// Error is the row a person reads, which says all there is. Neither address
+// is in it: both are origin's own and may carry credentials, and the person
+// can read them with git remote -v.
+func (originAmbiguous) Error() string { return machine.PhraseInitOriginAmbiguous.String() }
+
 // eject removes the gate and its records.
 //
 // It prints what it would remove and does nothing until it is told again with
@@ -370,6 +470,13 @@ func syncBranch(ctx context.Context, in *invocation) (any, error) {
 // there, so the row informs before a stage does and stops nothing. The commit
 // identity row is the same kind again: commitIdentity says why.
 //
+// Git is the first dependency it asks about after the home, through
+// vcs.Installed, because every row that reads the checkout reads it through
+// git; when git cannot be run those rows are not made and the git row is the
+// step. It asks the git this process would run, on this process's PATH, and
+// the service runs git from the environment it was started in, so the two can
+// differ, as the commit identity row says of its own answer.
+//
 // Once the gate check passes it also reads where the checkout's change stands
 // on the way to a run, which changeStanding owns, so a first run is walked by
 // the same loop as every other answer here. That read decides nothing about
@@ -391,11 +498,23 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		defer func() { _ = records.Close() }()
 	}
 
-	working, workErr := in.workingCopy(ctx)
+	// Git is asked first and on its own, because every row after it that
+	// reads the checkout reads it through git, and a git that cannot be
+	// started would otherwise read as a directory that is not a checkout.
+	// When it cannot, the rows that read the checkout are not made at all:
+	// what they would say is unknown, and the git row is the one step.
+	var working string
+	gitLine, workErr := vcs.Installed(ctx)
 	if workErr != nil {
-		add(machine.Check{Name: machine.CheckWorkingCopy, Blocking: true, Detail: workErr.Error()})
+		add(machine.Check{Name: machine.CheckGit, Blocking: true, Detail: workErr.Error()})
 	} else {
-		add(machine.Check{Name: machine.CheckWorkingCopy, OK: true, Blocking: true, Detail: working})
+		add(machine.Check{Name: machine.CheckGit, OK: true, Blocking: true, Detail: gitLine})
+		working, workErr = in.workingCopy(ctx)
+		if workErr != nil {
+			add(machine.Check{Name: machine.CheckWorkingCopy, Blocking: true, Detail: workErr.Error()})
+		} else {
+			add(machine.Check{Name: machine.CheckWorkingCopy, OK: true, Blocking: true, Detail: working})
+		}
 	}
 
 	if records != nil && workErr == nil {

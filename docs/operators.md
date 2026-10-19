@@ -28,7 +28,44 @@ recorded and where that answer came from.
 origin. When there is no origin and `--upstream` names none, `init` refuses,
 sets up no gate, and exits with the incorrect-usage code (2). Name the
 repository with `--upstream`; a working copy with no origin also has no default
-branch to learn, so give `--default-branch` beside it.
+branch to learn, so give `--default-branch` beside it. When origin sends a push
+to another repository than the one it fetches from (a push address set with
+`git remote set-url --push`), `init` refuses the same way, because your own
+push and a run would go to different places; name the one your changes are
+destined for with `--upstream`. Two addresses for one repository on github.com
+or gitlab.com, such as HTTPS to fetch and SSH to push, are not refused.
+
+`init` also prints the row `doctor` prints for the upstream it recorded: one
+that opens pull requests on github.com, merge requests on gitlab.com, one with
+no code host, or a host this build does not address, which a run is refused on
+and which `init` records anyway so you can correct it with `--upstream`.
+
+### Running `init` again
+
+Running `init` again is how a registration is repaired or changed, and it adds
+no second gate or record. It writes the gate's hooks, its record and the
+`assistant` remote again and keeps every run recorded through it. Its first row
+is the new-gate row only when a gate repository was created at this path; after
+a move or copy it is the reattachment row; when the checkout already had its
+gate here it is the row that says init set the gate up again where it stood. It
+records what it was given this time, and for each field of the repository record
+that now holds a different value it prints a row: the upstream, the default
+branch (with the one it replaced after `Default branch before`), and the fork. A
+fork is recorded only while `--fork-url` names it, so an `init` run again
+without the flag stops sending runs to your fork and says so; run it with
+`--fork-url` to keep it. `--json init` carries the same facts as `created`,
+`reattached`, `changed` (each with `field`, `before` and `after`, credentials
+removed) and `upstream`: `created` is true only when a new gate repository was
+made at this path; `reattached` is true when a gate was adopted after a move or
+copy (`created` false); when the checkout already had its gate here, both are
+false. Run again with the same flags, including `--fork-url` when a fork is
+recorded, and an unchanged origin, and it reports no change.
+
+When git cannot be run, `init` and every other command that reads the checkout
+say that rather than that the directory is not a checkout, set up nothing, and
+exit with the operational failure code (1). `assistant doctor` reports it as a
+`git` row ahead of the rows that read the checkout, and makes none of those
+rows until git can be run.
 
 The test and lint stages run the commands the trusted configuration names and
 hold for you when it names none. To shorten that setup, `init` reads the
@@ -39,7 +76,19 @@ offers them. At a terminal it asks about each one; elsewhere it only prints
 them, and `--accept-commands` writes them all. They are merged into the
 checkout's `assistant.json` and never replace a key it already names. Runs read
 commands from that file only as the default branch on origin holds it, so
-commit the file and land it there before expecting a run to use them. Nothing
+commit the file and land it there before expecting a run to use them.
+
+`init` also reads the default branch's copy of `assistant.json`, as origin's
+copy of that branch was last fetched here (or the local branch of that name),
+without fetching. It offers nothing for a key that copy already names, even
+with `--accept-commands`, so it cannot make the two copies disagree, and lists
+those keys after a row saying so. When both copies name a key with different
+commands it says the checkout's command reaches no run until it lands there.
+When the default branch's copy does not parse it says so and offers as if
+there were none; a run refuses that copy on its own terms. None of this stops
+the gate from being set up. A branch that moved on origin since the last fetch,
+or an `--upstream` that is not origin, can name a key this read did not see.
+`--json init` carries it under `commands.branch`. Nothing
 is offered for `commands.document`: no common build file declares a command
 that updates prose, so that stage keeps holding until you configure one or
 answer it.

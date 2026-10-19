@@ -353,6 +353,9 @@ func TestInitializeRepairsADamagedGate(t *testing.T) {
 	if second.Reattached() {
 		t.Fatal("repairing a gate in place reported a reattachment")
 	}
+	if second.Created() {
+		t.Fatal("repairing a gate whose record was gone reported it created, so its references would read as new")
+	}
 	if url, ok := remoteURL(t, wc.path, gate.RemoteName); !ok || url != first.Repository() {
 		t.Fatalf("the %s remote is %q, want %q", gate.RemoteName, url, first.Repository())
 	}
