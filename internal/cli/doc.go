@@ -288,12 +288,15 @@
 //
 // Registering a checkout adds no verb either. init records the repository
 // and sets up its gate, and running it again is how a registration is
-// repaired or changed: the answer says whether internal/gate created the
-// gate or found it already there (machine.Init.Created), names every field
-// of the record the run replaced with a different value
-// (machine.Init.Changed), a fork not given again among them, and carries the
-// upstream row doctor makes from the same record, so a host a run is refused
-// on is reported when it is recorded. The command offer reads the default
+// repaired or changed: machine.Init.Created from internal/gate is true only
+// when it newly created the gate repository at this path; a checkout that
+// already had its gate here reads Created false with Reattached false, and
+// one whose gate was reattached after a move or copy reads Created false with
+// Reattached true. machine.Init.Changed names every field of the record this
+// run replaced with a different value, including a fork dropped because
+// --fork-url was not given again (After empty), and carries the upstream row
+// doctor makes from the same record, so a host a run is refused on is
+// reported when it is recorded. The command offer reads the default
 // branch's copy of the configuration file beside the checkout's and offers
 // nothing for a key that copy names (machine.BranchCopy). init refuses before
 // anything is set up when origin sends a push to another repository than the

@@ -39,14 +39,18 @@ import (
 // repository record, a half-state a run cannot start from and no verb here
 // repairs.
 //
-// Running it again is the repair PRD section 9 names, and it is idempotent:
-// given the inputs it was given before, it rewrites the gate as it stood and
-// records the same repository, and its answer says the gate was already
-// there (Init.Created, from internal/gate) and that nothing in the record
-// changed (Init.Changed). Given other inputs it records them, because the
-// flags are what init is for, and the answer names each field that replaced
-// a different value, including a fork recorded before and not given again,
-// so a re-run does not change where runs send their work without saying so.
+// Running it again is the repair PRD section 9 names. Given the same inputs
+// as before it rewrites the gate as it stood and records the same repository;
+// Init.Created from internal/gate is false when the checkout already had its
+// gate here, Init.Reattached is false, Init.Changed is empty, and InitPhrase
+// is the row for a gate set up again where it stood. After a move or copy
+// internal/gate may reattach instead: Init.Created is false, Init.Reattached
+// is true, and InitPhrase is the reattachment row. Init.Created is true only
+// when internal/gate newly created the gate repository at this path. Other
+// inputs are recorded because the flags are what init is for; Init.Changed
+// lists every recorded field this run wrote to a different value, including
+// a fork dropped because --fork-url was omitted (an entry whose After is
+// empty), so a re-run never changes where runs send their work without saying so.
 // It also carries the upstream row doctor makes from the same record, so an
 // upstream a run is refused on is reported when it is recorded.
 func initGate(ctx context.Context, in *invocation) (any, error) {

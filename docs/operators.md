@@ -44,18 +44,22 @@ and which `init` records anyway so you can correct it with `--upstream`.
 
 Running `init` again is how a registration is repaired or changed, and it adds
 no second gate or record. It writes the gate's hooks, its record and the
-`assistant` remote again and keeps every run recorded through it, and its first
-row says whether it created the gate, found it already there, or reattached a
-checkout that moved (a copied checkout gets a gate of its own). It records what
-it was given this time, and for each field of the repository record that now
-holds a different value it prints a row: the upstream, the default branch (with
-the one it replaced after `Default branch before`), and the fork. A fork is
-recorded only while `--fork-url` names it, so an `init` run again without the
-flag stops sending runs to your fork and says so; run it with `--fork-url` to
-keep it. `--json init` carries the same facts as `created`, `reattached`,
-`changed` (each with `field`, `before` and `after`, credentials removed) and
-`upstream`. Run with the same flags and an unchanged origin, it reports no
-change.
+`assistant` remote again and keeps every run recorded through it. Its first row
+is the new-gate row only when a gate repository was created at this path; after
+a move or copy it is the reattachment row; when the checkout already had its
+gate here it is the row that says init set the gate up again where it stood. It
+records what it was given this time, and for each field of the repository record
+that now holds a different value it prints a row: the upstream, the default
+branch (with the one it replaced after `Default branch before`), and the fork. A
+fork is recorded only while `--fork-url` names it, so an `init` run again
+without the flag stops sending runs to your fork and says so; run it with
+`--fork-url` to keep it. `--json init` carries the same facts as `created`,
+`reattached`, `changed` (each with `field`, `before` and `after`, credentials
+removed) and `upstream`: `created` is true only when a new gate repository was
+made at this path; `reattached` is true when a gate was adopted after a move or
+copy (`created` false); when the checkout already had its gate here, both are
+false. Run again with the same flags, including `--fork-url` when a fork is
+recorded, and an unchanged origin, and it reports no change.
 
 When git cannot be run, `init` and every other command that reads the checkout
 say that rather than that the directory is not a checkout, set up nothing, and
