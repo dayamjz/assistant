@@ -34,6 +34,7 @@ func TestEveryForkAndManagedRowIsDistinctListedAndNamesItsRemedy(t *testing.T) {
 		machine.ForkUnaddressable:         "--fork-url",
 		machine.ForkUpstreamUnaddressable: "--upstream",
 		machine.ForkIsUpstream:            "--fork-url",
+		machine.ForkOnAnotherHost:         "--fork-url",
 	}
 	for _, refusal := range machine.ForkRefusals() {
 		row := machine.ForkRefusalPhrase(refusal)

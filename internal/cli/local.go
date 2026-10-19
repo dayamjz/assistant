@@ -144,21 +144,25 @@ func intendedRepository(ctx context.Context, working, upstream, fork, defaultBra
 }
 
 // forkOf refuses a fork a run could not both push to and propose from, with a
-// forkRefused saying which: a fork that is not a repository on the code host
-// this build proposes changes on, an upstream that is not one, or a fork
-// naming the upstream itself. Both are read through forge.GitHubRepository,
-// the same reading internal/service makes when a run begins, so init records
-// no fork a run would then refuse. It reads the two URLs and asks the code
-// host nothing; whether each repository exists, and whether the fork is a
-// fork of the upstream, are learned when a run first writes to them.
+// forkRefused saying which: a fork that is not a repository on a code host
+// this build proposes changes on, an upstream that is not one, a fork on
+// another host than its upstream, or a fork naming the upstream itself. Both
+// are read through forge.RepositoryOf, the same reading internal/service
+// makes when a run begins, so init records no fork a run would then refuse.
+// It reads the two URLs and asks the code host nothing; whether each
+// repository exists, and whether the fork is a fork of the upstream, are
+// learned when a run first writes to them.
 func forkOf(upstream, fork string) error {
-	forkSpec, forkResolved := forge.GitHubRepository(fork)
+	forkSpec, forkKind, forkResolved := forge.RepositoryOf(fork)
 	if !forkResolved {
 		return forkRefused{reason: machine.ForkUnaddressable}
 	}
-	upstreamSpec, upstreamResolved := forge.GitHubRepository(upstream)
+	upstreamSpec, upstreamKind, upstreamResolved := forge.RepositoryOf(upstream)
 	if !upstreamResolved {
 		return forkRefused{reason: machine.ForkUpstreamUnaddressable}
+	}
+	if forkKind != upstreamKind {
+		return forkRefused{reason: machine.ForkOnAnotherHost}
 	}
 	if strings.EqualFold(forkSpec, upstreamSpec) {
 		return forkRefused{reason: machine.ForkIsUpstream}
@@ -430,9 +434,18 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 	add(namedOnlyAgents(ctx, catalog))
 	add(sessionProvider(ctx, in.home.ConfigFile(), catalog))
 
-	add(codeHost())
+	// The upstream is read first because which host the code-host row
+	// probes is the one the upstream names; the rows are still reported in
+	// CheckNames' order.
+	var upstream *machine.Check
+	kind := forge.RemoteGitHub
 	if records != nil && workErr == nil {
-		add(upstreamDelivery(ctx, records, working))
+		row, named := upstreamDelivery(ctx, records, working)
+		upstream, kind = &row, named
+	}
+	add(codeHost(kind, in.env.Getenv))
+	if upstream != nil {
+		add(*upstream)
 	}
 	add(stageBodies())
 
@@ -607,49 +620,83 @@ func commitIdentity(ctx context.Context, home string, records *store.Store, work
 	return machine.Check{Name: machine.CheckCommitIdentity, OK: true, Detail: detail}
 }
 
-// codeHost reports whether the code-host provider command line resolves on
-// this machine. It probes the host built the way internal/service builds the
-// one its stage bodies get, so what it answers for is the command a run would
-// invoke rather than a second spelling of it, and what the probe does and
-// does not establish is forge.GitHubHost.Probe's contract.
+// codeHost reports whether what a run needs to reach the code host its
+// upstream names is here. It probes the host built the way internal/service
+// builds the one its stage bodies get, so what it answers for is what a run
+// would use rather than a second spelling of it.
+//
+// For a gitlab.com upstream that is an access token, read from
+// forge.GitLabTokenVariable in this command's environment, and what the probe
+// does and does not establish is forge.GitLabHost.Probe's contract. The
+// service reads the environment it was started in, so a token set here and
+// not there is reported present here and refused there; the detail says so.
+// For every other upstream, including one not yet known, it is the gh command
+// line, on forge.GitHubHost.Probe's contract.
 //
 // It does not block, because a run can start without a code host: the stages
 // that talk to one refuse there, honestly, when they are reached. What the
 // row buys is that the operator learns here rather than from a stage partway
 // through a run.
-func codeHost() machine.Check {
+func codeHost(kind forge.RemoteKind, getenv func(string) string) machine.Check {
+	const startsAnyway = "; a run can start without it, and a stage that needs the code host reports the refusal itself"
+	if kind == forge.RemoteGitLab {
+		token := ""
+		if getenv != nil {
+			token = getenv(forge.GitLabTokenVariable)
+		}
+		host, err := forge.NewGitLabHost(redact.New(), forge.WithGitLabToken(token))
+		if err == nil {
+			err = host.Probe()
+		}
+		if err != nil {
+			return machine.Check{Name: machine.CheckCodeHost, Detail: err.Error() + startsAnyway}
+		}
+		return machine.Check{
+			Name: machine.CheckCodeHost,
+			OK:   true,
+			Detail: forge.GitLabTokenVariable + " is set in this environment; the service reads the one it was " +
+				"started in, and whether the token reaches the project is learned when a run first needs it",
+		}
+	}
 	resolved, err := forge.NewGitHubHost(redact.New()).Probe()
 	if err != nil {
-		return machine.Check{
-			Name:   machine.CheckCodeHost,
-			Detail: err.Error() + "; a run can start without it, and a stage that needs the code host reports the refusal itself",
-		}
+		return machine.Check{Name: machine.CheckCodeHost, Detail: err.Error() + startsAnyway}
 	}
 	return machine.Check{Name: machine.CheckCodeHost, OK: true, Detail: resolved}
 }
 
 // upstreamDelivery reports how this checkout's upstream treats the pull request
-// and checks stages. It reads the repository record when init has run, and
-// otherwise reads origin from the working copy, so doctor can say whether a run
-// can open a pull request before anything is recorded.
-func upstreamDelivery(ctx context.Context, records *store.Store, working string) machine.Check {
+// and checks stages, and the kind of remote it is, which is what codeHost
+// probes for. It reads the repository record when init has run, and otherwise
+// reads origin from the working copy, so doctor can say whether a run can open
+// a pull request before anything is recorded. An upstream it cannot read is
+// reported with the kind RemoteGitHub, which is the host codeHost probes when
+// nothing names another.
+func upstreamDelivery(ctx context.Context, records *store.Store, working string) (machine.Check, forge.RemoteKind) {
 	upstream, err := upstreamURL(ctx, records, working)
 	if err != nil {
 		return machine.Check{
 			Name:   machine.CheckUpstream,
 			Kind:   machine.UpstreamKindUnrecorded,
 			Detail: err.Error(),
-		}
+		}, forge.RemoteGitHub
 	}
-	switch forge.ClassifyRemote(upstream) {
+	spec, kind, _ := forge.RepositoryOf(upstream)
+	switch kind {
 	case forge.RemoteGitHub:
-		spec, _ := forge.GitHubRepository(upstream)
 		return machine.Check{
 			Name:   machine.CheckUpstream,
 			Kind:   machine.UpstreamKindGitHub,
 			OK:     true,
 			Detail: "pull requests open on " + spec,
-		}
+		}, kind
+	case forge.RemoteGitLab:
+		return machine.Check{
+			Name:   machine.CheckUpstream,
+			Kind:   machine.UpstreamKindGitLab,
+			OK:     true,
+			Detail: "merge requests open on " + spec,
+		}, kind
 	case forge.RemoteLocal:
 		return machine.Check{
 			Name: machine.CheckUpstream,
@@ -657,7 +704,7 @@ func upstreamDelivery(ctx context.Context, records *store.Store, working string)
 			OK:   true,
 			Detail: "no code host: runs here cannot open a pull request; after push they skip " +
 				"the pull request and checks stages and end pushed",
-		}
+		}, kind
 	default:
 		return machine.Check{
 			Name:     machine.CheckUpstream,
@@ -665,7 +712,7 @@ func upstreamDelivery(ctx context.Context, records *store.Store, working string)
 			Blocking: true,
 			Detail: fmt.Sprintf("upstream %q names a host this build does not address; "+
 				"a run is refused at start", upstream),
-		}
+		}, kind
 	}
 }
 

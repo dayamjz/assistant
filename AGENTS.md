@@ -278,11 +278,20 @@ Each has cost this repository more than one round of review.
   `pipeline.KeyForkRepository` (late, empty means the upstream), and
   `internal/stages`' `pushTarget` is the one place it picks `ForkRemote`, so
   the rebase stage's anchor and the push are on the fork's branch together.
+  GitLab is the second adapter, over GitLab's REST API rather than `glab`:
+  `forge.Hosts` is the one `Host` the product is handed and routes a
+  specifier to its adapter, `RepositoryOf` is the one reading of a remote,
+  and a GitLab specifier carries its host (`gitlab.com/group/project`) so it
+  never equals a GitHub `owner/name`, which is also why no `autonomy.merge`
+  entry reaches a GitLab run. `doc.go`'s GitLab section owns where its model
+  differs from GitHub's and its gaps.
   Tests outside the package reach a code host through
   `internal/forge/forgetest`, a stand-in `gh` answering over the wire and
   read by the real adapter, scripted with only shapes gh produces, on
-  `internal/judge/judgetest`'s terms; the package's own tests keep their
-  private stand-in for the contract cases it models and `forgetest` does not.
+  `internal/judge/judgetest`'s terms, or `internal/forge/labtest`, the same
+  for GitLab's API over HTTP; the package's own tests keep their private
+  stand-in for the contract cases it models and `forgetest` does not, and
+  its conformance suite holds both adapters to the same assertions.
 - `internal/gate` owns the local bare repository a push is validated through:
   where it lives, what it is born with, its hooks, and its identity across a
   move or a copy. It composes `internal/vcs` and builds no command lines, and it

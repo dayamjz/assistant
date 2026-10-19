@@ -1161,15 +1161,21 @@ const (
 	// can, and tmux needs both a tmux binary and an agent that declares
 	// terminal_workers.
 	CheckSessionProvider = "session provider"
-	// CheckCodeHost is whether the code host's command line resolves.
+	// CheckCodeHost is whether what a run needs to reach the code host is
+	// here: the gh command line for a github.com upstream, and an access token
+	// for a gitlab.com one.
 	CheckCodeHost = "code host"
 	// CheckUpstream is how this checkout's upstream treats pull
-	// requests: on github.com, local with no code host, or an unsupported host.
+	// requests: on github.com, on gitlab.com, local with no code host, or an
+	// unsupported host.
 	CheckUpstream = "upstream"
 
 	// UpstreamKindGitHub is a Check.Kind for CheckUpstream when pull requests
 	// open on github.com.
 	UpstreamKindGitHub = "upstream-github"
+	// UpstreamKindGitLab is a Check.Kind for CheckUpstream when merge
+	// requests open on gitlab.com.
+	UpstreamKindGitLab = "upstream-gitlab"
 	// UpstreamKindLocal is a Check.Kind for CheckUpstream when the upstream
 	// has no code host and a run cannot open a pull request.
 	UpstreamKindLocal = "upstream-local"
@@ -1241,8 +1247,8 @@ var phraseByCheck = map[string][2]Phrase{
 			Decision:    "Install tmux on the service's PATH, or choose an agent that declares terminal workers, or set session_provider back to pipe; " + readDoctor},
 	},
 	CheckCodeHost: {
-		{Outcome: "The code host's command line was found here.", Consequence: "Whether it can reach your repository is learned when a run first needs it.", Decision: "Nothing to do."},
-		{Outcome: "The code host's command line was not found here.", Consequence: "A run can still start, and a step that needs the code host stops and says so.", Decision: readDoctor},
+		{Outcome: "What a run needs to reach the code host was found here.", Consequence: "Whether it can reach your repository is learned when a run first needs it.", Decision: "Nothing to do."},
+		{Outcome: "What a run needs to reach the code host was not found here.", Consequence: "A run can still start, and a step that needs the code host stops and says so.", Decision: readDoctor},
 	},
 	CheckStages: {
 		{Outcome: "Every step of the gate has an implementation in this build.", Consequence: "No step stops for your decision only for want of one.", Decision: "Nothing to do."},
@@ -1257,6 +1263,11 @@ var (
 		Consequence: "A run proposes on the code host after the change is on the remote.",
 		Decision:    "Nothing to do.",
 	}
+	phraseUpstreamGitLab = Phrase{
+		Outcome:     "This checkout's upstream can open a merge request on GitLab.",
+		Consequence: "A run proposes on the code host after the change is on the remote, and reads the merge request's pipelines as its checks.",
+		Decision:    "Nothing to do.",
+	}
 	phraseUpstreamLocal = Phrase{
 		Outcome:     "This checkout's upstream has no code host, so a run cannot open a pull request.",
 		Consequence: "The pull request and checks stages are passed over with the reason recorded, and the run ends once the change is on the remote.",
@@ -1264,8 +1275,8 @@ var (
 	}
 	phraseUpstreamUnsupported = Phrase{
 		Outcome:     "This checkout's upstream names a host this build does not address.",
-		Consequence: "A run cannot start here until the upstream is github.com, a local path, or a file:// remote.",
-		Decision:    "Point the repository's upstream at github.com, a local path, or a file:// remote, then run assistant init again.",
+		Consequence: "A run cannot start here until the upstream is github.com, gitlab.com, a local path, or a file:// remote.",
+		Decision:    "Point the repository's upstream at github.com, gitlab.com, a local path, or a file:// remote, then run assistant init again.",
 	}
 	phraseUpstreamUnrecorded = Phrase{
 		Outcome:     "This checkout has no repository record yet and no remote named origin to learn where validated changes go from.",
@@ -1278,6 +1289,7 @@ var (
 // a person reads.
 var phraseByUpstreamKind = map[string]Phrase{
 	UpstreamKindGitHub:      phraseUpstreamGitHub,
+	UpstreamKindGitLab:      phraseUpstreamGitLab,
 	UpstreamKindLocal:       phraseUpstreamLocal,
 	UpstreamKindUnsupported: phraseUpstreamUnsupported,
 	UpstreamKindUnrecorded:  phraseUpstreamUnrecorded,
@@ -1652,7 +1664,7 @@ func TablePhrases() []Phrase {
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
 	for _, name := range CheckNames() {
 		if name == CheckUpstream {
-			for _, kind := range []string{UpstreamKindGitHub, UpstreamKindLocal, UpstreamKindUnsupported, UpstreamKindUnrecorded} {
+			for _, kind := range []string{UpstreamKindGitHub, UpstreamKindGitLab, UpstreamKindLocal, UpstreamKindUnsupported, UpstreamKindUnrecorded} {
 				out = append(out, CheckPhrase(Check{Name: name, Kind: kind}))
 			}
 			continue

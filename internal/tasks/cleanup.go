@@ -317,7 +317,9 @@ type CleanupDeps struct {
 	// merge record, the stored report, the holds, and the cleanup record
 	// this writes.
 	Store *store.Store
-	// Forge is the code host the merged-pull-request proof reads.
+	// Forge is the code host the merged-pull-request proof reads, opened on
+	// the specifier forge.RepositoryOf reads out of the upstream; the service
+	// passes its forge.Hosts, so a gitlab.com upstream is read on GitLab.
 	Forge forge.Host
 }
 

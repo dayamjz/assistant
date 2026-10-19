@@ -45,9 +45,9 @@ answer is bound to and that the fixer refuses, ordered fallback resolution, and
 a record of what each invocation cost. The eighth is
 `internal/forge`, the only package that talks to a code host: the provider
 interface over pull requests, mergeability, checks, and a merge bound to the
-head it was asked for, a GitHub adapter over
-the `gh` command line, and a checks model in which an empty check list is not a
-pass. The ninth is `internal/ipc`, the local protocol between the command line
+head it was asked for, a GitHub adapter over the `gh` command line and a
+GitLab adapter over GitLab's REST API, and a checks model in which an empty
+check list is not a pass. The ninth is `internal/ipc`, the local protocol between the command line
 and the background service: the method table, the event taxonomy and its
 bounded stream, a client, a server, and peer identification the kernel answers
 for. Who resolved a held decision that arrives here is derived from the
@@ -267,7 +267,7 @@ that mode needs and what attaching still cannot guarantee.
 | `internal/custody` | Custody of a person's branch, PRD section 11: the six classes a branch is in relative to what the pipeline holds, the exact steps each allows, and the only path that moves a person's branch, every move a decision of `internal/safety`'s anchored on the run's own observation. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, parsing of agent output, and the evidence a review report's findings are bound to. |
 | `internal/fixture` | The adversarial subject repository the end-to-end harness validates against: the seven scenarios, the conditions planted in them, and what each one is expected to produce. |
-| `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, checks and a merge bound to a head, and the GitHub adapter over the `gh` command line. `internal/forge/forgetest` is its over-the-wire stand-in. |
+| `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, checks and a merge bound to a head, the GitHub adapter over the `gh` command line, and the GitLab adapter over GitLab's REST API. `internal/forge/forgetest` and `internal/forge/labtest` are their over-the-wire stand-ins. |
 | `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks and the protocol they call the command surface with, the receive command and lock that make a push wait for a run's copy being cut, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/home` | The one root everything lives under: where the database, the socket, the lock, the gates, the isolated copies and the logs go, and the exclusive lock that gives a home one service. |

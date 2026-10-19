@@ -53,6 +53,26 @@ func TestTheRepositoryAPullRequestWouldLandInComesFromTheRunsOwnRecord(t *testin
 	}
 }
 
+// A run whose record names a gitlab.com upstream starts, and carries the
+// GitLab specifier, host and all, read out of the record and not out of the
+// checkout, whose origin names the github.com repository with the same path
+// on purpose: a run that read the checkout, or that dropped the host, would
+// carry a specifier the GitHub adapter would open on github.com (P1).
+func TestARunWhoseUpstreamIsOnGitLabCarriesTheGitLabSpecifier(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P1)
+	requiresIdentifiedPeer(t)
+
+	const (
+		recorded = "https://gitlab.com/dayamjz/assistant.git"
+		ambient  = "https://github.com/dayamjz/assistant.git"
+		want     = "gitlab.com/dayamjz/assistant"
+	)
+	if seen := observeForgeRepository(t, recorded, ambient); seen != want {
+		t.Fatalf("the run acts on %q, want %q", seen, want)
+	}
+}
+
 // TestARunWhoseUpstreamNamesAnUnsupportedHostIsRefusedAtStart holds issue
 // #283's second decision: a network host this build cannot address is refused
 // rather than walked to the pull request stage and stalled. The branch may

@@ -99,7 +99,7 @@ import (
 // pipeline.KeyForgeRepository is the repository on that host, so a run whose
 // record names no repository on a host this build talks to has nothing to open
 // and reports that rather than proceeding without one. The repository is
-// resolved from the run's upstream URL, and forge.GitHubRepository describes
+// resolved from the run's upstream URL, and forge.RepositoryOf describes
 // what reaches here and what does not.
 //
 // The adapter needs the pull request number, which is pipeline.KeyPullRequest.
