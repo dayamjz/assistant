@@ -88,6 +88,12 @@ type StartRequest struct {
 	// internal/service decides in source, so no value here can make a record
 	// say a person or a caller decided.
 	StandingConsent bool `json:"standing_consent,omitempty"`
+	// ReducedPath asks for the reduced path config.KeyReducedPath names.
+	// The service refuses it as an invalid request when the trusted
+	// configuration does not name one. Asking does not by itself skip a
+	// stage: the trusted value has to name record or publish, and a pushed
+	// copy cannot.
+	ReducedPath bool `json:"reduced_path,omitempty"`
 	// Task selects the run through a task instead of a working copy, for
 	// standing consent alone: the run selected is the task's current run, on
 	// RespondRequest.Task's terms, and the call attaches to it with

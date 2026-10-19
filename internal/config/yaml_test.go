@@ -46,6 +46,7 @@ allow_pushed_commands: true
 autonomy:
   merge: [owner/name]
 delivery: local
+reduced_path: publish
 allow_standing_consent: true
 session_provider: tmux
 `
@@ -73,6 +74,7 @@ const wholeSchemaJSON = `{
 	"allow_pushed_commands": true,
 	"autonomy": {"merge": ["owner/name"]},
 	"delivery": "local",
+	"reduced_path": "publish",
 	"allow_standing_consent": true,
 	"session_provider": "tmux"
 }`

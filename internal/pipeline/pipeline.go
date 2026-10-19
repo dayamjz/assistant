@@ -310,8 +310,10 @@ func (p *Pipeline) Executor(store graph.CheckpointStore) (*graph.Executor, error
 	return graph.NewExecutor(p.graph, graph.Config{Store: store, Budget: p.budget})
 }
 
-// Start is what a run begins with. Skip is the only way a caller may choose
-// that a stage does not run, and it is per run: nothing in Options can set it.
+// Start is what a run begins with. Skip names stages this one run does not
+// take. Nothing in Options can set it. ValidationNotPerformed is set by the
+// service when the run asked for the reduced path and the trusted
+// configuration named one; NewState records it and the push stage reads it.
 type Start struct {
 	// Repository identifies the repository being validated, as
 	// internal/store records it.
@@ -355,6 +357,13 @@ type Start struct {
 	IntentSupplied bool
 	// Skip names the stages this one run skips, on purpose.
 	Skip []Stage
+	// Reduced asks for the reduced path. Begin takes it only when the
+	// resolved trusted configuration names one, and then sets
+	// ValidationNotPerformed. NewState does not read Reduced.
+	Reduced bool
+	// ValidationNotPerformed says this run took the reduced path. Begin sets
+	// it from the run record; a zero value is a run that did not.
+	ValidationNotPerformed bool
 	// NoCodeHost says the run's upstream is a local path or file:// remote,
 	// so the pull request and checks stages skip after push. Begin sets it
 	// from forge.ClassifyRemote; a caller does not invent it.
@@ -395,7 +404,8 @@ func (p *Pipeline) NewState(s Start) (graph.State, error) {
 		string(KeyHead):             graph.TextValue(s.Submitted),
 		string(KeyIntent):           graph.TextValue(s.Intent),
 		string(KeyIntentSupplied):   graph.BoolValue(s.IntentSupplied),
-		string(KeySkip):             graph.ListValue(skip...),
-		string(KeyNoCodeHost):       graph.BoolValue(s.NoCodeHost),
+		string(KeySkip):                    graph.ListValue(skip...),
+		string(KeyValidationNotPerformed): graph.BoolValue(s.ValidationNotPerformed),
+		string(KeyNoCodeHost):              graph.BoolValue(s.NoCodeHost),
 	})
 }

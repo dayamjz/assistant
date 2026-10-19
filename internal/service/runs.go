@@ -67,6 +67,18 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 			return machine.Run{}, standingConsentRefused(repository)
 		}
 	}
+	// The reduced path asked for where the trusted copy does not name one is
+	// refused before any run is recorded, so the refusal leaves nothing
+	// behind. reduced.go owns the rule. A pushed copy cannot grant it.
+	if req.ReducedPath {
+		path, err := s.trustedReducedPath(ctx, repository)
+		if err != nil {
+			return machine.Run{}, err
+		}
+		if mode, ok := path.Mode(); !ok || !mode.Path.Named() {
+			return machine.Run{}, reducedPathRefused(repository)
+		}
+	}
 	// Everything the record is built from is read before the branch is
 	// claimed, so what the claim holds is the decision and the write - the
 	// row, and the one fetch create makes to record the commit in the gate -
@@ -108,6 +120,7 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 		Intent:         req.Intent,
 		IntentSupplied: req.IntentSupplied,
 		Skip:           skip,
+		Reduced:        req.ReducedPath,
 	})
 }
 
@@ -128,6 +141,9 @@ func startInputs(req machine.StartRequest) []string {
 	}
 	if len(req.Skip) > 0 {
 		named = append(named, "skip")
+	}
+	if req.ReducedPath {
+		named = append(named, "reduced_path")
 	}
 	return named
 }
@@ -692,12 +708,18 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	if err := s.store.SetRunResolvedAgent(ctx, record.ID, built.agent.Name); err != nil {
 		return machine.Run{}, err
 	}
+	if err := s.takeReducedPath(ctx, built, record, &start, resolved); err != nil {
+		return machine.Run{}, err
+	}
 	topo, err := s.topologyFor(built, resolved)
 	if err != nil {
 		return machine.Run{}, err
 	}
 	initial, err := topo.pipeline.NewState(start)
 	if err != nil {
+		if start.ValidationNotPerformed {
+			s.endPending(ctx, built, record.ID, "its initial state was refused")
+		}
 		return machine.Run{}, err
 	}
 	if _, err := built.runs.Start(ctx, record.ID); err != nil {
@@ -1081,7 +1103,15 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 		endText, head := pipeline.PullRequestEnd(result.State)
 		end := store.PullRequestEnd(endText)
 		if end == "" {
-			move, checksPassed = built.runs.Pass, true
+			move = built.runs.Pass
+			// A run whose record says validation was not performed did not
+			// end checks-passed, even though the graph completed. Autonomy
+			// merges only a checks-passed run, so this path does not.
+			record, err := s.store.Run(ctx, runID)
+			if err != nil {
+				return err
+			}
+			checksPassed = !validationNotPerformed(record)
 			break
 		}
 		_, number, err := recordedPullRequest(result.State)
@@ -1734,11 +1764,12 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 		return machine.Run{}, err
 	}
 	standing := machine.Standing{
-		Record:     record.Status,
-		Park:       record.Park,
-		NoCodeHost: record.NoCodeHost,
-		Execution:  machine.ExecutionUnrecorded(),
-		Advancing:  result == nil && s.isAdvancing(runID),
+		Record:                 record.Status,
+		Park:                   record.Park,
+		NoCodeHost:             record.NoCodeHost,
+		ValidationNotPerformed: record.ValidationNotPerformed,
+		Execution:              machine.ExecutionUnrecorded(),
+		Advancing:              result == nil && s.isAdvancing(runID),
 	}
 	answer := machine.Run{Record: record}
 	if cleanup.Run != "" {

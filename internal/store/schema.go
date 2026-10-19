@@ -95,6 +95,11 @@ const holdResolutionNoteMigration = "hold resolution note"
 // sealCheckpointTableMigration is a constant.
 const taskAttemptRouteMigration = "task attempt route"
 
+// runValidationNotPerformedMigration names the migration that records when a
+// run took the reduced path, for the reason sealCheckpointTableMigration is
+// a constant.
+const runValidationNotPerformedMigration = "run validation not performed"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1541,6 +1546,26 @@ var schema = []migration{
 			// SetAttemptRoute before the process starts.
 			`ALTER TABLE task_attempt ADD COLUMN adapter TEXT`,
 			`ALTER TABLE task_attempt ADD COLUMN route_reason TEXT`,
+		},
+	},
+	{
+		version: 37,
+		name:    runValidationNotPerformedMigration,
+		statements: []string{
+			// GAP-06: a run that took the reduced path records that
+			// validation was not performed, on the row, so a listing that
+			// has only the record still says so. NULL means the run did not
+			// take the path, including every row written before this column.
+			// The only written value is 1. A second write of 1 is the
+			// setter's no-op; the trigger refuses a revision of a value
+			// already written.
+			`ALTER TABLE run ADD COLUMN validation_not_performed INTEGER`,
+			`CREATE TRIGGER run_validation_not_performed_is_written_once
+				BEFORE UPDATE OF validation_not_performed ON run
+				WHEN OLD.validation_not_performed IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run''s validation_not_performed flag is written once and is not updated');
+				END`,
 		},
 	},
 }

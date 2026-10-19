@@ -163,11 +163,18 @@ const (
 	// request stage writes into the body. Its encoding belongs to
 	// internal/stages, which both writes and reads it.
 	KeyDecisionChecks Key = "decision.checks"
-	// KeySkip names the stages this one run skips. It is a run input, per P2:
-	// a person may skip a stage on purpose for one run, and no standing
-	// configuration may skip one on their behalf, which is why nothing in
-	// Options can write it.
+	// KeySkip names the stages this one run skips. It is a run input: a person
+	// may skip a stage on purpose for one run, and nothing in Options can
+	// write it. The reduced path is not a standing skip either. Begin appends
+	// stages here only when that run asks and the trusted configuration names
+	// the path, and the run record then says validation was not performed.
 	KeySkip Key = "skip"
+	// KeyValidationNotPerformed says this run took the reduced path, so
+	// validation was not performed. It is a run input begin sets from the
+	// run record, and the push stage reads it: the review gate does not
+	// apply and the anchor still does. A late key: runs checkpointed before
+	// it existed behave as if it is false.
+	KeyValidationNotPerformed Key = "validation_not_performed"
 	// KeyNoCodeHost says this run's upstream is a local path or file:// remote
 	// with no code host this build talks to. It is a run input set at begin
 	// from forge.ClassifyRemote, and the pull request and checks stage nodes
@@ -229,6 +236,7 @@ var sharedKeys = []keySpec{
 	{KeySubmitted, graph.KindText, graph.MergeNone, ownerRun, false},
 	{KeySubmittedSubject, graph.KindText, graph.MergeNone, ownerRun, true},
 	{KeySkip, graph.KindList, graph.MergeNone, ownerRun, false},
+	{KeyValidationNotPerformed, graph.KindBool, graph.MergeNone, ownerRun, true},
 	{KeyNoCodeHost, graph.KindBool, graph.MergeNone, ownerRun, true},
 	{KeyHead, graph.KindText, graph.MergeLastWriteWins, ownerStage, false},
 	{KeyIntent, graph.KindText, graph.MergeNone, ownerStage, false},

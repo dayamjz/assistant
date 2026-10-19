@@ -90,6 +90,11 @@ type Config struct {
 	// closed set. internal/tasks records it on a task at intake, and that
 	// record, not a later read of this field, decides the task's path.
 	Delivery Delivery
+	// ReducedPath is the reduced-validation path a run that asks may take.
+	// A Config from Resolve holds a member of the closed set. Off, the
+	// default, names no reduced path. KeyReducedPath says where the value
+	// is read from and what it does not grant.
+	ReducedPath ReducedPath
 	// AutonomyMerge is the repositories, as the code host names them,
 	// where the program may merge a run that ended checks-passed. Empty
 	// means it merges nothing. Ask MergesIn rather than searching it.

@@ -425,6 +425,15 @@ var (
 		Consequence: "There is nothing to carry it on from.",
 		Decision:    "End it with assistant --cancel and start a fresh run.",
 	}
+	// phraseUnvalidated is what a person reads when the run record says
+	// validation was not performed. It is not the pushed row: that row says
+	// there is no code host, and this run may have one. The outcome word is
+	// still pushed, because checks-passed would claim checks that did not run.
+	phraseUnvalidated = Phrase{
+		Outcome:     "This change was not validated.",
+		Consequence: "It is not on the shared branch until it is merged.",
+		Decision:    "Decide whether to merge it yourself.",
+	}
 )
 
 // phraseByPark is what a person reads about a run whose record names the
@@ -461,6 +470,9 @@ var phraseByPark = map[store.ParkBound]Phrase{
 // different runs. Run.Phrase makes the same choice from an answer already
 // decided, through the same chooser.
 func RunPhrase(s Standing) Phrase {
+	if p, ok := phraseIfUnvalidated(s.Record, s.ValidationNotPerformed, s.PullRequestEnd == store.PullRequestMerged); ok {
+		return p
+	}
 	return outcomePhrase(OutcomeOf(s), s.Park, s.Advancing, s.Execution.Recorded())
 }
 
@@ -469,6 +481,10 @@ func RunPhrase(s Standing) Phrase {
 // recorded, which is what Decide wrote and Progress carries, through the
 // chooser RunPhrase uses.
 func (r Run) Phrase() Phrase {
+	merged := r.MergeRecord != nil && r.MergeRecord.End == store.PullRequestMerged
+	if p, ok := phraseIfUnvalidated(r.Record.Status, r.Record.ValidationNotPerformed, merged); ok {
+		return p
+	}
 	return outcomePhrase(r.Outcome, r.Record.Park, r.Advancing, r.Progress != nil)
 }
 
@@ -509,9 +525,17 @@ func outcomePhrase(outcome Outcome, park store.Optional[store.RunPark], advancin
 // that. A terminated record parked before the park record existed reads as
 // ended before a verdict.
 func RecordPhrase(r store.Run) Phrase {
+	// A listing has no merge record, so a passed row whose flag says
+	// validation was not performed reads as that, including one a merge
+	// record beside the listing would settle as passed. RunPhrase is where
+	// the merge record settles it.
+	if p, ok := phraseIfUnvalidated(r.Status, r.ValidationNotPerformed, false); ok {
+		return p
+	}
 	outcome := OutcomeOf(Standing{
 		Record: r.Status, Park: r.Park, NoCodeHost: r.NoCodeHost,
-		Execution: ExecutionUnrecorded(),
+		ValidationNotPerformed: r.ValidationNotPerformed,
+		Execution:              ExecutionUnrecorded(),
 	})
 	if p, ok := parkPhrase(outcome, r.Park); ok {
 		return p
@@ -520,6 +544,20 @@ func RecordPhrase(r store.Run) Phrase {
 		return p
 	}
 	return phraseByOutcome[OutcomeFailed]
+}
+
+// phraseIfUnvalidated is the row for a passed run whose record says
+// validation was not performed, and false otherwise. merged settles the run
+// as passed, so the row does not speak over a merge record.
+func phraseIfUnvalidated(status store.RunStatus, flag store.Optional[bool], merged bool) (Phrase, bool) {
+	if merged || status != store.RunPassed {
+		return Phrase{}, false
+	}
+	set, ok := flag.Get()
+	if !ok || !set {
+		return Phrase{}, false
+	}
+	return phraseUnvalidated, true
 }
 
 // parkPhrase is the bound's row for a failed run whose record names its park,
@@ -1566,7 +1604,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
-	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded)
+	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded, phraseUnvalidated)
 	for _, bound := range store.ParkBounds() {
 		if p, ok := phraseByPark[bound]; ok {
 			out = append(out, p)

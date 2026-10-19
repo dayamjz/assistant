@@ -20,7 +20,9 @@ import (
 // PRD section 5 requires this stage to:
 //  1. Forward the exact verified commit
 //  2. Only after confirming the update won't discard commits already on the target
-//  3. Require a durable record that a completed review approved a commit this one descends from
+//  3. Require a durable record that a completed review approved a commit this one descends from,
+//     unless pipeline.KeyValidationNotPerformed is set. Begin sets that key only when the
+//     run record says validation was not performed. The exception does not reach the anchor.
 //
 // # What it forwards to
 //
@@ -79,6 +81,13 @@ import (
 // work no completed review looked at. A review that completed while naming no
 // revision is refused too, because a comparison against nothing is a check
 // that passes by looking at nothing.
+//
+// When pipeline.KeyValidationNotPerformed is set, this gate does not apply
+// and reviewLaterCommits is not called, so the stage does not launch a
+// reviewer for a run that recorded that validation was not performed. The
+// anchor requirement below is unchanged, and the report carries a note
+// saying validation was not performed. The approved commit written then is
+// the head, because no review named one.
 //
 // # Commits written after the review (P5)
 //
@@ -155,6 +164,7 @@ func Push(deps StageDeps) pipeline.Implementation {
 		pipeline.KeyIntent,
 		pipeline.KeyIntentSupplied,
 		pipeline.KeyForkRepository,
+		pipeline.KeyValidationNotPerformed,
 	}, pipeline.StageResultKeys(pipeline.StageReview)...)
 	for _, stage := range fixingAfterReview() {
 		reads = append(reads, stage.FixKey())
@@ -184,28 +194,42 @@ func pushVerifiedCommit(ctx context.Context, deps StageDeps, in pipeline.Input) 
 
 	// A run whose review did not complete has nothing to forward, and that is
 	// read before anything else: it costs no remote read and it is the
-	// condition PRD section 5 states outright.
-	if !facts.reviewPassed {
-		return noApprovalToForward(facts), nil
-	}
-	if facts.reviewedCommit == "" {
-		return noReviewedCommit(facts), nil
-	}
-	descends, err := repo.IsAncestor(ctx, facts.reviewedCommit, facts.head)
-	if errors.Is(err, vcs.ErrRefNotFound) {
-		// The comparison could not be made, which P6 answers the same way it
-		// answers a fact that cannot be verified: refuse and report. Treating
-		// it as an error would fail the run over the one condition the
-		// principle names a refusal for.
-		return reviewedCommitUnreadable(facts, err), nil
-	}
-	if err != nil {
-		return pipeline.Output{}, fmt.Errorf(
-			"stages: establishing whether %s descends from the reviewed commit %s: %w",
-			facts.head, facts.reviewedCommit, err)
-	}
-	if !descends {
-		return notDescendedFromReview(facts), nil
+	// condition PRD section 5 states outright. A run whose record says
+	// validation was not performed has no review to require; the anchor
+	// below still does, and the report says the validation was not performed.
+	approved := facts.head
+	var later []findings.Finding
+	if facts.unvalidated {
+		later = []findings.Finding{{
+			ID:          "push-validation-not-performed",
+			Severity:    findings.SeverityInfo,
+			Action:      findings.ActionNote,
+			Description: "Validation was not performed. The update is anchored to the observation this run recorded.",
+		}}
+	} else {
+		if !facts.reviewPassed {
+			return noApprovalToForward(facts), nil
+		}
+		if facts.reviewedCommit == "" {
+			return noReviewedCommit(facts), nil
+		}
+		descends, err := repo.IsAncestor(ctx, facts.reviewedCommit, facts.head)
+		if errors.Is(err, vcs.ErrRefNotFound) {
+			// The comparison could not be made, which P6 answers the same way it
+			// answers a fact that cannot be verified: refuse and report. Treating
+			// it as an error would fail the run over the one condition the
+			// principle names a refusal for.
+			return reviewedCommitUnreadable(facts, err), nil
+		}
+		if err != nil {
+			return pipeline.Output{}, fmt.Errorf(
+				"stages: establishing whether %s descends from the reviewed commit %s: %w",
+				facts.head, facts.reviewedCommit, err)
+		}
+		if !descends {
+			return notDescendedFromReview(facts), nil
+		}
+		approved = facts.reviewedCommit
 	}
 
 	// The anchor is the run's own observation, taken by the rebase stage
@@ -236,10 +260,9 @@ func pushVerifiedCommit(ctx context.Context, deps StageDeps, in pipeline.Input) 
 	// pushed, and only when there are some: a head that is the reviewed commit
 	// costs no second review. It comes after the refusals that need no agent
 	// and before the target is read, so the decision below is made on a read
-	// taken after the review rather than before it.
-	approved := facts.reviewedCommit
-	var later []findings.Finding
-	if facts.head != facts.reviewedCommit {
+	// taken after the review rather than before it. A run that recorded that
+	// validation was not performed does not launch that review.
+	if !facts.unvalidated && facts.head != facts.reviewedCommit {
 		out, err := reviewLaterCommits(ctx, deps, repo, facts)
 		if err != nil {
 			return pipeline.Output{}, err
@@ -692,6 +715,9 @@ type pushState struct {
 	// change with, on the same terms the review stage does.
 	intent   string
 	supplied bool
+	// unvalidated says the run recorded that validation was not performed,
+	// so the review gate above does not apply. The anchor still does.
+	unvalidated bool
 	// laterRounds is what the last fix round of each stage between review and
 	// push said it changed, for the stages whose round left an account.
 	laterRounds []laterRound
@@ -727,6 +753,11 @@ func readPushState(state pipeline.Reader) (pushState, error) {
 		return pushState{}, err
 	}
 	facts.supplied, _ = supplied.Bool()
+	unvalidated, err := state.Get(pipeline.KeyValidationNotPerformed)
+	if err != nil {
+		return pushState{}, err
+	}
+	facts.unvalidated, _ = unvalidated.Bool()
 	for _, stage := range fixingAfterReview() {
 		v, err := state.Get(stage.FixKey())
 		if err != nil {

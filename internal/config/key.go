@@ -181,8 +181,24 @@ const (
 	// set; "direct" is section 12's deferred mode and is refused at parse
 	// time rather than accepted and ignored. It decides only what a task's
 	// own push does, and only through the posture recorded on the task at
-	// intake: it never changes what a person's push to the gate does.
+	// 	intake: it never changes what a person's push to the gate does.
 	KeyDelivery Key = "delivery"
+
+	// KeyReducedPath is "reduced_path": whether a run that asks may take a
+	// reduced path instead of the nine-stage gate. It is off by default, and
+	// off is not a reduced path: a run stays on the nine stages until this
+	// resolved value is record or publish and the run asks. The mode table
+	// in reduced.go states, for each value, the validation it requires, what
+	// it may publish, and who may authorize a merge. Every value names the
+	// same merge rule as autonomy.merge, so the path does not grant a merge.
+	//
+	// It is trusted-only, so a pushed branch cannot name a reduced path for
+	// itself (P7): a pushed copy setting it is dropped at the merge and
+	// reported as a rejection. The class also admits the operator's own file,
+	// as it does for every trusted-only key, and a trusted copy that sets the
+	// key wins over that file. It is not a delivery posture and not the
+	// deferred "direct" mode, which decodeDelivery still refuses.
+	KeyReducedPath Key = "reduced_path"
 
 	// KeySessionProvider is "session_provider": which terminal session
 	// provider the service starts a task's worker through, PRD section 8's
@@ -300,6 +316,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.AutonomyMerge = cloneSlice(v.([]string)) }},
 	{KeyDelivery, TrustTrusted, DefaultDelivery, decodeDelivery,
 		func(c *Config, v any) { c.Delivery = v.(Delivery) }},
+	{KeyReducedPath, TrustTrusted, ReducedPathOff, decodeReducedPath,
+		func(c *Config, v any) { c.ReducedPath = v.(ReducedPath) }},
 	{KeyAllowStandingConsent, TrustTrusted, false, decodeBool,
 		func(c *Config, v any) { c.AllowStandingConsent = v.(bool) }},
 	{KeySessionProvider, TrustGlobal, DefaultSessionProvider, decodeSessionProvider,

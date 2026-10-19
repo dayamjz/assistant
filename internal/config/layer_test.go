@@ -101,6 +101,7 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"allow_pushed_commands": true,
 		"autonomy": {"merge": ["owner/name"]},
 		"delivery": "local",
+		"reduced_path": "publish",
 		"allow_standing_consent": true,
 		"session_provider": "tmux"
 	}`
@@ -160,6 +161,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	}
 	if c.Delivery != DeliveryLocal {
 		t.Errorf("Delivery = %q", c.Delivery)
+	}
+	if c.ReducedPath != ReducedPathPublish {
+		t.Errorf("ReducedPath = %q", c.ReducedPath)
 	}
 	if c.SessionProvider != SessionProviderTmux {
 		t.Errorf("SessionProvider = %q", c.SessionProvider)

@@ -400,6 +400,7 @@ func TestAStartGivenATaskIsForStandingConsentAlone(t *testing.T) {
 			"no consent":         {Task: "nobody"},
 			"an intent":          {Task: "nobody", StandingConsent: true, Intent: "something"},
 			"a skip":             {Task: "nobody", StandingConsent: true, Skip: []string{"lint"}},
+			"a reduced path":     {Task: "nobody", StandingConsent: true, ReducedPath: true},
 		} {
 			if err := start(r); !errors.Is(err, ipc.ErrInvalidRequest) {
 				t.Errorf("a start given a task with %s came to %v, want an invalid request", name, err)

@@ -82,7 +82,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		task         string
 		hold         string
 		targetRun    bool
-		consent      bool
+		consent  bool
+		reduced  bool
 	)
 	if err := in.parseArgs("", 1, func(set *flag.FlagSet) {
 		set.StringVar(&intent, "intent", "", "what this change sets out to do, in your own terms")
@@ -105,6 +106,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.BoolVar(&consent, "standing-consent", false, "put the run this starts or attaches to under standing consent, "+
 			"where the repository's default branch sets "+string(config.KeyAllowStandingConsent)+": the program then answers "+
 			"the decisions about findings before the push itself, and never the push, pull request or checks ones")
+		set.BoolVar(&reduced, "reduced-path", false, "ask for the reduced path "+string(config.KeyReducedPath)+" names on the default branch; "+
+			"off by default, and a pushed branch cannot grant it")
 	}); err != nil {
 		return nil, err
 	}
@@ -180,7 +183,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		return nil, usagef("--answer and --cancel are two different things to do with one run; pass one")
 	}
 	if acting := actingOnTheRunInFlight(answered, cancel.on); acting != "" {
-		for _, name := range []string{"intent", "intent-supplied", "skip", "standing-consent"} {
+		for _, name := range []string{"intent", "intent-supplied", "skip", "standing-consent", "reduced-path"} {
 			if flagWasSet(in.flags, name) {
 				return nil, usagef("%s acts on the run this branch already has, and --%s is for starting one; pass one", acting, name)
 			}
@@ -206,7 +209,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		}
 	}
 	if tasked && !answered {
-		for _, name := range []string{"intent", "intent-supplied", "skip"} {
+		for _, name := range []string{"intent", "intent-supplied", "skip", "reduced-path"} {
 			if flagWasSet(in.flags, name) {
 				return nil, usagef("--task with --standing-consent attaches to the task's run, and --%s is for starting one; pass one", name)
 			}
@@ -240,6 +243,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		// the trusted copy; a refusal comes back as an invalid request and
 		// exits as incorrect usage.
 		StandingConsent: consent,
+		ReducedPath:     reduced,
 	}, &run)
 	return run, err
 }

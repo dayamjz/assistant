@@ -15,8 +15,11 @@ import (
 // # When the program merges
 //
 // Only a run that ended checks-passed - passed, with no pull request read
-// ending it - in a repository the operator's global-only autonomy.merge
-// lists, by the specifier the code host names it with. Nothing else reaches
+// ending it, and whose record does not say validation was not performed -
+// in a repository the operator's global-only autonomy.merge
+// lists, by the specifier the code host names it with. A reduced path does
+// not become checks-passed by completing, including where no_ci would have
+// made an empty check list green. Nothing else reaches
 // the code host here: a repository nobody listed is never asked anything,
 // and a run that passed with no pull request recorded has nothing to merge.
 //
@@ -121,6 +124,10 @@ func mergeAfterLiveRead(ctx context.Context, provider forge.Provider, number int
 // on a recorded merge it cleans up what the merge landed and releases what it
 // cleared, as settle does for a run its pull request's merge ended.
 func (s *Service) mergeUnderAutonomy(ctx context.Context, built *driver, record store.Run, facts passedPullRequest) error {
+	if validationNotPerformed(record) {
+		return fmt.Errorf("service: run %s was not merged: its record says validation was not performed, and %s merges only a run that ended checks-passed",
+			record.ID, config.KeyAutonomyMerge)
+	}
 	if !s.cfg.MergesIn(facts.specifier) {
 		return nil
 	}

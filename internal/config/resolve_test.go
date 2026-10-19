@@ -461,6 +461,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyAutonomyMerge:               `{"autonomy": {"merge": ["owner/name"]}}`,
 		KeyDelivery:                    `{"delivery": "local"}`,
 		KeyAllowStandingConsent:        `{"allow_standing_consent": true}`,
+		KeyReducedPath:                 `{"reduced_path": "record"}`,
 		KeySessionProvider:             `{"session_provider": "tmux"}`,
 	}
 	// Every schema key is covered, so a key added without a decision about its

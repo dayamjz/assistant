@@ -154,6 +154,11 @@ type Run struct {
 	// what lets a listing that has only the record phrase a completed run as
 	// pushed rather than checks-passed without restoring a checkpoint.
 	NoCodeHost Optional[bool] `json:"no_code_host,omitempty"`
+	// ValidationNotPerformed is whether begin recorded that this run took the
+	// reduced path. Known true means validation was not performed. Unknown
+	// means the run did not take that path, including a run recorded before
+	// the column existed. It is written once, and only as true.
+	ValidationNotPerformed Optional[bool] `json:"validation_not_performed,omitempty"`
 	// CreatedAt is when the run was recorded, which PRD section 8 requires to
 	// precede the creation of its directory.
 	CreatedAt time.Time `json:"created_at"`
@@ -573,6 +578,44 @@ func (s *Store) GiveRunStandingConsent(ctx context.Context, id string) (Run, err
 	return s.Run(ctx, id)
 }
 
+// SetRunValidationNotPerformed records that this run took the reduced path,
+// so validation was not performed. It is written once as true: a second
+// write is a no-op so a begin that failed after the first write can retry,
+// and a revision of a value already written is refused by the schema trigger.
+func (s *Store) SetRunValidationNotPerformed(ctx context.Context, id string) error {
+	const flag int64 = 1
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx,
+			`UPDATE run SET validation_not_performed = ?, updated_at = ? WHERE id = ? AND validation_not_performed IS NULL`,
+			flag, encodeTime(nowUTC()), id)
+		if err != nil {
+			return fmt.Errorf("store: recording run %s validation: %w", id, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("store: recording run %s validation: %w", id, err)
+		}
+		if affected == 1 {
+			return nil
+		}
+		var current Optional[int64]
+		switch err := tx.QueryRowContext(ctx, `SELECT validation_not_performed FROM run WHERE id = ?`, id).Scan(&current); {
+		case isNoRows(err):
+			return fmt.Errorf("store: recording run %s validation: %w", id, ErrNotFound)
+		case err != nil:
+			return fmt.Errorf("store: recording run %s validation: %w", id, err)
+		}
+		got, ok := current.Get()
+		if !ok {
+			return fmt.Errorf("store: recording run %s validation: %w", id, ErrNotFound)
+		}
+		if got == flag {
+			return nil
+		}
+		return fmt.Errorf("store: recording run %s validation: already settled the other way", id)
+	})
+}
+
 // SetRunNoCodeHost records that begin settled this run has no code host. It
 // is written once: a second write of the same settlement is a no-op so a
 // begin that failed after the first write can retry, and a write that would
@@ -654,19 +697,19 @@ const runColumns = `SELECT
 	approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
 	build_version, build_revision, build_modified, build_go, config_digest,
 	config_rejections, resolved_agent, park, standing_consent, held_moves, no_code_host,
-	created_at, updated_at`
+	validation_not_performed, created_at, updated_at`
 
 func scanRun(sc scanner) (Run, error) {
 	var r Run
 	var status, created, updated string
 	var modified int
 	var rejections, park, consent Optional[string]
-	var noCodeHost Optional[int64]
+	var noCodeHost, unvalidated Optional[int64]
 	if err := sc.Scan(
 		&r.ID, &r.RepositoryID, &r.Branch, &r.SubmittedHead, &r.Base, &r.CurrentHead, &status,
 		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.Intent, &r.IntentSource,
 		&r.Build.Version, &r.Build.Revision, &modified, &r.Build.Go, &r.ConfigDigest,
-		&rejections, &r.ResolvedAgent, &park, &consent, &r.HeldMoves, &noCodeHost,
+		&rejections, &r.ResolvedAgent, &park, &consent, &r.HeldMoves, &noCodeHost, &unvalidated,
 		&created, &updated,
 	); err != nil {
 		return Run{}, err
@@ -685,6 +728,9 @@ func scanRun(sc scanner) (Run, error) {
 	}
 	if flag, ok := noCodeHost.Get(); ok {
 		r.NoCodeHost = Known(flag != 0)
+	}
+	if flag, ok := unvalidated.Get(); ok {
+		r.ValidationNotPerformed = Known(flag != 0)
 	}
 	if r.CreatedAt, err = decodeTime(created); err != nil {
 		return Run{}, err

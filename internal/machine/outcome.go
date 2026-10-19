@@ -259,6 +259,13 @@ type Standing struct {
 	// predates that column or begin never settled it; then Execution's
 	// pipeline.KeyNoCodeHost is the fallback.
 	NoCodeHost store.Optional[bool]
+	// ValidationNotPerformed is whether the run's record says validation was
+	// not performed, read off store.Run.ValidationNotPerformed. A passed run
+	// with it known true reads as pushed: checks-passed would claim checks
+	// that did not run. The phrase for that reading is not the no-code-host
+	// sentence; RunPhrase chooses it. Unknown means the run did not take the
+	// reduced path.
+	ValidationNotPerformed store.Optional[bool]
 	// Execution is where the run's execution stands.
 	Execution Execution
 	// Advancing is whether a segment of the run was executing when the answer
@@ -282,13 +289,16 @@ type Standing struct {
 // merges: the gate stops at the end, unless a merge internal/service read
 // later, its own under the autonomy flag or a person's, was recorded, and PRD
 // section 9 makes that the point at
-// which a driving agent asks the person. The one completed run that reads as
-// pushed is one with no code host: the pull request and checks stages were
-// skipped for that reason, and checks-passed would claim checks that did not
-// run. Standing.NoCodeHost carries that fact from the run row when begin
-// settled it; otherwise Execution's pipeline.KeyNoCodeHost is the fallback for
-// a surface that restored a checkpoint. A passed record that has neither still
-// reads as checks-passed rather than inventing pushed. The one passed record
+// which a driving agent asks the person. A completed run reads as pushed in
+// two cases, and checks-passed would claim checks that did not run in both.
+// One is no code host: the pull request and checks stages were skipped for
+// that reason. Standing.NoCodeHost carries that fact from the run row when
+// begin settled it; otherwise Execution's pipeline.KeyNoCodeHost is the
+// fallback. The other is a run whose record says validation was not
+// performed. That reading uses the same outcome word and a different phrase,
+// which RunPhrase chooses, so it does not say there was no code host. A
+// merge record still reads as passed. A passed record that has neither fact
+// still reads as checks-passed rather than inventing pushed. The one passed record
 // that reads as passed is one whose merge record says a merge ended it, which
 // is Standing's PullRequestEnd, read off that record rather than inferred from
 // a checkpoint that still stands at the checks stage. A run that ended without
@@ -311,6 +321,9 @@ func OutcomeOf(s Standing) Outcome {
 	case store.RunPassed:
 		if s.PullRequestEnd == store.PullRequestMerged {
 			return OutcomePassed
+		}
+		if flag, ok := s.ValidationNotPerformed.Get(); ok && flag {
+			return OutcomePushed
 		}
 		if noHost, ok := s.NoCodeHost.Get(); ok {
 			if noHost {
@@ -355,6 +368,9 @@ func OutcomeOf(s Standing) Outcome {
 // that bound's action, ParkAction's, rather than the failed row's, which has to
 // cover a run that could not proceed as well as all three parks.
 func NextActionOf(s Standing) string {
+	if action, ok := unvalidatedActionOf(s); ok {
+		return action
+	}
 	outcome := OutcomeOf(s)
 	if outcome == OutcomeExecuting && !s.Advancing && !s.Execution.Recorded() {
 		return unrecordedAction
@@ -423,6 +439,23 @@ var nextActions = map[Outcome]string{
 	OutcomeCancelled:    "Nothing was undone. Start a fresh run when the change is ready again.",
 	OutcomeDecision:     "Answer the decision to carry the run on.",
 	OutcomeExecuting:    "Nothing yet. Attach to carry it on - that blocks until the next decision unless this service is already advancing the run, in which case it answers at once and you should pause before asking again.",
+}
+
+const unvalidatedAction = "Validation was not performed. This run is not one that ended checks-passed. " +
+	"Ask the person whether to merge it; this program will not merge it."
+
+// unvalidatedActionOf is the next action for a passed run whose record says
+// validation was not performed, and false when that is not the run. A merge
+// record settles the run as passed, so this does not speak over it.
+func unvalidatedActionOf(s Standing) (string, bool) {
+	if s.Record != store.RunPassed || s.PullRequestEnd == store.PullRequestMerged {
+		return "", false
+	}
+	flag, ok := s.ValidationNotPerformed.Get()
+	if !ok || !flag {
+		return "", false
+	}
+	return unvalidatedAction, true
 }
 
 // NextAction is what to do about a run this outcome describes, whether it has

@@ -468,6 +468,8 @@ type pushRun struct {
 	pushed         string
 	reviewedCommit string
 	reviewOutcome  pipeline.Outcome
+	// unvalidated says the run recorded that validation was not performed.
+	unvalidated bool
 }
 
 // newPushRun builds an upstream holding only main, and an isolated copy
@@ -630,8 +632,9 @@ func (r *pushRun) state(t *testing.T) map[pipeline.Key]graph.Value {
 		pipeline.KeyBase:                  graph.TextValue("main"),
 		pipeline.KeyHead:                  graph.TextValue(r.head),
 		pipeline.KeyPushAnchor:            graph.TextValue(r.anchor),
-		pipeline.KeyPushed:                graph.TextValue(r.pushed),
-		pipeline.StageReview.ReportKey():  graph.TextValue(string(review)),
+		pipeline.KeyPushed:                 graph.TextValue(r.pushed),
+		pipeline.KeyValidationNotPerformed: graph.BoolValue(r.unvalidated),
+		pipeline.StageReview.ReportKey():   graph.TextValue(string(review)),
 		pipeline.StageReview.OutcomeKey(): graph.TextValue(string(r.reviewOutcome)),
 	}
 }

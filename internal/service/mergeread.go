@@ -294,10 +294,11 @@ func (s *Service) readPersonMerge(ctx context.Context, record store.Run) (mergeR
 		return mergeReadFailed, true
 	}
 	standing := machine.Standing{
-		Record:     record.Status,
-		Park:       record.Park,
-		NoCodeHost: record.NoCodeHost,
-		Execution:  machine.ExecutionAt(latest.Status, latest.State),
+		Record:                 record.Status,
+		Park:                   record.Park,
+		NoCodeHost:             record.NoCodeHost,
+		ValidationNotPerformed: record.ValidationNotPerformed,
+		Execution:              machine.ExecutionAt(latest.Status, latest.State),
 	}
 	if ended {
 		standing.PullRequestEnd = merge.End
