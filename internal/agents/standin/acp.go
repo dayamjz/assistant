@@ -107,6 +107,12 @@ func serveACP(control string, args []string) int {
 			if record(callsPath(control), call) != nil {
 				return exitNoRecord
 			}
+			if refusal, ok := worker.refusal(text); ok {
+				if encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": -32603, "message": refusal}}) != nil {
+					return exitNoOutput
+				}
+				continue
+			}
 			reply := "standin: message received"
 			ends := false
 			for _, exchange := range worker.Exchanges {

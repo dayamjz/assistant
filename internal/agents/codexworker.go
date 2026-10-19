@@ -60,7 +60,7 @@ func (r *codexRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error
 		pending: map[uint64]chan codexMessage{}, send: make(chan struct{}, 1),
 	}
 	w.procWorker = &procWorker{
-		cmd: cmd, availability: &workerAvailability{}, stdin: input,
+		cmd: cmd, availability: &workerAvailability{agent: CodexName}, stdin: input,
 		out: &tailWriter{limit: r.settings.maxOut}, grace: r.settings.grace,
 		done: make(chan struct{}), slot: make(chan struct{}, 1),
 		frame: plainLine, format: OutputStreamJSON, stdinOpen: true,
@@ -191,9 +191,20 @@ func (w *codexWorker) call(ctx context.Context, method string, params any) (code
 	}
 }
 
+// failure is the typed account of a JSON-RPC error the app-server answered
+// a request with. One availabilityMarkers recognizes is also recorded, the
+// way completeTurn records a failed turn, because a turn/start refused this
+// way is followed by no turn/completed: without the record, Send would
+// return the typed error while CurrentWorkerFailure, which a worker handoff
+// polls, kept reading FailureNone. An error the table does not recognize is
+// the request's failure and is not recorded, on completeTurn's terms.
 func (w *codexWorker) failure(message string) error {
 	category, cause := availabilityCategory(FailureAgent, message)
-	return &WorkerError{Agent: CodexName, Failure: category, Message: message, Err: cause}
+	failure := &WorkerError{Agent: CodexName, Failure: category, Message: message, Err: cause}
+	if category != FailureAgent {
+		w.availability.fail(failure)
+	}
+	return failure
 }
 
 // Send writes one turn/start and returns when that request is accepted.

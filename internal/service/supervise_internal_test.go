@@ -249,9 +249,11 @@ func openLoopHooked(t *testing.T, h *home.Home, records *store.Store, terminals 
 
 // pass makes the loop run one pass and returns that pass's report. The
 // pass begins when the loop takes the kick, which is after the test's last
-// step, and the report is read off the channel the kick carried, so it is
-// the kicked pass's whatever other passes did: no report of a pass the loop
-// made on its own can be returned in its place.
+// step, and the report is read off the channel the kick carried, so what it
+// returns is the kicked pass's own report, whatever other passes did: no
+// report of a pass the loop made on its own can be returned in its place.
+// When no incarnation is idle to take the kick, or the kicked pass is never
+// reported, the test fails rather than read some other pass's report.
 func (l *loopSubject) pass(t *testing.T) passReport {
 	t.Helper()
 	reply := make(chan passReport, 1)

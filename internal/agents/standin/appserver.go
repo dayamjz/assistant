@@ -126,6 +126,12 @@ func serveAppServer(control string, args []string) int {
 			if record(callsPath(control), call) != nil {
 				return exitNoRecord
 			}
+			if refusal, ok := worker.refusal(text); ok {
+				if encoder.Encode(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": refusal}}) != nil {
+					return exitNoOutput
+				}
+				continue
+			}
 			if encoder.Encode(map[string]any{"id": m.ID, "result": map[string]any{"turn": map[string]any{"id": "standin-codex-turn", "status": "inProgress"}}}) != nil {
 				return exitNoOutput
 			}

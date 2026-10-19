@@ -15,6 +15,9 @@ import (
 // the Recorded lines one after another, or for a Run exchange the Ran of the
 // command the line carries.
 func (e Exchange) answer(line string) (string, error) {
+	if e.Refuse != "" {
+		return "", errors.New("a Refuse exchange is answered only by a JSON-RPC worker, which has a request to refuse")
+	}
 	if len(e.Recorded) > 0 {
 		return strings.Join(e.Recorded, "\n"), nil
 	}
@@ -37,12 +40,28 @@ func (e Exchange) answer(line string) (string, error) {
 	return string(encoded), nil
 }
 
+// refusal is the Refuse text of the first exchange that answers line, and
+// whether that exchange is a Refuse one: a JSON-RPC worker answers the
+// request with an error then, and otherwise goes on to answer as it does.
+func (w *WorkerScript) refusal(line string) (string, bool) {
+	for _, exchange := range w.Exchanges {
+		if exchange.answers(line) {
+			return exchange.Refuse, exchange.Refuse != ""
+		}
+	}
+	return "", false
+}
+
 // valid refuses an exchange whose Run cannot be answered as Run says: one
 // with no Contains to find the command after, and one with a Reply the Ran
 // would replace; and one whose Recorded lines cannot be played back as
 // Recorded says: beside a Reply, a Run or a Write they would replace, or
-// carrying a line with a newline in it.
+// carrying a line with a newline in it; and a Refuse exchange beside
+// anything its refusal would replace.
 func (e Exchange) valid() error {
+	if e.Refuse != "" && (e.Reply != "" || e.Run || e.Write || len(e.Recorded) > 0 || e.Ends) {
+		return errors.New("a Refuse exchange answers with a JSON-RPC error in place of a Reply, a Run, a Write, Recorded lines or an end, so it may have none of them")
+	}
 	if len(e.Recorded) > 0 {
 		if e.Reply != "" || e.Run || e.Write {
 			return errors.New("an exchange playing Recorded lines prints them in place of a Reply, a Run or a Write, so it may have none of them")

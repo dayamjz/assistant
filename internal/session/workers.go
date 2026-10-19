@@ -88,10 +88,11 @@ func (w *Workers) Member(group int) (Membership, bool) {
 	return live(w.groups[group])
 }
 
-// Hosted reports the membership of the worker whose terminal the process
-// host names hosts, and whether that worker's done signal has not closed. A
-// zero identity hosts nobody, so a pipe worker's membership is never
-// answered here.
+// Hosted looks a worker up by the agents.Identity of the tmux server
+// process its membership recorded as Host, and reports that membership and
+// whether the worker's done signal has not closed, so a server is found
+// only for its worker's lifetime. A zero identity hosts nobody, so a pipe
+// worker's membership is never answered here.
 func (w *Workers) Hosted(host agents.Identity) (Membership, bool) {
 	if host == (agents.Identity{}) {
 		return Membership{}, false

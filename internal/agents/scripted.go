@@ -85,7 +85,7 @@ func (r *scriptedRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, er
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
-	worker, err := startWorker(ctx, procSpec{
+	worker, err := startWorker(ctx, ScriptedName, procSpec{
 		bin:    r.resolved,
 		args:   slices.Clone(r.extra),
 		dir:    spec.Dir,

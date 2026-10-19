@@ -22,7 +22,10 @@ const (
 	// with ErrUnknownOrigin rather than being treated as any of the others.
 	OriginUnknown Origin = iota
 	// OriginGlobal is the operator's own configuration file in their home. It
-	// is the only origin that may set a TrustGlobal key.
+	// is the only origin that may set a TrustGlobal key, and the one a
+	// TrustGlobalLoosens key takes its floor from: the value set here, or
+	// the key's default where nothing is, is what a repository layer may
+	// name or tighten and never loosen.
 	OriginGlobal
 	// OriginTrusted is a repository file read from the default branch at a
 	// commit resolved by a fresh fetch.
