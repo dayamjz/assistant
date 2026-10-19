@@ -1,10 +1,14 @@
 package machine
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"sort"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // CatchUp is PRD section 9's catching up: the one read assistant watch
@@ -21,6 +25,11 @@ import (
 // than being dropped. Waiting, UnderWay and Stopped are never filtered:
 // an open decision is shown until it is answered, and the other two are
 // what is true now.
+//
+// The read's digest, its four parts in counts, is not a field: it is
+// Digest, computed from the parts on every call, and MarshalJSON writes it
+// beside them, so the counts a structured answer carries and the parts they
+// count cannot come apart and no surface has an assignment site for one.
 type CatchUp struct {
 	// Waiting is every open decision, a task's hold and a run's, oldest
 	// first, each with the answer that closes it.
@@ -41,6 +50,108 @@ type CatchUp struct {
 	// fleet view warned before this read existed, and the read replacing
 	// its opening listing keeps the warning rather than dropping it.
 	Supervision *Supervision `json:"supervision,omitempty"`
+}
+
+// Digest is the catch-up read in counts, the fleet digest assistant watch
+// prints ahead of the four parts. Every count is of this read's own parts
+// and of nothing else, so it adds no fact the parts do not carry and counts
+// nothing a person marked seen: Landed is what the seen mark left unseen,
+// shown or counted in MoreLanded.
+//
+// Unconfirmed is the one count that is not a part's length. It is how many
+// of the tasks under way resolve Running without Resolution.Progress: work
+// whose worker's own newest word says it is on the work while no live
+// terminal was observed on this read, which internal/taskstate resolves
+// from the worker's history rather than from the process tier. The digest
+// says that work was not seen moving rather than counting it as moving, and
+// TaskPhrase gives the task's own line the same reading.
+//
+// A task resolved Unknown is in both UnderWay and Stopped, because the read
+// lists it in both parts (internal/service's catchup.go says why), so the
+// counts are not a partition of the fleet and are not to be summed.
+func (c CatchUp) Digest() Digest {
+	d := Digest{
+		Waiting:   len(c.Waiting),
+		Landed:    len(c.Landed) + c.MoreLanded,
+		UnderWay:  len(c.UnderWay.Tasks),
+		Advancing: len(c.UnderWay.Runs),
+		Stopped:   len(c.Stopped),
+	}
+	for _, task := range c.UnderWay.Tasks {
+		if unconfirmed(task) {
+			d.Unconfirmed++
+		}
+	}
+	return d
+}
+
+// unconfirmed reports whether a task resolves Running with no positive
+// evidence behind it. internal/taskstate sets Progress for Running only when
+// the terminal was observed live, so a false one is the worker's own word
+// and nothing more.
+func unconfirmed(t Task) bool {
+	return t.State.State == taskstate.Running && !t.State.Progress
+}
+
+// MarshalJSON writes the read with its digest beside the parts, under the
+// key digest. The digest is computed here from the parts rather than
+// carried, so what travels is the parts and their counts as one reading,
+// and a decoded read recomputes the same counts through Digest. HTML
+// escaping is off for the reason Run.MarshalJSON gives.
+func (c CatchUp) MarshalJSON() ([]byte, error) {
+	type fields CatchUp
+	var document bytes.Buffer
+	enc := json.NewEncoder(&document)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(struct {
+		fields
+		Digest Digest `json:"digest"`
+	}{fields(c), c.Digest()}); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(document.Bytes(), []byte("\n")), nil
+}
+
+// UnmarshalJSON reads a read back, digest included. The digest is not kept,
+// because Digest recomputes it from the parts, and a document whose digest
+// disagrees with its own parts is refused rather than read: MarshalJSON
+// cannot produce one, so such a document was not written by this shape. A
+// document with no digest at all decodes, since only the parts are facts.
+func (c *CatchUp) UnmarshalJSON(data []byte) error {
+	type fields CatchUp
+	var read struct {
+		fields
+		Digest *Digest `json:"digest"`
+	}
+	if err := json.Unmarshal(data, &read); err != nil {
+		return err
+	}
+	decoded := CatchUp(read.fields)
+	if read.Digest != nil && *read.Digest != decoded.Digest() {
+		return fmt.Errorf("the catch-up read carries the digest %+v and its parts count %+v", *read.Digest, decoded.Digest())
+	}
+	*c = decoded
+	return nil
+}
+
+// Digest is the catch-up read's four parts in counts, as CatchUp.Digest
+// computes it. It is a reading of one CatchUp and owns no fact of its own.
+type Digest struct {
+	// Waiting is how many decisions wait on the person: len(Waiting).
+	Waiting int `json:"waiting"`
+	// Landed is how many landed records are not yet marked seen: the ones
+	// Landed shows and the ones MoreLanded counts.
+	Landed int `json:"landed"`
+	// UnderWay is how many tasks are in flight: len(UnderWay.Tasks).
+	UnderWay int `json:"under_way"`
+	// Unconfirmed is how many of UnderWay resolve Running with no live
+	// terminal observed, which is never counted as work seen moving.
+	Unconfirmed int `json:"unconfirmed"`
+	// Advancing is how many runs a segment is advancing now:
+	// len(UnderWay.Runs).
+	Advancing int `json:"advancing"`
+	// Stopped is how many tasks stopped without a decision: len(Stopped).
+	Stopped int `json:"stopped"`
 }
 
 // Shown is the landed records this read showed, in the order it showed

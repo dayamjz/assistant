@@ -91,6 +91,14 @@ assistant watch --once          # what waits on you, what landed, what is under 
 The state is resolved from the records each time it is read. Do not infer it
 from the last event you saw.
 
+`assistant --json watch --once` carries a `digest` of that read: counts of
+what waits on the person, what landed unseen, what is under way, what is being
+validated, and what stopped, plus `unconfirmed`, the tasks under way whose
+worker said it is at work while no live terminal was seen. Do not report
+unconfirmed work to the person as moving; read the task first. The digest
+acknowledges no wake, so it is no substitute for your own drain and
+acknowledgement.
+
 When an investigation has filed its report, `assistant --json tasks ID`
 carries it at `report`: `summary`, `findings`, `evidence` (paths the worker
 named), `evidence_file` (the on-disk copy under the task's directory), and

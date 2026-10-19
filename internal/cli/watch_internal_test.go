@@ -301,7 +301,7 @@ func TestWatchSpeaksThePhraseTableAndEndsWhenInterrupted(t *testing.T) {
 		if _, err := records.AppendTaskEvent(t.Context(), "watchedtaska", "working", "the worker says so"); err != nil {
 			t.Fatal(err)
 		}
-		waitLine(t, seen, "A worker is on this work.")
+		waitLine(t, seen, "The worker last said it is on this work, but it was not seen at it just now.")
 	}, "watch")
 	if code != machine.ExitOK {
 		t.Fatalf("an interrupted watch exited %s, want ok", code)

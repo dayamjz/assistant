@@ -149,13 +149,15 @@ func HostInstallPhrase(h HostInstall) Phrase {
 // phraseByState is the one table from a task's resolved state to what a person
 // reads about it. Every state internal/taskstate can resolve has a row, which
 // the vocabulary test derives from taskstate.States and checks, so a state
-// added there fails that test until it is phrased here. Two states are
+// added there fails that test until it is phrased here. Three states are
 // translated from more than the word: Paused is never shown as a word, which
 // PRD section 6 and its translation row require, and renders as what the
-// worker said it is waiting on through WaitingPhrase; and Unknown after a
+// worker said it is waiting on through WaitingPhrase; Unknown after a
 // note the program appended, a promotion or a relaunch, is not a failure
-// but a worker that has not reported yet, which NoWordYet says. TaskPhrase
-// is the one reader, and it is where those two translations are chosen.
+// but a worker that has not reported yet, which NoWordYet says; and Running
+// is this table's row only with a live terminal behind it, and
+// phraseWorkerUnseen without one. TaskPhrase is the one reader, and it is
+// where those translations are chosen.
 //
 // No row carries an outcome word. A task's state is PRD section 6's own
 // vocabulary and not a second rendering of a run's outcome, so a task with no
@@ -299,6 +301,19 @@ var (
 	}
 )
 
+// phraseWorkerUnseen is Running without Resolution.Progress: the worker's
+// own newest word says it is on the work, and no live terminal was observed
+// on this read, because the terminal was gone from view, belongs to another
+// home, or could not be probed. internal/taskstate sets Progress for Running
+// only from a terminal observed live, so this row is the one a worker that
+// is offline or unknown reads as, and it never says the work is moving.
+// phraseByState's Running row is the one with that evidence behind it.
+var phraseWorkerUnseen = Phrase{
+	Outcome:     "The worker last said it is on this work, but it was not seen at it just now.",
+	Consequence: "Nothing here shows the work is moving.",
+	Decision:    "Check on the worker before counting on this work.",
+}
+
 // NoWordYet is the row for a task whose newest history entry is a note the
 // program appended, a promotion or a relaunch, and which therefore resolves
 // Unknown: the worker was launched, or launched again, and has not reported
@@ -338,7 +353,9 @@ func WaitingPhrase(on string) Phrase {
 // person reads. It is phraseByState's row for the state, with the two
 // translations that row table describes: Paused is WaitingPhrase over
 // Task.Waiting, and Unknown resolved at the event tier from a note the
-// program appended is NoWordYet. Held resolved from the hold tier is
+// program appended is NoWordYet. Running without Resolution.Progress is
+// phraseWorkerUnseen, so a worker no live terminal was observed for is
+// never read as a worker at its work. Held resolved from the hold tier is
 // phraseTaskHeld, which says how a hold naming the task is answered; Held
 // from a run or from the worker's own history keeps the table's row.
 // Reported points at assistant --json tasks for the stored report and never
@@ -351,6 +368,8 @@ func TaskPhrase(t Task) Phrase {
 	switch {
 	case state == taskstate.Paused:
 		return WaitingPhrase(t.Waiting)
+	case unconfirmed(t):
+		return phraseWorkerUnseen
 	case state == taskstate.Held && t.State.Source == taskstate.SourceHold:
 		return phraseTaskHeld
 	case state == taskstate.Landed && t.State.Source == taskstate.SourceRecord && t.State.Basis.LandedRun == "" &&
@@ -870,6 +889,63 @@ func CatchUpPhrases(c CatchUp) (waiting, landed, underWay, stopped Phrase) {
 		stopped = phraseNothingStopped
 	}
 	return waiting, landed, underWay, stopped
+}
+
+// DigestPhrase is the catch-up read's digest line unless a pull-guard
+// supervision warning precedes it, in which case it is second: its four
+// parts in counts, as CatchUp.Digest computed them. A digest with nothing in
+// any part is the quiet row. Otherwise the outcome counts each part, the
+// consequence says how much of the work under way no worker was seen at
+// (Digest.Unconfirmed) or that the lines below are what is counted, and the
+// decision names the most urgent thing the counts show: a decision waiting
+// on the person, then work that stopped, then work no worker was seen at.
+// It names no task, run or record; the lines below and the structured
+// answer do.
+func DigestPhrase(d Digest) Phrase {
+	if d == (Digest{}) {
+		return phraseDigestQuiet
+	}
+	p := Phrase{
+		Outcome: fmt.Sprintf("In short: %d decision(s) are waiting on you, %d item(s) were merged or cleared away since you last marked what you had seen, "+
+			"%d piece(s) of work are under way, %d change(s) are being validated now, and %d piece(s) of work stopped without asking you anything.",
+			d.Waiting, d.Landed, d.UnderWay, d.Advancing, d.Stopped),
+		Consequence: "Each count is of the lines below.",
+		Decision:    "Nothing to decide.",
+	}
+	if d.Unconfirmed > 0 {
+		p.Consequence = fmt.Sprintf("For %d of the work under way, the worker last said it is on it but was not seen at it just now, so that work is not counted as moving.", d.Unconfirmed)
+	}
+	switch {
+	case d.Waiting > 0:
+		p.Decision = "Answer what waits on you first, as its line says."
+	case d.Stopped > 0:
+		p.Decision = "Read what stopped and decide whether to pick it up or let it go."
+	case d.Unconfirmed > 0:
+		p.Decision = "Check on the work no worker was seen at."
+	case d.Landed > 0:
+		p.Decision = "Once you have read what was merged or cleared away, run assistant watch --mark-seen to mark it."
+	}
+	return p
+}
+
+// digestRows is DigestPhrase's rows for the table, one per decision it can
+// choose and each consequence, with sample counts standing in for a read's.
+func digestRows() []Phrase {
+	return []Phrase{
+		DigestPhrase(Digest{}),
+		DigestPhrase(Digest{Waiting: 1, Landed: 1, UnderWay: 1, Advancing: 1, Stopped: 1}),
+		DigestPhrase(Digest{Stopped: 1, UnderWay: 1, Unconfirmed: 1}),
+		DigestPhrase(Digest{UnderWay: 2, Unconfirmed: 1}),
+		DigestPhrase(Digest{Landed: 1}),
+		DigestPhrase(Digest{UnderWay: 1, Advancing: 1}),
+	}
+}
+
+// phraseDigestQuiet is the digest of a read with nothing in any part.
+var phraseDigestQuiet = Phrase{
+	Outcome:     "In short: nothing waits on you, nothing new was merged or cleared away, and nothing is under way or stopped.",
+	Consequence: "Nothing here needs you right now.",
+	Decision:    "Nothing to decide.",
 }
 
 // LandedPhrase is what a person reads about one landed record: the merge
@@ -1750,7 +1826,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
-	out = append(out, phraseTaskHeld, NoWordYet, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
+	out = append(out, phraseTaskHeld, NoWordYet, phraseWorkerUnseen, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
 	for _, outcome := range Outcomes() {
 		if p, ok := phraseByOutcome[outcome]; ok {
 			out = append(out, p)
@@ -1800,6 +1876,7 @@ func TablePhrases() []Phrase {
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)
 	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
 		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
+	out = append(out, digestRows()...)
 	out = append(out, defaultBranchRows()...)
 	out = append(out, upstreamRows()...)
 	out = append(out, forkRows()...)
