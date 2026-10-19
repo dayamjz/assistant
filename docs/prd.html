@@ -2159,7 +2159,12 @@ flowchart TB
     stage makes and says so: a worker's turns and any price are not in it. The local protocol
     carries the same read as one open method, so a driving agent gets the same model. It is a
     detailed evidence document in P13's sense, because its rows are agent names, model identifiers,
-    and stage purposes; the line pointing at it is phrased. No verb is added.
+    and stage purposes; the line pointing at it is phrased. It also carries a ceiling line stating
+    where the recorded use stands against section 10's <code>usage_ceiling</code>: no ceiling set,
+    under it, reached, not weighable because a call did not report a count it is set on, or not
+    known because the record could not be read, with the exact figures when a count is set. The
+    line is over the ceiling's own window, which need not be the window the view was asked for. No
+    verb is added.
   </p>
   <p class="mb-4 opacity-90">
     The <b>log view</b> is a flag on <code>assistant runs</code> given with a run, naming a stage. It
@@ -2522,6 +2527,11 @@ flowchart TB
         <tr><td><code>session_provider</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>pipe</code></td><td>Which terminal session provider the service starts every worker through: <code>pipe</code>, the reference provider, or <code>tmux</code>. It chooses which program starts every worker, and so which process starts with your credentials, and it is one choice for the whole service, so no repository copy, trusted or pushed, may set it (P7).</td></tr>
         <tr><td><code>session_reuse</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
         <tr><td><code>decision_model</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>evaluate</code></td><td>The mode of the checks in section 5, "Checks a decision model may add": <code>evaluate</code>, <code>enforce</code>, or <code>off</code>. They run against the one supported provider, and only where the provider's key is in the operator's environment, never in a configuration file; with the key present they send the changed lines of every reviewed file to that provider.</td></tr>
+        <tr><td><code>usage_ceiling.window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>How far back from each comparison the usage ceiling sums section 8's agent invocation record. The ceiling is the home's, not a run's: it is compared against that record across every run within the window, and it is not one of the three loop bounds, so it parks nothing. Before every agent call a stage body or a fix round starts, the service compares it, and when it refuses, that call is not started and the run holds for you on an <code>ask</code> whose remedy lies outside the change, which standing consent leaves alone. Equal counts as reached. A record that cannot be read, or a call in the window that did not report a count a ceiling is set on, refuses too, because missing information is never read as room. What it bounds is section 14, decision 17. The limits table bounds it on both sides. No repository copy, trusted or pushed, may set it or any other <code>usage_ceiling</code> key; a repository file naming one is refused at parse time (P7).</td></tr>
+        <tr><td><code>usage_ceiling.input_tokens</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">0</code></td><td>The ceiling on recorded input tokens, a whole number. Zero is no ceiling on that count. <code>usage_ceiling.window</code> says what it is compared against and what reaching it does.</td></tr>
+        <tr><td><code>usage_ceiling.output_tokens</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">0</code></td><td>The ceiling on recorded output tokens, on the same terms.</td></tr>
+        <tr><td><code>usage_ceiling.cache_read_tokens</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">0</code></td><td>The ceiling on recorded cache read tokens, on the same terms.</td></tr>
+        <tr><td><code>usage_ceiling.cache_creation_tokens</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">0</code></td><td>The ceiling on recorded cache creation tokens, on the same terms.</td></tr>
         <tr><td><code>commit.fix_message</code></td><td><code>fix: {summary}</code></td><td>Subject line for fix commits. <code>{summary}</code> is the single required substitution, replaced by the agent's summary of the fix; a template without it is invalid. The template, the agent's summary, and the rendered result are each validated for length and for characters that could disguise content before anything is staged.</td></tr>
       </tbody>
     </table>
@@ -2661,6 +2671,8 @@ flowchart TB
         <tr><td>Stall inspection count ceiling</td><td><code class="prd-num">100</code></td><td><code>stall_inspection_count</code>. Above this a stall surfaces more often than anyone would read before an inspection is demanded. Chosen, not measured.</td></tr>
         <tr><td>Merge authority entries</td><td><code class="prd-num">64</code></td><td>Elements of <code>autonomy.merge</code>. Chosen, not measured.</td></tr>
         <tr><td>Relaunch attempts ceiling</td><td><code class="prd-num">20</code></td><td><code>relaunch_attempts</code>. Above this a worker that fails the same way every time is restarted for days before you hear. The floor is zero, which is a value you may choose. Chosen, not measured.</td></tr>
+        <tr><td>Usage ceiling window floor</td><td><code>1m</code></td><td><code>usage_ceiling.window</code>. Below this a ceiling bounds little more than the call in flight. Chosen, not measured.</td></tr>
+        <tr><td>Usage ceiling window ceiling</td><td><code>8760h</code></td><td><code>usage_ceiling.window</code>. The same year <code>checks_timeout</code> is bounded by. Chosen, not measured.</td></tr>
       </tbody>
     </table>
   </div>
@@ -2992,6 +3004,11 @@ flowchart TB
           <td class="prd-num">16</td>
           <td>P9's rule that a wake is absorbed <b>only on positive evidence</b> is about wakes that carry evidence; the program's own entries are absorbed by their kind.</td>
           <td>Decided 2026-10-19 (#281, #320). P9 gains one sentence saying so, and section 5's flowchart gains the path: <code>queued</code> and <code>dispatched</code> record the program's own act, carry no evidence of anything, and never wake the coordinator.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">17</td>
+          <td>The usage ceiling is <b>a bound on starting an agent call</b>, across the whole home, not on what the calls spend.</td>
+          <td>Decided 2026-10-19 (#306, #372). Section 10 gains the five global-only <code>usage_ceiling</code> keys and their window bounds, and section 9's usage view gains the ceiling line. It bounds starts and not spend: a call is counted when it finishes, so one call started under the ceiling can carry the total past it, two concurrent starts can both pass, and calls already running are not cancelled. A worker's own turns and the decision-model checks are not covered.</td>
         </tr>
       </tbody>
     </table>

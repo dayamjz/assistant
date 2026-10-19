@@ -239,8 +239,9 @@ const (
 	// open. Nor is it the routing by quota or price PRD section 12 defers: it
 	// asks no provider what remains of a quota and carries no price.
 	//
-	// PRD section 10's keys table has no row for these yet, which the pull
-	// request that added them raised with the owner rather than settled.
+	// PRD section 10's schema has one row per key and its limits table the
+	// window's floor and ceiling; section 14's decision 17 says what the
+	// ceiling bounds.
 	KeyUsageCeilingWindow Key = "usage_ceiling.window"
 	// KeyUsageCeilingInputTokens is "usage_ceiling.input_tokens", the
 	// ceiling on recorded input tokens; KeyUsageCeilingWindow owns the rest.
