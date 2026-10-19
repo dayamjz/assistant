@@ -125,8 +125,12 @@ type Exchange struct {
 	Write bool `json:"write,omitempty"`
 	// Recorded are lines printed on standard output verbatim, each followed
 	// by a newline, in place of the answer: in stream mode in place of the
-	// three lines a turn otherwise prints, and in line mode in place of
-	// Reply. It is how a test plays back output a real agent was recorded
+	// three lines a turn otherwise prints, in app-server mode after the
+	// turn/start result and in place of the agent message and the idle
+	// that otherwise follow it, and in line mode in place of Reply. With
+	// Ends, an app-server that plays back a partial turn exits before the
+	// turn settles, which is the app-server dying mid-turn. It is how a
+	// test plays back output a real agent was recorded
 	// writing, so what it prints is that agent's shape rather than one the
 	// stand-in made up, which is the test's to keep true of what it plays.
 	// Reply must be empty and Run and Write unset beside it, and no line

@@ -68,6 +68,15 @@ var (
 	// to a process that is gone would be lost, so the send is refused rather
 	// than reported as delivered.
 	ErrWorkerEnded = errors.New("agents: the worker is no longer running")
+	// ErrCredentialRefused is the cause an *InvocationError or a *WorkerError
+	// carries when the agent reported that its provider had no credential
+	// for it or rejected the one it sent. The failure it rides on is
+	// FailureUnavailable, so the fallback rule is unchanged; this names which
+	// outage it was, so a person is told to log in rather than to wait. It is
+	// only as good as what the adapter read it from, which availability.go
+	// states per adapter: a structured field where the CLI emits one, a text
+	// line pinned to an observed CLI version where it does not.
+	ErrCredentialRefused = errors.New("agents: the agent's provider has no credential for it or rejected the one it sent")
 )
 
 // CapabilityError reports a path refused because the adapter has not declared

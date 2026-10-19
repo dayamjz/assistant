@@ -81,6 +81,8 @@ func Main() {
 		os.Exit(serveAppServer(control, args))
 	case slices.Contains(args, "acp"):
 		os.Exit(serveACP(control, args))
+	case codexExecArgs(args):
+		os.Exit(serveCodexExec(control, args))
 	case interactiveArgs(args):
 		os.Exit(serveInteractiveWorker(control, args))
 	case !oneShotArgs(args):
@@ -204,7 +206,7 @@ func serve(control string, args []string) int {
 		fmt.Fprintf(os.Stderr, "standin: no step of the script answers this invocation: %s\n", call)
 		return ExitUnscripted
 	}
-	return emit(script.Steps[step].Reply, call)
+	return emit(script.Steps[step].Reply, call, Envelope.wire)
 }
 
 // serveWorker runs this process as a worker: it records itself, greets, then
@@ -332,7 +334,11 @@ func choose(control string, script Script, call Call) (int, error) {
 // because that prompt is the one thing a Review needs that the script could
 // not hold. It fills the envelope and only an empty one, so a reply stating
 // both an envelope and a review is answered with the envelope it stated.
-func emit(reply Reply, call Call) int {
+//
+// encode is how this mode puts an envelope on the wire: Envelope.wire for
+// the adapters that read one result object, Envelope.codexWire for Codex
+// exec.
+func emit(reply Reply, call Call, encode func(Envelope, Call) ([]byte, error)) int {
 	if reply.Envelope == nil && reply.Review != nil {
 		report, err := reply.Review.report(call.Prompt)
 		if err != nil {
@@ -355,7 +361,7 @@ func emit(reply Reply, call Call) int {
 		}
 	}
 	if reply.Envelope != nil {
-		encoded, err := reply.Envelope.wire(call)
+		encoded, err := encode(*reply.Envelope, call)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "standin: encoding the envelope: "+err.Error())
 			return exitNoOutput

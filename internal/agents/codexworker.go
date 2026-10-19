@@ -74,7 +74,7 @@ func (r *codexRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error
 	}
 	go func() {
 		defer close(w.done)
-		_ = cmd.Wait()
+		w.exited(cmd.Wait())
 		terminateTree(cmd.Process, r.settings.grace, false, nil)
 	}()
 	start, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -108,11 +108,15 @@ type codexMessage struct {
 
 type codexWorker struct {
 	*procWorker
-	mu            sync.Mutex
-	next          uint64
-	pending       map[uint64]chan codexMessage
-	send          chan struct{}
-	settled       chan struct{}
+	mu      sync.Mutex
+	next    uint64
+	pending map[uint64]chan codexMessage
+	send    chan struct{}
+	settled chan struct{}
+	// ended is the typed failure of an app-server that exited while a turn
+	// it was sent was still running, nil otherwise. It is written once, by
+	// exited, before done is closed, so whoever sees done closed reads it.
+	ended         *WorkerError
 	thread, route string
 	model, effort string
 }
@@ -183,13 +187,13 @@ func (w *codexWorker) call(ctx context.Context, method string, params any) (code
 	case <-ctx.Done():
 		return codexMessage{}, ctx.Err()
 	case <-w.done:
-		return codexMessage{}, ErrWorkerEnded
+		return codexMessage{}, w.endedError()
 	}
 }
 
 func (w *codexWorker) failure(message string) error {
-	category := availabilityCategory(FailureAgent, message)
-	return &WorkerError{Agent: CodexName, Failure: category, Message: message}
+	category, cause := availabilityCategory(FailureAgent, message)
+	return &WorkerError{Agent: CodexName, Failure: category, Message: message, Err: cause}
 }
 
 // Send writes one turn/start and returns when that request is accepted.
@@ -208,7 +212,7 @@ func (w *codexWorker) Send(ctx context.Context, text string) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-w.done:
-		return ErrWorkerEnded
+		return w.endedError()
 	}
 	defer func() { <-w.send }()
 	if err := w.finishTurn(ctx); err != nil {
@@ -252,7 +256,7 @@ func (w *codexWorker) finishTurn(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-w.done:
-		return ErrWorkerEnded
+		return w.endedError()
 	}
 }
 
@@ -315,6 +319,10 @@ func (w *codexWorker) receive(line []byte) {
 		w.markIdle()
 		return
 	}
+	if message.Method == "turn/completed" {
+		w.completeTurn(message.Params)
+		return
+	}
 	if message.Method != "" || len(message.ID) == 0 {
 		return
 	}
@@ -329,6 +337,111 @@ func (w *codexWorker) receive(line []byte) {
 	if reply != nil {
 		reply <- message
 	}
+}
+
+// completeTurn reads a turn/completed notification. Only a failed one acts:
+// Codex CLI 0.163.0 was observed to end a failed turn this way after moving
+// the thread to systemError, with no idle after it, so the turn is settled
+// here or the next Send would wait on an idle that never comes. A completed
+// turn is still settled by its idle, as before, so an idle that follows a
+// turn/completed cannot settle the turn after it. The failure is classified
+// by codexTurnFailure, and only a recognized one is recorded, because a
+// recorded failure is what a worker handoff acts on and an ordinary failed
+// turn is not a reason to change agents.
+func (w *codexWorker) completeTurn(params json.RawMessage) {
+	var completed struct {
+		Turn struct {
+			Status string `json:"status"`
+			Error  *struct {
+				Message string          `json:"message"`
+				Info    json.RawMessage `json:"codexErrorInfo"`
+			} `json:"error"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(params, &completed) != nil || completed.Turn.Status != "failed" {
+		return
+	}
+	var message string
+	var info json.RawMessage
+	if e := completed.Turn.Error; e != nil {
+		message, info = e.Message, e.Info
+	}
+	if failure := codexTurnFailure(info, message); failure != nil {
+		w.availability.fail(failure)
+	}
+	w.markIdle()
+}
+
+// codexTurnFailure classifies a failed turn's error, structured field
+// first. codexErrorInfo is either a string or an object naming one variant
+// whose value may carry httpStatusCode. A 401 on any variant is a missing or
+// rejected credential: Codex CLI 0.163.0 reported httpConnectionFailed with
+// httpStatusCode 401 both with no credential and with a key the provider
+// refused, recorded in testdata/codex-app-server-unauthenticated-0.163.0.jsonl
+// and testdata/codex-app-server-rejected-0.163.0.jsonl. The string
+// "unauthorized" is read the same way because the schema that CLI version
+// generates (`codex app-server generate-json-schema`) names it; it was not
+// observed on the wire. Anything else falls back on availabilityMarkers'
+// text match over the message, and an error neither recognizes is nil.
+func codexTurnFailure(info json.RawMessage, message string) *WorkerError {
+	credential := false
+	var named string
+	if json.Unmarshal(info, &named) == nil {
+		credential = named == "unauthorized"
+	} else {
+		var variants map[string]struct {
+			Status *int `json:"httpStatusCode"`
+		}
+		if json.Unmarshal(info, &variants) == nil {
+			for _, v := range variants {
+				if v.Status != nil && *v.Status == 401 {
+					credential = true
+				}
+			}
+		}
+	}
+	if credential {
+		return &WorkerError{Agent: CodexName, Failure: FailureUnavailable, Message: message, Err: ErrCredentialRefused}
+	}
+	if category, cause := availabilityCategory(FailureAgent, message); category != FailureAgent {
+		return &WorkerError{Agent: CodexName, Failure: category, Message: message, Err: cause}
+	}
+	return nil
+}
+
+// exited records how the app-server's process ended when it ended on its
+// own while a turn it was sent had not settled: neither an idle nor a failed
+// turn/completed arrived first. A process Close ended is not that, and is
+// told apart by Close having closed standard input before it signals.
+func (w *codexWorker) exited(err error) {
+	w.stdinMu.Lock()
+	closing := !w.stdinOpen
+	w.stdinMu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if closing || w.settled == nil {
+		return
+	}
+	status := "exit status 0"
+	if err != nil {
+		status = err.Error()
+	}
+	w.ended = &WorkerError{
+		Agent: CodexName, Failure: FailureProcess, Err: ErrWorkerEnded,
+		Message: "the app-server ended (" + status + ") before the turn it was sent finished",
+	}
+}
+
+// endedError is what a call or a Send refuses with once the process is
+// gone: the mid-turn failure exited recorded, which also matches
+// ErrWorkerEnded, or ErrWorkerEnded alone.
+func (w *codexWorker) endedError() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.ended != nil {
+		return w.ended
+	}
+	return ErrWorkerEnded
 }
 
 func (w *codexWorker) answerServer(message codexMessage) {

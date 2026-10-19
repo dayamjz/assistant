@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -85,5 +86,54 @@ func TestAnIdleCannotFinishALaterTurn(t *testing.T) {
 		default:
 		}
 		w.markIdle()
+	}
+}
+
+// codexTurnFailure reads the structured field before any text. The
+// recorded failed turn/completed of both credential recordings classifies
+// as a credential; the same frame with its status changed to 500 does not,
+// even though its message still names a status, and with the field removed
+// the message alone is read through the marker table, which takes the
+// recorded 401 line. The schema's "unauthorized" string is a credential
+// too, and an unrecognized string with an unrecognized message is nil.
+func TestCodexTurnFailureReadsTheStructuredFieldFirst(t *testing.T) {
+	for _, name := range []string{"codex-app-server-unauthenticated-0.163.0.jsonl", "codex-app-server-rejected-0.163.0.jsonl"} {
+		raw, err := os.ReadFile("testdata/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+		var completed struct {
+			Params struct {
+				Turn struct {
+					Status string `json:"status"`
+					Error  struct {
+						Message string          `json:"message"`
+						Info    json.RawMessage `json:"codexErrorInfo"`
+					} `json:"error"`
+				} `json:"turn"`
+			} `json:"params"`
+		}
+		if err := json.Unmarshal([]byte(lines[len(lines)-1]), &completed); err != nil || completed.Params.Turn.Status != "failed" {
+			t.Fatalf("%s does not end in a failed turn/completed: %v", name, err)
+		}
+		e := completed.Params.Turn.Error
+		got := codexTurnFailure(e.Info, e.Message)
+		if got == nil || got.Failure != FailureUnavailable || !errors.Is(got, ErrCredentialRefused) {
+			t.Fatalf("%s: the recorded failure classified as %+v", name, got)
+		}
+		server := json.RawMessage(strings.ReplaceAll(string(e.Info), "401", "500"))
+		if got := codexTurnFailure(server, "unexpected status 500 Internal Server Error"); got != nil {
+			t.Fatalf("%s: a 500 classified as %+v", name, got)
+		}
+		if got := codexTurnFailure(nil, e.Message); got == nil || !errors.Is(got, ErrCredentialRefused) {
+			t.Fatalf("%s: the message alone classified as %+v", name, got)
+		}
+	}
+	if got := codexTurnFailure(json.RawMessage(`"unauthorized"`), "denied"); got == nil || !errors.Is(got, ErrCredentialRefused) {
+		t.Fatalf("the unauthorized string classified as %+v", got)
+	}
+	if got := codexTurnFailure(json.RawMessage(`"contextWindowExceeded"`), "context window exceeded"); got != nil {
+		t.Fatalf("an unrecognized failure classified as %+v", got)
 	}
 }

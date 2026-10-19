@@ -47,3 +47,23 @@ func ReadClaudeScreen(screen string) string {
 // ClaudeObservedVersion is the Claude Code version the terminal mode's
 // observations were made on.
 const ClaudeObservedVersion = claudeObservedVersion
+
+// AvailabilityMarker is one row of availabilityMarkers, exported so a test
+// can hold every row to the line it recognizes and to a near miss.
+type AvailabilityMarker struct {
+	Marker  string
+	Failure Failure
+	Cause   error
+}
+
+// AvailabilityMarkers returns availabilityMarkers in order.
+func AvailabilityMarkers() []AvailabilityMarker {
+	rows := make([]AvailabilityMarker, 0, len(availabilityMarkers))
+	for _, row := range availabilityMarkers {
+		rows = append(rows, AvailabilityMarker{Marker: row.marker, Failure: row.failure, Cause: row.cause})
+	}
+	return rows
+}
+
+// AvailabilityMessage exposes availabilityMessage.
+var AvailabilityMessage = availabilityMessage

@@ -181,8 +181,9 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 		return nil, store.ErrTaskMoved
 	}
 	if adapter == role.Fallback.Agent {
+		reported := worker.AvailabilityError()
 		err := host.Close(worker)
-		return fail(errors.Join(fmt.Errorf("both configured workers are unavailable; backup %s reported %s", adapter, failure), err))
+		return fail(errors.Join(fmt.Errorf("both configured workers are unavailable; backup %s reported %s", adapter, failure), reported, err))
 	}
 	handoff := store.TaskFallback{Primary: role.Agent, Backup: role.Fallback.Agent, Reason: string(failure), Attempt: attempt}
 	if err = s.store.RecordTaskFallback(ctx, task.ID, handoff); err != nil {
