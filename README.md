@@ -218,6 +218,15 @@ PRD section 12 and is refused at parse; routing among agents waits for a
 second adapter; and interrupting a worker is refused because no adapter
 declares it.
 
+## Platforms
+
+macOS and Linux are supported, and CI runs the tests on both. Windows is not
+supported. CI vets the build for Windows (`GOOS=windows go vet ./...`) so the
+Windows-tagged sources keep compiling, but nothing runs or is tested there, and
+the surfaces this build cannot provide on Windows refuse rather than degrade:
+`internal/ipc` identifies no socket peer there, so every method that drives a
+run is refused, no worker is placed, and `service start --install` is refused.
+
 ## The two promises
 
 **Nothing unvalidated is shared.** The gate is a named remote you push to on
