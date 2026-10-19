@@ -418,13 +418,70 @@ func (g *Graph) validateParkedAt(c Checkpoint) error {
 		switch {
 		case c.Status == StatusRoundsExhausted && e.Rounds > 0:
 			return nil
-		case c.Status == StatusConverged && g.back[i] && !e.Answered:
+		case c.Status == StatusConverged && g.comparesFingerprint(i, c.Counters.Unattended):
 			return nil
 		}
 	}
 	return &CheckpointError{Field: "parked_at", Detail: fmt.Sprintf(
 		"names the edge from %q to %q with %d rounds, and this graph declares no such edge whose bound parks a run %s",
 		ref.From, ref.To, ref.Rounds, c.Status)}
+}
+
+// leavesHalt reports whether edge i leaves a halt point, which is what makes
+// every traversal of it the first edge a run takes after an answer.
+func (g *Graph) leavesHalt(i int) bool {
+	idx, ok := g.index[g.edges[i].From]
+	return ok && g.nodes[idx].Halt != nil
+}
+
+// recordsFingerprint reports whether the convergence check records the state
+// on every traversal of edge i: a back edge, which is where a cycle closes,
+// and an edge leaving a halt point, which is where an answer sends a run on.
+// Every such traversal is recorded whoever gave the answer it follows, so a
+// comparison is always against the edge's previous traversal.
+func (g *Graph) recordsFingerprint(i int) bool { return g.back[i] || g.leavesHalt(i) }
+
+// comparesFingerprint reports whether a traversal of edge i is compared with
+// the one before it, given whether the latest answer the run took was
+// unattended. That is the convergence check's whole rule, and two of its
+// three cases exist only for an unattended answer.
+//
+// A back edge not marked Edge.Answered is always compared. An Answered back
+// edge is compared after an unattended answer, measuring the round it closes
+// against the round before it on that edge. An edge leaving a halt point is
+// compared after an unattended answer too, and measures something different:
+// the run's state as it leaves the halt point carrying that answer, against
+// its state the last time it left by the same edge. Equal means the run is
+// being sent on from exactly where it was sent on from last time, so the
+// round between the two answers changed nothing, and the run parks before
+// spending another round. It is the comparison that sees a round's whole
+// effect, because it is taken after everything the round led to has run,
+// where the back edge closing the round is taken before what follows it.
+func (g *Graph) comparesFingerprint(i int, unattended bool) bool {
+	switch {
+	case g.back[i] && !g.edges[i].Answered:
+		return true
+	case !unattended:
+		return false
+	default:
+		return g.recordsFingerprint(i)
+	}
+}
+
+// convergedReason is what a convergence park on edge i says, which is the
+// one owner of that sentence.
+func (g *Graph) convergedReason(i int) string {
+	e := g.edges[i]
+	switch {
+	case g.back[i] && !e.Answered:
+		return fmt.Sprintf("the round from %q to %q changed no state", e.From, e.To)
+	case g.back[i]:
+		return fmt.Sprintf("the round from %q to %q changed no state, and the answer that asked for it was not a person's",
+			e.From, e.To)
+	default:
+		return fmt.Sprintf("the run left %q for %q in the state it left in last time, so the round between changed no state, "+
+			"and the answer that sent it on again was not a person's", e.From, e.To)
+	}
 }
 
 // decisionFor builds the decision a halt point emits. It is the one place the

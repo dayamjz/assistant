@@ -26,8 +26,10 @@ const (
 	StatusRoundsExhausted
 	// StatusBudgetExhausted means the run reached its run-wide step budget.
 	StatusBudgetExhausted
-	// StatusConverged means a round crossed a back edge without changing state.
-	// A back edge marked Edge.Answered never produces it.
+	// StatusConverged means a round crossed a back edge without changing state,
+	// or an unattended answer sent the run out of a halt point in the state
+	// the previous traversal of the same edge left in. A back edge marked
+	// Edge.Answered produces it only after an unattended answer.
 	StatusConverged
 )
 
@@ -266,8 +268,11 @@ type Counters struct {
 	// Traversals counts, per edge index, how many times the edge was taken.
 	Traversals []int `json:"traversals"`
 	// Fingerprints holds, per edge index, the state fingerprint recorded the
-	// last time the edge was traversed. The convergence check compares against
-	// it. An empty entry means the edge has not been traversed.
+	// last time the edge was traversed, for a back edge and for an edge
+	// leaving a halt point; every other entry stays empty. The convergence
+	// check compares against it. An empty entry means the edge has not been
+	// traversed, and a checkpoint written before edges leaving a halt point
+	// were recorded carries theirs empty, which reads the same way.
 	Fingerprints []string `json:"fingerprints"`
 	// EdgeDigest fingerprints the edge vector the two vectors above are
 	// indexed against. Both are positional, so a graph whose edges differ
@@ -278,13 +283,17 @@ type Counters struct {
 	EdgeDigest string `json:"edge_digest"`
 	// Unattended records that the latest answer the run took was given by
 	// Executor.AnswerUnattended, so a traversal of an Edge.Answered back edge
-	// is held to the convergence check rather than exempt from it. Every
-	// answer writes it on the checkpoint that claims the run, true for
-	// AnswerUnattended and false for Answer and AnswerWith, and the build
-	// admits Answered only on an edge every traversal of which follows an
-	// answer, so the value a traversal reads is always its own answer's. A
-	// checkpoint written before the field existed carries false, which is the
-	// exemption every answer had then.
+	// is held to the convergence check rather than exempt from it, and so is
+	// the edge the answer took out of its halt point. Every answer writes it
+	// on the checkpoint that claims the run, true for AnswerUnattended and
+	// false for Answer and AnswerWith. The build admits Answered only on an
+	// edge every traversal of which follows an answer, and a halt point's
+	// node runs only once it is answered, so the value either traversal reads
+	// is always its own answer's. A checkpoint written before the field
+	// existed carries false, which is the exemption every answer had then.
+	// Validation reads it too: a convergence park on an edge only an
+	// unattended answer holds to the check is refused on a checkpoint that
+	// does not record one.
 	Unattended bool `json:"unattended,omitempty"`
 }
 

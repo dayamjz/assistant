@@ -84,11 +84,14 @@ import (
 // budget bound it, and an answer internal/graph refuses for either is taken
 // as the consent stopping: the hold stays open for a person and the refusal is
 // recorded. It is given through graph.Executor.AnswerUnattended, because
-// nobody attended it, so the requested cycle's edge back is not exempt from
-// the convergence check for a round consent asked for: a round that left the
-// run's state as the round before it on that edge left it parks the run
-// converged. A park ends the run as it always does; consent answers holds and
-// a park is not one.
+// nobody attended it, so the requested cycle's edges are not exempt from the
+// convergence check for a round consent asked for: an answer that would send
+// the run into a round from exactly the state the previous answer at that
+// hold sent it in from parks the run converged before that round runs, so a
+// loop of rounds that change nothing spends two and not the whole of
+// pipeline.RequestedFixRounds. internal/pipeline's doc.go says why two is the
+// fewest. A park ends the run as it always does; consent answers holds and a
+// park is not one.
 //
 // # How each answer is recorded
 //
@@ -123,14 +126,17 @@ import (
 //     a person's: the follow-up kind that record keeps is a person's answer.
 //     The owner's decision on #253 keeps this a stated gap until that record
 //     keeps follow-ups for any program-side answer.
-//   - The convergence check compares a round with the round before it on the
-//     same edge, and a stage's re-run report carries the hold the previous
-//     requested round left, which the report the first round read did not.
-//     So the first two rounds at a hold never compare equal, and a run of
-//     rounds that change nothing is parked at the third at the earliest,
-//     which is the round RequestedFixRounds would have refused the next one
-//     after. What the bound changes there is how such a run ends, parked
-//     rather than held, not how many rounds it spends.
+//   - A loop of rounds that change nothing still spends two before it parks.
+//     The first round's effect includes the hold it leaves in the stage's
+//     re-run report, which the report it read did not carry, so over the
+//     whole state it changed something; the second is the first that can be
+//     seen to change nothing, and the answer that would start a third is
+//     where that is seen. That third answer is therefore recorded as given,
+//     on the checkpoint that claims the run, and the run parks on it.
+//   - "Changes nothing" is over the whole state, so a stage whose report
+//     differs between two such rounds, or a fixer whose summary does,
+//     defeats it, and the loop is bounded by pipeline.RequestedFixRounds and
+//     the run-wide budget instead.
 
 // ErrStandingConsentNotAllowed reports a request for standing consent on a
 // run of a repository whose trusted configuration does not allow it. It

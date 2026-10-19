@@ -151,7 +151,9 @@ type Edge struct {
 	// cannot check is that the value is one only a person gives, because the
 	// graph does not know who answers; that rests on who calls Answer. A
 	// traversal that follows an answer given through
-	// Executor.AnswerUnattended is not exempt.
+	// Executor.AnswerUnattended is not exempt, and that answer is also
+	// measured on the edge it takes out of its halt point, on the terms the
+	// package documentation's "Bounding cycles" states.
 	Answered bool
 }
 

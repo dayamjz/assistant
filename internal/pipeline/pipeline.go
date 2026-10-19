@@ -183,7 +183,10 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 		// round a person asked for that changed nothing returns to the hold
 		// for them to see rather than parking the run on convergence. A round
 		// asked for by an unattended answer is not exempt, which
-		// internal/graph decides from how the answer was given.
+		// internal/graph decides from how the answer was given, and it
+		// measures such an answer on the edge in as well, so a loop of them
+		// that changes nothing parks before the third round; doc.go says
+		// why the edge back alone would not.
 		// RequestedFixRounds and the run-wide budget bound both.
 		//
 		// The edge in is guarded on the answer key rather than on the
