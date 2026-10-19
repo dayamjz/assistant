@@ -277,3 +277,60 @@ func TestALiveWorkersDeclaredWaitIsReadAsRunning(t *testing.T) {
 		}
 	}
 }
+
+// PRD principle P9's "absence of evidence surfaces; it never absorbs", for
+// a worker that declared a wait and whose terminal then cannot be observed.
+// The task resolves Paused, because the process tier is skipped on an
+// Unobserved probe and the log answers. The loop surfaces terminal gone
+// with the case unobservable, once per escalation window, rather than
+// absorbing the silence on the declared wait's recheck window. The
+// declaration is the worker's word that it is waiting; an Unobserved probe
+// says nothing about whether that worker is still there, so absorbing on it
+// would hide a worker lost behind an unheld reference or an unreadable
+// terminal for a whole recheck window. Surfacing it is not reading the wait
+// as a crash: the case is unobservable and not dead, and PRD section 11's
+// ambiguous liveness row leaves such a task alone, which reconcile.go's
+// table keeps (no relaunch, no cleanup). This is the guard against moving
+// the declared-wait reading ahead of the gone cases, which an unvalidated
+// change on wip/overnight-gaps proposed.
+func TestAnUnobservedTerminalUnderADeclaredWaitSurfacesAsUnobservable(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P9)
+	h, records := loopHomeConfigured(t, declaredWaitConfig)
+	// The double holds no handle for this reference, so its probe answers
+	// Unobserved with the unheld reason, as a provider does for a survivor
+	// of another service's life.
+	task := plantDeclaredWait(t, records, "unseenwaitaa", "pane-unheld")
+	terminals := newScriptedTerminals()
+	clock := &fakeClock{now: time.Date(2026, 10, 19, 9, 0, 0, 0, time.UTC)}
+	l := openLoop(t, h, records, terminals, clock)
+	defer func() { _ = l.service.Close() }()
+	first := l.nextPass(t)
+
+	got, err := l.service.tasks().Task(t.Context(), task)
+	if err != nil || got.State != taskstate.Paused || got.Basis.Process != taskstate.Unobserved {
+		t.Fatalf("the task resolves %+v (%v), want Paused from its log with the terminal unobserved", got, err)
+	}
+	gone := detectionsOf(first, task, supervisor.KindTerminalGone)
+	if len(gone) != 1 || !gone[0].Verdict.Surfaces() || gone[0].Disposition != store.WakeAppended ||
+		!strings.HasPrefix(gone[0].Marker, "terminal-gone:unobservable:pane-unheld:") {
+		t.Fatalf("the unobserved terminal under a declared wait = %+v, want terminal gone surfaced as unobservable", gone)
+	}
+	if got := detectionsOf(first, task, supervisor.KindDeclaredWait); len(got) != 0 {
+		t.Fatalf("the unobserved terminal was absorbed on the declared wait: %+v", got)
+	}
+	// Once per window: the next pass inside it absorbs, and none reads it
+	// as a wait.
+	clock.Advance(30 * time.Second)
+	next := l.pass(t)
+	if got := verdictsOf(next, task, supervisor.KindTerminalGone); len(got) != 1 ||
+		got[0] != (supervisor.Verdict{Level: supervisor.Absorb, Reason: supervisor.ReasonSurfacedThisWindow}) {
+		t.Fatalf("the pass inside the window = %+v, want absorbed for the window", got)
+	}
+	if got := detectionsOf(next, task, supervisor.KindDeclaredWait); len(got) != 0 {
+		t.Fatalf("a later pass read the unobserved terminal as the declared wait: %+v", got)
+	}
+	if rows := wakesOfKind(t, l.records(t), task, supervisor.KindTerminalGone); len(rows) != 1 {
+		t.Fatalf("the terminal-gone wakes = %+v, want one", rows)
+	}
+}
