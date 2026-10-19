@@ -57,19 +57,20 @@ func TestEveryPathIsUnderTheRoot(t *testing.T) {
 	t.Parallel()
 	h := open(t, t.TempDir())
 	paths := map[string]string{
-		"config file":  h.ConfigFile(),
-		"database":     h.Database(),
-		"socket":       h.Socket(),
-		"lock":         h.LockFile(),
-		"worktree":     h.Worktree("repo", "run"),
-		"evidence":     h.Evidence("run"),
-		"evidence log": h.EvidenceLog("run", "test"),
-		"task":         taskPath(t, h, validTaskID),
-		"task copy":    copyPath(t, h, validTaskID),
-		"instance":     h.InstanceFile(),
-		"beacon":       h.Beacon(),
-		"stage log":    h.StageLog("run", "review"),
-		"service log":  h.ServiceLog(),
+		"config file":   h.ConfigFile(),
+		"database":      h.Database(),
+		"socket":        h.Socket(),
+		"notifications": h.Notifications(),
+		"lock":          h.LockFile(),
+		"worktree":      h.Worktree("repo", "run"),
+		"evidence":      h.Evidence("run"),
+		"evidence log":  h.EvidenceLog("run", "test"),
+		"task":          taskPath(t, h, validTaskID),
+		"task copy":     copyPath(t, h, validTaskID),
+		"instance":      h.InstanceFile(),
+		"beacon":        h.Beacon(),
+		"stage log":     h.StageLog("run", "review"),
+		"service log":   h.ServiceLog(),
 	}
 	for name, path := range paths {
 		if !strings.HasPrefix(path, h.Root()+string(filepath.Separator)) {

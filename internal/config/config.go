@@ -103,6 +103,10 @@ type Config struct {
 	// workers through. A Config from Resolve holds a member of the closed
 	// set; KeySessionProvider says why only the operator's file sets it.
 	SessionProvider SessionProvider
+	// Notifications is whether the service runs the notification gateway.
+	// False, the default, means the gateway refuses every notice and every
+	// action. KeyNotifications says why a repository cannot set it.
+	Notifications bool
 }
 
 // MergesIn reports whether repository, named as the code host names it, is
@@ -240,6 +244,9 @@ const (
 	// 12's phase 1 names, so a home whose operator chose nothing runs its
 	// workers exactly as it did before the key existed.
 	DefaultSessionProvider = SessionProviderPipe
+	// DefaultNotifications leaves the notification gateway off. The operator
+	// turns it on; a repository cannot.
+	DefaultNotifications = false
 )
 
 // SessionProvider names a terminal session provider. The set is closed:

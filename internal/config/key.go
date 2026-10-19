@@ -200,6 +200,14 @@ const (
 	// naming it is refused at parse time like every global-only key.
 	// internal/service reads it once per service, in driverFor.
 	KeySessionProvider Key = "session_provider"
+
+	// KeyNotifications is "notifications": whether the service runs the
+	// notification gateway. It is off by default. It is global-only, and
+	// that is a P7 decision: the gateway delivers on the operator's machine,
+	// so a repository file must not be able to turn it on, in either copy.
+	// internal/notify is the gateway, and internal/service reads this once
+	// per service, in openParts.
+	KeyNotifications Key = "notifications"
 )
 
 // cloneSlice copies a slice-valued configuration value. A default and a parsed
@@ -304,6 +312,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.AllowStandingConsent = v.(bool) }},
 	{KeySessionProvider, TrustGlobal, DefaultSessionProvider, decodeSessionProvider,
 		func(c *Config, v any) { c.SessionProvider = v.(SessionProvider) }},
+	{KeyNotifications, TrustGlobal, DefaultNotifications, decodeBool,
+		func(c *Config, v any) { c.Notifications = v.(bool) }},
 }
 
 // specByKey indexes the schema, and sections holds every dotted prefix a key

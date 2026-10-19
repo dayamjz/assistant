@@ -638,3 +638,26 @@ type StageLogRequest struct {
 	// Stage is the stage's name.
 	Stage string `json:"stage"`
 }
+
+// NotifySendRequest asks the notification gateway to deliver one notice.
+// Public asks for an audience the gateway refuses.
+type NotifySendRequest struct {
+	// EventID is the identifier a later delivery of the same notice shares.
+	EventID string `json:"event_id"`
+	// Text is the notice.
+	Text string `json:"text,omitempty"`
+	// Public asks to post publicly. The gateway refuses that.
+	Public bool `json:"public,omitempty"`
+}
+
+// NotifyActionRequest asks the notification gateway to accept one action.
+// User is a name the payload may claim. The service does not use it as the
+// caller's identity; that is the socket credential.
+type NotifyActionRequest struct {
+	// EventID is the identifier a later attempt of the same action shares.
+	EventID string `json:"event_id"`
+	// User is ignored.
+	User string `json:"user,omitempty"`
+	// Kind is what the caller asked for.
+	Kind string `json:"kind"`
+}

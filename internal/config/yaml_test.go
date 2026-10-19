@@ -48,6 +48,7 @@ autonomy:
 delivery: local
 allow_standing_consent: true
 session_provider: tmux
+notifications: true
 `
 
 const wholeSchemaJSON = `{
@@ -74,7 +75,8 @@ const wholeSchemaJSON = `{
 	"autonomy": {"merge": ["owner/name"]},
 	"delivery": "local",
 	"allow_standing_consent": true,
-	"session_provider": "tmux"
+	"session_provider": "tmux",
+	"notifications": true
 }`
 
 func resolvedGlobal(t *testing.T, l Layer) Config {

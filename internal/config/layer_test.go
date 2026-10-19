@@ -102,7 +102,8 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"autonomy": {"merge": ["owner/name"]},
 		"delivery": "local",
 		"allow_standing_consent": true,
-		"session_provider": "tmux"
+		"session_provider": "tmux",
+		"notifications": true
 	}`
 	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
@@ -163,6 +164,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	}
 	if c.SessionProvider != SessionProviderTmux {
 		t.Errorf("SessionProvider = %q", c.SessionProvider)
+	}
+	if !c.Notifications {
+		t.Error("Notifications = false, want the document's true")
 	}
 }
 

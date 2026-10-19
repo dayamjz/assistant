@@ -334,6 +334,18 @@ func TestAWorkerAppendsToItsOwnHistoryAndNoOneElseCan(t *testing.T) {
 		if !errors.Is(err, ipc.ErrNotWorker) {
 			t.Fatalf("task.event from a peer in no worker group = %v, want ErrNotWorker", err)
 		}
+		if _, code := callAs(t, w, ipc.MethodNotifyAction, machine.NotifyActionRequest{
+			EventID: "worker-action", User: "root", Kind: "ack",
+		}); code != ipc.CodeWorker {
+			t.Fatalf("a worker's notification action was refused with %q, want %q", code, ipc.CodeWorker)
+		}
+		var acted machine.NotifyActed
+		err = running.client.Call(t.Context(), ipc.MethodNotifyAction, machine.NotifyActionRequest{
+			EventID: "person-action", User: "root", Kind: "ack",
+		}, &acted)
+		if err == nil || !strings.Contains(err.Error(), "gateway is off") {
+			t.Fatalf("a notification action with the gateway off = %v, want the gateway refused", err)
+		}
 
 		events := historyOf(t, w.home, task)
 		last := events[len(events)-1]

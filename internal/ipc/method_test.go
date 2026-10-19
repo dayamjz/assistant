@@ -49,6 +49,8 @@ func TestMethodTableIsWrittenDownHere(t *testing.T) {
 		"service.stop":       true,
 		"service.restart":    true,
 		"events.subscribe":   false,
+		"notify.send":        true,
+		"notify.action":      true,
 	}
 	seen := map[ipc.Method]bool{}
 	for _, spec := range ipc.Methods() {

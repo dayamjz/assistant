@@ -35,8 +35,8 @@ import (
 // whether it is a task's worker, and workers.go derives that from the same
 // credentials for the methods whose answer depends on it: the six there,
 // wakewait.go's wakes.wait and wakes.subscribe, coordinator.go's three, steer.go's three,
-// taskholds.go's task.respond, catchup.go's catchup.mark and custody.go's
-// branch.sync. wakes.subscribe is a stream, so internal/ipc asks this only
+// taskholds.go's task.respond, catchup.go's catchup.mark, custody.go's
+// branch.sync, and notify.go's notify.send and notify.action. wakes.subscribe is a stream, so internal/ipc asks this only
 // whether the caller may hold it, and an error here is its refusal.
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
 	switch req.Method {
@@ -171,6 +171,14 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 	case ipc.MethodServiceRestart:
 		return call(ctx, req, func(ctx context.Context, r machine.LifecycleRequest) (machine.Lifecycle, error) {
 			return s.lifecycle(ctx, req, r, true)
+		})
+	case ipc.MethodNotifySend:
+		return call(ctx, req, func(ctx context.Context, r machine.NotifySendRequest) (machine.NotifySent, error) {
+			return s.notifySend(ctx, req, r)
+		})
+	case ipc.MethodNotifyAction:
+		return call(ctx, req, func(ctx context.Context, r machine.NotifyActionRequest) (machine.NotifyActed, error) {
+			return s.notifyAction(ctx, req, r)
 		})
 	default:
 		return nil, fmt.Errorf("%w: %s is in the method table and this service has no answer for it", ipc.ErrUnknownMethod, req.Method)

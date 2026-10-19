@@ -20,6 +20,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/judge"
+	"github.com/dayamjz/assistant/internal/notify"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/runs"
@@ -153,6 +154,12 @@ type Options struct {
 	// readers on purpose, so what a stage read and what the service re-reads
 	// come from the same place.
 	Forge forge.Host
+	// NotifyTransport delivers notices when the operator has turned the
+	// gateway on. Nil, which is what the product passes, is the private
+	// channel at the home's notifications file. A test passes a scripted
+	// transport. The field is ignored when notifications are off, so
+	// supplying one does not turn the gateway on.
+	NotifyTransport notify.Transport
 	// Terminals is what the supervisor loop observes a task's terminal
 	// through, and what every task reader this service builds probes
 	// through, reconciliation's included. Nil, which is what the product
@@ -207,6 +214,10 @@ type Service struct {
 	// resolves and the session policy its run service is built with.
 	global config.Layer
 	cfg    config.Config
+	// notes is the notification gateway. It is off unless the operator's
+	// file set notifications, and it does not create a task, answer a hold,
+	// or merge. notify.go owns the wiring.
+	notes *notify.Gateway
 	// digest identifies the operator's configuration document. It is the
 	// digest a run's record is created with, before the run's own resolution
 	// exists; begin replaces it with the run's own, which covers all three
@@ -559,6 +570,7 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 		return err
 	}
 	s.store = records
+	s.notes = s.notificationGateway(o, cfg)
 	s.checkpoints = checkpoints.New(records)
 	if s.queue, err = s.newQueue(); err != nil {
 		return err

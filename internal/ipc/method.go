@@ -217,6 +217,19 @@ const (
 	// restricted caller alone may read: a coordinator's wakes travel on
 	// MethodWakesSubscribe instead.
 	MethodEventsSubscribe Method = "events.subscribe"
+	// MethodNotifySend delivers one notice through the notification gateway.
+	// It is restricted, and the handler refuses a task's worker as well: a
+	// notice does not create a task, answer a hold, or merge, and a worker
+	// does not get a side channel that posts as the operator. The gateway
+	// is off unless the operator's file turned it on, and a call then is
+	// refused before anything is delivered.
+	MethodNotifySend Method = "notify.send"
+	// MethodNotifyAction accepts one incoming action for the notification
+	// gateway. The identity is the peer's socket credentials, never a name
+	// in the body. It is restricted on MethodNotifySend's terms, and a
+	// worker is refused the same way. An action that would create a task,
+	// answer a hold, or merge is refused even for a trusted peer.
+	MethodNotifyAction Method = "notify.action"
 )
 
 // Kind says whether a method answers once or opens a stream.
@@ -312,6 +325,8 @@ var specs = []Spec{
 	{MethodServiceStop, KindRequest, AccessRestricted, "Stop the service."},
 	{MethodServiceRestart, KindRequest, AccessRestricted, "Restart the service."},
 	{MethodEventsSubscribe, KindStream, AccessOpen, "Open the event stream."},
+	{MethodNotifySend, KindRequest, AccessRestricted, "Deliver one notice through the notification gateway."},
+	{MethodNotifyAction, KindRequest, AccessRestricted, "Accept one action for the notification gateway."},
 }
 
 // specByMethod indexes the table, refusing at build time a table this server

@@ -1055,3 +1055,25 @@ type Custody struct {
 	// Detail is custody's sentence for either.
 	Detail string `json:"detail,omitempty"`
 }
+
+// NotifySent is the answer to a notice the gateway delivered or had
+// already delivered. It names no task and no hold.
+type NotifySent struct {
+	// EventID is the notice's identifier.
+	EventID string `json:"event_id"`
+	// Duplicate is true when the identifier was already recorded and this
+	// call did not deliver again.
+	Duplicate bool `json:"duplicate"`
+}
+
+// NotifyActed is the answer to an action the gateway accepted. ActorUID is
+// the socket credential's user identifier, not a name from the request.
+type NotifyActed struct {
+	// EventID is the action's identifier.
+	EventID string `json:"event_id"`
+	// ActorUID is the user identifier the action was accepted for.
+	ActorUID int `json:"actor_uid"`
+	// Duplicate is true when the identifier was already recorded and this
+	// call did not record it again.
+	Duplicate bool `json:"duplicate"`
+}

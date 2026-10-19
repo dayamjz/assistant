@@ -88,6 +88,11 @@ func (h *Home) Database() string { return filepath.Join(h.root, "state.db") }
 // Socket is the local endpoint the service binds and the command line dials.
 func (h *Home) Socket() string { return filepath.Join(h.root, "socket") }
 
+// Notifications is the private-channel log the notification gateway appends
+// to when the operator turns it on. Nothing listens on it. The file is
+// created by the first delivery, not by Create.
+func (h *Home) Notifications() string { return filepath.Join(h.root, "notifications.log") }
+
 // LockFile is the file the home's exclusive lock is taken on.
 func (h *Home) LockFile() string { return filepath.Join(h.root, "lock") }
 

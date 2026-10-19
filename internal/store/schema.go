@@ -95,6 +95,11 @@ const holdResolutionNoteMigration = "hold resolution note"
 // sealCheckpointTableMigration is a constant.
 const taskAttemptRouteMigration = "task attempt route"
 
+// notificationEventMigration names the migration that adds the ledger of
+// notification event identifiers, for the reason
+// sealCheckpointTableMigration is a constant.
+const notificationEventMigration = "notification event ledger"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1541,6 +1546,32 @@ var schema = []migration{
 			// SetAttemptRoute before the process starts.
 			`ALTER TABLE task_attempt ADD COLUMN adapter TEXT`,
 			`ALTER TABLE task_attempt ADD COLUMN route_reason TEXT`,
+		},
+	},
+	{
+		version: 37,
+		name:    notificationEventMigration,
+		statements: []string{
+			// GAP-14: an event identifier the notification gateway has
+			// applied. The row is that fact and nothing about a task. It is
+			// written once, by RecordNotificationEvent, after a delivery or
+			// an acceptance succeeded. A duplicate identifier inserts
+			// nothing. The triggers refuse a later revision or removal, on
+			// task_relay's terms.
+			`CREATE TABLE notification_event (
+				event_id    TEXT PRIMARY KEY,
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TRIGGER notification_event_is_written_once
+				BEFORE UPDATE ON notification_event
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification event is written once and is not updated');
+				END`,
+			`CREATE TRIGGER notification_event_is_not_removed
+				BEFORE DELETE ON notification_event
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification event is written once and is not deleted');
+				END`,
 		},
 	},
 }

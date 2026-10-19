@@ -13,6 +13,13 @@
 // means; a decision made here would be a second opinion on a question one of
 // those packages already answers.
 //
+// The notification gateway is optional and off unless the operator's file
+// sets config.KeyNotifications. internal/notify decides what a notice and
+// an action may do, and notify.go wires it. A notice does not create a
+// task, answer a hold, or merge. An action is accepted only for the socket
+// credential of a user this service trusted at open, and a name in the
+// request is not that credential.
+//
 // # One service owns a home, and the lock is what makes that true
 //
 // Open takes the home's lock before it opens the database and before it binds

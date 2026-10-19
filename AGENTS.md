@@ -215,6 +215,10 @@ Each has cost this repository more than one round of review.
   liveness. The message record (migration 21, `message.go`) is sealed like
   `wake`: written or refused once, acknowledged once, never deleted, and who
   sent it is `Sender`, the same closed shape as `Acknowledger`.
+  The notification event ledger (`RecordNotificationEvent`, migration 37,
+  `notification.go`) is written once after a delivery or an acknowledgement
+  and is not a task, a hold, or a merge; `internal/notify` decides what it
+  means.
   The one-row `checkpoint` migration 1 created was the second record the PRD
   forbids, and it now has no accessor at all. Do not give it one. Its table is
   still declared because a migration may not remove a table, so migration 6
@@ -746,6 +750,13 @@ Each has cost this repository more than one round of review.
   a URL's userinfo and a bearer or Authorization value and nothing else, and
   says so; adding a shape means adding it there, never a second remover at a
   call site.
+- `internal/notify` is the optional notification gateway, off unless the
+  global-only `notifications` key is set. It delivers to one private channel
+  and accepts an acknowledgement for a trusted socket user identifier. It
+  does not create a task, answer a hold, or merge, and it starts no
+  listener. A scripted transport is what the tests drive. Read its `doc.go`
+  for the residual gaps: a delivery whose record then fails can be delivered
+  again, and the private-channel file is not proof anyone read it.
 - `internal/judge` is the decision-model client for PRD section 5's "Checks a
   decision model may add": the two fixed questions, the pinned version, the
   cutoffs and their measurement. A `Result` is a probability or a failure and
