@@ -400,7 +400,7 @@ flowchart TB
         Supervision costs nothing until something is actionable
       </div>
       <div class="collapse-content text-sm opacity-90 space-y-2">
-        <p>A cheap non-model supervisor classifies every wake. It absorbs a wake only on positive evidence that work is genuinely proceeding: an active validation stage attributed to that task's branch, or a live process signal from its terminal. Absence of evidence surfaces; it never absorbs.</p>
+        <p>A cheap non-model supervisor classifies every wake. It absorbs a wake only on positive evidence that work is genuinely proceeding: an active validation stage attributed to that task's branch, or a live process signal from its terminal. Absence of evidence surfaces; it never absorbs. That rule is about wakes that carry evidence: the program's own entries, <code>queued</code> and <code>dispatched</code>, carry no evidence of anything and are absorbed by their kind.</p>
         <p><b>Prevents:</b> two opposite failures. Waking a model on every heartbeat makes a fleet unaffordable. Absorbing wakes on a timer makes a finished or crashed worker invisible.</p>
       </div>
     </div>
@@ -1941,7 +1941,7 @@ flowchart TB
         <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write. Draining hands a row out; acknowledging closes it. The coordinator acknowledges a row after it has acted on it, and a row handed out and never acknowledged is handed out again: after a restart, and once the coordinator it was handed to is no longer attached. No row is deleted: closed rows are kept, and a row is actionable until acknowledged.</td></tr>
         <tr><td><b>merge record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the code-host read that ends a run on a merge: the pull request, the head read, and when. The code host owns the merge; this is the program's record that it saw it. The run's <code>passed</code> on a merge and the task's Landed are both derived from this one record, and neither stores the fact again.</td></tr>
         <tr><td><b>local landing record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the approved fast-forward that delivers a <code>local</code> task: the task, the commit, the local default branch's tip before and after, and when. The task's Landed for a <code>local</code> task is derived from it, read in the same tier as the merge record.</td></tr>
-        <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. The task's Complete is derived from it. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>
+        <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. A delivery task's Complete is derived from it; an investigation's Complete is derived from the record that its findings were relayed, never from this one. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>
         <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. One resolution the service makes itself is for the hold the checks stage raises when <code>checks_timeout</code> elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. The other is each answer section 9's standing consent gives, recorded under the resolver that consent has of its own. Every other hold keeps the rule.</td></tr>
         <tr><td><b>message</b></td><td>Authoritative, appended</td><td>One row per message sent to a worker: the task, the attempt, the text with credentials removed, and who sent it, derived from the surface. Each of written, refused, and acknowledged is recorded on it once and never revised, and it is the one place whether a message was delivered is read from. Section 6's steering says what writes each.</td></tr>
         <tr><td><b>seen mark</b></td><td>Authoritative, appended</td><td>One row per merge or cleanup record you were shown and marked seen, keyed the way that record is keyed. One per home. It is what section 9's catch-up reads to decide what landed since you last looked, and nothing else reads it.</td></tr>
@@ -2987,6 +2987,11 @@ flowchart TB
           <td class="prd-num">15</td>
           <td><b>Windows is not supported</b>; macOS and Linux are.</td>
           <td>Section 8's process model says so. The build is still vetted for Windows so it does not rot, and the surfaces that already refuse there keep their refusals rather than gaining a Windows implementation. Section 13's end-to-end run is owed on macOS and Linux.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">16</td>
+          <td>P9's rule that a wake is absorbed <b>only on positive evidence</b> is about wakes that carry evidence; the program's own entries are absorbed by their kind.</td>
+          <td>Decided 2026-10-19 (#281, #320). P9 gains one sentence saying so, and section 5's flowchart gains the path: <code>queued</code> and <code>dispatched</code> record the program's own act, carry no evidence of anything, and never wake the coordinator.</td>
         </tr>
       </tbody>
     </table>
