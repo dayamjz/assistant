@@ -365,6 +365,18 @@ from another major series rather than quietly running `go vet` alone, so a
 green `make check` always means lint ran. `make lint-guard-test` proves that
 refusal still fires.
 
+The linter also has to be built with Go 1.26 or later, because go.mod pins
+`toolchain go1.26.9` and golangci-lint refuses to load its config when the Go
+language version it was built with, major and minor only, is older than the one
+that line names. The release binaries of the version CI pins are built with Go
+1.26; one built from source with Go 1.25 stops with that refusal before linting
+anything.
+
+`make test` runs the race detector, so on darwin/arm64 it needs Go 1.26.5 or
+later (golang/go#79804, #321). The `toolchain` line selects go1.26.9 on its own
+under the default `GOTOOLCHAIN=auto`; `go version` inside the checkout shows
+which one a run uses.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
