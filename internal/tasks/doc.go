@@ -49,12 +49,20 @@
 // token internal/taskstate gives the isolation-refused event, and is the one
 // owner of that mapping.
 //
-// Until #91's worker set exists, "own branch, only through the gate" is
-// instruction text and nothing enforces which ref a worker's push may move:
-// the gate admits a push on what it is a push of and not on who made it, so
-// a worker with the gate as its remote can move any branch the gate holds.
-// The second check and the instructions are what a worker is told; this
-// package and the gate enforce neither.
+// "Own branch, only through the gate" is enforced at the gate and nowhere
+// else. A push whose destination is the gate repository runs the admission
+// hook internal/gate installed there, by whatever remote name or path it
+// was addressed, and internal/service's admit_workers.go holds a push whose
+// peer is placed as a task's worker to the task's record: a delivery
+// worker may move only refs/heads/<its branch>, forward, and may delete
+// nothing, and an investigation worker, whose task names no branch, may
+// move nothing there at all, refused before any reference changes. A push
+// to any other repository never runs those hooks, so the gate sees neither
+// a remote a worker adds toward the subject nor a push by that repository's
+// path, and this package's assertion is of the copy at launch and not of
+// what the worker does in it afterwards; the residual gap below says what
+// that leaves. The second check and the instructions are what a worker is
+// told, and this package enforces neither.
 //
 // # The cleanup decision
 //
@@ -300,11 +308,18 @@
 //     that reaches an Isolation already returned; the second check is the
 //     only thing that runs afterwards, and it is detection by a worker that
 //     chooses to run it. An investigation copy is cut with no remotes for
-//     that reason, and a worker that later adds one and pushes toward the
-//     subject is outside this package's assertion: that push can move a
-//     protected tip when the branch is free to update, and a tip that stays
-//     put because the branch is checked out is git's refusal, not a
-//     continuous isolation guarantee here.
+//     that reason, and what keeps its worker off the subject after launch
+//     is then the gate's admission alone, which sees only a push addressed
+//     to the gate. A worker that adds a remote toward the subject, or pushes
+//     by the subject's path, is outside this package's assertion and outside
+//     the gate: that push can move a protected tip when the branch is free
+//     to update, and a tip that stays put because the branch is checked out
+//     is git's refusal, not a guarantee here. The worker is a process of the
+//     same user as the service, with git and a shell, so a push URL this
+//     package could set, a remote it could shape and a file mode it could
+//     apply are each something that user undoes with one command, and none
+//     would fail closed; internal/service's investigation_isolation_unix_test.go
+//     shows the push the gate never sees beside the one it refuses.
 //   - The second check compares the remote URL as a string, after the same
 //     file:// and trailing-separator normalization AssertIsolated applies,
 //     and cannot compare by identity: a gate spelled through a symbolic link,

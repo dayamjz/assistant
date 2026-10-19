@@ -34,6 +34,30 @@ import (
 // admit, with the mechanism in internal/vcs and nothing of it written at the
 // git call.
 //
+// # Which pushes reach this
+//
+// The admission hook is installed in the gate repository, so every push
+// whose destination is that repository runs it: through the assistant
+// remote Initialize writes, through a remote of any other name a pusher
+// points at the gate, or by the gate's path. The receive command the
+// assistant remote of an initialized working copy names adds the copies
+// lock and nothing of admission, and a task copy's assistant remote names
+// no receive command, so no route into the gate skips this. A push to any
+// other repository never runs the gate's hooks: a worker that adds a
+// remote toward the subject's working copy, or toward anything else, and
+// pushes there is seen neither here nor anywhere else in the product.
+// Isolation against the subject therefore rests on the launch-time
+// assertion internal/tasks owns, on the grant internal/agents gives a
+// worker, which is the agent's own permission reading and not a boundary,
+// and on this rule for the pushes that arrive at the gate; the worker is a
+// process of the service's own user with git and a shell, and nothing in
+// its environment or its copy's configuration stops a push to a path it
+// names. investigation_isolation_unix_test.go shows both halves.
+//
+// An investigation task names no branch, so there is no reference its
+// worker may move: its push is refused before any update is read, whatever
+// it carries, a tag and a new branch included.
+//
 // # What is read, and where
 //
 // Which reference and whether it is a deletion are the update's own. Whether
@@ -59,8 +83,6 @@ import (
 //     worker exited first, is placed as a person's and this rule never sees
 //     it. placement.go names the shape and workers.go which way every rule
 //     then goes. A chain placement could not read is refused, not admitted.
-//   - An investigation task names no branch, so its worker's push is refused
-//     whatever it carries.
 //   - Nothing here reads whether the pushed commit is the copy's head, only
 //     that it descends from what the gate holds.
 //   - The gate's standing value and the hook's are two reads; a push that

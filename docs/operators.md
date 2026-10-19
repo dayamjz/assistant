@@ -224,13 +224,18 @@ Three things follow for whoever runs the service:
   service then ends the worker it holds for the task and removes its copy on
   the cleanup check's proof; the stored report and its holds stay.
 - An investigation copy is cut with no remotes and a detached HEAD, and the
-  launch asserts that again before a worker starts. That is launch-time
-  isolation (P11): a worker that later adds a remote and pushes toward the
-  subject is not re-checked by the product. Such a push can move a protected
-  branch tip when that branch is free to update on the subject; a tip that
-  stays put because the branch is checked out is git refusing the update,
-  not a continuous isolation monitor here. Promotion to delivery is a
-  separate, coordinator-only step; a worker that calls
+  launch asserts that again before a worker starts. A push its worker makes
+  to the gate, by any remote name or by the gate's path, is refused before
+  any reference moves, whatever it carries, because the task names no
+  branch; a delivery worker's push is held to its own branch, forward and
+  never a deletion. That is the product's whole reach (P11): the launch
+  assertion, and admission for the pushes that arrive at the gate. A worker
+  that later adds a remote toward the subject, or pushes by the subject's
+  path, is neither re-checked nor seen by the gate. Such a push can move a
+  protected branch tip when that branch is free to update on the subject; a
+  tip that stays put because the branch is checked out is git refusing the
+  update, not a continuous isolation monitor here. Promotion to delivery is
+  a separate, coordinator-only step; a worker that calls
   `assistant coordinator promote` is refused.
 
 ## Waiting on a fleet
