@@ -80,33 +80,43 @@ type stageSpec struct {
 	// it stands here again. wire builds the back edge that path takes, bounded
 	// by RebaseAfterPushRounds, from this column and nothing else.
 	rebasesAfterPush bool
+	// repairsAfterPush says a fix round of this stage, which runs after the
+	// push, sends the run back to the review stage with the commit it wrote,
+	// PRD section 5's repair of a red CI run: the repaired head is reviewed
+	// again, passes the checks before push again, and is pushed a second
+	// time on an anchor at the commit the run last pushed before this stage
+	// reads the pull request again. It is exactly the checks stage, the one
+	// stage that takes fix rounds after the push, and wire builds the back
+	// edge that path takes, bounded by the stage's own fix round limit, from
+	// this column and nothing else. repair.go has the rest.
+	repairsAfterPush bool
 }
 
 // stageTable is the pipeline: nine rows, in the fixed order a run takes them.
 var stageTable = []stageSpec{
 	{StageIntent, "intent",
-		func(s *Stages) *Implementation { return &s.Intent }, nil, "", true, false},
+		func(s *Stages) *Implementation { return &s.Intent }, nil, "", true, false, false},
 	{StageRebase, "rebase",
 		func(s *Stages) *Implementation { return &s.Rebase },
-		func(r *config.FixRounds) *int { return &r.Rebase }, config.KeyFixRoundsRebase, true, false},
+		func(r *config.FixRounds) *int { return &r.Rebase }, config.KeyFixRoundsRebase, true, false, false},
 	{StageReview, "review",
 		func(s *Stages) *Implementation { return &s.Review },
-		func(r *config.FixRounds) *int { return &r.Review }, config.KeyFixRoundsReview, true, false},
+		func(r *config.FixRounds) *int { return &r.Review }, config.KeyFixRoundsReview, true, false, false},
 	{StageTest, "test",
 		func(s *Stages) *Implementation { return &s.Test },
-		func(r *config.FixRounds) *int { return &r.Test }, config.KeyFixRoundsTest, true, false},
+		func(r *config.FixRounds) *int { return &r.Test }, config.KeyFixRoundsTest, true, false, false},
 	{StageDocument, "document",
-		func(s *Stages) *Implementation { return &s.Document }, nil, "", true, false},
+		func(s *Stages) *Implementation { return &s.Document }, nil, "", true, false, false},
 	{StageLint, "lint",
 		func(s *Stages) *Implementation { return &s.Lint },
-		func(r *config.FixRounds) *int { return &r.Lint }, config.KeyFixRoundsLint, true, false},
+		func(r *config.FixRounds) *int { return &r.Lint }, config.KeyFixRoundsLint, true, false, false},
 	{StagePush, "push",
-		func(s *Stages) *Implementation { return &s.Push }, nil, "", false, false},
+		func(s *Stages) *Implementation { return &s.Push }, nil, "", false, false, false},
 	{StagePR, "pr",
-		func(s *Stages) *Implementation { return &s.PR }, nil, "", false, false},
+		func(s *Stages) *Implementation { return &s.PR }, nil, "", false, false, false},
 	{StageCI, "ci",
 		func(s *Stages) *Implementation { return &s.CI },
-		func(r *config.FixRounds) *int { return &r.Checks }, config.KeyFixRoundsChecks, false, true},
+		func(r *config.FixRounds) *int { return &r.Checks }, config.KeyFixRoundsChecks, false, true, true},
 }
 
 // spec returns the stage's row, and false when s names no stage.
@@ -235,6 +245,17 @@ func ParkedStage(p graph.Park) (Stage, bool) {
 func (s Stage) RebasesAfterPush() bool {
 	row, ok := s.spec()
 	return ok && row.rebasesAfterPush
+}
+
+// RepairsAfterPush reports whether a fix round of this stage sends the run
+// back to the review stage with the commit it wrote, which the stage table
+// answers: the checks stage, and no other. The back edge it takes is the one
+// wire builds from this stage's node to the review stage's, bounded by the
+// stage's own fix round limit, and only when that limit is above zero, since
+// a stage with no fix round has no repair to send back.
+func (s Stage) RepairsAfterPush() bool {
+	row, ok := s.spec()
+	return ok && row.repairsAfterPush
 }
 
 // Requestable reports whether a person may ask for a fix round at this

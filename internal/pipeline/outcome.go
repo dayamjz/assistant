@@ -59,6 +59,16 @@ const (
 	// what it found then, unless RebaseAfterPushRounds parks the run first, in
 	// which case it is the outcome the parked run shows for the stage.
 	OutcomeRebase Outcome = "rebase"
+	// OutcomeRepair means a fix round of the stage repaired what it found
+	// after the push, and the stage sent the run back to the review stage
+	// with the repaired head, PRD section 5's repair of a red CI run. Only a
+	// stage whose row says Stage.RepairsAfterPush records it, only when its
+	// fix round limit is above zero, and only over a report that would
+	// otherwise have passed, so a hold a round raised still holds. It stands
+	// only while the run takes that path: the stage runs again at the end of
+	// it and records what it found then, unless a bound parks the run first,
+	// in which case it is the outcome the parked run shows for the stage.
+	OutcomeRepair Outcome = "repair"
 )
 
 // holdOptions are the answers a hold accepts, and they are the outcomes a

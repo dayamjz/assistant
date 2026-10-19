@@ -2,6 +2,7 @@ package stages_test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -304,28 +305,216 @@ func TestAPullRequestThatConflictsAfterThePushIsRebasedOnlyCleanlyAndPushedOnlyO
 	}
 }
 
-// TestACommitTheChecksFixRoundWroteIsHeldAndNeverPushed is the checks stage's
-// fix round through a real pipeline. The review passes, the push stage
-// forwards the reviewed head, the checks fail, and the stage's one round
-// commits a change in the run's copy. That commit reaches neither the
-// upstream nor a reviewer: the stage runs again, sees the run's head is not
-// the commit the push forwarded, and holds with ci-fix-not-pushed naming both
-// commits.
+// TestARedCIRunIsRepairedReviewedAgainAndPushedOnlyOnItsOwnAnchor is PRD
+// section 5's repair of a red CI run, as the owner decided it on #325,
+// through a real pipeline: the real rebase, review, push and checks stages
+// and the real fix body, over a subject with an upstream to push to and a
+// stand-in code host the real GitHub adapter reads. The review passes, the
+// push stage forwards the branch, the checks fail, and the checks stage's one
+// fix round commits a repair in the run's copy.
 //
-// P5 is why it holds rather than pushing: no review read the round's commit,
-// and the agent's invocations show none was asked to. P6 is why it names the
-// commit: the round's work has a path back to a person, the hold.
+// The control is the repair going all the way: the checks stage observes the
+// branch where the run pushed it and sends the run back to review, which
+// reviews the repaired head in a session of its own; the push stage pushes it
+// anchored on the commit the run pushed first; and the checks stage reads the
+// checks again on what it pushed, where they pass and the run completes with
+// no hold. The run's record says one repair was sent back and pushed again.
 //
-// The controls are in the same run: the push stage did forward the reviewed
-// head, so a pipeline that pushed nothing would fail the upstream assertion,
-// and the round did move the copy's head, so a round that committed nothing
-// cannot pass.
-func TestACommitTheChecksFixRoundWroteIsHeldAndNeverPushed(t *testing.T) {
-	principles.Cite(t, principles.P5)
+// The other three are where it must not go on. The branch moved out of band
+// after the first push and before the checks stage observed it, which holds
+// at the checks stage with ci-fix-branch-moved and sends nothing for review;
+// the branch moved out of band after that observation and before the second
+// push, which the push stage refuses and holds; and checks still failing on
+// the repair, which parks the run on the checks round limit in front of the
+// fixer rather than taking a second round. In the first two, the commit
+// somebody else put on the branch is still where they put it.
+//
+// This is P6 for the second update of a branch: the update is anchored to the
+// commit the run itself pushed, observed before the review and the push that
+// follow, never to a tip read just before pushing, and a branch that moved is
+// refused rather than adopted. It is P5 for the repair: the commit a fix round
+// wrote after the push reaches the pull request only after a full review of
+// it. And it is P4: the review of the repair resumes no session, and no
+// invocation the run made resumed one.
+func TestARedCIRunIsRepairedReviewedAgainAndPushedOnlyOnItsOwnAnchor(t *testing.T) {
 	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P5)
+	principles.Cite(t, principles.P4)
 	t.Parallel()
 
-	run := newChecksPipeline(t, 1, func(head string) forgetest.Script {
+	type outcome struct {
+		status   graph.Status
+		position string
+		finding  string
+	}
+	for _, tc := range []struct {
+		name string
+		// moveBeforeObservation and moveBeforeSecondPush push a commit onto
+		// the branch out of band, after the first push and before the checks
+		// stage observes it for the repair, or after that and before the
+		// second push.
+		moveBeforeObservation bool
+		moveBeforeSecondPush  bool
+		// stillRed has the checks fail on the repaired head as well.
+		stillRed bool
+		want     outcome
+	}{
+		{name: "control: the repair is reviewed again, pushed on its anchor, and checked green",
+			want: outcome{graph.StatusCompleted, "", ""}},
+		{name: "a branch moved before the repair was observed holds at the checks stage",
+			moveBeforeObservation: true,
+			want:                  outcome{graph.StatusHalted, pipeline.StageCI.HoldNode(), "ci-fix-branch-moved"}},
+		{name: "a branch moved after the observation refuses the second push",
+			moveBeforeSecondPush: true,
+			want:                 outcome{graph.StatusHalted, pipeline.StagePush.HoldNode(), "push-refused"}},
+		{name: "checks still red on the repair park on the round limit",
+			stillRed: true,
+			want:     outcome{graph.StatusRoundsExhausted, pipeline.StageCI.FixNode(), ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			run := newChecksPipeline(t, 1, func(head string) forgetest.Script {
+				return forgetest.Script{
+					forgetest.OpView:   {openPullRequest(head, "MERGEABLE")},
+					forgetest.OpChecks: {failedChecks(head)},
+				}
+			})
+			var moved string
+			run.afterPush = func(t *testing.T, pass int) {
+				if pass == 1 {
+					if tc.moveBeforeObservation {
+						moved = run.landOnBranch(t)
+					}
+					return
+				}
+				// The second push has happened, so the code host reports the
+				// pull request on the commit it forwarded, and its checks.
+				pushed := git(t, run.upstream, "rev-parse", "refs/heads/topic")
+				checks := passedChecks(pushed)
+				if tc.stillRed {
+					checks = failedChecks(pushed)
+				}
+				run.code.Rescript(t, forgetest.Script{
+					forgetest.OpView:   {openPullRequest(pushed, "MERGEABLE")},
+					forgetest.OpChecks: {checks},
+				})
+			}
+			run.beforePush = func(t *testing.T, pass int) {
+				if pass == 2 && tc.moveBeforeSecondPush {
+					moved = run.landOnBranch(t)
+				}
+			}
+			result := run.execute(t)
+
+			report := func(stage pipeline.Stage) findings.Report {
+				t.Helper()
+				r, err := pipeline.StageReport(result.State, stage)
+				if err != nil {
+					t.Fatalf("reading the %s stage's report: %v", stage, err)
+				}
+				return r
+			}
+			if result.Status != tc.want.status || result.Position != tc.want.position {
+				t.Fatalf("the run is %s at %q, want %s at %q:\nreview: %+v\npush: %+v\nchecks: %+v",
+					result.Status, result.Position, tc.want.status, tc.want.position,
+					report(pipeline.StageReview), report(pipeline.StagePush), report(pipeline.StageCI))
+			}
+			repaired := run.copyHead(t)
+			if repaired == run.subject.head {
+				t.Fatalf("the checks round committed nothing, so this run has no repair")
+			}
+			// The harness's script answers a review of later commits at step
+			// 0, a review at step 1, and the fixer at step 2.
+			reviews := 0
+			for _, call := range run.agent.Calls() {
+				if call.Session() != "" {
+					t.Fatalf("an invocation resumed session %q:\n%v", call.Session(), call)
+				}
+				if call.Step == 0 {
+					t.Fatalf("the push stage reviewed later commits, and the review stage had already read the repair:\n%s",
+						call.Prompt)
+				}
+				if call.Step == 1 && strings.Contains(call.Prompt, "It must be exactly "+repaired) {
+					reviews++
+				}
+			}
+			upstream := git(t, run.upstream, "rev-parse", "refs/heads/topic")
+			repairs, err := pipeline.RepairsOf(result.State)
+			if err != nil {
+				t.Fatalf("reading the run's repairs: %v", err)
+			}
+
+			if tc.moveBeforeObservation || tc.moveBeforeSecondPush {
+				stage, _ := pipeline.StageOfNode(tc.want.position)
+				r := report(stage)
+				if !hasFinding(r, tc.want.finding) {
+					t.Fatalf("the %s stage holds without %s: %+v", stage, tc.want.finding, r)
+				}
+				if upstream != moved {
+					t.Fatalf("the pushed branch stands at %s, want %s, which somebody else pushed and nothing in "+
+						"this run may overwrite", upstream, moved)
+				}
+				if tc.moveBeforeObservation {
+					if reviews != 0 || len(repairs) != 0 {
+						t.Fatalf("a repair the checks stage refused was reviewed %d time(s) and recorded as %+v",
+							reviews, repairs)
+					}
+					for _, want := range []string{repaired, run.subject.head} {
+						if !strings.Contains(r.Summary, want) || !strings.Contains(r.Findings[0].Description, want) {
+							t.Fatalf("the hold does not name %s: %+v", want, r)
+						}
+					}
+					return
+				}
+				if reviews != 1 || len(repairs) != 1 || repairs[0].Republished {
+					t.Fatalf("the refused repair was reviewed %d time(s) and recorded as %+v, want one review "+
+						"and one repair not pushed again", reviews, repairs)
+				}
+				return
+			}
+
+			// The repair went through review and a second push.
+			if reviews != 1 {
+				t.Fatalf("the repaired head %s was reviewed %d time(s), want once:\n%v", repaired, reviews, run.agent.Calls())
+			}
+			if r := report(pipeline.StageReview); r.Revision != repaired {
+				t.Fatalf("the review stage last read %s, want the repaired head %s", r.Revision, repaired)
+			}
+			if upstream != repaired || textAt(t, result.State, pipeline.KeyPushed) != repaired {
+				t.Fatalf("the pushed branch stands at %s and the run pushed %s, want the repair %s on both",
+					upstream, textAt(t, result.State, pipeline.KeyPushed), repaired)
+			}
+			want := []pipeline.Repair{{Pushed: run.subject.head, Repaired: repaired, Republished: true}}
+			if fmt.Sprint(repairs) != fmt.Sprint(want) {
+				t.Fatalf("the run records repairs %+v, want %+v", repairs, want)
+			}
+			if tc.stillRed {
+				if result.ParkedAt == nil || result.ParkedAt.To != pipeline.StageCI.FixNode() {
+					t.Fatalf("the run parked on %+v, want the edge into the checks stage's fixer", result.ParkedAt)
+				}
+				return
+			}
+			if got := pipeline.StageOutcome(result.State, pipeline.StageCI); got != pipeline.OutcomePassed {
+				t.Fatalf("the checks stage ended %q on the repair, want passed", got)
+			}
+			if r := report(pipeline.StageCI); r.HasHeld() || r.Revision != repaired {
+				t.Fatalf("the checks stage's last report is %+v, want a pass read on %s", r, repaired)
+			}
+		})
+	}
+}
+
+// A fix round's commit the path back to review cannot take holds with
+// ci-fix-not-pushed, as it did before the path existed, naming both commits
+// and why: here the run skips the push stage, so it pushed nothing and has no
+// branch of its own for a repair to go on. The commit reaches neither the
+// upstream nor a reviewer. The control is the repair test above, whose run
+// skips nothing and takes the path.
+func TestARepairARunCannotReviewAgainIsHeldAndNeverPushed(t *testing.T) {
+	principles.Cite(t, principles.P5)
+	t.Parallel()
+
+	run := newChecksPipelineSkipping(t, 1, []pipeline.Stage{pipeline.StagePush}, func(head string) forgetest.Script {
 		return forgetest.Script{
 			forgetest.OpView:   {openPullRequest(head, "MERGEABLE")},
 			forgetest.OpChecks: {failedChecks(head)},
@@ -333,14 +522,13 @@ func TestACommitTheChecksFixRoundWroteIsHeldAndNeverPushed(t *testing.T) {
 	})
 	result := run.execute(t)
 
-	if result.Status != graph.StatusHalted || result.Position != pipeline.StageCI.HoldNode() {
-		report, _ := pipeline.StageReport(result.State, pipeline.StageCI)
-		t.Fatalf("the run is %s at %q after the checks round, want halted at %q: %+v",
-			result.Status, result.Position, pipeline.StageCI.HoldNode(), report)
-	}
 	report, err := pipeline.StageReport(result.State, pipeline.StageCI)
 	if err != nil {
 		t.Fatalf("reading the checks stage's report: %v", err)
+	}
+	if result.Status != graph.StatusHalted || result.Position != pipeline.StageCI.HoldNode() {
+		t.Fatalf("the run is %s at %q after the checks round, want halted at %q: %+v",
+			result.Status, result.Position, pipeline.StageCI.HoldNode(), report)
 	}
 	round := run.copyHead(t)
 	if round == run.subject.head {
@@ -349,27 +537,19 @@ func TestACommitTheChecksFixRoundWroteIsHeldAndNeverPushed(t *testing.T) {
 	if !hasFinding(report, "ci-fix-not-pushed") {
 		t.Fatalf("the checks stage holds without saying the round's commit is not pushed: %+v", report)
 	}
-	for _, want := range []string{round, run.subject.head} {
+	for _, want := range []string{round, "pushed no commit"} {
 		if !strings.Contains(report.Summary, want) || !strings.Contains(report.Findings[0].Description, want) {
-			t.Fatalf("the hold does not name %s: %+v", want, report)
+			t.Fatalf("the hold does not say %q: %+v", want, report)
 		}
 	}
-	if got := git(t, run.upstream, "rev-parse", "refs/heads/topic"); got != run.subject.head {
-		t.Fatalf("the pushed branch stands at %s, want the reviewed commit %s and not the round's %s",
-			got, run.subject.head, round)
-	}
-	calls := run.agent.Calls()
-	if len(calls) != 2 {
-		t.Fatalf("the agent was invoked %d time(s), want the review and the checks round:\n%v", len(calls), calls)
-	}
-	for _, call := range calls {
-		if strings.Contains(call.Prompt, laterLandmark) {
-			t.Fatalf("a review of the round's commit ran, and this build does not push what it would approve:\n%s",
-				call.Prompt)
+	run.mustNotExistUpstream(t, "refs/heads/topic")
+	for _, call := range run.agent.Calls() {
+		if call.Step != 2 && strings.Contains(call.Prompt, round) {
+			t.Fatalf("a review read the round's commit, and nothing in this run pushes it:\n%v", call)
 		}
 	}
-	if writes := writesTo(run.code); len(writes) != 0 {
-		t.Fatalf("the run wrote to the code host after the push: %+v", writes)
+	if repairs, err := pipeline.RepairsOf(result.State); err != nil || len(repairs) != 0 {
+		t.Fatalf("a repair the run could not review again was recorded as %+v (%v)", repairs, err)
 	}
 }
 
@@ -393,6 +573,14 @@ type checksPipeline struct {
 // checks stage. script is what the code host answers, given the head the
 // push stage will forward.
 func newChecksPipeline(t *testing.T, rounds int, script func(head string) forgetest.Script) *checksPipeline {
+	t.Helper()
+	return newChecksPipelineSkipping(t, rounds, nil, script)
+}
+
+// newChecksPipelineSkipping is newChecksPipeline for a run whose skip list
+// names skip.
+func newChecksPipelineSkipping(t *testing.T, rounds int, skip []pipeline.Stage,
+	script func(head string) forgetest.Script) *checksPipeline {
 	t.Helper()
 	s := newSubject(t)
 	git(t, s.dir, "config", "user.name", "test")
@@ -463,6 +651,7 @@ func newChecksPipeline(t *testing.T, rounds int, script func(head string) forget
 	}
 	start := s.start()
 	start.ForgeRepository = "dayamjz/assistant"
+	start.Skip = skip
 	state, err := p.NewState(start)
 	if err != nil {
 		t.Fatalf("building the run's initial state: %v", err)

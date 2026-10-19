@@ -299,6 +299,14 @@ type Run struct {
 	// copy, whose removal is Cleanup's decision alone. CopySweepPhrase is the
 	// line a person reads for the outcomes that leave them something to do.
 	CopySweep *store.RunCopySweep `json:"copy_sweep,omitempty"`
+	// Repairs is every repair a fix round of the checks stage sent back for
+	// review after the push, in the order they were taken, as
+	// pipeline.RepairsOf reads them off the run's state: the commit the run
+	// had pushed, the repair, and whether the push stage has forwarded
+	// another commit since. It is the state composed rather than restated,
+	// and it is absent for a run that repaired nothing. RepairPhrase is the
+	// line a person reads.
+	Repairs []pipeline.Repair `json:"repairs,omitempty"`
 	// AnswerNotApplied says, on the answer to a response, why the answer the
 	// request carried was not applied to the run: the hold it answered was
 	// closed by the service first, on a re-read of the run's pull request,

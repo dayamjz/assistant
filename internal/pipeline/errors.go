@@ -122,4 +122,18 @@ var (
 	// the path. The step fails rather than routing on, because a request the
 	// topology has no edge for would otherwise be dropped without a word.
 	ErrRebaseNotOffered = errors.New("pipeline: the stage asked for a rebase after the push and has no path back to rebase")
+	// ErrRepairNotOffered is returned when a stage body asks to send the run
+	// back to the review stage with a repair and this pipeline built that
+	// stage no path there: the stage table does not give it the path, or its
+	// fix round limit is zero, so no round of it could have written a repair;
+	// and when the run has no repair to send, because it pushed nothing or
+	// its head is still the commit it pushed. The step fails for ErrRebaseNotOffered's reason: without the edge, the
+	// outcome would fall through to the stage's way forward and a repair
+	// nothing reviewed would read as a pass.
+	ErrRepairNotOffered = errors.New("pipeline: the stage asked to send a repair back to review and has no path back to review")
+	// ErrTwoPathsBack is returned when a stage body asks for the path back to
+	// rebase and the path back to review in one execution. They answer two
+	// different findings, a conflict and a repair, and the topology can take
+	// one edge, so the step fails rather than choosing for the body.
+	ErrTwoPathsBack = errors.New("pipeline: the stage asked for both paths back after the push")
 )

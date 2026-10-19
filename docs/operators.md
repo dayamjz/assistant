@@ -540,12 +540,30 @@ the run skips the rebase, review or push stage. The fix round limits of the
 stages the path passes through are per run, so a stage that spent its rounds
 on the first pass has none left on the second.
 
-A failing check is still sent to the checks stage's fix rounds
-(`fix_rounds.checks`). The round commits in the run's isolated copy, but that
-commit is not reviewed and nothing in this build pushes it, so the next time
-the stage runs it holds with `ci-fix-not-pushed`, naming the round's commit and
-the commit the pull request still stands on, instead of reading checks that
-could not have seen the fix.
+A failing check is sent to the checks stage's fix rounds
+(`fix_rounds.checks`). The round commits a repair in the run's isolated copy,
+and the run takes it back through review before it reaches the pull request:
+the checks stage observes the branch and goes on only if it still stands at
+the commit this run pushed, the review stage reviews the repaired head in a
+fresh session, the test, document and lint stages run again, and the push
+stage pushes it anchored on that commit, before the checks stage reads the
+checks again on what it pushed. A branch somebody else moved since this run
+pushed it holds with `ci-fix-branch-moved` and nothing is pushed, and a branch
+that moves after that observation is refused at the push and held, so a commit
+somebody else pushed there is never dropped. Fix rounds are per run, so
+`fix_rounds.checks` bounds the repairs: a check still failing after the last
+round it allows parks the run in front of the checks stage's fixer. The run's
+answer says whether a repair was made and whether it has been added to the
+pull request since.
+
+Where that path cannot do its job, because the run pushed nothing or skips the
+review or push stage, the stage holds with `ci-fix-not-pushed`, naming the
+round's commit, the commit the pull request still stands on, and why, instead
+of reading checks that could not have seen the fix.
+
+The path changes the stage graph's edge digest whenever `fix_rounds.checks` is
+above zero, so a run checkpointed by an earlier build is refused on resume and
+has to be started again.
 
 ## Keep `commands.test` targeted
 
@@ -595,12 +613,13 @@ commits between the reviewed one and the head before it pushes anything, and
 holds unless that review raises nothing but notes (PRD section 14, decision 7).
 Two things that review does not cover:
 
-- The checks stage's fix rounds. That stage runs after the push, so nothing
-  reviews the commits its rounds make, and nothing in this build pushes them;
-  the stage holds with `ci-fix-not-pushed` rather than reporting on checks
-  that never saw the round's commit. A rebase the checks stage sends the run
-  back for is not one of these: it is reviewed by the review stage before the
-  second push, as described above.
+- The checks stage's fix rounds. That stage runs after the push, so the push
+  stage's review of later commits never sees what its rounds make. They are
+  reviewed instead by the review stage the checks stage sends a repair back
+  to before the second push, as described above, and so is a rebase the
+  checks stage sends the run back for. Where the run cannot take a repair
+  back, the stage holds with `ci-fix-not-pushed` rather than reporting on
+  checks that never saw the round's commit.
 - Earlier rounds' own accounts. The reviewer of the later commits is handed
   each stage's last fix summary as a claim to check. A stage that took more
   than one round is represented by its last summary, and its earlier rounds

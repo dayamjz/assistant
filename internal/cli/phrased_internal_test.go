@@ -58,6 +58,9 @@ func fixtureRun() machine.Run {
 			Run: "abcdefghij23", Outcome: store.SweepNotCleared, Ended: store.Known(0), Remaining: store.Known(1),
 			Occasion: store.SweptAtRecovery, Detail: "swept " + filepath.Join(vocabtest.SampleRoot(), "worktrees", "repo", "abcdefghij23") + ": 1 survived",
 		},
+		Repairs: []pipeline.Repair{{
+			Pushed: "4f1c0de4f1c0de4f1c0de4f1c0de4f1c0de4f1c0", Repaired: "9a8b7c6d9a8b7c6d9a8b7c6d9a8b7c6d9a8b7c6d", Republished: true,
+		}},
 	}
 }
 
@@ -776,7 +779,8 @@ func TestATaskLineIsItsPhraseAndNothingOfTheRecord(t *testing.T) {
 }
 
 // A run's head is its phrase, its branch, its agent, the kept-copy line
-// from its cleanup refusal and the line for a copy sweep that did not clear;
+// from its cleanup refusal, the line for a copy sweep that did not clear and
+// the line for a repair of its checks;
 // the details beneath it are an evidence document,
 // and this says so by showing exactly which lines carry a stage name once
 // stage views are added.
@@ -796,6 +800,13 @@ func TestARunsHeadIsPhrasedAndItsDetailsAreNot(t *testing.T) {
 	unswept, ok := machine.CopySweepPhrase(*run.CopySweep)
 	if !ok || !strings.Contains(head, unswept.String()) || strings.Contains(head, run.CopySweep.Detail) {
 		t.Fatalf("the head does not carry the uncleared-sweep line alone:\n%s", head)
+	}
+	// A repair of the checks is one phrased line, and its commits stay the
+	// structured rendering's.
+	repaired, ok := machine.RepairPhrase(run.Repairs)
+	if !ok || !strings.Contains(head, repaired.String()) ||
+		strings.Contains(head, run.Repairs[0].Pushed) || strings.Contains(head, run.Repairs[0].Repaired) {
+		t.Fatalf("the head does not carry the repair line alone:\n%s", head)
 	}
 	if !strings.Contains(head, run.Phrase().String()) || !strings.Contains(head, "Branch     feature/parser") || !strings.Contains(head, "Agent      claude") {
 		t.Fatalf("the head is missing the phrase, the branch or the agent:\n%s", head)

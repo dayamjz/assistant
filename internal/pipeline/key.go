@@ -133,6 +133,20 @@ const (
 	KeyPushAnchor Key = "push.anchor"
 	// KeyPushed is the commit the push stage forwarded.
 	KeyPushed Key = "pushed"
+	// KeyRepairs is the record of every repair a fix round of the checks stage
+	// sent back to the review stage after the push, one entry per traversal
+	// of that path in the order they were taken, each the commit the run had
+	// pushed and the head it sent back. It is how a run's answer says a CI
+	// repair was made and reviewed again: RepairsOf reads it.
+	//
+	// The stage node writes it, in the execution that records OutcomeRepair,
+	// and no stage or fixer may, so an entry is there exactly when the node
+	// routed a repair back and a body can neither leave one out nor add one.
+	// Its row is late, because no entry is how every run behaved before the
+	// path existed. It is part of the convergence fingerprint like every key,
+	// and it can only make two traversals differ, which the head they carry
+	// already does.
+	KeyRepairs Key = "repairs"
 	// KeyPullRequest identifies the pull request the run created or updated.
 	KeyPullRequest Key = "pull_request"
 	// KeyChecks is the checks verdict the CI stage reached.
@@ -242,6 +256,9 @@ var sharedKeys = []keySpec{
 	// be anchored on.
 	{KeyPushAnchor, graph.KindText, graph.MergeLastWriteWins, ownerStage, false},
 	{KeyPushed, graph.KindText, graph.MergeNone, ownerStage, false},
+	// Every repair appends one entry, so the key is a list with the append
+	// rule, though one node writes it.
+	{KeyRepairs, graph.KindList, graph.MergeAppend, ownerPipeline, true},
 	{KeyPullRequest, graph.KindText, graph.MergeNone, ownerStage, false},
 	{KeyChecks, graph.KindText, graph.MergeNone, ownerStage, false},
 	{KeyPullRequestEnd, graph.KindText, graph.MergeNone, ownerStage, false},

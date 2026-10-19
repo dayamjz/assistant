@@ -48,12 +48,13 @@ import (
 //
 // # A second push (P6)
 //
-// A run the checks stage sent back to rebase reaches this stage again with
-// pipeline.KeyPushed already naming the commit it forwarded the first time,
-// and the branch it now updates is one this run rewrote. The anchor for that
-// update has to be an observation of the branch standing at that commit,
-// which is what the rebase stage's second pass records and the only one it
-// records. This stage asks safety.RequireObservedAt of the anchor before it
+// A run the checks stage sent back to rebase, or back to review with a repair
+// its fix round committed, reaches this stage again with pipeline.KeyPushed
+// already naming the commit it forwarded last, and the branch it now updates
+// is one this run updated before. The anchor for that update has to be an
+// observation of the branch standing at that commit, which is what the
+// rebase stage's second pass records for a conflict and what the checks
+// stage records for a repair, and the only one either records. This stage asks safety.RequireObservedAt of the anchor before it
 // decides, so an anchor from the first pass, taken before the run pushed
 // anything, is refused here and held rather than reaching a decision. That
 // anchor reaches here when the second pass held and a person carried the run
@@ -111,11 +112,10 @@ import (
 //     stage read, not the later commits. Those are reviewed here like any
 //     other, and a person is asked again only if that review raises something.
 //   - The checks stage's fix rounds run after this stage and are not reviewed
-//     here. Nothing in this build pushes the commits they make, and the
-//     checks stage holds on one rather than reading checks it cannot be in.
-//     A rebase the checks stage sends the run back for is different: it
-//     comes back through the review stage, and through here, before it is
-//     pushed.
+//     by this review of later commits. They are reviewed by the review stage
+//     instead: the checks stage sends a repair back to it, so the repaired
+//     head is the commit the review stage read by the time it reaches here,
+//     and so is a rebase the checks stage sends the run back for.
 //   - A judge path a later round deleted, which judge.go already held that
 //     round's stage for, is reported again by this review's judge lens: it
 //     cannot tell which edits a person already accepted, so it asks again

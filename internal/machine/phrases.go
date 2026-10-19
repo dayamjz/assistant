@@ -941,6 +941,40 @@ func CleanupPhrase(c store.RunCleanup) (Phrase, bool) {
 	}
 }
 
+// The repair rows, for a run whose checks a fix round repaired after its
+// work reached the pull request: the repair was reviewed again and has been
+// added to the pull request since, or it has not been added yet. A run with
+// no repair has no row, because nothing about it changed.
+var (
+	phraseRepairAdded = Phrase{
+		Outcome:     "A check on the pull request did not pass, and this run repaired it and had the repair reviewed again before adding it to the pull request.",
+		Consequence: "The pull request now carries the repair, so its checks are read on the repaired work.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseRepairNotYetAdded = Phrase{
+		Outcome:     "A check on the pull request did not pass, and this run repaired it, but the repair has not been added to the pull request.",
+		Consequence: "It is added only once it has been reviewed again, so until then the pull request carries the work as it stood before the repair.",
+		Decision:    "Nothing to decide about the repair itself; anything this run needs from you is said with it.",
+	}
+)
+
+// RepairPhrase is what a person reads about the repairs a run's checks stage
+// sent back for review after the push, and false for a run that sent none.
+// It reads the last one, because that is the one the pull request stands in
+// relation to now: added once pipeline.Repair.Republished says the push stage
+// has forwarded another commit since, which it does only behind a completed
+// review on the path a repair takes, and not yet added otherwise. The commits
+// and the count are the structured rendering's.
+func RepairPhrase(repairs []pipeline.Repair) (Phrase, bool) {
+	if len(repairs) == 0 {
+		return Phrase{}, false
+	}
+	if repairs[len(repairs)-1].Republished {
+		return phraseRepairAdded, true
+	}
+	return phraseRepairNotYetAdded, true
+}
+
 // The copy sweep row, for the record of the latest sweep of a run's local
 // copy that did not establish the copy clear: the platform has no sweep, the
 // sweep could not be made, or it left something it could not end. A cleared
@@ -1639,7 +1673,7 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseRetryUndispatchable, phraseNotRetried, phraseLandedLocallyNow)
 	out = append(out, phraseMessageUnread, phraseMessageRead, phraseMessageRefused, phraseMessageUnknown,
 		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified)
-	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept)
+	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept, phraseRepairAdded, phraseRepairNotYetAdded)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseNoticeQueued, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))

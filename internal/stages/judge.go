@@ -82,8 +82,9 @@ import (
 //     reviewer's, in a finding of its own.
 //   - The rule stops the pipeline changing the judge after review, not changing
 //     the code. A test or lint round's edits outside the judge paths are
-//     reviewed at the push stage before they are pushed, which push.go owns;
-//     a checks round's are not, because that stage runs after the push.
+//     reviewed at the push stage before they are pushed, which push.go owns,
+//     and a checks round's are reviewed by the review stage the checks stage
+//     sends a repair back to before it is pushed, which repair.go owns.
 //   - The fixer is told the judge paths are not its to change. Nothing depends
 //     on it listening, and nothing here prevents the edit: the hold is what
 //     follows from it.
