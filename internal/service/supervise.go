@@ -660,13 +660,16 @@ func surfacedKey(kind supervisor.Kind, marker string) string { return string(kin
 // The first three are made for every task, watched or not, and each
 // surfaces once: its key is in the wake table afterwards. The
 // terminal
-// reading is one of: terminal gone, with the case and the unobserved-since
-// instant in the marker, surfaced once per reference and case and then
-// once per escalation window measured from the GoneSurfacedAt marker, with
-// that surface's instant added to the marker; a screen
-// that changed, which resets the surfaced flag, the window and the stall
-// count and makes no wake; a declared wait, when the task resolves Paused,
-// measured against the recheck window; no change, when the screen is empty,
+// reading is one of: a declared wait, when the task resolves Paused, taken
+// before any gone case and measured against the recheck window, because
+// that resolution is the log's waiting-external and a live terminal would
+// have resolved Running and a dead one Unknown, so reading Paused as
+// terminal gone would treat the wait as a crash; terminal gone, with the
+// case and the unobserved-since instant in the marker, surfaced once per
+// reference and case and then once per escalation window measured from the
+// GoneSurfacedAt marker, with that surface's instant added to the marker; a
+// screen that changed, which resets the surfaced flag, the window and the
+// stall count and makes no wake; no change, when the screen is empty,
 // nothing changed and there is evidence of progress; and otherwise terminal
 // unchanged, measured against the escalation window with the marker's
 // surfaced flag and stall count. A task with no terminal to read has an
@@ -738,6 +741,26 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 		return d
 	}
 
+	// Paused is the worker's declared wait. A live terminal resolves Running
+	// and a dead one Unknown, both from the process tier, so this state is
+	// the log reached because the probe was not one of those. Classifying
+	// the unobserved probe as terminal gone would treat that wait as a crash.
+	if o.observed.State.State == taskstate.Paused {
+		d.advance.UnobservedSince = store.Optional[time.Time]{}
+		d.advance.GoneSurfacedAt = store.Optional[time.Time]{}
+		start, ok := o.markers.WindowStart.Get()
+		if !ok {
+			start = now
+			d.advance.WindowStart = store.Known(now)
+		}
+		wake, _ := supervisor.Of(supervisor.KindDeclaredWait)
+		marker := fmt.Sprintf("declared-wait:%d:%s", o.observed.State.Basis.EventSequence, start.UTC().Format(time.RFC3339Nano))
+		if v := detect(wake, marker, elapsed(start, cfg.RecheckWindow, now), false, supervisor.Stall{}); v.Surfaces() {
+			d.advance.WindowStart = store.Known(now)
+		}
+		return d
+	}
+
 	if o.gone != "" {
 		since, ok := o.markers.UnobservedSince.Get()
 		if !ok {
@@ -789,12 +812,6 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 		screen = "none"
 	}
 	switch {
-	case o.observed.State.State == taskstate.Paused:
-		wake, _ := supervisor.Of(supervisor.KindDeclaredWait)
-		marker := fmt.Sprintf("declared-wait:%d:%s", o.observed.State.Basis.EventSequence, start.UTC().Format(time.RFC3339Nano))
-		if v := detect(wake, marker, elapsed(start, cfg.RecheckWindow, now), false, supervisor.Stall{}); v.Surfaces() {
-			d.advance.WindowStart = store.Known(now)
-		}
 	case !o.screen.IsKnown() && evidence == supervisor.Progress:
 		wake, _ := supervisor.Of(supervisor.KindNoChange)
 		detect(wake, "no-change", supervisor.WindowOpen, false, supervisor.Stall{})

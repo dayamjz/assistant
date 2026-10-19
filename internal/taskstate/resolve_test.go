@@ -120,6 +120,9 @@ func TestTheProcessTier(t *testing.T) {
 	}{
 		{"live terminal, no run", log("", "queued"), nil, Live, Running, SourceProcess},
 		{"dead terminal, stale started event", stale, nil, Dead, Unknown, SourceProcess},
+		{"dead terminal does not keep a declared wait", log("", "waiting-external"), nil, Dead, Unknown, SourceProcess},
+		{"unobserved terminal keeps a declared wait", log("", "waiting-external"), nil, Unobserved, Paused, SourceEvent},
+		{"live terminal outranks a declared wait", log("", "waiting-external"), nil, Live, Running, SourceProcess},
 		{"dead terminal, finished run: the run outranks", stale, finished, Dead, Ready, SourceRun},
 		{"live terminal, finished run: the run outranks", stale, finished, Live, Ready, SourceRun},
 		{"unobserved terminal falls to the log", stale, nil, Unobserved, Running, SourceEvent},

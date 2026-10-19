@@ -1123,3 +1123,93 @@ func plantComplete(t *testing.T, records *store.Store) string {
 	}
 	return id
 }
+
+// GAP-05: a worker that declared an external wait is not a crash, and a
+// terminal that then dies is not left as that wait. While the probe is
+// Unobserved the task resolves Paused and the pass classifies a declared
+// wait, absorbed inside the recheck window, with no terminal-gone wake and
+// no second attempt. Once the probe answers Dead the task resolves Unknown
+// from the process, the pass classifies terminal-gone for that session, and
+// the declared-wait classification is gone with the state that carried it.
+func TestADeclaredWaitIsNotACrashAndADeadTerminalIsNotThatWait(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P9)
+	h, records := loopHome(t)
+	const id = "declaredwait"
+	const ref = "pane-waiting"
+	ctx := t.Context()
+	if _, err := records.CreateTask(ctx, store.Task{
+		ID: id, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: "/w/" + id,
+	}, store.Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"started", "waiting-external"} {
+		if _, err := records.AppendTaskEvent(ctx, id, kind, "the external check"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := records.BeginTaskAttempt(ctx, id, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.SetAttemptSession(ctx, id, 1, ref); err != nil {
+		t.Fatal(err)
+	}
+
+	terminals := newScriptedTerminals()
+	l := openLoop(t, h, records, terminals, nil)
+	defer func() { _ = l.service.Close() }()
+
+	var waiting passReport
+	deadline := time.Now().Add(loopWait)
+	for {
+		waiting = l.freshPass(t)
+		if len(detectionsOf(waiting, id, supervisor.KindDeclaredWait)) == 1 {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the declared wait was not classified; the pass is %+v", waiting.Tasks[id])
+		}
+	}
+	declared := detectionsOf(waiting, id, supervisor.KindDeclaredWait)
+	if declared[0].Verdict.Surfaces() {
+		t.Fatalf("the declared wait surfaced inside its recheck window: %+v", declared)
+	}
+	if gone := detectionsOf(waiting, id, supervisor.KindTerminalGone); len(gone) != 0 {
+		t.Fatalf("the declared wait was classified as terminal gone: %+v", gone)
+	}
+	if rows := wakesOfKind(t, l.records(t), id, supervisor.KindTerminalGone); len(rows) != 0 {
+		t.Fatalf("the declared wait queued terminal-gone: %+v", rows)
+	}
+	if got, err := l.service.tasks().Task(ctx, id); err != nil || got.State != taskstate.Paused || got.Source != taskstate.SourceEvent {
+		t.Fatalf("during the wait the task resolves %+v (%v), want Paused from the event", got, err)
+	}
+	if attempts, err := l.records(t).TaskAttempts(ctx, id); err != nil || len(attempts) != 1 {
+		t.Fatalf("the declared wait began another attempt: %+v (%v)", attempts, err)
+	}
+
+	terminals.dead(ref)
+	var crashed passReport
+	deadline = time.Now().Add(loopWait)
+	for {
+		crashed = l.freshPass(t)
+		if len(detectionsOf(crashed, id, supervisor.KindTerminalGone)) == 1 {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the dead terminal was not classified as terminal gone; the pass is %+v", crashed.Tasks[id])
+		}
+	}
+	if wait := detectionsOf(crashed, id, supervisor.KindDeclaredWait); len(wait) != 0 {
+		t.Fatalf("the dead terminal was still a declared wait: %+v", wait)
+	}
+	gone := detectionsOf(crashed, id, supervisor.KindTerminalGone)
+	if !gone[0].Verdict.Surfaces() || !strings.HasPrefix(gone[0].Marker, "terminal-gone:dead:"+ref+":") {
+		t.Fatalf("the dead terminal = %+v, want terminal-gone dead for %s surfaced", gone, ref)
+	}
+	if got, err := l.service.tasks().Task(ctx, id); err != nil || got.State != taskstate.Unknown || got.Source != taskstate.SourceProcess || got.Basis.Process != taskstate.Dead {
+		t.Fatalf("after the crash the task resolves %+v (%v), want Unknown from the dead terminal", got, err)
+	}
+	if attempts, err := l.records(t).TaskAttempts(ctx, id); err != nil || len(attempts) != 1 {
+		t.Fatalf("classifying the crash began another attempt: %+v (%v)", attempts, err)
+	}
+}

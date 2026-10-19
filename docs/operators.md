@@ -301,15 +301,17 @@ wrong.
 | Posture | What is true | What the service does | What you do |
 |---|---|---|---|
 | Active execution | Terminal Live, or a validation run the service is advancing | Absorbs; no wake | Nothing |
-| Declared wait | Worker declared a wait whose recheck window is open | Absorbs until the window elapses | Nothing until a wake surfaces |
+| Declared wait | The task resolves Paused: the worker declared an external wait, and the terminal is neither live nor dead | Absorbs until the recheck window elapses, and does not queue `terminal-gone` for that probe | Nothing until a wake surfaces |
 | Missing heartbeats / stalled screen | Terminal Live but the capture is unchanged past the escalation window | Surfaces `terminal-unchanged` once, then absorbs redraws until the next window | Inspect; do not treat as a crash |
 | Dead process | Probe answers Dead; work not landed; no stored report | Queues `terminal-gone` with case `dead`; on restart (or `task.relaunch`) sweeps the standing copy and relaunches in place up to `relaunch_attempts`, acknowledging that session's queued `terminal-gone` wakes as the program | After a restart, read `assistant tasks` before acting on a re-handed wake |
 | Ambiguous / unobserved | Probe answers Unobserved (unheld survivor, unreadable, foreign home, and the like) | Surfaces `terminal-gone` with case `unobservable`; never relaunches; never deletes the standing copy | Probe or wait; never `task.relaunch` |
 | Blocked decision | Open hold naming the task (relaunch bound, no-sweep, stop, report decision, …) | Resolves Held; leaves alone until answered | `assistant --task ID --answer …` |
 | Failed recovery | Relaunch or sweep refused, or past `relaunch_attempts` | Holds or surfaces; does not destroy the copy | Read the hold or service log; answer retry/stop or fix the host |
 
-A legitimate declared wait is never classified as a dead worker. A dead worker
-is never left looking like a wait once the probe answers Dead. Ambiguous
+A legitimate declared wait is never classified as a dead worker: Paused is
+taken before any terminal-gone case. A dead worker is never left looking like
+a wait once the probe answers Dead, because that resolution is Unknown from
+the process and the stale wait in the log is not read. Ambiguous
 state never triggers destructive cleanup or a duplicate delivery action: the
 copy stays, and a second handout of the same wake id after a lost ack does
 not start another attempt once the program has already relaunched that
