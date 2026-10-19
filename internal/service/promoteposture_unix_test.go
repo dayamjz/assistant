@@ -72,7 +72,9 @@ func workerPushes(t *testing.T, w launched, branch string) string {
 // default branch, and a real worker's push (#187). Over a trusted copy that
 // does not parse, the promotion is refused as unavailable and records
 // nothing, with no posture assumed. Over a gated project, local asked for is
-// refused as lighter and records nothing. Once the project declares local,
+// refused as lighter and records nothing. The operator's own file says local,
+// the only layer that may loosen the posture (#304), so the gated project is
+// a trusted copy tightening it. Once the project declares local,
 // the promotion records local in the flip, and the promoted worker's push of
 // its branch starts no run and raises the approval hold offering its commit,
 // which is the path an intake-recorded local task takes.
@@ -80,55 +82,56 @@ func TestAPromotionInALocalProjectRecordsLocalAndItsPushAsksForApproval(t *testi
 	t.Parallel()
 	principles.Cite(t, principles.P7)
 	principles.Cite(t, principles.P14)
-	launchedWorkerOf(t, store.TaskInvestigation, "", func(w launched) {
-		ctx := t.Context()
-		subject := w.repository.WorkingPath
+	launchedWorkerConfigured(t, store.TaskInvestigation, "", store.Unknown[config.Delivery](),
+		`{"supervision_beacon_interval": "1s", "delivery": "local"}`, func(w launched) {
+			ctx := t.Context()
+			subject := w.repository.WorkingPath
 
-		publishTrusted(t, subject, `{"delivery": "direct"}`)
-		if _, err := promoteRunningInvestigation(t, w, "task/promoted", ""); !errors.Is(err, ipc.ErrUnavailable) {
-			t.Fatalf("a promotion over an unparseable trusted copy = %v, want unavailable", err)
-		}
-		stillAnInvestigation(t, w, "the promotion over an unparseable copy")
-
-		publishTrusted(t, subject, "")
-		if _, err := promoteRunningInvestigation(t, w, "task/promoted", "local"); !errors.Is(err, ipc.ErrRefused) {
-			t.Fatalf("local asked of a gated project's promotion = %v, want refused", err)
-		}
-		stillAnInvestigation(t, w, "the lighter promotion")
-
-		publishTrusted(t, subject, `{"delivery": "local"}`)
-		promoted, err := promoteRunningInvestigation(t, w, "task/promoted", "")
-		if err != nil {
-			t.Fatalf("the promotion in a local project: %v", err)
-		}
-		if promoted.Record.Delivery != store.Known(config.DeliveryLocal) {
-			t.Fatalf("the promotion answered a task under %v, want local", promoted.Record.Delivery)
-		}
-		records := openRecords(t, w.home)
-		defer func() { _ = records.Close() }()
-		if stored, err := records.Task(ctx, w.task); err != nil || stored.Shape != store.TaskDelivery ||
-			stored.Delivery != store.Known(config.DeliveryLocal) {
-			t.Fatalf("the stored task is %+v (%v), want a delivery task under local", stored, err)
-		}
-
-		head := workerPushes(t, w, "task/promoted")
-		if runs, err := records.RunsForRepository(ctx, w.repository.ID); err != nil || len(runs) != 0 {
-			t.Fatalf("the promoted local task's push started %d runs (%v), want none", len(runs), err)
-		}
-		open, err := records.OpenHolds(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		offered := false
-		for _, h := range open {
-			if h.TaskID.Or("") == w.task && strings.Contains(h.Key, "/local-approval/"+head+"/") {
-				offered = true
+			publishTrusted(t, subject, `{"delivery": "direct"}`)
+			if _, err := promoteRunningInvestigation(t, w, "task/promoted", ""); !errors.Is(err, ipc.ErrUnavailable) {
+				t.Fatalf("a promotion over an unparseable trusted copy = %v, want unavailable", err)
 			}
-		}
-		if !offered {
-			t.Fatalf("the open holds %+v offer nothing of task %s naming %s", open, w.task, head)
-		}
-	})
+			stillAnInvestigation(t, w, "the promotion over an unparseable copy")
+
+			publishTrusted(t, subject, `{"delivery": "gated"}`)
+			if _, err := promoteRunningInvestigation(t, w, "task/promoted", "local"); !errors.Is(err, ipc.ErrRefused) {
+				t.Fatalf("local asked of a gated project's promotion = %v, want refused", err)
+			}
+			stillAnInvestigation(t, w, "the lighter promotion")
+
+			publishTrusted(t, subject, `{"delivery": "local"}`)
+			promoted, err := promoteRunningInvestigation(t, w, "task/promoted", "")
+			if err != nil {
+				t.Fatalf("the promotion in a local project: %v", err)
+			}
+			if promoted.Record.Delivery != store.Known(config.DeliveryLocal) {
+				t.Fatalf("the promotion answered a task under %v, want local", promoted.Record.Delivery)
+			}
+			records := openRecords(t, w.home)
+			defer func() { _ = records.Close() }()
+			if stored, err := records.Task(ctx, w.task); err != nil || stored.Shape != store.TaskDelivery ||
+				stored.Delivery != store.Known(config.DeliveryLocal) {
+				t.Fatalf("the stored task is %+v (%v), want a delivery task under local", stored, err)
+			}
+
+			head := workerPushes(t, w, "task/promoted")
+			if runs, err := records.RunsForRepository(ctx, w.repository.ID); err != nil || len(runs) != 0 {
+				t.Fatalf("the promoted local task's push started %d runs (%v), want none", len(runs), err)
+			}
+			open, err := records.OpenHolds(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			offered := false
+			for _, h := range open {
+				if h.TaskID.Or("") == w.task && strings.Contains(h.Key, "/local-approval/"+head+"/") {
+					offered = true
+				}
+			}
+			if !offered {
+				t.Fatalf("the open holds %+v offer nothing of task %s naming %s", open, w.task, head)
+			}
+		})
 }
 
 // The positive control: a gated project's promoted task is recorded gated,

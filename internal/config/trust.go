@@ -78,6 +78,17 @@ const (
 	// dropped when layers merge, because the key has no business appearing in
 	// a repository file in the first place.
 	TrustGlobal
+	// TrustGlobalLoosens is a key whose values are ordered from strictest to
+	// loosest, where only the operator's own file may choose a looser value
+	// than the one beneath it. A repository file, trusted or pushed, may
+	// carry the key and may name the value beneath it or a stricter one,
+	// which takes effect; naming a looser one refuses the whole resolution
+	// with a *LoosenError, because a repository stating a lighter path than
+	// the operator consented to is a file saying something it has no
+	// standing to say, and dropping it quietly would leave its author
+	// believing it took effect. The order is the key's own row, in the key
+	// table, and only a key of this class carries one.
+	TrustGlobalLoosens
 )
 
 // String returns the class name, which is what appears in rejections.
@@ -91,6 +102,8 @@ func (t Trust) String() string {
 		return "trusted-only"
 	case TrustGlobal:
 		return "global-only"
+	case TrustGlobalLoosens:
+		return "global-only-to-loosen"
 	default:
 		return "trust(" + itoa(int(t)) + ")"
 	}
@@ -117,9 +130,18 @@ func (t Trust) refusedInRepositoryFile() bool { return t == TrustGlobal }
 // nothing reaches that branch through Parse, which refuses such a key when the
 // document is read. Resolve consults this for every key regardless, so the
 // answer is stated rather than assumed.
+//
+// TrustGlobalLoosens admits every origin here, because which values a
+// repository file may name is a comparison against the value beneath it and
+// not a question about the origin alone. ResolveRun makes that comparison for
+// every admitted value of such a key, and refuses rather than drops a looser
+// one.
 func (t Trust) admits(o Origin, allowPushedCommands bool) bool {
 	if t == TrustGlobal {
 		return o == OriginGlobal
+	}
+	if t == TrustGlobalLoosens {
+		return o == OriginGlobal || o.isRepository()
 	}
 	if o == OriginGlobal || o == OriginTrusted {
 		return true

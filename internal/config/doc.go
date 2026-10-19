@@ -73,6 +73,14 @@
 //     machine behaves rather than facts about a repository: the checks timeout,
 //     session reuse, and the decision-model mode. Only the operator's own file may set one, and a
 //     repository file carrying one is refused when it is parsed.
+//   - TrustGlobalLoosens keys have ordered values and only the operator's own
+//     file may loosen one: the delivery posture, by the owner's decision on
+//     #304, so no commit turns a lighter delivery path on without the
+//     operator's consent. A repository file, trusted or pushed, may name the
+//     value beneath it or a stricter one, and naming a looser one refuses the
+//     resolution with a *LoosenError naming the key, the layer and both
+//     values. PRD section 6 still calls the delivery key trusted-only; that
+//     sentence is the owner's to reword.
 //
 // The fourth class is this package's reading rather than the PRD's wording,
 // and it is the larger of two such readings. PRD section 10 names three
@@ -87,14 +95,17 @@
 // opt-out in prose without giving it a schema row; that name is settled and
 // what the PRD still owes is the row.
 //
-// A key a layer set but its origin may not set is not an error, with the one
-// exception above. It is dropped, the key falls back to the global layer or
+// A key a layer set but its origin may not set is not an error, with the two
+// exceptions above. It is dropped, the key falls back to the global layer or
 // its default, and the drop is reported as a Rejection so an author can be
 // told their setting had no effect. It is still validated first, because PRD
 // section 10 requires an invalid value to fail at parse time even on a branch
 // whose fields are otherwise ignored. A global-only key in a repository file
-// is the exception because the file has no standing to carry it at all: that
-// is refused where its author will see it rather than dropped quietly.
+// is the first exception because the file has no standing to carry it at all:
+// that is refused where its author will see it rather than dropped quietly. A
+// repository file loosening a TrustGlobalLoosens key is the second, refused
+// when the layers are resolved, because whether a value loosens is a
+// comparison with the layers beneath and no single document can answer it.
 //
 // # Failing at parse time
 //

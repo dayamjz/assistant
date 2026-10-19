@@ -537,10 +537,12 @@ Each has cost this repository more than one round of review.
   it: intake, queueing, the P11 assertion, the P12 cleanup decision and
   promotion, with dispatch and the copy in `internal/service` and the launch
   in `internal/session`. Intake and promotion record a delivery task's
-  delivery posture from `Deps.Posture`, the project's trusted copy as `internal/service`
-  reads it, refuses with `ErrPostureUnreadable` when that read fails rather
-  than assuming one, and lets a request tighten it and never loosen it
-  (`*PostureError`); a local task's cleanup proof is the content check
+  delivery posture from `Deps.Posture`, the operator's layer tightened by
+  the project's trusted copy as `internal/service` resolves them (the key is
+  `config.TrustGlobalLoosens`: a repository file may tighten it and a looser
+  one is a `*config.LoosenError`), refuses with `ErrPostureUnreadable` when
+  that read fails rather than assuming one, and lets a request tighten it
+  and never loosen it (`*PostureError`); a local task's cleanup proof is the content check
   against the working copy's default branch and nothing else. `Expect` computes
   a task's `Expectation` and its second-check shell line from one call, and
   `AssertIsolated` compares a real `vcs.Observation` against it by file

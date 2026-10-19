@@ -129,6 +129,20 @@ never a claim made by the note. `--run` answers the task's current run even
 while the task still has holds of its own open, so a promoted delivery run is
 reachable without first clearing every report hold.
 
+A delivery task's posture is recorded at intake or promotion from the
+`delivery` key, and only your own configuration file, `config.yaml` under
+the home, can loosen it: `delivery: local` there lets every repository of
+the home record `local` tasks, and with the key absent the posture is
+`gated`. A repository's
+`assistant.json` may name a stricter posture, which takes effect for that
+repository, and never a lighter one: a trusted copy on the default branch
+saying `local` while your file says `gated`, or says nothing, refuses every
+intake, promotion and run of that repository, naming the trusted layer and
+both postures, until either file changes; a pushed branch saying `local`
+over a `gated` beneath it refuses its own run the same way. The file has no
+per-repository section, so `local` in it is consent for every repository
+that does not tighten it.
+
 A local delivery task's approval hold, keyed `task/ID/local-approval/...`,
 is yours and not the coordinator's: `approve` fast-forwards your local
 default branch to the worker's commit, `stop` leaves it where it is. The
