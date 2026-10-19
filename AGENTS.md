@@ -551,10 +551,10 @@ Each has cost this repository more than one round of review.
   `Isolation` to start a worker and `internal/service`'s launch is what
   reaches it, with a proof asserted again at launch; its own P11 citation
   claims the assertion refuses and nothing about launch, and
-  `internal/service`'s claims the launch edge. Until
-  #91's worker set exists, "own branch, only through the gate" is
-  instruction text and nothing enforces which ref a worker's push may move;
-  its `doc.go` carries that sentence. Every lifecycle move there is an appended event, never a state
+  `internal/service`'s claims the launch edge. A
+  worker's push that reaches the gate is held to `internal/service`'s
+  `admit_workers.go` rule, and a push to any other repository never reaches
+  it; its `doc.go` states both halves. Every lifecycle move there is an appended event, never a state
   column: `Create` writes the disposition through `store.CreateTask`, anchored
   to the newest task row it saw on the branch and under the service's branch
   exclusion, and `Release` appends `dispatched` through
