@@ -143,9 +143,10 @@
 // Create rather than promoting onto it, since Task.BlockerTask is written
 // once and a promotion cannot queue a task that is already running. The
 // posture is read on intake's terms, through the same ProjectPosture and the
-// same tighten-only rule, before anything is written: an unreadable trusted
-// copy refuses the promotion with ErrPostureUnreadable rather than leaving a
-// delivery task followed as gated by default.
+// same tighten-only rule, before anything is written: a trusted copy that
+// cannot be read or parsed, or that loosens the operator's delivery posture,
+// refuses the promotion with ErrPostureUnreadable rather than leaving a
+// delivery task recorded as gated by default.
 //
 // The flip and the cleanup claim exclude each other: RecordTaskCleanup
 // reads the shape in the transaction that claims the record, and

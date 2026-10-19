@@ -43,6 +43,25 @@ func TestDeliveryIsAGlobalOnlyToLoosenRowDefaultingToGated(t *testing.T) {
 // without an order fails here rather than panicking in a resolution. The
 // delivery row is the positive control: the class has a member, so the walk
 // looked at something.
+// ResolveRun refuses a global-only-to-loosen value that carries no order
+// rather than panicking, so a row wired without ordered fails at resolution
+// with a typed refusal if the construction walk is bypassed.
+func TestResolveRunRefusesAGlobalOnlyToLoosenValueWithoutOrder(t *testing.T) {
+	trusted := Layer{
+		origin:  OriginTrusted,
+		present: true,
+		values:  map[Key]any{KeyDelivery: 42},
+	}
+	res, err := ResolveRun(Absent(OriginGlobal), trusted, Absent(OriginPushed))
+	var ke *KeyError
+	if !errors.As(err, &ke) || !errors.Is(err, ErrInvalid) || ke.Key != KeyDelivery {
+		t.Fatalf("ResolveRun = %+v, %v; want a *KeyError for delivery wrapping ErrInvalid", res, err)
+	}
+	if res.Config.Delivery != "" || res.Rejected != nil {
+		t.Errorf("a refused resolution carried %+v", res)
+	}
+}
+
 func TestEveryGlobalOnlyToLoosenRowIsOrdered(t *testing.T) {
 	members := 0
 	for _, s := range specs {

@@ -86,8 +86,12 @@ const (
 	// with a *LoosenError, because a repository stating a lighter path than
 	// the operator consented to is a file saying something it has no
 	// standing to say, and dropping it quietly would leave its author
-	// believing it took effect. The order is the key's own row, in the key
-	// table, and only a key of this class carries one.
+	// believing it took effect. The order is owned by the value type, through
+	// the ordered interface (Delivery's is the posture table, through
+	// looserThan and Lighter); a row of this class whose default does not
+	// implement ordered is caught before any resolution runs, and ResolveRun
+	// refuses any layer value of such a key that does not implement ordered
+	// rather than comparing it. Only keys of this class carry an order.
 	TrustGlobalLoosens
 )
 

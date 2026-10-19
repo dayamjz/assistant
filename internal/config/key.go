@@ -264,7 +264,7 @@ type spec struct {
 // its values are compared in, which the type owns rather than the row, so the
 // order has one owner. Delivery's is the policy table's, through Lighter. A
 // test holds every row of that class to a default that implements it, and
-// ResolveRun asserts it of every value it compares.
+// ResolveRun refuses any compared value that does not implement it.
 type ordered interface {
 	// looserThan reports whether the value is looser than beneath, a value
 	// of the same type.

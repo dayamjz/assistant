@@ -120,10 +120,20 @@ func ResolveRun(global, trusted, pushed Layer) (Resolution, error) {
 				continue
 			}
 			if s.trust.admits(layer.origin, allowPushed) {
-				if s.trust == TrustGlobalLoosens && v.(ordered).looserThan(value) {
-					return Resolution{}, &LoosenError{
-						Key: s.key, Origin: layer.origin, Value: fmt.Sprint(v),
-						Beneath: fmt.Sprint(value), BeneathOrigin: from, BeneathIsDefault: isDefault,
+				if s.trust == TrustGlobalLoosens {
+					candidate, ok := v.(ordered)
+					if !ok {
+						return Resolution{}, &KeyError{
+							Key:    s.key,
+							Value:  fmt.Sprint(v),
+							Detail: "the value carries no order for a global-only-to-loosen key",
+						}
+					}
+					if candidate.looserThan(value) {
+						return Resolution{}, &LoosenError{
+							Key: s.key, Origin: layer.origin, Value: fmt.Sprint(v),
+							Beneath: fmt.Sprint(value), BeneathOrigin: from, BeneathIsDefault: isDefault,
+						}
 					}
 				}
 				value, from, isDefault = v, layer.origin, false

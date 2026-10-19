@@ -96,7 +96,8 @@ func (e *OutrankedError) Unwrap() error { return ErrOutranked }
 // *config.LoosenError says. PRD section 6 delivers nothing when that copy
 // cannot be read and parsed, and assumes no posture in its place, not even
 // gated; a loosening copy is refused on the same terms.
-var ErrPostureUnreadable = errors.New("tasks: the project's delivery posture could not be read from its trusted configuration")
+var ErrPostureUnreadable = errors.New("tasks: the project's delivery posture could not be established from its trusted configuration " +
+	"(read, parsed, or it loosened the home's)")
 
 // ErrLighterPosture is the class every *PostureError belongs to.
 var ErrLighterPosture = errors.New("tasks: a task may not be recorded under a lighter delivery posture than its project's")
