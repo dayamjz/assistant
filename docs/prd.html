@@ -1817,6 +1817,7 @@ flowchart TB
     <li>Admission runs before any reference in the gate changes, so a refusal happens before mutation rather than after.</li>
     <li>Pushes to the same branch serialize, and a new push supersedes the run in progress. Different branches run concurrently.</li>
     <li>Launch and readiness are different states. Publishing a process identifier is not proof of readiness; only a real health response is.</li>
+    <li>macOS and Linux are the supported platforms. Windows is not supported: the build is vetted for it so it does not rot, and nothing is run or tested there. What this build cannot provide on Windows refuses rather than degrades: no socket peer is identified, so every request that drives a run is refused and no worker is placed, and the managed service's install is refused.</li>
   </ul>
 
   <h3 class="text-xl font-semibold mb-3">Modules</h3>
@@ -2945,6 +2946,11 @@ flowchart TB
           <td class="prd-num">14</td>
           <td>A role names <b>one agent, one model provider, one model type, one model version, and one effort</b>, and a task names a role.</td>
           <td>Section 10's <code>roles</code>. The agent is the process. The provider, the type, and the version are a triple from that section's table, and the role does not name a model identifier: the adapter translates the triple. <code>review</code>, <code>fix</code>, and <code>worker</code> are the three the program assigns; any other name is a worker role. You assign them. The program does not rank agents, providers, types, or versions, and a role without a configured backup that cannot run refuses that launch with nothing started in its place. An explicit backup is allowed only on section 10's availability-failure terms. Review and fix stay separate sessions even when they name the same agent, provider, type, and version (P4). A task's role does not follow its push into the gate: that run reviews with <code>review</code> and fixes with <code>fix</code>. The default fixer is <code>cursor</code>. Review and worker use <code>agent</code> until a role names them, and a <code>fix</code> role that names no agent uses <code>agent</code> too, on that agent's own model. Choosing by quota or by price stays deferred in section 12.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">15</td>
+          <td><b>Windows is not supported</b>; macOS and Linux are.</td>
+          <td>Section 8's process model says so. The build is still vetted for Windows so it does not rot, and the surfaces that already refuse there keep their refusals rather than gaining a Windows implementation. Section 13's end-to-end run is owed on macOS and Linux.</td>
         </tr>
       </tbody>
     </table>
