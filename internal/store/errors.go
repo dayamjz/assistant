@@ -299,6 +299,12 @@ var ErrAttemptRouteRecorded = errors.New("store: the attempt already names a rou
 // it begins; a second resolution would describe a run that did not happen.
 var ErrRunAgentResolved = errors.New("store: the run already names its resolved agent")
 
+// ErrAttemptKnowledgeRecorded is returned by SetAttemptKnowledge when the
+// attempt already names the knowledge revision it was launched with. What a
+// worker was told is recorded once, before the process starts; a launch told
+// something else is a new attempt.
+var ErrAttemptKnowledgeRecorded = errors.New("store: the attempt already names its knowledge revision")
+
 // ErrCleanupRecorded is returned by RecordTaskCleanup when the task already
 // has a cleanup record. PRD section 8 says the record is written once, so a
 // second write is refused rather than overwriting the proof the first was made

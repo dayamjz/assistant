@@ -59,15 +59,27 @@ type TaskAttempt struct {
 	// Effort is the effort the role named. It is unknown when the role named
 	// none. It is filled with the route.
 	Effort Optional[string] `json:"effort"`
+	// KnowledgeCommit is the default-branch commit the launch read the
+	// repository's curated knowledge document at. It is unknown until
+	// SetAttemptKnowledge fills it, once, before the process starts; an
+	// attempt that never reached that read keeps it unknown.
+	KnowledgeCommit Optional[string] `json:"knowledge_commit"`
+	// KnowledgeDigest is the SHA-256 of the document's bytes at
+	// KnowledgeCommit. It is unknown when KnowledgeCommit is, and also when
+	// that commit's tree held no document, which a known KnowledgeCommit
+	// tells apart.
+	KnowledgeDigest Optional[string] `json:"knowledge_digest"`
 }
 
-const taskAttemptColumns = `SELECT task_id, sequence, started_at, session_ref, adapter, route_reason, route_skipped, role, model, effort`
+const taskAttemptColumns = `SELECT task_id, sequence, started_at, session_ref, adapter, route_reason, route_skipped, role, model, effort, ` +
+	`knowledge_commit, knowledge_digest`
 
 func scanTaskAttempt(sc scanner) (TaskAttempt, error) {
 	var a TaskAttempt
 	var started string
 	var skipped Optional[string]
-	if err := sc.Scan(&a.TaskID, &a.Sequence, &started, &a.SessionRef, &a.Adapter, &a.RouteReason, &skipped, &a.Role, &a.Model, &a.Effort); err != nil {
+	if err := sc.Scan(&a.TaskID, &a.Sequence, &started, &a.SessionRef, &a.Adapter, &a.RouteReason, &skipped, &a.Role, &a.Model, &a.Effort,
+		&a.KnowledgeCommit, &a.KnowledgeDigest); err != nil {
 		return TaskAttempt{}, err
 	}
 	var err error
@@ -205,6 +217,45 @@ func (s *Store) SetAttemptRoute(ctx context.Context, taskID string, sequence int
 			adapter, reason, skipped, namedOrNull(asked.Role), namedOrNull(asked.Model), namedOrNull(asked.Effort), taskID, sequence)
 		if err != nil {
 			return fmt.Errorf("store: task %s attempt %d: recording its route: %w", taskID, sequence, err)
+		}
+		return nil
+	})
+}
+
+// AttemptKnowledge is the revision of a repository's curated knowledge
+// document a launch read: the commit it was read at, and the digest of the
+// document's bytes there, empty when that commit's tree held no document.
+type AttemptKnowledge struct {
+	Commit string
+	Digest string
+}
+
+// SetAttemptKnowledge records the knowledge revision the attempt's worker is
+// launched with. It is filled once, before the process starts: a second call
+// is refused with ErrAttemptKnowledgeRecorded, and the database refuses a
+// rewrite on the same terms. An empty commit is refused, because a launch
+// that read nothing has no revision to record, and an attempt that does not
+// exist is ErrNotFound, wrapped. The document's text is not stored here.
+func (s *Store) SetAttemptKnowledge(ctx context.Context, taskID string, sequence int64, read AttemptKnowledge) error {
+	if strings.TrimSpace(read.Commit) == "" {
+		return fmt.Errorf("store: task %s attempt %d: the knowledge commit is empty", taskID, sequence)
+	}
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		var recorded Optional[string]
+		err := tx.QueryRowContext(ctx,
+			`SELECT knowledge_commit FROM task_attempt WHERE task_id = ? AND sequence = ?`, taskID, sequence).
+			Scan(&recorded)
+		if err != nil {
+			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, errNoRows(err))
+		}
+		if recorded.IsKnown() {
+			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrAttemptKnowledgeRecorded)
+		}
+		_, err = tx.ExecContext(ctx,
+			`UPDATE task_attempt SET knowledge_commit = ?, knowledge_digest = ? WHERE task_id = ? AND sequence = ?`,
+			read.Commit, namedOrNull(read.Digest), taskID, sequence)
+		if err != nil {
+			return fmt.Errorf("store: task %s attempt %d: recording its knowledge revision: %w", taskID, sequence, err)
 		}
 		return nil
 	})

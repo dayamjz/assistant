@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/knowledge"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -125,6 +126,12 @@ type runResolution struct {
 	// digest, so an author whose key had no effect can read that from the
 	// run rather than from this service's log.
 	rejected []string
+	// knowledge is the repository's curated knowledge document read at the
+	// trusted commit the digest names, so two resolutions with one digest
+	// carry one reading, and the zero reading for a run that suppresses
+	// project instructions, which the digest also covers through the
+	// documents that set the key.
+	knowledge knowledge.Knowledge
 }
 
 // resolveRunConfig reads the run's two repository configuration copies and
@@ -169,10 +176,22 @@ func (s *Service) resolveRunConfig(ctx context.Context, record store.Run) (runRe
 	if !resolution.Config.Roles.Equal(s.cfg.Roles) {
 		return runResolution{}, ErrRepositoryRoles
 	}
+	// The curated knowledge a review is told is read at the commit the
+	// trusted copy was, and never at the submitted one (knowledge.go). A run
+	// under suppress_project_instructions is told none: the document is the
+	// repository's own instructions, which is what that key withholds.
+	var project knowledge.Knowledge
+	if !resolution.Config.SuppressProjectInstructions {
+		project, err = knowledgeAt(ctx, bare, trustedAt, "run "+record.ID, ErrTrustedConfig)
+		if err != nil {
+			return runResolution{}, err
+		}
+	}
 	return runResolution{
-		cfg:      resolution.Config,
-		digest:   runConfigDigest(s.digest, trustedAt, trustedBytes, pushedBytes),
-		rejected: rejected,
+		cfg:       resolution.Config,
+		digest:    runConfigDigest(s.digest, trustedAt, trustedBytes, pushedBytes),
+		rejected:  rejected,
+		knowledge: project,
 	}, nil
 }
 
@@ -190,21 +209,9 @@ func (s *Service) trustedLayer(ctx context.Context, bare *vcs.Repository, reposi
 // reads cannot overwrite each other's, and every refusal names for.
 func (s *Service) trustedLayerAt(ctx context.Context, bare *vcs.Repository, repository store.Repository,
 	ref, forWhat string) (config.Layer, string, []byte, error) {
-	if repository.DefaultBranch == "" {
-		return config.Layer{}, "", nil, fmt.Errorf(
-			"%w: the repository record of %s names no default branch to read it from", ErrTrustedConfig, forWhat)
-	}
-	if err := fetchIntoGate(ctx, bare, vcs.FetchSpec{
-		Remote:   repository.UpstreamURL,
-		Refspecs: []string{"+refs/heads/" + repository.DefaultBranch + ":" + ref},
-	}); err != nil {
-		return config.Layer{}, "", nil, fmt.Errorf("%w: fetching %s from the upstream for %s: %w",
-			ErrTrustedConfig, repository.DefaultBranch, forWhat, err)
-	}
-	at, err := bare.ResolveCommit(ctx, ref)
+	at, err := fetchTrusted(ctx, bare, repository, ref, forWhat, ErrTrustedConfig)
 	if err != nil {
-		return config.Layer{}, "", nil, fmt.Errorf("%w: resolving the fetched %s for %s: %w",
-			ErrTrustedConfig, repository.DefaultBranch, forWhat, err)
+		return config.Layer{}, "", nil, err
 	}
 	document, err := bare.FileAt(ctx, at, config.RepositoryDocument)
 	if errors.Is(err, vcs.ErrPathNotFound) {
@@ -220,6 +227,33 @@ func (s *Service) trustedLayerAt(ctx context.Context, bare *vcs.Repository, repo
 			ErrTrustedConfig, config.RepositoryDocument, at, forWhat, err)
 	}
 	return layer, at, document, nil
+}
+
+// fetchTrusted fetches the default branch's tip from the upstream the
+// repository record names into ref in the gate repository and returns the
+// commit it resolved, which is the one trusted copy every reader of one
+// reads at. A record naming no default branch, a fetch that fails and a tip
+// that does not resolve are each reported under class, the reader's own
+// refusal, naming forWhat.
+func fetchTrusted(ctx context.Context, bare *vcs.Repository, repository store.Repository,
+	ref, forWhat string, class error) (string, error) {
+	if repository.DefaultBranch == "" {
+		return "", fmt.Errorf(
+			"%w: the repository record of %s names no default branch to read it from", class, forWhat)
+	}
+	if err := fetchIntoGate(ctx, bare, vcs.FetchSpec{
+		Remote:   repository.UpstreamURL,
+		Refspecs: []string{"+refs/heads/" + repository.DefaultBranch + ":" + ref},
+	}); err != nil {
+		return "", fmt.Errorf("%w: fetching %s from the upstream for %s: %w",
+			class, repository.DefaultBranch, forWhat, err)
+	}
+	at, err := bare.ResolveCommit(ctx, ref)
+	if err != nil {
+		return "", fmt.Errorf("%w: resolving the fetched %s for %s: %w",
+			class, repository.DefaultBranch, forWhat, err)
+	}
+	return at, nil
 }
 
 // taskTrustedRef is the name the gate repository holds the default branch's

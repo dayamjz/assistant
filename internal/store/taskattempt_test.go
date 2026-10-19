@@ -222,3 +222,60 @@ func TestAnAttemptsRouteIsFilledOnce(t *testing.T) {
 		t.Fatalf("the attempt's skips are %v (known=%v), want %v in order", got[0].RouteSkipped, ok, asked.Skipped)
 	}
 }
+
+// The knowledge revision is filled once, before the process starts: a
+// second fill is refused and the first stands, a rewrite past the accessor
+// is refused by the database, an empty commit is refused, an attempt that
+// does not exist is not found, and an absent document is a known commit with
+// an unknown digest, which an attempt that never read anything does not
+// look like.
+func TestAnAttemptsKnowledgeRevisionIsFilledOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	task := seedTask(t, s, "taskaaaaaaab")
+	a, err := s.BeginTaskAttempt(ctx, task.ID, 0)
+	if err != nil {
+		t.Fatalf("BeginTaskAttempt: %v", err)
+	}
+	if a.KnowledgeCommit.IsKnown() || a.KnowledgeDigest.IsKnown() {
+		t.Fatalf("a new attempt carries a knowledge revision: %+v", a)
+	}
+	b, err := s.BeginTaskAttempt(ctx, task.ID, a.Sequence)
+	if err != nil {
+		t.Fatalf("BeginTaskAttempt: %v", err)
+	}
+	if err := s.SetAttemptKnowledge(ctx, task.ID, a.Sequence, AttemptKnowledge{Commit: " "}); err == nil {
+		t.Fatal("SetAttemptKnowledge accepted an empty commit")
+	}
+	if err := s.SetAttemptKnowledge(ctx, task.ID, b.Sequence+1, AttemptKnowledge{Commit: "c1"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetAttemptKnowledge on a missing attempt = %v, want ErrNotFound", err)
+	}
+	if err := s.SetAttemptKnowledge(ctx, task.ID, a.Sequence, AttemptKnowledge{Commit: "c1", Digest: "d1"}); err != nil {
+		t.Fatalf("SetAttemptKnowledge: %v", err)
+	}
+	if err := s.SetAttemptKnowledge(ctx, task.ID, a.Sequence, AttemptKnowledge{Commit: "c2", Digest: "d2"}); !errors.Is(err, ErrAttemptKnowledgeRecorded) {
+		t.Fatalf("a second fill = %v, want ErrAttemptKnowledgeRecorded", err)
+	}
+	if _, err := s.write.ExecContext(ctx,
+		`UPDATE task_attempt SET knowledge_digest = 'forged' WHERE task_id = ? AND sequence = ?`, task.ID, a.Sequence); err == nil {
+		t.Fatal("the database let a recorded knowledge revision be rewritten")
+	}
+	if err := s.SetAttemptKnowledge(ctx, task.ID, b.Sequence, AttemptKnowledge{Commit: "c3"}); err != nil {
+		t.Fatalf("SetAttemptKnowledge for an absent document: %v", err)
+	}
+	got, err := s.TaskAttempts(ctx, task.ID)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("TaskAttempts = %+v, %v", got, err)
+	}
+	if c, _ := got[0].KnowledgeCommit.Get(); c != "c1" {
+		t.Fatalf("the first attempt's knowledge commit is %v, want c1", got[0].KnowledgeCommit)
+	}
+	if d, _ := got[0].KnowledgeDigest.Get(); d != "d1" {
+		t.Fatalf("the first attempt's knowledge digest is %v, want d1", got[0].KnowledgeDigest)
+	}
+	if c, _ := got[1].KnowledgeCommit.Get(); c != "c3" || got[1].KnowledgeDigest.IsKnown() {
+		t.Fatalf("the absent document reads %v / %v, want c3 and an unknown digest",
+			got[1].KnowledgeCommit, got[1].KnowledgeDigest)
+	}
+}

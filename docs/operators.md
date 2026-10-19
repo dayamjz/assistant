@@ -256,6 +256,66 @@ Three things follow for whoever runs the service:
   a separate, coordinator-only step; a worker that calls
   `assistant coordinator promote` is refused.
 
+## Curating project knowledge
+
+A repository's project knowledge is one file, `assistant-knowledge.md` at
+the top of the repository: the conventions you want every worker and every
+reviewer told, such as which command proves a change, which directories are
+generated, or which module owns what. You curate it like any other file and
+it takes effect when the change to it lands on the default branch.
+
+Where it is read from is the whole of what makes it curated. The program
+reads it only from the default branch, at a commit it fetched from the
+upstream for the read, the same trusted copy `assistant.json` is read from
+(P7). It never reads the copy a pushed branch carries, a working copy, or
+anything an agent wrote. So a branch that rewrites the file is not reviewed
+under its own rewrite, an agent cannot make its own claim into project
+knowledge, and the audit of who changed the file, when and why is the
+repository's own history.
+
+What reaches whom:
+
+- A task's worker is told the file in its first turn, after the task's
+  instructions, framed by two lines naming the digest of its bytes and the
+  default-branch commit it was read at. Each launch reads it afresh, a
+  relaunch included, so a worker relaunched after a merge is told the newer
+  revision. The task's attempt records that commit and the SHA-256 of the
+  file there, `knowledge_commit` and `knowledge_digest` on the task's
+  `task_attempt` row in the home's database, and nothing of the text, so you
+  reproduce exactly what a worker was told with
+  `git show COMMIT:assistant-knowledge.md`. A known commit with no digest
+  means the default branch held no file then. No command prints the record
+  yet; it is read from the database.
+- A run's review is told the file as the default branch held it at the
+  commit the run's configuration was read at. The push stage's review of the
+  run's own later commits is told the same. A repository whose trusted
+  configuration sets `suppress_project_instructions` is told none, because
+  the file is the repository's own instructions.
+- Nothing else is told it. A fix round's fixer is told the findings it is
+  asked to resolve and not the file.
+
+The text passes the same credential removal every stored or relayed text
+does before it reaches anyone, so a URL with a credential in it or a token of
+a shape the program recognizes arrives as `redacted`. Do not put secrets in
+the file anyway: the removal recognizes a fixed set of shapes and no others.
+
+A repository with no file composes nothing and refuses nothing. A file
+larger than 32 KiB, or one that is not UTF-8 text, is refused rather than
+cut: a launch records `knowledge-refused` and the task reads `failed`, and a
+run does not start. A default branch the launch cannot fetch leaves the task
+dispatched with no worker started, the way any other launch read that fails
+does, rather than starting a worker told nothing. The file is context and grants nothing: it does not widen what a
+worker may run, does not change what the gate checks, and says so to the
+agent it is given to. Whether an agent follows it is the agent's; no check
+reads its work against it. Each copy is a checkout, so an agent can still
+open its own copy's revision of the file itself; what the program controls
+is what it tells the agent.
+
+Session notes for one task are not project knowledge. Steer a running task
+with `assistant coordinator message ID --text ...`, which is recorded,
+delivered under a number and acknowledged by the worker; nothing a message
+says reaches another task or the file.
+
 ## Catching up on a fleet
 
 `assistant watch` starts with one read of the fleet and then follows the

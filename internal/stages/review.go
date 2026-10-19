@@ -265,7 +265,7 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 	scopeGuidance, scopeErr := scope.Guidance(scoped)
 
 	prompt := reviewPrompt(deps.Config, facts, change, evidence, scopeGuidance,
-		judgeReviewGuidance(judged, change.excluded))
+		judgeReviewGuidance(judged, change.excluded), deps.knowledge.Section())
 	if len(prompt) > agents.MaxPromptBytes {
 		return finish(tooLargeToReview(change, "Reviewing "+facts.head+" would take a prompt of "+
 			strconv.Itoa(len(prompt))+" bytes, and one invocation may carry "+

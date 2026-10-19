@@ -772,6 +772,14 @@ Each has cost this repository more than one round of review.
   recognizes, what it does not, and the residual gaps are internal/redact's
   package comment; adding a shape means adding it there, never a second remover
   at a call site.
+- `internal/knowledge` is the one composition of a repository's curated
+  project knowledge, `assistant-knowledge.md`, into what an agent is told,
+  and it is pure: `internal/service`'s `knowledge.go` reads the bytes only
+  from the default branch at a freshly fetched commit (P7), never a pushed
+  commit or a copy, for a worker's first turn and a run's review. The store
+  keeps the revision a launch was told (`SetAttemptKnowledge`, migration 45)
+  and never the text, and no verb or agent writes knowledge. Read its
+  `doc.go` for the bound, the refusals and the gaps.
 - `internal/judge` is the decision-model client for PRD section 5's "Checks a
   decision model may add": the two fixed questions, the pinned version, the
   cutoffs and their measurement. A `Result` is a probability or a failure and

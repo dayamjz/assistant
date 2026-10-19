@@ -21,13 +21,20 @@ import (
 // absent rather than replaced by a weaker one, and observeScope reports why in
 // the stage's own report.
 //
+// project is the repository's curated knowledge as internal/knowledge
+// composes it from the trusted copy, empty when the default branch holds no
+// document or the run suppresses project instructions. It comes after the
+// repository's own rules because it is context and not a rule the answer is
+// checked against, and its own text says it outranks nothing here.
+//
 // It is one string rather than a template so that what reaches the agent is
 // what a reader of this function sees. The order is deliberate: what the
 // reviewer is, what it is looking at, what the change was for, the two rules
-// its answer is checked against, the repository's own extra rules, the judge
-// paths the change touched, what a previous fix round claimed, the shape of the answer, and last the diff,
-// which is the only unbounded part.
-func reviewPrompt(cfg config.Config, f reviewFacts, change reviewChangeSet, evidence, lens, judge string) string {
+// its answer is checked against, the repository's own extra rules, its
+// curated knowledge, the judge paths the change touched, what a previous fix
+// round claimed, the shape of the answer, and last the diff, which is the
+// only unbounded part.
+func reviewPrompt(cfg config.Config, f reviewFacts, change reviewChangeSet, evidence, lens, judge, project string) string {
 	var b strings.Builder
 	section := func(text string) {
 		if strings.TrimSpace(text) == "" {
@@ -45,6 +52,7 @@ func reviewPrompt(cfg config.Config, f reviewFacts, change reviewChangeSet, evid
 	section(lens)
 	section(evidence)
 	section(reviewRules(cfg, change.touched))
+	section(project)
 	section(judge)
 	section(reviewPriorRound(f))
 	section(reviewAnswerShape(lens != ""))

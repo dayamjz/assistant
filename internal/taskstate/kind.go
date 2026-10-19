@@ -151,7 +151,11 @@ func decodeIsolationRefusal(detail string) error {
 // Failed and carries one of IsolationRefusals as its detail, checked by the
 // row's decoder before it is appended. "route-refused" claims Failed when
 // worker routing covers no configured agent (GAP-02); its detail is free
-// text. "promoted" is a note too, appended by
+// text. "knowledge-refused" claims Failed when the repository's curated
+// knowledge document on its default branch is one internal/knowledge
+// refuses to compose (GAP-13), so the worker is not launched told part of
+// it or nothing in its place; its detail is free text. "promoted" is a note
+// too, appended by
 // store.TransitionTaskShape in the transaction that flips a task's shape,
 // and nothing follows it: the worker it tells is already running, and what
 // it is doing is the process tier's to answer, so a promoted task whose
@@ -186,6 +190,7 @@ var kinds = []Row{
 	// refusal; the attempt's adapter/route_reason columns carry a successful
 	// selection instead.
 	{Kind: "route-refused", Role: RoleState, State: Failed, Writer: WriterProgram},
+	{Kind: "knowledge-refused", Role: RoleState, State: Failed, Writer: WriterProgram},
 	{Kind: "relaunched", Role: RoleNote, Writer: WriterProgram},
 	{Kind: store.PromotedEventKind, Role: RoleNote, Writer: WriterProgram},
 	{Kind: store.FindingsRelayedEventKind, Role: RoleNote, Writer: WriterProgram},
