@@ -74,6 +74,10 @@ type commandSpec struct {
 	command string
 	// dir is the directory it runs in.
 	dir string
+	// stdin is written to the command's standard input, which is then
+	// closed. Empty leaves standard input the null device, which is what
+	// every stage's command gets.
+	stdin string
 	// record receives everything the command wrote, standard output and
 	// standard error interleaved as the command produced them, after redact
 	// has removed what it recognizes. It is the run's test evidence, and it
@@ -189,9 +193,14 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	cmd := shellCommand(ctx, spec.command, spec.dir)
 	// Standard input is left unset, which os/exec reads as the null device, so
 	// a command that reads it reaches end of file at once rather than waiting
-	// for a person who is not there. Standard output and standard error are
+	// for a person who is not there. A spec carrying stdin has it written and
+	// then closed, so that command too reaches end of file once it has read
+	// what it was given. Standard output and standard error are
 	// the one descriptor, so the two arrive interleaved as the command wrote
 	// them; os/exec passes the same file to both rather than duplicating it.
+	if spec.stdin != "" {
+		cmd.Stdin = strings.NewReader(spec.stdin)
+	}
 	cmd.Stdout = write
 	cmd.Stderr = write
 	cmd.WaitDelay = spec.grace

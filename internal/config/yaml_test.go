@@ -57,6 +57,8 @@ usage_ceiling:
   output_tokens: 2
   cache_read_tokens: 3
   cache_creation_tokens: 4
+notify:
+  command: notify-me --channel private
 `
 
 const wholeSchemaJSON = `{
@@ -85,7 +87,8 @@ const wholeSchemaJSON = `{
 	"delivery": "local",
 	"allow_standing_consent": true,
 	"session_provider": "tmux",
-	"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4}
+	"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4},
+	"notify": {"command": "notify-me --channel private"}
 }`
 
 func resolvedGlobal(t *testing.T, l Layer) Config {

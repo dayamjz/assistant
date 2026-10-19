@@ -264,6 +264,26 @@ const (
 	// "usage_ceiling.cache_creation_tokens", the ceiling on recorded cache
 	// creation tokens.
 	KeyUsageCeilingCacheCreationTokens Key = "usage_ceiling.cache_creation_tokens"
+
+	// KeyNotifyCommand is "notify.command": the operator's private channel,
+	// a command line the service runs once for each wake the supervisor
+	// loop appends, with the wake's row on standard input. It is a line of
+	// shell on the commands.* keys' terms and runs through the runner they
+	// run through, in the home's root, with the service's environment.
+	// Empty, the default, is no channel: nothing is run and nothing is
+	// recorded.
+	//
+	// It is global-only, and that is a P7 decision. The command executes on
+	// the operator's machine with the operator's credentials, and where a
+	// wake is sent is the operator's to choose for the whole home, so no
+	// repository's copy, trusted or pushed, is the document it could be read
+	// from. A repository file naming it is refused at parse time like every
+	// global-only key. The command decides nothing the program does: what it
+	// is sent is a copy of a row the coordinator is also offered, and how it
+	// exits is recorded and never read back as an answer. internal/service
+	// reads it once per service, at open, and its notify.go owns what is
+	// sent, the record, and what is not covered.
+	KeyNotifyCommand Key = "notify.command"
 )
 
 // cloneSlice copies a slice-valued configuration value. A default and a parsed
@@ -392,6 +412,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.UsageCeiling.CacheReadTokens = v.(int64) }},
 	{KeyUsageCeilingCacheCreationTokens, TrustGlobal, int64(0), decodeTokenCeiling,
 		func(c *Config, v any) { c.UsageCeiling.CacheCreationTokens = v.(int64) }},
+	{KeyNotifyCommand, TrustGlobal, "", decodeCommand,
+		func(c *Config, v any) { c.NotifyCommand = v.(string) }},
 }
 
 // specByKey indexes the schema, and sections holds every dotted prefix a key

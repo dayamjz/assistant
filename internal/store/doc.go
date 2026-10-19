@@ -142,6 +142,18 @@
 // (P8). Who sent a message is Sender, closed on Acknowledger's terms, with no
 // member meaning a person.
 //
+// # The notification record
+//
+// The wake notification migration's notification table is one row per wake
+// offered to the operator's notify command, keyed by the wake and sealed on
+// wake's terms: ClaimNotification writes the claim before the command runs,
+// refusing a second claim and a wake already acknowledged in the claiming
+// transaction, and SettleNotification writes the outcome once, the row's
+// one revision. PendingNotifications is the read that offers a wake, the
+// queued ones with no row. It records how a command ended and nothing
+// about the wake: the queue stays the owner of whether a wake is
+// actionable, and nothing reads this table to decide one.
+//
 // # The wake queue and the markers it is written with
 //
 // PRD section 8's wake is the durable wake queue: a table here and not a
@@ -420,14 +432,14 @@
 // would need synchronous FULL and would pay an fsync per commit for it; this
 // package does not make that claim.
 //
-// # Five columns are stored redacted
+// # Six columns are stored redacted
 //
 // PRD section 8 stores repository URLs with credentials removed and recovers
 // the credentialed URL from the gate at run time. P14 gives credential removal
 // one owner, so this package does not implement it: Open requires a
 // [vcs.Redactor] and fails with ErrNoRedactor without one.
 //
-// What the redactor covers is five columns, and four accessors reach it.
+// What the redactor covers is six columns, and five accessors reach it.
 // UpsertRepository runs it on repository.upstream_url and
 // repository.fork_url, the columns PRD section 8 designates for repository
 // URLs. AppendMessage runs it on message.text, what was sent to a worker, and
@@ -435,7 +447,8 @@
 // ResolveHoldNoted and the HoldClosure paths run it on hold.resolution_note,
 // free text recorded with an answer. Opening runs the same redactor over notes
 // already stored when the hold resolution seal migration applies, before that
-// migration seals resolved rows.
+// migration seals resolved rows. SettleNotification runs it on
+// notification.detail, how the operator's notify command ended.
 //
 // Every other column holds exactly what the caller passed. A push binding, a
 // pull request reference, a run's intent, a promoted task's delivery intent,

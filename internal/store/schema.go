@@ -133,6 +133,11 @@ const taskAttemptRouteSkipsMigration = "task attempt route skips"
 // constant.
 const taskAttemptKnowledgeMigration = "task attempt knowledge revision"
 
+// notificationMigration names the migration that adds the notification
+// record, one row per wake offered to the operator's notify command, for the
+// reason sealCheckpointTableMigration is a constant.
+const notificationMigration = "wake notification"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1731,6 +1736,48 @@ var schema = []migration{
 				WHEN OLD.knowledge_commit IS NOT NULL
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a task attempt''s knowledge revision is written once and is not updated');
+				END`,
+		},
+	},
+	{
+		version: 46,
+		name:    notificationMigration,
+		statements: []string{
+			// AGE-312: the record of one wake offered to the operator's
+			// notify command. The row is claimed before the command runs,
+			// which is what keeps a wake from being sent twice, and settled
+			// once with how the command ended: outcome, the exit status when
+			// it reported one, and a redacted detail. A row claimed and never
+			// settled is a delivery whose end nobody recorded, a crash
+			// between the two among them, and it is not offered again.
+			// The claim columns never change, the settlement is the row's
+			// one revision, and no row is deleted, on wake's terms.
+			`CREATE TABLE notification (
+				wake_id    INTEGER PRIMARY KEY REFERENCES wake(id),
+				claimed_at TEXT NOT NULL,
+				outcome    TEXT CHECK (outcome IN ('sent', 'failed')),
+				exit_code  INTEGER,
+				detail     TEXT,
+				settled_at TEXT,
+				CHECK ((outcome IS NULL) = (settled_at IS NULL)),
+				CHECK (outcome IS NOT NULL OR (exit_code IS NULL AND detail IS NULL)),
+				CHECK (outcome IS NOT 'sent' OR exit_code = 0)
+			) STRICT`,
+			`CREATE TRIGGER notification_claim_is_written_once
+				BEFORE UPDATE OF wake_id, claimed_at ON notification
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is claimed once and the claim is not rewritten');
+				END`,
+			`CREATE TRIGGER notification_is_settled_once
+				BEFORE UPDATE OF outcome, exit_code, detail, settled_at ON notification
+				WHEN OLD.outcome IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is settled once and the first outcome stands');
+				END`,
+			`CREATE TRIGGER notification_is_not_removed
+				BEFORE DELETE ON notification
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is kept and is not deleted');
 				END`,
 		},
 	},
