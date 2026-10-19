@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -166,6 +167,115 @@ func TestStandingConsentSendsNoRoundToAnAskNoAgentCanFix(t *testing.T) {
 		if log := serviceLog(t, h); !strings.Contains(log, "no fix round can resolve it") {
 			t.Fatalf("the service log does not say why consent left the test stage's hold:\n%s", log)
 		}
+	})
+}
+
+// The two review findings that say no review happened are beyond an agent's
+// reach, and standing consent leaves the hold either raises for a person
+// rather than sending it to a fixer (#320 item 5b): a change too large to put
+// in front of a reviewer in one piece, whose answer is splitting it, and a
+// reviewer that came back with nothing usable, whose answer is a review a fix
+// round does not perform. Each is driven through the real review body under
+// standing consent, and each run holds at the review on that finding with the
+// fixer never called, nothing recorded as the program's answer, and the
+// service log naming the finding and saying no fix round can resolve it.
+//
+// The control is the same run whose reviewer reports an ordinary ask about
+// the change, which consent answers with a fix round, so what keeps the two
+// held is the finding and not a consent that answered nothing.
+func TestStandingConsentLeavesAReviewThatDidNotHappenForAPerson(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	clean := standin.Step{Match: standin.MatchReview(), Times: standin.Always,
+		Reply: standin.Reviewed("the change reads cleanly")}
+	fixed := standin.Step{Times: standin.Always, Reply: standin.Text("resolved the selected findings")}
+
+	held := func(t *testing.T, id string, agent *standin.Agent, prepare func(subject string)) {
+		t.Helper()
+		h := newHome(t)
+		subject := consentingSubject(t, h, allowsConsent)
+		if prepare != nil {
+			prepare(subject)
+		}
+		withServiceOptions(t, consentOptions(t, h, agent, forgetest.New(t, forgetest.Script{}), nil), func(running serviceUnderTest) {
+			run, err := startUnderConsent(t, running.client, subject)
+			if err != nil {
+				t.Fatalf("starting a run under standing consent: %v", err)
+			}
+			decision := holdingAt(t, run, pipeline.StageReview)
+			beyond := false
+			for _, f := range decision.Findings {
+				beyond = beyond || (f.ID == id && f.Holds() && f.RemedyOutsideChange)
+			}
+			if !beyond {
+				t.Fatalf("the review holds on %+v, want %s marked beyond a fix round's reach", decision.Findings, id)
+			}
+			if rounds := fixRounds(agent); len(rounds) != 0 {
+				t.Fatalf("standing consent sent %s to %d fix round(s)", id, len(rounds))
+			}
+			records := openRecords(t, h)
+			defer func() { _ = records.Close() }()
+			if answers := consentAnswers(t, records, run.Record.ID); len(answers) != 0 {
+				t.Fatalf("standing consent recorded an answer to %s: %+v", id, answers)
+			}
+			if log := serviceLog(t, h); !strings.Contains(log, "finding "+id) ||
+				!strings.Contains(log, "no fix round can resolve it") {
+				t.Fatalf("the service log does not say why consent left %s for a person:\n%s", id, log)
+			}
+		})
+	}
+
+	t.Run("a change too large to review", func(t *testing.T) {
+		t.Parallel()
+		agent := standin.New(t, standin.Script{Steps: []standin.Step{clean, fixed}})
+		held(t, "review-change-too-large", agent, func(subject string) {
+			if err := writeFile(filepath.Join(subject, "generated.txt"),
+				strings.Repeat("a line of a very large generated file\n", 40000)); err != nil {
+				t.Fatalf("writing a change too large to review: %v", err)
+			}
+			git(t, subject, "add", "-A")
+			git(t, subject, "commit", "--quiet", "-m", "add something too large to review")
+		})
+		if calls := agent.Calls(); len(calls) != 0 {
+			t.Fatalf("the agent was called %d time(s) about a change too large to review", len(calls))
+		}
+	})
+
+	t.Run("a reviewer that came back with nothing usable", func(t *testing.T) {
+		t.Parallel()
+		agent := standin.New(t, standin.Script{Steps: []standin.Step{
+			{Match: standin.MatchReview(), Reply: standin.Text("Looks good to me!")}, clean, fixed,
+		}})
+		held(t, "review-not-established", agent, nil)
+		if calls := agent.Calls(); len(calls) != 1 {
+			t.Fatalf("the agent was called %d time(s), want the one review that came back unusable", len(calls))
+		}
+	})
+
+	t.Run("an ordinary ask, the control", func(t *testing.T) {
+		t.Parallel()
+		h := newHome(t)
+		subject := consentingSubject(t, h, allowsConsent)
+		agent := reviewThen(t, findings.Finding{ID: "scope", Severity: findings.SeverityWarning,
+			Action: findings.ActionAsk, Location: findings.Location{Path: "work.txt", Line: 1},
+			Description: "this widens what the change was asked to do"})
+		withServiceOptions(t, consentOptions(t, h, agent, mergeableProvider(t), nil), func(running serviceUnderTest) {
+			run, err := startUnderConsent(t, running.client, subject)
+			if err != nil {
+				t.Fatalf("starting a run under standing consent: %v", err)
+			}
+			if run.Outcome != machine.OutcomeChecksPassed {
+				t.Fatalf("an ordinary ask under consent ended %s: %s; want checks-passed", run.Outcome, run.Reason)
+			}
+			if rounds := fixRounds(agent); len(rounds) != 1 {
+				t.Fatalf("consent sent an ordinary ask to %d fix round(s), want one", len(rounds))
+			}
+			records := openRecords(t, h)
+			defer func() { _ = records.Close() }()
+			if answers := consentAnswers(t, records, run.Record.ID); len(answers) == 0 {
+				t.Fatal("consent recorded no answer to an ordinary ask")
+			}
+		})
 	})
 }
 

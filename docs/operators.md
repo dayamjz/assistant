@@ -382,8 +382,11 @@ run, from anywhere, without checking the task's branch out.
 It never answers the push, pull request, or checks holds, so a push refusal
 still waits for you. It also leaves a hold for you when a finding there is an
 ask whose action the reviewer never stated, or one no fix round can resolve,
-such as a test, document or lint stage with no command configured; the
-service log says which finding and why. The three-round limit and the run
+such as a test, document or lint stage with no command configured, or a
+review that did not happen because the change was too large to review in one
+piece (`review-change-too-large`) or the reviewer came back with nothing
+usable (`review-not-established`); the service log says which finding and
+why. The three-round limit and the run
 budget still bound the rounds it asks for, and so does the convergence bound,
 which a round you ask for yourself is exempt from: a run whose consented
 rounds leave nothing changed parks rather than waiting for you.
