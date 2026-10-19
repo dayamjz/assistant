@@ -209,7 +209,8 @@ recent output, redacted and bounded, and names the command that attaches to
 it. That needs tmux on the service's PATH and an agent adapter that declares
 terminal workers, which Claude Code does: its worker runs the CLI's
 interactive interface with a configuration directory of its own, so the
-service needs `ANTHROPIC_API_KEY` in its environment, and
+service needs `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` in its
+environment, and
 [`docs/operators.md`](docs/operators.md) says what that mode rests on.
 
 What this build does not do yet, so nothing here claims it: the pipe

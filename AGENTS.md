@@ -371,7 +371,8 @@ Each has cost this repository more than one round of review.
   the terminal would cut. The Claude Code adapter declares it over the CLI's
   interactive interface (`claudeterminal.go`): a per-worker
   `CLAUDE_CONFIG_DIR` seeded so no first-run screen appears,
-  `ANTHROPIC_API_KEY` or a typed refusal, and every send one bracketed paste
+  `ANTHROPIC_API_KEY` or else `CLAUDE_CODE_OAUTH_TOKEN`, only the one
+  chosen passed through, or a typed refusal, and every send one bracketed paste
   typed only once the screen reads ready. All of it is pinned to screen text
   observed of one CLI version; the stand-in's interactive mode models it for
   CI, a probe against an installed CLI checks the model where one exists,

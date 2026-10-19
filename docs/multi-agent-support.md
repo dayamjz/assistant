@@ -31,9 +31,11 @@ OpenAI, and Grok Build.
 - **Binary**: `claude`
 - **Auth**: `claude` login / Pro·Max subscription, or `ANTHROPIC_API_KEY`
 - **Sessions**: resumable fixer sessions
-- **Terminal workers**: still require `ANTHROPIC_API_KEY` in the service
-  environment (see `docs/operators.md`); each worker gets an isolated config
-  directory that does not carry your login.
+- **Terminal workers**: require `ANTHROPIC_API_KEY` or
+  `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) in the service
+  environment, the key winning when both are set (see `docs/operators.md`);
+  each worker gets an isolated config directory that does not carry your
+  login.
 
 ### 3. Codex (OpenAI Codex CLI)
 

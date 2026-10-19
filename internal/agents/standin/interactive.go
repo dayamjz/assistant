@@ -120,6 +120,25 @@ func firstRunScreen(configDir, home, dir, key string) []string {
 	return nil
 }
 
+// credentialVariables are the variables the CLI was observed to
+// authenticate from with no login in its configuration directory: the API
+// key, presented as x-api-key, and a subscription's OAuth token, presented
+// as a bearer Authorization (#320).
+var credentialVariables = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
+
+// credentialsSet is the name of every credentialVariables entry set and not
+// empty in this process's environment, in that order. It reads each value
+// only to tell empty from not, and returns none of them.
+func credentialsSet() []string {
+	var set []string
+	for _, name := range credentialVariables {
+		if os.Getenv(name) != "" {
+			set = append(set, name)
+		}
+	}
+	return set
+}
+
 // suffix is the last n bytes of s, or s when it is shorter.
 func suffix(s string, n int) string {
 	if len(s) <= n {
@@ -399,7 +418,7 @@ func serveInteractiveWorker(control string, args []string) int {
 	}
 	dir, _ := os.Getwd()
 	call := Call{Args: args, Dir: dir, Step: -1, Worker: true, Interactive: true,
-		ConfigDir: os.Getenv("CLAUDE_CONFIG_DIR")}
+		ConfigDir: os.Getenv("CLAUDE_CONFIG_DIR"), Credentials: credentialsSet()}
 	seq, err := claimCall(control, call)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "standin: "+err.Error())

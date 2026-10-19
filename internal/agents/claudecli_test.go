@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -47,17 +48,41 @@ func installedClaude(t *testing.T) string {
 // fakeMessages is a local stand-in for the model's Messages API: it answers
 // every message request with a short reply, streamed or not as asked, and
 // keeps the text of the last user message of each request. It keeps no
-// header, so whatever credential a request carried is never held.
+// header, so whatever credential a request carried is never held: it keeps
+// only how each message request presented one, compared against want as it
+// arrives, in presented.
 type fakeMessages struct {
-	mu    sync.Mutex
-	texts []string
+	// want is the credential the probe handed the CLI, which a request is
+	// compared against and which is never stored beside what it arrived as.
+	want      string
+	mu        sync.Mutex
+	texts     []string
+	presented []string
 }
+
+// The ways a message request was seen to present a credential, as
+// fakeMessages records them.
+const (
+	presentedKey    = "x-api-key"
+	presentedBearer = "bearer"
+	presentedOther  = "other"
+)
 
 func (f *fakeMessages) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost || !strings.HasPrefix(r.URL.Path, "/v1/messages") || strings.Contains(r.URL.Path, "count_tokens") {
 		http.NotFound(w, r)
 		return
 	}
+	how := presentedOther
+	switch key, auth := r.Header.Get("x-api-key"), r.Header.Get("Authorization"); {
+	case key == f.want && auth == "":
+		how = presentedKey
+	case key == "" && auth == "Bearer "+f.want:
+		how = presentedBearer
+	}
+	f.mu.Lock()
+	f.presented = append(f.presented, how)
+	f.mu.Unlock()
 	var body struct {
 		Model    string `json:"model"`
 		Stream   bool   `json:"stream"`
@@ -144,6 +169,23 @@ func (f *fakeMessages) received(parts ...string) bool {
 	return false
 }
 
+// presentedAs reports whether every message request so far presented the
+// credential the way how names, and there was at least one.
+func (f *fakeMessages) presentedAs(how string) ([]string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	seen := slices.Clone(f.presented)
+	if len(seen) == 0 {
+		return seen, false
+	}
+	for _, p := range seen {
+		if p != how {
+			return seen, false
+		}
+	}
+	return seen, true
+}
+
 // awaitReceived waits until the fake has been sent a message carrying
 // every one of parts, and fails with the worker's screen when it is not.
 func (f *fakeMessages) awaitReceived(t *testing.T, w agents.Worker, parts ...string) {
@@ -163,22 +205,45 @@ func (f *fakeMessages) awaitReceived(t *testing.T, w agents.Worker, parts ...str
 // The terminal_workers probe, held against an installed Claude Code rather
 // than the stand-in. The CLI is the real binary in a real tmux pane; the
 // model is fakeMessages on this machine, reached through ANTHROPIC_BASE_URL,
-// with a placeholder key, a HOME of the test's own and no proxy, so no
-// account is used and no model is called. It skips, saying so, where there
-// is no claude on PATH or no tmux, and it logs the CLI version it ran
+// with a placeholder credential, a HOME of the test's own and no proxy, so
+// no account is used and no model is called. It skips, saying so, where
+// there is no claude on PATH or no tmux, and it logs the CLI version it ran
 // against.
 //
-// It runs the conformance suite's own terminal probe first, the one
+// It runs once for each credential StartInTerminal accepts, the API key and
+// the OAuth token, each alone in the environment. Each run starts with the
+// conformance suite's own terminal probe, the one
 // TestTheShippedAdapterConformsToItsDeclaration runs against the stand-in,
 // and then asks what the stand-in's model rests on: instructions beginning
 // with a dash reach the model, a multi-line send reaches it as one message,
 // and a send
-// beginning with "!" or "/" reaches it as a message and runs nothing.
+// beginning with "!" or "/" reaches it as a message and runs nothing. Last,
+// it asks how every message request presented the credential: the key as
+// x-api-key and the token as a bearer Authorization, each with the value
+// the probe gave, which is what shows the CLI authenticated with the one
+// credential it was handed.
 func TestTheTerminalProbeHoldsAgainstAnInstalledClaudeCode(t *testing.T) {
+	for _, c := range []struct {
+		name, variable, value, presented string
+	}{
+		{"api key", agents.ClaudeKeyVariable, standinKey, presentedKey},
+		{"oauth token", agents.ClaudeTokenVariable, standinToken, presentedBearer},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			probeInstalledClaude(t, c.variable, c.value, c.presented)
+		})
+	}
+}
+
+// probeInstalledClaude is one run of
+// TestTheTerminalProbeHoldsAgainstAnInstalledClaudeCode, with value as the
+// only credential in the environment, under variable, and presented as how
+// every message request has to present it.
+func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 	tmux := standin.Tmux(t)
 	claude := installedClaude(t)
 
-	api := &fakeMessages{}
+	api := &fakeMessages{want: value}
 	server := httptest.NewServer(api)
 	defer server.Close()
 	home := t.TempDir()
@@ -187,7 +252,7 @@ func TestTheTerminalProbeHoldsAgainstAnInstalledClaudeCode(t *testing.T) {
 		"HOME=" + home,
 		"LANG=C.UTF-8",
 		"ANTHROPIC_BASE_URL=" + server.URL,
-		agents.ClaudeKeyVariable + "=" + standinKey,
+		variable + "=" + value,
 		// Without it the CLI was seen to write a copy of itself, a few
 		// hundred megabytes, under a fresh HOME on every run.
 		"DISABLE_AUTOUPDATER=1",
@@ -250,5 +315,8 @@ func TestTheTerminalProbeHoldsAgainstAnInstalledClaudeCode(t *testing.T) {
 	// The CLI kept its state in the worker's own directory, not the home's.
 	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the installed CLI wrote a state file under HOME: %v", err)
+	}
+	if seen, ok := api.presentedAs(presented); !ok {
+		t.Errorf("the message requests presented the credential as %q, want %q every time", seen, presented)
 	}
 }
