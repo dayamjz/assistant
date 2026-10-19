@@ -103,6 +103,11 @@ type Config struct {
 	// workers through. A Config from Resolve holds a member of the closed
 	// set; KeySessionProvider says why only the operator's file sets it.
 	SessionProvider SessionProvider
+	// UsageCeiling is the operator's ceiling on recorded agent use, which
+	// internal/service compares the invocation record against before it
+	// starts an agent call. Its zero counts are no ceiling.
+	// KeyUsageCeilingWindow says who may set it and what it is not.
+	UsageCeiling UsageCeiling
 	// Roles says which agent, model, and effort each role runs. A Config from
 	// Resolve names the fixer as cursor unless the winning document named the
 	// fix role. A role that names no agent uses Agent. KeyRoles says which
@@ -439,7 +444,48 @@ const (
 	// MaxAutonomyMerge is the number of repositories autonomy.merge may
 	// list. Chosen, not measured.
 	MaxAutonomyMerge = 64
+	// DefaultUsageCeilingWindow is how far back usage_ceiling.window sums
+	// the invocation record when the operator names no window: seven days,
+	// the usage view's own default window. Chosen, not measured.
+	DefaultUsageCeilingWindow = 7 * 24 * time.Hour
+	// MinUsageCeilingWindow is the shortest usage ceiling window. Below it a
+	// ceiling bounds little more than the call in flight. Chosen, not
+	// measured.
+	MinUsageCeilingWindow = time.Minute
+	// MaxUsageCeilingWindow is the longest usage ceiling window, the same
+	// year checks_timeout is bounded by. Chosen, not measured.
+	MaxUsageCeilingWindow = 8760 * time.Hour
 )
+
+// UsageCeiling is the operator's ceiling on recorded agent use: a window
+// measured back from each comparison, and one ceiling per token count the
+// invocation record keeps, each from its own row of the key table. A count
+// of zero is no ceiling on that count, which is every count's default, so a
+// home that sets none starts every call it started before.
+//
+// It says what the operator set and decides nothing. internal/machine's
+// CeilingOf compares it against the record, and internal/service refuses to
+// start an agent call while that comparison says the ceiling is reached or
+// cannot be established.
+type UsageCeiling struct {
+	// Window is how far back from each comparison the record is summed.
+	Window time.Duration
+	// InputTokens is the ceiling on the prompt tokens agents reported.
+	InputTokens int64
+	// OutputTokens is the ceiling on the tokens agents generated.
+	OutputTokens int64
+	// CacheReadTokens is the ceiling on prompt tokens served from a cache.
+	CacheReadTokens int64
+	// CacheCreationTokens is the ceiling on prompt tokens written to a
+	// cache.
+	CacheCreationTokens int64
+}
+
+// Set reports whether any count has a ceiling. A UsageCeiling that is not
+// set compares nothing, so nothing reads the record for it.
+func (u UsageCeiling) Set() bool {
+	return u.InputTokens > 0 || u.OutputTokens > 0 || u.CacheReadTokens > 0 || u.CacheCreationTokens > 0
+}
 
 // ReservedAgentFlags are agent flags configuration may not set, because each
 // one would take over something the run manages itself: which session is

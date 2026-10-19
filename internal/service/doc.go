@@ -630,12 +630,16 @@
 // never a prompt or an output. The run and stage are stamped by containRunner
 // from the context advance and the observe wrappers mark, so a call outside
 // either records it as unknown; usage.go reads the history back as section
-// 9's usage view.
+// 9's usage view, and ceiling.go reads it before every agent call
+// containRunner starts, against the operator's global-only usage ceiling,
+// holding the stage that needed a refused call for a person. ceiling.go owns
+// what kind of bound that is and what it leaves open.
 // invocation.go owns the translation and states the two edges plainly: a
 // caller-supplied catalog built its factories already, so it records only
 // what its own factories arranged, and a row that cannot be written is
-// logged and dropped, so the history understates rather than blocking or
-// failing an invocation over its own bookkeeping.
+// logged and dropped, so the history understates rather than failing an
+// invocation over its own bookkeeping, and the ceiling compares a total that
+// understates with it.
 //
 // It is also where two records beside a run's execution are written: when
 // each stage execution started and ended, and what the run did next with a

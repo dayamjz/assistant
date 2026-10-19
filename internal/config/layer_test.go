@@ -103,7 +103,8 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"autonomy": {"merge": ["owner/name"]},
 		"delivery": "local",
 		"allow_standing_consent": true,
-		"session_provider": "tmux"
+		"session_provider": "tmux",
+		"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4}
 	}`
 	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
@@ -164,6 +165,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	}
 	if c.SessionProvider != SessionProviderTmux {
 		t.Errorf("SessionProvider = %q", c.SessionProvider)
+	}
+	if c.UsageCeiling != (UsageCeiling{Window: 24 * time.Hour, InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3, CacheCreationTokens: 4}) {
+		t.Errorf("UsageCeiling = %+v", c.UsageCeiling)
 	}
 }
 
@@ -236,6 +240,14 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"session provider misspelled", `{"session_provider": "Tmux"}`, KeySessionProvider, `"Tmux"`},
 		{"session provider not offered", `{"session_provider": "zellij"}`, KeySessionProvider, `"zellij"`},
 		{"session provider not a string", `{"session_provider": true}`, KeySessionProvider, "true"},
+		{"usage ceiling window unparseable", `{"usage_ceiling": {"window": "a week"}}`, KeyUsageCeilingWindow, `"a week"`},
+		{"usage ceiling window in days", `{"usage_ceiling": {"window": "7d"}}`, KeyUsageCeilingWindow, `"7d"`},
+		{"usage ceiling window under the floor", `{"usage_ceiling": {"window": "59s"}}`, KeyUsageCeilingWindow, `"59s"`},
+		{"usage ceiling window over the ceiling", `{"usage_ceiling": {"window": "8761h"}}`, KeyUsageCeilingWindow, `"8761h"`},
+		{"usage ceiling negative", `{"usage_ceiling": {"input_tokens": -1}}`, KeyUsageCeilingInputTokens, "-1"},
+		{"usage ceiling fractional", `{"usage_ceiling": {"output_tokens": 1.5}}`, KeyUsageCeilingOutputTokens, "1.5"},
+		{"usage ceiling not a number", `{"usage_ceiling": {"cache_read_tokens": "100"}}`, KeyUsageCeilingCacheReadTokens, `"100"`},
+		{"usage ceiling as a flag", `{"usage_ceiling": {"cache_creation_tokens": true}}`, KeyUsageCeilingCacheCreationTokens, "true"},
 		{"decision model misspelled", `{"decision_model": "Evaluate"}`, KeyDecisionModel, `"Evaluate"`},
 		{"decision model not a string", `{"decision_model": false}`, KeyDecisionModel, "false"},
 		{"decision model as a cutoff", `{"decision_model": "0.5"}`, KeyDecisionModel, `"0.5"`},

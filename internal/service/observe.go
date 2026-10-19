@@ -108,7 +108,9 @@ func (s *Service) observeStage(impl pipeline.Implementation) pipeline.Implementa
 			mark := s.answerMark(run)
 			started := time.Now()
 			s.logBodyBegan(run, in.Stage, started)
-			out, err := body(withServing(ctx, in.Stage.String()), in)
+			// A usage ceiling refusal is a hold for a person rather than a
+			// failed step; ceiling.go says why.
+			out, err := heldAtCeiling(body(withServing(ctx, in.Stage.String()), in))
 			// The end is the start plus the monotonic time elapsed, so a wall
 			// clock stepped back mid-execution cannot record an end before
 			// its start.
@@ -143,6 +145,7 @@ func (s *Service) observeFixer(fixer pipeline.Fixer,
 			started := time.Now()
 			s.logRoundBegan(run, in, started)
 			out, err := body(withServing(ctx, in.Stage.String()), in)
+			out, err = roundHeldAtCeiling(in.Stage, out, err)
 			s.logRoundEnded(run, in.Stage, started, started.Add(time.Since(started)), out, err)
 			if err != nil {
 				return out, err

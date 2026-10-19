@@ -28,8 +28,11 @@ import (
 // Recording is best-effort by the shape of the seam, and that is stated
 // rather than hidden: agents.Recorder returns nothing, so a row that cannot
 // be written is logged to the service log and dropped, and the history
-// understates what was spent. It is history, not an authoritative record; no
-// decision reads it, so a dropped row costs visibility and nothing else.
+// understates what was spent. The call being recorded is not failed for it,
+// because the drop happens after the call ran. One decision reads the
+// history: the usage ceiling in ceiling.go sums it before every later start,
+// so a dropped row is absent from the total the ceiling compares and a later
+// start can pass a ceiling the dropped call had reached.
 type invocationRecorder struct {
 	s *Service
 }
