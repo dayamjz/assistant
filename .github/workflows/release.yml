@@ -154,6 +154,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Everything the build writes goes outside the checkout. A file left
+      # inside it would be untracked, and the toolchain would then stamp the
+      # binaries built after it as built from a modified working copy.
+      - name: Place the output outside the checkout
+        shell: bash
+        run: |
+          echo "BUILD=$RUNNER_TEMP/build" >> "$GITHUB_ENV"
+          echo "DIST=$RUNNER_TEMP/dist" >> "$GITHUB_ENV"
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -165,17 +174,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist
+          mkdir -p "$DIST"
           for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
             goos="${target%/*}"
             goarch="${target#*/}"
             name="assistant_${VERSION}_${goos}_${goarch}"
-            mkdir -p "build/$name"
+            mkdir -p "$BUILD/$name"
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
               -ldflags "-s -w -X ${VERSION_SYMBOL}=${VERSION}" \
-              -o "build/$name/assistant" ./cmd/assistant
-            cp README.md LICENSE "build/$name/"
-            tar -C build -czf "dist/$name.tar.gz" "$name"
+              -o "$BUILD/$name/assistant" ./cmd/assistant
+            cp README.md LICENSE "$BUILD/$name/"
+            tar -C "$BUILD" -czf "$DIST/$name.tar.gz" "$name"
           done
 
       # The linux/amd64 binary is the one this runner can execute, and it was
@@ -187,13 +196,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          line=$("build/assistant_${VERSION}_linux_amd64/assistant" --version)
+          line=$("$BUILD/assistant_${VERSION}_linux_amd64/assistant" --version)
           echo "$line"
           case "$line" in
             "assistant ${VERSION} "*) ;;
             *) echo "::error::the built binary reports '$line', not version ${VERSION}"; exit 1 ;;
           esac
-          document=$("build/assistant_${VERSION}_linux_amd64/assistant" --json --version)
+          case "$line" in
+            *+modified*) echo "::error::the built binary reports '$line', a build from a modified working copy"; exit 1 ;;
+          esac
+          document=$("$BUILD/assistant_${VERSION}_linux_amd64/assistant" --json --version)
           if [ "$(printf '%s' "$document" | jq -r .version)" != "$line" ]; then
             echo "::error::--json --version wrote '$document', which does not name '$line'"
             exit 1
@@ -201,7 +213,7 @@ jobs:
           for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
             goos="${target%/*}"
             goarch="${target#*/}"
-            info=$(go version -m "build/assistant_${VERSION}_${goos}_${goarch}/assistant")
+            info=$(go version -m "$BUILD/assistant_${VERSION}_${goos}_${goarch}/assistant")
             for want in "GOOS=$goos" "GOARCH=$goarch" "CGO_ENABLED=0"; do
               if ! printf '%s\n' "$info" | grep -Eq "^[[:space:]]+build[[:space:]]+${want}$"; then
                 echo "::error::$goos/$goarch does not record $want"
@@ -213,8 +225,8 @@ jobs:
 
       - name: Checksums
         shell: bash
-        working-directory: dist
         run: |
+          cd "$DIST"
           sha256sum -- *.tar.gz > SHA256SUMS
           cat SHA256SUMS
           sha256sum --check SHA256SUMS
@@ -222,7 +234,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ env.VERSION }}
-          path: dist/
+          path: ${{ env.DIST }}
           if-no-files-found: error
           retention-days: 7
 
