@@ -112,11 +112,13 @@ func callFromWindow(t *testing.T, w launched, method ipc.Method, params any) (js
 // tmux provider produces, though the worker is the tmux server's child and
 // not this service's: a call the worker runs in a process group of its own
 // appends to its own task's history and is refused the coordinator's queue.
-// A shell a person opens in a new window of the same server is placed as no
-// worker: its task.event is refused as not a worker's, and the queue answers
-// it. That pair is what makes registering the pane's process, and not the
-// server, the right membership: the window is the server's child too.
-func TestUnderTmuxTheServicePlacesTheWorkerAndNotAPersonsWindow(t *testing.T) {
+// A shell in a new window of the same server is the server's child and not
+// the pane's, and the server is the worker's host, so it is placed as the
+// worker's too, whoever opened it: its task.event is the worker's, and the
+// queue refuses it. The window a person opens is used here because the
+// service cannot tell it from one the worker opens, which
+// TestUnderTmuxAWorkersOwnWindowIsHeldToItsBranch drives from the worker.
+func TestUnderTmuxTheServicePlacesTheWorkerAndEveryWindowOfItsServer(t *testing.T) {
 	t.Parallel()
 	launchedTmuxWorker(t, "task/tmux-one", func(w launched) {
 		if _, ok := w.provider.(*session.Tmux); !ok {
@@ -145,11 +147,18 @@ func TestUnderTmuxTheServicePlacesTheWorkerAndNotAPersonsWindow(t *testing.T) {
 			t.Fatalf("wakes.list from the tmux-hosted worker answered %q, want %q", code, ipc.CodeWorker)
 		}
 
-		if _, code := callFromWindow(t, w, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: "working"}); code != ipc.CodeNotWorker {
-			t.Fatalf("task.event from a person's window on the worker's server answered %q, want %q", code, ipc.CodeNotWorker)
+		answer, code = callFromWindow(t, w, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: "working", Detail: "from a window"})
+		if code != "" {
+			t.Fatalf("task.event from a window of the worker's server was refused with %q, want it placed as the worker's", code)
 		}
-		if _, code := callFromWindow(t, w, ipc.MethodWakesList, struct{}{}); code != "" {
-			t.Fatalf("wakes.list from a person's window on the worker's server was refused with %q", code)
+		if err := json.Unmarshal(answer, &appended); err != nil {
+			t.Fatalf("the answer does not decode: %v\n%s", err, answer)
+		}
+		if appended.Event.TaskID != w.task || appended.Event.Detail != "from a window" {
+			t.Fatalf("the window's event was recorded as %+v, want an entry of task %s", appended.Event, w.task)
+		}
+		if _, code := callFromWindow(t, w, ipc.MethodWakesList, struct{}{}); code != ipc.CodeWorker {
+			t.Fatalf("wakes.list from a window of the worker's server answered %q, want %q", code, ipc.CodeWorker)
 		}
 	})
 }
@@ -211,9 +220,9 @@ func TestARestartUnderTmuxRelaunchesADeadTerminalInPlace(t *testing.T) {
 // recent output with the command a person attaches with, redacted before it
 // is abbreviated and bounded, within machine.MaxPeekBytes and with what an
 // abbreviation cut counted;
-// the worker itself is refused the read, and a person's window on the
-// worker's own server is served it, which is the placement rule above
-// applied to one more coordinator method.
+// the worker itself is refused the read, and so is a window on the
+// worker's own server, which is the placement rule above applied to one
+// more coordinator method; a person reads it from a shell of their own.
 func TestUnderTmuxAPeekIsTheCoordinatorsRedactedAndBounded(t *testing.T) {
 	t.Parallel()
 	launchedTmuxWorker(t, "task/tmux-three", func(w launched) {
@@ -262,8 +271,8 @@ func TestUnderTmuxAPeekIsTheCoordinatorsRedactedAndBounded(t *testing.T) {
 		if _, code := callAs(t, w, ipc.MethodTaskPeek, machine.TaskRequest{Task: w.task}); code != ipc.CodeWorker {
 			t.Fatalf("task.peek from the worker answered %q, want %q", code, ipc.CodeWorker)
 		}
-		if _, code := callFromWindow(t, w, ipc.MethodTaskPeek, machine.TaskRequest{Task: w.task}); code != "" {
-			t.Fatalf("task.peek from a person's window on the worker's server was refused with %q", code)
+		if _, code := callFromWindow(t, w, ipc.MethodTaskPeek, machine.TaskRequest{Task: w.task}); code != ipc.CodeWorker {
+			t.Fatalf("task.peek from a window of the worker's server answered %q, want %q", code, ipc.CodeWorker)
 		}
 	})
 }
@@ -423,12 +432,19 @@ func TestUnderTmuxKillingOneWindowSurfacesTerminalGoneAndLeavesTheSibling(t *tes
 	})
 }
 
-// A person's new window on a worker's tmux server is not the worker for git
-// admission: a push from that window of the worker's own branch under another
-// name is admitted as a person's (the worker rule never sees it), while the
-// same push run by the worker is refused. Attach typing "!" is a residual
-// outside this placement rule; session/doc.go and docs/operators.md say so.
-func TestUnderTmuxAPersonsWindowIsNotTheWorkerForGitAdmission(t *testing.T) {
+// Every window of a worker's tmux server is the worker for git admission,
+// end to end through the socket's credentials: the worker's push of its own
+// branch is admitted, its push of that tip under another name is refused by
+// the worker rule, and the same off-branch push from a window of the
+// worker's server is refused the same way, whether the worker opened the
+// window itself, which is #301 (c)'s shape, or a person did from outside
+// with the socket. The worker opens its window the way an agent would,
+// through the socket tmux names in its own environment and nothing the test
+// hands it. Before the server was recorded as the worker's host, the
+// window's push was admitted as a person's: it moved refs/heads/other.
+// Attach typing "!" is a residual outside this placement rule;
+// session/doc.go and docs/operators.md say so.
+func TestUnderTmuxAWorkersOwnWindowIsHeldToItsBranch(t *testing.T) {
 	t.Parallel()
 	launchedTmuxWorker(t, "task/tmux-git", func(w launched) {
 		running, task, gateRepo := w.running, w.task, w.gateRepo
@@ -465,23 +481,56 @@ func TestUnderTmuxAPersonsWindowIsNotTheWorkerForGitAdmission(t *testing.T) {
 			t.Fatalf("the refused worker push changed the gate's references:\nbefore: %s\nafter:  %s", before, got)
 		}
 
-		// The same off-branch push from a person's window on the worker's
-		// server is not placed as the worker, so the worker rule does not
-		// refuse it; the gate admits it as a person's push.
-		out, err = gitFromWindow(t, w, copyPath, "push", gate.RemoteName, "task/tmux-git:refs/heads/other")
-		if err != nil {
-			t.Fatalf("a person's window push of the worker's tip under another name was refused, so the worker rule reached a person:\n%s", out)
-		}
-		if !strings.Contains(gateRefs(t, gateRepo), "refs/heads/other "+head) {
-			t.Fatalf("the person's window push was reported admitted and moved nothing:\n%s", gateRefs(t, gateRepo))
+		// The same off-branch push from a window the worker opens on its
+		// own server, and from one a person opens there, is placed as the
+		// worker's through the server's identity, so the worker rule
+		// refuses both and nothing moves.
+		for name, open := range map[string]windowOpener{"the worker": openedByWorker, "a person": openedFromOutside} {
+			out, err = gitInWindow(t, w, open, copyPath, "push", gate.RemoteName, "task/tmux-git:refs/heads/other")
+			if err == nil {
+				t.Fatalf("an off-branch push from a window %s opened on the worker's server was admitted:\n%s", name, out)
+			}
+			if !strings.Contains(out, "is not that branch") {
+				t.Fatalf("the push from a window %s opened was refused without the worker rule saying why:\n%s", name, out)
+			}
+			if got := gateRefs(t, gateRepo); got != before {
+				t.Fatalf("the refused push from a window %s opened changed the gate's references:\nbefore: %s\nafter:  %s", name, before, got)
+			}
 		}
 	})
 }
 
-// gitFromWindow has a shell in a new window of the worker's own tmux server
-// run git in dir, the way a person who opened a window there would, and
-// returns its output and an error when git failed.
-func gitFromWindow(t *testing.T, w launched, dir string, args ...string) (string, error) {
+// windowOpener opens a new window on the launched worker's tmux server
+// running the shell script in the file at script, one way of asking the
+// server for it.
+type windowOpener func(t *testing.T, w launched, script string)
+
+// openedFromOutside opens the window the way a person holding the socket
+// would: the test runs the tmux client against it.
+func openedFromOutside(t *testing.T, w launched, script string) {
+	t.Helper()
+	if raw, err := exec.Command(standin.Tmux(t), "-S", workerSocket(t, w), "new-window", "-d", "--",
+		"/bin/sh", script).CombinedOutput(); err != nil {
+		t.Fatalf("opening a window in the worker's server: %v: %s", err, raw)
+	}
+}
+
+// openedByWorker has the worker open the window itself, on the socket its
+// own environment names in TMUX and nothing the test hands it: the shape of
+// an agent running "tmux new-window" on its own server. A worker with no
+// TMUX exits 9 and opens nothing.
+func openedByWorker(t *testing.T, w launched, script string) {
+	t.Helper()
+	ran := asWorker(t, w, `[ -n "$TMUX" ] || exit 9; `+shellQuote(standin.Tmux(t))+` -S "${TMUX%%,*}" new-window -d -- /bin/sh `+shellQuote(script))
+	if ran.Exit != 0 {
+		t.Fatalf("the worker's own tmux new-window exited %d: %s%s", ran.Exit, ran.Stdout, ran.Stderr)
+	}
+}
+
+// gitInWindow has a shell in a new window of the worker's own tmux server,
+// opened by open, run git in dir, and returns its output and an error when
+// git failed.
+func gitInWindow(t *testing.T, w launched, open windowOpener, dir string, args ...string) (string, error) {
 	t.Helper()
 	tmpdir := t.TempDir()
 	out, errOut, code := filepath.Join(tmpdir, "out"), filepath.Join(tmpdir, "err"), filepath.Join(tmpdir, "code")
@@ -491,10 +540,13 @@ func gitFromWindow(t *testing.T, w launched, dir string, args ...string) (string
 		shellQuote(append([]string{"git"}, args...)...) +
 		" > " + shellQuote(out) + " 2> " + shellQuote(errOut) +
 		"; echo $? > " + shellQuote(code+".tmp") + " && mv " + shellQuote(code+".tmp") + " " + shellQuote(code)
-	if raw, err := exec.Command(standin.Tmux(t), "-S", workerSocket(t, w), "new-window", "-d", "--",
-		"/bin/sh", "-c", script).CombinedOutput(); err != nil {
-		t.Fatalf("opening a window in the worker's server: %v: %s", err, raw)
+	// The script is a file so the line that opens the window stays short
+	// enough for a terminal worker to be typed.
+	file := filepath.Join(tmpdir, "window.sh")
+	if err := os.WriteFile(file, []byte(script+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	open(t, w, file)
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		raw, err := os.ReadFile(code)

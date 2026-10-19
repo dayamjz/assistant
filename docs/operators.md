@@ -490,8 +490,14 @@ What you type there is the worker's input, exactly as a message is, and the
 program keeps no record of it: the worker acts on it, and the coordinator
 reconciles around what the worker then does. A command the worker runs
 because you typed it is the worker's, so its pushes are held to the worker's
-own branch like any other. A new window you open in that server is not the
-worker: its pushes are a person's and start the full run.
+own branch like any other. So is a new window you open in that server: the
+server is the worker's, every window on it is placed as the worker, its
+pushes are held to the worker's branch, and the coordinator's commands are
+refused there. The worker can open a window on its own server too, since
+tmux names the socket in its environment, and that window is the worker's
+for the same reason; a push the worker makes that way is held to its branch
+rather than admitted as yours. To push or coordinate as yourself, use a
+shell of your own, not the worker's server.
 
 Two things it needs. tmux has to be on the service's PATH; without it every
 launch is refused and the task stays dispatched, which the service log says.
@@ -544,9 +550,15 @@ a shell command or a slash command. Some limits are worth knowing:
   empty input there runs a shell command outside the worker's permissions,
   as it does in any Claude Code session. That residual is not closed: a
   person attached to the pane can still reach a shell the program did not
-  grant, and a new window on the same server is not the worker for git or
-  delivery (its pushes are a person's). Do not take attach as a guarantee
-  that every keystroke stays inside the worker's permissions.
+  grant. A command run that way descends from the pane, so a push it makes
+  is placed as the worker's on the same terms as any command the worker
+  runs; what it escapes is the CLI's grant, not placement. Do not take
+  attach as a guarantee that every keystroke stays inside the worker's
+  permissions.
+- A worker that starts a second tmux server, on a socket of its own, or any
+  other daemon, puts what runs there outside its process tree, and a push
+  from there is placed as a person's and starts the full run. The worker's
+  own server is covered; a server it starts is not.
 - A long or multi-line message reaches the model wrapped as pasted content
   rather than as bare text.
 - All of this rests on what Claude Code 2.1.301 drew on screen and kept in

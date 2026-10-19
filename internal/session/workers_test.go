@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/session"
 )
@@ -50,10 +51,13 @@ func TestASessionsGroupIsAMemberForTheProcessLifetime(t *testing.T) {
 	}
 	m, ok := set.Member(group)
 	if !ok || m != (session.Membership{Task: sub.id, Group: group}) {
-		t.Fatalf("Member(%d) = %+v, %v; want the session's task", group, m, ok)
+		t.Fatalf("Member(%d) = %+v, %v; want the session's task and no host, since a pipe has no terminal", group, m, ok)
 	}
 	if _, ok := set.Member(group + 1); ok {
 		t.Fatalf("a group nobody leads is a member")
+	}
+	if _, ok := set.Hosted(agents.Identity{}); ok {
+		t.Fatal("the zero identity hosts a worker, so a process the reader cannot identify would be placed")
 	}
 	if err := p.Send(context.Background(), ended, "finish"); err != nil {
 		t.Fatalf("Send: %v", err)

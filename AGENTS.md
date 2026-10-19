@@ -659,7 +659,12 @@ Each has cost this repository more than one round of review.
   output stream and not a screen, with the rules derived from what the
   stand-in emits and the real adapter's format stated unknown; the
   comparison is the supervisor's. `Workers` is the set of live worker groups,
-  keyed by the process group a worker leads and naming its task, and the
+  keyed by the process group a worker leads and naming its task, and, for a
+  tmux worker, the identity of the server hosting it, which `Hosted`
+  answers for: the worker can open a window on its own server through the
+  socket tmux names in its environment, and that window descends from the
+  server and not the pane, so the server's descendants are placed as the
+  worker's rather than as a person's. The
   providers' `Create` produce it: it joins the group and the membership ends with
   the process or with `Close`, the join is unexported, and `Member` reads the
   worker's done signal, so nothing a caller states is a membership. It is
@@ -856,8 +861,9 @@ Each has cost this repository more than one round of review.
   worker is placed by the other relation over the same credentials, the
   worker group set `internal/session` holds, and `workers.go` owns that
   derivation (credentials, then the peer's parent chain, which `placement.go`
-  walks to a process in a worker group, or one that is itself a worker the
-  set holds, reading each process through
+  walks to a process in a worker group, one that is itself a worker the
+  set holds, or one whose identity is the host of a worker's terminal,
+  reading each process through
   `agents.ReadLineage`, then the set) and the four methods
   that turn on it. It walks the chain rather than reading the peer's own
   group as containment does, because #225 observed the Claude Code CLI's Bash

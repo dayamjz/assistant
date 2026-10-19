@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -56,15 +57,23 @@ import (
 // Credentials name a process, read off the socket by internal/ipc and never
 // from a frame. placement.go walks that process's parent chain, as the
 // operating system reports it, to the first process inside a worker group
-// the set holds or that is a worker the set holds, and the set names the
-// task. No step reads a request: a task identifier in a body would be the
-// caller's claim, and no body here has a field for one.
+// the set holds, that is a worker the set holds, or that is the host of a
+// worker's terminal the set holds, and the set names the task. No step
+// reads a request: a task identifier in a body would be the caller's
+// claim, and no body here has a field for one.
 //
 // The chain rather than the peer's own group is what places a worker's
 // descendants whatever process group they run in: a command the Claude Code
 // CLI runs in a group of its own, as #225 observed of its Bash tool, is
 // still a descendant of the worker while the processes between them stand,
-// so the hook a worker's push runs is placed by the worker's process.
+// so the hook a worker's push runs is placed by the worker's process. The
+// host is what places a tmux worker's windows: the worker's own server is
+// reachable from its pane through the socket tmux names in its
+// environment, and a window it opens there is the server's child and not
+// the pane's, so the membership carries the server's identity and a push
+// from any window of that server, the worker's or a person's, is held to
+// the worker's rule rather than admitted as a person's; a person pushes
+// as a person from a shell of their own.
 // placement.go says why that and not anything the worker's environment
 // carries, what it reads on each platform, and the descendant it loses. On
 // Windows, and on every platform but Linux and macOS, nothing is read:
@@ -134,22 +143,41 @@ func (s *Service) workerOf(c ipc.Credentials) (session.Membership, bool, error) 
 	if empty {
 		return session.Membership{}, false, nil
 	}
-	member := func(group int) (session.Membership, bool) {
-		for _, set := range sets {
-			if set == nil {
-				continue
-			}
-			if m, ok := set.Member(group); ok {
-				return m, true
-			}
-		}
-		return session.Membership{}, false
-	}
-	m, ok, err := placeByAncestry(c.PID, readLineage, member)
+	m, ok, err := placeByAncestry(c.PID, readLineage, workerSets(sets))
 	if err != nil {
 		return session.Membership{}, false, fmt.Errorf("placing %s: %w", c, err)
 	}
 	return m, ok, nil
+}
+
+// workerSets is the placer over every worker set this service holds: the
+// first set answering for a group or a host answers for all.
+type workerSets []*session.Workers
+
+// Member is session.Workers.Member over every set.
+func (sets workerSets) Member(group int) (session.Membership, bool) {
+	for _, set := range sets {
+		if set == nil {
+			continue
+		}
+		if m, ok := set.Member(group); ok {
+			return m, true
+		}
+	}
+	return session.Membership{}, false
+}
+
+// Hosted is session.Workers.Hosted over every set.
+func (sets workerSets) Hosted(host agents.Identity) (session.Membership, bool) {
+	for _, set := range sets {
+		if set == nil {
+			continue
+		}
+		if m, ok := set.Hosted(host); ok {
+			return m, true
+		}
+	}
+	return session.Membership{}, false
 }
 
 // workerPeer is workerOf over a request's peer. An unidentified peer is

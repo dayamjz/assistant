@@ -19,11 +19,13 @@ import (
 // Placement under the tmux provider, read off real processes with the real
 // reader. Under the pipe provider a worker is this process's child; under
 // tmux it is the child of a tmux server that is nobody's descendant here, so
-// the question these tests settle is whether the walk placement.go makes
-// still places the worker's commands as the worker's and nothing else as
-// the worker's when the worker's parent is that server.
+// the questions these tests settle are whether the walk placement.go makes
+// still places the worker's commands as the worker's when the worker's
+// parent is that server, and what it makes of the windows the server opens,
+// which the worker itself can ask for.
 //
-// The set is one worker, answered by the pane process's group, which is what
+// The set is one worker, answered by the pane process's group and, where a
+// test says so, by the server's identity as its host, which is what
 // session.Tmux's Workers answers for a worker it holds; internal/session's
 // tests hold the provider to that, and the service tests in
 // workers_tmux_unix_test.go reach the same walk through the real set and the
@@ -45,6 +47,12 @@ func terminalWorker(t *testing.T) (agents.TerminalWorker, agents.Terminal, strin
 	}
 	t.Cleanup(worker.Close)
 	return worker, term, dir
+}
+
+// hostedWorker is the placer session.Tmux produces for worker: its group,
+// and its server as the host.
+func hostedWorker(worker agents.TerminalWorker) oneWorkerSet {
+	return oneWorkerSet{group: worker.Group(), host: worker.Host()}
 }
 
 // tmuxIn runs the tmux client against term's server.
@@ -69,12 +77,22 @@ func pidIn(t *testing.T, path string) int {
 	return pid
 }
 
+// windowShell is the shell command a new window runs so a test can read its
+// process: it writes its own identifier to path and waits.
+func windowShell(path string) string {
+	return `echo "$$" > ` + path + `.tmp && mv ` + path + `.tmp ` + path + ` && exec sleep 60`
+}
+
 // The worker under tmux is not this process's child: its parent is the tmux
-// server, whose own parent is no process of this test. A command the worker
-// runs in a process group of its own, which is the shape #225 observed of the
-// Claude Code CLI's Bash tool, is still the pane process's descendant, so the
-// walk places it as the worker's, and the group read alone would not have.
-// The server itself, and this test process, are placed as nobody's.
+// server, whose own parent is no process of this test, and the handle's Host
+// is that server's identity, agreeing with the parent the kernel attributes
+// the pane to and with the process the server reports itself as. A command
+// the worker runs in a process group of its own, which is the shape #225
+// observed of the Claude Code CLI's Bash tool, is still the pane process's
+// descendant, so the walk places it as the worker's by the chain alone, and
+// the group read alone would not have. The server is placed as the worker's
+// by its host identity and by nothing else, and this test process is
+// placed as nobody's.
 func TestUnderTmuxAWorkersCommandIsPlacedThroughTheServer(t *testing.T) {
 	t.Parallel()
 	worker, term, dir := terminalWorker(t)
@@ -101,6 +119,9 @@ func TestUnderTmuxAWorkersCommandIsPlacedThroughTheServer(t *testing.T) {
 	if want := tmuxIn(t, term, "display-message", "-p", "#{pid}"); strconv.Itoa(server.PID) != want {
 		t.Fatalf("the pane's parent is process %d and the server reports itself as %s", server.PID, want)
 	}
+	if worker.Host() != server.Identity || worker.Host().Start == 0 {
+		t.Fatalf("the handle's Host is %v, want the server's identity %v with a start time", worker.Host(), server.Identity)
+	}
 
 	// The shell stays until released, so the chain from the sleep to the
 	// worker stands while it is read; a shell that exited would leave the
@@ -119,39 +140,93 @@ func TestUnderTmuxAWorkersCommandIsPlacedThroughTheServer(t *testing.T) {
 	if own == group {
 		t.Fatalf("the command ran in the worker's own group %d, so this is not the shape the test is about", group)
 	}
-	if _, ok := member(own); ok {
+	if _, ok := member.Member(own); ok {
 		t.Fatal("the group read alone places the command, so the walk is not what placed it")
 	}
 	if m, ok, err := placeByAncestry(child, readLineage, member); err != nil || !ok || m.Group != group {
 		t.Fatalf("the worker's command under tmux was placed %+v, %v, %v; want the worker's", m, ok, err)
 	}
-	for name, pid := range map[string]int{"the tmux server": server.PID, "this test": os.Getpid()} {
-		if _, ok, err := placeByAncestry(pid, readLineage, member); err != nil || ok {
-			t.Errorf("%s was placed %v, %v; want nobody's", name, ok, err)
-		}
+	if _, ok, err := placeByAncestry(server.PID, readLineage, member); err != nil || ok {
+		t.Fatalf("the tmux server was placed %v, %v by the group alone; want nobody's, since it leads no worker group", ok, err)
+	}
+	if m, ok, err := placeByAncestry(server.PID, readLineage, hostedWorker(worker)); err != nil || !ok || m.Group != group {
+		t.Fatalf("the tmux server was placed %+v, %v, %v with its host recorded; want the worker's", m, ok, err)
+	}
+	if _, ok, err := placeByAncestry(os.Getpid(), readLineage, hostedWorker(worker)); err != nil || ok {
+		t.Errorf("this test was placed %v, %v; want nobody's", ok, err)
+	}
+}
+
+// The answer to #301 (c). The worker can open a window on its own server:
+// tmux sets TMUX in the pane's environment, naming the socket, and the
+// worker runs the tmux client against it. The shell in that window is the
+// server's child and not the pane's, so the walk by the chain alone reaches
+// the server and stops, placing the shell as nobody's: a push from it would
+// have been admitted as a person's, unconfined. That is the hole, read off a
+// real server as the control half of this test. With the server's identity
+// recorded as the worker's host, which session.Tmux does, the same shell is
+// placed as the worker's, and so is anything it starts.
+func TestUnderTmuxAWindowTheWorkerOpensOnItsOwnServerIsPlacedAsTheWorkers(t *testing.T) {
+	t.Parallel()
+	worker, term, dir := terminalWorker(t)
+	window := filepath.Join(dir, "window")
+	// The socket is read from the worker's own environment and nowhere
+	// else, which is what makes the server reachable from the pane; a
+	// pane with no TMUX exits 9 and the window never opens.
+	command := `[ -n "$TMUX" ] || exit 9; ` + shellWord(term.Tmux) + ` -S "${TMUX%%,*}" new-window -d -- /bin/sh -c ` +
+		shellWord(windowShell(window))
+	if err := worker.Send(t.Context(), "run: "+command); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	shell := pidIn(t, window)
+	lineage, err := readLineage(shell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lineage.Parent == worker.Group() {
+		t.Fatal("the window's shell is the pane process's child, so this is not the shape the test is about")
+	}
+	if lineage.Parent != worker.Host().PID {
+		t.Fatalf("the window's shell has parent %d, want the server %d", lineage.Parent, worker.Host().PID)
+	}
+	if _, ok, err := placeByAncestry(shell, readLineage, oneWorker(worker.Group())); err != nil || ok {
+		t.Fatalf("the worker's window was placed %v, %v by the chain alone; the control expects nobody's, which is the hole", ok, err)
+	}
+	if m, ok, err := placeByAncestry(shell, readLineage, hostedWorker(worker)); err != nil || !ok || m.Group != worker.Group() {
+		t.Fatalf("the worker's window was placed %+v, %v, %v with the host recorded; want the worker's", m, ok, err)
+	}
+	// A host whose identity is another process's does not place it: the
+	// match is by identity, so the server's identifier under a different
+	// start time is not the host.
+	other := hostedWorker(worker)
+	other.host.Start++
+	if _, ok, err := placeByAncestry(shell, readLineage, other); err != nil || ok {
+		t.Fatalf("the worker's window was placed %v, %v by a host identity with another start time; want nobody's", ok, err)
 	}
 }
 
 // The person's controls, on the same server the worker runs in. A shell a
-// person opens in a new window of the worker's server is the server's child
-// and the worker's sibling, so it is placed as nobody's. A person outside
-// tmux who types into the worker's window with send-keys is placed as
-// nobody's, and so is the client a person attaches with. What the person
-// types into the window, though, is the worker's input, so a command they
-// have the worker run is placed as the worker's: typing into the window is
-// authoritative, and what it makes the worker do is the worker's act, read
-// off the kernel's chain like every other.
-func TestUnderTmuxAPersonsShellOnTheSameServerIsNotTheWorker(t *testing.T) {
+// person opens in a new window of the worker's server is the server's child,
+// exactly as one the worker opens is, and the walk cannot tell who asked
+// for it: it is placed as the worker's, which is the direction that admits
+// less. A person outside tmux who types into the worker's window with
+// send-keys is placed as nobody's, and so is the client a person attaches
+// with, because neither descends from the server. What the person types
+// into the window is the worker's input, so a command they have the worker
+// run is placed as the worker's: typing into the window is authoritative,
+// and what it makes the worker do is the worker's act, read off the
+// kernel's chain like every other.
+func TestUnderTmuxAPersonsWindowIsTheWorkersAndAPersonOutsideIsNot(t *testing.T) {
 	t.Parallel()
 	worker, term, dir := terminalWorker(t)
-	member := oneWorker(worker.Group())
+	member := hostedWorker(worker)
 	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(dir, "release"), nil, 0o600) })
 
 	// A window a person opens in the worker's own server.
 	window := filepath.Join(dir, "window")
-	tmuxIn(t, term, "new-window", "-d", "--", "/bin/sh", "-c", `echo "$$" > `+window+`.tmp && mv `+window+`.tmp `+window+` && exec sleep 60`)
-	if _, ok, err := placeByAncestry(pidIn(t, window), readLineage, member); err != nil || ok {
-		t.Errorf("a shell in a new window of the worker's server was placed %v, %v; want nobody's", ok, err)
+	tmuxIn(t, term, "new-window", "-d", "--", "/bin/sh", "-c", windowShell(window))
+	if m, ok, err := placeByAncestry(pidIn(t, window), readLineage, member); err != nil || !ok || m.Group != worker.Group() {
+		t.Errorf("a shell in a new window of the worker's server was placed %+v, %v, %v; want the worker's", m, ok, err)
 	}
 
 	// A person's shell outside tmux types a command into the worker's
@@ -196,4 +271,9 @@ func TestUnderTmuxAPersonsShellOnTheSameServerIsNotTheWorker(t *testing.T) {
 	if _, ok, err := placeByAncestry(pid, readLineage, member); err != nil || ok {
 		t.Errorf("the client a person attached with was placed %v, %v; want nobody's", ok, err)
 	}
+}
+
+// shellWord quotes one word for a POSIX shell.
+func shellWord(word string) string {
+	return "'" + strings.ReplaceAll(word, "'", `'\''`) + "'"
 }

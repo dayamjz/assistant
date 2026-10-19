@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -101,6 +102,23 @@ func TestATerminalWorkerIsTypedToAndEndedWithItsServer(t *testing.T) {
 	}
 	if got := worker.Attach(); len(got) < 3 || got[0] != term.Tmux || !strings.Contains(strings.Join(got, " "), term.Socket) {
 		t.Errorf("Attach() = %q, want the tmux binary addressing the worker's socket", got)
+	}
+	// The host is the server the kernel attributes the pane to, read as
+	// the pane's parent, and the server the socket answers for.
+	lineage, found, err := agents.ReadLineage(worker.Group())
+	if err != nil || !found {
+		t.Fatalf("reading the pane process's lineage: found %v, %v", found, err)
+	}
+	server, found, err := agents.Identify(lineage.Parent)
+	if err != nil || !found {
+		t.Fatalf("reading the server's identity: found %v, %v", found, err)
+	}
+	if worker.Host() != server || worker.Host().Start == 0 {
+		t.Errorf("Host() = %v, want the pane's parent %v with a start time", worker.Host(), server)
+	}
+	if reported, err := exec.Command(term.Tmux, "-S", term.Socket, "display-message", "-p", "#{pid}").Output(); err != nil ||
+		strings.TrimSpace(string(reported)) != strconv.Itoa(worker.Host().PID) {
+		t.Errorf("the server reports itself as %q (%v), and Host() names %d", strings.TrimSpace(string(reported)), err, worker.Host().PID)
 	}
 
 	worker.Close()

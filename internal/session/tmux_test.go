@@ -142,7 +142,11 @@ func TestTmuxCaptureSendAndAPersonAttaches(t *testing.T) {
 // pane's process runs, and, once a person kills the window from outside, Dead
 // through the handle and Dead by identity from a provider holding none.
 // Nothing between reads Live after the process has gone, which is P9's rule
-// that only a live process signal absorbs.
+// that only a live process signal absorbs. The membership the pane's group
+// joins names the tmux server as its host, the pane process's parent as
+// the kernel attributes it, and Hosted answers for that identity for the
+// same lifetime; the server's own group is no member, so a placement by
+// group alone does not reach it and one by identity does.
 func TestTmuxProbesLiveThenDeadOnceTheWindowIsKilled(t *testing.T) {
 	principles.Cite(t, principles.P9)
 	sub := newSubject(t)
@@ -151,8 +155,29 @@ func TestTmuxProbesLiveThenDeadOnceTheWindowIsKilled(t *testing.T) {
 	ref := s.Reference().String()
 	waitCapture(t, p, s, "worker ready")
 	expect(t, p.Probe(context.Background(), ref), session.ReasonHeld)
-	if _, ok := p.Workers().Member(s.Reference().PID); !ok {
+	m, ok := p.Workers().Member(s.Reference().PID)
+	if !ok {
 		t.Fatal("the pane's process group is not a member of the worker set while it runs")
+	}
+	pane, found, err := agents.ReadLineage(s.Reference().PID)
+	if err != nil || !found {
+		t.Fatalf("reading the pane process's lineage: found %v, %v", found, err)
+	}
+	server, found, err := agents.Identify(pane.Parent)
+	if err != nil || !found {
+		t.Fatalf("reading the tmux server's identity: found %v, %v", found, err)
+	}
+	if m.Host != server || m.Host.Start == 0 {
+		t.Fatalf("the membership names host %v, want the pane's parent %v with a start time", m.Host, server)
+	}
+	if hosted, ok := p.Workers().Hosted(server); !ok || hosted != m {
+		t.Fatalf("Hosted(%v) = %+v, %v; want the worker's membership", server, hosted, ok)
+	}
+	if _, ok := p.Workers().Member(server.PID); ok {
+		t.Fatal("the tmux server's own group is a member, so a placement by group alone would reach it")
+	}
+	if _, ok := p.Workers().Hosted(agents.Identity{PID: server.PID, Start: server.Start + 1}); ok {
+		t.Fatal("the server's identifier under another start time is the host, so the match is by number and not identity")
 	}
 
 	attach, err := p.AttachReference(ref)
@@ -164,6 +189,9 @@ func TestTmuxProbesLiveThenDeadOnceTheWindowIsKilled(t *testing.T) {
 	expect(t, waitProbe(t, p, ref, session.ReasonExited), session.ReasonExited)
 	if _, ok := p.Workers().Member(s.Reference().PID); ok {
 		t.Error("the killed worker's group is still a member of the worker set")
+	}
+	if _, ok := p.Workers().Hosted(server); ok {
+		t.Error("the killed worker's server is still a host in the worker set")
 	}
 	other, _ := tmuxProvider(t, sub.home, standin.Script{})
 	got := other.Probe(context.Background(), ref)

@@ -26,14 +26,32 @@ import (
 // The set placement asks is one worker, answered by the worker's group, which
 // is what session.Workers answers for a worker it holds.
 
-// oneWorker is a membership lookup holding the one worker leading group.
-func oneWorker(group int) func(int) (session.Membership, bool) {
-	return func(id int) (session.Membership, bool) {
-		if id == group {
-			return session.Membership{Task: "the-task", Group: group}, true
-		}
-		return session.Membership{}, false
+// oneWorker is a placer holding the one worker leading group, with no
+// terminal host: Hosted answers for nobody, so a placement it makes rests
+// on the group and the chain alone.
+func oneWorker(group int) oneWorkerSet { return oneWorkerSet{group: group} }
+
+// oneWorkerSet is oneWorker's placer. host, when set, is the identity the
+// worker's terminal host has, on session.Membership.Host's terms.
+type oneWorkerSet struct {
+	group int
+	host  agents.Identity
+}
+
+// Member answers for the one group.
+func (s oneWorkerSet) Member(group int) (session.Membership, bool) {
+	if group == s.group {
+		return session.Membership{Task: "the-task", Group: s.group, Host: s.host}, true
 	}
+	return session.Membership{}, false
+}
+
+// Hosted answers for the host when there is one.
+func (s oneWorkerSet) Hosted(host agents.Identity) (session.Membership, bool) {
+	if s.host != (agents.Identity{}) && host == s.host {
+		return session.Membership{Task: "the-task", Group: s.group, Host: s.host}, true
+	}
+	return session.Membership{}, false
 }
 
 // startedWorker starts a line-mode stand-in worker that runs what follows
@@ -111,7 +129,7 @@ func TestPlacementFollowsTheChainAndLosesItWhenTheKernelRewritesIt(t *testing.T)
 	if own == group {
 		t.Fatalf("the sleep is in the worker's own group %d, so this is not the shape the test is about", group)
 	}
-	if _, ok := member(own); ok {
+	if _, ok := member.Member(own); ok {
 		t.Fatal("the group read alone places the sleep, so the walk is not what placed it")
 	}
 	m, ok, err := placeByAncestry(child, readLineage, member)

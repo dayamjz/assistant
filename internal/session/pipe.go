@@ -56,7 +56,7 @@ func (p *Pipe) Create(ctx context.Context, spec Spec) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("session: starting the worker: %w", err)
 	}
-	return p.adopt(spec.TaskID, worker, nil)
+	return p.adopt(spec.TaskID, worker, nil, agents.Identity{})
 }
 
 // Capture returns the retained output and its digest, on the terms

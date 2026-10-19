@@ -36,8 +36,9 @@ var ErrNoTmux = errors.New("session: the tmux provider needs an absolute path to
 // everything else Unobserved, so a worker an earlier service started in tmux
 // reads after a restart exactly as one it started on a pipe would. The
 // worker group set is produced the same way, from the pane's process, which
-// leads its own group; the package documentation says what placement then
-// reads through the tmux server.
+// leads its own group, with the server the adapter read as the pane's
+// parent recorded as the membership's host; the package documentation says
+// what placement then reads through the tmux server.
 //
 // What it adds is the terminal. AttachReference answers the command a
 // person runs to attach to a held session; Capture is the pane's screen
@@ -90,7 +91,7 @@ func (t *Tmux) Create(ctx context.Context, spec Spec) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("session: starting the worker in a terminal: %w", err)
 	}
-	return t.adopt(spec.TaskID, worker, worker.Attach())
+	return t.adopt(spec.TaskID, worker, worker.Attach(), worker.Host())
 }
 
 // Capture returns the pane's text and its digest, on the terms
