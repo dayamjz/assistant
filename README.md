@@ -260,6 +260,7 @@ that mode needs and what attaching still cannot guarantee.
 | `internal/agents` | The only package that starts an agent process: the run and fix roles, the stage-body form of the agent that is not a route to a fixer session, the capability declaration every adapter is held to, the Claude Code adapter, fallback resolution, the review shape and the evidence demand it carries, and invocation records. |
 | `internal/agents/route` | The typed-graph answer to one question about a type: can a caller holding it reach a fixer session. The general form of the P4 check, asked by `internal/agents` and `internal/stages`. |
 | `internal/agents/standin` | The scripted agent the tests outside `internal/agents` run against: the test binary re-executed as the agent process, read by the production adapter. |
+| `internal/buildinfo` | Which build this binary is: the release version a release build is stamped with at link time, and what the Go toolchain recorded. `--version` and the build a run is recorded against both read it. |
 | `internal/checkpoints` | The durable `graph.CheckpointStore` over `internal/store`: a run's checkpoint history, appends anchored to what the caller observed, and the fork that copies a run's history up to a point into a new run. |
 | `internal/cli` | The command surface: the verbs PRD section 9 specifies, their flags, the two renderings of one answer, and the subcommands a gate's hooks and its remote invoke. It holds no validation logic. |
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
@@ -290,6 +291,55 @@ that mode needs and what attaching still cannot guarantee.
 | `internal/taskstate` | What is true of a task now, resolved from its records on every read rather than stored as a summary. |
 | `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |
 | `docs/prd.html` | The product requirements. The specification this code answers to. |
+
+## Install
+
+With Go 1.25 or newer:
+
+```sh
+go install github.com/dayamjz/assistant/cmd/assistant@latest
+```
+
+That builds from source into `$(go env GOPATH)/bin`, or `$GOBIN` when it is
+set. `@latest` is the newest release tag once one exists, and until then the
+newest commit on `main`; `assistant --version` names whichever it was, as the
+module version Go recorded.
+
+Or download a release binary. Each release on the
+[releases page](https://github.com/dayamjz/assistant/releases) carries one
+archive per platform, `assistant_VERSION_OS_ARCH.tar.gz` for `darwin` and
+`linux` on `amd64` and `arm64`, and a `SHA256SUMS` file covering them. Verify
+the archive against it before unpacking:
+
+```sh
+set -e
+VERSION=v0.1.0 OS=darwin ARCH=arm64   # the release, and this machine's platform
+archive="assistant_${VERSION}_${OS}_${ARCH}.tar.gz"
+base=https://github.com/dayamjz/assistant/releases/download/$VERSION
+curl -fLO "$base/$archive"
+curl -fLO "$base/SHA256SUMS"
+grep -F "$archive" SHA256SUMS | shasum -a 256 -c -   # on Linux: grep -F "$archive" SHA256SUMS | sha256sum -c -
+tar -xzf "$archive"
+sudo install -m 0755 "assistant_${VERSION}_${OS}_${ARCH}/assistant" /usr/local/bin/   # or: mkdir -p ~/.local/bin && install -m 0755 ... ~/.local/bin/
+assistant --version   # assistant v0.1.0 COMMIT GO_VERSION
+```
+
+The check passes only when the digest line for that archive matches the file
+you downloaded; if the manifest has no line for it, or the digest differs,
+nothing after it runs.
+It shows the archive is the one published beside that `SHA256SUMS`, not who
+published it: both come from the same release, and nothing is signed yet.
+The binaries are built without cgo, so each archive holds one executable and
+no separate libraries to install beside it; on macOS that executable still
+links the system libraries the Go runtime uses. A release build's `--version`
+names its release tag; any
+other build names the module version Go recorded, `(devel)` included. There
+is no self-update.
+
+A release is cut by pushing a `v*` tag on a commit on `main`:
+[`.github/workflows/release.yml`](.github/workflows/release.yml) refuses a
+tag off `main`, runs `make check` on Linux and macOS, and publishes nothing
+unless both pass.
 
 ## Development
 

@@ -1,0 +1,277 @@
+name: Release
+
+# A v* tag builds, checks and publishes a release. Every other trigger is a
+# dry run that does all of it but the publish, so the path can be exercised
+# without a tag: a pull request that changes this file or internal/buildinfo
+# runs it, and so does a manual dispatch once this file is on the default
+# branch. The publish job is the only one that can write, and it runs only for
+# a tag push.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - internal/buildinfo/**
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The version to stamp into the dry-run build. Nothing is published.
+        required: true
+        default: v0.0.0-dryrun
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # The symbol internal/buildinfo.VersionSymbol names. The linker ignores -X
+  # for a symbol that does not exist, so the verify step below reads the
+  # version back out of a built binary rather than trusting this spelling.
+  VERSION_SYMBOL: github.com/dayamjz/assistant/internal/buildinfo.Version
+
+jobs:
+  # The version is settled once, here, and every later job reads it from this
+  # job's output. A tag that is not a release version refuses the run before
+  # anything is built.
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.settle.outputs.version }}
+      prerelease: ${{ steps.settle.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - id: settle
+        name: Settle the version
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          case "$EVENT" in
+            push)
+              if [ "$REF_TYPE" != "tag" ]; then
+                echo "::error::a release push must be a tag, and this is a $REF_TYPE"
+                exit 1
+              fi
+              version="$REF_NAME"
+              ;;
+            workflow_dispatch) version="$INPUT_VERSION" ;;
+            *) version="v0.0.0-dryrun.$RUN_NUMBER" ;;
+          esac
+          if ! go run ./cmd/releasetag "$version"; then
+            echo "::error::$version is not a release version (vMAJOR.MINOR.PATCH with an optional -PRERELEASE of dot-separated identifiers)"
+            exit 1
+          fi
+          prerelease=false
+          case "$version" in *-*) prerelease=true ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Version: $version (prerelease: $prerelease, event: $EVENT)"
+
+  # make check is what CI and the gate run, so a commit that fails it cannot
+  # release. It runs on both platforms CI checks, on the tagged commit itself.
+  check:
+    name: make check (${{ matrix.os }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A release is cut from main. A tag on a commit main does not contain
+      # is refused, so a branch nobody merged cannot ship.
+      - name: Require the tagged commit on main
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_SHA is not on main, so it is not released"
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install tmux
+        shell: bash
+        run: |
+          if ! command -v tmux >/dev/null 2>&1; then
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              brew install tmux
+            else
+              sudo apt-get update && sudo apt-get install -y tmux
+            fi
+          fi
+          tmux -V
+
+      # make lint requires golangci-lint and refuses without it. The release
+      # must lint with the release CI lints with, so the pin below is checked
+      # against ci.yml's rather than trusted to have been edited in both.
+      - name: Require the golangci-lint pin to match CI's
+        shell: bash
+        run: |
+          if ! grep -Eq '^[[:space:]]+version: v2\.12\.2$' .github/workflows/ci.yml; then
+            echo "::error::.github/workflows/ci.yml no longer pins golangci-lint v2.12.2; update the pin in release.yml to match"
+            exit 1
+          fi
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          install-only: true
+
+      - name: make check
+        shell: bash
+        env:
+          ASSISTANT_REQUIRE_TMUX: "1"
+        run: make check
+
+  build:
+    name: build
+    needs: [version, check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Everything the build writes goes outside the checkout. A file left
+      # inside it would be untracked, and the toolchain would then stamp the
+      # binaries built after it as built from a modified working copy.
+      - name: Place the output outside the checkout
+        shell: bash
+        run: |
+          echo "BUILD=$RUNNER_TEMP/build" >> "$GITHUB_ENV"
+          echo "DIST=$RUNNER_TEMP/dist" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # CGO_ENABLED=0 because the store's driver is pure Go on purpose, so
+      # none of these builds need a C toolchain. macOS binaries still link
+      # the system libraries Go's runtime uses; the verify step checks
+      # CGO_ENABLED=0 from the build metadata, not static linking.
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$DIST"
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            name="assistant_${VERSION}_${goos}_${goarch}"
+            mkdir -p "$BUILD/$name"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
+              -ldflags "-s -w -X ${VERSION_SYMBOL}=${VERSION}" \
+              -o "$BUILD/$name/assistant" ./cmd/assistant
+            cp README.md LICENSE "$BUILD/$name/"
+            tar -C "$BUILD" -czf "$DIST/$name.tar.gz" "$name"
+          done
+
+      # The linux/amd64 binary is the one this runner can execute, and it was
+      # built by the same loop with the same flags as the other three, so its
+      # answer is the check that the stamp's spelling reached the variable.
+      # The other three are checked for their target and for being built
+      # without cgo, from the build information the toolchain recorded.
+      - name: Verify the binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          line=$("$BUILD/assistant_${VERSION}_linux_amd64/assistant" --version)
+          echo "$line"
+          case "$line" in
+            "assistant ${VERSION} "*) ;;
+            *) echo "::error::the built binary reports '$line', not version ${VERSION}"; exit 1 ;;
+          esac
+          case "$line" in
+            *+modified*) echo "::error::the built binary reports '$line', a build from a modified working copy"; exit 1 ;;
+          esac
+          document=$("$BUILD/assistant_${VERSION}_linux_amd64/assistant" --json --version)
+          if [ "$(printf '%s' "$document" | jq -r .version)" != "$line" ]; then
+            echo "::error::--json --version wrote '$document', which does not name '$line'"
+            exit 1
+          fi
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            info=$(go version -m "$BUILD/assistant_${VERSION}_${goos}_${goarch}/assistant")
+            for want in "GOOS=$goos" "GOARCH=$goarch" "CGO_ENABLED=0"; do
+              if ! printf '%s\n' "$info" | grep -Eq "^[[:space:]]+build[[:space:]]+${want}$"; then
+                echo "::error::$goos/$goarch does not record $want"
+                printf '%s\n' "$info"
+                exit 1
+              fi
+            done
+          done
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd "$DIST"
+          sha256sum -- *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ env.VERSION }}
+          path: ${{ env.DIST }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: [version, build]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ env.VERSION }}
+          path: dist
+
+      - name: Create the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum --check SHA256SUMS)
+          flags=(--verify-tag --title "$VERSION" --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$VERSION" "${flags[@]}" dist/*.tar.gz dist/SHA256SUMS

@@ -43,7 +43,8 @@ type Environment struct {
 	// by path so a push cannot choose a different one through PATH, and
 	// starting the service launches it.
 	Executable string
-	// Version is what --version reports.
+	// Version is what --version reports. cmd/assistant passes
+	// internal/buildinfo's Line, the one owner of which build this is.
 	Version string
 	// Interactive says a person is at a terminal: standard input and
 	// standard error are both one. Only init reads it, to decide whether it
