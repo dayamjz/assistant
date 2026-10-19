@@ -157,8 +157,10 @@ type Ran struct {
 	// Stdout and Stderr are what the command wrote to each.
 	Stdout string `json:"stdout"`
 	Stderr string `json:"stderr"`
-	// Group is the process group the shell ran in, read while it ran, and
-	// zero where this platform reports none.
+	// Group is the process group the shell ran in, read after it started
+	// and before the worker waited for it, so a shell that has already
+	// exited still reports the group it led (#360), and zero where this
+	// platform reports none or the read failed.
 	Group int `json:"group"`
 	// Refused is why the command was not run at all, the refusal bashCheck
 	// models, and empty for a command the worker ran. A refused command has
