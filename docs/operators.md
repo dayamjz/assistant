@@ -129,6 +129,21 @@ never a claim made by the note. `--run` answers the task's current run even
 while the task still has holds of its own open, so a promoted delivery run is
 reachable without first clearing every report hold.
 
+A local delivery task's approval hold, keyed `task/ID/local-approval/...`,
+is yours and not the coordinator's: `approve` fast-forwards your local
+default branch to the worker's commit, `stop` leaves it where it is. The
+service takes either answer only from a command in the foreground of a
+terminal, which it reads from the kernel's record of the calling process
+and never from anything the command says: type it at your shell, in the
+foreground. A command with no terminal (a script, a cron job, `ssh` with no
+pseudo-terminal), a background job, or a command a coordinator agent's host
+runs is refused with code `not-at-terminal`, the hold stays open and nothing
+moves. What the service establishes is a terminal's foreground and not a
+person: a program that allocates a terminal of its own and runs the command
+there is served, and the record of who approved still says
+`machine-interface`. On a platform where the service identifies no socket
+peer, every such answer is refused.
+
 The stage runs again after the round and holds again, so you see the result
 before anything is pushed. A round that changed nothing says so and returns to
 the hold. At most three rounds can be asked for at one stage in one run. The

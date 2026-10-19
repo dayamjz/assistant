@@ -76,15 +76,27 @@ func runQuietly(m *testing.M) int {
 	return m.Run()
 }
 
+// cliVerb is the first argument that makes this binary run the product's
+// command line over the arguments after it, so a test can run a person's
+// command from a process it placed, at a terminal's foreground among them,
+// with the credentials the service reads being that process's.
+const cliVerb = "cli-run"
+
 // hookMain lets this binary act as the command a gate's hooks invoke, on
 // the terms internal/cli's own push tests give it: internal/gate writes the
 // absolute path of the binary that initialized the gate into its hooks, a
 // push therefore reaches this process, and this hands the arguments and the
 // streams straight to cli.Run, which is the product. A test binary is never
-// run with "gate" as its first argument by the testing package.
+// run with "gate" as its first argument by the testing package. Given
+// cliVerb first instead, it hands cli.Run the arguments after it, which is
+// the same product reached the way a person's shell reaches it.
 func hookMain() {
-	if len(os.Args) < 2 || os.Args[1] != "gate" {
+	if len(os.Args) < 2 || (os.Args[1] != "gate" && os.Args[1] != cliVerb) {
 		return
+	}
+	args := os.Args[1:]
+	if os.Args[1] == cliVerb {
+		args = os.Args[2:]
 	}
 	workingDir, err := os.Getwd()
 	if err != nil {
@@ -97,7 +109,7 @@ func hookMain() {
 		os.Exit(1)
 	}
 	os.Exit(int(cli.Run(context.Background(), cli.Environment{
-		Args:       os.Args[1:],
+		Args:       args,
 		Stdout:     os.Stdout,
 		Stderr:     os.Stderr,
 		Stdin:      os.Stdin,

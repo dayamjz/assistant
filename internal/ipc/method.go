@@ -72,7 +72,12 @@ const (
 	// blocks on it while a task's closes a hold record. Who resolved is
 	// derived from this surface by Request.HoldResolver and never read from
 	// the request. Refused for a task's worker on MethodWakesList's terms, so
-	// no worker answers a hold, its own task's included.
+	// no worker answers a hold, its own task's included. One hold is held to
+	// a third relation as well: the local landing's approval hold, PRD
+	// section 6's "You approve", is answered only from a peer in the
+	// foreground of its controlling terminal, decided by the service from
+	// the peer's lineage, and refused ErrNotAtTerminal to a host agent's tool
+	// command and to anything else not there.
 	MethodTaskRespond Method = "task.respond"
 	// MethodTaskCreate records a new task through internal/tasks' intake,
 	// PRD section 9's coordinator-only service method for creating one. It

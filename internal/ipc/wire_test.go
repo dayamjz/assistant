@@ -140,6 +140,7 @@ var wireSentinels = map[Code]error{
 	CodeContained:          ErrContained,
 	CodeWorker:             ErrWorker,
 	CodeNotWorker:          ErrNotWorker,
+	CodeNotAtTerminal:      ErrNotAtTerminal,
 	CodeRefused:            ErrRefused,
 	CodeUnavailable:        ErrUnavailable,
 	CodeSubscriberStalled:  ErrSubscriberStalled,

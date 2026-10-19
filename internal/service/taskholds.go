@@ -441,7 +441,10 @@ func (s *Service) holdAtBound(ctx context.Context, id string, attempts []store.T
 // this file's opening comment states. Without Hold, it is the only such
 // hold; when more than one is open the answer is refused and lists them.
 // With Hold set, that hold is named (full key or finding id). A task's
-// worker is refused with ipc.ErrWorker, from the caller's credentials. A
+// worker is refused with ipc.ErrWorker, from the caller's credentials, and
+// the local landing's approval hold is answered only from the foreground of
+// a terminal, on foreground.go's terms, refusing ipc.ErrNotAtTerminal before
+// anything is read of the answer or written. A
 // request naming no task or giving no answer, an answer a retry hold does
 // not offer, a Hold that is not an open hold of the task, an empty Hold
 // when more than one is open, and a note over machine.MaxMessageBytes are
@@ -482,6 +485,9 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 		return machine.TaskAnswered{}, err
 	}
 	if _, _, local := localApprovalOf(hold.Key, r.Task); local {
+		if err := s.refuseOffTerminal(req); err != nil {
+			return machine.TaskAnswered{}, err
+		}
 		out, err := s.answerLocal(ctx, req, r, task, hold)
 		if err != nil {
 			return machine.TaskAnswered{}, err

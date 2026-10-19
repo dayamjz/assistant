@@ -30,6 +30,14 @@ import "github.com/dayamjz/assistant/internal/store"
 // authorizing itself. [store.ResolvedByPerson] belongs to a surface that
 // witnessed the person, and this repository has none yet.
 //
+// One hold is held to more than who may call: the local landing's approval
+// hold is served only to a peer the kernel reports in the foreground of its
+// controlling terminal, which internal/service decides from the peer's
+// lineage and refuses with ErrNotAtTerminal. That relation keeps a host
+// agent's tool command out and does not witness a person, since a program
+// that allocates a terminal of its own can put a command in its foreground,
+// so the answer recorded there is still this one.
+//
 // The vocabulary is internal/store's, per P14. This package chooses which
 // member the protocol may produce and owns no part of what the members mean.
 func (Request) HoldResolver() store.Resolver {

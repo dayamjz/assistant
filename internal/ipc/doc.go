@@ -186,6 +186,16 @@
 // a class meaning "the coordinator only" would need that set as an input of
 // this package, and the set is a fact about processes a service started.
 // ErrWorker and ErrNotWorker are the two refusals that cross the wire for it.
+//
+// A third relation over the same credentials, whether the peer is in the
+// foreground of its controlling terminal, is decided the same way and is not
+// an access class either. The handler reads it off the peer's own lineage,
+// the process group and the terminal's foreground group the kernel keeps for
+// the process, for the one request whose answer turns on it: task.respond
+// answering the local landing's approval hold, which PRD section 6 gives the
+// person. ErrNotAtTerminal is the refusal that crosses the wire for it. What
+// it witnesses is a terminal's foreground and not a person, which is why the
+// resolver it records stays what Request.HoldResolver derives.
 // ErrRefused is a third code and not about the caller at all: it is a
 // handler deciding a request against the records and refusing it, which a
 // caller must tell apart from a request it sent wrong and from a fact the

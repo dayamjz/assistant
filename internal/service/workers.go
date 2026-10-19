@@ -25,14 +25,17 @@ import (
 // the worker of, decided from the kernel's credentials and nothing a caller
 // states, and the methods whose answer turns on it.
 //
-// # Two relations over one input
+// # Two relations over one input, and a third for one hold
 //
 // A peer reaching this service is placed by two separate relations over the
 // same credentials. The containment registry in contain.go answers whether
 // the peer is inside a validation stage, and internal/ipc applies it to
 // every restricted method before a handler runs. The worker group set
 // answers which task the peer is the worker of, and the handlers whose
-// answer depends on it apply it here: task.event admits only a worker and
+// answer depends on it apply it here; foreground.go is a third relation
+// over the same credentials, whether the peer is in the foreground of its
+// controlling terminal, asked by task.respond for the local landing's
+// approval hold alone and after the worker rule. task.event admits only a worker and
 // attributes the entry to its task; wakes.list, wakes.peek, wakes.acknowledge,
 // wakewait.go's wakes.wait and wakes.subscribe, supervision.assert, coordinator.go's task.create, task.promote,
 // task.relaunch and task.relay, steer.go's task.message, task.stop and task.interrupt,
