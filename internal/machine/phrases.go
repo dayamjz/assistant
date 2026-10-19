@@ -891,7 +891,8 @@ func CatchUpPhrases(c CatchUp) (waiting, landed, underWay, stopped Phrase) {
 	return waiting, landed, underWay, stopped
 }
 
-// DigestPhrase is what a person reads first in the catch-up read: its four
+// DigestPhrase is the catch-up read's digest line unless a pull-guard
+// supervision warning precedes it, in which case it is second: its four
 // parts in counts, as CatchUp.Digest computed them. A digest with nothing in
 // any part is the quiet row. Otherwise the outcome counts each part, the
 // consequence says how much of the work under way no worker was seen at

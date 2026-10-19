@@ -236,8 +236,9 @@ Three things follow for whoever runs the service:
 ## Catching up on a fleet
 
 `assistant watch` starts with one read of the fleet and then follows the
-service's updates; `assistant watch --once` prints that read and exits. The
-read opens with a digest, one line counting what follows it:
+service's updates; `assistant watch --once` prints that read and exits. When the pull guard
+has a supervision warning for in-flight work, that warning is printed first;
+otherwise the read opens with a digest. That digest is one line counting what follows it:
 
 - the decisions waiting on you, every open hold and every run held at a
   decision;
