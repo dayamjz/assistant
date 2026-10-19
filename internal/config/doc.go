@@ -71,7 +71,7 @@
 //     the run budget. A pushed branch may never set one.
 //   - TrustGlobal keys are the operator's preferences about how their own
 //     machine behaves rather than facts about a repository: the checks timeout,
-//     session reuse, and the decision-model mode. Only the operator's own file may set one, and a
+//     session reuse, the decision-model mode, and the usage ceiling. Only the operator's own file may set one, and a
 //     repository file carrying one is refused when it is parsed.
 //
 // The fourth class is this package's reading rather than the PRD's wording,

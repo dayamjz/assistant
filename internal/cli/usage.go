@@ -26,6 +26,7 @@ func readOutUsage(w io.Writer, u machine.Usage) {
 	writef(w, "Window     %s: calls started since %s, read at %s\n",
 		printable(u.Window), u.Since.UTC().Format(time.RFC3339), u.ReadAt.UTC().Format(time.RFC3339))
 	writef(w, "Counts     %s; not %s\n", printable(strings.Join(u.Covers, ", ")), printable(strings.Join(u.Excludes, ", ")))
+	writeUsageCeiling(w, u.Ceiling)
 	writeUsageTotals(w, "Total", u.Total)
 	if u.Total.Calls == 0 {
 		return
@@ -44,6 +45,18 @@ func readOutUsage(w io.Writer, u machine.Usage) {
 	writeln(w, "\nBy run and stage")
 	for _, g := range u.ByRun {
 		writeUsageTotals(w, fmt.Sprintf("  run %s  stage %s", printable(g.Run.String()), printable(g.Stage.String())), g.UsageTotals)
+	}
+}
+
+// writeUsageCeiling prints the operator's usage ceiling as the answer
+// compared it: internal/machine's row for its standing, which a standing the
+// row table does not know reads as unread rather than as room, then the exact
+// figures when a count is set, over the ceiling's own window, which need not
+// be the window the view was asked for.
+func writeUsageCeiling(w io.Writer, c machine.UsageCeiling) {
+	writef(w, "Ceiling    %s\n", machine.CeilingPhrase(c.Standing))
+	if len(c.Counts) > 0 || c.Unread != "" {
+		writef(w, "           %s\n", printable(c.Figures()))
 	}
 }
 

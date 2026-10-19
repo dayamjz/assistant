@@ -213,6 +213,48 @@ const (
 	// naming it is refused at parse time like every global-only key.
 	// internal/service reads it once per service, in driverFor.
 	KeySessionProvider Key = "session_provider"
+
+	// KeyUsageCeilingWindow is "usage_ceiling.window": how far back from
+	// each comparison the invocation record is summed for the usage
+	// ceiling, a duration between MinUsageCeilingWindow and
+	// MaxUsageCeilingWindow, refused rather than clamped outside them. The
+	// four count rows below are the ceilings themselves, one per token count
+	// the record keeps, each a whole number where zero, the default, is no
+	// ceiling on that count.
+	//
+	// All five are global-only, and that is a P7 decision. A ceiling decides
+	// whether the service starts another agent call on the operator's
+	// machine, on the operator's account, so a repository has no standing to
+	// raise it or to lift it, in either copy; and the comparison is the
+	// home's, over every run's calls, so no one repository's copy is the
+	// document it could be read from. A repository file naming one is
+	// refused at parse time like every global-only key.
+	//
+	// It is not one of internal/graph's three loop bounds: it is compared
+	// against the home's record and not against anything a run's checkpoint
+	// carries, it counts every run's calls together, and it parks nothing.
+	// internal/service's containRunner asks it before every agent call it
+	// starts, and a refusal there holds the stage that needed the call for a
+	// person; internal/service's ceiling.go owns that and what it leaves
+	// open. Nor is it the routing by quota or price PRD section 12 defers: it
+	// asks no provider what remains of a quota and carries no price.
+	//
+	// PRD section 10's keys table has no row for these yet, which the pull
+	// request that added them raised with the owner rather than settled.
+	KeyUsageCeilingWindow Key = "usage_ceiling.window"
+	// KeyUsageCeilingInputTokens is "usage_ceiling.input_tokens", the
+	// ceiling on recorded input tokens; KeyUsageCeilingWindow owns the rest.
+	KeyUsageCeilingInputTokens Key = "usage_ceiling.input_tokens"
+	// KeyUsageCeilingOutputTokens is "usage_ceiling.output_tokens", the
+	// ceiling on recorded output tokens.
+	KeyUsageCeilingOutputTokens Key = "usage_ceiling.output_tokens"
+	// KeyUsageCeilingCacheReadTokens is "usage_ceiling.cache_read_tokens",
+	// the ceiling on recorded cache read tokens.
+	KeyUsageCeilingCacheReadTokens Key = "usage_ceiling.cache_read_tokens"
+	// KeyUsageCeilingCacheCreationTokens is
+	// "usage_ceiling.cache_creation_tokens", the ceiling on recorded cache
+	// creation tokens.
+	KeyUsageCeilingCacheCreationTokens Key = "usage_ceiling.cache_creation_tokens"
 )
 
 // cloneSlice copies a slice-valued configuration value. A default and a parsed
@@ -319,6 +361,16 @@ var specs = []spec{
 		func(c *Config, v any) { c.AllowStandingConsent = v.(bool) }},
 	{KeySessionProvider, TrustGlobal, DefaultSessionProvider, decodeSessionProvider,
 		func(c *Config, v any) { c.SessionProvider = v.(SessionProvider) }},
+	{KeyUsageCeilingWindow, TrustGlobal, DefaultUsageCeilingWindow, decodeUsageCeilingWindow,
+		func(c *Config, v any) { c.UsageCeiling.Window = v.(time.Duration) }},
+	{KeyUsageCeilingInputTokens, TrustGlobal, int64(0), decodeTokenCeiling,
+		func(c *Config, v any) { c.UsageCeiling.InputTokens = v.(int64) }},
+	{KeyUsageCeilingOutputTokens, TrustGlobal, int64(0), decodeTokenCeiling,
+		func(c *Config, v any) { c.UsageCeiling.OutputTokens = v.(int64) }},
+	{KeyUsageCeilingCacheReadTokens, TrustGlobal, int64(0), decodeTokenCeiling,
+		func(c *Config, v any) { c.UsageCeiling.CacheReadTokens = v.(int64) }},
+	{KeyUsageCeilingCacheCreationTokens, TrustGlobal, int64(0), decodeTokenCeiling,
+		func(c *Config, v any) { c.UsageCeiling.CacheCreationTokens = v.(int64) }},
 }
 
 // specByKey indexes the schema, and sections holds every dotted prefix a key

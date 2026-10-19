@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/session"
 )
@@ -51,3 +53,23 @@ func SeedDatabase(tb testing.TB, path string) {
 
 // RemoveDatabaseTemplate is removeDatabaseTemplate for TestMain.
 func RemoveDatabaseTemplate() { removeDatabaseTemplate() }
+
+// LateRecorder is an agents.Recorder for this package's external tests that
+// hands each record to the service's own invocation recorder, the one the
+// default catalog's adapters are built with, once Bind names the service. A
+// test needs it because the catalog is built before Open returns the
+// service the recorder writes through. A record before Bind panics rather
+// than being dropped, so a test cannot pass over a call nothing recorded.
+type LateRecorder struct{ s atomic.Pointer[Service] }
+
+// Bind names the service whose recorder the records go to.
+func (r *LateRecorder) Bind(s *Service) { r.s.Store(s) }
+
+// RecordInvocation hands rec to the bound service's recorder.
+func (r *LateRecorder) RecordInvocation(rec agents.Record) {
+	s := r.s.Load()
+	if s == nil {
+		panic("service.LateRecorder: a record arrived before Bind")
+	}
+	invocationRecorder{s: s}.RecordInvocation(rec)
+}

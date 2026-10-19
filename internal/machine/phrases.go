@@ -1085,6 +1085,81 @@ func FixRoundPhrase(option string) Phrase {
 	}
 }
 
+// The usage ceiling's rows. The digest rows are the line the usage view
+// prints about the ceiling, one per CeilingStanding; the hold rows are what a
+// person reads at a decision the ceiling raised, one per standing that
+// refuses a start. None names the configuration key or the counts: the exact
+// figures follow a row in the evidence it sits in, UsageCeiling.Figures, and
+// the rows claim only what internal/service's refusal does, which is that no
+// further agent call starts. Neither kind says when room comes back, because
+// that depends on calls ageing out of the window, which no row can see.
+var (
+	phraseByCeiling = map[CeilingStanding]Phrase{
+		CeilingOff: {
+			Outcome:     "No ceiling on agent use is set for this home.",
+			Consequence: "Agent calls start whatever the record says they have used.",
+			Decision:    "Nothing to decide; a ceiling in your own configuration would bound them.",
+		},
+		CeilingUnder: {
+			Outcome:     "Agent use recorded for this home is under the ceiling you set.",
+			Consequence: "Agent calls go on starting until it is reached.",
+			Decision:    "Nothing to decide.",
+		},
+		CeilingReached: {
+			Outcome:     "Agent use recorded for this home has reached the ceiling you set.",
+			Consequence: "No further agent call starts, so work that needs one waits on you.",
+			Decision:    "Raise the ceiling in your own configuration and restart the service, or let that use age out of its window.",
+		},
+		CeilingUnestablished: {
+			Outcome:     "Agent use recorded for this home could not be weighed against the ceiling you set, because some calls did not report a count it is set on.",
+			Consequence: "A count nobody gave is not read as none, so no further agent call starts.",
+			Decision:    "Set the ceiling on counts every agent reports and restart the service, or let those calls age out of its window.",
+		},
+		CeilingUnread: {
+			Outcome:     "The record of agent use could not be read, so whether the ceiling you set is reached is not known.",
+			Consequence: "No further agent call starts while it cannot be read.",
+			Decision:    "Run assistant doctor.",
+		},
+	}
+	phraseCeilingHeld = map[CeilingStanding]Phrase{
+		CeilingReached: {
+			Outcome:     "This step did not start the agent call it needed, because agent use recorded for this home has reached the ceiling you set.",
+			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
+			Decision:    "Raise the ceiling in your own configuration and restart the service, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+		},
+		CeilingUnestablished: {
+			Outcome:     "This step did not start the agent call it needed, because some recorded calls did not report a count the ceiling you set is on, so the ceiling could not be weighed.",
+			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
+			Decision:    "Set the ceiling on counts every agent reports and restart the service, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+		},
+		CeilingUnread: {
+			Outcome:     "This step did not start the agent call it needed, because the record of agent use could not be read to weigh against the ceiling you set.",
+			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
+			Decision:    "Run assistant doctor, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+		},
+	}
+)
+
+// CeilingPhrase is the usage view's line about the ceiling. A standing
+// outside the set reads as unread, which says no further call starts; it
+// never reads as room.
+func CeilingPhrase(standing CeilingStanding) Phrase {
+	if p, ok := phraseByCeiling[standing]; ok {
+		return p
+	}
+	return phraseByCeiling[CeilingUnread]
+}
+
+// CeilingHoldPhrase is what a person reads at a decision the ceiling raised.
+// A standing that does not refuse raises none, and one outside the set reads
+// as unread, so the row never claims a ceiling was reached that was not.
+func CeilingHoldPhrase(standing CeilingStanding) Phrase {
+	if p, ok := phraseCeilingHeld[standing]; ok {
+		return p
+	}
+	return phraseCeilingHeld[CeilingUnread]
+}
+
 // Evidence rows: the message that points a person at one of the two
 // detailed evidence documents PRD section 9 names, the two notices about a
 // request and the one about the run's standing consent that sit beside a
@@ -1713,6 +1788,12 @@ func TablePhrases() []Phrase {
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
+	for _, standing := range CeilingStandings() {
+		out = append(out, CeilingPhrase(standing))
+		if standing.Refuses() {
+			out = append(out, CeilingHoldPhrase(standing))
+		}
+	}
 	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseStageLogFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied,
 		PhraseStandingConsent)
 	out = append(out, phraseWaitingOnYou, phraseNothingWaiting, phraseLandedSince, phraseNothingLanded,

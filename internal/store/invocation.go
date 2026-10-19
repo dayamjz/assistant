@@ -9,9 +9,11 @@ import (
 )
 
 // AgentInvocation is one row of the agent invocation history: what one agent
-// call cost, as PRD section 8 lists the record. It is history, not an
-// authoritative record: nothing reads it back to decide what a run may do,
-// and nothing here revises a row once it is written.
+// call cost, as PRD section 8 lists the record. It is append-only history:
+// nothing here revises a row once it is written, and this package decides
+// nothing from it. One reader does: internal/service sums the rows in a window
+// against the operator's usage ceiling before it starts another agent call,
+// recomputing the sum on every read rather than keeping one beside the rows.
 //
 // The vocabulary fields are text whose meaning belongs to internal/agents,
 // the way run.resolved_agent holds a name the agent catalog owns: this

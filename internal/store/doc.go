@@ -554,7 +554,8 @@
 // value means is internal/agents', and who feeds the history is
 // internal/service, which is also where its one softness is owned and stated:
 // the recording interface returns nothing, so a row that cannot be written is
-// dropped and the history understates.
+// dropped and the history understates. The usage ceiling sums that history,
+// so a dropped row is missing from the total a later start is held to.
 //
 // The decision-model record PRD section 5 asks for is here on the same terms,
 // as AppendDecisionAnswer and DecisionAnswers: one row per answer or failed

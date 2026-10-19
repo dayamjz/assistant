@@ -330,6 +330,26 @@ func decodeBoundedDuration(k Key, v any, what, example string, floor, ceiling ti
 	return d, nil
 }
 
+// decodeUsageCeilingWindow is decodeBoundedDuration between
+// MinUsageCeilingWindow and MaxUsageCeilingWindow.
+func decodeUsageCeilingWindow(k Key, v any) (any, error) {
+	return decodeBoundedDuration(k, v, "a usage ceiling window", "168h", MinUsageCeilingWindow, MaxUsageCeilingWindow)
+}
+
+// decodeTokenCeiling accepts a whole number of tokens that is not negative.
+// Zero is no ceiling on that count, which is the default, so a ceiling of
+// zero cannot be read as one that refuses everything.
+func decodeTokenCeiling(k Key, v any) (any, error) {
+	n, err := asInt(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if n < 0 {
+		return nil, keyErr(k, v, "a token ceiling cannot be negative; zero is no ceiling")
+	}
+	return int64(n), nil
+}
+
 // decodeEscalationWindow is decodeBoundedDuration between
 // MinEscalationWindow and MaxEscalationWindow.
 func decodeEscalationWindow(k Key, v any) (any, error) {

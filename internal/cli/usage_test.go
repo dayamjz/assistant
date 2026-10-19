@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,9 @@ func TestRunsUsageReportsTheInvocationRecordThroughTheSurface(t *testing.T) {
 	if !strings.Contains(got.stdout, `"input_tokens":{"total":null`) {
 		t.Errorf("no group carries an unreported input total as null:\n%s", got.stdout)
 	}
+	if usage.Ceiling.Standing != machine.CeilingOff || len(usage.Ceiling.Counts) != 0 {
+		t.Errorf("a home that set no ceiling answered %+v, want it off", usage.Ceiling)
+	}
 
 	human := run(t, h, subject, "runs", "--usage")
 	if human.code != machine.ExitOK {
@@ -95,6 +99,74 @@ func TestRunsUsageReportsTheInvocationRecordThroughTheSurface(t *testing.T) {
 	if !strings.Contains(human.stdout, "Window     "+machine.DefaultUsageWindow+":") ||
 		!strings.Contains(human.stdout, "run usage-run-1  stage review") || !strings.Contains(human.stdout, "run unknown  stage unknown") {
 		t.Errorf("the usage view over the default window does not carry its window and groups:\n%s", human.stdout)
+	}
+	if !strings.Contains(human.stdout, "Ceiling    "+machine.CeilingPhrase(machine.CeilingOff).String()+"\n") {
+		t.Errorf("the usage view does not say no ceiling is set:\n%s", human.stdout)
+	}
+}
+
+// TestRunsUsageWeighsTheOperatorsCeilingAgainstTheSameTotal drives the usage
+// view over a home whose operator set an input-token ceiling, through
+// cli.Run against a real service. The ceiling's window and the window asked
+// for are the same day, so the view's input total and the total the ceiling
+// was weighed against are the same rows, and the answer says the two are one
+// figure: the ceiling reached at the record's total, with the call that
+// reported no input count beside it not read as none. The human rendering
+// carries internal/machine's row for a reached ceiling and the exact figures
+// (P13), and the call outside the ceiling's window is in neither total (P8).
+func TestRunsUsageWeighsTheOperatorsCeilingAgainstTheSameTotal(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P8)
+	h := newHome(t)
+	subject := newSubject(t)
+	if err := os.WriteFile(h.ConfigFile(), []byte("usage_ceiling:\n  window: 24h\n  input_tokens: 1000\n"), 0o600); err != nil {
+		t.Fatalf("writing the operator's configuration: %v", err)
+	}
+	serve(t, h)
+
+	records := openStore(t, h)
+	t.Cleanup(func() { _ = records.Close() })
+	now := time.Now().UTC()
+	for _, inv := range []store.AgentInvocation{
+		{Purpose: "review", Agent: "claude", SessionUse: "none", Started: now.Add(-2 * time.Hour), InputTokens: store.Known[int64](1000)},
+		{Purpose: "fix", Agent: "claude", SessionUse: "opened", Started: now.Add(-time.Hour), Failure: "timeout"},
+		{Purpose: "review", Agent: "claude", SessionUse: "none", Started: now.Add(-48 * time.Hour), InputTokens: store.Known[int64](99999)},
+	} {
+		if _, err := records.AppendAgentInvocation(t.Context(), inv); err != nil {
+			t.Fatalf("seeding the history: %v", err)
+		}
+	}
+
+	got := run(t, h, subject, "--json", "runs", "--usage=1d")
+	if got.code != machine.ExitOK {
+		t.Fatalf("assistant runs --usage=1d exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	var usage machine.Usage
+	if err := json.Unmarshal([]byte(got.stdout), &usage); err != nil {
+		t.Fatalf("the answer is not the usage view: %v\n%s", err, got.stdout)
+	}
+	ceiling := usage.Ceiling
+	if ceiling.Standing != machine.CeilingReached || ceiling.Window != "1d" || len(ceiling.Counts) != 1 {
+		t.Fatalf("the ceiling answered %+v, want the input ceiling reached over a day", ceiling)
+	}
+	if ceiling.Counts[0].Recorded != usage.Total.InputTokens {
+		t.Errorf("the ceiling weighed %+v, the view totals %+v", ceiling.Counts[0].Recorded, usage.Total.InputTokens)
+	}
+	if n, ok := ceiling.Counts[0].Recorded.Total.Get(); !ok || n != 1000 || ceiling.Counts[0].Recorded.Unreported != 1 {
+		t.Errorf("the ceiling weighed %+v, want 1000 with the fix round unreported", ceiling.Counts[0].Recorded)
+	}
+
+	human := run(t, h, subject, "runs", "--usage=1d")
+	if human.code != machine.ExitOK {
+		t.Fatalf("assistant runs --usage=1d exited %s:\n%s%s", human.code, human.stdout, human.stderr)
+	}
+	for _, want := range []string{
+		"Ceiling    " + machine.CeilingPhrase(machine.CeilingReached).String() + "\n",
+		"input_tokens at least 1000 (1 of 2 calls unreported) of 1000 (reached)",
+	} {
+		if !strings.Contains(human.stdout, want) {
+			t.Errorf("the usage view does not carry %q:\n%s", want, human.stdout)
+		}
 	}
 }
 

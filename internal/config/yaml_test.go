@@ -51,6 +51,12 @@ autonomy:
 delivery: local
 allow_standing_consent: true
 session_provider: tmux
+usage_ceiling:
+  window: 24h
+  input_tokens: 1
+  output_tokens: 2
+  cache_read_tokens: 3
+  cache_creation_tokens: 4
 `
 
 const wholeSchemaJSON = `{
@@ -78,7 +84,8 @@ const wholeSchemaJSON = `{
 	"autonomy": {"merge": ["owner/name"]},
 	"delivery": "local",
 	"allow_standing_consent": true,
-	"session_provider": "tmux"
+	"session_provider": "tmux",
+	"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4}
 }`
 
 func resolvedGlobal(t *testing.T, l Layer) Config {

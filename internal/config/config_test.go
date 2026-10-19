@@ -171,7 +171,9 @@ func TestKeysAreTheWholeSchemaAndUnique(t *testing.T) {
 		KeyDecisionModel, KeySupervisionBeaconInterval, KeyEscalationWindow, KeyRecheckWindow,
 		KeyStallInspectionCount, KeyRelaunchAttempts, KeyCommitFixMessage, KeyAllowPushedCommands,
 		KeyAutonomyMerge,
-		KeyDelivery, KeyAllowStandingConsent,
+		KeyDelivery, KeyAllowStandingConsent, KeySessionProvider,
+		KeyUsageCeilingWindow, KeyUsageCeilingInputTokens, KeyUsageCeilingOutputTokens,
+		KeyUsageCeilingCacheReadTokens, KeyUsageCeilingCacheCreationTokens,
 	} {
 		if !seen[k] {
 			t.Errorf("%s is missing from Keys()", k)

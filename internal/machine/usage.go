@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -60,6 +61,11 @@ type Usage struct {
 	// any call made outside a run, is grouped under an unknown run and stage
 	// rather than guessed into one.
 	ByRun []UsageByRun `json:"by_run"`
+	// Ceiling is the operator's usage ceiling compared against the same rows
+	// over its own window, which UsageViewOf fills and UsageOf leaves zero.
+	// Its totals are UsageOf's, so the view and the refusal the ceiling
+	// raises report one total.
+	Ceiling UsageCeiling `json:"ceiling"`
 }
 
 // UsageCovers and UsageExcludes are what Usage.Covers and Usage.Excludes say,
@@ -228,6 +234,26 @@ func UsageOf(window UsageWindow, readAt time.Time, rows []store.AgentInvocation)
 	return usage
 }
 
+// UsageViewOf is the usage view as usage.read answers it: UsageOf over
+// window, with the operator's ceiling compared against the same rows by
+// CeilingOf. rows must reach back to the earlier of the two windows' starts,
+// which UsageViewSince says.
+func UsageViewOf(window UsageWindow, ceiling config.UsageCeiling, readAt time.Time, rows []store.AgentInvocation) Usage {
+	usage := UsageOf(window, readAt, rows)
+	usage.Ceiling = CeilingOf(ceiling, readAt, rows)
+	return usage
+}
+
+// UsageViewSince is how far back the rows UsageViewOf is handed must reach:
+// the earlier of window's start and the ceiling's.
+func UsageViewSince(window UsageWindow, ceiling config.UsageCeiling, readAt time.Time) time.Time {
+	since := window.Since(readAt)
+	if c := CeilingWindow(ceiling).Since(readAt); c.Before(since) {
+		since = c
+	}
+	return since
+}
+
 // DefaultUsageWindow is the window a usage read covers when the request names
 // none: the last seven days.
 const DefaultUsageWindow = "7d"
@@ -236,7 +262,8 @@ const DefaultUsageWindow = "7d"
 var ErrUsageWindow = errors.New("a usage window is a positive span such as 24h, 90m or 7d")
 
 // UsageWindow is how far back a usage read reaches. The zero value is not a
-// window; ParseUsageWindow is the only way to get one.
+// window; ParseUsageWindow is the way to get one from text, and CeilingWindow
+// the way to get the configured usage ceiling's.
 type UsageWindow struct {
 	text string
 	span time.Duration

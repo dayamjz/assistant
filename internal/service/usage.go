@@ -15,6 +15,10 @@ import (
 // machine.ParseUsageWindow cannot read is refused as an invalid request
 // rather than read as the default.
 //
+// The answer carries the operator's usage ceiling compared against the same
+// rows, so the view and the refusal ceiling.go returns report one total; the
+// rows are read back to the earlier of the two windows' starts for that.
+//
 // It reads the history as it stands at the read and keeps nothing between
 // reads. What the history holds is what invocation.go feeds it, so the view
 // carries that recorder's gaps rather than closing them: a row the store
@@ -26,9 +30,9 @@ func (s *Service) usage(ctx context.Context, req machine.UsageRequest) (machine.
 		return machine.Usage{}, fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
 	}
 	readAt := time.Now().UTC()
-	rows, err := s.store.AgentInvocationsSince(ctx, window.Since(readAt))
+	rows, err := s.store.AgentInvocationsSince(ctx, machine.UsageViewSince(window, s.cfg.UsageCeiling, readAt))
 	if err != nil {
 		return machine.Usage{}, err
 	}
-	return machine.UsageOf(window, readAt, rows), nil
+	return machine.UsageViewOf(window, s.cfg.UsageCeiling, readAt, rows), nil
 }
