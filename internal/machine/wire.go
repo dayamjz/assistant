@@ -451,8 +451,9 @@ type Task struct {
 	Report *InvestigationReport `json:"report,omitempty"`
 	// Policy is what the posture recorded on the task requires, publishes
 	// and leaves to whom: config.Delivery.PolicyForNoCodeHost of that
-	// posture and of whether the task's repository has a code host, as
-	// internal/service's codeHostOf decides it for a run's start. It is
+	// posture and its noCodeHost argument, whether the task's repository
+	// has no code host as codeHostOf decides for a run's start and taskPolicy
+	// passes as host.none. It is
 	// present exactly when both are known: the record holds a posture, and
 	// the repository the task names can be read and is one a run can start
 	// against. Otherwise it is absent. It is derived on every answer and
