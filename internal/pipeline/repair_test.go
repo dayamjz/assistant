@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -314,6 +315,52 @@ func TestAHoldOnThePathBackToReviewIsLeftOncePerRepair(t *testing.T) {
 	if got := c.stageCount(StageLint); got != 4 {
 		t.Fatalf("lint ran %d times, want four: the first pass and one per repair", got)
 	}
+}
+
+// RepairAlreadySent reports whether the same repair was recorded earlier.
+func TestRepairAlreadySent(t *testing.T) {
+	t.Parallel()
+	p := repairPipeline(t, newCalls(), 1, 1)
+	state, err := p.NewState(complete())
+	if err != nil {
+		t.Fatalf("NewState: %v", err)
+	}
+	reader := stateReader{state}
+	if got, err := RepairAlreadySent(reader, "p0", "r1"); err != nil || got {
+		t.Fatalf("empty state: got %v, %v, want false", got, err)
+	}
+	repairs, err := RepairsOf(state)
+	if err != nil || len(repairs) != 0 {
+		t.Fatalf("RepairsOf empty: %+v, %v", repairs, err)
+	}
+	entry, err := repairValue("p0", "r1")
+	if err != nil {
+		t.Fatalf("repairValue: %v", err)
+	}
+	encoded, err := json.Marshal(map[string]graph.Value{string(KeyRepairs): entry})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if err := json.Unmarshal(encoded, &state); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	reader = stateReader{state}
+	if got, err := RepairAlreadySent(reader, "p0", "r1"); err != nil || !got {
+		t.Fatalf("recorded repair: got %v, %v, want true", got, err)
+	}
+	if got, err := RepairAlreadySent(reader, "p0", "r2"); err != nil || got {
+		t.Fatalf("different repair: got %v, %v, want false", got, err)
+	}
+}
+
+type stateReader struct{ graph.State }
+
+func (s stateReader) Get(k Key) (graph.Value, error) {
+	v, ok := s.State.Get(string(k))
+	if !ok {
+		return graph.Value{}, nil
+	}
+	return v, nil
 }
 
 // runErr runs a pipeline from a complete Start and returns the error the run

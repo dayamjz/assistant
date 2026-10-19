@@ -31,14 +31,14 @@ import (
 // the stage's fix round limit, rounds, which is above zero wherever wire
 // builds it.
 //
-// The bound is the same number the edge into the stage's fixer carries, and
-// it is not the one that stops anything. Every traversal of this edge follows
-// one entry into the fixer, which that edge counted first, so a run whose
-// repairs keep failing parks rounds-exhausted in front of the fixer, on the
-// round the limit has no room for, before this edge could reach its own bound.
-// That is the fix round limit bounding repairs. The graph requires a number on
-// every back edge, and this is the one that cannot fire first, for the reason
-// the fix return carries the limit too.
+// The bound is the same number the edge into the stage's fixer carries. Every
+// traversal of this edge follows one entry into the fixer, which that edge
+// counted first, and a resubmission of the same repair without another fix
+// round is counted the same way: the checks stage reports it as another fix
+// finding rather than taking this edge again, so a run whose repairs keep
+// failing parks rounds-exhausted in front of the fixer before this edge could
+// reach its own bound. The graph requires a number on every back edge, and
+// this is the one that cannot fire first under that counting.
 //
 // The convergence bound applies here as to every back edge that is not
 // answered, and the run-wide step budget counts every node the path runs.
@@ -99,6 +99,35 @@ func repairValue(pushed, repaired string) (graph.Value, error) {
 		return graph.Value{}, fmt.Errorf("pipeline: recording the repair of %s: %w", pushed, err)
 	}
 	return graph.ListValue(string(encoded)), nil
+}
+
+// RepairAlreadySent reports whether the run already recorded sending the same
+// pushed and repaired commits back to review. The checks stage asks before it
+// takes the path again, so a resubmission without another fix round counts
+// toward the fix round limit instead of appending a second record and
+// traversing this edge again.
+func RepairAlreadySent(r Reader, pushed, repaired string) (bool, error) {
+	if pushed == "" || repaired == "" {
+		return false, nil
+	}
+	value, err := r.Get(KeyRepairs)
+	if err != nil {
+		return false, err
+	}
+	items, ok := value.List()
+	if !ok {
+		return false, nil
+	}
+	for _, item := range items {
+		var entry repairEntry
+		if err := json.Unmarshal([]byte(item), &entry); err != nil {
+			return false, fmt.Errorf("%w: repair already sent: %w", ErrBadReport, err)
+		}
+		if entry.Pushed == pushed && entry.Repaired == repaired {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // RepairsOf reads every repair the run sent back to review, in the order they

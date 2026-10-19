@@ -429,10 +429,12 @@
 // was not built fails the step with ErrRepairNotOffered instead of falling
 // through to the stage's way forward. It is bounded by that same limit, per
 // run and not per pass, as the owner decided: every repair is one entry into
-// the checks stage's fixer, the edge in counts it first, so a check still
-// failing after the last round the limit allows parks the run
+// the checks stage's fixer, the edge in counts it first, and resubmitting the
+// same repair without another fix round is counted the same way, so a check
+// still failing after the last round the limit allows parks the run
 // rounds-exhausted in front of the fixer, and the path's own bound, which the
-// graph requires, cannot fire first. Convergence applies to it as to every
+// graph requires, cannot fire first under that counting. Convergence applies
+// to it as to every
 // unanswered back edge, and the run-wide budget counts every node it runs. The
 // holds on the path get the bound repush.go gives them, which counts one pass
 // for each repair the limit allows on top of the passes back to rebase.

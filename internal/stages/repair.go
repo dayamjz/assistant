@@ -9,6 +9,7 @@ import (
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/safety"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // The identifiers of what the checks stage reports about a repair: the note
@@ -21,6 +22,9 @@ const (
 	// findingRepairBranchMoved is the hold for a branch that no longer stands
 	// where this run's last push left it, so the repair was not sent back.
 	findingRepairBranchMoved = "ci-fix-branch-moved"
+	// findingRepairNotOnPushed is the hold for a repair whose head does not
+	// descend from the commit the run pushed.
+	findingRepairNotOnPushed = "ci-fix-repair-not-on-pushed"
 )
 
 // repairAfterPush is the checks stage's answer to a fix round of its own that
@@ -49,10 +53,13 @@ const (
 //
 // What this does not establish. A branch that moved away and back to the
 // pushed commit between the push and this observation is not seen, which is
-// RequireObservedAt's own residual gap. And the repair is a commit on top of
-// the pushed one only because a fix round commits on the copy's head; this
-// does not check its ancestry, and the push stage's decision refuses one that
-// would drop the pushed commit as it refuses any update that would discard.
+// RequireObservedAt's own residual gap.
+//
+// The run's head is checked to descend from the pushed commit before the
+// repair is sent back, on the same terms as the rebase stage's second pass,
+// so a fix round that rewound the copy and committed beside the pushed work
+// is held rather than forwarded for a push that would drop what the run
+// pushed.
 func repairAfterPush(ctx context.Context, deps StageDeps, facts ciFacts) (pipeline.Output, error) {
 	copied, err := deps.Copy(ctx, facts.repositoryID, facts.runID)
 	if err != nil {
@@ -70,6 +77,25 @@ func repairAfterPush(ctx context.Context, deps StageDeps, facts ciFacts) (pipeli
 		}
 		return pipeline.Output{}, fmt.Errorf("stages: observing %s before sending a repair back for review: %w", target, err)
 	}
+	current, err := copied.ResolveCommit(ctx, "HEAD")
+	if err != nil {
+		return pipeline.Output{}, fmt.Errorf("stages: resolving HEAD before sending a repair back for review: %w", err)
+	}
+	carries := current == facts.head
+	if carries {
+		carries, err = copied.IsAncestor(ctx, facts.pushed, facts.head)
+		if errors.Is(err, vcs.ErrRefNotFound) {
+			carries, err = false, nil
+		}
+		if err != nil {
+			return pipeline.Output{}, fmt.Errorf("stages: establishing whether %s carries the pushed commit %s: %w",
+				facts.head, facts.pushed, err)
+		}
+	}
+	if !carries {
+		return pipeline.Output{Report: repairNotOnPushed(facts, current)}, nil
+	}
+
 	anchorValue, err := encodeAnchor(anchor)
 	if err != nil {
 		return pipeline.Output{}, err
@@ -108,6 +134,28 @@ func repairingReport(facts ciFacts) findings.Report {
 // repairBranchMoved is the hold for a repair whose branch does not stand where
 // this run's push left it. It relays the refusal as internal/safety rendered
 // it and names both commits, so the round's work has a path back to a person.
+// repairNotOnPushed is the hold for a repair whose head does not carry the
+// commit the run pushed.
+func repairNotOnPushed(facts ciFacts, current string) findings.Report {
+	return findings.Report{
+		Revision: facts.head,
+		Summary: fmt.Sprintf("A fix round at the checks stage committed %s, which does not carry %s, the commit "+
+			"this run pushed, so the repair was not sent back for review.", facts.head, facts.pushed),
+		Findings: []findings.Finding{{
+			ID:       findingRepairNotOnPushed,
+			Severity: findings.SeverityError,
+			Action:   findings.ActionAsk,
+			Description: fmt.Sprintf("This stage sends a repair back for review only when the run's head is a commit "+
+				"on top of what it pushed. A second push may forward only a fast-forward from the anchor, so a repair "+
+				"that dropped the pushed commit would be refused at push even if it were reviewed.\n\nrun head: %s\n"+
+				"copy stands on: %s\npushed: %s\n\nTo use the work, take %s from this run's isolated copy and push it "+
+				"through the gate, which starts a run that reviews it. Approving carries this run past the checks that "+
+				"failed; skipping records this stage as skipped; cancelling ends the run.",
+				facts.head, current, facts.pushed, facts.head),
+		}},
+	}
+}
+
 func repairBranchMoved(facts ciFacts, refusal *safety.Refusal) findings.Report {
 	return findings.Report{
 		Revision: facts.head,

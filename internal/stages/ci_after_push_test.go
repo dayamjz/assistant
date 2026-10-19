@@ -504,6 +504,83 @@ func TestARedCIRunIsRepairedReviewedAgainAndPushedOnlyOnItsOwnAnchor(t *testing.
 	}
 }
 
+// A repair whose head does not carry the commit the run pushed is held at the
+// checks stage with ci-fix-repair-not-on-pushed and is not sent for review.
+// Here the fix round rewinds the copy to the pushed commit's parent and
+// commits beside it. The control is the repair test above, whose repair is on
+// top of the pushed commit and is reviewed and pushed again.
+func TestARepairThatDoesNotContainThePushedCommitIsHeld(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	t.Parallel()
+
+	run := newChecksPipelineOpts(t, 1, func(head string) forgetest.Script {
+		return forgetest.Script{
+			forgetest.OpView:   {openPullRequest(head, "MERGEABLE")},
+			forgetest.OpChecks: {failedChecks(head)},
+		}
+	}, checksPipelineOpts{repairSibling: true})
+	result := run.execute(t)
+
+	report, err := pipeline.StageReport(result.State, pipeline.StageCI)
+	if err != nil {
+		t.Fatalf("reading the checks stage's report: %v", err)
+	}
+	if result.Status != graph.StatusHalted || result.Position != pipeline.StageCI.HoldNode() {
+		t.Fatalf("the run is %s at %q, want halted at the checks hold: %+v", result.Status, result.Position, report)
+	}
+	if !hasFinding(report, "ci-fix-repair-not-on-pushed") {
+		t.Fatalf("the checks stage holds without saying the repair does not carry the pushed commit: %+v", report)
+	}
+	sibling := run.copyHead(t)
+	if isAncestor(t, run.subject.dir, run.subject.head, sibling) {
+		t.Fatalf("the sibling repair %s carries the pushed commit %s, so this run does not test a dropped push",
+			sibling, run.subject.head)
+	}
+	for _, call := range run.agent.Calls() {
+		if call.Step == 1 && strings.Contains(call.Prompt, sibling) {
+			t.Fatalf("the repair was sent for review:\n%v", call)
+		}
+	}
+	if repairs, err := pipeline.RepairsOf(result.State); err != nil || len(repairs) != 0 {
+		t.Fatalf("a refused repair was recorded as %+v (%v)", repairs, err)
+	}
+}
+
+// With one checks fix round allowed, a repair sent back for review that never
+// reaches the pull request is not sent back again without another fix round:
+// the resubmission counts toward the same limit and parks in front of the
+// fixer. Here the review stage holds on the repair, the person skips review,
+// approves the push hold without a push happening, and the checks fail again
+// on the commit still on the pull request.
+func TestAResubmittedRepairWithoutAnotherFixRoundParksOnTheFixRoundLimit(t *testing.T) {
+	t.Parallel()
+
+	run := newChecksPipelineOpts(t, 1, func(head string) forgetest.Script {
+		return forgetest.Script{
+			forgetest.OpView:   {openPullRequest(head, "MERGEABLE")},
+			forgetest.OpChecks: {failedChecks(head)},
+		}
+	}, checksPipelineOpts{holdRepairReview: true})
+	result := run.executeAnswering(t, map[pipeline.Stage]string{
+		pipeline.StageReview: string(pipeline.OutcomeSkipped),
+		pipeline.StagePush:   string(pipeline.OutcomeApproved),
+	})
+
+	if result.Status != graph.StatusRoundsExhausted || result.Position != pipeline.StageCI.FixNode() {
+		t.Fatalf("the run is %s at %q, want rounds-exhausted at the checks fixer", result.Status, result.Position)
+	}
+	repairs, err := pipeline.RepairsOf(result.State)
+	if err != nil {
+		t.Fatalf("reading repairs: %v", err)
+	}
+	if len(repairs) != 1 {
+		t.Fatalf("the run recorded repairs %+v, want exactly one", repairs)
+	}
+	if result.ParkedAt == nil || result.ParkedAt.To != pipeline.StageCI.FixNode() {
+		t.Fatalf("the run parked on %+v, want the edge into the checks fixer", result.ParkedAt)
+	}
+}
+
 // A fix round's commit the path back to review cannot take holds with
 // ci-fix-not-pushed, as it did before the path existed, naming both commits
 // and why: here the run skips the push stage, so it pushed nothing and has no
@@ -519,7 +596,7 @@ func TestARepairARunCannotReviewAgainIsHeldAndNeverPushed(t *testing.T) {
 			forgetest.OpView:   {openPullRequest(head, "MERGEABLE")},
 			forgetest.OpChecks: {failedChecks(head)},
 		}
-	})
+	}, checksPipelineOpts{})
 	result := run.execute(t)
 
 	report, err := pipeline.StageReport(result.State, pipeline.StageCI)
@@ -564,9 +641,17 @@ type checksPipeline struct {
 	// each push, and beforePush each time the test stage runs, which is
 	// between the rebase stage's observation and the push; pass counts from
 	// one. conflicting is the commit a test landed on the base.
-	afterPush   func(t *testing.T, pass int)
-	beforePush  func(t *testing.T, pass int)
-	conflicting string
+	afterPush        func(t *testing.T, pass int)
+	beforePush       func(t *testing.T, pass int)
+	conflicting      string
+	repairSibling    bool
+	holdRepairReview bool
+}
+
+// checksPipelineOpts configures optional behaviour of a checks pipeline run.
+type checksPipelineOpts struct {
+	repairSibling    bool
+	holdRepairReview bool
 }
 
 // newChecksPipeline builds the run with rounds automatic fix rounds at the
@@ -574,13 +659,20 @@ type checksPipeline struct {
 // push stage will forward.
 func newChecksPipeline(t *testing.T, rounds int, script func(head string) forgetest.Script) *checksPipeline {
 	t.Helper()
-	return newChecksPipelineSkipping(t, rounds, nil, script)
+	return newChecksPipelineOpts(t, rounds, script, checksPipelineOpts{})
+}
+
+// newChecksPipelineOpts is newChecksPipeline with optional behaviour.
+func newChecksPipelineOpts(t *testing.T, rounds int, script func(head string) forgetest.Script,
+	opts checksPipelineOpts) *checksPipeline {
+	t.Helper()
+	return newChecksPipelineSkipping(t, rounds, nil, script, opts)
 }
 
 // newChecksPipelineSkipping is newChecksPipeline for a run whose skip list
 // names skip.
 func newChecksPipelineSkipping(t *testing.T, rounds int, skip []pipeline.Stage,
-	script func(head string) forgetest.Script) *checksPipeline {
+	script func(head string) forgetest.Script, opts checksPipelineOpts) *checksPipeline {
 	t.Helper()
 	s := newSubject(t)
 	git(t, s.dir, "config", "user.name", "test")
@@ -591,13 +683,30 @@ func newChecksPipelineSkipping(t *testing.T, rounds int, skip []pipeline.Stage,
 	git(t, s.dir, "push", "--quiet", stages.UpstreamRemote, "main")
 
 	code := forgetest.New(t, script(s.head))
-	agent := standin.New(t, standin.Script{Steps: []standin.Step{
+	steps := []standin.Step{
 		{Match: standin.Match{PromptContains: laterLandmark}, Times: standin.Always, Reply: standin.Reviewed(
 			"objecting", findings.Finding{ID: "should-never-be-asked", Severity: findings.SeverityError,
 				Action: findings.ActionAsk, Description: "a review of later commits ran"})},
 		{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("nothing to report")},
 		{Times: standin.Always, Reply: standin.Text(fixerAccount)},
-	}})
+	}
+	if opts.holdRepairReview {
+		repairHold := findings.Finding{
+			ID:          "repair-not-reviewed-yet",
+			Severity:    findings.SeverityError,
+			Action:      findings.ActionAsk,
+			Description: "the repair should wait for a person before review continues",
+		}
+		steps = []standin.Step{
+			{Match: standin.Match{PromptContains: laterLandmark}, Times: standin.Always, Reply: standin.Reviewed(
+				"objecting", findings.Finding{ID: "should-never-be-asked", Severity: findings.SeverityError,
+					Action: findings.ActionAsk, Description: "a review of later commits ran"})},
+			{Match: standin.Match{PromptContains: fixedLine}, Times: 1, Reply: standin.Reviewed("hold the repair", repairHold)},
+			{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("nothing to report")},
+			{Times: standin.Always, Reply: standin.Text(fixerAccount)},
+		}
+	}
+	agent := standin.New(t, standin.Script{Steps: steps})
 
 	cfg := config.Defaults()
 	cfg.ChecksTimeout = checksTimeout
@@ -609,7 +718,7 @@ func newChecksPipelineSkipping(t *testing.T, rounds int, skip []pipeline.Stage,
 		s.home, cfg, nil, redact.New(),
 	)
 
-	run := &checksPipeline{code: code}
+	run := &checksPipeline{code: code, repairSibling: opts.repairSibling, holdRepairReview: opts.holdRepairReview}
 	all := pipeline.ConstantStages("nothing to report")
 	all.Rebase = stages.Rebase(deps)
 	all.Review = stages.Review(deps)
@@ -631,6 +740,23 @@ func newChecksPipelineSkipping(t *testing.T, rounds int, skip []pipeline.Stage,
 	fixer.NewBody = func() pipeline.FixBody {
 		body := real.NewBody()
 		return func(ctx context.Context, in pipeline.FixInput) (pipeline.FixOutput, error) {
+			if run.repairSibling {
+				parent := git(t, s.dir, "rev-parse", s.head+"^")
+				git(t, s.dir, "reset", "--hard", parent)
+				write(t, s.dir, totalPath, strings.Replace(baseTotal, "sum := 0", "sum := 0 "+fixedLine, 1))
+				git(t, s.dir, "add", totalPath)
+				git(t, s.dir, "commit", "--quiet", "-m", "repair beside the pushed commit")
+				sibling := git(t, s.dir, "rev-parse", "HEAD")
+				out, err := body(ctx, in)
+				if err != nil {
+					return out, err
+				}
+				if out.Writes == nil {
+					out.Writes = map[pipeline.Key]graph.Value{}
+				}
+				out.Writes[pipeline.KeyHead] = graph.TextValue(sibling)
+				return out, nil
+			}
 			write(t, s.dir, totalPath, strings.Replace(baseTotal, "sum := 0", "sum := 0 "+fixedLine, 1))
 			return body(ctx, in)
 		}
@@ -695,6 +821,33 @@ func (r *checksPipeline) landOnBranch(t *testing.T) string {
 	git(t, other, "commit", "--quiet", "-m", "somebody else pushes to the branch")
 	git(t, other, "push", "--quiet", "origin", "topic")
 	return git(t, other, "rev-parse", "HEAD")
+}
+
+// executeAnswering runs the pipeline, answering each hold with the outcome the
+// map names for that stage, until the run completes, parks, or no answer is
+// given for the halt point it reached.
+func (r *checksPipeline) executeAnswering(t *testing.T, answers map[pipeline.Stage]string) graph.Result {
+	t.Helper()
+	result := r.execute(t)
+	for steps := 0; result.Status == graph.StatusHalted; steps++ {
+		if steps > 8 {
+			t.Fatalf("the run is still halted at %q after %d answers", result.Position, steps)
+		}
+		stage, ok := pipeline.StageOfNode(result.Position)
+		if !ok || !strings.HasSuffix(result.Position, ".hold") {
+			return result
+		}
+		answer, ok := answers[stage]
+		if !ok {
+			t.Fatalf("the run halted at %q (%s) with no answer", result.Position, stage)
+		}
+		var err error
+		result, err = r.exec.Answer(t.Context(), r.subject.run, answer)
+		if err != nil {
+			t.Fatalf("answering %s at %q: %v", answer, result.Position, err)
+		}
+	}
+	return result
 }
 
 // calling is a stage that passes with summary and calls then with how many

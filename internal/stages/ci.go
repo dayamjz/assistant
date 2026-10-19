@@ -295,6 +295,7 @@ func CI(deps StageDeps) pipeline.Implementation {
 			pipeline.KeyRepository, pipeline.KeyRun, pipeline.KeyBase,
 			pipeline.KeyHead, pipeline.KeyPushed, pipeline.StageCI.FixKey(),
 			pipeline.KeySkip, pipeline.KeyBranch, pipeline.KeyForkRepository,
+			pipeline.KeyRepairs,
 		},
 		Writes: []pipeline.Key{pipeline.KeyPullRequestEnd, pipeline.KeyPullRequestEndHead, pipeline.KeyPushAnchor},
 		NewBody: func() pipeline.Body {
@@ -398,6 +399,13 @@ func runChecks(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 			}
 			if !facts.mayRepair() {
 				return pipeline.Output{Report: unpushedRoundReport(facts)}, nil
+			}
+			already, err := pipeline.RepairAlreadySent(in.State, facts.pushed, facts.head)
+			if err != nil {
+				return pipeline.Output{}, fmt.Errorf("stages: reading repairs before sending one back for review: %w", err)
+			}
+			if already {
+				return pipeline.Output{Report: repairResubmitReport(facts)}, nil
 			}
 			return repairAfterPush(ctx, deps, facts)
 		}
@@ -1145,6 +1153,27 @@ func unpushedRoundReport(facts ciFacts) findings.Report {
 				"run's isolated copy and push it through the gate, which starts a run that reviews it. Approving "+
 				"carries this run past the checks that failed; skipping records this stage as skipped; cancelling "+
 				"ends the run.", facts.head, pushed, why, pushed, facts.head),
+		}},
+	}
+}
+
+// repairResubmitReport is the report for a repair the run already sent back
+// to review without pushing. It carries a fix finding so the resubmission
+// counts toward the checks stage's fix round limit rather than taking the path
+// back to review again without another fix round.
+func repairResubmitReport(facts ciFacts) findings.Report {
+	return findings.Report{
+		Revision: facts.head,
+		Summary: fmt.Sprintf("Pull request %d still stands on %s, and the repair %s was already sent back for "+
+			"review without being pushed, so the checks still fail.", facts.pullRequest, facts.pushed, facts.head),
+		Findings: []findings.Finding{{
+			ID:       "ci-check-failed",
+			Severity: findings.SeverityError,
+			Action:   findings.ActionFix,
+			Description: fmt.Sprintf("The repair %s is still not on the pull request, which stands on %s. The run "+
+				"already sent that repair back for review once without a second push, so asking again counts as "+
+				"another fix round at this stage rather than a second trip through review without one.",
+				facts.head, facts.pushed),
 		}},
 	}
 }
