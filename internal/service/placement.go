@@ -43,8 +43,11 @@ import (
 //
 // Each process is read through agents.ReadLineage, which internal/agents
 // owns beside the start-time read a process Identity rests on: its parent,
-// its process group, and its start time, from /proc/<pid>/stat on Linux and
-// the kern.proc.pid sysctl on macOS, one read per process. A walk costs one
+// its process group, the foreground process group of its controlling
+// terminal (zero for a process with none), and its start time, from
+// /proc/<pid>/stat on Linux and the kern.proc.pid sysctl on macOS, one read
+// per process. The walk reads the parent and the group; the terminal's
+// foreground group is what foreground.go reads off the peer. A walk costs one
 // read per ancestor, it runs only while the set holds a worker, and it ends
 // at the first process with no parent, or as an error past maxAncestry.
 // Every other platform refuses the read; internal/ipc identifies no peer on

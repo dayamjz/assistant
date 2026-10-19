@@ -67,8 +67,10 @@ func createStore(t *testing.T, opts ...Option) *Store {
 // still exercised: by the template itself, by createStore, and by every test
 // that opens a path of its own through openStoreAt. Open keeps the redactor
 // in memory and writes nothing of it to the file, so a test that opens the
-// copy with a redactor of its own is held to that one. internal/service's
-// seed_internal_test.go is the same arrangement for that package's homes.
+// copy with a redactor of its own is held to that one. Packages outside
+// this one copy the template internal/store/storetest owns rather than
+// building their own; internal/service's seed_internal_test.go delegates to
+// it.
 var databaseTemplate struct {
 	once sync.Once
 	dir  string

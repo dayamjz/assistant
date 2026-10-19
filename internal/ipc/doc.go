@@ -193,13 +193,15 @@
 // the process group and the terminal's foreground group the kernel keeps for
 // the process, for the one request whose answer turns on it: task.respond
 // answering the local landing's approval hold, which PRD section 6 gives the
-// person. ErrNotAtTerminal is the refusal that crosses the wire for it. What
+// person. ErrNotAtTerminal is the refusal that crosses the wire for it, and
+// ErrUnavailable the answer when the peer's lineage could not be read. What
 // it witnesses is a terminal's foreground and not a person, which is why the
 // resolver it records stays what Request.HoldResolver derives.
-// ErrRefused is a third code and not about the caller at all: it is a
-// handler deciding a request against the records and refusing it, which a
-// caller must tell apart from a request it sent wrong and from a fact the
-// service could not establish.
+//
+// ErrRefused is a code of another kind, about no relation and not about the
+// caller at all: it is a handler deciding a request against the records and
+// refusing it, which a caller must tell apart from a request it sent wrong
+// and from a fact the service could not establish.
 //
 // # What a resolution arriving here may say about who made it
 //
