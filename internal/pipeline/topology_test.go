@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -218,7 +219,10 @@ func backEdgeOwners(t *testing.T, g *graph.Graph) map[int]Stage {
 				// exits the graph reads as back edges because that path exists;
 				// repush.go says why.
 				e.From == stage.Node() && stage.RebasesAfterPush() && e.To == StageRebase.Node(),
-				e.From == stage.HoldNode() && holdExitRounds(stage) > 0:
+				// The path back from the checks stage to review, which a
+				// repair after the push takes; repair.go says why.
+				e.From == stage.Node() && stage.RepairsAfterPush() && e.To == StageReview.Node(),
+				e.From == stage.HoldNode() && holdExitRounds(stage, 0) > 0:
 				owners[i] = stage
 				found = true
 			}
@@ -285,6 +289,11 @@ func TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations(t *testing.T) {
 		// fixer was given.
 		requestable, rebasing := 0, 0
 		for _, stage := range Order() {
+			// The path back to review is one back edge, built only where the
+			// stage that repairs after the push takes rounds.
+			if stage.RepairsAfterPush() && slices.Contains(taking, stage.String()) {
+				rebasing++
+			}
 			if stage.Requestable() {
 				requestable++
 			}
@@ -293,7 +302,7 @@ func TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations(t *testing.T) {
 			if stage.RebasesAfterPush() {
 				rebasing++
 			}
-			if holdExitRounds(stage) > 0 {
+			if holdExitRounds(stage, 0) > 0 {
 				rebasing++
 			}
 		}

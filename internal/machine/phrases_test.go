@@ -8,6 +8,7 @@ import (
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -480,5 +481,34 @@ func TestACopySweepIsPhrasedExactlyWhenItDidNotClear(t *testing.T) {
 		if ok && phrase.Decision == "" {
 			t.Errorf("a %s sweep's row names no decision", outcome)
 		}
+	}
+}
+
+// A run's repairs are phrased by the last one: added to the pull request once
+// the push stage has forwarded another commit since, not yet added otherwise,
+// and not phrased at all for a run with none. The two rows differ, so a
+// renderer that printed either for both would fail the first half.
+func TestARepairIsPhrasedByWhetherItWasAddedToThePullRequest(t *testing.T) {
+	t.Parallel()
+	vocabtest.Control(t)
+	if _, ok := machine.RepairPhrase(nil); ok {
+		t.Error("a run with no repair is phrased")
+	}
+	added, ok := machine.RepairPhrase([]pipeline.Repair{{Pushed: "a", Repaired: "b", Republished: true}})
+	if !ok || !strings.Contains(added.String(), "reviewed again before adding it") {
+		t.Errorf("a republished repair reads %q, %v", added, ok)
+	}
+	pending, ok := machine.RepairPhrase([]pipeline.Repair{
+		{Pushed: "a", Repaired: "b", Republished: true},
+		{Pushed: "c", Repaired: "d"},
+	})
+	if !ok || !strings.Contains(pending.String(), "has not been added") {
+		t.Errorf("a repair not yet pushed again reads %q, %v", pending, ok)
+	}
+	if added == pending {
+		t.Error("a repair added and one not yet added read alike")
+	}
+	for _, p := range []machine.Phrase{added, pending} {
+		vocabtest.Assert(t, p.String())
 	}
 }

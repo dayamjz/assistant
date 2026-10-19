@@ -43,6 +43,19 @@ func git(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// isAncestor reports whether ancestor is reachable from descendant in dir's
+// repository, without failing the test when the answer is no.
+func isAncestor(t *testing.T, dir, ancestor, descendant string) bool {
+	t.Helper()
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, ".gitconfig-absent"),
+		"GIT_CONFIG_SYSTEM="+filepath.Join(dir, ".gitconfig-absent"),
+	)
+	return cmd.Run() == nil
+}
+
 // newHome opens a home under a temporary root.
 func newHome(t *testing.T) *home.Home {
 	t.Helper()

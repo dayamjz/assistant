@@ -24,9 +24,10 @@ import (
 // failures and conflicts. This implementation reads the checks on the pull
 // request's head and whether the provider reports the pull request mergeable,
 // and reports what it read once both are settled. A conflict it answers by
-// sending the run back to rebase, which reaches the pull request only through
-// a second review and a second anchored push; a fix round's commit holds
-// rather than being pushed. The two sections below say how and why.
+// sending the run back to rebase, and a repair its own fix round committed by
+// sending the run back to review, and either reaches the pull request only
+// through a second review and a second anchored push. The two sections below
+// say how and why.
 //
 // A pass establishes that every registered check settled and passed, and that
 // the provider reported the pull request mergeable, in the reads this
@@ -60,7 +61,8 @@ import (
 // pushed, its head has to be the commit it pushed, and none of the rebase,
 // review and push stages may be on this run's skip list: a run that pushed
 // nothing has no branch to rebase, a head a fix round of this stage moved is
-// held on below, and a skipped stage would leave the second push without the
+// sent back to review below before the pull request is read again, and a
+// skipped stage would leave the second push without the
 // anchor, the review, or the push itself. Anywhere else the conflict holds
 // with an ask finding, as it did before the path existed, saying why the run
 // did not rebase and how a person moves the work on.
@@ -73,25 +75,40 @@ import (
 // failed are settled whatever the mergeability, because their findings are
 // what this stage's fix rounds are for.
 //
-// # A fix round's commit is not pushed
+// # A fix round's commit is reviewed again and pushed on an anchor
 //
 // A fix round at this stage commits in the run's isolated copy after the push
 // stage forwarded the branch, so the pull request and its checks still stand
-// on the pushed commit. PRD section 14 decision 7 has the commits a round
-// writes after review reviewed before they are pushed, and says this stage's
-// fix rounds run after the push and are not covered; nothing in this build
-// pushes them either, and the path back to rebase above is taken for a
-// conflict and never for a fix round's commit. So when this stage runs again after one of its own rounds and
-// the run's head is not the commit the push stage forwarded, it holds with an
-// ask finding naming both commits and saying the round's commit will not
-// reach the pull request, rather than reading checks that cannot have seen
-// it. That is decided from pipeline.KeyHead, pipeline.KeyPushed and this
-// stage's own fix key, never from what the fixer said it did.
+// on the pushed commit. The owner decided on #325 that such a repair goes
+// back through the review stage before it is pushed, so when this stage runs
+// again after one of its own rounds and the run's head is not the commit the
+// push stage forwarded, it does not read the checks, which cannot have seen
+// the round's commit. It observes the branch it pushed and requires the
+// observation to stand at that commit, safety.RequireObservedAt, records it
+// as the anchor of the next push, and asks for internal/pipeline's path back
+// to the review stage with pipeline.Output.Repair, over a report carrying one
+// note. The run then reviews the repaired head in a session of its own, runs
+// the checks before push, pushes it on that anchor, updates the pull request,
+// and stands here again, where it reads the checks on what it pushed.
+// repair.go is that body; the decision is made from pipeline.KeyHead,
+// pipeline.KeyPushed and this stage's own fix key, never from what the fixer
+// said it did.
 //
-// The round still runs, because PRD section 5 gives this stage fix rounds and
-// its commit is something a person can take forward through the gate, where
-// it is reviewed like any other change. What happens to the copy holding it
-// when the run settles is internal/tasks' CleanUpRun's decision.
+// What bounds it is this stage's fix round limit, per run and not per pass:
+// every repair is one round, and a check still failing after the last round
+// the limit allows parks the run in front of this stage's fixer.
+// internal/pipeline builds the path only where that limit is above zero.
+//
+// A branch somebody else moved since this run pushed it is refused at the
+// observation and holds with ci-fix-branch-moved, naming both commits, and the
+// push stage refuses one that moves after it. Where the path cannot do its
+// job at all - the run pushed nothing, or it skips the review or the push
+// stage - the stage holds with ci-fix-not-pushed as it did before the path
+// existed, naming both commits and why. A hold a round raised, such as the
+// judge rule's, holds the stage whatever the body asked, because
+// internal/pipeline honours the request only over a report that would
+// otherwise pass. What happens to the copy holding a commit that was never
+// pushed is internal/tasks' CleanUpRun's decision.
 //
 // # The code host and the repository
 //
@@ -277,9 +294,10 @@ func CI(deps StageDeps) pipeline.Implementation {
 			pipeline.KeyForgeRepository, pipeline.KeyPullRequest,
 			pipeline.KeyRepository, pipeline.KeyRun, pipeline.KeyBase,
 			pipeline.KeyHead, pipeline.KeyPushed, pipeline.StageCI.FixKey(),
-			pipeline.KeySkip,
+			pipeline.KeySkip, pipeline.KeyBranch, pipeline.KeyForkRepository,
+			pipeline.KeyRepairs,
 		},
-		Writes: []pipeline.Key{pipeline.KeyPullRequestEnd, pipeline.KeyPullRequestEndHead},
+		Writes: []pipeline.Key{pipeline.KeyPullRequestEnd, pipeline.KeyPullRequestEndHead, pipeline.KeyPushAnchor},
 		NewBody: func() pipeline.Body {
 			return func(ctx context.Context, in pipeline.Input) (pipeline.Output, error) {
 				return runChecks(ctx, deps, in)
@@ -379,7 +397,17 @@ func runChecks(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 			if err := w.end(ctx); err != nil {
 				return pipeline.Output{}, err
 			}
-			return pipeline.Output{Report: unpushedRoundReport(facts)}, nil
+			if !facts.mayRepair() {
+				return pipeline.Output{Report: unpushedRoundReport(facts)}, nil
+			}
+			already, err := pipeline.RepairAlreadySent(in.State, facts.pushed, facts.head)
+			if err != nil {
+				return pipeline.Output{}, fmt.Errorf("stages: reading repairs before sending one back for review: %w", err)
+			}
+			if already {
+				return pipeline.Output{Report: repairResubmitReport(facts)}, nil
+			}
+			return repairAfterPush(ctx, deps, facts)
 		}
 		if pr.Mergeability == forge.MergeabilityConflicted {
 			cancel()
@@ -629,6 +657,10 @@ type ciFacts struct {
 	head     string
 	pushed   string
 	roundRan bool
+	// branch and fork locate the branch the push stage forwards to, which a
+	// repair observes before it is sent back for a second push.
+	branch string
+	fork   string
 	// skipped names the stages this run's skip list passes over, which is
 	// what says whether the path back to rebase would run the stages it is
 	// for.
@@ -675,12 +707,51 @@ func (f ciFacts) whyNotRebased() string {
 }
 
 // unpushedRound reports whether a fix round of this stage moved the run's
-// head off the commit the push stage forwarded, so the head is a commit
-// nothing will push. Only this stage's own round is asked about: the pull
-// request stage writes no head, and the stages before push are behind the
-// push stage's own review of later commits.
+// head off the commit the push stage forwarded, so the head is a commit the
+// pull request does not carry. Only this stage's own round is asked about:
+// the pull request stage writes no head, and the stages before push are
+// behind the push stage's own review of later commits.
 func (f ciFacts) unpushedRound() bool {
 	return f.roundRan && f.head != "" && f.head != f.pushed
+}
+
+// repairPath is the stages the path back to review needs to run for a
+// repair to be reviewed again and pushed a second time.
+var repairPath = []pipeline.Stage{pipeline.StageReview, pipeline.StagePush}
+
+// mayRepair reports whether a fix round's commit is answered by the path
+// back to review: the run pushed, so there is a branch the repair goes on top
+// of and an anchor to observe, and neither the review stage nor the push
+// stage is on this run's skip list, since a skipped review would send a
+// repair to the pull request that nothing read, and a skipped push would
+// leave it where it is.
+func (f ciFacts) mayRepair() bool {
+	if f.pushed == "" {
+		return false
+	}
+	for _, stage := range repairPath {
+		if f.skipped[stage] {
+			return false
+		}
+	}
+	return true
+}
+
+// whyNotRepaired says why a fix round's commit holds rather than taking the
+// path back to review, in a sentence a hold can carry. It is asked only where
+// mayRepair is false.
+func (f ciFacts) whyNotRepaired() string {
+	if f.pushed == "" {
+		return "This run pushed no commit, so it has no branch of its own for the repair to go on."
+	}
+	var names []string
+	for _, stage := range repairPath {
+		if f.skipped[stage] {
+			names = append(names, stage.String())
+		}
+	}
+	return fmt.Sprintf("This run skips the %s stage(s), which a repair has to pass through before it is "+
+		"pushed.", strings.Join(names, ", "))
 }
 
 // readCIState reads the facts this stage needs from the run's state: which
@@ -699,6 +770,8 @@ func readCIState(state pipeline.Reader) (ciFacts, error) {
 		{pipeline.KeyBase, &facts.base},
 		{pipeline.KeyHead, &facts.head},
 		{pipeline.KeyPushed, &facts.pushed},
+		{pipeline.KeyBranch, &facts.branch},
+		{pipeline.KeyForkRepository, &facts.fork},
 	}
 	for _, t := range texts {
 		value, err := state.Get(t.key)
@@ -826,7 +899,8 @@ const (
 	// as conflicting with its base.
 	findingConflicted = "ci-conflicted"
 	// findingUnpushedRound is the hold for a commit this stage's own fix
-	// round made, which nothing pushes.
+	// round made where the path back to review cannot take it, so nothing in
+	// this run pushes it.
 	findingUnpushedRound = "ci-fix-not-pushed"
 )
 
@@ -1052,31 +1126,54 @@ func conflictedReport(pr forge.PullRequest, facts ciFacts) findings.Report {
 }
 
 // unpushedRoundReport is the report for a run whose head a fix round of this
-// stage moved off the pushed commit. It holds, names both commits, and says
-// the round's commit will not reach the pull request: PRD section 14 decision
-// 7 leaves this stage's rounds unreviewed, and nothing in this build pushes
-// them, so reading the checks again could only read the pushed commit's.
+// stage moved off the pushed commit, when the path back to review cannot take
+// it. It holds, names both commits, says why the repair was not sent back,
+// and says the round's commit will not reach the pull request: nothing in
+// this run reviews or pushes it, so reading the checks again could only read
+// the pushed commit's.
 func unpushedRoundReport(facts ciFacts) findings.Report {
 	pushed := facts.pushed
 	if pushed == "" {
 		pushed = "(nothing: the push stage forwarded no commit in this run)"
 	}
+	why := facts.whyNotRepaired()
 	return findings.Report{
 		Revision: facts.head,
 		Summary: fmt.Sprintf("A fix round at the checks stage committed %s in this run's isolated copy. It will not "+
-			"be reviewed or pushed by this run, so pull request %d still stands on %s.",
-			facts.head, facts.pullRequest, pushed),
+			"be reviewed or pushed by this run, so pull request %d still stands on %s. %s",
+			facts.head, facts.pullRequest, pushed, why),
 		Findings: []findings.Finding{{
 			ID:       findingUnpushedRound,
 			Severity: findings.SeverityWarning,
 			Action:   findings.ActionAsk,
 			Description: fmt.Sprintf("This stage's fix round committed %s on top of %s, the commit the push stage "+
-				"forwarded. A commit a fix round writes after review is reviewed before it is pushed, and the "+
-				"checks stage runs after the push, so nothing in this build reviews or pushes this one: the pull "+
-				"request and its checks still stand on %s. To use the round's change, take %s from this run's "+
-				"isolated copy and push it through the gate, which starts a run that reviews it. Approving carries "+
-				"this run past the checks that failed; skipping records this stage as skipped; cancelling ends "+
-				"the run.", facts.head, pushed, pushed, facts.head),
+				"forwarded. A commit a fix round writes after the push reaches the pull request only once the review "+
+				"stage has reviewed it again and the push stage has pushed it, and this run cannot take it there: %s "+
+				"The pull request and its checks still stand on %s. To use the round's change, take %s from this "+
+				"run's isolated copy and push it through the gate, which starts a run that reviews it. Approving "+
+				"carries this run past the checks that failed; skipping records this stage as skipped; cancelling "+
+				"ends the run.", facts.head, pushed, why, pushed, facts.head),
+		}},
+	}
+}
+
+// repairResubmitReport is the report for a repair the run already sent back
+// to review without pushing. It carries a fix finding so the resubmission
+// counts toward the checks stage's fix round limit rather than taking the path
+// back to review again without another fix round.
+func repairResubmitReport(facts ciFacts) findings.Report {
+	return findings.Report{
+		Revision: facts.head,
+		Summary: fmt.Sprintf("Pull request %d still stands on %s, and the repair %s was already sent back for "+
+			"review without being pushed, so the checks still fail.", facts.pullRequest, facts.pushed, facts.head),
+		Findings: []findings.Finding{{
+			ID:       "ci-check-failed",
+			Severity: findings.SeverityError,
+			Action:   findings.ActionFix,
+			Description: fmt.Sprintf("The repair %s is still not on the pull request, which stands on %s. The run "+
+				"already sent that repair back for review once without a second push, so asking again counts as "+
+				"another fix round at this stage rather than a second trip through review without one.",
+				facts.head, facts.pushed),
 		}},
 	}
 }

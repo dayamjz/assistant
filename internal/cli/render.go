@@ -412,7 +412,8 @@ func readOutService(w io.Writer, s machine.Service) {
 
 // readOutRun prints a run: its phrase, the branch, the agent it resolved,
 // whether it runs under standing consent, what became of its local copy and whether something it started may still
-// be at work there, what of the request was not applied, and
+// be at work there, whether a repair of its checks was reviewed again and added
+// to the pull request, what of the request was not applied, and
 // then its details, its decision and the findings holding the decision. The
 // details and the findings are the two evidence documents, each written
 // through writeEvidence behind the row that points at it; the decision
@@ -444,6 +445,9 @@ func readOutRun(w io.Writer, r machine.Run) {
 		if phrase, ok := machine.CopySweepPhrase(*r.CopySweep); ok {
 			writeln(w, phrase)
 		}
+	}
+	if phrase, ok := machine.RepairPhrase(r.Repairs); ok {
+		writeln(w, phrase)
 	}
 	// What a request carried and the run did not take is said about the
 	// request, as a status line, so it is a row here and not evidence: which

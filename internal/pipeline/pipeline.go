@@ -133,12 +133,13 @@ func New(o Options) (*Pipeline, error) {
 	for _, key := range graphKeys() {
 		b.Key(key)
 	}
+	repairs := repairRounds(limits)
 	for i, row := range stageTable {
 		next := NodeDone
 		if i+1 < len(stageTable) {
 			next = stageTable[i+1].stage.Node()
 		}
-		if err := wire(b, row.stage, *row.implementation(&o.Stages), o.Fixer, limits[i], next); err != nil {
+		if err := wire(b, row.stage, *row.implementation(&o.Stages), o.Fixer, limits[i], repairs, next); err != nil {
 			return nil, err
 		}
 	}
@@ -154,9 +155,12 @@ func New(o Options) (*Pipeline, error) {
 
 // wire adds one stage's nodes and every edge leaving them. Every stage is
 // wired by this one function, so the shape of a stage is the same for all nine
-// and a stage cannot be given an arrangement of its own.
-func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, rounds int, next string) error {
+// and a stage cannot be given an arrangement of its own. repairs is the fix
+// round limit of the stage that repairs after the push, which every hold on
+// that path is bounded by as well as its own.
+func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, rounds, repairs int, next string) error {
 	requests := fixer.NewBody != nil && stage.Requestable()
+	repairing := stage.RepairsAfterPush() && rounds > 0
 	if impl.NewBody == nil {
 		return fmt.Errorf("%w: %s", ErrMissingStage, stage)
 	}
@@ -166,7 +170,7 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 	if err := checkDeclared("stage "+stage.String(), "writes", impl.Writes, declaredStageWrites); err != nil {
 		return err
 	}
-	b.Node(stageNode(stage, impl, rounds > 0 || requests))
+	b.Node(stageNode(stage, impl, rounds > 0 || requests, repairing))
 	b.Node(holdNode(stage, requests))
 	if requests {
 		// PRD section 5's Fix action at a hold: the stage's fixer runs one
@@ -216,13 +220,13 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 
 	// The hold's other two exits. They come before the stage's own edges
 	// rather than after them because the exit to the next stage is a back
-	// edge for a stage on the path back from the checks stage to rebase, and
+	// edge for a stage on a path back from the checks stage, and
 	// every back edge of a stage sits ahead of the stage's configured fix
 	// return; repush.go says why that exit is a back edge at all, and doc.go
 	// has the arithmetic. Order among edges matters only per node they leave,
 	// and these leave the hold, whose unconditional exit is still its last.
 	b.Edge(guarded(stage.HoldNode(), stage, OutcomeCancelled, NodeCancel))
-	b.Edge(graph.Edge{From: stage.HoldNode(), To: next, Rounds: holdExitRounds(stage)})
+	b.Edge(graph.Edge{From: stage.HoldNode(), To: next, Rounds: holdExitRounds(stage, repairs)})
 	if stage.RebasesAfterPush() {
 		// PRD section 14 decision 7's rebase of a conflicted pull request:
 		// the stage sends the run back to rebase, and from there through
@@ -232,6 +236,20 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 		// Its guard and the stage's other guards read the one outcome key, so
 		// at most one of them passes and the order among them decides nothing.
 		b.Edge(rebaseAfterPushEdge(stage))
+	}
+	if repairing {
+		// PRD section 5's repair of a red CI run: a fix round of the stage
+		// committed after the push, and the stage sends the run back to the
+		// review stage with that commit, from where it passes the checks
+		// before push and a second anchored push to stand here again. It is
+		// a back edge bounded by the stage's own round limit, built only when
+		// that limit is above zero, since without a fix round there is no
+		// repair; repair.go says why the limit is the bound and why it is the
+		// edge into the fixer that reaches it first. It sits with the path
+		// back to rebase, ahead of the fix return and the stage's own edges,
+		// for the reason that path does, and its guard reads the same outcome
+		// key, so the order between them decides nothing.
+		b.Edge(repairAfterPushEdge(stage, rounds))
 	}
 
 	// A stage that found something a person must decide holds. A stage that

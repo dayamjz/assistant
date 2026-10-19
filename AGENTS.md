@@ -473,9 +473,11 @@ Each has cost this repository more than one round of review.
   exists only at the stage table's requestable stages, the ones before push,
   and its edge back is `graph.Edge.Answered`, exempt from convergence and
   from no other bound. The checks stage's path back to rebase (`repush.go`) is
-  a third, the one edge from a stage to an earlier stage, and because of it
-  `internal/graph` reads every hold exit on that path as a back edge, so those
-  carry a bound too. Read its
+  a third, and its path back to review for a repair its fix round made after
+  the push (`repair.go`, bounded by that stage's round limit) a fourth; they
+  are the only edges from a stage to an earlier stage, and because of them
+  `internal/graph` reads every hold exit on those paths as a back edge, so
+  those carry a bound too. Read its
   `doc.go` before changing the loop or the holds, and for the residual gaps: no
   review reads what a person left unselected, and convergence is over the whole
   state.

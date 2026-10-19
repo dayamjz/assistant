@@ -1806,6 +1806,15 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	// with the outcome beside it.
 	answer = answer.Decide(standing)
 	answer.Stages = stageViews(result.State)
+	// The repairs are read off the same state the stages are. A record that
+	// cannot be read leaves the answer without them and the service log
+	// saying why, on the stage times' terms below: it describes the run and
+	// decides nothing about it.
+	if repairs, err := pipeline.RepairsOf(result.State); err != nil {
+		s.log.Printf("reporting run %s without its repairs: %v", runID, err)
+	} else {
+		answer.Repairs = repairs
+	}
 	// When each stage executed is the store's history rather than the
 	// checkpoint's. It describes the run and decides nothing about it, so a
 	// history that cannot be read leaves the stages without times and the

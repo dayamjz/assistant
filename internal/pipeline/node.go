@@ -20,13 +20,24 @@ import (
 // and reports them with its own findings, which is what makes a hold a round
 // raised independent of the stage's implementation: a body cannot leave one
 // out, because it never handles it.
-func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
+//
+// repairing says this pipeline built the stage the path back to review, which
+// is a stage whose row says Stage.RepairsAfterPush given fix rounds. Its node
+// then also reads the run's head and the commit it pushed, and writes
+// KeyRepairs, the record of each repair it routes back, so the record is the
+// node's and a body can neither omit nor invent one.
+func stageNode(stage Stage, impl Implementation, fixed, repairing bool) graph.Node {
 	adapterReads := []Key{KeySkip, KeyDiffEmpty, KeyNoCodeHost}
 	if fixed {
 		adapterReads = append(adapterReads, stage.HeldKey())
 	}
+	adapterWrites := []Key{stage.ReportKey(), stage.OutcomeKey()}
+	if repairing {
+		adapterReads = append(adapterReads, KeyHead, KeyPushed)
+		adapterWrites = append(adapterWrites, KeyRepairs)
+	}
 	reads := union(impl.Reads, adapterReads...)
-	writes := union(impl.Writes, stage.ReportKey(), stage.OutcomeKey())
+	writes := union(impl.Writes, adapterWrites...)
 	declared := keySet(impl.Reads)
 	permitted := keySet(impl.Writes)
 	return graph.Node{
@@ -93,6 +104,28 @@ func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
 					return err
 				}
 				outcome := classify(report)
+				if out.Rebase && out.Repair {
+					return fmt.Errorf("%w: %s", ErrTwoPathsBack, stage)
+				}
+				if out.Repair {
+					if !repairing {
+						return fmt.Errorf("%w: %s", ErrRepairNotOffered, stage)
+					}
+					// On Rebase's terms: a hold a fix round raised, such as the
+					// judge rule's, or a fix finding, routes as it would without
+					// the request, and only a report that would have passed
+					// takes the repair back to review.
+					if outcome == OutcomePassed {
+						entry, err := repairEntryOf(r)
+						if err != nil {
+							return err
+						}
+						if err := w.Set(string(KeyRepairs), entry); err != nil {
+							return err
+						}
+						outcome = OutcomeRepair
+					}
+				}
 				if out.Rebase {
 					if !stage.RebasesAfterPush() {
 						return fmt.Errorf("%w: %s", ErrRebaseNotOffered, stage)
@@ -111,6 +144,30 @@ func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
 			}
 		},
 	}
+}
+
+// repairEntryOf is the KeyRepairs entry for the repair a stage node is about
+// to route back: the commit the run pushed and the head it sends to review,
+// both read off the run's state rather than taken from the body. A run that
+// pushed nothing, or whose head is the commit it pushed, has no repair to
+// record, and that is refused rather than recorded, since the path back is for
+// a commit the pull request does not carry yet.
+func repairEntryOf(r graph.Reader) (graph.Value, error) {
+	pushed, err := r.Get(string(KeyPushed))
+	if err != nil {
+		return graph.Value{}, err
+	}
+	head, err := r.Get(string(KeyHead))
+	if err != nil {
+		return graph.Value{}, err
+	}
+	p, _ := pushed.Text()
+	h, _ := head.Text()
+	if p == "" || h == "" || p == h {
+		return graph.Value{}, fmt.Errorf("%w: the run's head %q is not a commit on top of the pushed %q",
+			ErrRepairNotOffered, h, p)
+	}
+	return repairValue(p, h)
 }
 
 // skipped reports whether this stage does not run in this run. Three things

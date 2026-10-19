@@ -125,6 +125,24 @@ type Output struct {
 	// bounded by RebaseAfterPushRounds, and a request past that bound parks
 	// the run rather than taking it.
 	Rebase bool
+	// Repair asks the run to take a commit this stage's own fix round wrote
+	// after the push back to the review stage, which is how the checks stage
+	// answers a red CI run it repaired: the run reviews the repaired head,
+	// runs the checks before push again, and pushes it on an anchor
+	// internal/safety's RequireObservedAt accepts, before it stands at the
+	// checks stage again.
+	//
+	// Only a stage whose row says Stage.RepairsAfterPush, in a pipeline that
+	// gave it fix rounds, may ask; any other asking fails the step with
+	// ErrRepairNotOffered, and asking for Rebase as well fails it with
+	// ErrTwoPathsBack. The request is honoured only over a report that would
+	// otherwise pass, on Rebase's terms. The stage node then records the
+	// repair under KeyRepairs, the commit the run had pushed and the head it
+	// sends back, which no stage writes. The path is a back edge bounded by
+	// the stage's own fix round limit, and the round into the fixer reaches
+	// that limit first, so it is the fix round limit that parks a run whose
+	// repairs keep failing.
+	Repair bool
 }
 
 // Fixer applies a stage's fix-eligible findings. It is a separate contract

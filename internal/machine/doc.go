@@ -77,7 +77,9 @@
 // that effect's doc says the mechanism does; the kept and
 // removed rows for a run's cleanup record; the one row for a run's copy sweep
 // record that did not establish the copy clear, through CopySweepPhrase,
-// whose counts and occasion stay the structured rendering's; the stream's
+// whose counts and occasion stay the structured rendering's; the two rows for
+// a repair the checks stage sent back for review after the push, added to the
+// pull request or not yet, through RepairPhrase; the stream's
 // own rows; the
 // status rows; and the rows for the rest of the command surface - a decision
 // and a fix round's offer, a row per doctor check and result keyed on the

@@ -237,9 +237,9 @@
 // reasoning is short enough to check rather than take on trust. internal/graph
 // writes and reads a fingerprint only on a back edge and skips the comparison
 // when the slot is empty. The back edges here are the fix nodes' returns, the
-// requested rounds' returns, the path back from the checks stage to rebase,
-// and the hold exits on that path, which internal/graph reads as back edges
-// for the reason repush.go gives. What the conclusion rests on is that an
+// requested rounds' returns, the two paths back from the checks stage, to
+// rebase and to review, and the hold exits on them, which internal/graph reads
+// as back edges for the reason repush.go gives. What the conclusion rests on is that an
 // index which is a back edge under two different configurations belongs to the
 // same stage in both:
 // a fingerprint that is read is never another edge's, and a slot the new graph
@@ -250,15 +250,18 @@
 // which emits a stage's edges as one block, in this order: the two edges of
 // the requested-round cycle when the pipeline was given a fixer and the stage
 // is requestable, whose second is a back edge; the hold's two exits, whose
-// second is a back edge at a stage on the path back from the checks stage; that
-// path itself, at the stage that takes it; the fix node's return when the
-// stage's round limit is above zero; and the stage's own three edges. Which of
-// these a stage has, apart from the fix return, is the stage table's and not
-// the configuration's, so a block has a fixed part, five edges plus two at a
-// requestable stage given a fixer and one at the stage that rebases after
-// push, and a configured part, the one fix return. A block starts at the sum
-// of the earlier stages' fixed parts plus the number of earlier stages taking
-// rounds, at most four.
+// second is a back edge at a stage on a path back from the checks stage; the
+// path back to rebase, at the stage that takes it; the path back to review, at
+// the stage that takes it when its round limit is above zero; the fix node's
+// return when the stage's round limit is above zero; and the stage's own three
+// edges. Which of these a stage has, apart from the path back to review and
+// the fix return, is the stage table's and not the configuration's, so a
+// block has a fixed part, five edges plus two at a requestable stage given a
+// fixer and one at the stage that rebases after push, and a configured part,
+// the fix return and, at the stage that repairs after push, the path back to
+// review. A block starts at the sum of the earlier stages' fixed parts plus
+// the number of earlier stages taking rounds, at most four, because the one
+// stage with a configured part of two is ci and nothing comes after ci.
 //
 // A stage's back edges sit at least one edge into its block, and its last one
 // is its fix return, three edges before the block ends, or for a stage taking
@@ -327,8 +330,8 @@
 // under budget runs a fixer and re-runs to verify. That is the fix cycle, and
 // internal/graph requires every back edge to carry a bound at construction, so
 // none of the three bounds can be left until a run starts. The other two
-// cycles here, a round a person asks for and the path back from the checks
-// stage, are described below. The fix cycle's three bounds:
+// cycles here, a round a person asks for and the two paths back from the
+// checks stage, are described below. The fix cycle's three bounds:
 //
 //   - Per-stage rounds. Each stage's limit bounds the fix cycle it sits on.
 //     Both of that cycle's edges carry the limit, because the graph requires a
@@ -395,6 +398,53 @@
 // report that holds or carries fix findings routes as it would without one,
 // and a stage the table does not give the path to fails the step with
 // ErrRebaseNotOffered rather than having the request dropped.
+//
+// # A repair after the push
+//
+// PRD section 5 gives the checks stage fix rounds, and they run after the
+// push, so a round's commit is one the pull request does not carry. The owner
+// decided on #325 that such a repair goes back through the review stage
+// before it is pushed. That is the second path back from the checks stage,
+// and like the first it is a path between existing stages rather than a tenth
+// stage: a stage whose row says Stage.RepairsAfterPush, which is the checks
+// stage, asks for it with Output.Repair on the execution after its own round,
+// its node records OutcomeRepair and appends the repair to KeyRepairs, and a
+// back edge from its node to the review stage's takes the run through
+// review, the checks before push, push, and the pull request stage before it
+// stands at the checks stage again. It lands on review rather than rebase
+// because a repair is a commit on top of the one the run pushed, which a
+// rebase has nothing to do for, and review is the first stage that reads the
+// change.
+//
+// What makes the second push an anchored update of a pushed branch belongs to
+// the stage bodies, as it does for the path back to rebase: internal/stages'
+// checks stage observes the branch and records the anchor only where it still
+// stands at the commit the run pushed, and the push stage refuses an anchor
+// that does not name it. This package owns that the path exists, that only
+// the checks stage may take it, that it records each traversal, and that it
+// is bounded.
+//
+// The path is built only when the checks stage's fix round limit is above
+// zero, because without a round there is no repair, and a request where it
+// was not built fails the step with ErrRepairNotOffered instead of falling
+// through to the stage's way forward. It is bounded by that same limit, per
+// run and not per pass, as the owner decided: every repair is one entry into
+// the checks stage's fixer, the edge in counts it first, and resubmitting the
+// same repair without another fix round is counted the same way, so a check
+// still failing after the last round the limit allows parks the run
+// rounds-exhausted in front of the fixer, and the path's own bound, which the
+// graph requires, cannot fire first under that counting. Convergence applies
+// to it as to every
+// unanswered back edge, and the run-wide budget counts every node it runs. The
+// holds on the path get the bound repush.go gives them, which counts one pass
+// for each repair the limit allows on top of the passes back to rebase.
+//
+// RepairsOf reads KeyRepairs back, and is how a run's answer says a repair
+// was made and whether it has been pushed since; a pushed repair went through
+// review on the way, because the path reaches the push stage only through the
+// review stage and the push stage pushes only behind a completed review.
+// Asking for both paths back in one execution fails the step with
+// ErrTwoPathsBack.
 //
 // # Halt points
 //
