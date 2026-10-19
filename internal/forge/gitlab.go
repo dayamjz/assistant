@@ -464,7 +464,10 @@ func (g *gitLab) UpdateBody(ctx context.Context, number int, body string) (PullR
 // whether GitLab files every status an external system posts under such a
 // pipeline is not verified here. A pipeline a person replaced with a newer
 // one on the same commit is still read, so a failed one keeps the verdict
-// failed until the head moves.
+// failed until the head moves. Merged-result pipelines are kept by ref
+// rather than by sha, because GitLab runs them on the temporary merge
+// commit; an earlier pipeline on the source branch is still dropped when its
+// ref is that branch and its sha is not the head.
 func (g *gitLab) Checks(ctx context.Context, number int) (ChecksReport, error) {
 	const op = "checks"
 	mr, err := g.mergeRequest(ctx, op, number)
@@ -490,7 +493,7 @@ func (g *gitLab) Checks(ctx context.Context, number int) (ChecksReport, error) {
 			return ChecksReport{}, err
 		}
 		for _, p := range pipelines {
-			if p.SHA != mr.SHA || p.Status == "skipped" {
+			if !gitLabPipelineCounts(mr, p) {
 				continue
 			}
 			state, reported := gitLabPipelineState(p.Status)
@@ -878,7 +881,10 @@ func gitLabState(s string) PullRequestState {
 // accounting for pipelines, approvals, drafts and discussions, which is the
 // blend Mergeability keeps out, so it is not asked for.
 //
-// has_conflicts is the conflict answer: true is MergeabilityConflicted
+// has_conflicts is the conflict answer when GitLab's own pairing holds:
+// it documents has_conflicts as false unless merge_status is
+// cannot_be_merged, so can_be_merged with has_conflicts true is unknown
+// rather than conflicted. Otherwise true is MergeabilityConflicted
 // whatever else the merge request carries. Mergeable is merge_status's
 // can_be_merged with no conflict reported. Everything else - GitLab's
 // unchecked, checking, cannot_be_merged_recheck, a cannot_be_merged with no
@@ -890,6 +896,8 @@ func gitLabState(s string) PullRequestState {
 // so a merge request is never read mergeable on its absence.
 func gitLabMergeability(status string, conflicts bool) Mergeability {
 	switch {
+	case status == "can_be_merged" && conflicts:
+		return MergeabilityUnknown
 	case conflicts:
 		return MergeabilityConflicted
 	case status == "can_be_merged":
@@ -899,10 +907,30 @@ func gitLabMergeability(status string, conflicts bool) Mergeability {
 	}
 }
 
+// gitLabPipelineCounts reports whether a pipeline from the merge request's
+// pipeline list is a check this head owes. Skipped pipelines ran nothing.
+// A pipeline on the source branch's current head counts; an earlier commit
+// on that branch in the same list does not. Merged-result pipelines run on
+// a temporary merge commit GitLab names under refs/merge-requests/, not on
+// the head sha, and count when their ref is not the source branch.
+func gitLabPipelineCounts(mr gitLabMergeRequest, p gitLabPipeline) bool {
+	if p.Status == "skipped" {
+		return false
+	}
+	if p.SHA == mr.SHA {
+		return true
+	}
+	if p.Ref == mr.SourceBranch {
+		return false
+	}
+	return true
+}
+
 // gitLabPipeline is the part of a pipeline list entry this adapter reads.
 type gitLabPipeline struct {
 	ID     int    `json:"id"`
 	SHA    string `json:"sha"`
+	Ref    string `json:"ref"`
 	Status string `json:"status"`
 	WebURL string `json:"web_url"`
 }

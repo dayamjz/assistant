@@ -238,8 +238,7 @@ func TestGitLabSendsTheTokenAsAHeaderAndThePathEncoded(t *testing.T) {
 }
 
 // Get maps GitLab's states and mergeability onto the package's model, with
-// every word it does not recognize, and GitLab's locked, read as unknown, and
-// a conflict read from has_conflicts whatever merge_status says.
+// every word it does not recognize, and GitLab's locked read as unknown.
 func TestGitLabGetMapsStateAndMergeability(t *testing.T) {
 	cases := []struct {
 		state, mergeStatus string
@@ -249,7 +248,6 @@ func TestGitLabGetMapsStateAndMergeability(t *testing.T) {
 	}{
 		{"opened", "can_be_merged", false, forge.PullRequestStateOpen, forge.MergeabilityMergeable},
 		{"opened", "cannot_be_merged", true, forge.PullRequestStateOpen, forge.MergeabilityConflicted},
-		{"opened", "can_be_merged", true, forge.PullRequestStateOpen, forge.MergeabilityConflicted},
 		{"opened", "cannot_be_merged", false, forge.PullRequestStateOpen, forge.MergeabilityUnknown},
 		{"opened", "unchecked", false, forge.PullRequestStateOpen, forge.MergeabilityUnknown},
 		{"opened", "checking", false, forge.PullRequestStateOpen, forge.MergeabilityUnknown},
@@ -276,6 +274,22 @@ func TestGitLabGetMapsStateAndMergeability(t *testing.T) {
 			pr.URL != "https://gitlab.com/group/name/-/merge_requests/12" {
 			t.Errorf("Get answered %+v", pr)
 		}
+	}
+}
+
+// GitLab documents has_conflicts as false unless merge_status is
+// cannot_be_merged, so the pair can_be_merged with has_conflicts true is
+// unknown rather than conflicted.
+func TestGitLabGetReadsImpossibleConflictPairAsUnknown(t *testing.T) {
+	v := openMR(12)
+	v.MergeStatus, v.HasConflicts = "can_be_merged", true
+	_, adapter := openGitLab(t, labtest.Script{labtest.OpView: {labtest.MergeRequest(v)}})
+	pr, err := adapter.Get(context.Background(), 12)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if pr.Mergeability != forge.MergeabilityUnknown {
+		t.Fatalf("Get read mergeability as %s, want unknown", pr.Mergeability)
 	}
 }
 
@@ -485,8 +499,9 @@ func TestGitLabMergeAsksOnlyForABoundMergeNow(t *testing.T) {
 }
 
 // Checks reads the pipelines on the head and only those: a pipeline on an
-// earlier head is not a check on this one, and a skipped pipeline ran nothing,
-// so a head whose only pipeline was skipped has no checks and is not green.
+// earlier head is not a check on this one, merged-result pipelines on the
+// temporary merge commit count, and a skipped pipeline ran nothing, so a head
+// whose only pipeline was skipped has no checks and is not green.
 func TestGitLabChecksReadsOnlyThePipelinesThatRanOnTheHead(t *testing.T) {
 	older := strings.Repeat("a", 40)
 	_, adapter := openGitLab(t, labtest.Script{
@@ -518,6 +533,42 @@ func TestGitLabChecksReadsOnlyThePipelinesThatRanOnTheHead(t *testing.T) {
 	}
 	if result := report.Evaluate(forge.NoCIDeclaration{}); result.Verdict != forge.VerdictNoChecks {
 		t.Fatalf("a head whose only pipeline was skipped evaluated as %s, want no checks", result)
+	}
+}
+
+const gitLabMergedResultRef = "refs/merge-requests/12/merge"
+
+// Checks counts merged-result pipelines GitLab runs on the temporary merge
+// commit, not only pipelines whose sha matches the source head.
+func TestGitLabChecksCountsMergedResultPipelines(t *testing.T) {
+	mergedSHA := strings.Repeat("c", 40)
+	_, adapter := openGitLab(t, labtest.Script{
+		labtest.OpView: {labtest.MergeRequest(openMR(12))},
+		labtest.OpPipelines: {labtest.Pipelines(
+			labtest.PipelineView{ID: 10, SHA: mergedSHA, Ref: gitLabMergedResultRef, Status: "success"},
+		)},
+	})
+	report, err := adapter.Checks(context.Background(), 12)
+	if err != nil {
+		t.Fatalf("Checks: %v", err)
+	}
+	if result := report.Evaluate(forge.NoCIDeclaration{}); result.Verdict != forge.VerdictPassed {
+		t.Fatalf("only a successful merged-result pipeline evaluated as %s, want passed", result)
+	}
+
+	_, adapter = openGitLab(t, labtest.Script{
+		labtest.OpView: {labtest.MergeRequest(openMR(12))},
+		labtest.OpPipelines: {labtest.Pipelines(
+			labtest.PipelineView{ID: 9, SHA: conformanceHead, Ref: "fm/work", Status: "success"},
+			labtest.PipelineView{ID: 10, SHA: mergedSHA, Ref: gitLabMergedResultRef, Status: "failed"},
+		)},
+	})
+	report, err = adapter.Checks(context.Background(), 12)
+	if err != nil {
+		t.Fatalf("Checks: %v", err)
+	}
+	if result := report.Evaluate(forge.NoCIDeclaration{}); result.Verdict != forge.VerdictFailed {
+		t.Fatalf("a failed merged-result pipeline with a passing branch pipeline evaluated as %s, want failed", result)
 	}
 }
 
@@ -557,7 +608,7 @@ func TestGitLabChecksFollowsPagesUpToTheBound(t *testing.T) {
 	fullPage := func(status string) labtest.Response {
 		rows := make([]labtest.PipelineView, 100)
 		for i := range rows {
-			rows[i] = labtest.PipelineView{ID: 1000 + i, SHA: strings.Repeat("b", 40), Status: status}
+			rows[i] = labtest.PipelineView{ID: 1000 + i, SHA: strings.Repeat("b", 40), Ref: "fm/work", Status: status}
 		}
 		return labtest.Pipelines(rows...)
 	}
