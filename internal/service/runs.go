@@ -618,7 +618,8 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 // document is read at the submitted commit, which the copy's build is what
 // fetches into the gate repository, and a trusted copy that cannot be read
 // stops the run here, before anything is recorded as running and before any
-// stage body or agent launches.
+// stage body or agent launches. A refused resolution ends the run's record as
+// terminated, so the branch's next start is a fresh run.
 func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.Start) (machine.Run, error) {
 	built, err := s.driverFor(ctx)
 	if err != nil {
@@ -677,6 +678,14 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	start.SubmittedSubject = s.submittedSubject(ctx, record)
 	resolved, err := s.resolveRunConfig(ctx, record)
 	if err != nil {
+		// A refused resolution ends the run on the code-host refusal's terms
+		// above: the run has no checkpoint, so nothing could ever resume it,
+		// and left pending it is an unfinished run a later start on the
+		// branch would attach to and report as executing, rather than one a
+		// fresh start replaces once the document is fixed.
+		if _, ended := built.runs.Terminate(context.WithoutCancel(ctx), record.ID); ended != nil {
+			s.log.Printf("run %s could not be ended after its configuration was refused: %v", record.ID, ended)
+		}
 		return machine.Run{}, err
 	}
 	// The record catches up to the run's own resolution, so a surprising

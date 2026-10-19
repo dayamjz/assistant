@@ -172,16 +172,21 @@ func TestAnUnreadableTrustedConfigurationStopsTheRunBeforeLaunch(t *testing.T) {
 		if got := bodies.Load(); got != 0 {
 			t.Fatalf("%d stage bodies ran under a trusted configuration nobody could read", got)
 		}
+		// Ended rather than left pending: a pending run with no checkpoint
+		// can never be resumed, and a later start would attach to it.
 		record := onlyRun(t, h)
-		if record.Status == store.RunRunning {
-			t.Fatalf("the refused run is recorded as %s", record.Status)
+		if record.Status != store.RunTerminated {
+			t.Fatalf("the refused run is recorded as %s, want it ended", record.Status)
 		}
 	})
 }
 
 // TestAPushedConfigurationDocumentThatDoesNotParseIsRefused is section 10's
 // parse-time rule on the untrusted copy: a broken document surfaces before it
-// merges, even though its keys would mostly have been dropped.
+// merges, even though its keys would mostly have been dropped. The refused run
+// is ended rather than left pending, so once the branch carries a document
+// that parses, the next start on the branch is a fresh run rather than an
+// attach to one nothing can resume.
 func TestAPushedConfigurationDocumentThatDoesNotParseIsRefused(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P7)
@@ -198,6 +203,19 @@ func TestAPushedConfigurationDocumentThatDoesNotParseIsRefused(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "pushed configuration") {
 			t.Fatalf("the refusal does not name the pushed copy: %v", err)
+		}
+		refused := onlyRun(t, h)
+		if refused.Status != store.RunTerminated {
+			t.Fatalf("the refused run is recorded as %s, want it ended", refused.Status)
+		}
+
+		plantPushedDocument(t, subject, `{"ignore_patterns": ["vendor/**"]}`)
+		fresh := startRun(t, running.client, subject)
+		if fresh.Record.ID == refused.ID {
+			t.Fatalf("the start after the document was fixed attached to the refused run %s", refused.ID)
+		}
+		if fresh.Record.Status == store.RunPending || fresh.Record.Status == store.RunTerminated {
+			t.Fatalf("the fresh run is recorded as %s, want it walked", fresh.Record.Status)
 		}
 	})
 }
