@@ -282,14 +282,32 @@ type supervisionHooks struct {
 	// now replaces the clock the loop and the watchdog read, so a window
 	// can elapse under a test without waiting for it.
 	now func() time.Time
-	// afterPass is called with every pass's report, after its writes.
+	// afterPass is called, after its writes, with the report of every pass
+	// the loop makes on its own: an incarnation's first pass and each
+	// pass at the interval. A kicked pass's report goes to its kick
+	// instead, so each report reaches exactly one of the two.
 	afterPass func(passReport)
 	// onReplace is called by the watchdog with the incarnation it is
 	// replacing and the one it began, after the delay.
 	onReplace func(replaced, next *incarnation)
 	// kick makes the current incarnation run a pass when it is idle: a
-	// receive on it, by the loop, is one pass.
-	kick chan struct{}
+	// receive on it, by the loop, is one pass, and that pass's report is
+	// sent, after its writes, on the channel received, which must have
+	// room for it. A report read there is the kicked pass's and no other's,
+	// so what a test reads is addressed by the pass it asked for rather
+	// than by its place in a queue other passes also post to.
+	kick chan chan<- passReport
+	// untimed stops the interval ticks of the loop and of the watchdog: an
+	// incarnation writes its first beacon and makes its first pass and then
+	// passes only when kicked, and the watchdog judges no beacon, so it
+	// replaces an incarnation only when the incarnation's goroutine
+	// returns. A test that moves the clock or the fleet by hand between
+	// kicked passes sets it, because a pass at the interval would act on
+	// the step before the kick does, and a watchdog reading the beacon by
+	// an injected clock the test moved can replace an incarnation that
+	// is not wedged. A test of the interval itself, the beacon or the
+	// watchdog leaves it unset.
+	untimed bool
 	// wakeRecheck replaces wakeWaitRecheck for an armed wakes.wait when it
 	// is positive, so a test can push the recheck past its own bound and
 	// show that the bell this loop rings is what answers the wait.
@@ -421,35 +439,46 @@ func (s *Service) loop(c *incarnation) {
 		s.log.Printf("supervisor incarnation %d could not write its first beacon: %v", c.inc.Epoch(), err)
 		return
 	}
-	if s.passAndReport(c) {
+	if s.passAndReport(c, nil) {
 		return
 	}
-	ticker := time.NewTicker(s.sup.interval)
-	defer ticker.Stop()
+	ticks, stopTicks := s.sup.ticker()
+	defer stopTicks()
 	for {
 		select {
 		case <-c.ctx.Done():
 			return
-		case <-s.sup.hooks.kick:
-			if s.passAndReport(c) {
+		case reply := <-s.sup.hooks.kick:
+			if s.passAndReport(c, reply) {
 				return
 			}
-		case <-ticker.C:
+		case <-ticks:
 			if err := s.writeBeacon(c); err != nil {
 				s.log.Printf("supervisor incarnation %d stops: %v", c.inc.Epoch(), err)
 				return
 			}
-			if s.passAndReport(c) {
+			if s.passAndReport(c, nil) {
 				return
 			}
 		}
 	}
 }
 
+// ticker is the interval tick the loop and the watchdog select on, and its
+// stop. Under the untimed hook it is a channel that never delivers.
+func (sv *supervision) ticker() (<-chan time.Time, func()) {
+	if sv.hooks.untimed {
+		return nil, func() {}
+	}
+	t := time.NewTicker(sv.interval)
+	return t.C, t.Stop
+}
+
 // passAndReport runs one pass, logs what failed, hands the report to the
-// test hook, and reports whether the incarnation has been replaced, which is
-// what ErrStaleIncarnation on any write means.
-func (s *Service) passAndReport(c *incarnation) (replaced bool) {
+// kick that asked for the pass when reply is not nil and to the afterPass
+// hook otherwise, and reports whether the incarnation has been replaced,
+// which is what ErrStaleIncarnation on any write means.
+func (s *Service) passAndReport(c *incarnation, reply chan<- passReport) (replaced bool) {
 	report := s.pass(c)
 	if report.Err != nil {
 		s.log.Printf("supervisor incarnation %d could not read the fleet: %v", c.inc.Epoch(), report.Err)
@@ -463,7 +492,10 @@ func (s *Service) passAndReport(c *incarnation) (replaced bool) {
 			}
 		}
 	}
-	if s.sup.hooks.afterPass != nil {
+	switch {
+	case reply != nil:
+		reply <- report
+	case s.sup.hooks.afterPass != nil:
 		s.sup.hooks.afterPass(report)
 	}
 	return replaced
@@ -931,8 +963,8 @@ func (s *Service) watchdog() {
 		}
 	}
 	begin()
-	ticker := time.NewTicker(s.sup.interval)
-	defer ticker.Stop()
+	ticks, stopTicks := s.sup.ticker()
+	defer stopTicks()
 	for {
 		var ended chan struct{}
 		if current != nil {
@@ -944,7 +976,7 @@ func (s *Service) watchdog() {
 			return
 		case <-ended:
 			s.log.Printf("supervisor incarnation %d ended on its own and is replaced", current.inc.Epoch())
-		case <-ticker.C:
+		case <-ticks:
 			if current != nil && s.beaconLive(current, fresh, firstWait) {
 				continue
 			}

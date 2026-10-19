@@ -181,7 +181,9 @@ func TestCreatingATaskQueuesNoWakeForItsOwnEntries(t *testing.T) {
 	l := openLoop(t, h, records, nil, nil)
 	defer func() { _ = l.service.Close() }()
 
-	first := l.freshPass(t)
+	// The incarnation's first pass is the one that reads the two entries
+	// open wrote: the queue release at open precedes supervision.
+	first := l.nextPass(t)
 	events := detectionsOf(first, task, supervisor.KindPlainEvent)
 	if len(events) != 2 {
 		t.Fatalf("the pass detected %+v, want the queued and dispatched entries", events)
@@ -198,13 +200,10 @@ func TestCreatingATaskQueuesNoWakeForItsOwnEntries(t *testing.T) {
 	if _, err := l.records(t).AppendTaskEvent(ctx, task, "progress-note", "read the code"); err != nil {
 		t.Fatalf("appending the worker's note: %v", err)
 	}
-	// A pass already under way when the note was appended may report
-	// first, so passes are taken until one has read it.
-	var rows []store.Wake
-	for i := 0; i < 5 && len(rows) == 0; i++ {
-		l.pass(t)
-		rows = wakesOfKind(t, l.records(t), task, supervisor.KindPlainEvent)
-	}
+	// The kicked pass is the first since the note was appended, so it is
+	// the one that reads it.
+	l.pass(t)
+	rows := wakesOfKind(t, l.records(t), task, supervisor.KindPlainEvent)
 	if len(rows) != 1 || rows[0].Marker != "event:3" {
 		t.Fatalf("after the worker's note the queue holds %+v, want one wake for event 3", rows)
 	}

@@ -26,9 +26,13 @@ import (
 // the beacon interval at its floor so a stale beacon is noticed in seconds,
 // the two windows at their floors and the inspection count low, so a window
 // can elapse under the injected clock and the inspection level is reached
-// in a handful of surfaces. Every pass a test waits on is one the loop
-// reported through the afterPass hook, and every capture it waits on is one
-// the double signalled: nothing here polls a file or sleeps for a pass.
+// in a handful of surfaces. The loop is opened untimed unless a test is of
+// the interval itself, so between a test's steps no pass runs that the test
+// did not kick, and a kicked pass's report comes back on its own kick rather
+// than from a queue other passes also post to. Every other pass a test waits
+// on is one the loop reported through the afterPass hook, and every capture
+// it waits on is one the double signalled: nothing here polls a file or
+// sleeps for a pass.
 const loopConfig = `{"supervision_beacon_interval": "1s", "escalation_window": "1m",
 	"recheck_window": "1m", "stall_inspection_count": 2}` + "\n"
 
@@ -122,7 +126,7 @@ type loopSubject struct {
 	home     *home.Home
 	passes   chan passReport
 	replaced chan [2]*incarnation
-	kick     chan struct{}
+	kick     chan chan<- passReport
 	clock    *fakeClock
 }
 
@@ -172,8 +176,9 @@ func loopHome(t *testing.T) (*home.Home, *store.Store) {
 	return h, records
 }
 
-// openLoop opens the service over a planted home with the loop's hooks. The
-// records handed in are closed first, because one service owns the home.
+// openLoop opens the service over a planted home with the loop's hooks,
+// untimed. The records handed in are closed first, because one service owns
+// the home.
 func openLoop(t *testing.T, h *home.Home, records *store.Store, terminals Terminals, clock *fakeClock) *loopSubject {
 	t.Helper()
 	return openLoopWith(t, h, records, terminals, clock, nil)
@@ -187,6 +192,13 @@ func openLoopWith(t *testing.T, h *home.Home, records *store.Store, terminals Te
 	catalog *agents.Catalog) *loopSubject {
 	t.Helper()
 	return openLoopHooked(t, h, records, terminals, clock, catalog, nil)
+}
+
+// openTimedLoop is openLoop with the loop's and the watchdog's interval
+// ticks running, for a test of the beacon, the interval or the watchdog.
+func openTimedLoop(t *testing.T, h *home.Home, records *store.Store, terminals Terminals) *loopSubject {
+	t.Helper()
+	return openLoopHooked(t, h, records, terminals, nil, nil, func(hooks *supervisionHooks) { hooks.untimed = false })
 }
 
 // openLoopHooked is openLoopWith with a last say over the hooks the service
@@ -206,13 +218,14 @@ func openLoopHooked(t *testing.T, h *home.Home, records *store.Store, terminals 
 		home:     h,
 		passes:   make(chan passReport, 1024),
 		replaced: make(chan [2]*incarnation, 16),
-		kick:     make(chan struct{}),
+		kick:     make(chan chan<- passReport),
 		clock:    clock,
 	}
 	hooks := supervisionHooks{
 		afterPass: func(r passReport) { subject.passes <- r },
 		onReplace: func(replaced, next *incarnation) { subject.replaced <- [2]*incarnation{replaced, next} },
 		kick:      subject.kick,
+		untimed:   true,
 	}
 	if clock != nil {
 		hooks.now = clock.Now
@@ -234,38 +247,31 @@ func openLoopHooked(t *testing.T, h *home.Home, records *store.Store, terminals 
 	return subject
 }
 
-// pass makes the loop run one pass and returns its report.
+// pass makes the loop run one pass and returns that pass's report. The
+// pass begins when the loop takes the kick, which is after the test's last
+// step, and the report is read off the channel the kick carried, so it is
+// the kicked pass's whatever other passes did: no report of a pass the loop
+// made on its own can be returned in its place.
 func (l *loopSubject) pass(t *testing.T) passReport {
 	t.Helper()
+	reply := make(chan passReport, 1)
 	select {
-	case l.kick <- struct{}{}:
+	case l.kick <- reply:
 	case <-time.After(loopWait):
 		t.Fatal("the loop did not take a pass: it is not idle in its select")
 	}
-	return l.nextPass(t)
-}
-
-// freshPass is pass over a drained report channel: the reports of passes
-// the ticker already made are discarded first. It does not promise the
-// report returned is of a pass that began after the test's last step: a
-// ticker pass already running when the channel is drained posts its report
-// afterwards, the kick waits for that pass to end, and that report is the
-// one read. A check that needs a pass to have seen a change since its last
-// step takes passes until one has.
-func (l *loopSubject) freshPass(t *testing.T) passReport {
-	t.Helper()
-	for {
-		select {
-		case <-l.passes:
-			continue
-		default:
-		}
-		break
+	select {
+	case r := <-reply:
+		return r
+	case <-time.After(loopWait):
+		t.Fatal("the kicked pass was not reported")
+		return passReport{}
 	}
-	return l.pass(t)
 }
 
-// nextPass waits for the next pass report, whichever incarnation made it.
+// nextPass waits for the next report of a pass the loop made on its own,
+// whichever incarnation made it: an incarnation's first pass, or, on a
+// timed loop, a pass at the interval. A kicked pass is never read here.
 func (l *loopSubject) nextPass(t *testing.T) passReport {
 	t.Helper()
 	select {
@@ -354,7 +360,7 @@ func readBeacon(t *testing.T, h *home.Home) supervisor.Beacon {
 func TestTheLoopWritesTheBeaconOnAnIdleFleet(t *testing.T) {
 	t.Parallel()
 	h, records := loopHome(t)
-	l := openLoop(t, h, records, nil, nil)
+	l := openTimedLoop(t, h, records, nil)
 	defer func() { _ = l.service.Close() }()
 
 	first := l.nextPass(t)
@@ -380,6 +386,58 @@ func TestTheLoopWritesTheBeaconOnAnIdleFleet(t *testing.T) {
 	}
 }
 
+// A kicked pass is reported on its own kick, so the report a test reads
+// after a step is of the pass that began after it, even with the report of
+// a pass the loop made on its own waiting unread. The loop is timed here so
+// that there is such a report: after the first pass, the next capture is an
+// interval pass's, the screen changes once that capture has been made, and
+// the loop takes the kick only after that pass has posted its report. The
+// interval pass saw the old screen a second time and raised terminal
+// unchanged; the kicked pass sees the change and raises nothing. Reading
+// the next report of any pass, which is how this harness read a kicked
+// pass before, returns the interval pass's here on every run, so this is
+// the check that fails if that read comes back (#354).
+func TestAKickedPassIsReportedOnItsOwnKick(t *testing.T) {
+	t.Parallel()
+	h, records := loopHome(t)
+	task := plantRunning(t, records, "kickedpassaa", "pane-kicked").ID
+	terminals := newScriptedTerminals()
+	terminals.live("pane-kicked", "one\n")
+	l := openTimedLoop(t, h, records, terminals)
+	defer func() { _ = l.service.Close() }()
+
+	capture := func(what string) {
+		t.Helper()
+		select {
+		case <-terminals.calls:
+		case <-time.After(loopWait):
+			t.Fatalf("the %s never captured the terminal", what)
+		}
+	}
+	l.nextPass(t)
+	capture("first pass")
+	// No kick has been sent, so this capture is a pass at the interval. The
+	// double reads the screen before it signals, so the change below is
+	// after that pass's reading and before the kicked pass's.
+	capture("pass at the interval")
+	terminals.live("pane-kicked", "two\n")
+
+	kicked := l.pass(t)
+	if err := kicked.Tasks[task].Err; err != nil || !kicked.Tasks[task].Watched {
+		t.Fatalf("the kicked pass over task %s: watched %v, err %v", task, kicked.Tasks[task].Watched, err)
+	}
+	if got := detectionsOf(kicked, task, supervisor.KindTerminalUnchanged); len(got) != 0 {
+		t.Fatalf("the kicked pass raised terminal unchanged %+v over the changed screen: it is not the pass that was kicked", got)
+	}
+	// The control: the report waiting unread is the interval pass's, which
+	// read the old screen again, so a read that returned it would have
+	// failed above.
+	waiting := l.nextPass(t)
+	if got := detectionsOf(waiting, task, supervisor.KindTerminalUnchanged); len(got) != 1 {
+		t.Fatalf("the interval pass's report = %+v, want terminal unchanged over the screen it read twice", waiting.Tasks[task])
+	}
+}
+
 // A loop wedged in a capture that ignores its context stops writing the
 // beacon, the watchdog replaces it with the next incarnation after the first
 // beacon wait and the delay, and when the wedged capture returns the old
@@ -394,7 +452,7 @@ func TestAWedgedIncarnationIsReplacedAndFencedOut(t *testing.T) {
 	terminals := newScriptedTerminals()
 	terminals.live("pane-wedged", "working\n")
 	terminals.blockFirst = true
-	l := openLoop(t, h, records, terminals, nil)
+	l := openTimedLoop(t, h, records, terminals)
 	defer func() { _ = l.service.Close() }()
 
 	select {
@@ -483,7 +541,7 @@ func TestCloseReturnsWithinItsGraceWithAWedgedLoop(t *testing.T) {
 	terminals := newScriptedTerminals()
 	terminals.live("pane-close", "working\n")
 	terminals.blockFirst = true
-	l := openLoop(t, h, records, terminals, nil)
+	l := openTimedLoop(t, h, records, terminals)
 	defer close(terminals.block)
 
 	select {
@@ -866,10 +924,9 @@ func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 		t.Fatalf("the launched task resolves %+v (%v), want Running from the live terminal", got, err)
 	}
 
-	// The screen's first reading, then the unchanged one, absorbed. The
-	// ticker makes passes of its own at the interval, so each report read
-	// here is of a pass begun after the step before it.
-	first := l.freshPass(t)
+	// The screen's first reading, then the unchanged one, absorbed. Each
+	// report read here is of the pass kicked after the step before it.
+	first := l.pass(t)
 	if gone := detectionsOf(first, id, supervisor.KindTerminalGone); len(gone) != 0 {
 		t.Fatalf("a live worker was read as terminal gone: %+v", gone)
 	}
@@ -881,7 +938,7 @@ func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 	if err != nil || !has || markers.CaptureDigest.Or("") != captured.Digest {
 		t.Fatalf("the markers are %+v (has %v, %v), want the live screen's digest %s", markers, has, err, captured.Digest)
 	}
-	second := l.freshPass(t)
+	second := l.pass(t)
 	unchanged := detectionsOf(second, id, supervisor.KindTerminalUnchanged)
 	if len(unchanged) != 1 || unchanged[0].Verdict.Surfaces() {
 		t.Fatalf("the unchanged live screen = %+v, want one terminal-unchanged detection absorbed on the live probe", unchanged)
@@ -896,27 +953,15 @@ func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 	}
 	waitCaptured(t, provider, launched, "worker finished")
 	waitLiveness(t, provider, ref, taskstate.Dead)
-	// A ticker pass may have surfaced it already, in which case the kicked
-	// pass finds the row standing and absorbs it as surfaced this window;
-	// the wake table is the owner of the fact, so it is what is read. A
-	// ticker pass that began before the worker was read Dead can still post
-	// its report after freshPass drained the channel, and that report is the
-	// one freshPass returns, so passes are taken until one has read the
-	// worker gone rather than trusting the first.
-	var rows []store.Wake
-	deadline := time.Now().Add(loopWait)
-	for {
-		third := l.freshPass(t)
-		gone := detectionsOf(third, id, supervisor.KindTerminalGone)
-		if len(gone) == 1 && !gone[0].Verdict.Surfaces() &&
-			gone[0].Verdict.Reason != supervisor.ReasonSurfacedThisWindow {
-			t.Fatalf("the finished worker = %+v, want terminal gone surfaced", gone)
-		}
-		rows = wakesOfKind(t, l.records(t), id, supervisor.KindTerminalGone)
-		if len(gone) != 0 || len(rows) != 0 || time.Now().After(deadline) {
-			break
-		}
+	// The kicked pass is the first since the worker was read Dead, so it is
+	// the one that surfaces it, and the wake table, the owner of the fact,
+	// holds the row it appended.
+	third := l.pass(t)
+	if gone := detectionsOf(third, id, supervisor.KindTerminalGone); len(gone) != 1 ||
+		!gone[0].Verdict.Surfaces() || gone[0].Disposition != store.WakeAppended {
+		t.Fatalf("the finished worker = %+v, want terminal gone surfaced and appended", gone)
 	}
+	rows := wakesOfKind(t, l.records(t), id, supervisor.KindTerminalGone)
 	if len(rows) != 1 || !rows[0].Queued() || !strings.HasPrefix(rows[0].Marker, "terminal-gone:dead:"+ref+":") {
 		t.Fatalf("the terminal-gone wakes = %+v, want one queued row for the dead terminal", rows)
 	}
@@ -931,10 +976,10 @@ func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 // once the window since that surface has elapsed and not before, with the
 // instant in the wake's marker and in the markers' GoneSurfacedAt, and
 // keeps that spacing across a restart of the service, because the instant
-// it measures from is the durable marker. The wake table is read for
-// counts, since a ticker pass may make a surface before the kicked one;
-// nothing here sleeps. P9's "absence of evidence surfaces" is what is
-// established for the loop: the silence is never absorbed for good.
+// it measures from is the durable marker. Each pass's verdict is read off
+// its own report and the counts off the wake table; nothing here sleeps.
+// P9's "absence of evidence surfaces" is what is established for the loop:
+// the silence is never absorbed for good.
 func TestASilentCrashSurfacesAgainOncePerEscalationWindow(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P9)
@@ -971,7 +1016,20 @@ func TestASilentCrashSurfacesAgainOncePerEscalationWindow(t *testing.T) {
 		}
 	}
 
-	l.freshPass(t)
+	// surfaces is whether a pass's one terminal-gone detection surfaced:
+	// a dead terminal is detected on every pass, surfaced or absorbed.
+	surfaces := func(r passReport) bool {
+		t.Helper()
+		got := detectionsOf(r, task, supervisor.KindTerminalGone)
+		if len(got) != 1 || r.Tasks[task].Err != nil {
+			t.Fatalf("at %v the pass's terminal-gone detections are %+v (%v), want one", clock.Now(), got, r.Tasks[task].Err)
+		}
+		return got[0].Verdict.Surfaces()
+	}
+
+	if !surfaces(l.nextPass(t)) {
+		t.Fatal("the first pass over the dead terminal did not surface it")
+	}
 	first := gone(1)[0]
 	if !strings.HasPrefix(first.Marker, "terminal-gone:dead:pane-crashed:") || strings.Contains(first.Marker, ":again:") {
 		t.Fatalf("the first surface's marker is %q, want the first composition", first.Marker)
@@ -981,11 +1039,8 @@ func TestASilentCrashSurfacesAgainOncePerEscalationWindow(t *testing.T) {
 	// Inside the window: every pass absorbs, however many.
 	for i := 0; i < 3; i++ {
 		clock.Advance(15 * time.Second)
-		r := l.freshPass(t)
-		for _, d := range detectionsOf(r, task, supervisor.KindTerminalGone) {
-			if d.Verdict.Surfaces() {
-				t.Fatalf("a pass %v after the surface surfaced again: %+v", clock.Now().Sub(start), d)
-			}
+		if surfaces(l.pass(t)) {
+			t.Fatalf("a pass %v after the surface surfaced again", clock.Now().Sub(start))
 		}
 		gone(1)
 	}
@@ -994,8 +1049,9 @@ func TestASilentCrashSurfacesAgainOncePerEscalationWindow(t *testing.T) {
 	// The window since the surface elapses: one more surface, at once, and
 	// the window restarts at it.
 	clock.Advance(15 * time.Second)
-	l.freshPass(t)
-	l.freshPass(t)
+	if !surfaces(l.pass(t)) {
+		t.Fatal("the pass at the window did not surface the silence again")
+	}
 	again := gone(2)[1]
 	resurfaced := clock.Now()
 	if want := terminalGoneAgainMarker(goneDead, "pane-crashed", start, resurfaced); again.Marker != want || !again.Queued() {
@@ -1009,13 +1065,14 @@ func TestASilentCrashSurfacesAgainOncePerEscalationWindow(t *testing.T) {
 		t.Fatalf("acknowledging: %v", err)
 	}
 	clock.Advance(59 * time.Second)
-	l.freshPass(t)
+	if surfaces(l.pass(t)) {
+		t.Fatal("a pass a second short of the window surfaced")
+	}
 	gone(2)
-	// Two passes, as at every surface here: a ticker pass already under
-	// way when the clock moved can be the report the first one returns.
 	clock.Advance(time.Second)
-	l.freshPass(t)
-	l.freshPass(t)
+	if !surfaces(l.pass(t)) {
+		t.Fatal("the pass at the next window did not surface")
+	}
 	gone(3)
 	third := clock.Now()
 	lastSurface(third)
@@ -1033,13 +1090,15 @@ func TestASilentCrashSurfacesAgainOncePerEscalationWindow(t *testing.T) {
 	}
 	l = openLoop(t, h, reopened, terminals, clock)
 	closed = false
-	l.freshPass(t)
-	l.freshPass(t)
+	if surfaces(l.nextPass(t)) {
+		t.Fatal("the reopened service's first pass surfaced inside the window")
+	}
 	gone(3)
 	lastSurface(third)
 	clock.Advance(30 * time.Second)
-	l.freshPass(t)
-	l.freshPass(t)
+	if !surfaces(l.pass(t)) {
+		t.Fatal("the reopened service did not surface at the window")
+	}
 	gone(4)
 	lastSurface(clock.Now())
 }
@@ -1059,7 +1118,7 @@ func TestACompleteTaskProducesNoWakeAndAnUnanswerableReferenceSurfacesAsUnobserv
 	defer func() { _ = l.service.Close() }()
 
 	first := l.nextPass(t)
-	second := l.freshPass(t)
+	second := l.pass(t)
 	if got := detectionsOf(first, unseen, supervisor.KindTerminalGone); len(got) != 1 ||
 		!strings.HasPrefix(got[0].Marker, "terminal-gone:unobservable:pane-unseen:") {
 		t.Fatalf("the task with an unanswerable reference = %+v, want terminal gone as unobservable", got)
