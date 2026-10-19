@@ -101,10 +101,16 @@ acknowledgement.
 
 When an investigation has filed its report, `assistant --json tasks ID`
 carries it at `report`: `summary`, `findings`, `evidence` (paths the worker
-named), `evidence_file` (the on-disk copy under the task's directory), and
-`recorded_at`. Read that field; do not ask the worker to repeat the report,
+named), `uncertainties` (what the worker could not settle) and `follow_ups`
+(further work it recommends), each a list of `text` with an optional
+`location`, `evidence_file` (the on-disk copy under the task's directory),
+and `recorded_at`. Uncertainties and follow-ups are not findings: they raise
+no hold and start nothing, so a decision the person owes is only ever an
+`ask` finding's hold, and a follow-up becomes work only if you create it.
+Read that field; do not ask the worker to repeat the report,
 and do not relay its wording to the person (P13). The plain `assistant tasks`
-line only says the report is in and points you at `--json`. A reported
+line only says the report is in, counts its uncertainties and follow-ups
+without their text, and points you at `--json`. A reported
 investigation whose decisions are still open also lists those holds; answer
 them with `assistant --task ID --answer ...` before you promote or record
 findings relayed.

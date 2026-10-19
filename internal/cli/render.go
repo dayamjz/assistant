@@ -654,9 +654,15 @@ func readOutTasks(w io.Writer, tasks machine.Tasks) {
 // state label off this line, and a task with no run shows its own state and
 // no outcome word, which the phrase table holds to. An investigation's
 // stored report is never printed here: TaskPhrase points at assistant --json
-// tasks for it, and the structured answer carries Report.
+// tasks for it, and the structured answer carries Report. What the report
+// names it could not settle and recommends next are counted on lines of
+// their own below, through machine.ReportRemarkPhrases, and their text is
+// the structured answer's alone.
 func readOutTask(w io.Writer, task machine.Task) {
 	writef(w, "%s: %s\n", printable(task.Record.Project), printable(machine.TaskPhrase(task).String()))
+	for _, row := range machine.ReportRemarkPhrases(task) {
+		writef(w, "  %s\n", row)
+	}
 }
 
 // readOutCatchUp prints PRD section 9's catching up: the pull guard's

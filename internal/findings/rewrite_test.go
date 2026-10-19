@@ -78,7 +78,7 @@ func TestRewrittenReachesEveryStringField(t *testing.T) {
 		t.Fatal("rewriting the report wrote through to the report it was rewritten from")
 	}
 	if empty := (findings.Report{}).Rewritten(dropSecret); empty.Findings != nil || empty.Read != nil ||
-		empty.Traced != nil || empty.Tested != nil || empty.Evidence != nil {
+		empty.Traced != nil || empty.Tested != nil || empty.Evidence != nil || empty.Uncertainties != nil || empty.FollowUps != nil {
 		t.Fatalf("rewriting an empty report made its lists non-nil: %+v", empty)
 	}
 }

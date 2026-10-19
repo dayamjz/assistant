@@ -43,6 +43,25 @@ func fixtureTask() machine.Task {
 	}
 }
 
+// fixtureReportedTask is an investigation whose stored report names
+// uncertainties and follow-ups, each carrying an identifier, a home path and
+// a stage name, which the listing counts and never prints.
+func fixtureReportedTask() machine.Task {
+	path := filepath.Join(vocabtest.SampleRoot(), "tasks", "abcdefghij23", "copy", "notes.txt")
+	return machine.Task{
+		Record: store.Task{ID: "abcdefghij23", Shape: store.TaskInvestigation, Project: "the importer"},
+		State:  taskstate.Resolution{TaskID: "abcdefghij23", State: taskstate.Reported, Source: taskstate.SourceReport},
+		Report: &machine.InvestigationReport{
+			Summary: "looked at run abcdefghij23",
+			Uncertainties: findings.RemarkList{
+				{Text: "whether the review stage of abcdefghij23 reads " + path, Location: findings.Location{Path: path}},
+				{Text: "which callers of abcdefghij23 rely on the order"},
+			},
+			FollowUps: findings.RemarkList{{Text: "rerun the test stage of abcdefghij23"}},
+		},
+	}
+}
+
 // fixtureRun is a run at a hold, with no position, no stage views and no
 // decision, so what it renders is the phrased head alone; the details and the
 // findings behind a decision are renderers that are not phrased.
@@ -205,7 +224,7 @@ func fixtures(t *testing.T) map[string]any {
 		"status":  status,
 		"run":     run,
 		"runs":    machine.Runs{Runs: []store.Run{run.Record}},
-		"tasks":   machine.Tasks{Tasks: []machine.Task{task}},
+		"tasks":   machine.Tasks{Tasks: []machine.Task{task, fixtureReportedTask()}},
 		"task":    task,
 		"service": withManaged(status.Service),
 		"managed removal": machine.ManagedRemoval{

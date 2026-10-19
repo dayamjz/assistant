@@ -67,13 +67,26 @@ type Report struct {
 	Tested []string `json:"tested,omitempty"`
 	// Evidence is the artifacts the stage produced.
 	Evidence []Evidence `json:"evidence,omitempty"`
+	// Uncertainties are what the stage could not settle, in its own words.
+	// Each is a Remark and never a Finding, so none of them holds anything:
+	// an uncertainty that needs a person's decision is an ask finding
+	// instead. An investigation report is the one the PRD asks to carry
+	// them; any stage may, and nothing reads them to decide anything.
+	Uncertainties RemarkList `json:"uncertainties,omitempty"`
+	// FollowUps are the next pieces of work the stage recommends, in its own
+	// words, on the same terms as Uncertainties: a recommendation registers
+	// no hold and starts nothing.
+	FollowUps RemarkList `json:"follow_ups,omitempty"`
 }
 
 // Normalize returns a copy of the report with every finding normalized and
 // with identifiers assigned to the findings that arrived without one. It
 // resolves every unrecognized action to ActionAsk and every unrecognized
 // severity to SeverityWarning, trims the text fields, and drops entries of
-// Read, Tested, and a finding's Cites that are empty once trimmed.
+// Read, Tested, and a finding's Cites that are empty once trimmed, and the
+// remarks of Uncertainties and FollowUps that carry nothing once trimmed.
+// Like every other text field, a remark is bounded only by MaxRawBytes, the
+// bound on the whole output a report is read from.
 //
 // It does not resolve Risk, since there is no safe value to resolve an
 // unrecognized one to; it trims and folds a recognized one and otherwise
@@ -95,6 +108,8 @@ func (r Report) Normalize() Report {
 	r.Traced = normalizeTraces(r.Traced)
 	r.Tested = normalizeTested(r.Tested)
 	r.Evidence = normalizeEvidence(r.Evidence)
+	r.Uncertainties = normalizeRemarks(r.Uncertainties)
+	r.FollowUps = normalizeRemarks(r.FollowUps)
 	return r
 }
 

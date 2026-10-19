@@ -63,6 +63,20 @@
 // not either understate the risk or manufacture alarm, so the person sees the
 // raw output instead.
 //
+// A report also carries, beside its findings and evidence, the uncertainties
+// the stage could not settle and the follow-ups it recommends, each a list of
+// Remark: a text and an optional location, with no action and no severity.
+// They are fields of the report rather than findings, so nothing that decides
+// from an action reads them, and in particular internal/tasks registers no
+// hold for one: an uncertainty that needs a person's decision has to be an ask
+// finding to hold anything. That is why a remark written with an action is
+// refused with DefectActionOutsideFinding rather than read with the action
+// dropped, which would turn a stated ask into text that holds nothing. A
+// remark in a shape this package cannot read is kept as the JSON it was
+// written as, on the terms a trace is, so it costs the findings nothing.
+// Investigation reports are the ones told about these fields; any stage may
+// write them and no stage body reads them.
+//
 // An unreadable severity is different again, and this is this package's own
 // rule rather than one PRD section 5 states. A missing or unrecognized
 // severity becomes SeverityWarning. Severity orders and colors a list; it never

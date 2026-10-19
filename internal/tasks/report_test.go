@@ -135,3 +135,87 @@ func TestAReportRefusalQuotesTheFiledTextRedacted(t *testing.T) {
 		t.Fatalf("the refusal reads %q, want the filed text quoted with its credential removed", text)
 	}
 }
+
+// An investigation's uncertainties and follow-ups are stored with the
+// report and register no hold: StoreReport's registration reads findings
+// alone. The control is the same report with one ask finding added, which
+// registers exactly that hold, so the registration was asked of the report
+// and found nothing to hold in the remarks. A credential the worker wrote
+// into a follow-up is gone from the stored report, the body and the evidence
+// copy, and an uncertainty carrying an action is refused with nothing
+// stored.
+func TestStoreReportKeepsUncertaintiesAndFollowUpsAndHoldsNoneOfThem(t *testing.T) {
+	principles.Cite(t, principles.P3)
+	const password = "hunter2-follow-up-password"
+	remarks := `"uncertainties": [{"text": "whether the cache is ever cold", "location": "pkg/cache.go:12"}, "which callers rely on the order"], ` +
+		`"follow_ups": ["rotate the mirror at https://deploy:` + password + `@example.com/o/r.git"]`
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		name     string
+		findings string
+		holds    []string
+	}{
+		{"remarks alone", `[{"severity": "info", "action": "note", "description": "the retry path is bounded"}]`, nil},
+		{"with an ask", `[{"severity": "info", "action": "note", "description": "the retry path is bounded"}, ` +
+			`{"severity": "warning", "action": "ask", "description": "should the old order be kept?"}]`, []string{"should the old order be kept?"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newCleanupSubject(t, nil)
+			tk := s.investigationTask(t)
+			raw := `{"summary": "looked at the retry path", "findings": ` + c.findings + `, ` + remarks + `}`
+			stored, err := s.cleaner.StoreReport(ctx, tk.id, raw)
+			if err != nil {
+				t.Fatalf("StoreReport: %v", err)
+			}
+			var subjects []string
+			for _, h := range stored.Holds {
+				subjects = append(subjects, h.Subject)
+			}
+			if strings.Join(subjects, "|") != strings.Join(c.holds, "|") {
+				t.Fatalf("registered holds %q, want %q", subjects, c.holds)
+			}
+			open, err := s.store.OpenHolds(ctx)
+			if err != nil || len(open) != len(c.holds) {
+				t.Fatalf("open holds = %+v, %v, want %d", open, err, len(c.holds))
+			}
+			record, err := s.store.TaskReport(ctx, tk.id)
+			if err != nil || len(record.HoldKeys) != len(c.holds) {
+				t.Fatalf("TaskReport = %+v, %v", record, err)
+			}
+			var parsed findings.Report
+			if err := json.Unmarshal(record.Report, &parsed); err != nil {
+				t.Fatalf("the stored report does not decode: %v", err)
+			}
+			if len(parsed.Uncertainties) != 2 || parsed.Uncertainties[0].Text != "whether the cache is ever cold" ||
+				parsed.Uncertainties[0].Location.String() != "pkg/cache.go:12" || len(parsed.FollowUps) != 1 ||
+				!strings.HasPrefix(parsed.FollowUps[0].Text, "rotate the mirror at https://") {
+				t.Fatalf("the stored report carries uncertainties %+v and follow-ups %+v", parsed.Uncertainties, parsed.FollowUps)
+			}
+			evidence, err := os.ReadFile(stored.Evidence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for what, text := range map[string]string{"stored report": string(record.Report), "body": record.Body, "evidence copy": string(evidence)} {
+				if strings.Contains(text, password) {
+					t.Errorf("the %s keeps the credential written into a follow-up:\n%s", what, text)
+				}
+			}
+		})
+	}
+
+	s := newCleanupSubject(t, nil)
+	tk := s.investigationTask(t)
+	_, err := s.cleaner.StoreReport(ctx, tk.id,
+		`{"summary": "looked", "uncertainties": [{"text": "should the old order be kept?", "action": "ask"}]}`)
+	var verr *findings.ValidationError
+	if !errors.Is(err, ErrReportUnreadable) || !errors.As(err, &verr) || !verr.HasDefect(findings.DefectActionOutsideFinding) {
+		t.Fatalf("an uncertainty with an action = %v, want ErrReportUnreadable wrapping %s", err, findings.DefectActionOutsideFinding)
+	}
+	if _, err := s.store.TaskReport(ctx, tk.id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a refused report left a record: %v", err)
+	}
+	if holds, err := s.store.OpenHolds(ctx); err != nil || len(holds) != 0 {
+		t.Fatalf("a refused report registered holds: %+v, %v", holds, err)
+	}
+}

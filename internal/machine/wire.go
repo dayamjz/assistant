@@ -470,8 +470,8 @@ type Task struct {
 }
 
 // InvestigationReport is what task.get (and every other answer that carries
-// a Task) exposes of an investigation's stored report. Summary, Findings and
-// Evidence are the worker's filed report as internal/findings decoded it from
+// a Task) exposes of an investigation's stored report. Summary, Findings,
+// Evidence, Uncertainties and FollowUps are the worker's filed report as internal/findings decoded it from
 // the task_report row; EvidenceFile is the evidence copy under the task's
 // directory for a person to open. The row is the source (P8); the file is
 // beside it and may be missing after a crash between the two writes.
@@ -482,6 +482,15 @@ type InvestigationReport struct {
 	Findings []findings.Finding `json:"findings,omitempty"`
 	// Evidence are the artifact paths the report named, as filed.
 	Evidence []findings.Evidence `json:"evidence,omitempty"`
+	// Uncertainties are what the investigation could not settle, as filed.
+	// None of them is a hold: one needing a decision is an ask finding in
+	// Findings instead. The person-facing rendering counts them through
+	// UncertaintiesPhrase and never relays their text (P13).
+	Uncertainties findings.RemarkList `json:"uncertainties,omitempty"`
+	// FollowUps are the next pieces of work the investigation recommends,
+	// as filed, on the same terms as Uncertainties: none starts anything,
+	// and the rendering counts them through FollowUpsPhrase.
+	FollowUps findings.RemarkList `json:"follow_ups,omitempty"`
 	// EvidenceFile is the path of the on-disk evidence copy, empty when the
 	// home could not name one for the task.
 	EvidenceFile string `json:"evidence_file,omitempty"`

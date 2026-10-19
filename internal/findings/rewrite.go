@@ -30,12 +30,13 @@ func ParseReportThrough(raw string, text func(string) string) (Report, error) {
 // Rewritten returns a copy of the report with every string it carries passed
 // through text: the summary, revision, risk and its rationale, every read
 // path, every trace's path and reason, every entry of Tested, every evidence
-// label and path, and every finding's identifier, severity, action, location
-// path, citations and description.
+// label and path, every finding's identifier, severity, action, location
+// path, citations and description, and every uncertainty's and follow-up's
+// text and location path.
 //
 // Every string rather than the fields an agent is likely to write in, because
 // the caller asking cannot tell which of them carry what it is removing. A
-// field Report, Finding, Trace, Evidence or Location gains later has to be
+// field Report, Finding, Trace, Evidence, Remark or Location gains later has to be
 // added here; TestRewrittenReachesEveryStringField fills every string field
 // by reflection, so a new one left out of this fails that test.
 //
@@ -80,6 +81,8 @@ func (r Report) Rewritten(text func(string) string) Report {
 		}
 		r.Findings = fs
 	}
+	r.Uncertainties = rewrittenRemarks(r.Uncertainties, text)
+	r.FollowUps = rewrittenRemarks(r.FollowUps, text)
 	return r
 }
 
