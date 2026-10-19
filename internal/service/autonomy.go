@@ -58,6 +58,11 @@ import (
 //     record yet.
 //   - Which merge method is used is internal/forge's GitHub adapter's
 //     choice among those the repository permits, stated there.
+//   - Nothing on gitlab.com is merged here. autonomy.merge names a
+//     repository as owner/name, internal/config refuses any other shape, and
+//     internal/forge writes a GitLab specifier with its host in front, so no
+//     entry is ever the specifier of a GitLab run and MergesIn is false for
+//     every one of them.
 
 // errMergeNotReady is the class of every refusal the live read makes.
 var errMergeNotReady = errors.New("service: the pull request is not ready for the program to merge")

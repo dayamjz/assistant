@@ -76,21 +76,21 @@ var ErrRepositoryRoles = errors.New("service: this build resolves one roles tabl
 
 // ErrForkUnresolved reports a repository record naming a fork that a run
 // cannot push to and propose from: the fork or its upstream is not a
-// repository on the code host this build addresses, or the fork names the
-// upstream itself. The run is refused before anything is recorded as running,
-// because pushing anywhere else would be a guess about where its work goes.
-// Running assistant init again with a fork that resolves, or without one,
-// resolves it.
+// repository on a code host this build addresses, the two are on different
+// hosts, or the fork names the upstream itself. The run is refused before
+// anything is recorded as running, because pushing anywhere else would be a
+// guess about where its work goes. Running assistant init again with a fork
+// that resolves, or without one, resolves it.
 var ErrForkUnresolved = errors.New("service: the repository record names a fork this run cannot push to and propose from")
 
 // ErrUnsupportedHost reports a repository whose upstream names a network host
-// this build does not address (GitLab, GitHub Enterprise, an scp-style host
-// that is not github.com, or a scheme-less host/path form). The run is refused
-// rather than walked to the pull request stage and stalled; begin ends any
-// pending record for that refusal before returning, so the branch is not left
-// with an unfinished run. A local path or file:// remote is not this error:
-// those have no code host and the run skips the pull request and checks
-// stages after push.
+// this build does not address (a self-managed GitLab, GitHub Enterprise, an
+// scp-style host that is neither github.com nor gitlab.com, or a scheme-less
+// host/path form). The run is refused rather than walked to the pull request
+// stage and stalled; begin ends any pending record for that refusal before
+// returning, so the branch is not left with an unfinished run. A local path
+// or file:// remote is not this error: those have no code host and the run
+// skips the pull request and checks stages after push.
 var ErrUnsupportedHost = errors.New("service: the repository's upstream names a host this build does not address")
 
 // trustedRef is the name the gate repository holds a run's freshly fetched

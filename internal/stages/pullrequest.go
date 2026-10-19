@@ -181,8 +181,8 @@ const titleLimit = 72
 //
 // That check is about this stage's own write and not about the provider's
 // behaviour. It is what makes recording a number mean the number is usable;
-// the GitHub adapter in this module already refuses such an answer, so against
-// that adapter this catches nothing, and forge.Provider promises no more than
+// both adapters in this module already refuse such an answer, so against
+// either this catches nothing, and forge.Provider promises no more than
 // that its answer is a pull request.
 func PullRequest(deps StageDeps) pipeline.Implementation {
 	return pipeline.Implementation{

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/forge"
+	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -174,9 +175,12 @@ func carriesCredential(args []string, stdin string) (string, bool) {
 	return "", false
 }
 
-// TestMain runs the stand-in provider when the environment asks for it, and
-// the tests otherwise.
+// TestMain runs one of the two stand-in providers when the environment asks
+// for it, and the tests otherwise: this package's private one, and
+// forgetest's, which the conformance suite holds the GitHub adapter to beside
+// the GitLab adapter over labtest.
 func TestMain(m *testing.M) {
+	forgetest.Main()
 	if dir := os.Getenv(fakeGHDir); dir != "" {
 		os.Exit(fakeGHMain(dir))
 	}

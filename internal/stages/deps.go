@@ -134,7 +134,8 @@ type StageDeps struct {
 	// passes it to Open.
 	//
 	// It is nil only where nothing wired it: internal/service builds one
-	// forge.GitHubHost and every run of that service opens through it. A run
+	// forge.Hosts and every run of that service opens through it, which hands
+	// the specifier to the adapter for the host it names. A run
 	// whose KeyForgeRepository is empty has no provider to open, because
 	// forge.Host.Open refuses an empty specifier; a body that needs a code
 	// host is to report that rather than proceed without one.

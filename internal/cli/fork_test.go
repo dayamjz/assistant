@@ -68,8 +68,9 @@ func TestInitRecordsAForkBesideItsUpstream(t *testing.T) {
 }
 
 // init refuses a fork a run could neither send its branch to and propose
-// from: one that is not a repository on github.com, one given beside an
-// upstream that is not, and one naming the upstream itself in another
+// from: one that is not a repository on a host this build addresses, one on
+// another host than its upstream, one given beside an upstream that is not a
+// repository on such a host, and one naming the upstream itself in another
 // spelling. Each refusal is incorrect usage, because the remedy is a flag the
 // caller supplies, is internal/machine's row for its reason in both
 // renderings, and sets up nothing: no gate, no record. The control is the
@@ -84,9 +85,11 @@ func TestInitRefusesAForkItCannotProposeFrom(t *testing.T) {
 		reason machine.ForkRefusal
 		args   []string
 	}{
-		{"a fork off github.com", machine.ForkUnaddressable,
+		{"a fork on no host this build addresses", machine.ForkUnaddressable,
+			[]string{"--upstream", forkTestUpstream, "--fork-url", "https://gitlab.example.com/me/assistant.git"}},
+		{"a fork on another host than its upstream", machine.ForkOnAnotherHost,
 			[]string{"--upstream", forkTestUpstream, "--fork-url", "https://gitlab.com/me/assistant.git"}},
-		{"an upstream off github.com", machine.ForkUpstreamUnaddressable,
+		{"an upstream on no host this build addresses", machine.ForkUpstreamUnaddressable,
 			[]string{"--fork-url", forkTestFork}},
 		{"the upstream again", machine.ForkIsUpstream,
 			[]string{"--upstream", forkTestUpstream, "--fork-url", "git@github.com:Upstream/assistant"}},

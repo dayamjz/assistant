@@ -3,8 +3,12 @@
 // state, with one interface and one adapter per provider, and PRD section 5's
 // pull request and checks stages are what it answers to.
 //
-// Provider is the interface. GitHub is the adapter over the gh command line,
-// and it is the only implementation in this module.
+// Provider is the interface, and this module has two implementations: GitHub,
+// the adapter over the gh command line, and the GitLab adapter over GitLab's
+// REST API, which GitLabHost opens. Hosts holds both and is the Host the
+// rest of the product is handed: it gives a specifier to the adapter for the
+// host the specifier names, so which code host a run reaches is read off the
+// run's own record and nothing else.
 //
 // # A provider addresses one repository, and a Host is how it gets one
 //
@@ -14,8 +18,8 @@
 // package splits the two by lifetime. Host holds what is settled once - the
 // command line, the environment, the redactor, the output bound - and
 // Host.Open takes the repository, which is the run's own fact and arrives from
-// the run's record. GitHubRepository is what reads that specifier out of the
-// upstream URL a record holds.
+// the run's record. RepositoryOf is what reads that specifier out of the
+// upstream URL a record holds, through GitHubRepository or GitLabRepository.
 //
 // GitHubRepository reads a remote on GitHubHostname and no other host, and
 // every invocation is given that host in GH_HOST. Both are there for one
@@ -24,13 +28,13 @@
 // send a pull request to the github.com repository sharing the name, and an
 // operator's environment pointing gh elsewhere would move where a write lands.
 // What that costs is a GitHub Enterprise installation, which this adapter does
-// not address; a run whose upstream is on one carries no specifier, and the
-// stage that needs a code host refuses.
+// not address; a run whose upstream is on one carries no specifier, and
+// internal/service refuses the run before it starts.
 //
 // # A write goes where the run said, or it does not happen
 //
 // Opening a pull request is outward-facing and cannot be taken back, so the
-// two write operations - Open and UpdateBody - are preceded by a confirmation
+// write operations - Open, UpdateBody and Merge - are preceded by a confirmation
 // that the repository the provider resolves this adapter's specifier to is
 // that specifier. An adapter that names no repository cannot write at all,
 // because there is nothing for the provider's answer to be checked against.
@@ -158,6 +162,72 @@
 // merge-state summary, because that summary folds check status into the
 // mergeability answer and would collapse exactly the distinction above.
 //
+// # GitLab
+//
+// The GitLab adapter speaks GitLab's REST API, version 4, through one
+// net/http client its GitLabHost holds, rather than through the glab command
+// line. Two reasons decided that. The host a request lands on is then a
+// constant in this package rather than whatever a command line resolves from
+// its own configuration and the environment, so the pin GH_HOST buys for gh
+// is structural here. And the answers are GitLab's documented JSON objects,
+// which labtest can serve over HTTP exactly as the adapter reads them, so the
+// stand-in is wire-level without modelling a second tool's output format and
+// exit statuses. What it costs is that this package handles the token
+// itself, so keeping it out of every refusal is this package's job: it
+// travels only in the PRIVATE-TOKEN header, the endpoint can be nothing but
+// gitlab.com or a loopback stand-in, and a redirect is refused rather than
+// followed with the token on it.
+//
+// A GitLab specifier names its host - gitlab.com/group/project - where a
+// GitHub one is owner/name. GitLabRepository says why: a specifier is
+// compared wherever a repository is named, and a two-segment GitLab path
+// would otherwise be the same text as a GitHub repository on a different
+// host. In particular internal/config's autonomy.merge reads entries as
+// owner/name, so no entry names a GitLab project and the program merges
+// nothing on GitLab; extending it is a decision about that key, not about
+// this adapter.
+//
+// The facts a caller acts on are held to the same rules as GitHub's, and the
+// conformance suite runs both adapters through the same assertions: an empty
+// check list is not green, a state the adapter does not recognize keeps the
+// caller waiting, a cancelled pipeline is settled and not a pass, a merge is
+// bound to the observed head or not asked for, and a write is preceded by a
+// confirmation of every project it names. Where GitLab's model differs, the
+// adapter takes the strict reading and says so where it reads it:
+//
+//   - The checks are the merge request's pipelines on its head commit,
+//     followed page by page to a bound; Checks says why a skipped pipeline is
+//     no check at all, why the commit status list is not read, and what that
+//     leaves unread.
+//   - Mergeability is read from has_conflicts and merge_status, never from
+//     detailed_merge_status, which folds pipelines and approvals in.
+//   - A merge sends the head commit and nothing else, so no merge method is
+//     chosen here and no merge is scheduled for when a pipeline succeeds.
+//   - Find on an adapter with no fork keeps only a merge request whose source
+//     project is its target project, which is stricter than the GitHub
+//     adapter's read of the same case.
+//   - Neither adapter reads approvals or discussions. A merge GitLab refuses
+//     for either arrives from Merge as ReasonRejected, carrying its message.
+//
+// Its residual gaps, beyond those it shares with the GitHub adapter:
+//
+//   - None of this was exercised against gitlab.com. The request shapes, the
+//     status words and the error object are taken from GitLab's API
+//     documentation, and labtest answers with those shapes; a field GitLab
+//     renames arrives as its zero value, which reads unknown, unrecognized or
+//     malformed rather than as a pass.
+//   - A self-managed GitLab installation is not addressed, for the reason a
+//     GitHub Enterprise one is not.
+//   - The proxy settings in the service's environment apply to the client,
+//     as they do to any net/http client; certificate verification is the
+//     standard library's default and is not relaxed.
+//   - Telling a permission refusal from an authentication failure rests on
+//     the status GitLab answers with; a 401 for any reason is
+//     ReasonUnauthenticated.
+//   - The token's value is not a shape internal/redact recognizes, so what
+//     keeps it out of a refusal is that nothing here puts it there, not a
+//     redactor that would catch it if something did.
+//
 // # A provider that cannot answer refuses
 //
 // Every failure is a *Refusal naming a Reason, and a refusal is a typed result
@@ -203,9 +273,11 @@
 //
 // # What this package does not do
 //
-// It does not merge, and it has no way to. PRD section 9 keeps merge policy
-// with the forge and the operator, and the gate publishes facts rather than
-// reaching a verdict on them.
+// It does not decide whether to merge. Provider.Merge asks the host to merge
+// one pull request bound to one head, and internal/service's autonomy merge
+// is its one caller and the place that decides when to ask; whether the merge
+// is allowed stays the host's, as PRD section 9 keeps merge policy with the
+// forge and the operator.
 //
 // It does not poll. Checks reports what the provider says now, and how long a
 // run waits, when it re-reads, and when it gives up belong to the checks stage
@@ -232,10 +304,18 @@
 //
 // # Requirements
 //
-// The gh command line on PATH, or one named with WithBinary, authenticated for
-// the repository being addressed.
+// For a github.com repository, the gh command line on PATH, or one named with
+// WithBinary, authenticated for the repository being addressed. For a
+// gitlab.com project, an access token given to WithGitLabToken, which
+// internal/service reads from GitLabTokenVariable, with the scopes the
+// project's API needs.
 //
-// # The stand-in another package tests against
+// # The stand-ins another package tests against
+//
+// labtest is the same for the GitLab adapter: a stand-in GitLab API on a
+// loopback address, answering with GitLab's documented objects, which the
+// real adapter reads over HTTP. The conformance suite here runs the GitHub
+// adapter over forgetest and the GitLab adapter over labtest.
 //
 // forgetest is a stand-in gh answering over the wire, read by this package's
 // real adapter, scripted with only shapes gh puts on standard output, on

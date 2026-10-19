@@ -570,16 +570,53 @@ run (`no_code_host`), and the run ends `pushed` rather than `checks-passed`
 (checks that did not run are never claimed). Merge the change on the remote
 yourself. `assistant doctor` says so up front on its upstream row.
 
-A remote that names a network host this build does not address (GitLab, GitHub
-Enterprise, an scp-style host that is not github.com) is refused when a run
-starts, with a typed error, rather than walked eight stages and stalled.
+A remote that names a network host this build does not address (a self-managed
+GitLab, GitHub Enterprise, an scp-style host that is neither github.com nor
+gitlab.com) is refused when a run starts, with a typed error, rather than
+walked eight stages and stalled.
+
+## Repositories on GitLab
+
+A repository whose recorded upstream is a project on gitlab.com is validated
+the same way and proposed as a merge request there. The service talks to
+GitLab's REST API directly, not through `glab`, and authenticates with an
+access token it reads once, when it starts, from `GITLAB_TOKEN` in its own
+environment; a configuration file cannot supply one. Without a token every
+request to GitLab is refused before it is sent, so a run reaches the pull
+request stage and stops there saying so. `assistant doctor` reports on its
+code-host row whether the token is set in the environment you run doctor in,
+which is not necessarily the one the service was started in.
+
+What differs from GitHub, each in the stricter direction:
+
+- The checks are the merge request's pipelines on its head commit. A pipeline
+  GitLab reports `skipped` ran nothing and is not counted, so a head whose
+  only pipeline was skipped has no checks, which is not a pass without
+  `no_ci`. A pipeline waiting on a manual job keeps the run waiting. A
+  pipeline a person replaced with a newer one on the same commit is still
+  read, so a failed one keeps the checks failed until the head moves.
+- The commit status list is not read, because GitLab lists a pipeline's own
+  jobs there, including jobs allowed to fail. A status an external system
+  posts that appears in no pipeline on the merge request is therefore not
+  read.
+- Whether the merge request can be merged is read from GitLab's conflict and
+  merge-status fields, not its detailed status, which folds in pipelines and
+  approvals.
+- The program never merges on GitLab, as the merge order section says.
+
+A fork on gitlab.com is supported beside an upstream on gitlab.com; `assistant
+init` refuses a fork on one host beside an upstream on the other.
 
 ## Merge order and stacking
 
-The gate opens or updates one pull request per branch and never merges it. This
-build has no merge step: its outcome vocabulary has `passed` for a merged pull
-request, and what produces it is a pull request someone merged while the checks
-stage waited on it, or while the hold that wait left was standing. Merge order, stacked pull
+The gate opens or updates one pull request per branch. It merges one only in a
+repository the operator's global-only `autonomy.merge` lists, after the live
+read PRD section 6 gives, and a merge request on GitLab never, because that
+list names repositories as `owner/name` and a GitLab run's repository is named
+with its host. Its outcome vocabulary has `passed` for a merged pull request,
+and otherwise what produces it is a pull request someone merged while the
+checks stage waited on it, or while the hold that wait left was standing, or
+after the run ended `checks-passed`. Merge order, stacked pull
 requests, and queueing belong to the forge or to merge-queue tooling you already
 use, and the binary has no stack view. If you stack branches, each is pushed and
 validated as its own run, and the pull request stage reports which base the run

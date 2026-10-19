@@ -131,11 +131,12 @@ type Options struct {
 	// LockWait is how long to wait for the home's lock. Zero means
 	// DefaultLockWait, and a negative value asks once and refuses.
 	LockWait time.Duration
-	// Environment is where the decision-model key, judge.KeyVariable, is
-	// looked up, once, when the service opens. Nil means the process
-	// environment through os.LookupEnv, which is the operator's: the key is
-	// never read from a configuration file, and a key put in the environment
-	// after the service opened is not seen until it restarts.
+	// Environment is where the decision-model key, judge.KeyVariable, and the
+	// GitLab token, forge.GitLabTokenVariable, are looked up, once, when the
+	// service opens. Nil means the process environment through
+	// os.LookupEnv, which is the operator's: neither is ever read from a
+	// configuration file, and one put in the environment after the service
+	// opened is not seen until it restarts.
 	Environment func(string) (string, bool)
 	// Judge is further options for the decision-model client, applied before
 	// the recorder this service gives it, so a test can point the client at a
@@ -152,7 +153,16 @@ type Options struct {
 	// with forge.ReasonUnavailable, never from Open. It is one host for both
 	// readers on purpose, so what a stage read and what the service re-reads
 	// come from the same place.
+	//
+	// It is the GitHub member of the service's forge.Hosts, which is what the
+	// stages and every reader are handed: a run whose repository is on
+	// github.com reaches this, and one on gitlab.com reaches GitLab.
 	Forge forge.Host
+	// GitLab is the GitLab member of the same forge.Hosts, on Forge's terms.
+	// Zero means GitLab's REST API on gitlab.com, with the token read once,
+	// here, from forge.GitLabTokenVariable in the service's environment, which
+	// the product passes; a test passes a host built on labtest.
+	GitLab forge.Host
 	// Terminals is what the supervisor loop observes a task's terminal
 	// through, and what every task reader this service builds probes
 	// through, reconciliation's included. Nil, which is what the product
@@ -228,8 +238,10 @@ type Service struct {
 	// It is built once at Open, from the key in the operator's environment,
 	// with the recorder that feeds the store's decision-model record.
 	judge *judge.Client
-	// forge is the code host, settled at Open from Options.Forge; checkshold.go
-	// is the one reader of it outside the stage dependencies.
+	// forge is every code host this service addresses, a forge.Hosts settled
+	// at Open from Options.Forge and Options.GitLab, which hands a specifier
+	// to the host it names; the stage dependencies, the cleanup decision and
+	// this package's own reads of a pull request all open through it.
 	forge forge.Host
 	// terminals is Options.Terminals, or heldTerminals over this service's
 	// own provider when none was passed: the one seam a task's terminal is
@@ -515,12 +527,12 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	if s.terminals == nil {
 		s.terminals = heldTerminals{s}
 	}
-	s.forge = o.Forge
-	if s.forge == nil {
-		// Built with its own redactor because the redactor is otherwise
-		// chosen per topology; both are redact.New, which internal/redact
-		// makes the one owner of what is removed.
-		s.forge = forge.NewGitHubHost(redact.New())
+	// Both hosts are built with their own redactor because the redactor is
+	// otherwise chosen per topology; all are redact.New, which
+	// internal/redact makes the one owner of what is removed.
+	github := o.Forge
+	if github == nil {
+		github = forge.NewGitHubHost(redact.New())
 	}
 	if s.catalog == nil {
 		// The shipped adapters are built with the recorder that feeds the
@@ -539,6 +551,16 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	}
 	s.judge = judge.FromEnvironment(lookup,
 		append(append([]judge.Option(nil), o.Judge...), judge.WithRecorder(decisionRecorder{s}))...)
+	gitlab := o.GitLab
+	if gitlab == nil {
+		token, _ := lookup(forge.GitLabTokenVariable)
+		host, err := forge.NewGitLabHost(redact.New(), forge.WithGitLabToken(token))
+		if err != nil {
+			return nil, unstarted(err)
+		}
+		gitlab = host
+	}
+	s.forge = forge.Hosts{GitHub: github, GitLab: gitlab}
 	if err := s.openParts(ctx, o); err != nil {
 		s.log.Printf("the service could not start: %v", err)
 		_ = s.Close()

@@ -98,7 +98,7 @@ func (c *Cleaner) taskLanding(ctx context.Context, task store.Task, copied *vcs.
 		}
 	}
 	if l.pullRequest != nil {
-		l.pullRequest.repository, _ = forge.GitHubRepository(l.upstream)
+		l.pullRequest.repository, _, _ = forge.RepositoryOf(l.upstream)
 	}
 	return l, nil
 }
@@ -118,7 +118,7 @@ func (c *Cleaner) runLanding(ctx context.Context, run store.Run, bare *vcs.Repos
 		return landing{}, err
 	}
 	if found && record.End == store.PullRequestMerged {
-		specifier, _ := forge.GitHubRepository(l.upstream)
+		specifier, _, _ := forge.RepositoryOf(l.upstream)
 		l.pullRequest = &pullRequestFact{repository: specifier, number: record.PullRequest, head: record.Head}
 	}
 	return l, nil

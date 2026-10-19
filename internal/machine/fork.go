@@ -5,7 +5,7 @@ package machine
 //
 // A fork changes where a run's work goes: the branch is sent to the fork and
 // the pull request is proposed from it to the upstream. init records one only
-// when both are repositories on the code host this build proposes changes
+// when both are repositories on one code host this build proposes changes
 // on, and never one naming the upstream itself, because otherwise one of the
 // two writes would have nowhere to go and the other would be a guess. Which
 // exit code a refusal ends with is internal/cli's failureExit, not this
@@ -15,22 +15,27 @@ package machine
 // closed set, ForkRefusals, and each member has its own row.
 type ForkRefusal string
 
-// The three refusals, in the order ForkRefusals lists them.
+// The four refusals, in the order ForkRefusals lists them.
 const (
-	// ForkUnaddressable is a fork that is not a repository on the code host
+	// ForkUnaddressable is a fork that is not a repository on a code host
 	// this build proposes changes on.
 	ForkUnaddressable ForkRefusal = "fork_unaddressable"
 	// ForkUpstreamUnaddressable is a fork given beside an upstream that is
-	// not a repository on that host, so there is nothing to propose to.
+	// not a repository on a host this build proposes changes on, so there is
+	// nothing to propose to.
 	ForkUpstreamUnaddressable ForkRefusal = "upstream_unaddressable"
 	// ForkIsUpstream is a fork naming the upstream itself.
 	ForkIsUpstream ForkRefusal = "fork_is_upstream"
+	// ForkOnAnotherHost is a fork and an upstream that are each a repository
+	// this build addresses, on two different code hosts, where no pull request
+	// can be proposed from one to the other.
+	ForkOnAnotherHost ForkRefusal = "fork_on_another_host"
 )
 
 // ForkRefusals is every refusal, so a test walks the set rather than a list
 // of its own.
 func ForkRefusals() []ForkRefusal {
-	return []ForkRefusal{ForkUnaddressable, ForkUpstreamUnaddressable, ForkIsUpstream}
+	return []ForkRefusal{ForkUnaddressable, ForkUpstreamUnaddressable, ForkIsUpstream, ForkOnAnotherHost}
 }
 
 // forkRefusedConsequence is what every refusal row says was not done.
@@ -38,19 +43,24 @@ const forkRefusedConsequence = "This checkout was left as it was, and nothing wa
 
 var phraseByForkRefusal = map[ForkRefusal]Phrase{
 	ForkUnaddressable: {
-		Outcome:     "No gate was set up, because the fork you named is not a repository on github.com, where this build proposes changes.",
+		Outcome:     "No gate was set up, because the fork you named is not a repository on github.com or gitlab.com, where this build proposes changes.",
 		Consequence: forkRefusedConsequence,
-		Decision:    "Run assistant init again with --fork-url naming your fork on github.com, or without it to send changes to the upstream.",
+		Decision:    "Run assistant init again with --fork-url naming your fork on github.com or gitlab.com, or without it to send changes to the upstream.",
 	},
 	ForkUpstreamUnaddressable: {
-		Outcome:     "No gate was set up, because a change sent to a fork is proposed to the upstream, and the upstream is not a repository on github.com.",
+		Outcome:     "No gate was set up, because a change sent to a fork is proposed to the upstream, and the upstream is not a repository on github.com or gitlab.com.",
 		Consequence: forkRefusedConsequence,
-		Decision:    "Run assistant init again with --upstream naming the repository on github.com your fork was made from, or without --fork-url.",
+		Decision:    "Run assistant init again with --upstream naming the repository on github.com or gitlab.com your fork was made from, or without --fork-url.",
 	},
 	ForkIsUpstream: {
 		Outcome:     "No gate was set up, because the fork you named is the upstream itself.",
 		Consequence: forkRefusedConsequence,
 		Decision:    "Run assistant init again with --fork-url naming your own fork, or without it to send changes to the upstream.",
+	},
+	ForkOnAnotherHost: {
+		Outcome:     "No gate was set up, because the fork you named is on a different code host than the upstream, and a change is proposed between two repositories on one host.",
+		Consequence: forkRefusedConsequence,
+		Decision:    "Run assistant init again with --fork-url naming your fork on the upstream's host, or without it to send changes to the upstream.",
 	},
 }
 
