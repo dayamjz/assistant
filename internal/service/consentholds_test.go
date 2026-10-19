@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -169,29 +170,55 @@ func TestStandingConsentSendsNoRoundToAnAskNoAgentCanFix(t *testing.T) {
 }
 
 // A round standing consent asks for is held to the convergence bound, which a
-// round a person asks for is exempt from. The reviewer reports the same
-// stated ask on every review and the fixer changes nothing, so every round
-// leaves the run's state as the round before it left it. Under consent the
-// run parks on convergence at the review. The control is the same run with a
-// person asking for every round over the machine interface: it never parks,
-// and once the rounds are spent the answer asking for another is refused
-// with the decision still open.
+// round a person asks for is exempt from, and a stuck loop parks before it
+// spends pipeline.RequestedFixRounds (#320 item 5a). The reviewer reports the
+// same stated ask on every review and the fixer changes nothing, so every
+// round leaves the run's state as the round before it left it. Under consent
+// the run parks on convergence at the review's request node, in front of a
+// round that never runs. The controls are run the same way and do not park:
+// a person asking for every round over the machine interface, which spends
+// the limit and has the answer asking for another refused with the decision
+// still open; and consent over a reviewer that words its ask differently on
+// every review, so every round does change the state, which spends the limit
+// and then holds for a person. The second control is what makes the first
+// case evidence: without it the park would hold just as well for a bound that
+// parked every consented round.
 //
 // The number of rounds consent took before the park is pinned rather than
 // bounded, because consent.go states it: a stage's re-run report carries the
 // hold the previous round left, which the report the first round read did
-// not, so the bound fires on the third round and no earlier.
+// not, so it is the second round that is first seen to change nothing, and
+// the answer that would start a third is where internal/graph sees it.
 func TestARoundStandingConsentAsksForIsHeldToConvergence(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	const converged = 2
+	if converged >= pipeline.RequestedFixRounds {
+		t.Fatalf("a park after %d rounds would not come before the limit of %d", converged, pipeline.RequestedFixRounds)
+	}
 	located := findings.Location{Path: "work.txt", Line: 1}
+	ask := func(description string) findings.Finding {
+		return findings.Finding{ID: "scope", Severity: findings.SeverityWarning, Action: findings.ActionAsk,
+			Location: located, Description: description}
+	}
+	// reviewing is a reviewer that reports one ask on every review, worded
+	// as say words it for the review numbered n from zero, and a fixer that
+	// changes nothing. Every review past the limit's reads as the last one.
+	reviewing := func(t *testing.T, say func(n int) string) *standin.Agent {
+		var steps []standin.Step
+		for n := range pipeline.RequestedFixRounds + 1 {
+			times := 1
+			if n == pipeline.RequestedFixRounds {
+				times = standin.Always
+			}
+			steps = append(steps, standin.Step{Match: standin.MatchReview(), Times: times,
+				Reply: standin.Reviewed("one finding", ask(say(n)))})
+		}
+		steps = append(steps, standin.Step{Times: standin.Always, Reply: standin.Text("looked and changed nothing")})
+		return standin.New(t, standin.Script{Steps: steps})
+	}
 	stuck := func(t *testing.T) *standin.Agent {
-		return standin.New(t, standin.Script{Steps: []standin.Step{
-			{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("one finding",
-				findings.Finding{ID: "scope", Severity: findings.SeverityWarning, Action: findings.ActionAsk,
-					Location: located, Description: "this widens what the change was asked to do"})},
-			{Times: standin.Always, Reply: standin.Text("looked and changed nothing")},
-		}})
+		return reviewing(t, func(int) string { return "this widens what the change was asked to do" })
 	}
 
 	t.Run("under consent", func(t *testing.T) {
@@ -205,12 +232,35 @@ func TestARoundStandingConsentAsksForIsHeldToConvergence(t *testing.T) {
 				t.Fatalf("starting a run under standing consent: %v", err)
 			}
 			park, parked := run.Record.Park.Get()
-			if !parked || park.Bound != store.ParkConvergence || park.Stage != pipeline.StageReview.String() {
-				t.Fatalf("the run ended %s with park %+v (%v): %s; want parked on convergence at the review",
+			if !parked || park.Bound != store.ParkConvergence || park.Stage != pipeline.StageReview.String() ||
+				park.Node != pipeline.StageReview.RequestNode() {
+				t.Fatalf("the run ended %s with park %+v (%v): %s; want parked on convergence at the review's request node",
 					run.Outcome, park, parked, run.Reason)
 			}
+			if rounds := fixRounds(agent); len(rounds) != converged {
+				t.Fatalf("consent took %d round(s) before the park, want %d", len(rounds), converged)
+			}
+		})
+	})
+
+	t.Run("under consent, every round changing the state", func(t *testing.T) {
+		t.Parallel()
+		h := newHome(t)
+		subject := consentingSubject(t, h, allowsConsent)
+		agent := reviewing(t, func(n int) string {
+			return fmt.Sprintf("this widens what the change was asked to do, reading %d", n+1)
+		})
+		withServiceOptions(t, consentOptions(t, h, agent, forgetest.New(t, forgetest.Script{}), nil), func(running serviceUnderTest) {
+			run, err := startUnderConsent(t, running.client, subject)
+			if err != nil {
+				t.Fatalf("starting a run under standing consent: %v", err)
+			}
+			if park, parked := run.Record.Park.Get(); parked {
+				t.Fatalf("a run whose every round changed the state parked: %+v (%s)", park, run.Reason)
+			}
+			holdingAt(t, run, pipeline.StageReview)
 			if rounds := fixRounds(agent); len(rounds) != pipeline.RequestedFixRounds {
-				t.Fatalf("consent took %d round(s) before the park, want %d", len(rounds), pipeline.RequestedFixRounds)
+				t.Fatalf("consent took %d round(s), want the limit of %d", len(rounds), pipeline.RequestedFixRounds)
 			}
 		})
 	})
