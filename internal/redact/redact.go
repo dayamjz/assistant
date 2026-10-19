@@ -59,8 +59,9 @@
 // so it is cut only if it begins "sk-ant-" like the OAuth access token
 // Anthropic's SDK example shows, and a value of any other shape stands. Every
 // row has the same residual gaps: a value shorter than the row's floor, a
-// value split across lines, and a value issued under a prefix the table does
-// not list are not cut.
+// value split across lines, a value whose prefix differs in case from the
+// row's prefix, and a value issued under a prefix the table does not list are
+// not cut.
 //
 // # What it does not do
 //

@@ -161,9 +161,8 @@ type StageDeps struct {
 	// - internal/redact documents that the zero Redactor works - so an
 	// unwired StageDeps does not quietly skip redaction.
 	//
-	// What it removes is the shapes internal/redact recognizes, a credential
-	// in a URL's userinfo and a bearer or Authorization value, and nothing
-	// else; that package's doc owns the residual gap.
+	// What it removes is whatever shapes internal/redact recognizes; that
+	// package's doc owns the list and the residual gap.
 	redact redact.Redactor
 	// judge is the decision-model client the review body puts its two checks
 	// to. It is build-scoped for the reason every adapter here is: the key is

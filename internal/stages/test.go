@@ -156,14 +156,13 @@ const testProjectionBytes = 8 << 10
 // how long the command itself runs. commandGrace says what that bounds and
 // what it does not.
 //
-// Redaction removes the one shape internal/redact recognizes, a credential in
-// a URL's userinfo, and nothing else. An API key echoed by a failing
-// assertion, a token in an environment dump, and every other secret a command
-// might print go into the record and the report as the command wrote them, and
-// a whitespace-free token longer than redactingWriter's bound can carry even
-// the recognized shape past it, which that writer's doc owns. What redaction
-// buys here is that this persistence boundary is no worse than the others in
-// this build, not that the record is safe to publish.
+// Redaction is whatever shapes internal/redact recognizes at this persistence
+// boundary; that package's doc owns the list, the residual gaps, and every
+// other secret a command might print that is not covered. A whitespace-free
+// token longer than redactingWriter's bound can carry even a recognized shape
+// past it, which that writer's doc owns. What redaction buys here is that this
+// persistence boundary is no worse than the others in this build, not that the
+// record is safe to publish.
 func Test(deps StageDeps) pipeline.Implementation {
 	return pipeline.Implementation{
 		Reads: []pipeline.Key{pipeline.KeyRepository, pipeline.KeyRun},
