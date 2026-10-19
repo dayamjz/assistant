@@ -3,8 +3,9 @@ package store
 import (
 	"errors"
 	"fmt"
-	"runtime/debug"
 	"strings"
+
+	"github.com/dayamjz/assistant/internal/buildinfo"
 )
 
 // Build identifies the software that produced a run. PRD section 8 requires a
@@ -15,8 +16,8 @@ import (
 // copy is not the commit it names, and a verdict traced to that commit would be
 // traced to code that was never what ran.
 type Build struct {
-	// Version is the module version, such as a tag, or "(devel)" for a build
-	// from a working copy.
+	// Version is the release version a release build was stamped with, or
+	// otherwise the module version the toolchain recorded, such as "(devel)".
 	Version string `json:"version"`
 	// Revision is the source control revision the binary was built from.
 	Revision string `json:"revision"`
@@ -68,28 +69,25 @@ func (b Build) String() string {
 	return strings.Join(parts, " ")
 }
 
-// CurrentBuild reads the running binary's identity from the information the Go
-// toolchain stamps into it. It is a convenience for the common caller; a caller
+// CurrentBuild reads the running binary's identity from internal/buildinfo,
+// the one owner of which build this is, so a release build records the
+// release version it was stamped with and any other build the module version
+// the toolchain recorded. It is a convenience for the common caller; a caller
 // whose build system knows better constructs a Build itself.
 //
 // It returns an error rather than a partial identity when the binary carries no
 // build information, so a run cannot be recorded against a build nobody can
 // find. A binary built without source control stamping still validates on its
-// module version.
+// version.
 func CurrentBuild() (Build, error) {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
+	id, err := buildinfo.Current()
+	if errors.Is(err, buildinfo.ErrUnidentified) {
 		return Build{}, ErrBuildUnidentified
 	}
-	b := Build{Version: info.Main.Version, Go: info.GoVersion}
-	for _, setting := range info.Settings {
-		switch setting.Key {
-		case "vcs.revision":
-			b.Revision = setting.Value
-		case "vcs.modified":
-			b.Modified = setting.Value == "true"
-		}
+	if err != nil {
+		return Build{}, err
 	}
+	b := Build{Version: id.Version, Revision: id.Revision, Modified: id.Modified, Go: id.Go}
 	if err := b.Validate(); err != nil {
 		return Build{}, err
 	}

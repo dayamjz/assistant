@@ -18,8 +18,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"runtime/debug"
 
+	"github.com/dayamjz/assistant/internal/buildinfo"
 	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/mattn/go-isatty"
 )
@@ -43,7 +43,7 @@ func main() {
 		Getenv:     os.Getenv,
 		WorkingDir: workingDir,
 		Executable: executable,
-		Version:    version(),
+		Version:    buildinfo.Line(),
 		// A person is at a terminal when both the stream init reads an
 		// answer from and the one it asks on are one.
 		Interactive: terminal(os.Stdin) && terminal(os.Stderr),
@@ -55,29 +55,4 @@ func main() {
 // MSYS shell gives a process on Windows.
 func terminal(f *os.File) bool {
 	return isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd())
-}
-
-// version is what --version reports: the build information the Go toolchain
-// stamped into this binary. A binary carrying none says so rather than
-// printing an empty line.
-func version() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "assistant (no build information)"
-	}
-	revision, modified := "", ""
-	for _, setting := range info.Settings {
-		switch setting.Key {
-		case "vcs.revision":
-			revision = setting.Value
-		case "vcs.modified":
-			if setting.Value == "true" {
-				modified = "+modified"
-			}
-		}
-	}
-	if revision == "" {
-		return fmt.Sprintf("assistant %s %s", info.Main.Version, info.GoVersion)
-	}
-	return fmt.Sprintf("assistant %s %s%s %s", info.Main.Version, revision, modified, info.GoVersion)
 }
