@@ -434,13 +434,19 @@ func verbUsage(name string, set *flag.FlagSet) string {
 //
 // The root rather than the directory the command was run in is what matters: a
 // gate is filed under a hash of the working copy's path, so the same command
-// run from a subdirectory has to be about the same gate.
+// run from a subdirectory has to be about the same gate. A git binary that
+// cannot be started is onboardRefused with OnboardGitMissing, which the
+// caller handles; it is not reported as a directory that is not a working copy.
 func (in *invocation) workingCopy(ctx context.Context) (string, error) {
 	working, err := vcs.OpenWorktree(ctx, in.env.WorkingDir)
 	if err != nil {
-		return "", fmt.Errorf("%s is not inside a working copy: %w", in.env.WorkingDir, err)
+		return "", worktreeFailure(in.env.WorkingDir, err)
 	}
-	return working.WorkingRoot(ctx)
+	root, err := working.WorkingRoot(ctx)
+	if err != nil {
+		return "", missingGit(err)
+	}
+	return root, nil
 }
 
 // openStore opens the home's database for a verb that acts on the working copy
@@ -618,6 +624,11 @@ func render(in *invocation, answer any, err error) machine.Code {
 // send changes to and propose from, and the remedy is a flag the caller
 // supplies, --fork-url or --upstream.
 //
+// Init's refusal during inspection is incorrect usage only for an origin
+// whose fetch and push addresses differ: the caller settles it with
+// --upstream. A missing git, and a configuration file that disagrees with
+// the copy on the default branch, are operational failures.
+//
 // A request to remove a managed service from a home that has none set up is
 // incorrect usage: there is nothing it could have removed. Every other
 // refusal of a managed service is operational, the protected-folder refusal
@@ -647,6 +658,15 @@ func failureExit(err error) machine.Code {
 		case machine.DefaultBranchNoOrigin, machine.DefaultBranchUnrecorded, machine.DefaultBranchOutsideOrigin:
 			return machine.ExitUsage
 		}
+	}
+	// Init's refusal during inspection is incorrect usage only when the
+	// caller can settle it with a flag: origin advertises two addresses and
+	// --upstream names one. A missing git, and a configuration file that
+	// disagrees with the default branch's copy, are facts about the machine
+	// and the checkout, so they stay operational failures.
+	var inspection onboardRefused
+	if errors.As(err, &inspection) && inspection.reason == machine.OnboardIdentityAmbiguous {
+		return machine.ExitUsage
 	}
 	return machine.ExitFailure
 }

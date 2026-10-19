@@ -42,7 +42,24 @@ commands from that file only as the default branch on origin holds it, so
 commit the file and land it there before expecting a run to use them. Nothing
 is offered for `commands.document`: no common build file declares a command
 that updates prose, so that stage keeps holding until you configure one or
-answer it.
+answer it. Inspection reads files and runs nothing, so a program the checkout
+contains is not started by detection. A command is written only through the
+consent above, and even then a run does not use it until that file is on the
+default branch.
+
+Running `init` again records the same gate and the same repository and does
+not rewrite a configuration file whose command keys are already set. Origin's
+fetch address and push address have to be the same when you do not pass
+`--upstream`; when they differ, `init` refuses, sets up no gate, and exits
+with the incorrect-usage code (2). Name the address with `--upstream`. When
+git itself cannot be started, or the checkout's `assistant.json` and the copy
+on the local default branch disagree about `commands.test`, `commands.lint`,
+or `commands.document`, `init` refuses, sets up no gate, and exits with the
+operational failure code (1). The comparison is against the commit the local
+default branch names, not a fresh fetch, and a default-branch document that
+does not parse is not part of that comparison. The repository `init` records
+is the one `assistant status` and the coordinator read back; there is no
+second registry.
 
 The gate's admission hook decides whether the push may proceed, and its
 notification hook starts a run for that branch and commit. A push that deletes

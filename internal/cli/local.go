@@ -63,6 +63,13 @@ func initGate(ctx context.Context, in *invocation) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Inspection stays read-only through here. A disagreement on a command
+	// key, a missing git, or an origin with two addresses has already refused,
+	// and no gate or repository record has been written. Those two are the
+	// registration coordinator work reads back through the service.
+	if err := conflictingCommands(ctx, working, intended.DefaultBranch); err != nil {
+		return nil, err
+	}
 	built, err := gate.Initialize(ctx, gate.Spec{
 		Home:        in.home.Root(),
 		WorkingPath: working,
@@ -119,6 +126,12 @@ func intendedRepository(ctx context.Context, working, upstream, fork, defaultBra
 			return store.Repository{}, "", upstreamRefused{cause: err}
 		} else if err != nil {
 			return store.Repository{}, "", fmt.Errorf("reading this working copy's origin to take the upstream from: %w", err)
+		}
+		// The caller did not name an address, so origin has to have one.
+		// A fetch address and a push address that differ are two answers,
+		// and recording either would be the guess this refusal exists to stop.
+		if err := ambiguousOrigin(ctx, repo, upstream); err != nil {
+			return store.Repository{}, "", err
 		}
 	}
 	forkURL := store.Unknown[string]()

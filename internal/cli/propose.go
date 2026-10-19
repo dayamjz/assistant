@@ -75,18 +75,20 @@ import (
 //
 // # Residual gaps
 //
-// The configuration file compared against is the checkout's copy, not the
-// default branch's. A checkout behind that branch, or on a branch whose copy
-// differs, is offered a key the trusted copy already names, and writing it
-// would make the two copies differ; the answer names the branch so a person
-// committing the file sees which copy they are changing. The operator's own
-// configuration file is not consulted either, so a key it sets is still
-// offered for the repository, where it would take precedence. Detection is
-// textual: a Makefile target defined through an include or a variable is not
-// seen, and one guarded by a conditional is seen whether or not the
-// condition holds. And a detected command is the repository's declaration,
-// not a check that it passes or is targeted at a change: init proposes it
-// and the person decides.
+// The configuration file this function compares against is the checkout's
+// copy. init refuses, before calling it, when that copy and the local
+// default branch's copy disagree on a command key this offer considers.
+// That check reads the commit the local default branch names, not a fresh
+// fetch of origin, and it does not compare a branch document that is
+// absent, unreadable, or unparsable, so the offer is still reached then.
+// The operator's own configuration file is not consulted either, so a key
+// it sets is still offered for the repository, where it would take
+// precedence. Detection is textual: a Makefile target defined through an
+// include or a variable is not seen, and one guarded by a conditional is
+// seen whether or not the condition holds. And a detected command is the
+// repository's declaration, not a check that it passes or is targeted at a
+// change: init proposes it and the person decides. It reads files and runs
+// nothing, including a command the files name.
 
 // acceptCommandsFlag is the consent flag for the non-interactive path.
 const acceptCommandsFlag = "accept-commands"

@@ -1539,7 +1539,8 @@ var PhraseNoReading = Phrase{
 // empty row per part, a row per kind of landed record, the row for what a
 // read left out, and the two rows for a mark, and custody's: a row per class
 // planned and carried out and as status prints it, a row per refusal, and a
-// row per step, and the coordinator client's: a created task begun and one
+// row per step, init's three onboarding refusals, and the coordinator client's:
+// a created task begun and one
 // recorded behind other work, a promotion, a relaunch, a drain with and
 // without notices, an acknowledgement, and arm verification's three. A templated row is listed with its
 // placeholder filled in. The result is a copy. Phrases is the same list as
@@ -1604,5 +1605,6 @@ func TablePhrases() []Phrase {
 	out = append(out, managedRows()...)
 	out = append(out, commandsRows()...)
 	out = append(out, custodyRows()...)
+	out = append(out, onboardRows()...)
 	return append(out, coordinatorRows()...)
 }

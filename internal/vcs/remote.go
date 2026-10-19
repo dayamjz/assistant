@@ -60,15 +60,41 @@ func (r *Repository) Fetch(ctx context.Context, spec FetchSpec) error {
 // ErrRemoteNotFound when there is no such remote.
 //
 // The URL is returned exactly as it is configured, including any credentials
-// in it. This is the one place in this package that hands a caller a
-// credentialed URL, because recovering that URL is what it is for. Everything
-// that persists or reports it is responsible for redacting it first.
+// in it. RemoteURL and PushURL are the two reads that hand a caller a
+// credentialed URL, because recovering that URL is what they are for.
+// Everything that persists or reports either is responsible for redacting it
+// first.
 func (r *Repository) RemoteURL(ctx context.Context, name string) (string, error) {
 	if err := checkArg("remote", name); err != nil {
 		return "", err
 	}
 	// Exit status 2 is what git remote reports for a remote it does not have.
 	out, code, err := r.runExpecting(ctx, "remote-url", []int{2}, "remote", "get-url", "--", name)
+	if err != nil {
+		return "", err
+	}
+	url := strings.TrimSpace(string(out))
+	if code != 0 || url == "" {
+		return "", ErrRemoteNotFound
+	}
+	return url, nil
+}
+
+// PushURL returns the push URL configured for a remote, and ErrRemoteNotFound
+// when there is no such remote.
+//
+// It returns the trimmed output of `git remote get-url --push`, including
+// any credentials. Nothing here contacts the remote or establishes that a
+// push would be accepted there. A caller that records one address for where
+// changes go compares this with RemoteURL and refuses when they differ
+// rather than picking one.
+func (r *Repository) PushURL(ctx context.Context, name string) (string, error) {
+	if err := checkArg("remote", name); err != nil {
+		return "", err
+	}
+	// Exit status 2 is what git remote reports for a remote it does not have,
+	// the same status RemoteURL reads that fact from.
+	out, code, err := r.runExpecting(ctx, "remote-push-url", []int{2}, "remote", "get-url", "--push", "--", name)
 	if err != nil {
 		return "", err
 	}
