@@ -79,10 +79,15 @@ var runStates = map[store.RunStatus]State{
 //     investigation is, is not read by this tier: its row is evidence of
 //     what it was asked before, not its deliverable. Reported is not
 //     Complete: the tier says the report is in and nothing about cleanup.
-//  5. The terminal: Live reads as Running, positive evidence. Dead with no run
-//     and no stored report reads as Unknown from SourceProcess and does not
-//     fall through to the log, because a stale event is what a dead terminal
-//     must not be trusted for. Unobserved skips the tier.
+//  5. The terminal: Live reads as Running, positive evidence, except where
+//     the log's most recent event is a kind whose row is a DeclaredWait:
+//     then the worker whose terminal runs has said it is waiting, and the
+//     answer is Paused from SourceEvent, which is PRD section 5's "a
+//     declared wait is not a stall" taking precedence over the live signal
+//     by the owner's decision on #303. Dead with no run and no stored
+//     report reads as Unknown from SourceProcess and does not fall through
+//     to the log, declared wait or not, because a stale event is what a
+//     dead terminal must not be trusted for. Unobserved skips the tier.
 //  6. The log: only when its most recent event's kind has a row in this
 //     package's table that claims a state, or says a decision is open (Held).
 //     A kind that closes a decision, a note, an unrecognized kind, or an empty
@@ -154,6 +159,9 @@ func Resolve(in Inputs) Resolution {
 	case isReported:
 		out.State, out.Source = Reported, SourceReport
 		out.Detail = store.Known("the investigation's report was stored at " + reportedAt.UTC().Format(time.RFC3339))
+	case in.Process == Live && declaredWait(events):
+		out.State, out.Source = Paused, SourceEvent
+		out.Detail = store.Known("the worker declared an external wait and its terminal is live")
 	case in.Process == Live:
 		out.State, out.Source = Running, SourceProcess
 		out.Detail = store.Known("the task's terminal is live")
@@ -283,6 +291,18 @@ func oldestOpenNaming(holds []store.Hold, names func(store.Hold) bool) (store.Ho
 
 // fromEvents is the log tier. events is in sequence order. The detail is a
 // fixed sentence naming the kind's role and never the worker's text.
+// declaredWait reports whether the most recent event in events, which is in
+// sequence order, is a kind whose row is a DeclaredWait. It reads the
+// event the log tier would answer from and nothing older, so a worker that
+// declared a wait and then said it is working again is not read as waiting.
+func declaredWait(events []store.TaskEvent) bool {
+	if len(events) == 0 {
+		return false
+	}
+	row, ok := Lookup(events[len(events)-1].Kind)
+	return ok && row.DeclaredWait
+}
+
 func fromEvents(events []store.TaskEvent) (State, Source, store.Optional[string]) {
 	if len(events) == 0 {
 		return Unknown, SourceNone, store.Known("the task has no history")

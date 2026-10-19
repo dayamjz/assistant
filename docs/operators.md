@@ -409,8 +409,8 @@ wrong.
 | Posture | What is true | What the service does | What you do |
 |---|---|---|---|
 | Active execution | Terminal Live, or a validation run the service is advancing | Absorbs; no wake | Nothing |
-| Declared wait | Worker declared a wait, the task resolves Paused, and its recheck window is open | Absorbs until the recheck window elapses, then surfaces `declared-external-wait` once per window; see the note below for a worker whose terminal is live | Nothing until a wake surfaces |
-| Stalled screen | Terminal Live but the capture is unchanged past the escalation window | Surfaces `terminal-unchanged` once, then absorbs redraws until the next window | Inspect; do not treat as a crash |
+| Declared wait | Worker's most recent word is a declared wait, its terminal is Live or Unobserved, and its recheck window is open; the task resolves Paused | Absorbs until the recheck window elapses, then surfaces `declared-external-wait` once per window; an unchanged screen is not read as a stall | Nothing until a wake surfaces |
+| Stalled screen | Terminal Live, no declared wait, and the capture is unchanged past the escalation window | Surfaces `terminal-unchanged` once, then absorbs redraws until the next window | Inspect; do not treat as a crash |
 | Dead process | Probe answers Dead; work not landed; no stored report | Queues `terminal-gone` with case `dead`; on restart (or `task.relaunch`) sweeps the standing copy and relaunches in place up to `relaunch_attempts`, acknowledging that session's queued `terminal-gone` wakes as the program | After a restart, read `assistant tasks` before acting on a re-handed wake |
 | Ambiguous / unobserved | Probe answers Unobserved (unheld survivor, unreadable, foreign home, and the like) | Surfaces `terminal-gone` with case `unobservable`; never relaunches; never deletes the standing copy | Probe or wait; never `task.relaunch` |
 | Blocked decision | Open hold naming the task (relaunch bound, no-sweep, stop, report decision, …) | Resolves Held; leaves alone until answered | `assistant --task ID --answer …` |
@@ -423,16 +423,19 @@ copy stays, and a second handout of the same wake id after a lost ack does
 not start another attempt once the program has already relaunched that
 session.
 
-**Residual (declared wait with a live terminal).** Paused is read from the
-task's history, and a live terminal outranks the history in the order a
-task's state is resolved, so a worker that declared a wait while its
-terminal is live resolves Running and is watched like any running worker:
-its unchanged screen surfaces `terminal-unchanged` once the escalation
-window elapses, as the stalled screen row says. The declared-wait absorb
-above is reached today only by a task with no terminal to probe. This is
-raised on #303 for the owner's decision; until it is settled, read a
-`terminal-unchanged` wake about a worker that said it is waiting against
-what it said.
+**Declared wait against the terminal.** A worker's declared wait outranks
+its live terminal: a worker that said it is waiting resolves Paused while
+its terminal runs, and its unchanged screen is not surfaced as
+`terminal-unchanged` (the owner's decision on #303). It never outranks a
+dead terminal: once the probe answers Dead the task resolves as the dead
+process row says, whatever it declared. An unobserved terminal under a
+declaration still surfaces `terminal-gone` with case `unobservable`, as
+the ambiguous row says, because the declaration does not show the worker
+is still there. Only the worker's most recent word counts, so a worker that
+declared a wait and then reported working again is watched as running.
+The residual is the recheck window itself: a worker that declared a wait
+and then stalled for another reason is not surfaced until that window
+(`recheck_window`, 2h unless configured) elapses.
 
 **No worker heartbeat.** Nothing in this build sends or expects a periodic
 sign of life from a worker. What the service reads of a worker is its

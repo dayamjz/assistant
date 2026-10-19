@@ -65,6 +65,14 @@ type Row struct {
 	// routine, which a test holds the table to, and a program kind that can
 	// report something going wrong, the isolation refusal, is not.
 	Routine bool
+	// DeclaredWait is whether the kind is a worker's own declared external
+	// wait, PRD section 5's "a declared wait is not a stall". As the most
+	// recent event it outranks the terminal's live process signal in
+	// Resolve, so a worker that said it is waiting resolves Paused while its
+	// terminal runs, and never a dead terminal or an unobserved one, which
+	// resolve as they do without it. Only a RoleState kind claiming Paused
+	// that a worker appends may be one, which a test holds the table to.
+	DeclaredWait bool
 	// Detail validates the detail text an event of this kind may carry, and
 	// is nil for a kind whose detail is free text. A kind with a decoder has
 	// a closed detail vocabulary, which a writer checks before appending
@@ -191,7 +199,7 @@ var kinds = []Row{
 	{Kind: store.FindingsRelayedEventKind, Role: RoleNote, Writer: WriterProgram},
 	{Kind: "started", Role: RoleState, State: Running, Writer: WriterWorker},
 	{Kind: "working", Role: RoleState, State: Running, Writer: WriterWorker},
-	{Kind: "waiting-external", Role: RoleState, State: Paused, Writer: WriterWorker},
+	{Kind: "waiting-external", Role: RoleState, State: Paused, Writer: WriterWorker, DeclaredWait: true},
 	{Kind: "handed-off", Role: RoleState, State: Validating, Writer: WriterWorker},
 	{Kind: "validation-started", Role: RoleState, State: Validating, Writer: WriterWorker},
 	{Kind: store.ReportReadyEventKind, Role: RoleState, State: Reported, Writer: WriterWorker},

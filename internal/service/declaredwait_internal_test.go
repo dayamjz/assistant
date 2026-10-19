@@ -58,15 +58,10 @@ func verdictsOf(r passReport, task string, kind supervisor.Kind) []supervisor.Ve
 // surfaced as terminal unchanged once the window has elapsed, which is the
 // stall the declaration is the exception to.
 //
-// The declared task has no session reference recorded, and that is not a
-// shortcut. Paused is the event tier's answer, below PRD section 6's live
-// process signal, so a task whose terminal probes Live resolves Running
-// whatever its log declared, and one whose terminal probes Dead or
-// Unobserved surfaces terminal gone before the declared wait is read: a
-// task with no terminal to probe is the one shape in which the loop's
-// declared-wait branch is reached today.
-// TestALiveWorkersDeclaredWaitIsReadAsRunning pins the live case, and the
-// PRD conflict it is, beside this one.
+// The declared task here has no session reference recorded, so its screen
+// is never read and the declared-wait branch is reached on the record
+// alone. TestALiveWorkersDeclaredWaitIsNotAStall is the same rule for a
+// worker whose terminal is live and unchanged.
 //
 // The pass that first reads the log surfaces the declaration itself as an
 // event, the flowchart's event branch with no decision verb and no
@@ -170,11 +165,13 @@ func TestADeclaredWaitIsNotAStallAndArmsTheRecheck(t *testing.T) {
 
 // PRD principle P9's "absorbing wakes on a timer makes a finished or
 // crashed worker invisible", for the one absorb that rests on a timer by
-// design: a worker that declared an external wait and whose terminal then
-// dies is surfaced as terminal gone, as dead, on the first pass that probes
-// it Dead, and is not read as a wait. The task resolves Unknown from the
-// dead terminal rather than Paused from the stale declaration, so no pass
-// makes a declared-wait detection, and the dead terminal surfaces once and
+// design: a worker that declared an external wait, and which resolves
+// Paused while its terminal is live, is surfaced as terminal gone, as dead,
+// on the first pass that probes its terminal Dead, and is no longer read as
+// a wait. The task resolves Unknown from the dead terminal rather than
+// Paused from the stale declaration, which is the dead-terminal exception
+// the owner's decision on #303 keeps, so no pass after the death makes a
+// declared-wait detection, and the dead terminal surfaces once and
 // is absorbed only for the rest of its escalation window, which
 // TestASilentCrashSurfacesAgainOncePerEscalationWindow carries past. Every
 // reading is the loop's own pass through the Terminals seam; the double
@@ -198,9 +195,14 @@ func TestADeadTerminalUnderADeclaredWaitSurfacesTerminalGoneOnce(t *testing.T) {
 			t.Fatalf("%s the pass made a declared-wait detection %+v", when, got)
 		}
 	}
+	// While the terminal is live the declaration answers: Paused, and the
+	// wait absorbs on its open recheck window.
 	clock.Advance(10 * time.Second)
 	alive := l.pass(t)
-	noWait(alive, "while the terminal was live")
+	if got := verdictsOf(alive, task, supervisor.KindDeclaredWait); len(got) != 1 ||
+		got[0] != (supervisor.Verdict{Level: supervisor.Absorb, Reason: supervisor.ReasonWindowOpen}) {
+		t.Fatalf("the declared wait while the terminal was live = %+v, want absorbed on the open recheck window", got)
+	}
 	if gone := detectionsOf(alive, task, supervisor.KindTerminalGone); len(gone) != 0 {
 		t.Fatalf("a live terminal was read as terminal gone: %+v", gone)
 	}
@@ -237,18 +239,22 @@ func TestADeadTerminalUnderADeclaredWaitSurfacesTerminalGoneOnce(t *testing.T) {
 	}
 }
 
-// The live case PRD section 5 and section 6 disagree on, pinned as the
-// code decides it so the disagreement cannot change silently. Section 5
-// says a declared wait "silences the stall detector but arms a slower
-// recheck". Section 6's precedence puts "a live process signal from the
-// task's terminal" above the event log, and taskstate.Resolve applies it,
-// so a worker that declared a wait while its terminal is live resolves
-// Running from the process tier, the loop reads its unchanged screen as
-// terminal unchanged, and that surfaces as a stall once the escalation
-// window elapses, exactly as for a worker that declared nothing. Nothing
-// here says which section is right: that is the owner's PRD wording, raised
-// on #303. When it is settled, this test is the one that has to change.
-func TestALiveWorkersDeclaredWaitIsReadAsRunning(t *testing.T) {
+// PRD section 5's "a declared wait is not a stall" for a worker whose
+// terminal is live, the owner's decision on #303 that section 5 outranks
+// section 6's live process signal. The worker declared an external wait and
+// its screen does not change. The task resolves Paused from its log with
+// the terminal still read Live, and on no pass, inside the escalation
+// window or past it, does it get terminal unchanged. Its declared-wait
+// detection absorbs on the open recheck window and surfaces once when that
+// window elapses. The control is the same worker with no declaration and
+// the same unchanged live screen in the same loop: it resolves Running
+// from the process tier and surfaces terminal unchanged once the
+// escalation window elapses, so the declaration is what the difference
+// rests on. Then the dead-terminal exception the decision keeps: the
+// declared worker's terminal dies, the task resolves Unknown from the dead
+// terminal rather than Paused, and the pass surfaces terminal gone as dead
+// with no declared-wait detection.
+func TestALiveWorkersDeclaredWaitIsNotAStall(t *testing.T) {
 	t.Parallel()
 	h, records := loopHomeConfigured(t, declaredWaitConfig)
 	declared := plantDeclaredWait(t, records, "livewaitaaaa", "pane-declared")
@@ -262,19 +268,76 @@ func TestALiveWorkersDeclaredWaitIsReadAsRunning(t *testing.T) {
 	l.nextPass(t)
 
 	got, err := l.service.tasks().Task(t.Context(), declared)
-	if err != nil || got.State != taskstate.Running || got.Source != taskstate.SourceProcess {
-		t.Fatalf("the live declared task resolves %+v (%v), want Running from the process tier", got, err)
+	if err != nil || got.State != taskstate.Paused || got.Source != taskstate.SourceEvent || got.Basis.Process != taskstate.Live {
+		t.Fatalf("the live declared task resolves %+v (%v), want Paused from its log with the terminal live", got, err)
 	}
+	if got, err := l.service.tasks().Task(t.Context(), control); err != nil || got.State != taskstate.Running || got.Source != taskstate.SourceProcess {
+		t.Fatalf("the undeclared control resolves %+v (%v), want Running from its live terminal", got, err)
+	}
+
+	noStall := func(r passReport, when string) {
+		t.Helper()
+		if err := r.Tasks[declared].Err; err != nil || !r.Tasks[declared].Watched {
+			t.Fatalf("%s the pass over the declared task: watched %v, err %v", when, r.Tasks[declared].Watched, err)
+		}
+		if got := detectionsOf(r, declared, supervisor.KindTerminalUnchanged); len(got) != 0 {
+			t.Fatalf("%s the live declared wait raised terminal unchanged %+v: a declared wait is not a stall", when, got)
+		}
+	}
+	waitIs := func(r passReport, when string, want supervisor.Verdict) {
+		t.Helper()
+		if got := verdictsOf(r, declared, supervisor.KindDeclaredWait); len(got) != 1 || got[0] != want {
+			t.Fatalf("%s the live declared wait's verdicts = %+v, want exactly %+v", when, got, want)
+		}
+	}
+	windowOpen := supervisor.Verdict{Level: supervisor.Absorb, Reason: supervisor.ReasonWindowOpen}
+
+	clock.Advance(10 * time.Second)
+	inside := l.pass(t)
+	noStall(inside, "inside the escalation window")
+	waitIs(inside, "inside the escalation window", windowOpen)
+	if got := verdictsOf(inside, control, supervisor.KindTerminalUnchanged); len(got) != 1 ||
+		got[0] != (supervisor.Verdict{Level: supervisor.Absorb, Reason: supervisor.ReasonProgress}) {
+		t.Fatalf("the control inside the window = %+v, want absorbed on progress", got)
+	}
+
 	clock.Advance(2 * time.Minute)
-	r := l.pass(t)
-	for _, task := range []string{declared, control} {
-		if got := verdictsOf(r, task, supervisor.KindTerminalUnchanged); len(got) != 1 ||
-			got[0] != (supervisor.Verdict{Level: supervisor.Surface, Reason: supervisor.ReasonWindowElapsed}) {
-			t.Fatalf("task %s past the escalation window = %+v, want terminal unchanged surfaced", task, got)
-		}
-		if got := detectionsOf(r, task, supervisor.KindDeclaredWait); len(got) != 0 {
-			t.Fatalf("task %s made a declared-wait detection %+v while its terminal is live", task, got)
-		}
+	past := l.pass(t)
+	noStall(past, "past the escalation window")
+	waitIs(past, "past the escalation window", windowOpen)
+	if got := verdictsOf(past, control, supervisor.KindTerminalUnchanged); len(got) != 1 ||
+		got[0] != (supervisor.Verdict{Level: supervisor.Surface, Reason: supervisor.ReasonWindowElapsed}) {
+		t.Fatalf("the control past the escalation window = %+v, want terminal unchanged surfaced", got)
+	}
+	if got := detectionsOf(past, control, supervisor.KindDeclaredWait); len(got) != 0 {
+		t.Fatalf("the undeclared control made a declared-wait detection %+v", got)
+	}
+
+	clock.Advance(8 * time.Minute)
+	recheck := l.pass(t)
+	noStall(recheck, "past the recheck window")
+	waitIs(recheck, "past the recheck window", supervisor.Verdict{Level: supervisor.Surface, Reason: supervisor.ReasonWindowElapsed})
+	if rows := wakesOfKind(t, l.records(t), declared, supervisor.KindDeclaredWait); len(rows) != 1 {
+		t.Fatalf("the live declared task's declared-wait wakes = %+v, want the recheck's one", rows)
+	}
+	if rows := wakesOfKind(t, l.records(t), declared, supervisor.KindTerminalUnchanged); len(rows) != 0 {
+		t.Fatalf("the live declared task has terminal-unchanged wakes %+v, want none", rows)
+	}
+
+	// The dead-terminal control: the declaration never outranks a dead one.
+	terminals.dead("pane-declared")
+	clock.Advance(10 * time.Second)
+	died := l.pass(t)
+	if got := detectionsOf(died, declared, supervisor.KindDeclaredWait); len(got) != 0 {
+		t.Fatalf("the dead terminal was read as the declared wait: %+v", got)
+	}
+	gone := detectionsOf(died, declared, supervisor.KindTerminalGone)
+	if len(gone) != 1 || !gone[0].Verdict.Surfaces() || gone[0].Disposition != store.WakeAppended ||
+		!strings.HasPrefix(gone[0].Marker, "terminal-gone:dead:pane-declared:") {
+		t.Fatalf("the dead terminal under the declared wait = %+v, want terminal gone surfaced as dead", gone)
+	}
+	if got, err := l.service.tasks().Task(t.Context(), declared); err != nil || got.State != taskstate.Unknown || got.Source != taskstate.SourceProcess {
+		t.Fatalf("the declared task with its terminal dead resolves %+v (%v), want Unknown from the dead terminal", got, err)
 	}
 }
 
