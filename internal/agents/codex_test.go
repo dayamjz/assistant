@@ -1,6 +1,9 @@
 package agents_test
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -118,6 +121,116 @@ func TestCodexFixerResumesViaExecResume(t *testing.T) {
 	jsonAt := indexOf(call.Args, "--json")
 	if resumeAt < 0 || jsonAt < 0 || jsonAt > resumeAt {
 		t.Errorf("--json must precede resume subcommand: %q", call.Args)
+	}
+}
+
+// A JSONL error event is the CLI's own failure, including a missing login.
+// The words are not reclassified as a cancellation, and a process that did
+// report a status is not FailureProcess.
+func TestCodexReportsALoginErrorAsTheAgentsOwnFailure(t *testing.T) {
+	t.Parallel()
+	runner, err := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t))).New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("building the codex adapter: %v", err)
+	}
+	_, err = runner.Run(t.Context(), agents.PurposeReview, invocation(t, agents.ShapeText, map[string]string{
+		helperModeVar:   "raw",
+		helperExitVar:   "1",
+		helperStdoutVar: "{\"type\":\"error\",\"message\":\"Not logged in. Run codex login to authenticate.\"}\n",
+	}))
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Run answered %v, want an *InvocationError", err)
+	}
+	if refusal.Failure != agents.FailureAgent {
+		t.Errorf("failure = %s, want %s", refusal.Failure, agents.FailureAgent)
+	}
+	if !strings.Contains(refusal.Message, "Not logged in") {
+		t.Errorf("message = %q, want the CLI's login text", refusal.Message)
+	}
+}
+
+// Text that says the run was cancelled is still the agent's own failure when
+// the caller's context was not cancelled. This adapter cancels only by ending
+// the local process tree.
+func TestCodexDoesNotTreatAgentTextAsCancellation(t *testing.T) {
+	t.Parallel()
+	runner, err := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t))).New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("building the codex adapter: %v", err)
+	}
+	_, err = runner.Run(t.Context(), agents.PurposeReview, invocation(t, agents.ShapeText, map[string]string{
+		helperModeVar:   "raw",
+		helperExitVar:   "1",
+		helperStdoutVar: "{\"type\":\"error\",\"message\":\"the run was cancelled by the user\"}\n",
+	}))
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) || refusal.Failure != agents.FailureAgent {
+		t.Fatalf("Run answered %v, want FailureAgent", err)
+	}
+}
+
+// A non-zero exit with no JSONL event is the process's own status, which is
+// FailureExit, distinct from a process that never started.
+func TestCodexReportsANonZeroExitWithoutEventsAsExit(t *testing.T) {
+	t.Parallel()
+	runner, err := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t))).New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("building the codex adapter: %v", err)
+	}
+	_, err = runner.Run(t.Context(), agents.PurposeReview, invocation(t, agents.ShapeText, map[string]string{
+		helperModeVar:   "raw",
+		helperExitVar:   "2",
+		helperStderrVar: "codex: boom",
+	}))
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) || refusal.Failure != agents.FailureExit {
+		t.Fatalf("Run answered %v, want FailureExit", err)
+	}
+	if !strings.Contains(refusal.Message, "boom") {
+		t.Errorf("message = %q, want the process's stderr", refusal.Message)
+	}
+}
+
+// Replacing the executable after New is a process that cannot start. The
+// refusal names FailureProcess rather than an agent verdict.
+func TestCodexReportsAProcessThatCannotStart(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "codex")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner, err := agents.CodexFactory(agents.WithCodexBinary(bin)).New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("building the codex adapter: %v", err)
+	}
+	if err := os.Remove(bin); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err = runner.Run(t.Context(), agents.PurposeReview, invocation(t, agents.ShapeText, nil))
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) || refusal.Failure != agents.FailureProcess {
+		t.Fatalf("Run answered %v, want FailureProcess", err)
+	}
+}
+
+// Cancellation is the caller's context ending the local process tree.
+func TestCodexCancellationIsTheCallersContext(t *testing.T) {
+	runner, err := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t))).New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("building the codex adapter: %v", err)
+	}
+	inv, pidFile := spawningInvocation(t, "spawn")
+	ctx, spawned := cancelOnceSpawned(t, pidFile)
+	_, err = runner.Run(ctx, agents.PurposeReview, inv)
+	spawned()
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) || refusal.Failure != agents.FailureCancelled {
+		t.Fatalf("Run answered %v, want FailureCancelled", err)
 	}
 }
 

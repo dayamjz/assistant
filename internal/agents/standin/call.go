@@ -28,7 +28,8 @@ type Call struct {
 	// and continues with the flags the adapter manages.
 	Args []string `json:"args"`
 	// Prompt is what reached the agent: standard input for Claude Code and
-	// Cursor, or the contents of --prompt-file for Grok Build.
+	// Cursor, the contents of --prompt-file for Grok Build, or the argv
+	// operand after "--" for Codex exec.
 	Prompt string `json:"prompt"`
 	// Dir is the working directory the stand-in process resolved. A platform
 	// that resolves symbolic links on the way makes this differ textually from
@@ -40,9 +41,10 @@ type Call struct {
 	// is -1 for a worker, which no step answers.
 	Step int `json:"step"`
 	// Worker reports that this process was started as a worker rather than
-	// as a one-shot invocation: the adapter put neither --print nor
-	// --prompt-file on its command line, or put --print there with streaming
-	// input, which is the whole of how the stand-in tells the two apart.
+	// as a one-shot invocation: the adapter put neither --print, nor
+	// --prompt-file, nor Codex's exec --json on its command line, or put
+	// --print there with streaming input, which is the whole of how the
+	// stand-in tells the two apart.
 	Worker bool `json:"worker,omitempty"`
 	// Stream reports that the worker read streaming input: --print and
 	// --input-format stream-json were on its command line, so each line it
@@ -88,10 +90,24 @@ type Call struct {
 func (c Call) Answered() bool { return c.Step >= 0 }
 
 // Session is the session the invocation asked the agent to continue, empty
-// when it asked for none. It is the value of --resume, so it is empty for
-// every invocation agents.Runner.Run makes, and it is what a test asserts P4
-// on from the wire.
-func (c Call) Session() string { return c.flag("--resume") }
+// when it asked for none. It is the value of --resume, or, for the Codex
+// adapter, the thread id after the resume subcommand and before "--". It is
+// empty for every invocation agents.Runner.Run makes, and it is what a test
+// asserts P4 on from the wire.
+func (c Call) Session() string {
+	if id := c.flag("--resume"); id != "" {
+		return id
+	}
+	for i, a := range c.Args {
+		if a == "--" {
+			return ""
+		}
+		if a == "resume" && i+1 < len(c.Args) && c.Args[i+1] != "--" && !strings.HasPrefix(c.Args[i+1], "-") {
+			return c.Args[i+1]
+		}
+	}
+	return ""
+}
 
 // Model is the model the invocation asked for, empty when it named none.
 func (c Call) Model() string { return c.flag("--model") }

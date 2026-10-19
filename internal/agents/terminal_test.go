@@ -288,14 +288,30 @@ func TestATerminalIsRefusedBeforeAnythingStarts(t *testing.T) {
 // the same way.
 func TestOpenTerminalWorkerConsultsTheDeclarationBeforeTheMechanism(t *testing.T) {
 	term := agents.Terminal{Tmux: "/nonexistent/tmux", Socket: "/nonexistent/s"}
-	cursor, err := agents.CursorFactory(agents.WithCursorBinary(helperBinary(t))).New(t.Context(), nil)
-	if err != nil {
-		t.Fatalf("building the cursor adapter: %v", err)
-	}
-	_, err = agents.OpenTerminalWorker(t.Context(), cursor, term, workerSpec(t))
-	var refusal *agents.CapabilityError
-	if !errors.As(err, &refusal) || refusal.Capability != agents.CapabilityTerminalWorkers || refusal.Agent != agents.CursorName {
-		t.Fatalf("the cursor adapter answered %v, want a *CapabilityError naming %s", err, agents.CapabilityTerminalWorkers)
+	for _, build := range []struct {
+		name string
+		new  func() (agents.Runner, error)
+	}{
+		{agents.CursorName, func() (agents.Runner, error) {
+			return agents.CursorFactory(agents.WithCursorBinary(helperBinary(t))).New(t.Context(), nil)
+		}},
+		{agents.CodexName, func() (agents.Runner, error) {
+			return agents.CodexFactory(agents.WithCodexBinary(helperBinary(t))).New(t.Context(), nil)
+		}},
+		{agents.GrokName, func() (agents.Runner, error) {
+			return agents.GrokFactory(agents.WithGrokBinary(helperBinary(t))).New(t.Context(), nil)
+		}},
+	} {
+		runner, err := build.new()
+		if err != nil {
+			t.Fatalf("building the %s adapter: %v", build.name, err)
+		}
+		_, err = agents.OpenTerminalWorker(t.Context(), runner, term, workerSpec(t))
+		var refusal *agents.CapabilityError
+		if !errors.As(err, &refusal) || refusal.Capability != agents.CapabilityTerminalWorkers || refusal.Agent != build.name {
+			t.Fatalf("the %s adapter answered %v, want a *CapabilityError naming %s",
+				build.name, err, agents.CapabilityTerminalWorkers)
+		}
 	}
 	undeclared := &terminalStubRunner{stubRunner: &stubRunner{name: "undeclared"}}
 	if _, err := agents.OpenTerminalWorker(t.Context(), undeclared, term, workerSpec(t)); !errors.Is(err, agents.ErrUndeclaredCapability) {

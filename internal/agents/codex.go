@@ -140,8 +140,13 @@ func (f *codexFactory) AutoEligible() bool { return false }
 // What availability means here is exactly one thing: the named executable
 // resolves to a file this process may execute. An installation that resolves
 // and then fails on its first invocation, because it is unauthenticated or of
-// an incompatible version, is not caught here; it surfaces as a failed
-// invocation with the agent's own message.
+// an incompatible version, is not caught here. A JSONL error event, including
+// one that says the CLI is not logged in, is FailureAgent and carries that
+// message. A process that does not start, or that ends without a status of
+// its own, is FailureProcess. Cancellation is only the caller's context
+// ending this local process tree; an agent message is never reclassified as
+// a cancellation, and this adapter has no separate call that cancels a
+// stored thread.
 func (f *codexFactory) New(ctx context.Context, args []string) (Runner, error) {
 	_ = ctx
 	resolved, err := exec.LookPath(f.settings.bin)
@@ -513,6 +518,8 @@ func decodeCodexJSONL(stdout []byte) (codexDecoded, error) {
 			}
 		case "turn.completed":
 			if ev.Usage != nil {
+				// Turns are not a field this event carries, so they stay
+				// unreported rather than being recorded as zero.
 				out.usage = Usage{
 					InputTokens:         reportedCount(ev.Usage.InputTokens),
 					OutputTokens:        reportedCount(ev.Usage.OutputTokens),

@@ -64,6 +64,32 @@ func NewWorker(tb testing.TB, script Script, opts ...agents.ClaudeOption) *Agent
 	return newAgent(tb, script, handshakeFlag, agents.ScriptedFactory, opts...)
 }
 
+// NewCodex is New over agents.CodexFactory. The Runner it hands back is the
+// Codex adapter, so a test drives `codex exec --json` and the adapter's own
+// JSONL reader rather than a Claude envelope. It declares resumable sessions
+// and no worker: OpenWorker on it is the adapter's typed refusal.
+//
+// opts are passed to agents.CodexFactory ahead of the binary this package
+// sets, on New's terms. The caller may not replace the binary.
+func NewCodex(tb testing.TB, script Script, opts ...agents.CodexOption) *Agent {
+	tb.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		tb.Fatalf("standin: locating this test binary, which is the stand-in agent: %v", err)
+	}
+	control := prepare(tb, script)
+	verifyAdapter(tb, "codex", func(token string) (agents.Runner, error) {
+		return agents.CodexFactory(agents.WithCodexBinary(self)).
+			New(tb.Context(), []string{handshakeFlag + token})
+	})
+	runner, err := agents.CodexFactory(slices.Concat(opts, []agents.CodexOption{agents.WithCodexBinary(self)})...).
+		New(tb.Context(), []string{controlFlag + control})
+	if err != nil {
+		tb.Fatalf("standin: building a runner over this test binary: %v", err)
+	}
+	return &Agent{tb: tb, control: control, runner: runner}
+}
+
 // factory is what newAgent builds the Runner with: ClaudeFactory for New and
 // ScriptedFactory for NewWorker, both of which take the same options.
 type factory func(opts ...agents.ClaudeOption) agents.Factory
@@ -134,15 +160,26 @@ var wiring struct {
 // script written for it would be answered by whatever that binary does.
 func verify(tb testing.TB, self, probeFlag string) {
 	tb.Helper()
+	verifyAdapter(tb, probeFlag, func(token string) (agents.Runner, error) {
+		return agents.ClaudeFactory(agents.WithBinary(self)).
+			New(tb.Context(), []string{probeFlag + token})
+	})
+}
+
+// verifyAdapter is verify for one adapter's handshake. cacheKey keeps a
+// Claude handshake from standing in for a Codex one: each adapter has to
+// read the bytes Main prints.
+func verifyAdapter(tb testing.TB, cacheKey string, probe func(token string) (agents.Runner, error)) {
+	tb.Helper()
 	wiring.mu.Lock()
 	defer wiring.mu.Unlock()
-	reason, asked := wiring.answered[probeFlag]
+	reason, asked := wiring.answered[cacheKey]
 	if !asked {
-		reason = handshakeWith(tb, self, probeFlag)
+		reason = handshakeRunner(tb, probe)
 		if wiring.answered == nil {
 			wiring.answered = map[string]string{}
 		}
-		wiring.answered[probeFlag] = reason
+		wiring.answered[cacheKey] = reason
 	}
 	if reason == "" {
 		return
@@ -165,13 +202,24 @@ func verify(tb testing.TB, self, probeFlag string) {
 // started rather than from anything a binary could have printed on its own.
 func handshakeWith(tb testing.TB, self, probeFlag string) string {
 	tb.Helper()
+	return handshakeRunner(tb, func(token string) (agents.Runner, error) {
+		return agents.ClaudeFactory(agents.WithBinary(self)).
+			New(tb.Context(), []string{probeFlag + token})
+	})
+}
+
+// handshakeRunner runs the handshake once through probe and returns why it
+// was not answered, empty when it was. probe receives the token directory,
+// which is also the working directory, so an answer that carries it came
+// from a process this call started.
+func handshakeRunner(tb testing.TB, probe func(token string) (agents.Runner, error)) string {
+	tb.Helper()
 	token := tb.TempDir()
-	probe, err := agents.ClaudeFactory(agents.WithBinary(self)).
-		New(tb.Context(), []string{probeFlag + token})
+	runner, err := probe(token)
 	if err != nil {
 		return "building a runner over it failed: " + err.Error()
 	}
-	result, err := probe.Run(tb.Context(), agents.PurposeReview, agents.Invocation{
+	result, err := runner.Run(tb.Context(), agents.PurposeReview, agents.Invocation{
 		Prompt: "standin: answer the handshake",
 		Shape:  agents.ShapeText,
 		Dir:    token,

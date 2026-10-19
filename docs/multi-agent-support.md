@@ -51,6 +51,18 @@ OpenAI, and Grok Build.
   that flag already sets workspace-write and conflicts with `--sandbox` on
   the Codex CLI). Residual: fix grant still permits shell through Codex
   automatic review, not a hard Bash deny.
+- **Usage**: token counts from `turn.completed` when that event carries them.
+  A count the event omits stays unreported. Turns are not on that event, so
+  they are not recorded.
+- **Cancellation**: the caller's context ends the local process tree. There
+  is no separate call that cancels a stored thread, and text the CLI prints
+  is not treated as a cancellation.
+- **Credentials**: a missing login is the CLI's own error event
+  (`FailureAgent`, with its message) or a non-zero exit whose stderr is the
+  message (`FailureExit`). A process that does not start is `FailureProcess`.
+  `OPENAI_API_KEY` is stripped; it is not a substitute for `codex login`.
+- **Workers**: not declared. An operator pin of `codex` refuses a worker
+  launch with `route-refused` and does not change grants.
 
 ### 4. OpenAI (legacy stub)
 
@@ -217,5 +229,7 @@ agent: cursor
 
 The configured agent list has no adapter that declares the worker
 capabilities the session provider needs. Pin Claude, or list a covering
-adapter after your preferred run agent. A Cursor-only pin refuses workers on
-purpose; it does not fall back silently or change grants.
+adapter after your preferred run agent. A Cursor-only, Codex-only, or
+Grok-only pin refuses workers on purpose; it does not fall back silently
+or change grants. The refusal is a `route-refused` event, not a log line
+the launch continues past.

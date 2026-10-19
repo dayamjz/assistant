@@ -602,6 +602,29 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 	}
 }
 
+// Cursor, Codex, and Grok declare resumable sessions and nothing else. The
+// conformance probes run the undeclared worker and terminal refusals, so a
+// later declaration of either without a probe fails here rather than shipping
+// as a comment.
+func TestSessionOnlyAdaptersConformToWhatTheyDeclare(t *testing.T) {
+	t.Parallel()
+	codex, err := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t))).New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("codex: %v", err)
+	}
+	cursor, err := agents.CursorFactory(agents.WithCursorBinary(helperBinary(t))).New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("cursor: %v", err)
+	}
+	grok, err := agents.GrokFactory(agents.WithGrokBinary(helperBinary(t))).New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("grok: %v", err)
+	}
+	conform(t, codex)
+	conform(t, cursor)
+	conform(t, grok)
+}
+
 // Resolve holds an adapter to its declaration in both directions, and refuses
 // the whole resolution rather than passing over the entry.
 func TestResolveRefusesAnAdapterWhoseDeclarationDoesNotMatchWhatItIs(t *testing.T) {

@@ -547,15 +547,7 @@ func (e Envelope) wire(c Call) ([]byte, error) {
 			subtype = "error_during_execution"
 		}
 	}
-	session := ""
-	switch {
-	case e.Session != nil:
-		session = *e.Session
-	case c.Session() != "":
-		session = c.Session()
-	default:
-		session = fmt.Sprintf("standin-session-%d", c.Seq)
-	}
+	session := e.sessionID(c)
 	model := e.Model
 	if model == "" {
 		model = c.Model()
@@ -578,4 +570,67 @@ func (e Envelope) wire(c Call) ([]byte, error) {
 			"cache_creation_input_tokens": e.Usage.CacheCreationTokens,
 		},
 	})
+}
+
+// sessionID is the session an envelope reports, shared by the Claude-shaped
+// envelope and the Codex JSONL wire so the two cannot disagree about it.
+func (e Envelope) sessionID(c Call) string {
+	switch {
+	case e.Session != nil:
+		return *e.Session
+	case c.Session() != "":
+		return c.Session()
+	default:
+		return fmt.Sprintf("standin-session-%d", c.Seq)
+	}
+}
+
+// codexWire encodes the envelope as `codex exec --json` JSONL: a
+// thread.started event, then either an error event or an agent_message plus
+// turn.completed. Counts the envelope did not report are omitted, and turns
+// are omitted entirely, because turn.completed on that CLI has no turns field
+// and the adapter must not record one it was not given.
+func (e Envelope) codexWire(c Call) ([]byte, error) {
+	session := e.sessionID(c)
+	var lines []any
+	started := map[string]any{"type": "thread.started"}
+	if session != "" {
+		started["thread_id"] = session
+	}
+	lines = append(lines, started)
+	if e.IsError {
+		message := e.Result
+		if strings.TrimSpace(message) == "" {
+			message = "error"
+		}
+		lines = append(lines, map[string]any{"type": "error", "message": message})
+	} else {
+		lines = append(lines, map[string]any{
+			"type": "item.completed",
+			"item": map[string]any{"id": "item_0", "type": "agent_message", "text": e.Result},
+		})
+		usage := map[string]any{}
+		add := func(key string, count agents.Count) {
+			if n, ok := count.Value(); ok {
+				usage[key] = n
+			}
+		}
+		add("input_tokens", e.Usage.InputTokens)
+		add("output_tokens", e.Usage.OutputTokens)
+		add("cached_input_tokens", e.Usage.CacheReadTokens)
+		add("cache_write_input_tokens", e.Usage.CacheCreationTokens)
+		if len(usage) > 0 {
+			lines = append(lines, map[string]any{"type": "turn.completed", "usage": usage})
+		}
+	}
+	var buf []byte
+	for _, line := range lines {
+		encoded, err := json.Marshal(line)
+		if err != nil {
+			return nil, err
+		}
+		buf = append(buf, encoded...)
+		buf = append(buf, '\n')
+	}
+	return buf, nil
 }

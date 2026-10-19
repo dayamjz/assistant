@@ -18,7 +18,10 @@
 // Agent.Runner hands back the adapter's own Runner, which is the one of those
 // this package passes along rather than makes. It writes bytes on standard
 // output and standard error, exits with a status, and lets
-// agents.ClaudeFactory read all of that. Every Result, every InvocationError,
+// agents.ClaudeFactory read all of that. NewCodex is the same arrangement
+// over agents.CodexFactory: when the command line is `exec --json` the
+// process prints that CLI's JSONL events, which is the wire the Codex
+// adapter reads, and not the Claude envelope the other constructors print. Every Result, every InvocationError,
 // and every Record a test sees was built by the production adapter out of a
 // process's output, on the path a real Claude Code installation is read on.
 // Even declared usage counts are not handed over: they are marshalled into the

@@ -45,22 +45,39 @@ func awaitWorkerOutput(t *testing.T, w agents.Worker, want string) string {
 // process is started; and a stub that carries the mechanism without declaring
 // it is refused the same way rather than served.
 func TestOpenWorkerConsultsTheDeclarationBeforeTheMechanism(t *testing.T) {
-	cursor, err := agents.CursorFactory(agents.WithCursorBinary(helperBinary(t))).New(t.Context(), nil)
-	if err != nil {
-		t.Fatalf("building the cursor adapter: %v", err)
-	}
-	_, err = agents.OpenWorker(t.Context(), cursor, workerSpec(t))
-	var refusal *agents.CapabilityError
-	if !errors.As(err, &refusal) {
-		t.Fatalf("OpenWorker on the cursor adapter answered %v, want a *CapabilityError", err)
-	}
-	if refusal.Capability != agents.CapabilityWorkerSessions || refusal.Agent != agents.CursorName {
-		t.Errorf("the refusal names %q on %q, want %q on %q",
-			refusal.Capability, refusal.Agent, agents.CapabilityWorkerSessions, agents.CursorName)
+	// Cursor, Codex, and Grok declare no worker. The refusal is typed and
+	// names the capability; the mechanism is not reached.
+	for _, build := range []struct {
+		name string
+		new  func() (agents.Runner, error)
+	}{
+		{agents.CursorName, func() (agents.Runner, error) {
+			return agents.CursorFactory(agents.WithCursorBinary(helperBinary(t))).New(t.Context(), nil)
+		}},
+		{agents.CodexName, func() (agents.Runner, error) {
+			return agents.CodexFactory(agents.WithCodexBinary(helperBinary(t))).New(t.Context(), nil)
+		}},
+		{agents.GrokName, func() (agents.Runner, error) {
+			return agents.GrokFactory(agents.WithGrokBinary(helperBinary(t))).New(t.Context(), nil)
+		}},
+	} {
+		runner, err := build.new()
+		if err != nil {
+			t.Fatalf("building the %s adapter: %v", build.name, err)
+		}
+		_, err = agents.OpenWorker(t.Context(), runner, workerSpec(t))
+		var refusal *agents.CapabilityError
+		if !errors.As(err, &refusal) {
+			t.Fatalf("OpenWorker on the %s adapter answered %v, want a *CapabilityError", build.name, err)
+		}
+		if refusal.Capability != agents.CapabilityWorkerSessions || refusal.Agent != build.name {
+			t.Errorf("the refusal names %q on %q, want %q on %q",
+				refusal.Capability, refusal.Agent, agents.CapabilityWorkerSessions, build.name)
+		}
 	}
 
 	undeclared := &workerStubRunner{stubRunner: &stubRunner{name: "undeclared"}}
-	_, err = agents.OpenWorker(t.Context(), undeclared, workerSpec(t))
+	_, err := agents.OpenWorker(t.Context(), undeclared, workerSpec(t))
 	if errors.Is(err, errStubWorkerReached) {
 		t.Fatal("OpenWorker reached the worker mechanism of an adapter that declared nothing")
 	}

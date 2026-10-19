@@ -90,22 +90,34 @@ func Main() {
 // printFlag is the flag the Claude Code and Cursor adapters put on every
 // one-shot invocation and on every pipe worker they start, and put on no
 // terminal worker. promptFileFlag is Grok Build's equivalent delivery: the
-// prompt is a file path rather than standard input. Which of four things this
-// process is follows from the command line alone, which is what the wire
-// carries: with the screen reader flag before "--" and without a one-shot
-// marker, an interactive worker; otherwise without a one-shot marker, a
-// line-mode worker; with --print and streaming input, a stream-mode worker;
-// with a one-shot marker and nothing more, a one-shot invocation that reads
-// its prompt to the end.
+// prompt is a file path rather than standard input. execFlag and jsonFlag
+// together are the Codex CLI's one-shot shape (`codex exec --json`); that
+// adapter declares no worker, so the pair is never a worker. Which of four
+// things this process is follows from the command line alone, which is what
+// the wire carries: with the screen reader flag before "--" and without a
+// one-shot marker, an interactive worker; otherwise without a one-shot
+// marker, a line-mode worker; with --print and streaming input, a
+// stream-mode worker; with a one-shot marker and nothing more, a one-shot
+// invocation that reads its prompt to the end.
 const (
 	printFlag      = "--print"
 	promptFileFlag = "--prompt-file"
+	execFlag       = "exec"
+	jsonFlag       = "--json"
 )
 
 // oneShotArgs reports whether args name a one-shot invocation rather than a
-// worker: --print (Claude/Cursor) or --prompt-file (Grok).
+// worker: --print (Claude/Cursor), --prompt-file (Grok), or exec with --json
+// (Codex).
 func oneShotArgs(args []string) bool {
-	return slices.Contains(args, printFlag) || slices.Contains(args, promptFileFlag)
+	return slices.Contains(args, printFlag) || slices.Contains(args, promptFileFlag) || codexExecArgs(args)
+}
+
+// codexExecArgs reports whether args are the Codex adapter's one-shot command
+// line. Both words are required so a configured flag that happens to be one
+// of them does not by itself change which process this is.
+func codexExecArgs(args []string) bool {
+	return slices.Contains(args, execFlag) && slices.Contains(args, jsonFlag)
 }
 
 // flagValue is the value of the first argument with this prefix, and whether
@@ -131,8 +143,9 @@ func flagArg(args []string, name string) string {
 }
 
 // readPrompt returns the invocation prompt: the contents of --prompt-file when
-// that flag is present (Grok Build), otherwise everything on standard input
-// (Claude Code and Cursor).
+// that flag is present (Grok Build), the argv operand after "--" for a Codex
+// exec (the adapter closes stdin empty, because a live stdin is more prompt
+// to that CLI), otherwise everything on standard input (Claude Code and Cursor).
 func readPrompt(args []string) (string, error) {
 	if path := flagArg(args, promptFileFlag); path != "" {
 		raw, err := os.ReadFile(path)
@@ -141,11 +154,27 @@ func readPrompt(args []string) (string, error) {
 		}
 		return string(raw), nil
 	}
+	if codexExecArgs(args) {
+		if prompt, ok := promptAfterDoubleDash(args); ok {
+			return prompt, nil
+		}
+	}
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return "", err
 	}
 	return string(raw), nil
+}
+
+// promptAfterDoubleDash is the single argv word after "--", which is where
+// the Codex adapter places the prompt.
+func promptAfterDoubleDash(args []string) (string, bool) {
+	for i, a := range args {
+		if a == "--" && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return "", false
 }
 
 // handshake answers New's wiring check by printing a well-formed envelope
@@ -351,7 +380,17 @@ func emit(reply Reply, call Call) int {
 		}
 	}
 	if reply.Envelope != nil {
-		encoded, err := reply.Envelope.wire(call)
+		var encoded []byte
+		var err error
+		if codexExecArgs(call.Args) {
+			// Codex's adapter reads JSONL events, the shape `codex exec --json`
+			// prints. A Claude envelope here would be a shape that CLI does not
+			// emit, and the tests that drive this adapter would pass on a path
+			// the real process never takes.
+			encoded, err = reply.Envelope.codexWire(call)
+		} else {
+			encoded, err = reply.Envelope.wire(call)
+		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "standin: encoding the envelope: "+err.Error())
 			return exitNoOutput
