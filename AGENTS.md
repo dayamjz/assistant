@@ -691,8 +691,8 @@ Each has cost this repository more than one round of review.
   `InFlightOf` reads it beside `store.UnacknowledgedWakes`, because a hold
   nobody has been told about is in flight whatever its state says.
   `terminal.go` is the same kind of closed table for which states have their
-  terminal read at all, every state but `Reported`, so a delivered
-  investigation raises no `terminal-gone`. Read its
+  terminal read at all, every state but `Reported`, `Landed` and
+  `Complete`, so a delivered task raises no `terminal-gone`. Read its
   `doc.go` for the residual gaps: the
   check-result kind has no producer, the repetition count is read for the
   unchanged terminal alone, and freshness blocks falsely across a suspend or a clock
