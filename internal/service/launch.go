@@ -58,7 +58,8 @@ import (
 // with no fallthrough. A longer list is ordered preference with capability
 // filtering. The selection is recorded on the attempt through
 // store.SetAttemptRoute before Create, so every launch that reaches a
-// process names the adapter and reason. A routing refusal is recorded as
+// process names the adapter, the reason, and every entry routing passed
+// over with the stable reason agents gave for it. A routing refusal is recorded as
 // "route-refused" and the task resolves Failed rather than staying
 // Dispatched forever. Grants are unchanged: the selected worker still starts
 // under GrantWorker through the ordinary session Create path.
@@ -153,7 +154,7 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
 	}
 	if err := s.store.SetAttemptRoute(ctx, d.id, d.attempt, selection.Resolution.Name, selection.Reason, store.AttemptLaunch{
-		Role: task.Role, Model: model, Effort: role.Effort,
+		Role: task.Role, Model: model, Effort: role.Effort, Skipped: skippedAgents(selection.Resolution.Skipped),
 	}); err != nil {
 		return nil, fmt.Errorf("service: recording the route of task %s attempt %d: %w", d.id, d.attempt, err)
 	}
@@ -228,6 +229,24 @@ func (s *Service) routeWorker(ctx context.Context, roleName string) (agents.Sele
 		return agents.Selection{}, config.Role{}, err
 	}
 	return selection, role, nil
+}
+
+// skippedAgents is the record of what a selection passed over: each entry's
+// adapter name, the stable skip reason internal/agents gave it, and, for a
+// missing capability, which one. The entry's arguments and the error text
+// are not carried, so nothing an operator wrote into an entry and nothing an
+// adapter printed reaches the record.
+func skippedAgents(skipped []agents.Unavailability) []store.SkippedAgent {
+	out := make([]store.SkippedAgent, 0, len(skipped))
+	for _, u := range skipped {
+		entry := store.SkippedAgent{Agent: u.Name, Reason: u.Reason}
+		var undeclared *agents.CapabilityError
+		if u.Reason == agents.SkipMissingCapability && errors.As(u.Err, &undeclared) {
+			entry.Capability = string(undeclared.Capability)
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // workerOverride is the operator pin: a single named agent entry that is not

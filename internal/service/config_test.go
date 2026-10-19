@@ -2,11 +2,15 @@ package service_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -82,6 +86,9 @@ func TestARunResolvesTheTrustedRepositoryConfiguration(t *testing.T) {
 		if name, known := run.Record.ResolvedAgent.Get(); !known || name == "" {
 			t.Fatalf("ResolvedAgent = %v, want the agent the run resolved", run.Record.ResolvedAgent)
 		}
+		if skipped, known := run.Record.ResolvedSkipped.Get(); !known || len(skipped) != 0 {
+			t.Fatalf("ResolvedSkipped = %v (known=%v), want a known empty list for a first entry that ran", skipped, known)
+		}
 
 		// A second run after the trusted document changes records a different
 		// digest, which is what makes the record trace to the documents the
@@ -91,6 +98,39 @@ func TestARunResolvesTheTrustedRepositoryConfiguration(t *testing.T) {
 		second := startRunSkipping(t, running.client, subject, pipeline.StageReview)
 		if second.Record.ConfigDigest == run.Record.ConfigDigest {
 			t.Fatalf("two runs over different trusted documents record one digest, %s", run.Record.ConfigDigest)
+		}
+	})
+}
+
+// A run's record names the agent its resolution chose and every entry the
+// resolution passed over before it, with the stable reason, and the record
+// arrives over the wire, so the structured surface carries it. The operator
+// lists an adapter whose executable is missing ahead of the scripted one, so
+// the first entry is passed over as one that cannot run here; the error text
+// and the entry's arguments are not on the record.
+func TestARunRecordsWhatItsAgentResolutionPassedOver(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	if err := os.WriteFile(h.ConfigFile(), []byte(`{"agent": ["codex --model gone", "claude"]}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	o := options(t, h)
+	runner := standin.New(t, standin.Script{Steps: []standin.Step{{
+		Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly"),
+	}}}).Runner()
+	missing := agents.CodexFactory(agents.WithCodexBinary(filepath.Join(t.TempDir(), "no-codex-here")))
+	o.Catalog = agents.NewCatalog(missing, fixedFactory{runner: runner}, cursorFactory{runner: runner})
+	withServiceOptions(t, o, func(running serviceUnderTest) {
+		run := startRunSkipping(t, running.client, subject, pipeline.StageReview)
+		if name, _ := run.Record.ResolvedAgent.Get(); name != runner.Name() {
+			t.Fatalf("ResolvedAgent = %v, want %s", run.Record.ResolvedAgent, runner.Name())
+		}
+		want := []store.SkippedAgent{{Agent: "codex", Reason: agents.SkipCannotRun}}
+		if skipped, known := run.Record.ResolvedSkipped.Get(); !known || !slices.Equal(skipped, want) {
+			t.Fatalf("ResolvedSkipped = %v (known=%v), want %v", skipped, known, want)
 		}
 	})
 }

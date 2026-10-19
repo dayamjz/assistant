@@ -476,6 +476,15 @@ reason rather than falling back or widening grants; list Claude after Cursor
 if you want Cursor for runs and Claude for attachable workers. See
 `docs/multi-agent-support.md`.
 
+Each launch records which adapter it chose on the task attempt in the home's
+database, once, as `adapter`, `route_reason` and `route_skipped`; no command
+prints the attempt yet. The reason is `override`, `ordered`, `fallback-unavailable` or
+`fallback-quota`. Each skipped entry names its adapter and one of
+`names-no-agent`, `not-in-build`, `cannot-run` or `missing-capability`, with
+the missing capability beside the last. A run records its own agent the same
+way, as `resolved_agent` and `resolved_skipped` in the run's record, which
+`assistant --json runs RUN` prints.
+
 It is read strictly: an unrecognized key, a key written twice, and a value of
 the wrong type are each refused by name rather than ignored or converted, so
 `yes` is not `true` and `"3"` is not `3`. A file written as JSON, as this one

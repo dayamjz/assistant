@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 
@@ -174,12 +175,27 @@ func TestAnAttemptsRouteIsFilledOnce(t *testing.T) {
 	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence+1, "claude", "ordered", AttemptLaunch{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetAttemptRoute on a missing attempt = %v, want ErrNotFound", err)
 	}
-	asked := AttemptLaunch{Role: "pages", Model: "claude-opus-5-5", Effort: "high"}
+	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence, "claude", "ordered", AttemptLaunch{Skipped: []SkippedAgent{{Agent: "cursor"}}}); err == nil {
+		t.Fatal("SetAttemptRoute accepted a skip naming no reason")
+	}
+	asked := AttemptLaunch{Role: "pages", Model: "claude-opus-5-5", Effort: "high", Skipped: []SkippedAgent{
+		{Agent: "openai", Reason: "missing-capability", Capability: "worker_sessions"},
+		{Agent: "", Reason: "names-no-agent"},
+	}}
 	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence, "claude", "override", asked); err != nil {
 		t.Fatalf("SetAttemptRoute: %v", err)
 	}
 	if err := s.SetAttemptRoute(ctx, task.ID, a.Sequence, "cursor", "ordered", AttemptLaunch{}); !errors.Is(err, ErrAttemptRouteRecorded) {
 		t.Fatalf("a second fill = %v, want ErrAttemptRouteRecorded", err)
+	}
+	for _, rewrite := range []string{
+		`UPDATE task_attempt SET adapter = 'cursor' WHERE task_id = ?`,
+		`UPDATE task_attempt SET route_reason = 'ordered' WHERE task_id = ?`,
+		`UPDATE task_attempt SET route_skipped = '[]' WHERE task_id = ?`,
+	} {
+		if _, err := s.write.ExecContext(ctx, rewrite, task.ID); err == nil {
+			t.Fatalf("the database accepted %q over a recorded route", rewrite)
+		}
 	}
 	got, err := s.TaskAttempts(ctx, task.ID)
 	if err != nil || len(got) != 1 {
@@ -201,5 +217,8 @@ func TestAnAttemptsRouteIsFilledOnce(t *testing.T) {
 	}
 	if effort, ok := got[0].Effort.Get(); !ok || effort != asked.Effort {
 		t.Fatalf("the attempt's effort is %q (known=%v), want %s", effort, ok, asked.Effort)
+	}
+	if skipped, ok := got[0].RouteSkipped.Get(); !ok || !slices.Equal(skipped, asked.Skipped) {
+		t.Fatalf("the attempt's skips are %v (known=%v), want %v in order", got[0].RouteSkipped, ok, asked.Skipped)
 	}
 }

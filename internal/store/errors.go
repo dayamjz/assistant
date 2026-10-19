@@ -294,6 +294,11 @@ var ErrAttemptSessionRecorded = errors.New("store: the attempt already names a s
 // which is a new attempt.
 var ErrAttemptRouteRecorded = errors.New("store: the attempt already names a route")
 
+// ErrRunAgentResolved is returned by SetRunAgentResolution when the run
+// already names the agent it resolved. A run resolves its agent once, when
+// it begins; a second resolution would describe a run that did not happen.
+var ErrRunAgentResolved = errors.New("store: the run already names its resolved agent")
+
 // ErrCleanupRecorded is returned by RecordTaskCleanup when the task already
 // has a cleanup record. PRD section 8 says the record is written once, so a
 // second write is refused rather than overwriting the proof the first was made

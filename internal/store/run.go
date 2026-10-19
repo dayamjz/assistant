@@ -127,6 +127,13 @@ type Run struct {
 	// column existed and for one refused before an agent answered for it, so
 	// the record understates here too.
 	ResolvedAgent Optional[string] `json:"resolved_agent"`
+	// ResolvedSkipped is every entry the agent resolution passed over before
+	// it chose ResolvedAgent, in the order it considered them, with the
+	// stable reason for each. It is recorded with ResolvedAgent by
+	// SetRunAgentResolution, so a known empty list is a resolution whose
+	// first entry ran. It is unknown wherever ResolvedAgent is, and for a
+	// run that resolved before the column existed.
+	ResolvedSkipped Optional[[]SkippedAgent] `json:"resolved_skipped"`
 	// Park is which loop bound parked the run, known exactly when
 	// TransitionRunOnPark ended it. It is what tells a terminated run a bound
 	// stopped from one a person cancelled or a push superseded, which the
@@ -555,12 +562,42 @@ func (s *Store) SetRunConfigResolution(ctx context.Context, id, digest string, r
 	})
 }
 
-// SetRunResolvedAgent records the name of the agent the run resolved, as
-// configuration spells it. It is a name and not a second record of the agent:
-// what the name means is the agent catalog's, and internal/agents owns the
-// resolution itself.
-func (s *Store) SetRunResolvedAgent(ctx context.Context, id, name string) error {
-	return s.updateRun(ctx, id, "resolved_agent", name)
+// SetRunAgentResolution records the agent the run resolved, as
+// configuration spells it, and every entry the resolution passed over before
+// it, in one write. It is a name and not a second record of the agent: what
+// the name means is the agent catalog's, and internal/agents owns the
+// resolution itself and the vocabulary of the skip reasons.
+//
+// It is written once: a run that already names an agent is refused with
+// ErrRunAgentResolved, decided in the transaction that writes, and a trigger
+// holds the same rule against a direct rewrite. A blank name, and a skipped
+// entry naming no reason, are refused; a nil list is recorded as the empty
+// one. A run that does not exist is ErrNotFound, wrapped.
+func (s *Store) SetRunAgentResolution(ctx context.Context, id, name string, skipped []SkippedAgent) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("store: run %s: the resolved agent is empty", id)
+	}
+	encoded, err := skippedText("resolved_skipped", skipped)
+	if err != nil {
+		return fmt.Errorf("store: run %s: %w", id, err)
+	}
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		var agent, recorded Optional[string]
+		err := tx.QueryRowContext(ctx,
+			`SELECT resolved_agent, resolved_skipped FROM run WHERE id = ?`, id).Scan(&agent, &recorded)
+		if err != nil {
+			return fmt.Errorf("store: run %s: %w", id, errNoRows(err))
+		}
+		if agent.IsKnown() || recorded.IsKnown() {
+			return fmt.Errorf("store: run %s: %w", id, ErrRunAgentResolved)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE run SET resolved_agent = ?, resolved_skipped = ?, updated_at = ? WHERE id = ?`,
+			name, encoded, encodeTime(nowUTC()), id); err != nil {
+			return fmt.Errorf("store: run %s: recording its agent resolution: %w", id, err)
+		}
+		return nil
+	})
 }
 
 // GiveRunStandingConsent records that the run was put under standing consent,
@@ -684,20 +721,20 @@ const runColumns = `SELECT
 	id, repository_id, branch, submitted_head, base, current_head, status,
 	approved_commit, push_binding, pull_request, fixer_session, fixer_agent, intent, intent_source,
 	build_version, build_revision, build_modified, build_go, config_digest,
-	config_rejections, resolved_agent, park, standing_consent, held_moves, no_code_host,
+	config_rejections, resolved_agent, resolved_skipped, park, standing_consent, held_moves, no_code_host,
 	created_at, updated_at`
 
 func scanRun(sc scanner) (Run, error) {
 	var r Run
 	var status, created, updated string
 	var modified int
-	var rejections, park, consent Optional[string]
+	var rejections, skipped, park, consent Optional[string]
 	var noCodeHost Optional[int64]
 	if err := sc.Scan(
 		&r.ID, &r.RepositoryID, &r.Branch, &r.SubmittedHead, &r.Base, &r.CurrentHead, &status,
 		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.FixerAgent, &r.Intent, &r.IntentSource,
 		&r.Build.Version, &r.Build.Revision, &modified, &r.Build.Go, &r.ConfigDigest,
-		&rejections, &r.ResolvedAgent, &park, &consent, &r.HeldMoves, &noCodeHost,
+		&rejections, &r.ResolvedAgent, &skipped, &park, &consent, &r.HeldMoves, &noCodeHost,
 		&created, &updated,
 	); err != nil {
 		return Run{}, err
@@ -706,6 +743,9 @@ func scanRun(sc scanner) (Run, error) {
 	r.Build.Modified = modified != 0
 	var err error
 	if r.ConfigRejections, err = rejectionsValue(rejections); err != nil {
+		return Run{}, err
+	}
+	if r.ResolvedSkipped, err = skippedValue("resolved_skipped", skipped); err != nil {
 		return Run{}, err
 	}
 	if r.Park, err = parkValue(park); err != nil {

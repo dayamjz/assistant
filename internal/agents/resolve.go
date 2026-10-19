@@ -258,8 +258,9 @@ func Resolve(ctx context.Context, entries []string, catalog *Catalog) (Resolutio
 		fields := strings.Fields(entry)
 		if len(fields) == 0 {
 			skipped = append(skipped, Unavailability{
-				Entry: entry,
-				Err:   errors.New("entry names no agent"),
+				Entry:  entry,
+				Reason: SkipNamesNoAgent,
+				Err:    errors.New("entry names no agent"),
 			})
 			continue
 		}
@@ -267,15 +268,16 @@ func Resolve(ctx context.Context, entries []string, catalog *Catalog) (Resolutio
 		factory, ok := catalog.lookup(name)
 		if !ok {
 			skipped = append(skipped, Unavailability{
-				Entry: entry,
-				Name:  name,
-				Err:   errors.New("this build has no adapter named " + name),
+				Entry:  entry,
+				Name:   name,
+				Reason: SkipNotInBuild,
+				Err:    errors.New("this build has no adapter named " + name),
 			})
 			continue
 		}
 		runner, err := factory.New(ctx, args)
 		if err != nil {
-			skipped = append(skipped, Unavailability{Entry: entry, Name: name, Err: err})
+			skipped = append(skipped, Unavailability{Entry: entry, Name: name, Reason: SkipCannotRun, Err: err})
 			continue
 		}
 		declared, err := verifyDeclaration(name, runner)

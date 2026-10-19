@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/session"
+	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
@@ -318,6 +320,9 @@ func TestLaunchRecordsTheRoutedAdapterAndReason(t *testing.T) {
 	if !ok || reason != agents.ReasonOverride {
 		t.Fatalf("route reason = %q (known=%v), want %s", reason, ok, agents.ReasonOverride)
 	}
+	if skipped, ok := attempts[0].RouteSkipped.Get(); !ok || len(skipped) != 0 {
+		t.Fatalf("route skipped = %v (known=%v), want the known empty list of a pin", skipped, ok)
+	}
 	ref, ok := attempts[0].SessionRef.Get()
 	if !ok || ref != launched.Reference().String() {
 		t.Fatalf("session = %q (known=%v), want %s", ref, ok, launched.Reference())
@@ -353,5 +358,52 @@ func TestCloseEndsTheSessionsTheServiceLaunched(t *testing.T) {
 	waitLiveness(t, provider, ref, taskstate.Dead)
 	if errs := subject.service.closeSessions(); len(errs) != 0 {
 		t.Fatalf("a second close answered %v, want nothing to close", errs)
+	}
+}
+
+// An ordered agent list whose first entry runs but cannot host a worker
+// launches the second, and the attempt records the choice once with the
+// reason ordered and the first entry passed over as a missing capability,
+// naming which, and nothing of the entry's error text.
+func TestAnOrderedSkipIsRecordedWithItsReasonOnTheAttempt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	subject := newLaunchSubject(t, workerStandIn(t))
+	worker := subject.agent.Runner()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	openai, err := agents.OpenAIFactory(agents.WithOpenAIBinary(self)).New(ctx, subject.agent.Arguments())
+	if err != nil {
+		t.Fatalf("building the openai adapter over the stand-in: %v", err)
+	}
+	subject.service.catalog = agents.NewCatalog(fixedRunner{runner: openai}, fixedRunner{runner: worker}, cursorFactory{runner: worker})
+	subject.service.cfg.Agent = []string{openai.Name(), worker.Name()}
+	d, err := subject.service.dispatchTask(ctx, subject.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	launched, err := subject.service.launchTask(ctx, d)
+	if err != nil {
+		t.Fatalf("launching: %v", err)
+	}
+	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
+	if err != nil || len(attempts) != 1 {
+		t.Fatalf("TaskAttempts = %+v, %v", attempts, err)
+	}
+	got := attempts[0]
+	if adapter, ok := got.Adapter.Get(); !ok || adapter != worker.Name() {
+		t.Fatalf("adapter = %q (known=%v), want %s", adapter, ok, worker.Name())
+	}
+	if reason, ok := got.RouteReason.Get(); !ok || reason != agents.ReasonOrdered {
+		t.Fatalf("route reason = %q (known=%v), want %s", reason, ok, agents.ReasonOrdered)
+	}
+	want := []store.SkippedAgent{{Agent: openai.Name(), Reason: agents.SkipMissingCapability, Capability: string(agents.CapabilityWorkerSessions)}}
+	if skipped, ok := got.RouteSkipped.Get(); !ok || !slices.Equal(skipped, want) {
+		t.Fatalf("route skipped = %+v (known=%v), want %+v", got.RouteSkipped, ok, want)
+	}
+	if ref, ok := got.SessionRef.Get(); !ok || ref != launched.Reference().String() {
+		t.Fatalf("session = %q (known=%v), want %s", ref, ok, launched.Reference())
 	}
 }

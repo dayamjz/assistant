@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -603,10 +604,12 @@ func TestSetRunConfigResolutionReplacesThePlaceholder(t *testing.T) {
 	}
 }
 
-// The resolved agent's name is recordable after creation, unknown until then,
-// and never fabricated: a run refused before an agent answered for it keeps
-// the unknown.
-func TestSetRunResolvedAgentRecordsTheName(t *testing.T) {
+// The resolved agent's name and what the resolution passed over are
+// recordable after creation, unknown until then, never fabricated, and
+// written once: a run refused before an agent answered for it keeps both
+// unknown, a second resolution is refused and the first stands, and a direct
+// rewrite of either column is refused by the database too.
+func TestSetRunAgentResolutionRecordsTheNameAndTheSkipsOnce(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
@@ -615,23 +618,63 @@ func TestSetRunResolvedAgentRecordsTheName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	if r.ResolvedAgent.IsKnown() {
-		t.Fatalf("a run created before resolution carries the agent %v", r.ResolvedAgent)
+	if r.ResolvedAgent.IsKnown() || r.ResolvedSkipped.IsKnown() {
+		t.Fatalf("a run created before resolution carries the agent %v and skips %v", r.ResolvedAgent, r.ResolvedSkipped)
 	}
-	if err := s.SetRunResolvedAgent(ctx, r.ID, "claude"); err != nil {
-		t.Fatalf("SetRunResolvedAgent: %v", err)
+	if err := s.SetRunAgentResolution(ctx, r.ID, " ", nil); err == nil {
+		t.Fatal("an empty agent name was accepted, so the record could name an agent nobody resolved")
+	}
+	if err := s.SetRunAgentResolution(ctx, r.ID, "claude", []SkippedAgent{{Agent: "codex"}}); err == nil {
+		t.Fatal("a skip naming no reason was accepted, so the record could fabricate a cause")
+	}
+	if err := s.SetRunAgentResolution(ctx, "no-such-run", "claude", nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetRunAgentResolution on a missing run: %v", err)
+	}
+	skipped := []SkippedAgent{
+		{Agent: "codex", Reason: "cannot-run"},
+		{Agent: "cursor", Reason: "missing-capability", Capability: "worker_sessions"},
+	}
+	if err := s.SetRunAgentResolution(ctx, r.ID, "claude", skipped); err != nil {
+		t.Fatalf("SetRunAgentResolution: %v", err)
+	}
+	if err := s.SetRunAgentResolution(ctx, r.ID, "cursor", nil); !errors.Is(err, ErrRunAgentResolved) {
+		t.Fatalf("a second resolution = %v, want ErrRunAgentResolved", err)
+	}
+	for _, rewrite := range []string{
+		`UPDATE run SET resolved_agent = 'cursor' WHERE id = ?`,
+		`UPDATE run SET resolved_skipped = '[]' WHERE id = ?`,
+	} {
+		if _, err := s.write.ExecContext(ctx, rewrite, r.ID); err == nil {
+			t.Fatalf("the database accepted %q over a recorded resolution", rewrite)
+		}
 	}
 	got, err := s.Run(ctx, r.ID)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if name, known := got.ResolvedAgent.Get(); !known || name != "claude" {
-		t.Fatalf("ResolvedAgent = %v, want the recorded name", got.ResolvedAgent)
+		t.Fatalf("ResolvedAgent = %v, want the first recorded name", got.ResolvedAgent)
 	}
-	if err := s.SetRunResolvedAgent(ctx, "no-such-run", "claude"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("SetRunResolvedAgent on a missing run: %v", err)
+	if list, known := got.ResolvedSkipped.Get(); !known || !slices.Equal(list, skipped) {
+		t.Fatalf("ResolvedSkipped = %v, want %v in order", got.ResolvedSkipped, skipped)
 	}
-	if err := s.SetRunResolvedAgent(ctx, r.ID, " "); err == nil {
-		t.Fatal("an empty agent name was accepted, so the record could name an agent nobody resolved")
+
+	// A resolution that passed over nothing is the known empty list, never
+	// the unknown a run that never resolved reads as.
+	other := completeRun()
+	other.ID = "run-resolved-first"
+	created, err := s.CreateRun(ctx, other)
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := s.SetRunAgentResolution(ctx, created.ID, "claude", nil); err != nil {
+		t.Fatalf("SetRunAgentResolution: %v", err)
+	}
+	got, err = s.Run(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if list, known := got.ResolvedSkipped.Get(); !known || len(list) != 0 {
+		t.Fatalf("ResolvedSkipped = %v, want the known empty list", got.ResolvedSkipped)
 	}
 }
