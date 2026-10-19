@@ -2,6 +2,8 @@ module github.com/dayamjz/assistant
 
 go 1.25.0
 
+toolchain go1.26.9
+
 require (
 	github.com/mattn/go-isatty v0.0.24
 	go.yaml.in/yaml/v3 v3.0.4

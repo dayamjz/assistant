@@ -1285,7 +1285,10 @@ Each has cost this repository more than one round of review.
 - Concurrency rules need the race detector, so `make test` runs it and CI runs
   it on both supported platforms, macOS and Linux. Windows is unsupported:
   Windows-tagged sources still build and CI vets them with `GOOS=windows go
-  vet`, but no CI lane runs them.
+  vet`, but no CI lane runs them. On darwin/arm64 `-race` needs Go 1.26.5 or
+  later, which go.mod's `toolchain` line pins: 1.26.0 to 1.26.4 run a forked
+  child's pre-exec syscall through the race runtime, so a race-built test's
+  git or agent child can die before it execs (golang/go#79804, #321).
 - A test that establishes a PRD principle cites it with `principles.Cite` as
   well as saying so in its doc comment. The comment is what a reader learns
   from; the call is what `internal/principles` can count, and a principle no
