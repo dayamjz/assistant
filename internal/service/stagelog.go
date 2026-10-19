@@ -34,6 +34,8 @@ import (
 //     agents.Record the invocation record keeps, and its full reply, which
 //     that record by design never holds. A failed invocation writes its
 //     error instead, which carries what the agent wrote about the failure.
+//     A start the usage ceiling refused is written the same way, as that
+//     error, and it is not a row in the invocation history.
 //
 // Every write passes through internal/redact first, which is PRD section 8's
 // rule for anything persisted, so the file holds the reply with credentials

@@ -133,11 +133,21 @@ func servedOn(ctx context.Context) agents.Served {
 // outside this wrapper, and its calls are recorded by whatever recorder that
 // adapter was built with, if any.
 //
+// It is also where a start is held to the usage ceiling, before the inner
+// run and before the process is registered. ceiling.go decides, from the
+// operator's configuration and the invocation history. A refusal is returned
+// to the caller. When the context names a run and a stage it is also written
+// to that stage's log; a start that already passed the check is not
+// cancelled, because this wrapper does not keep the calls it has handed to
+// the inner runner.
+//
 // It is also where every such invocation reaches the run's stage log: once
 // it returns, its account and its full reply, or the error it ended with, are
 // written to the log of the stage agents.Served names, which stagelog.go
 // owns and redacts. The invocation record keeps no output by design; the log
-// is where the output is kept, as evidence.
+// is where the output is kept, as evidence. A start the ceiling refused is
+// written the same way, as the error, and it is not an invocation the
+// history records.
 //
 // The wrapper preserves the shape agents.Resolve vouched for: a runner with
 // resumable sessions stays an agents.SessionRunner and one without stays a
@@ -155,7 +165,7 @@ func servedOn(ctx context.Context) agents.Served {
 // admission, so a worker is obtained from the agent this wraps and registered
 // in a set of whoever owns the task, never in this registry.
 func (s *Service) containRunner(r agents.Runner) agents.Runner {
-	wrapped := containedRunner{inner: r, registry: s.registry, log: s.logInvocation}
+	wrapped := containedRunner{inner: r, registry: s.registry, log: s.logInvocation, admit: s.admitInvocation}
 	if sessions, ok := r.(agents.SessionRunner); ok {
 		return containedSessionRunner{containedRunner: wrapped, sessions: sessions}
 	}
@@ -171,6 +181,9 @@ type containedRunner struct {
 	// registration and the stamp, for the same reason: every invocation of a
 	// run passes here.
 	log invocationLog
+	// admit is the usage ceiling, asked before the inner run. It is the
+	// service's admitInvocation; a nil func is not produced by containRunner.
+	admit func(context.Context) error
 }
 
 // invocationLog is how the wrappers hand an invocation's account and reply
@@ -194,6 +207,10 @@ func (c containedRunner) Capabilities() agents.Capabilities {
 
 func (c containedRunner) Run(ctx context.Context, purpose agents.Purpose, inv agents.Invocation) (
 	agents.Result, error) {
+	if err := c.admit(ctx); err != nil {
+		c.log.write(servedOn(ctx), purpose, agents.Result{}, err)
+		return agents.Result{}, err
+	}
 	inv.Started = c.registry.starter(advancingRun(ctx), string(purpose))
 	inv.Served = servedOn(ctx)
 	result, err := c.inner.Run(ctx, purpose, inv)
@@ -221,7 +238,7 @@ func (c containedSessionRunner) Fixer(ctx context.Context, resume string) (agent
 	if err != nil {
 		return nil, err
 	}
-	return containedFixer{inner: fixer, registry: c.registry, log: c.log}, nil
+	return containedFixer{inner: fixer, registry: c.registry, log: c.log, admit: c.admit}, nil
 }
 
 // containedFixer registers each fix round's invocation on the same terms as
@@ -231,9 +248,14 @@ type containedFixer struct {
 	inner    agents.Fixer
 	registry *registry
 	log      invocationLog
+	admit    func(context.Context) error
 }
 
 func (c containedFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Result, error) {
+	if err := c.admit(ctx); err != nil {
+		c.log.write(servedOn(ctx), agents.PurposeFix, agents.Result{}, err)
+		return agents.Result{}, err
+	}
 	inv.Started = c.registry.starter(advancingRun(ctx), string(agents.PurposeFix))
 	inv.Served = servedOn(ctx)
 	result, err := c.inner.Apply(ctx, inv)

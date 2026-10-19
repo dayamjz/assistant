@@ -200,6 +200,28 @@ const (
 	// naming it is refused at parse time like every global-only key.
 	// internal/service reads it once per service, in driverFor.
 	KeySessionProvider Key = "session_provider"
+
+	// KeyUsageCeiling is "usage_ceiling": the ceiling on recorded input
+	// tokens that may start another agent invocation. It is one object, a
+	// window in the syntax internal/machine's usage view reads and an
+	// input-token count. Zero tokens is no ceiling: a start is not refused
+	// for usage, which is the default, so a home that never sets the key
+	// starts what it started before.
+	//
+	// It is global-only, and that is a P7 decision. The ceiling changes
+	// which invocations run, so a repository file must not be able to raise
+	// it for itself, in either copy. A repository file naming it is refused
+	// at parse time like every global-only key. internal/service reads the
+	// operator's resolved value before it starts an invocation and refuses
+	// the start when the invocation history in the window is over the count,
+	// or when that history does not establish the count. It does not cancel
+	// a start that already passed the check.
+	//
+	// PRD section 10's schema table does not yet carry a row for it, which
+	// is the same position KeySessionProvider was chosen in. Section 12
+	// defers routing by model, effort, or quota; this key is not that
+	// routing. It does not ask a provider what remains of a quota.
+	KeyUsageCeiling Key = "usage_ceiling"
 )
 
 // cloneSlice copies a slice-valued configuration value. A default and a parsed
@@ -304,6 +326,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.AllowStandingConsent = v.(bool) }},
 	{KeySessionProvider, TrustGlobal, DefaultSessionProvider, decodeSessionProvider,
 		func(c *Config, v any) { c.SessionProvider = v.(SessionProvider) }},
+	{KeyUsageCeiling, TrustGlobal, defaultUsageCeiling, decodeUsageCeiling,
+		func(c *Config, v any) { c.UsageCeiling = v.(UsageCeiling) }},
 }
 
 // specByKey indexes the schema, and sections holds every dotted prefix a key

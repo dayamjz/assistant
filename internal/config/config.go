@@ -103,6 +103,22 @@ type Config struct {
 	// workers through. A Config from Resolve holds a member of the closed
 	// set; KeySessionProvider says why only the operator's file sets it.
 	SessionProvider SessionProvider
+	// UsageCeiling is the ceiling on recorded input tokens that may start
+	// another agent invocation. InputTokens zero is no ceiling.
+	// KeyUsageCeiling says who may set it and who reads it.
+	UsageCeiling UsageCeiling
+}
+
+// UsageCeiling is KeyUsageCeiling's value: how far back recorded usage is
+// summed, and the input-token count a later start is held to. Window is the
+// text internal/machine's usage view reads, with the default filled in when
+// a document set the key and named no window. InputTokens zero means no
+// ceiling, including the zero value of this struct and the schema default.
+type UsageCeiling struct {
+	// Window is how far back the recorded input tokens are summed.
+	Window string
+	// InputTokens is the ceiling. Zero means the ceiling is off.
+	InputTokens int64
 }
 
 // MergesIn reports whether repository, named as the code host names it, is
@@ -430,7 +446,16 @@ const (
 	// MaxAutonomyMerge is the number of repositories autonomy.merge may
 	// list. Chosen, not measured.
 	MaxAutonomyMerge = 64
+	// DefaultUsageCeilingWindow is the window usage_ceiling sums when a
+	// document sets the key and names no window, and the window the schema
+	// default carries. It is the usage view's own default window; the test
+	// that holds the two strings equal is what keeps them one fact.
+	DefaultUsageCeilingWindow = "7d"
 )
+
+// defaultUsageCeiling is the schema default: the usage view's window and no
+// ceiling, so a start is not refused for usage until an operator sets a count.
+var defaultUsageCeiling = UsageCeiling{Window: DefaultUsageCeilingWindow}
 
 // ReservedAgentFlags are agent flags configuration may not set, because each
 // one would take over something the run manages itself: which session is

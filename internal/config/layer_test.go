@@ -102,7 +102,8 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"autonomy": {"merge": ["owner/name"]},
 		"delivery": "local",
 		"allow_standing_consent": true,
-		"session_provider": "tmux"
+		"session_provider": "tmux",
+		"usage_ceiling": {"window": "24h", "input_tokens": 1000}
 	}`
 	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
@@ -163,6 +164,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	}
 	if c.SessionProvider != SessionProviderTmux {
 		t.Errorf("SessionProvider = %q", c.SessionProvider)
+	}
+	if c.UsageCeiling != (UsageCeiling{Window: "24h", InputTokens: 1000}) {
+		t.Errorf("UsageCeiling = %+v", c.UsageCeiling)
 	}
 }
 
@@ -235,6 +239,12 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"session provider misspelled", `{"session_provider": "Tmux"}`, KeySessionProvider, `"Tmux"`},
 		{"session provider not offered", `{"session_provider": "zellij"}`, KeySessionProvider, `"zellij"`},
 		{"session provider not a string", `{"session_provider": true}`, KeySessionProvider, "true"},
+		{"usage ceiling not an object", `{"usage_ceiling": 1}`, KeyUsageCeiling, "1"},
+		{"usage ceiling negative", `{"usage_ceiling": {"input_tokens": -1}}`, KeyUsageCeiling, "-1"},
+		{"usage ceiling fractional", `{"usage_ceiling": {"input_tokens": 1.5}}`, KeyUsageCeiling, "1.5"},
+		{"usage ceiling not a number", `{"usage_ceiling": {"input_tokens": "100"}}`, KeyUsageCeiling, `"100"`},
+		{"usage ceiling bad window", `{"usage_ceiling": {"window": "soon"}}`, KeyUsageCeiling, `"soon"`},
+		{"usage ceiling unknown field", `{"usage_ceiling": {"price": 1}}`, KeyUsageCeiling, "price"},
 		{"decision model misspelled", `{"decision_model": "Evaluate"}`, KeyDecisionModel, `"Evaluate"`},
 		{"decision model not a string", `{"decision_model": false}`, KeyDecisionModel, "false"},
 		{"decision model as a cutoff", `{"decision_model": "0.5"}`, KeyDecisionModel, `"0.5"`},

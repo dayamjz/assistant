@@ -261,3 +261,88 @@ func (w UsageWindow) Span() time.Duration { return w.span }
 
 // Since is when a window measured back from now began.
 func (w UsageWindow) Since(now time.Time) time.Time { return now.Add(-w.span) }
+
+// UsageCeilingError is a refusal to start another agent invocation because
+// recorded input tokens in a window are over a ceiling, or because that
+// total is not established. It is the error internal/service returns before
+// the invocation starts. A start that already passed the check is not
+// mentioned here and is not cancelled by one.
+//
+// Read is set when the history could not be read, so the ceiling could not
+// be compared. Total is then unknown. Unreported is how many calls in the
+// window left input tokens unreported; a positive ceiling refuses in that
+// case rather than summing those calls as zero.
+type UsageCeilingError struct {
+	// Window is the window the ceiling was compared over.
+	Window string
+	// Ceiling is the input-token count, which is positive: zero is no
+	// ceiling and does not produce this error.
+	Ceiling int64
+	// Total is the known sum of reported input tokens. It is unknown when
+	// no call reported one, and it is a lower bound when Unreported is
+	// positive.
+	Total store.Optional[int64]
+	// Calls is how many calls were in the window.
+	Calls int
+	// Unreported is how many of those calls did not report input tokens.
+	Unreported int
+	// Read is why the history could not be read, when that is why the start
+	// was refused.
+	Read error
+}
+
+// Error reports which of the three refusals this is.
+func (e *UsageCeilingError) Error() string {
+	if e.Read != nil {
+		return fmt.Sprintf("usage ceiling: the invocation history could not be read, so a start under the ceiling of %d input tokens in %s was refused: %v",
+			e.Ceiling, e.Window, e.Read)
+	}
+	if e.Unreported > 0 {
+		return fmt.Sprintf("usage ceiling: recorded input tokens in %s are not established under the ceiling of %d: %d of %d calls did not report input tokens",
+			e.Window, e.Ceiling, e.Unreported, e.Calls)
+	}
+	total, _ := e.Total.Get()
+	return fmt.Sprintf("usage ceiling: %d recorded input tokens in %s are over the ceiling of %d",
+		total, e.Window, e.Ceiling)
+}
+
+// Unwrap returns the read error, or nil when the history was read.
+func (e *UsageCeilingError) Unwrap() error { return e.Read }
+
+// CeilingOn reports whether a positive input-token ceiling refuses another
+// start given usage, which is what UsageOf totalled over that ceiling's
+// window. A ceiling of zero or less is off and returns nil, so a missing
+// ceiling does not refuse.
+//
+// The comparison is the known input-token total, and it refuses when that
+// total is over the ceiling. Equal is under. When any call in the window
+// left input tokens unreported, the known total is a lower bound, and this
+// refuses rather than reading the missing counts as zero. A window with no
+// calls has nothing unreported and a total of none, which is under any
+// positive ceiling.
+//
+// It reads usage.Total.InputTokens and usage.Total.Calls and keeps nothing.
+// It does not read a price, output tokens, cache tokens, or a worker's
+// turns: UsageExcludes names what the totals leave out, and this compares
+// only the input-token total.
+func CeilingOn(usage Usage, ceiling int64) error {
+	if ceiling <= 0 {
+		return nil
+	}
+	in := usage.Total.InputTokens
+	refused := &UsageCeilingError{
+		Window:     usage.Window,
+		Ceiling:    ceiling,
+		Total:      in.Total,
+		Calls:      usage.Total.Calls,
+		Unreported: in.Unreported,
+	}
+	if in.Unreported > 0 {
+		return refused
+	}
+	total, ok := in.Total.Get()
+	if !ok || total <= ceiling {
+		return nil
+	}
+	return refused
+}

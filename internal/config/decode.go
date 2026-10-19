@@ -3,8 +3,11 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -33,6 +36,17 @@ func asBool(k Key, v any) (bool, error) {
 }
 
 func asInt(k Key, v any) (int, error) {
+	i, err := asInt64(k, v)
+	if err != nil {
+		return 0, err
+	}
+	if int64(int(i)) != i {
+		return 0, keyErr(k, v, "the number does not fit in an int on this platform")
+	}
+	return int(i), nil
+}
+
+func asInt64(k Key, v any) (int64, error) {
 	n, ok := v.(json.Number)
 	if !ok {
 		return 0, keyErr(k, v, "expected a whole number")
@@ -41,10 +55,7 @@ func asInt(k Key, v any) (int, error) {
 	if err != nil {
 		return 0, keyErr(k, v, "expected a whole number")
 	}
-	if int64(int(i)) != i {
-		return 0, keyErr(k, v, "the number does not fit in an int on this platform")
-	}
-	return int(i), nil
+	return i, nil
 }
 
 func asList(k Key, v any) ([]any, error) {
@@ -623,4 +634,83 @@ func ownershipField(entry listEntry, m map[string]any, field string) (string, er
 		return "", err
 	}
 	return s, nil
+}
+
+// usageCeilingDays is a whole number of days, the one unit time.ParseDuration
+// does not read. It is the same shape internal/machine's usage window reads;
+// TestUsageCeilingWindowAgreesWithTheUsageView holds the two to one result.
+var usageCeilingDays = regexp.MustCompile(`^([0-9]+)d$`)
+
+// decodeUsageCeiling accepts an object of window and input_tokens. Either
+// field may be omitted: a missing window is DefaultUsageCeilingWindow, and a
+// missing count is zero, which is no ceiling. An unknown field is refused,
+// in sorted order so a document with several names the same one every time.
+func decodeUsageCeiling(k Key, v any) (any, error) {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return nil, keyErr(k, v, `expected an object with "window" and "input_tokens"`)
+	}
+	names := make([]string, 0, len(obj))
+	for name := range obj {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if name != "window" && name != "input_tokens" {
+			return nil, keyErr(k, obj[name], "unrecognized field "+quote(name))
+		}
+	}
+	ceiling := defaultUsageCeiling
+	if raw, set := obj["input_tokens"]; set {
+		n, err := asInt64(k, raw)
+		if err != nil {
+			return nil, err
+		}
+		if n < 0 {
+			return nil, keyErr(k, raw, "an input-token ceiling cannot be negative; zero is no ceiling")
+		}
+		ceiling.InputTokens = n
+	}
+	if raw, set := obj["window"]; set {
+		s, err := asString(k, raw)
+		if err != nil {
+			return nil, err
+		}
+		text, err := canonicalUsageWindow(s)
+		if err != nil {
+			return nil, keyErr(k, raw, err.Error())
+		}
+		ceiling.Window = text
+	}
+	return ceiling, nil
+}
+
+// canonicalUsageWindow reads a usage window the way internal/machine's
+// ParseUsageWindow does: a whole number of days written as 7d, or anything
+// time.ParseDuration reads, empty standing for DefaultUsageCeilingWindow.
+// This package does not import that one, so the agreement is the test named
+// on usageCeilingDays rather than a call.
+func canonicalUsageWindow(text string) (string, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		text = DefaultUsageCeilingWindow
+	}
+	var span time.Duration
+	if m := usageCeilingDays.FindStringSubmatch(text); m != nil {
+		n, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil || n > int64(math.MaxInt64/(24*time.Hour)) {
+			return "", fmt.Errorf("%q is too long", text)
+		}
+		span = time.Duration(n) * 24 * time.Hour
+	} else {
+		parsed, err := time.ParseDuration(text)
+		if err != nil {
+			return "", fmt.Errorf("%q is not a usage window such as \"24h\", \"90m\" or \"7d\"", text)
+		}
+		span = parsed
+	}
+	if span <= 0 {
+		return "", fmt.Errorf("%q is not positive", text)
+	}
+	return text, nil
 }
