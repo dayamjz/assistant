@@ -482,6 +482,26 @@ var ErrMessageAcknowledged = errors.New("store: the message is already acknowled
 // acknowledges nothing. Nothing is appended.
 var ErrMessageRefused = errors.New("store: the message was refused and never reached a worker")
 
+// ErrNoKnowledgeAuthor is returned by AppendKnowledge for the zero
+// KnowledgeAuthor. A knowledge row records who wrote it.
+var ErrNoKnowledgeAuthor = errors.New("store: knowledge records who wrote it")
+
+// ErrUnknownKnowledgeAuthor is returned when a knowledge author is outside
+// the closed set knowledge.go names, on ErrUnknownSender's terms.
+var ErrUnknownKnowledgeAuthor = errors.New("store: knowledge author is outside the closed set")
+
+// ErrKnowledgeEmpty is returned by AppendKnowledge when the body is empty.
+var ErrKnowledgeEmpty = errors.New("store: knowledge carries no body")
+
+// ErrKnowledgeBound is returned by AppendKnowledge when the body or the
+// project exceeds the size bound. Nothing is written.
+var ErrKnowledgeBound = errors.New("store: knowledge exceeds its size bound")
+
+// ErrKnowledgeAdopts is returned by AppendKnowledge when an adoption does
+// not name a task assertion of the same project, or when a task assertion
+// tries to adopt. Nothing is written.
+var ErrKnowledgeAdopts = errors.New("store: an adoption names a task assertion of the same project")
+
 // ErrUnknownSeenKind is the reason a *SeenRecordError carries when MarkSeen
 // was named a record of a kind outside SeenKinds. Nothing in the batch is
 // written.

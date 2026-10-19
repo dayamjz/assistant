@@ -95,6 +95,10 @@ const holdResolutionNoteMigration = "hold resolution note"
 // sealCheckpointTableMigration is a constant.
 const taskAttemptRouteMigration = "task attempt route"
 
+// knowledgeMigration names the migration that adds the append-only knowledge
+// record, for the reason sealCheckpointTableMigration is a constant.
+const knowledgeMigration = "scoped knowledge"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1541,6 +1545,38 @@ var schema = []migration{
 			// SetAttemptRoute before the process starts.
 			`ALTER TABLE task_attempt ADD COLUMN adapter TEXT`,
 			`ALTER TABLE task_attempt ADD COLUMN route_reason TEXT`,
+		},
+	},
+	{
+		version: 37,
+		name:    knowledgeMigration,
+		statements: []string{
+			// Scoped knowledge is history, not current state and not a run's
+			// graph checkpoint. A row names the project it is scoped to, who
+			// wrote it (knowledge.go's closed set), the source task when the
+			// writer is a task, the body, and, for an operator row, the
+			// assertion it adopts. Nothing updates or deletes a row. What may
+			// be injected into a worker prompt is not decided here.
+			`CREATE TABLE knowledge (
+				id          INTEGER PRIMARY KEY,
+				project     TEXT NOT NULL,
+				author      TEXT NOT NULL,
+				source_task TEXT,
+				body        TEXT NOT NULL,
+				adopts      INTEGER,
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE INDEX knowledge_by_project ON knowledge(project, id)`,
+			`CREATE TRIGGER knowledge_is_appended
+				BEFORE UPDATE ON knowledge
+				BEGIN
+					SELECT RAISE(ABORT, 'store: knowledge is appended and is not updated');
+				END`,
+			`CREATE TRIGGER knowledge_is_not_removed
+				BEFORE DELETE ON knowledge
+				BEGIN
+					SELECT RAISE(ABORT, 'store: knowledge is appended and is not deleted');
+				END`,
 		},
 	},
 }

@@ -17,7 +17,10 @@
 // a run, a stage result, a task, a hold, and a gate binding are
 // authoritative: each has one owner and one row, rewritten in place. A round,
 // a task event, and a task attempt are history: appended, never revised, and
-// no answer to any present-tense question. A task's cleanup record is the one
+// no answer to any present-tense question. Knowledge is history too: one row
+// per recording, never revised, and not current state. What may be injected
+// into a worker prompt is internal/knowledge's decision over every row of a
+// project, not the last one. A task's cleanup record is the one
 // PRD section 8 calls appended and written once: one row, written with its
 // proof and taking exactly one revision afterwards, the mark of when the copy
 // was removed, in that order and never the reverse; TaskCleanup's doc says
@@ -412,24 +415,25 @@
 // would need synchronous FULL and would pay an fsync per commit for it; this
 // package does not make that claim.
 //
-// # Four columns are stored redacted
+// # Five columns are stored redacted
 //
 // PRD section 8 stores repository URLs with credentials removed and recovers
 // the credentialed URL from the gate at run time. P14 gives credential removal
 // one owner, so this package does not implement it: Open requires a
 // [vcs.Redactor] and fails with ErrNoRedactor without one.
 //
-// What the redactor covers is four columns, and three accessors reach it.
+// What the redactor covers is five columns, and four accessors reach it.
 // UpsertRepository runs it on repository.upstream_url and
 // repository.fork_url, the columns PRD section 8 designates for repository
 // URLs. AppendMessage runs it on message.text, what was sent to a worker, and
 // MarkMessageRefused runs it on message.refusal, why a send failed.
+// AppendKnowledge runs it on knowledge.body before the row is written.
 //
 // Every other column holds exactly what the caller passed. A push binding, a
 // pull request reference, a run's intent, a promoted task's delivery intent,
 // a run's fixer session reference, an attempt's session reference, a hold's
 // subject and detail, a stage's log path, a task report's body and parsed
-// report, and the round and graph checkpoint payloads are all bound verbatim, so a caller that puts a credential in one
+// report, a knowledge row's project and source task, and the round and graph checkpoint payloads are all bound verbatim, so a caller that puts a credential in one
 // of them has stored a credential, and nothing in this package will notice
 // or remove it. That is the caller's
 // responsibility, and this package does not claim otherwise: it is not a

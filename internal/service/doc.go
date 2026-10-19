@@ -675,6 +675,17 @@
 // checks hold above, and store.ResolvedByStandingConsent for each answer
 // standing consent gives, which consent.go records.
 //
+// # Scoped knowledge is a store record, and knowledge.go owns the writer
+//
+// Project knowledge is not a run's graph state and not a task's resolved
+// state. internal/store appends it and internal/knowledge decides which rows
+// may be injected into a worker prompt. RecordOperatorKnowledge and
+// RecordTaskAssertion are that writer. PRD section 9 names no verb for
+// either, so internal/cli does not serve one; a test calls the methods.
+// The operator method records store.AuthoredByOperator and does not witness
+// a person: store.ResolvedByPerson has no producer on this path.
+// knowledge.go states what the prompt keeps and what it does not.
+//
 // # Standing consent answers inside the segment, and consent.go owns it
 //
 // PRD section 9's standing consent is a per-run flag on a start or an attach,

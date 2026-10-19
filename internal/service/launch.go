@@ -142,10 +142,18 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		return nil, fmt.Errorf("service: recording the route of task %s attempt %d: %w", d.id, d.attempt, err)
 	}
 	host := s.sessionHost(selection.Resolution.Runner)
+	// The knowledge block follows the task's instructions. Inside the block
+	// the trusted operator document stays the prefix and generated knowledge
+	// is appended after it. A project with no knowledge rows adds nothing,
+	// which is what a launch before this record existed sent.
+	section, err := s.knowledgeForLaunch(ctx, d.id, fresh.Copy)
+	if err != nil {
+		return nil, err
+	}
 	launched, err := host.Create(ctx, session.Spec{
 		TaskID:       d.id,
 		Isolation:    fresh,
-		Instructions: string(instructions) + d.note + s.routeSection(d.want.Shape),
+		Instructions: string(instructions) + d.note + section + s.routeSection(d.want.Shape),
 		Route:        s.workerRoute,
 	})
 	if err != nil {
