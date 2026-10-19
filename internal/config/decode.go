@@ -417,23 +417,40 @@ func decodeAutonomyMerge(k Key, v any) (any, error) {
 	return out, nil
 }
 
-// decodeDelivery reads a delivery posture. "direct" is refused by name,
-// because PRD section 12 defers it and section 10's row has it rejected at
-// parse time; a reader told only that the value is unknown would not learn
-// that the mode exists and is withheld.
+// decodeDelivery reads a delivery posture. The accepted values are the
+// policy table's, and a withheld mode is refused by name with the table's
+// reason, because PRD section 12 defers "direct" and section 10's row has it
+// rejected at parse time; a reader told only that the value is unknown would
+// not learn that the mode exists and is withheld.
 func decodeDelivery(k Key, v any) (any, error) {
 	s, err := asString(k, v)
 	if err != nil {
 		return nil, err
 	}
-	switch d := Delivery(s); {
-	case d.Recognized():
+	if d := Delivery(s); d.Recognized() {
 		return d, nil
-	case s == "direct":
-		return nil, keyErr(k, v, `"direct" is deferred and no configuration selects it yet; expected "gated" or "local"`)
-	default:
-		return nil, keyErr(k, v, `expected "gated" or "local"`)
 	}
+	expected := "expected " + deliveriesExpected()
+	for _, w := range withheldDeliveries {
+		if string(w.Delivery) == s {
+			return nil, keyErr(k, v, quote(s)+" "+w.Reason+"; "+expected)
+		}
+	}
+	return nil, keyErr(k, v, expected)
+}
+
+// deliveriesExpected lists the closed set as a refusal names it, in the
+// table's order: "gated" or "local".
+func deliveriesExpected() string {
+	names := Deliveries()
+	quoted := make([]string, len(names))
+	for i, d := range names {
+		quoted[i] = quote(string(d))
+	}
+	if len(quoted) <= 2 {
+		return strings.Join(quoted, " or ")
+	}
+	return strings.Join(quoted[:len(quoted)-1], ", ") + ", or " + quoted[len(quoted)-1]
 }
 
 // decodeSessionProvider reads a session provider, spelled exactly. Any other

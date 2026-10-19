@@ -64,6 +64,7 @@ func TestTaskCreateRecordsTheTrustedPostureAndOnlyTightensIt(t *testing.T) {
 			if err != nil || stored.Delivery != store.Known(want) || stored.Mode != "interactive" {
 				t.Fatalf("the task was recorded under %v with launch notation %q (%v), want %s", stored.Delivery, stored.Mode, err, want)
 			}
+			policyOf(t, running.client, created.Record.ID, onLocalPath[want])
 		}
 
 		created, err := create("task/project", "")
@@ -102,6 +103,109 @@ func TestTaskCreateRecordsTheTrustedPostureAndOnlyTightensIt(t *testing.T) {
 		}
 		if got := taskCount(t, h); got != before {
 			t.Fatalf("refused intakes recorded %d tasks", got-before)
+		}
+	})
+}
+
+// The rows a task's answer is expected to carry, written out rather than
+// derived through config so a test of the answer does not agree with the
+// code it checks by calling it.
+var (
+	localRow         = config.Policy{Delivery: config.DeliveryLocal, Validation: config.ValidationNone, Publishes: config.PublishNothing, Lands: config.AuthorityApproval}
+	gatedRemoteRow   = config.Policy{Delivery: config.DeliveryGated, Validation: config.ValidationFullRun, Publishes: config.PublishBranchAndPullRequest, Lands: config.AuthorityRemote}
+	gatedCodeHostRow = config.Policy{Delivery: config.DeliveryGated, Validation: config.ValidationFullRun, Publishes: config.PublishBranchAndPullRequest, Lands: config.AuthorityCodeHost}
+	// onLocalPath is what each posture states on a repository whose
+	// upstream is a local path, which is what newSubject builds.
+	onLocalPath = map[config.Delivery]*config.Policy{config.DeliveryLocal: &localRow, config.DeliveryGated: &gatedRemoteRow}
+)
+
+// policyOf reads the task through task.get and fails unless its answer
+// states exactly want, or states none when want is nil.
+func policyOf(t *testing.T, client *ipc.Client, id string, want *config.Policy) machine.Task {
+	t.Helper()
+	var task machine.Task
+	if err := client.Call(t.Context(), ipc.MethodTaskGet, machine.TaskRequest{Task: id}, &task); err != nil {
+		t.Fatalf("reading task %s: %v", id, err)
+	}
+	switch {
+	case want == nil && task.Policy != nil:
+		t.Errorf("task %s states the policy %+v, want none", id, *task.Policy)
+	case want != nil && task.Policy == nil:
+		t.Errorf("task %s states no policy, want %+v", id, *want)
+	case want != nil && *task.Policy != *want:
+		t.Errorf("task %s states the policy %+v, want %+v", id, *task.Policy, *want)
+	}
+	return task
+}
+
+// A task's answer states a policy exactly when the posture is on its record
+// and the repository it names is one a run can start against, and its
+// landing authority is where that run would land: the code host for a
+// repository on github.com or gitlab.com, the remote for one whose upstream
+// is a local path. A repository on a network host this build does not
+// address, or naming a fork that does not resolve, starts no run, so its
+// task states none; so does a task naming no repository or one with no row,
+// a delivery task whose row holds no posture (the record holds none, though
+// its push is followed as the gate), and an investigation. A local task
+// states its own row whatever the upstream. The records are written through
+// internal/store so the posture-less row, which intake no longer writes, can
+// be stated at all.
+func TestATasksAnswerStatesThePolicyOfItsRecordedPostureWhereItsRunWouldLand(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+	onPath := recordRepository(t, h, subject)
+	records := openRecords(t, h)
+	ctx := t.Context()
+	for _, repository := range []store.Repository{
+		{ID: "github", UpstreamURL: "https://github.com/example/widgets.git"},
+		{ID: "gitlab", UpstreamURL: "https://gitlab.com/example/widgets.git"},
+		{ID: "unsupported", UpstreamURL: "https://git.example.com/example/widgets.git"},
+		{ID: "badfork", UpstreamURL: "https://github.com/example/widgets.git", ForkURL: store.Known("https://git.example.com/me/widgets.git")},
+	} {
+		repository.WorkingPath = filepath.Join(t.TempDir(), repository.ID)
+		repository.DefaultBranch = "main"
+		if _, err := records.UpsertRepository(ctx, repository); err != nil {
+			t.Fatalf("recording repository %s: %v", repository.ID, err)
+		}
+	}
+	gated, local := store.Known(config.DeliveryGated), store.Known(config.DeliveryLocal)
+	cases := []struct {
+		task store.Task
+		want *config.Policy
+	}{
+		{store.Task{ID: "localonpatha", Delivery: local, RepositoryID: store.Known(onPath.ID)}, &localRow},
+		{store.Task{ID: "gatedonpatha", Delivery: gated, RepositoryID: store.Known(onPath.ID)}, &gatedRemoteRow},
+		{store.Task{ID: "gatedgithubx", Delivery: gated, RepositoryID: store.Known("github")}, &gatedCodeHostRow},
+		{store.Task{ID: "gatedgitlabx", Delivery: gated, RepositoryID: store.Known("gitlab")}, &gatedCodeHostRow},
+		{store.Task{ID: "localgithubx", Delivery: local, RepositoryID: store.Known("github")}, &localRow},
+		{store.Task{ID: "gatedunsuppx", Delivery: gated, RepositoryID: store.Known("unsupported")}, nil},
+		{store.Task{ID: "gatedbadfork", Delivery: gated, RepositoryID: store.Known("badfork")}, nil},
+		{store.Task{ID: "gatedmissing", Delivery: gated, RepositoryID: store.Known("no-such-repository")}, nil},
+		{store.Task{ID: "gatednorepox", Delivery: gated}, nil},
+		{store.Task{ID: "unrecordedaa", RepositoryID: store.Known(onPath.ID)}, nil},
+		{store.Task{ID: "investigates", Shape: store.TaskInvestigation}, nil},
+	}
+	for _, c := range cases {
+		task := c.task
+		if task.Shape == "" {
+			task.Shape = store.TaskDelivery
+		}
+		if task.RepositoryID.IsKnown() {
+			task.Branch = store.Known("task/" + task.ID)
+		}
+		task.Project, task.Mode, task.WorktreePath = "one", "interactive", "/w/"+task.ID
+		if _, err := records.CreateTask(ctx, task, store.Disposition{}); err != nil {
+			t.Fatalf("recording %s: %v", task.ID, err)
+		}
+	}
+	_ = records.Close()
+	withService(t, h, func(running serviceUnderTest) {
+		for _, c := range cases {
+			answer := policyOf(t, running.client, c.task.ID, c.want)
+			if c.task.ID == "unrecordedaa" && answer.Record.Delivery.IsKnown() {
+				t.Errorf("the posture-less task's record reads %v, want no posture", answer.Record.Delivery)
+			}
 		}
 	})
 }

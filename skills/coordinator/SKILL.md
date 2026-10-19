@@ -61,7 +61,13 @@ assistant coordinator create --shape investigation --project NAME \
   it. With no `--overlaps` you claim independence; the program still queues
   a delivery behind a live task on the same branch.
 - `--delivery gated` or `--delivery local` asks for a posture in place of the
-  project's. It may be stricter than the project's and never lighter.
+  project's. It may be stricter than the project's and never lighter. The
+  task as `assistant --json tasks ID` reads it carries `policy`, when its
+  record holds a posture and its repository is one a run can start against:
+  what its recorded posture requires (`validation`), publishes
+  (`publishes`), and who lands it (`lands`; a gated task reads `code-host`, or
+  `remote` for a local-path upstream). `local` reads `none`, `nothing`,
+  `approval-hold`, so its change is never validated.
 - `--mode` is recorded as given.
 
 The answer comes once the task is recorded and before any worker exists.

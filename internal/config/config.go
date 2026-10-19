@@ -302,7 +302,9 @@ func (m DecisionModel) RunsChecks() bool {
 // The set is ordered by how much of the gate a posture keeps, and the order
 // is what Lighter answers: DeliveryGated keeps all of it and DeliveryLocal
 // starts no run. That order is the whole of what "tighten, never loosen"
-// compares at intake.
+// compares at intake. What each member requires, publishes and leaves to
+// whom is its Policy, and the policy table in posture.go is the one list
+// both the set and that statement are read from.
 type Delivery string
 
 const (
@@ -316,23 +318,32 @@ const (
 	DeliveryLocal Delivery = "local"
 )
 
-// deliveries is the closed set, strictest first: a posture's index is how
-// much lighter it is than DeliveryGated.
-var deliveries = []Delivery{DeliveryGated, DeliveryLocal}
-
-// Deliveries returns the closed set, strictest first. The result is a copy.
-func Deliveries() []Delivery { return slices.Clone(deliveries) }
+// Deliveries returns the closed set, strictest first, read off the policy
+// table. The result is a copy.
+func Deliveries() []Delivery {
+	out := make([]Delivery, len(policies))
+	for i, p := range policies {
+		out[i] = p.Delivery
+	}
+	return out
+}
 
 // Recognized reports whether d is a member of the closed set.
-func (d Delivery) Recognized() bool { return slices.Contains(deliveries, d) }
+func (d Delivery) Recognized() bool { return d.index() >= 0 }
 
 // Lighter reports whether d keeps less of the gate than than does. Both must
 // be recognized; a posture outside the set is lighter than nothing and
 // nothing is lighter than it, so a caller that compares one has already
 // skipped the check that would have refused it.
 func (d Delivery) Lighter(than Delivery) bool {
-	a, b := slices.Index(deliveries, d), slices.Index(deliveries, than)
+	a, b := d.index(), than.index()
 	return a >= 0 && b >= 0 && a > b
+}
+
+// index is d's position in the policy table, strictest first, or -1 for a
+// value outside the closed set.
+func (d Delivery) index() int {
+	return slices.IndexFunc(policies, func(p Policy) bool { return p.Delivery == d })
 }
 
 // ParseDelivery reads a posture from text, on the terms the delivery key is

@@ -160,6 +160,23 @@ commit, anchored to the tip read when the change was offered, without
 validating it and without anything leaving the machine. A person's push to the
 gate always starts the full run.
 
+What each posture requires, publishes, and leaves to whom is one table in
+`internal/config` (`config.Policies`). A delivery task's answer as
+`assistant --json tasks ID` carries its posture's row as `policy`, except that
+`lands` reads `remote` when the repository has no code host (a local path or
+`file://` upstream), where the person merges on the remote. The answer carries
+`policy` only when the task's record holds a posture and its repository is one
+a run can start against; a repository on a network host this build does not
+address starts no run, so its task's answer carries none, and so does a task
+whose record holds no posture (one recorded before intake or promotion wrote
+one), although its push starts the full run.
+`gated` is the full nine-stage run, then the branch and a pull request, merged
+under the code host's policy only where there is one.
+`local` validates nothing, publishes nothing, and lands only on an `approve`
+answer to its approval hold. That answer is recorded as the machine
+interface's, because no surface in this build witnesses a person, so a
+coordinator acting for you can give it too.
+
 The stage bodies are separate work against the stage contract, and they land
 one at a time; all nine have landed. Review is the one that reads the change
 against the diff and the recorded intent, puts the scope lens in front of a
