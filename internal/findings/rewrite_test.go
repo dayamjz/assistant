@@ -136,3 +136,29 @@ func TestParseReportThroughReadsTheStructureFromRawAsItArrived(t *testing.T) {
 		t.Fatalf("the report read through the remover is %+v", report)
 	}
 }
+
+// A bare token a reviewer quoted in a report reaches the parsed report with
+// the value cut when the report is read through internal/redact, the
+// remover internal/tasks and internal/pipeline hand ParseReportThrough. The
+// value is built at run time in the shape of a GitHub classic token, so no
+// literal here is a credential. Reading the same report through the identity
+// is the control: the value survives there, so the cut is the remover's.
+func TestParseReportThroughCutsABareTokenWithTheRemover(t *testing.T) {
+	value := "ghp_" + strings.Repeat("aB3dE6gH9k", 4)[:36]
+	raw := `{"summary":"found a key","findings":[{"action":"ask","description":"the log prints ` + value + ` in clear"}]}`
+
+	plain, err := findings.ParseReportThrough(raw, func(s string) string { return s })
+	if err != nil {
+		t.Fatalf("ParseReportThrough with the identity: %v", err)
+	}
+	if !strings.Contains(plain.Findings[0].Description, value) {
+		t.Fatalf("the report read through the identity is %+v, want the value standing", plain)
+	}
+	report, err := findings.ParseReportThrough(raw, redact.New().Redact)
+	if err != nil {
+		t.Fatalf("ParseReportThrough: %v", err)
+	}
+	if got, want := report.Findings[0].Description, "the log prints ghp_"+redact.Marker+" in clear"; got != want {
+		t.Fatalf("the finding reads %q, want %q", got, want)
+	}
+}

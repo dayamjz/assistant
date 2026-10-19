@@ -41,20 +41,46 @@
 // connection was made under if it does not. A userinfo with a colon in it is
 // redacted whatever the scheme, because a password half is a password half.
 //
+// A bare token value, which is the shape a person pastes: a value standing
+// anywhere in the text, with no header or URL around it, whose prefix is one
+// of the rows of tokenShapes in token.go. Those are the Anthropic "sk-ant-"
+// values (API keys, Admin API keys, and OAuth access tokens of the
+// "sk-ant-oat01-" form), the six GitHub prefixes "ghp_", "github_pat_",
+// "gho_", "ghu_", "ghs_" and "ghr_", GitLab's "glpat-" (personal,
+// impersonation, project and group access tokens), and OpenAI's "sk-" keys,
+// "sk-proj-", "sk-svcacct-" and "sk-admin-" among them. Each row names the
+// source its prefix and its length come from. The value is cut where it
+// stands, keeping its prefix and the surrounding text, and only when it is at
+// least the row's minimum length, so a near-miss such as "sk-antique", "ghp_"
+// followed by three characters, or "glpat-" in prose is left as written.
+//
+// The token from "claude setup-token" (CLAUDE_CODE_OAUTH_TOKEN) is not a row
+// of its own: no Anthropic source this package could cite states its prefix,
+// so it is cut only if it begins "sk-ant-" like the OAuth access token
+// Anthropic's SDK example shows, and a value of any other shape stands. Every
+// row has the same residual gaps: a value shorter than the row's floor, a
+// value split across lines, a value whose prefix differs in case from the
+// row's prefix, and a value issued under a prefix the table does not list are
+// not cut.
+//
 // # What it does not do
 //
-// It does not find a credential in any other shape. An API token in an
-// environment variable's assignment, a private key in a file, and a password
-// a command printed on its own are all outside what this recognizes, and
-// nothing here reports that it looked. PRD section 8 asks for removal from
-// URLs, errors, and anything persisted; this covers the URL and bearer shapes
-// wherever they appear in that text, and the residual gap is every other
-// shape.
+// It does not find a credential in any other shape. A token from an issuer
+// with no row in tokenShapes, a private key in a file, and a password a
+// command printed on its own are all outside what this recognizes; an
+// environment variable's assignment is recognized only when its value matches
+// a row; and nothing here reports that it looked. PRD section 8 asks for
+// removal from URLs, errors, and anything persisted; this covers the URL,
+// bearer and bare token shapes wherever they appear in that text, and the
+// residual gap is every other shape.
 //
-// It does not parse. Text arriving here is an error message, a command line,
-// or a log line, and a URL inside one is surrounded by prose that no URL
-// parser accepts, so the scan finds URL-shaped runs and leaves everything else
-// exactly as it stands.
+// It does not parse the whole string into a structure. Text arriving here is
+// an error message, a command line, or a log line, and a URL inside one is
+// surrounded by prose that no URL parser accepts, so credentials in URLs are
+// found by scanning for URL-shaped runs rather than parsing. Bare token values
+// are found the same way, by prefix and character class over the raw text, not
+// by parsing the surrounding line. Bytes that match none of those scans are
+// left as written.
 //
 // It does not report what it removed. A caller that needs the credentialed URL
 // recovers it from the gate, per PRD section 8; nothing here keeps a copy.
@@ -110,10 +136,12 @@ type Redactor struct{}
 func New() Redactor { return Redactor{} }
 
 // Redact returns s with every credential it recognizes replaced by Marker: the
-// userinfo of every URL-shaped run, and every bearer or Authorization value.
+// userinfo of every URL-shaped run, every bearer or Authorization value, and
+// every bare token value tokenShapes recognizes.
 // Text holding neither comes back unchanged, and so does a URL with no
 // userinfo, so it is safe to call on anything.
 func (Redactor) Redact(s string) string {
+	s = redactTokens(s)
 	s = redactAuthorization(s)
 	if !strings.Contains(s, "@") {
 		return s

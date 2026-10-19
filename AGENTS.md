@@ -761,10 +761,10 @@ Each has cost this repository more than one round of review.
   `internal/forge`, `internal/stages`, `internal/pipeline` and
   `internal/tasks` take. Which strings a report carries is
   `findings.Report.Rewritten`'s to say, and the last two redact a whole
-  report through it rather than through a list of their own. It recognizes a credential in
-  a URL's userinfo and a bearer or Authorization value and nothing else, and
-  says so; adding a shape means adding it there, never a second remover at a
-  call site.
+  report through it rather than through a list of their own. Which shapes it
+  recognizes, what it does not, and the residual gaps are internal/redact's
+  package comment; adding a shape means adding it there, never a second remover
+  at a call site.
 - `internal/judge` is the decision-model client for PRD section 5's "Checks a
   decision model may add": the two fixed questions, the pinned version, the
   cutoffs and their measurement. A `Result` is a probability or a failure and

@@ -196,6 +196,39 @@ func TestAHoldResolutionNoteIsStoredRedacted(t *testing.T) {
 	}
 }
 
+// A bare API key pasted into a hold answer's note reaches the stored row with
+// the value cut, through the redactor the product wires in. The value is
+// built at run time in the shape of an Anthropic key (internal/redact's
+// tokenShapes row), so no literal here is a credential. The note as written
+// is the control: it carries the value, so a store that wrote it unredacted
+// would fail on the stored row and not on the input.
+func TestABareTokenInAHoldResolutionNoteIsStoredRedacted(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t, WithRedactor(redact.New()))
+	if _, err := s.RegisterHold(ctx, Hold{Key: "noted-key", Subject: "a decision"}); err != nil {
+		t.Fatalf("RegisterHold: %v", err)
+	}
+	value := "sk-ant-api03-" + strings.Repeat("Ab3_x-Yz9Q", 9)
+	note := "use " + value + " for the retry"
+	if !strings.Contains(note, value) {
+		t.Fatalf("the note %q does not carry the value, so the test checks nothing", note)
+	}
+	if _, err := s.ResolveHoldNoted(ctx, "noted-key", "retry", note, ResolvedByPerson()); err != nil {
+		t.Fatalf("ResolveHoldNoted: %v", err)
+	}
+	stored, err := s.Hold(ctx, "noted-key")
+	if err != nil {
+		t.Fatalf("Hold: %v", err)
+	}
+	got, ok := stored.ResolutionNote.Get()
+	if !ok {
+		t.Fatal("ResolutionNote is unknown")
+	}
+	if want := "use sk-ant-" + redact.Marker + " for the retry"; got != want {
+		t.Fatalf("the stored note is %q, want %q", got, want)
+	}
+}
+
 // holdResolutionSealVersion is the shipped migration that seals a hold's
 // resolution. A shipped version never moves, so pinning to it holds the test
 // below to its subject as the list grows.
