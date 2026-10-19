@@ -275,7 +275,7 @@ type supervision struct {
 }
 
 // supervisionHooks are the seams this package's tests drive the loop
-// through. Every one is nil in production and reached from internal tests
+// through. Each is its zero value in production and reached from internal tests
 // only, on the terms betweenAttemptReadAndClaim is: the loop starts inside
 // Open, so they are handed over on Options rather than set afterwards.
 type supervisionHooks struct {
