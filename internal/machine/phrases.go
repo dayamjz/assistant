@@ -1325,6 +1325,9 @@ const (
 	CheckHome = "home"
 	// CheckDatabase is whether the home's records can be opened.
 	CheckDatabase = "database"
+	// CheckGit is whether the git this build runs can be started, which
+	// every read of a checkout and every gate needs.
+	CheckGit = "git"
 	// CheckWorkingCopy is whether the command was run inside a checkout.
 	CheckWorkingCopy = "working copy"
 	// CheckGate is whether the checkout is bound to a gate and has the
@@ -1377,7 +1380,7 @@ const (
 // CheckNames is every check name phraseByCheck has rows for, in the order
 // assistant doctor makes them. The result is a copy.
 func CheckNames() []string {
-	return []string{CheckHome, CheckDatabase, CheckWorkingCopy, CheckGate, CheckCommitIdentity, CheckService,
+	return []string{CheckHome, CheckDatabase, CheckGit, CheckWorkingCopy, CheckGate, CheckCommitIdentity, CheckService,
 		CheckAgent, CheckNamedOnlyAgents, CheckSessionProvider, CheckCodeHost, CheckUpstream, CheckStages}
 }
 
@@ -1398,6 +1401,10 @@ var phraseByCheck = map[string][2]Phrase{
 	CheckDatabase: {
 		{Outcome: "This home's records can be read.", Consequence: "Runs and fleet work can be recorded.", Decision: "Nothing to do."},
 		{Outcome: "This home's records could not be opened.", Consequence: "Nothing can be recorded, so no run can start.", Decision: readDoctor},
+	},
+	CheckGit: {
+		{Outcome: "Git can be run here.", Consequence: "A checkout can be read and a gate can take what you send.", Decision: "Nothing to do."},
+		{Outcome: "Git could not be run here.", Consequence: "No checkout can be read and nothing can be validated until it can.", Decision: "Install git so that it is on this PATH, then run assistant doctor again; " + readDoctor},
 	},
 	CheckWorkingCopy: {
 		{Outcome: "This directory is inside a checkout.", Consequence: "There is a change here a run can validate.", Decision: "Nothing to do."},
@@ -1656,12 +1663,20 @@ var (
 	}
 )
 
-// InitPhrase is what a person reads once a gate was created or reattached for
-// their checkout. The next decision names the remote a change is sent to,
-// which is internal/gate's, because sending a branch there is how a person
-// starts a run and nothing else on the line says so.
+// InitPhrase is what a person reads once a gate was created, reattached, or
+// set up again for their checkout, chosen by what internal/gate answered:
+// Created for a gate this init made, Reattached for one carried across a
+// move, and otherwise the row for a gate the checkout already had. The next
+// decision names the remote a change is sent to, which is internal/gate's,
+// because sending a branch there is how a person starts a run and nothing
+// else on the line says so.
 func InitPhrase(i Init) Phrase {
 	decision := "Send your branch to the remote named " + gate.RemoteName + " to have it validated."
+	if !i.Created && !i.Reattached {
+		row := phraseInitRefreshed
+		row.Decision = decision
+		return row
+	}
 	if i.Reattached {
 		return Phrase{
 			Outcome:     "This checkout was reattached to the gate it had before.",
@@ -1861,7 +1876,7 @@ func TablePhrases() []Phrase {
 		LifecyclePhrase(Lifecycle{ConfigurationRefused: true}), PhraseStartConfigurationRefused)
 	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil), phraseRerunMoved, phraseRerunBehind,
 		phraseCancelUnknown, phraseCancelEnded)
-	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
+	out = append(out, InitPhrase(Init{Created: true}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
 	for _, standing := range CeilingStandings() {
@@ -1879,6 +1894,7 @@ func TablePhrases() []Phrase {
 	out = append(out, digestRows()...)
 	out = append(out, defaultBranchRows()...)
 	out = append(out, upstreamRows()...)
+	out = append(out, registrationRows()...)
 	out = append(out, forkRows()...)
 	out = append(out, managedRows()...)
 	out = append(out, commandsRows()...)

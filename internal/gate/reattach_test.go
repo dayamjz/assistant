@@ -39,6 +39,10 @@ func TestAMovedWorkingCopyKeepsItsGate(t *testing.T) {
 	if !second.Reattached() {
 		t.Fatal("a moved working copy was not reported as reattached")
 	}
+	if !first.Created() || second.Created() {
+		t.Fatalf("Created was %v for the first initialization and %v for the reattachment, want true and false",
+			first.Created(), second.Created())
+	}
 	if second.ID() != first.ID() {
 		t.Fatalf("the moved working copy got identifier %q, want the original %q", second.ID(), first.ID())
 	}
@@ -64,6 +68,9 @@ func TestAMovedWorkingCopyKeepsItsGate(t *testing.T) {
 	}
 	if third.Reattached() {
 		t.Fatal("initializing an already reattached gate reported another reattachment")
+	}
+	if third.Created() {
+		t.Fatal("initializing an already reattached gate reported it created")
 	}
 	if third.Repository() != first.Repository() {
 		t.Fatalf("the third initialization moved the gate to %q", third.Repository())
@@ -99,6 +106,9 @@ func TestACopiedWorkingCopyDoesNotStealTheOriginalsGate(t *testing.T) {
 	}
 	if copied.Reattached() {
 		t.Fatal("the copy reported a reattachment, so it took over the original's gate")
+	}
+	if !copied.Created() {
+		t.Fatal("the copy was given a gate of its own and it was not reported created")
 	}
 	if copied.Repository() == original.Repository() {
 		t.Fatalf("the copy shares the original's gate at %q", copied.Repository())

@@ -662,8 +662,24 @@ type Init struct {
 	// which internal/gate answers and which a person wants to know because it
 	// says whether the run history under this working copy carried over.
 	Reattached bool `json:"reattached"`
+	// Created is whether this init made the gate's repository, which
+	// internal/gate answers. It is false for a checkout initialized again
+	// over the gate it already had and for a reattachment, so the row a
+	// person reads says a new gate only of one that is new.
+	Created bool `json:"created"`
 	// Repository is the repository record as it now stands.
 	Repository store.Repository `json:"repository"`
+	// Changed is every field of the repository record this init wrote a
+	// value into that differs from the one the record held before, in
+	// RecordFields' order, and is empty on a first init and on one that
+	// recorded what was already there. It is this answer's: the record
+	// keeps the value it now holds and not the one it replaced.
+	Changed []RecordChange `json:"changed,omitempty"`
+	// Upstream is how the upstream now recorded treats proposals, the same
+	// check assistant doctor makes from the same record, so init says when
+	// it recorded a host a run is refused on rather than leaving that to
+	// the first run.
+	Upstream *Check `json:"upstream,omitempty"`
 	// DefaultBranchSource is where Repository.DefaultBranch came from, one
 	// of DefaultBranchSources. It is this answer's and not the record's: the
 	// record keeps the branch and not how it was learned.

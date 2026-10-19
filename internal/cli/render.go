@@ -769,8 +769,20 @@ func readOutLifecycle(w io.Writer, answer machine.Lifecycle) {
 	}
 }
 
+// initPreviousBranchLabel is what the default branch a repeated init replaced
+// is printed after, as machine text, so a person reads which branch runs read
+// from before and not only that it changed. An upstream or a fork replaced is
+// the structured rendering's, on the terms the URLs it replaced are.
+const initPreviousBranchLabel = "Default branch before"
+
+// initDefaultBranchLabel is what the default branch init recorded is printed
+// after, as machine text.
+const initDefaultBranchLabel = "Default branch"
+
 // readOutInit prints what became of the checkout's gate, the row for a fork
-// when the record names one, whose URL is the structured rendering's, and the branch
+// when the record names one, whose URL is the structured rendering's, a row
+// for each field of the record a repeated init changed, the row doctor
+// prints for how the recorded upstream treats proposals, and the branch
 // trusted configuration is read from, which is the person's own branch name
 // and the one fact here they may want to correct with --default-branch, after
 // internal/machine's row for where that answer came from, so a wrong one is
@@ -783,9 +795,18 @@ func readOutInit(w io.Writer, answer machine.Init) {
 	if answer.Repository.ForkURL.IsKnown() {
 		writeln(w, machine.PhraseInitFork)
 	}
+	for _, change := range answer.Changed {
+		writeln(w, machine.RecordChangePhrase(change))
+		if change.Field == machine.RecordDefaultBranch && change.Before != "" {
+			writef(w, "%s %s\n", initPreviousBranchLabel, printable(change.Before))
+		}
+	}
+	if answer.Upstream != nil {
+		writeln(w, machine.CheckPhrase(*answer.Upstream))
+	}
 	if branch := answer.Repository.DefaultBranch; branch != "" {
 		writeln(w, machine.DefaultBranchPhrase(answer.DefaultBranchSource))
-		writef(w, "Default branch %s\n", printable(branch))
+		writef(w, "%s %s\n", initDefaultBranchLabel, printable(branch))
 	}
 	readOutCommands(w, answer.Commands)
 }

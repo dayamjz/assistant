@@ -397,6 +397,16 @@ naming what is untracked, unstaged or staged, then the exact
 watch`. Do what it says and run it again. It reads and never writes: every
 step is a command you run.
 
+Registering is `init` and `doctor` and nothing else. `doctor` checks git among
+its dependencies and names the one thing to do; `init` sets up
+the gate, says which upstream and default branch it recorded and how that
+upstream treats proposals, and offers commands only for keys the default
+branch's `assistant.json` does not already name. Running `init` again repairs
+the gate in place, says it was already there, and names each field of the
+record it changed, such as a fork it was not given again; with the same flags
+it records nothing new. A written command reaches no run until the file lands on
+the default branch. See [`docs/operators.md`](docs/operators.md#running-init-again).
+
 A working copy whose gate was created before a push learned to wait for a
 run's copy needs `assistant init` once more: that is what points its
 `assistant` remote's receive command through the gate, and until it runs a

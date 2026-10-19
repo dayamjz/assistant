@@ -42,7 +42,7 @@ func TestInitDoctorAndEjectSpeakInPhrasesThroughTheCommandLine(t *testing.T) {
 		"the working copy":      initialized.Repository.WorkingPath,
 		"the home":              h.Root(),
 	}
-	if !strings.Contains(created.stdout, machine.InitPhrase(machine.Init{}).String()) {
+	if !strings.Contains(created.stdout, machine.InitPhrase(machine.Init{Created: true}).String()) {
 		t.Errorf("init does not say the gate was created:\n%s", created.stdout)
 	}
 	if !strings.Contains(created.stdout, initialized.Repository.DefaultBranch) {

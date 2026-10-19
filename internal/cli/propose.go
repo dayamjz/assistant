@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // Proposing commands: what assistant init offers for the keys the test, lint
@@ -49,6 +52,16 @@ import (
 // merge read, on writeAnchored's terms, so a file that changed in between is
 // refused rather than overwritten.
 //
+// The default branch's copy of the file is read beside the checkout's, by
+// readBranchCopy, because that copy is the one a run reads. A key it names is
+// not offered even when the checkout's copy does not name it, since writing
+// one would make the two copies disagree; a key both copies name with
+// different commands is reported, because the checkout's command reaches no
+// run; and a copy on that branch that cannot be read or parsed is reported
+// and compared against nothing, while the offer goes on as it would without
+// it. None of these refuses the gate: the gate and the record are set up
+// before the offer, and a branch changing its own commands is ordinary work.
+//
 // # What is detected, and how
 //
 // Detection reads files and runs nothing: no build tool, no package manager,
@@ -75,11 +88,15 @@ import (
 //
 // # Residual gaps
 //
-// The configuration file compared against is the checkout's copy, not the
-// default branch's. A checkout behind that branch, or on a branch whose copy
-// differs, is offered a key the trusted copy already names, and writing it
-// would make the two copies differ; the answer names the branch so a person
-// committing the file sees which copy they are changing. The operator's own
+// The default branch's copy is read as this checkout last learned the
+// branch, origin's copy of it or else the local branch, and nothing is
+// fetched, while a run reads it at a fresh fetch of the upstream. A branch
+// that moved since, or an upstream named with --upstream that is not origin,
+// can name a key this read did not see, and that key is still offered. A key
+// the checkout's copy names and the branch's does not is not reported at
+// all, though what the checkout names for it reaches no run until the file
+// lands on the branch; only a command written in this same init is followed
+// by the row saying so. The operator's own
 // configuration file is not consulted either, so a key it sets is still
 // offered for the repository, where it would take precedence. Detection is
 // textual: a Makefile target defined through an include or a variable is not
@@ -300,13 +317,16 @@ func detectPython(fsys fs.FS) map[config.Key]detected {
 
 // proposeCommands is init's offer: it detects commands in the checkout at
 // working, compares them with what the checkout's configuration file already
-// names, asks for consent where it may, and writes what was consented to.
+// names and with what branch, readBranchCopy's reading of the default
+// branch's copy, names, asks for consent where it may, and writes what was
+// consented to.
 // accept is --accept-commands; ask is whether a person at a terminal may be
 // asked, which the caller decides. It never returns an error: every way the
 // offer can end is a result the answer carries.
-func proposeCommands(working string, accept, ask bool, prompt io.Writer, answers io.Reader) machine.CommandProposals {
+func proposeCommands(working string, branch branchCopy, accept, ask bool, prompt io.Writer, answers io.Reader) machine.CommandProposals {
 	path := filepath.Join(working, config.RepositoryDocument)
 	proposals := machine.CommandProposals{File: config.RepositoryDocument, Proposed: []machine.ProposedCommand{}, NotProposed: []machine.NotProposed{}}
+	proposals.Branch = branch.reading
 
 	observed, readErr := os.ReadFile(path)
 	existed := readErr == nil
@@ -317,12 +337,28 @@ func proposeCommands(working string, accept, ask bool, prompt io.Writer, answers
 	case readErr == nil:
 		layer, readErr = config.Parse(config.OriginTrusted, observed)
 	}
+	var checkout map[config.Key]string
+	if readErr == nil {
+		checkout, readErr = commandValues(layer)
+	}
 	readable := readErr == nil
 
 	found := detectCommands(os.DirFS(working))
 	for _, key := range proposedKeys {
+		onBranch, branchNames := branch.values[key]
 		if readable && layer.IsSet(key) {
 			proposals.Configured = append(proposals.Configured, string(key))
+			if branchNames && checkout[key] != onBranch {
+				proposals.Branch.Differs = append(proposals.Branch.Differs, string(key))
+			}
+			continue
+		}
+		if branchNames {
+			// The branch a run reads names this key and the checkout's copy
+			// does not, so writing one would make the two copies disagree.
+			// That holds whatever the checkout's file is, including one
+			// that cannot be read.
+			proposals.Branch.Named = append(proposals.Branch.Named, string(key))
 			continue
 		}
 		command, ok := found[key]
@@ -390,6 +426,81 @@ func proposeCommands(working string, accept, ask bool, prompt io.Writer, answers
 	}
 	proposals.Result = machine.CommandsWritten
 	return proposals
+}
+
+// branchCopy is what readBranchCopy found of the configuration file on the
+// default branch: the reading the answer carries, and the command each
+// considered key names there, present only for a key the copy sets.
+type branchCopy struct {
+	reading machine.BranchCopy
+	values  map[config.Key]string
+}
+
+// readBranchCopy reads the configuration file as the default branch holds it
+// in this checkout, for proposeCommands to compare with the checkout's own
+// copy. It reads origin's copy of the branch as last fetched, which is where
+// init read the branch's name from and the nearest thing this checkout holds
+// to what a run reads, and the local branch of that name when there is no
+// such copy; it fetches nothing, as changeStanding's comparison does not.
+//
+// It writes nothing and decides nothing about the gate: a copy it cannot
+// read or parse is BranchUnreadable, which the answer reports and which
+// leaves every key uncompared, because guessing what that copy says would
+// either offer what it names or withhold what it does not.
+func readBranchCopy(ctx context.Context, working, branch string) branchCopy {
+	unreadable := func(ref string, err error) branchCopy {
+		return branchCopy{reading: machine.BranchCopy{Reading: machine.BranchUnreadable, Ref: ref, Detail: err.Error()}}
+	}
+	repo, err := vcs.OpenWorktree(ctx, working, vcs.WithRedactor(redact.New()))
+	if err != nil {
+		return unreadable("", err)
+	}
+	for _, ref := range []string{"refs/remotes/origin/" + branch, "refs/heads/" + branch} {
+		if _, err := repo.ResolveCommit(ctx, ref); errors.Is(err, vcs.ErrRefNotFound) {
+			continue
+		} else if err != nil {
+			return unreadable(ref, err)
+		}
+		data, err := repo.FileAt(ctx, ref, config.RepositoryDocument)
+		if errors.Is(err, vcs.ErrPathNotFound) {
+			return branchCopy{reading: machine.BranchCopy{Reading: machine.BranchAbsent, Ref: ref}}
+		} else if err != nil {
+			return unreadable(ref, err)
+		}
+		layer, err := config.Parse(config.OriginTrusted, data)
+		if err != nil {
+			return unreadable(ref, err)
+		}
+		values, err := commandValues(layer)
+		if err != nil {
+			return unreadable(ref, err)
+		}
+		return branchCopy{reading: machine.BranchCopy{Reading: machine.BranchRead, Ref: ref}, values: values}
+	}
+	return branchCopy{reading: machine.BranchCopy{Reading: machine.BranchNotHere}}
+}
+
+// commandValues is the command a parsed layer names for each key init
+// considers, present only for a key the layer sets. It is read off the layer
+// through internal/config's resolution of it, so a value is what a run
+// would see and not a second reading of the document.
+func commandValues(layer config.Layer) (map[config.Key]string, error) {
+	resolved, err := config.Resolve(config.Absent(config.OriginGlobal), layer)
+	if err != nil {
+		return nil, err
+	}
+	all := map[config.Key]string{
+		config.KeyCommandsTest:     resolved.Config.Commands.Test,
+		config.KeyCommandsLint:     resolved.Config.Commands.Lint,
+		config.KeyCommandsDocument: resolved.Config.Commands.Document,
+	}
+	out := map[config.Key]string{}
+	for _, key := range proposedKeys {
+		if layer.IsSet(key) {
+			out[key] = all[key]
+		}
+	}
+	return out, nil
 }
 
 // askConsent asks about each proposal in turn on prompt, reading one line of
@@ -494,6 +605,7 @@ const (
 	commandsProposedLabel   = "Offered:"
 	commandsWrittenLabel    = "Written:"
 	commandsConfiguredLabel = "Already configured:"
+	commandsBranchKeyLabel  = "Key:"
 )
 
 // readOutCommands prints the row for what became of the offer, and beside it
@@ -513,6 +625,19 @@ func readOutCommands(w io.Writer, p machine.CommandProposals) {
 			label = commandsWrittenLabel
 		}
 		writef(w, "%s\n", commandLine(label, c))
+	}
+	for _, row := range machine.BranchCopyPhrases(p.Branch) {
+		writeln(w, row)
+		var keys []string
+		switch row {
+		case machine.PhraseCommandsOnDefaultBranch:
+			keys = p.Branch.Named
+		case machine.PhraseCommandsDiffer:
+			keys = p.Branch.Differs
+		}
+		for _, key := range keys {
+			writef(w, "%s %s\n", commandsBranchKeyLabel, printable(key))
+		}
 	}
 	writeln(w, machine.PhraseNoProseCommand)
 }

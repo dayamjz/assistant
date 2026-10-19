@@ -438,11 +438,35 @@ func verbUsage(name string, set *flag.FlagSet) string {
 // run from a subdirectory has to be about the same gate.
 func (in *invocation) workingCopy(ctx context.Context) (string, error) {
 	working, err := vcs.OpenWorktree(ctx, in.env.WorkingDir)
+	if vcs.GitNotFound(err) {
+		return "", gitMissing{cause: err}
+	}
 	if err != nil {
 		return "", fmt.Errorf("%s is not inside a working copy: %w", in.env.WorkingDir, err)
 	}
-	return working.WorkingRoot(ctx)
+	root, err := working.WorkingRoot(ctx)
+	if vcs.GitNotFound(err) {
+		return "", gitMissing{cause: err}
+	}
+	return root, err
 }
+
+// gitMissing is the refusal of a verb that has to read the checkout it was
+// run in when the git it runs could not be found to start, which
+// vcs.GitNotFound decides. It reads as internal/machine's PhraseGitMissing
+// rather than as a directory that is not a working copy, which is what the
+// same failure read as before, and it ends with the operational failure code:
+// the caller got nothing wrong on the command line.
+type gitMissing struct {
+	cause error
+}
+
+// Error is the row a person reads, which says all there is; what could not
+// be found is the cause, which Unwrap reaches.
+func (e gitMissing) Error() string { return machine.PhraseGitMissing.String() }
+
+// Unwrap resolves to the invocation that could not start.
+func (e gitMissing) Unwrap() error { return e.cause }
 
 // openStore opens the home's database for a verb that acts on the working copy
 // rather than on a run.
@@ -612,7 +636,11 @@ func render(in *invocation, answer any, err error) machine.Code {
 // Init's refusal to record an upstream it was not given is incorrect usage on
 // the same terms: the working copy has no origin to take it from, and the
 // answer is --upstream, which the caller supplies. A read of origin that
-// failed for another reason is not that refusal and stays operational.
+// failed for another reason is not that refusal and stays operational. Its
+// refusal of an origin that sends a push to another repository than the one
+// it fetches from is incorrect usage on the same terms, because --upstream
+// settles which one is meant. A git that could not be started is not either:
+// it is where things stand on this machine, and stays operational.
 //
 // Init's refusal of a fork is incorrect usage too, for every reason it has:
 // the fork or the upstream the caller named is not a repository a run can
@@ -632,6 +660,10 @@ func failureExit(err error) machine.Code {
 	}
 	var unnamed upstreamRefused
 	if errors.As(err, &unnamed) {
+		return machine.ExitUsage
+	}
+	var ambiguous originAmbiguous
+	if errors.As(err, &ambiguous) {
 		return machine.ExitUsage
 	}
 	var unforked forkRefused

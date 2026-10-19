@@ -40,6 +40,7 @@ type Gate struct {
 	repository  string
 	workingPath string
 	reattached  bool
+	created     bool
 }
 
 // ID is the gate's identifier. It is the hash of the working copy path the
@@ -68,6 +69,18 @@ func (g *Gate) WorkingPath() string { return g.workingPath }
 // working copy that moved away and back again, and false on every later
 // initialization of a gate whose record already names its working copy.
 func (g *Gate) Reattached() bool { return g.reattached }
+
+// Created reports that this initialization made the gate's repository: the
+// path it is filed under held nothing when the operation obtained it, which
+// is the same three-valued reading the resolution decided on, so a gate whose
+// record alone was gone is repaired rather than reported created. A working
+// copy initialized again over the gate it already has, and one reattached
+// after a move, report false; a copy of a gated project, which is given a
+// gate of its own at its own path's identifier, reports true when nothing
+// was filed there yet. Every other initialization rewrote the
+// hooks, the record, the binding and the remote of a gate that was already
+// there, which Initialize does on every call.
+func (g *Gate) Created() bool { return g.created }
 
 // Option configures an operation on a gate.
 type Option func(*settings)
@@ -220,7 +233,10 @@ func (h *held) initialize(ctx context.Context, command string) (*Gate, error) {
 		return nil, fmt.Errorf("gate: writing the receive command of the %s remote of %s: %w",
 			RemoteName, h.workingPath, err)
 	}
-	return &Gate{id: h.id, repository: h.repository, workingPath: h.workingPath, reattached: h.reattached}, nil
+	return &Gate{
+		id: h.id, repository: h.repository, workingPath: h.workingPath,
+		reattached: h.reattached, created: h.holds == noRepository,
+	}, nil
 }
 
 // Remove deletes a working copy's gate and gives up the remote that names it.

@@ -60,15 +60,41 @@ func (r *Repository) Fetch(ctx context.Context, spec FetchSpec) error {
 // ErrRemoteNotFound when there is no such remote.
 //
 // The URL is returned exactly as it is configured, including any credentials
-// in it. This is the one place in this package that hands a caller a
-// credentialed URL, because recovering that URL is what it is for. Everything
-// that persists or reports it is responsible for redacting it first.
+// in it. RemoteURL and PushURL are the two reads in this package that hand a
+// caller a credentialed URL, because recovering that URL is what they are
+// for. Everything that persists or reports either is responsible for
+// redacting it first.
 func (r *Repository) RemoteURL(ctx context.Context, name string) (string, error) {
 	if err := checkArg("remote", name); err != nil {
 		return "", err
 	}
 	// Exit status 2 is what git remote reports for a remote it does not have.
 	out, code, err := r.runExpecting(ctx, "remote-url", []int{2}, "remote", "get-url", "--", name)
+	if err != nil {
+		return "", err
+	}
+	url := strings.TrimSpace(string(out))
+	if code != 0 || url == "" {
+		return "", ErrRemoteNotFound
+	}
+	return url, nil
+}
+
+// PushURL returns the URL a push to a remote is sent to, which is what
+// git remote get-url --push reports for it, and ErrRemoteNotFound when there
+// is no such remote. A remote with no push address of its own reports its
+// fetch URL here, so a caller comparing the two learns whether they differ
+// rather than whether a push address is configured.
+//
+// It contacts nothing, so it says where a push would be sent and not that it
+// would be accepted there. The URL is returned as it is configured,
+// credentials included, on the terms RemoteURL states.
+func (r *Repository) PushURL(ctx context.Context, name string) (string, error) {
+	if err := checkArg("remote", name); err != nil {
+		return "", err
+	}
+	// Exit status 2 is the status RemoteURL reads a missing remote from.
+	out, code, err := r.runExpecting(ctx, "remote-push-url", []int{2}, "remote", "get-url", "--push", "--", name)
 	if err != nil {
 		return "", err
 	}
