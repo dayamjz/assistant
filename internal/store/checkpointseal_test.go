@@ -28,6 +28,7 @@ func insertCheckpointRow(ctx context.Context, db *sql.DB, runID string) error {
 // what is checked here is the database's own refusal, which is what a caller
 // that added new SQL for this table would run into.
 func TestTheOneRowCheckpointTableTakesNoRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -49,6 +50,7 @@ func TestTheOneRowCheckpointTableTakesNoRows(t *testing.T) {
 // own. It succeeds, which says the row satisfies everything else the table
 // declares and migration 6's trigger is the whole of what refused it.
 func TestTheCheckpointSealIsWhatRefusesTheRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -93,6 +95,7 @@ func sealMigrationVersion(t *testing.T) int {
 // additive, since applyMigration runs verifyAdditive inside the same
 // transaction as the statements.
 func TestTheSealEmptiesACheckpointTableThatAlreadyHasARow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -141,6 +144,7 @@ func TestTheSealEmptiesACheckpointTableThatAlreadyHasARow(t *testing.T) {
 // retired row is gone; the table will not take another; and the records that
 // were never this migration's business are all still there.
 func TestOpeningADatabaseWrittenBeforeTheSealRetiresItsRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
 

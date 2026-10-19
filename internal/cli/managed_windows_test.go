@@ -16,6 +16,7 @@ import (
 // compiled for Windows by CI's cross-compiled vet and is not run there, which
 // is a limit of CI and not of the test.
 func TestAManagedServiceIsRefusedOnWindows(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	row := machine.ManagedRefusalPhrase(managed.ReasonUnsupported).String()
 	for _, args := range [][]string{{"service", "start", "--install"}, {"service", "stop", "--uninstall"}} {

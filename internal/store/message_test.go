@@ -26,6 +26,7 @@ func seedAttempt(t *testing.T, s *Store, id string) TaskAttempt {
 // revised. An attempt the task does not have, the zero sender and empty text
 // are refused before anything is written.
 func TestAMessagesDeliveryIsRecordedOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	a := seedAttempt(t, s, "taskmsgaaaaa")
@@ -91,6 +92,7 @@ func TestAMessagesDeliveryIsRecordedOnce(t *testing.T) {
 // written-unacknowledged read is the loop's, and it holds exactly the
 // written message nobody acknowledged.
 func TestAnAcknowledgementIsTheEventAndTheRecordInOneTransaction(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	ctx := context.Background()
 	s := openStore(t)
@@ -166,6 +168,7 @@ func TestAnAcknowledgementIsTheEventAndTheRecordInOneTransaction(t *testing.T) {
 
 // The detail of an acknowledgement is a message identifier exactly.
 func TestParseMessageIDReadsOnlyAnIdentifier(t *testing.T) {
+	t.Parallel()
 	for _, bad := range []string{"", "0", "-1", "01", "1 ", "one", "1.0"} {
 		if _, err := ParseMessageID(bad); err == nil {
 			t.Errorf("ParseMessageID(%q) was accepted", bad)

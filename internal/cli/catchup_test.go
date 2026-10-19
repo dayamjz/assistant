@@ -128,6 +128,7 @@ func taskIDs(tasks []machine.Task) []string {
 // document lists is on a line of the human read with its own phrase, and
 // every line is held to P13's derived forbidden set (P13).
 func TestWatchCatchesUpOnEveryPartThroughTheSurface(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P13)
 	principles.Cite(t, principles.P14)
@@ -277,6 +278,7 @@ func TestWatchCatchesUpOnEveryPartThroughTheSurface(t *testing.T) {
 // disappears from the next read, so the assertions that a read changes
 // nothing are not passed by a mark that does nothing either.
 func TestTheSeenMarkMovesOnlyOnAnExplicitMarkOfWhatWasShown(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -390,6 +392,7 @@ func TestTheSeenMarkMovesOnlyOnAnExplicitMarkOfWhatWasShown(t *testing.T) {
 // run stops at its decision: it is no longer under way and is waiting on the
 // person instead.
 func TestARunBeingAdvancedIsUnderWay(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)

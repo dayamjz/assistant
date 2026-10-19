@@ -35,6 +35,7 @@ import (
 // the other half of the same sentence: a call that did advance the run answers
 // at a decision point, not with a run still moving.
 func TestReadsOfARunInsideAStageBodyAnswerExecuting(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

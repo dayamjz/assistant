@@ -10,6 +10,7 @@ import (
 )
 
 func TestReopeningKeepsEverything(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
 
@@ -47,6 +48,7 @@ func TestReopeningKeepsEverything(t *testing.T) {
 }
 
 func TestAccessorsRefuseAfterClose(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRun(t, s)
@@ -112,13 +114,15 @@ func TestAccessorsRefuseAfterClose(t *testing.T) {
 }
 
 func TestOpenRefusesAnEmptyPath(t *testing.T) {
+	t.Parallel()
 	if _, err := Open(context.Background(), "", WithRedactor(workingRedactor())); err == nil {
 		t.Fatal("Open accepted an empty path")
 	}
 }
 
 func TestPathIsAbsolute(t *testing.T) {
-	s := openStore(t)
+	t.Parallel()
+	s := createStore(t)
 	if !filepath.IsAbs(s.Path()) {
 		t.Fatalf("Path returned %q, which is not absolute", s.Path())
 	}
@@ -159,6 +163,7 @@ var guaranteedSettings = map[string]guaranteedSetting{
 // both directions: one that goes missing is a setting the store would open
 // without, and one that appears is a setting nobody decided belongs.
 func TestRequiredSettingsAreTheSettingsThisStoreGuarantees(t *testing.T) {
+	t.Parallel()
 	asked := make(map[string]setting)
 	for _, s := range requiredSettings() {
 		if _, twice := asked[s.name]; twice {
@@ -189,8 +194,9 @@ func TestRequiredSettingsAreTheSettingsThisStoreGuarantees(t *testing.T) {
 // does not establish. This is the accepting path for the check openPool
 // applies, so it cannot pass by refusing everything.
 func TestOpenedStoreReportsTheSettingsItsGuaranteesRestOn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	s := openStore(t)
+	s := createStore(t)
 
 	for pool, db := range map[string]*sql.DB{"writer": s.write, "reader": s.read} {
 		for name, guaranteed := range guaranteedSettings {
@@ -210,6 +216,7 @@ func TestOpenedStoreReportsTheSettingsItsGuaranteesRestOn(t *testing.T) {
 // refused rather than handed out, so the store never runs on a configuration
 // its documentation does not describe.
 func TestOpenPoolRefusesASettingThatDidNotApply(t *testing.T) {
+	t.Parallel()
 	for name, guaranteed := range guaranteedSettings {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()

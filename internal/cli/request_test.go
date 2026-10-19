@@ -18,6 +18,7 @@ import (
 // held stage's fixer, the stage runs again, and the run holds there again. No
 // verb is added for it; it is a flag set on the command section 9 names.
 func TestAFixRoundIsAskedForWithFlagsOnTheAnswer(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -101,6 +102,7 @@ func TestTheFixRoundFlagsAreRefusedWithoutTheFixAnswer(t *testing.T) {
 // does report, so the caller can correct the selection without guessing. The
 // decision stays open.
 func TestAStaleFindingIdentifierIsRefusedAsUsageNamingTheReportedOnes(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

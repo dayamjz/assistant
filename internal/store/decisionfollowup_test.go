@@ -10,6 +10,7 @@ import (
 // what produced a later answer, so that answer is not followed by it. The
 // answers themselves are untouched.
 func TestAFollowUpAttachesToTheAnswersBeforeItsMark(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	appendAnswer := func(run, path, finding string) DecisionAnswer {
@@ -56,6 +57,7 @@ func TestAFollowUpAttachesToTheAnswersBeforeItsMark(t *testing.T) {
 
 // A kind outside the three is refused, as is a follow-up naming nothing.
 func TestAFollowUpOfNoKnownKindIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	if _, err := s.AppendDecisionFollowUp(ctx, "run-1", "a.go", FollowUpAnswer, "review", "approve", 0); err != nil {
@@ -73,6 +75,7 @@ func TestAFollowUpOfNoKnownKindIsRefused(t *testing.T) {
 // with how many anything followed; an answer that produced no finding is not
 // a firing, and another check's firings are not counted.
 func TestDecisionFiringsCountFiredAndFollowedPerRun(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)

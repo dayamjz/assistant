@@ -8,6 +8,7 @@ import (
 )
 
 func TestZeroOptionalIsUnknown(t *testing.T) {
+	t.Parallel()
 	var o Optional[string]
 	if o.IsKnown() {
 		t.Fatal("the zero Optional reports a value")
@@ -28,6 +29,7 @@ func TestZeroOptionalIsUnknown(t *testing.T) {
 
 // The distinction this type exists for: a known zero is not an unknown.
 func TestKnownZeroIsNotUnknown(t *testing.T) {
+	t.Parallel()
 	zero := Known(0)
 	if !zero.IsKnown() {
 		t.Fatal("a known zero reports as unknown")
@@ -47,6 +49,7 @@ func TestKnownZeroIsNotUnknown(t *testing.T) {
 }
 
 func TestOptionalRoundTripsThroughTheDriver(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   Optional[string]
@@ -77,6 +80,7 @@ func TestOptionalRoundTripsThroughTheDriver(t *testing.T) {
 }
 
 func TestOptionalTimeConversionsRefuseCorruptText(t *testing.T) {
+	t.Parallel()
 	at := time.Date(2026, 9, 2, 12, 0, 0, 7, time.UTC)
 	back, err := optionalTimeValue(optionalTimeText(Known(at)), "column")
 	if err != nil {

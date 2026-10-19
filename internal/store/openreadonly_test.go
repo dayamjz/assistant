@@ -14,6 +14,7 @@ import (
 // redactor, because nothing it can do writes the columns the redactor is
 // for.
 func TestOpenReadOnlyReadsTheRecordAndRefusesEveryWrite(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
 	w := openStoreAt(t, path)
@@ -74,6 +75,7 @@ func TestOpenReadOnlyReadsTheRecordAndRefusesEveryWrite(t *testing.T) {
 // creates no file in any of those cases. An empty path is the caller's
 // mistake and is refused as something other than unreadable.
 func TestOpenReadOnlyReportsAnUnreadableDatabaseAsTheTypedResult(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dir := t.TempDir()
 

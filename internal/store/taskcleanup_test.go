@@ -13,6 +13,7 @@ import (
 // write is refused and the first stands; a proof outside the closed set and a
 // task that does not exist are refused before anything is written.
 func TestACleanupRecordIsWrittenOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
@@ -70,6 +71,7 @@ func TestACleanupRecordIsWrittenOnce(t *testing.T) {
 // A check that examined nothing and removed nothing records those as known
 // facts: an empty list, not an unknown one, and a removal that did not happen.
 func TestACleanupRecordKeepsAnEmptyExaminationAndNoRemovalApart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
@@ -89,6 +91,7 @@ func TestACleanupRecordKeepsAnEmptyExaminationAndNoRemovalApart(t *testing.T) {
 // this package does not define is refused rather than read back as some proof
 // it is not. The row is planted directly, because no accessor can write it.
 func TestACleanupRowOutsideTheSetIsRefusedOnRead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
@@ -117,6 +120,7 @@ func TestACleanupRowOutsideTheSetIsRefusedOnRead(t *testing.T) {
 // refused, the first mark stands, and a second is refused with the first
 // still in place.
 func TestACleanupRemovalIsMarkedOnceAfterTheProof(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")

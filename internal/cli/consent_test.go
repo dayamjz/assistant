@@ -61,6 +61,7 @@ func consentSubject(t *testing.T, h *home.Home, trusted, branch string) string {
 // copy sets the key is refused the same way, because the key is trusted-only
 // and a pushed branch cannot allow consent for itself.
 func TestStandingConsentWithoutTheTrustedKeyIsIncorrectUsage(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P7)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -109,6 +110,7 @@ func TestStandingConsentWithoutTheTrustedKeyIsIncorrectUsage(t *testing.T) {
 // status, and the run listing, each through the phrase table. The run stops at
 // the push's decision, which consent never answers.
 func TestEverySurfaceSaysARunRunsUnderStandingConsent(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P13)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -151,6 +153,7 @@ func TestEverySurfaceSaysARunRunsUnderStandingConsent(t *testing.T) {
 // copy does not allow consent: it is refused as incorrect usage and the run
 // is left as it was, so the attach is not taking consent for granted.
 func TestStandingConsentIsGivenToATasksRunFromOffItsBranch(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P1)
 	requiresIdentifiedPeer(t)
 

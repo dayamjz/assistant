@@ -56,6 +56,11 @@ func stopForCleanup(t *testing.T, h *home.Home) {
 // nothing and says why: internal/machine's row, then the file's refusal,
 // which names the file and the key. The same home with the file corrected
 // starts, so the refusal is the file's and not the start's.
+//
+// It runs serially, unlike most tests here: it starts a service as a process
+// of its own and waits on a bound for it to answer, which the load of the
+// package's parallel tests could exhaust, and serial tests run before any
+// parallel test resumes.
 func TestAStartOnABadHomeConfigurationLaunchesNothingAndSaysWhy(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P7)
@@ -94,6 +99,11 @@ func TestAStartOnABadHomeConfigurationLaunchesNothingAndSaysWhy(t *testing.T) {
 // restart row and the file's refusal, with a failure exit. Corrected, the
 // same restart goes through to a different process, which is the control
 // showing the refusal is the file's.
+//
+// It runs serially, unlike most tests here: it starts a service as a process
+// of its own and waits on a bound for it to answer, which the load of the
+// package's parallel tests could exhaust, and serial tests run before any
+// parallel test resumes.
 func TestARestartOnABadHomeConfigurationLeavesTheServiceUp(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -146,6 +156,11 @@ func TestARestartOnABadHomeConfigurationLeavesTheServiceUp(t *testing.T) {
 
 // A service that holds the home and cannot start writes why to the service
 // log before it exits, so the log an operator is pointed at holds the cause.
+//
+// It runs serially, unlike most tests here: it starts a service as a process
+// of its own and waits on a bound for it to answer, which the load of the
+// package's parallel tests could exhaust, and serial tests run before any
+// parallel test resumes.
 func TestAServiceThatCannotStartWritesWhyToItsLog(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -167,6 +182,11 @@ func TestAServiceThatCannotStartWritesWhyToItsLog(t *testing.T) {
 // exited, pointing at the log, rather than as a readiness wait that ran out,
 // and the log holds the cause. Here the home's database is a directory, which
 // the start's own read of the configuration cannot foresee.
+//
+// It runs serially, unlike most tests here: it starts a service as a process
+// of its own and waits on a bound for it to answer, which the load of the
+// package's parallel tests could exhaust, and serial tests run before any
+// parallel test resumes.
 func TestAStartWhoseServiceExitsSaysSoAndPointsAtTheLog(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)

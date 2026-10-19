@@ -87,6 +87,7 @@ func requireHoldAfterReview(t *testing.T) pipeline.Stage {
 // log overwritten with a claim that the run has finished leaves the run's
 // answer exactly what its record and checkpoint said.
 func TestAReviewAndItsFixRoundAreReadableInTheStageLogWithNoCredential(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P13)
@@ -225,6 +226,7 @@ func TestAReviewAndItsFixRoundAreReadableInTheStageLogWithNoCredential(t *testin
 // (P8: what is true now is read from the record, the checkpoint and the
 // service's own advancing fact, never inferred from history).
 func TestStatusShowsTheRunningStagesRoundAndHowLongItHasRun(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P8)
 	holdsAt := requireHoldAfterReview(t)
@@ -332,6 +334,7 @@ func TestStatusShowsTheRunningStagesRoundAndHowLongItHasRun(t *testing.T) {
 // beside it; each is incorrect usage, refused before the service is asked.
 // The control is that the same flag with a run and a stage is answered.
 func TestRunsLogRefusesWhatItCannotRead(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	subject := newSubject(t)
 	serve(t, h)

@@ -41,6 +41,7 @@ func postureOf(t *testing.T, s *Store, id string) Optional[config.Delivery] {
 // the test claims: the record is the one owner of the posture a task is
 // followed under, so no later write may make it say something else.
 func TestTheDeliveryPostureIsWrittenOnceAtIntakeOrPromotion(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P14)
 	ctx := context.Background()
 	s := openStore(t)
@@ -111,6 +112,7 @@ func TestTheDeliveryPostureIsWrittenOnceAtIntakeOrPromotion(t *testing.T) {
 // The migration is found by name, so the test spells no version the shipped
 // list may grow past.
 func TestThePromotedPostureMigrationKeepsEarlierTasks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	var added migration

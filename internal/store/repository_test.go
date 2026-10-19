@@ -10,6 +10,7 @@ import (
 const credentialed = "https://alice:s3cr3t@example.test/one.git"
 
 func TestUpsertRepositoryStoresRedactedURLs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -53,6 +54,7 @@ func TestUpsertRepositoryStoresRedactedURLs(t *testing.T) {
 // inert, and the store has to refuse to open rather than quietly hold
 // passwords.
 func TestOpenRefusesAnInertRedactor(t *testing.T) {
+	t.Parallel()
 	_, err := Open(context.Background(), t.TempDir()+"/state.db", WithRedactor(inertRedactor()))
 	if !errors.Is(err, ErrRedactorInert) {
 		t.Fatalf("Open accepted a redactor that removes nothing: %v", err)
@@ -62,6 +64,7 @@ func TestOpenRefusesAnInertRedactor(t *testing.T) {
 // A probe that only ever passes is not a probe. A redactor that removes the
 // credential opens, which is what the rest of these tests rely on.
 func TestOpenAcceptsAWorkingRedactor(t *testing.T) {
+	t.Parallel()
 	s, err := Open(context.Background(), t.TempDir()+"/state.db", WithRedactor(workingRedactor()))
 	if err != nil {
 		t.Fatalf("Open refused a working redactor: %v", err)
@@ -72,6 +75,7 @@ func TestOpenAcceptsAWorkingRedactor(t *testing.T) {
 }
 
 func TestOpenRequiresARedactor(t *testing.T) {
+	t.Parallel()
 	_, err := Open(context.Background(), t.TempDir()+"/state.db")
 	if !errors.Is(err, ErrNoRedactor) {
 		t.Fatalf("Open succeeded without a redactor: %v", err)
@@ -79,6 +83,7 @@ func TestOpenRequiresARedactor(t *testing.T) {
 }
 
 func TestUpsertRepositoryUpdatesInPlace(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -117,6 +122,7 @@ func TestUpsertRepositoryUpdatesInPlace(t *testing.T) {
 }
 
 func TestRepositoryRefusesIncompleteRecords(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	complete := Repository{ID: "repo-1", WorkingPath: "/checkouts/one",
@@ -145,6 +151,7 @@ func TestRepositoryRefusesIncompleteRecords(t *testing.T) {
 // is a sentinel a caller branches on rather than a driver's constraint text,
 // and a refused upsert writes nothing.
 func TestUpsertRepositoryRefusesATakenWorkingPath(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 
@@ -216,6 +223,7 @@ func TestUpsertRepositoryRefusesATakenWorkingPath(t *testing.T) {
 // the record for that path, tell a path it does not hold apart from a failure,
 // and give back the same redacted form every other accessor does.
 func TestRepositoryAtAnswersByWorkingPath(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 

@@ -38,6 +38,7 @@ import (
 // the run to the next stage that holds. Nothing in the primary moves: the
 // branch it stands on, its head and its worktree are as they were.
 func TestATasksRunIsAnsweredGivenTheTaskFromOffItsBranch(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P11)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -141,6 +142,7 @@ func TestATasksRunIsAnsweredGivenTheTaskFromOffItsBranch(t *testing.T) {
 // The refusal is typed on the wire and carries internal/machine's row,
 // which P13 holds to the vocabulary every phrase is.
 func TestATasksOwnHoldIsAnsweredBeforeItsRun(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P13)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -199,6 +201,7 @@ func TestATasksOwnHoldIsAnsweredBeforeItsRun(t *testing.T) {
 // task's report holds stay open, so a coordinator does not have to clear
 // every investigation decision before moving the run.
 func TestAPromotedTasksRunIsAnsweredWhileItsReportHoldsStayOpen(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -241,6 +244,7 @@ func TestAPromotedTasksRunIsAnsweredWhileItsReportHoldsStayOpen(t *testing.T) {
 // to read: a task that names no branch, a task whose branch has no run, and
 // a task whose run was ended. None records anything.
 func TestAnAnswerGivenATaskNothingWaitsOnIsRefused(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P13)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)

@@ -14,6 +14,7 @@ import (
 // The positive control is the other base. Without it a store that never wrote
 // anything after the first arm would pass the first half for the wrong reason.
 func TestAChecksWaitIsKeptForTheSameBaseAndReArmedForAnother(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	began := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -57,6 +58,7 @@ func TestAChecksWaitIsKeptForTheSameBaseAndReArmedForAnother(t *testing.T) {
 // the checks stage, and a wait that began again then would reset the timeout
 // on every restart.
 func TestAChecksWaitSurvivesReopeningTheStore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
 	began := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -85,6 +87,7 @@ func TestAChecksWaitSurvivesReopeningTheStore(t *testing.T) {
 // Ending a wait is what makes the next one begin afresh, and ending one that
 // never began is not a failure.
 func TestEndingAChecksWaitLetsTheNextBeginAfresh(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	began := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -110,6 +113,7 @@ func TestEndingAChecksWaitLetsTheNextBeginAfresh(t *testing.T) {
 
 // A wait keyed by nothing, or armed against a base nobody read, is refused.
 func TestAChecksWaitRefusesAnEmptyRunOrBase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	if _, err := s.ArmChecksWait(ctx, "", "base-a", time.Now()); err == nil {

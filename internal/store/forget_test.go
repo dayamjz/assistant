@@ -9,6 +9,7 @@ import (
 // Forgetting a repository takes everything recorded against its runs with it,
 // so nothing is left pointing at a row that is gone.
 func TestForgettingARepositoryTakesEverythingRecordedAgainstItsRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -61,6 +62,7 @@ func TestForgettingARepositoryTakesEverythingRecordedAgainstItsRuns(t *testing.T
 // A run that has not finished is one a service may still be driving, and
 // removing it would have that service writing against rows that are gone.
 func TestForgettingARepositoryIsRefusedWhileARunHasNotFinished(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -80,6 +82,7 @@ func TestForgettingARepositoryIsRefusedWhileARunHasNotFinished(t *testing.T) {
 // A task with a life of its own must not be left pointing at a run that no
 // longer exists, and which of the two goes is not this accessor's call.
 func TestForgettingARepositoryIsRefusedWhileATaskNamesOneOfItsRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -104,6 +107,7 @@ func TestForgettingARepositoryIsRefusedWhileATaskNamesOneOfItsRuns(t *testing.T)
 // A repository that is not there has nothing left to remove, which is not an
 // error.
 func TestForgettingARepositoryThatIsNotThereIsNothingToDo(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	removed, err := s.ForgetRepository(ctx, "never-existed")
@@ -118,6 +122,7 @@ func TestForgettingARepositoryThatIsNotThereIsNothingToDo(t *testing.T) {
 // Fleet work is listed newest first, and a home with none says so rather than
 // failing.
 func TestTasksAreListedNewestFirst(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 

@@ -10,6 +10,7 @@ import (
 // is what names each hold. A move that is not into held, and a repeated
 // move to held that writes nothing, leave the count where it was.
 func TestAMoveIntoHeldCountsItself(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -43,6 +44,7 @@ func TestAMoveIntoHeldCountsItself(t *testing.T) {
 // a jump of more than one. The control is the update that does move into
 // held, which the trigger lets through.
 func TestTheSchemaCountsOnlyMovesIntoHeld(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -69,6 +71,7 @@ func TestTheSchemaCountsOnlyMovesIntoHeld(t *testing.T) {
 // reads back with no count recorded, its first move into held after it counts
 // one, and the trigger refuses again. The migration is found by name.
 func TestTheRunHeldMovesMigrationKeepsEarlierRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	var added migration

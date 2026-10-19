@@ -29,6 +29,7 @@ import (
 // answer behind the phrase that points at it (P13), and --usage alone reads
 // the default window.
 func TestRunsUsageReportsTheInvocationRecordThroughTheSurface(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P13)
 	h := newHome(t)
@@ -103,6 +104,7 @@ func TestRunsUsageReportsTheInvocationRecordThroughTheSurface(t *testing.T) {
 // something it is not. The control is that --usage with a window it can read
 // is answered.
 func TestRunsUsageRefusesWhatItCannotRead(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	subject := newSubject(t)
 	serve(t, h)

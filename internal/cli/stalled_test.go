@@ -44,6 +44,7 @@ import (
 // answer names is the one driven here, and it carries the run to its first
 // decision.
 func TestARunNothingIsAdvancingIsNotReportedAsOneInFlight(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P14)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -128,6 +129,7 @@ func TestARunNothingIsAdvancingIsNotReportedAsOneInFlight(t *testing.T) {
 // caller no longer holds, which is what the first assertion below establishes:
 // it fires after the caller's start has already returned.
 func TestARunWhoseCallerGaveUpIsCarriedOnRatherThanStranded(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P14)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)

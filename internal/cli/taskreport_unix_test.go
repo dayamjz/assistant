@@ -31,8 +31,8 @@ import (
 // registers holds, so an answer that dropped the report or a filing that
 // never arrived cannot pass as one that removed the credentials.
 func TestAWorkersReportIsStoredAndAnsweredWithoutItsCredentials(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
-	quietGit(t)
 	const (
 		urlSecret    = "hunter2-url-password"
 		bearerSecret = "s3cretBearerToken0123456789"

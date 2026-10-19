@@ -10,6 +10,7 @@ import (
 // second give returns the run with that instant unchanged, a listing and a
 // single read say the same, and a run that does not exist is ErrNotFound.
 func TestStandingConsentIsGivenOnceAndReadBackEverywhere(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -47,6 +48,7 @@ func TestStandingConsentIsGivenOnceAndReadBackEverywhere(t *testing.T) {
 // run whose decisions the program answered keeps saying so. The control is an
 // update that does not name the column, which is accepted.
 func TestStandingConsentCannotBeWithdrawnOrRevised(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
@@ -79,6 +81,7 @@ func TestStandingConsentCannotBeWithdrawnOrRevised(t *testing.T) {
 // consent, and the trigger refuses again. It is found by name, so the test
 // spells no version the shipped list may grow past.
 func TestTheStandingConsentMigrationKeepsEarlierRuns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	var added migration
@@ -125,6 +128,7 @@ func TestTheStandingConsentMigrationKeepsEarlierRuns(t *testing.T) {
 // record rather than a refusal. A closure missing a subject, a resolution or a
 // resolver is refused before anything is written.
 func TestRecordHoldResolutionRegistersAndResolvesTogether(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)

@@ -17,6 +17,7 @@ import (
 // and not the opening event, so a kill between the two writes cannot strand a
 // task with no disposition.
 func TestCreateTaskRecordsTheDispositionOrNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	seedRun(t, s) // repo-1
@@ -66,6 +67,7 @@ func TestCreateTaskRecordsTheDispositionOrNothing(t *testing.T) {
 // stands, and nothing is written. The control is the same creation anchored
 // to that row, which is accepted.
 func TestCreateTaskIsRefusedWhenTheBranchMoved(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
 	s := openStore(t)
@@ -122,6 +124,7 @@ func TestCreateTaskIsRefusedWhenTheBranchMoved(t *testing.T) {
 // because the anchor is decided in the transaction that inserts the row. Run
 // under the race detector.
 func TestTwoIntakesOnOneBranchCreateOneTask(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
 	s := openStore(t)
@@ -150,6 +153,7 @@ func TestTwoIntakesOnOneBranchCreateOneTask(t *testing.T) {
 // The identifier is checked by internal/home's one validator, so a task is
 // never recorded under a name its directory could not take.
 func TestCreateTaskRefusesAnIdentifierTheHomeWouldRefuse(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	for _, id := range []string{"", "task-1", "TASKAAAAAAAB", "short", "../aaaaaaaaa"} {
@@ -164,6 +168,7 @@ func TestCreateTaskRefusesAnIdentifierTheHomeWouldRefuse(t *testing.T) {
 
 // A blocker is a task that exists and is not the one being created.
 func TestCreateTaskRefusesABlockerItCannotRecord(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	base := Task{ID: "taskaaaaaaab", Shape: TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/task-1"}

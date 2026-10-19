@@ -23,6 +23,7 @@ import (
 	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 )
 
 // TestMain lets this binary act as the stand-in agent, which the service a
@@ -39,7 +40,42 @@ func TestMain(m *testing.M) {
 	standInManagerMain()
 	hookMain()
 	holdLockMain()
-	os.Exit(m.Run())
+	os.Exit(runQuietly(m))
+}
+
+// runQuietly runs the tests with git's automatic maintenance off for every
+// git this process and its children start, so no background gc outlives a
+// test's temporary directory (#119) or races a copy a sweep is asked to
+// clear. The product's own git runs under internal/vcs, which keeps
+// GIT_CONFIG_GLOBAL, so the file named here is the one every repository a
+// test or the service under it creates reads.
+//
+// It is set once for the process rather than per test with t.Setenv because
+// t.Setenv refuses a test that runs in parallel, and the setting is the same
+// for every test: a per-test file held nothing a test could tell apart. It is
+// internal/service's runQuietly on the same terms. The raw git helper here
+// still names an absent file of its own, so what a test builds by hand is
+// insulated from this one as it was from the machine's, and a test whose
+// subject is the global configuration still names its own with t.Setenv and
+// runs serially, before any parallel test resumes.
+func runQuietly(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "gitconfig")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "making the quiet git configuration:", err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	cfg := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(cfg, []byte("[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n"), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "writing the quiet git configuration:", err)
+		return 1
+	}
+	if err := os.Setenv("GIT_CONFIG_GLOBAL", cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "naming the quiet git configuration:", err)
+		return 1
+	}
+	defer storetest.Remove()
+	return m.Run()
 }
 
 // hookMain lets this binary act as the command a gate's hooks invoke.
@@ -322,6 +358,10 @@ func serveOptions(t *testing.T, o service.Options) func() {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
 	o.Build = build
+	// A home nothing has opened yet gets this build's database copied in
+	// rather than created, on internal/store/storetest's terms; a home that
+	// already holds one is left as it is.
+	storetest.Seed(t, o.Home.Database())
 	running, err := service.Open(t.Context(), o)
 	if err != nil {
 		t.Fatalf("opening the service: %v", err)
@@ -386,6 +426,7 @@ func (unrunnableFactory) New(context.Context, []string) (agents.Runner, error) {
 // record where only the service would otherwise write one.
 func openStore(t *testing.T, h *home.Home) *store.Store {
 	t.Helper()
+	storetest.Seed(t, h.Database())
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening the store: %v", err)

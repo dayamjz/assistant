@@ -203,6 +203,7 @@ func decodeHostStop(t *testing.T, got invocation) machine.HostStop {
 // message the host would relay is held to the vocabulary rule here, where it
 // reaches the coordinator.
 func TestHostStopBlocksTheTurnUnlessALiveSupervisorHoldsTheHome(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P10)
 	vocabtest.Control(t)
 	now := time.Now()
@@ -297,6 +298,7 @@ func TestHostStopBlocksTheTurnUnlessALiveSupervisorHoldsTheHome(t *testing.T) {
 // judged from the environment it was given, so nothing stored carries one
 // invocation's answer into the next.
 func TestHostStopAllowsAReEnteredTurnAndNeverAnUnsignalledOne(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P10)
 	vocabtest.Control(t)
 	h := createdHome(t)

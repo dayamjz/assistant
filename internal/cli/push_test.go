@@ -41,6 +41,7 @@ import (
 // copy's head: an implementation that read the head would start a run for
 // main, which is a run about a commit nobody pushed.
 func TestAPushToTheGateStartsARunForThePushedCommit(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P1)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -103,6 +104,7 @@ func TestAPushToTheGateStartsARunForThePushedCommit(t *testing.T) {
 // displaced run's execution is signalled to cancel and not awaited, so nothing
 // here observes it stopping and nothing here could.
 func TestASecondPushSupersedesTheRunTheFirstStarted(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -145,6 +147,7 @@ func TestASecondPushSupersedesTheRunTheFirstStarted(t *testing.T) {
 // are reported. A push that quietly started nothing would be a push somebody
 // waits on a run for.
 func TestAPushThatIsNotAChangeToValidateStartsNoRunAndSaysSo(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -189,6 +192,7 @@ func TestAPushThatIsNotAChangeToValidateStartsNoRunAndSaysSo(t *testing.T) {
 // a finished run could not tell a notification that handed off from one that
 // waited, because both end with the run having advanced.
 func TestAPushReturnsWhileTheRunItStartedIsStillInsideAStage(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -244,6 +248,7 @@ func TestAPushReturnsWhileTheRunItStartedIsStillInsideAStage(t *testing.T) {
 // front door. What is checked is both halves: the push fails, and the gate
 // holds no reference afterwards.
 func TestAPushIsRefusedAndChangesNothingWhenNothingCanValidateIt(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	subject := newSubject(t)
 	// No serve: the home has a gate and no service, which is what a person
@@ -281,6 +286,7 @@ func TestAPushIsRefusedAndChangesNothingWhenNothingCanValidateIt(t *testing.T) {
 // does with the objects a push transferred before the hook ran; that is git's
 // business, this does not look, and no claim here rests on it.
 func TestARefusedPushLeavesEveryReferenceInTheGateAsItWas(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -343,6 +349,7 @@ func TestARefusedPushLeavesEveryReferenceInTheGateAsItWas(t *testing.T) {
 // than inheriting it. The references are read from the gate repository with
 // git, before and after, rather than stated here.
 func TestAPushIsRefusedWhenNoAgentCanRunAndLeavesTheGateAsItWas(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -412,6 +419,7 @@ func TestAPushIsRefusedWhenNoAgentCanRunAndLeavesTheGateAsItWas(t *testing.T) {
 // reason. Without it, an admission that had stopped asking for a driver
 // entirely would satisfy every check above.
 func TestAPushThatWouldStartNoRunIsAdmittedWithNoAgent(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

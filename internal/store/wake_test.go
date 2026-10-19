@@ -51,6 +51,7 @@ func surface(t *testing.T, s *Store, task, digest string, repetition int64) Wake
 // control is the counterfeit marker without the epoch, whose third surface
 // reads as already queued.
 func TestAScreenReturningToAnEarlierValueIsANewSurface(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID
@@ -94,6 +95,7 @@ func TestAScreenReturningToAnEarlierValueIsANewSurface(t *testing.T) {
 // its marker, so two escalations are two rows while the screen and the epoch
 // stay the same.
 func TestTwoEscalationsOfOneStallAreTwoRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID
@@ -116,6 +118,7 @@ func TestTwoEscalationsOfOneStallAreTwoRows(t *testing.T) {
 // and the markers are advanced all the same. The restart is simulated by
 // closing and reopening the store between the two.
 func TestAReplayedDetectionIsOneWake(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := t.TempDir() + "/state.db"
 	s := openStoreAt(t, path)
@@ -146,6 +149,7 @@ func TestAReplayedDetectionIsOneWake(t *testing.T) {
 // advance for a new surface, which is refused with ErrWakeHandled rather
 // than swallowed, and the refusal rolls the markers back with it.
 func TestAWakeConflictingWithAHandledRowIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID
@@ -168,6 +172,7 @@ func TestAWakeConflictingWithAHandledRowIsRefused(t *testing.T) {
 // sides with a planted fault: with the wake insert refused the markers do
 // not move, and with the marker write refused no wake lands.
 func TestAWakeAndItsMarkersAreOneWrite(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for name, fault := range map[string]string{
 		"the wake cannot be written": `CREATE TRIGGER fault BEFORE INSERT ON wake
@@ -202,6 +207,7 @@ func TestAWakeAndItsMarkersAreOneWrite(t *testing.T) {
 // the same rows in the same order, oldest first, bounded by the limit, and
 // neither acknowledges anything.
 func TestReadingTheQueueReturnsTheSameRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID
@@ -250,6 +256,7 @@ func handout(under string, held ...string) WakeHandout {
 // bound, and one under no attachment are refused before anything is
 // written.
 func TestDrainingHandsOutAndOnlyAnAcknowledgementCloses(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID
@@ -327,6 +334,7 @@ func TestDrainingHandsOutAndOnlyAnAcknowledgementCloses(t *testing.T) {
 // is the row the consumer acknowledged before the loss, which no drain
 // returns again.
 func TestALossAfterADrainRedeliversAndAnAcknowledgedRowIsNot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := t.TempDir() + "/state.db"
 	s := openStoreAt(t, path)
@@ -358,6 +366,7 @@ func TestALossAfterADrainRedeliversAndAnAcknowledgedRowIsNot(t *testing.T) {
 // count exactly one more. The control is the drain's own write, which the
 // trigger lets through.
 func TestTheSchemaKeepsAHandoutToAQueuedRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID
@@ -394,6 +403,7 @@ func TestTheSchemaKeepsAHandoutToAQueuedRow(t *testing.T) {
 // still queued then reads back with no handout, which is true of it, and the
 // trigger refuses again. The migration is found by name.
 func TestTheWakeHandoutMigrationKeepsEarlierRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	var added migration
@@ -438,6 +448,7 @@ func TestTheWakeHandoutMigrationKeepsEarlierRows(t *testing.T) {
 // naming it and writes nothing, and so does an identifier already
 // acknowledged. Nobody acknowledging is refused before anything is read.
 func TestAcknowledgingIsABatchThatNamesWhoAndRefusesWhatItCannot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID
@@ -483,6 +494,7 @@ func TestAcknowledgingIsABatchThatNamesWhoAndRefusesWhatItCannot(t *testing.T) {
 // a queued wake counts, an acknowledged wake does not, and a task with none
 // has no entry.
 func TestUnacknowledgedWakesCountsQueuedRowsPerTask(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	one := seedTask(t, s, "taskaaaaaaab").ID
@@ -507,6 +519,7 @@ func TestUnacknowledgedWakesCountsQueuedRowsPerTask(t *testing.T) {
 // acknowledgement is written once, and no row is deleted, all at the
 // database rather than only at the accessor.
 func TestAWakeRowIsAppendedAndAcknowledgedOnce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID
@@ -536,6 +549,7 @@ func TestAWakeRowIsAppendedAndAcknowledgedOnce(t *testing.T) {
 // package is not a second owner of it. A task that does not exist is
 // ErrNotFound.
 func TestAWakeIsRecordedWithoutTheStoreReadingItsKind(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID
@@ -568,6 +582,7 @@ func TestAWakeIsRecordedWithoutTheStoreReadingItsKind(t *testing.T) {
 // across an unchanged digest and a pass that only moves other columns, and
 // counts a capture that failed as a change too.
 func TestMarkersAreRewrittenInPlaceWithTheEpochDerived(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID

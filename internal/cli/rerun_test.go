@@ -39,6 +39,7 @@ import (
 // the same remedy and not sent to sync, because a run that pushed nothing has
 // no work of its own for sync to bring in.
 func TestARerunIsRefusedWhenTheCheckoutMovedPastTheRecordedHead(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P1)
 	principles.Cite(t, principles.P13)
@@ -178,6 +179,7 @@ func checkoutState(t *testing.T, dir string) string {
 // brings the pushed commit into the checkout, and the rerun that follows
 // proceeds and validates that commit rather than the one first submitted.
 func TestARerunValidatesWhatTheRunPushedAndBehindItNamesSync(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P1)
 	principles.Cite(t, principles.P13)

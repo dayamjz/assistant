@@ -44,6 +44,7 @@ func historyOf(t *testing.T, s *Store, id string) []TaskEvent {
 // prior values after each refusal and to their new values after the one
 // write.
 func TestTheShapeTransitionWritesShapeRepositoryAndBranchTogether(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P14)
 	ctx := context.Background()
 	s := openStore(t)
@@ -151,6 +152,7 @@ func TestTheShapeTransitionWritesShapeRepositoryAndBranchTogether(t *testing.T) 
 // row in their own transactions on the one writer connection, so in either
 // order the second refuses.
 func TestTheShapeTransitionAndTheCleanupClaimExcludeEachOther(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 

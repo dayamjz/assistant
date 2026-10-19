@@ -61,6 +61,7 @@ func turnEnd(t *testing.T, active any) string {
 // nothing on standard input - the bridge missing - answers the field case
 // blocked and fails here.
 func TestHostStopReadsTheHostsReentryFieldOnStandardInput(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P10)
 	vocabtest.Control(t)
 	h := unwatchedHome(t)
@@ -132,6 +133,7 @@ func TestHostStopReadsTheHostsReentryFieldOnStandardInput(t *testing.T) {
 // beside it the turn is allowed, by the variable, and the input is still
 // reported, which shows the report is about the input and not the verdict.
 func TestHostStopReadsNoSignalFromInputItCannotRead(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P10)
 	vocabtest.Control(t)
 	h := unwatchedHome(t)

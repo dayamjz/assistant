@@ -202,6 +202,7 @@ func TestAUsageFailureIsStructuredWhenStructuredOutputWasAskedFor(t *testing.T) 
 // The whole point of the surface: a run started, reported on, answered, and
 // carried on, each through a separate invocation of the command line.
 func TestARunIsStartedReportedAndAnsweredThroughSeparateInvocations(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -269,6 +270,7 @@ func TestARunIsStartedReportedAndAnsweredThroughSeparateInvocations(t *testing.T
 // A person reading the terminal is shown the decision and the findings behind
 // it in full, and told how to answer.
 func TestTheHumanRenderingShowsTheDecisionAndHowToAnswerIt(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -513,6 +515,7 @@ func TestDoctorReportsTheCodeHostAndDoesNotBlockOnIt(t *testing.T) {
 // one the phrase-table row and nothing else, and the exit code says the
 // person was stopped.
 func TestSyncAsksTheServiceAndReportsWhatCustodyFound(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -552,6 +555,7 @@ func TestSyncAsksTheServiceAndReportsWhatCustodyFound(t *testing.T) {
 // A command that can destroy work does nothing on its first invocation and
 // says what it would do.
 func TestEjectPrintsWhatItWouldRemoveBeforeRemovingAnything(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -644,6 +648,7 @@ func agentPATH(t *testing.T, names ...string) string {
 // one-shot invocation, and returning a stage's result, which PRD section 9
 // names no command for and which no stage in this build would use.
 func TestARunCanBeReadAndEndedThroughTheSurface(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -756,6 +761,7 @@ func TestHelpIsAnsweredRatherThanRefused(t *testing.T) {
 // before the gate is touched, so an eject that is refused leaves the gate and
 // the assistant remote exactly as they were.
 func TestEjectRefusedByAnActiveRunRemovesNothing(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -816,6 +822,7 @@ func TestEjectRefusedByAnActiveRunRemovesNothing(t *testing.T) {
 // end nothing recorded, is refused before the gate is touched, and the same
 // command completes once that record is cleared.
 func TestEjectRemovesEveryRecordOfAFinishedRunOrRefusesFirst(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -980,6 +987,7 @@ func TestAUsageFailureIsStructuredWhicheverSideOfTheVerbJSONWasAskedOn(t *testin
 // and a caller who says otherwise is taken at their word rather than having it
 // silently overridden.
 func TestTheIntentSuppliedFlagIsHonouredWhenTheCallerWritesIt(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -1120,6 +1128,7 @@ func TestVersionAndHelpAnswerAsDocumentsUnderJSON(t *testing.T) {
 // service that is not running inverts the one fact the command was asked for,
 // and it is the verb whose job is to say what is wrong.
 func TestStatusReportsARefusalRatherThanAServiceThatIsNotRunning(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -1225,6 +1234,7 @@ func TestAnsweringOrEndingARunRefusesTheFlagsThatStartOne(t *testing.T) {
 // run it answered with, in both renderings. Explicit input is never taken and
 // thrown away in silence.
 func TestAttachingSaysWhichStartingInputsWereNotApplied(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -1312,6 +1322,7 @@ func TestAnInitThatCannotCompleteCreatesNothing(t *testing.T) {
 // and the repository record the service resolves, so a half-state with one and
 // not the other is reported as a run that cannot start, however it was reached.
 func TestDoctorSaysARunCannotStartWithNoRepositoryRecord(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -1358,6 +1369,7 @@ func TestDoctorSaysARunCannotStartWithNoRepositoryRecord(t *testing.T) {
 // the checkpoint does, so a terminated run carries no decision on either
 // surface and neither invites an answer the surface would refuse.
 func TestARunThatHasEndedIsNotOfferedAsAnswerable(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -1588,6 +1600,7 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 // standing on a feature branch when init runs, which is the case a fallback to
 // the checked-out branch would answer wrongly.
 func TestInitRecordsOriginsDefaultBranchFromAFeatureBranch(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P7)
 	h := newHome(t)
 	subject := newSubject(t)

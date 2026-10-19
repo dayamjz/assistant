@@ -9,6 +9,7 @@ import (
 // back as a known zero, and a failed call reads back with no probability at
 // all, so a call that failed never reads as the model answering certain-no.
 func TestDecisionAnswersKeepAZeroAndAFailureApart(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	zero := DecisionAnswer{
@@ -50,6 +51,7 @@ func TestDecisionAnswersKeepAZeroAndAFailureApart(t *testing.T) {
 // A row that is both an answer and a failure, or neither, or that names
 // nothing it is attributed to, is refused rather than stored.
 func TestADecisionAnswerThatSaysTwoThingsOrNothingIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
 	base := DecisionAnswer{Run: "r", Stage: "review", Check: "trace-reason", Path: "a.go", Model: "jev-1.13.0", Cutoff: 0.8}

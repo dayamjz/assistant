@@ -25,6 +25,7 @@ import (
 // with the identifier beside it. A run written as the word after the flag is
 // refused by name rather than read as an argument nobody takes.
 func TestARunIsEndedByItsIdentifierFromAnywhere(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P13)
 	h := newHome(t)
@@ -113,6 +114,7 @@ func TestARunIsEndedByItsIdentifierFromAnywhere(t *testing.T) {
 // replaced intent changes nothing else. An intent that is only whitespace is
 // refused as incorrect usage and records no run.
 func TestARerunCanReplaceTheRecordedIntent(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
