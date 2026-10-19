@@ -106,6 +106,37 @@ func TestTheModelCatalogMatchesTheRoleTable(t *testing.T) {
 	}
 }
 
+// A worker role on Claude Fable 5.1 is one cell of the role table: the YAML
+// document an operator writes parses, resolves, and is the role a task naming
+// it runs under. A Fable version the table does not list is refused at parse
+// time, naming the role, so the accepted case is not the parser accepting any
+// version under the type.
+func TestAWorkerRoleOnFableParsesAndAnUnlistedVersionIsRefused(t *testing.T) {
+	doc := "roles:\n  worker-hard:\n    agent: claude\n    provider: anthropic\n    type: fable\n    version: \"5.1\"\n    effort: high\n"
+	l, err := ParseYAML(OriginGlobal, []byte(doc))
+	if err != nil {
+		t.Fatalf("ParseYAML: %v", err)
+	}
+	res, err := Resolve(l, Absent(OriginTrusted))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	got, err := res.Config.Roles.ForTask("worker-hard")
+	want := Role{Agent: "claude", Provider: "anthropic", Type: "fable", Version: "5.1", Effort: "high"}
+	if err != nil || !got.equal(want) {
+		t.Fatalf("worker-hard resolved to %+v (%v), want %+v", got, err, want)
+	}
+
+	unlisted := "roles:\n  worker-hard:\n    agent: claude\n    provider: anthropic\n    type: fable\n    version: \"9\"\n"
+	_, err = ParseYAML(OriginGlobal, []byte(unlisted))
+	if err == nil {
+		t.Fatal("ParseYAML accepted anthropic fable 9")
+	}
+	if !strings.Contains(err.Error(), `"worker-hard"`) || !strings.Contains(err.Error(), "fable 9") {
+		t.Fatalf("the refusal %q does not name the role and the cell", err)
+	}
+}
+
 func TestTheFixerDefaultsToCursor(t *testing.T) {
 	absent := resolve(t, Absent(OriginGlobal), Absent(OriginTrusted)).Config.Roles
 	if got := absent[RoleFix]; got != (Role{Agent: defaultFixAgent}) {
