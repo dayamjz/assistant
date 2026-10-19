@@ -24,7 +24,12 @@ failure, `2` incorrect usage.
   a remote named `assistant`. Run it once per working copy.
 - The service must be up: `assistant service start`.
 - `assistant doctor` says whether a run can start at all and what stops one.
-  Act on what it reports before starting.
+  Act on what it reports before starting. After `init` it also names the
+  change's next step: a feature branch, a commit, or the exact send line.
+  `assistant --json doctor` carries it under `change` (`step`, `branch`,
+  `untracked`, `unstaged`, `staged`, `unmerged`, `command`). Doctor writes
+  nothing; make each step yourself, and only with the user's consent where
+  it commits or sends their work.
 
 ## Start a run
 

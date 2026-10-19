@@ -44,6 +44,39 @@ is offered for `commands.document`: no common build file declares a command
 that updates prose, so that stage keeps holding until you configure one or
 answer it.
 
+### A first run, step by step
+
+Once `init` has run, `assistant doctor` also reads where the checkout's change
+stands and prints its next step after the verdict, one step at a time, in the
+order a first run meets them. Do what it says and run it again:
+
+1. On the default branch, or on no branch, it names `git switch -c` with a
+   name of your choosing. Uncommitted work comes along to the new branch.
+2. With work no commit records, it prints a row for each kind present - an
+   unresolved conflict, untracked files, unstaged edits, staged edits - and
+   names `git add` and `git commit` as each one needs. A run validates only
+   what is committed.
+3. On a clean branch with nothing its default branch lacks, it says there is
+   nothing to send yet. It compares against origin's copy of the default
+   branch as this checkout last fetched it, or the local branch of that name
+   when there is no such copy, and fetches nothing.
+4. On a clean branch with commits the gate does not hold, it prints the exact
+   command, `git push assistant BRANCH`, with the branch name quoted for a
+   shell when it needs to be, and says to follow the run with
+   `assistant watch`.
+5. When the gate already holds the branch's commit, it says so and names
+   `assistant watch` and `assistant rerun`. When the branch no longer holds
+   what the gate holds for it, as after an amend, it says sending replaces
+   that and prints the command with `--force-with-lease`; whether to run it is
+   your decision.
+
+The gate's side is read from the gate repository itself, never from this
+checkout's `assistant/BRANCH` tracking reference. Before `init` none of this
+is read, and the gate row's "Run assistant init here." comes first. `--json
+doctor` carries the same facts under `change`: the step, the branch and
+default branch, the four indicators, and the command. Doctor writes nothing to
+the checkout or the gate; every step is a command you run (P1).
+
 The gate's admission hook decides whether the push may proceed, and its
 notification hook starts a run for that branch and commit. A push that deletes
 a branch, or carries anything that is not a branch, starts nothing. An ordinary

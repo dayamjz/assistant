@@ -1012,6 +1012,12 @@ type Doctor struct {
 	CanStartRun bool `json:"can_start_run"`
 	// Detail says what stops one, and is empty when nothing does.
 	Detail string `json:"detail,omitempty"`
+	// Change is where this checkout's change stands on the way to a run and
+	// the next step it needs. It is read only once the checkout is set up
+	// for validation, so it is absent before assistant init has run there,
+	// where the gate row's own step comes first. It does not decide
+	// CanStartRun: a run can start whatever the change's step is.
+	Change *Change `json:"change,omitempty"`
 }
 
 // Plan is what assistant sync answers: PRD section 11's classification of

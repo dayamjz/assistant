@@ -365,6 +365,12 @@ func syncBranch(ctx context.Context, in *invocation) (any, error) {
 // provider command line and the stages that talk to the code host refuse
 // there, so the row informs before a stage does and stops nothing. The commit
 // identity row is the same kind again: commitIdentity says why.
+//
+// Once the gate check passes it also reads where the checkout's change stands
+// on the way to a run, which changeStanding owns, so a first run is walked by
+// the same loop as every other answer here. That read decides nothing about
+// whether a run can start, and before init it is not made at all, so the gate
+// row's own step is the one a person meets first.
 func doctor(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags("doctor", func(*flag.FlagSet) {}); err != nil {
 		return nil, err
@@ -393,6 +399,7 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		add(gated)
 		if gated.OK {
 			add(commitIdentity(ctx, in.home.Root(), records, working))
+			report.Change = changeStanding(ctx, in.home.Root(), records, working)
 		}
 	}
 

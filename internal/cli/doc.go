@@ -261,6 +261,23 @@
 // run could start are all things a person asks precisely when the service is
 // not running, and a doctor that needs the thing it is diagnosing is no doctor.
 //
+// # Doctor walks a first run
+//
+// Doctor's contract is that a person does what its first line says and runs
+// it again, and a first run from uncommitted changes to a gated send is that
+// same loop, so it lands there and adds no verb. Once the gate check passes,
+// firstrun.go's changeStanding reads where the checkout's change stands and
+// the report carries it as machine.Change: a branch of its own, a commit, the
+// exact send line, then watch, one step per answer, with every row in
+// internal/machine's change.go and the branch names and command printed
+// beside them as machine text. It writes nothing to the checkout or the gate,
+// so the only move toward a run is one the person makes (P1), and it decides
+// nothing about whether a run can start. Before init it is not read, so the
+// gate row's step comes first. firstrun.go states what each read does not
+// establish: the default branch is compared as this checkout last fetched it,
+// and the gate's branch is read when doctor runs and not when the person
+// sends.
+//
 // # Exit codes and where output goes
 //
 // Three codes, per PRD section 9, and internal/machine owns them: success and
