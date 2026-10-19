@@ -52,11 +52,12 @@ a change without a person. Each criterion is checkable:
    `no-mistakes` skill already installed in `~/.claude/skills`. Q1 has
    nothing to ablate without it.
 
-`IMPLEMENTATION_COMPLETE.md` (2026-09-09) calls the build fully operational
-and lists five stages as placeholders. That is stale: the `written` table in
-`internal/stages/stages.go` now has a body for all nine stages. Neither
-document is evidence for criteria 1-4, so check them against the journey
-harness when this plan is picked up.
+A root report of 2026-09-09, `IMPLEMENTATION_COMPLETE.md` (commit `5037cd7`,
+since removed under #323), called the build fully operational and listed five
+stages as placeholders. That was stale: the `written` table in
+`internal/stages/stages.go` now has a body for all nine stages. It was never
+evidence for criteria 1-4, so check them against the journey harness when
+this plan is picked up.
 
 ## 3. Design
 
