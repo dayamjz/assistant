@@ -241,6 +241,11 @@ func fixtures(t *testing.T) map[string]any {
 				{Name: machine.CheckStages, Detail: "3 of 9 stages have an implementation (intent, rebase, review); the rest hold for a decision"},
 			},
 			Detail: "a run cannot start: service",
+			// A branch whose name is a stage's word, sent by a command
+			// line whose verb is another: both are machine text the row
+			// must leave to the line beside it.
+			Change: &machine.Change{Step: machine.ChangeUnsent, Branch: "review", DefaultBranch: "main",
+				Command: "git push assistant review"},
 		},
 		"lifecycle": machine.Lifecycle{
 			Active: []store.Run{active},
@@ -407,6 +412,9 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 	// label, and only the lines left once they are taken out are held to the
 	// rule, so the exemption cannot swallow the row itself.
 	verbatim := map[string]func(any) []string{
+		"doctor": func(v any) []string {
+			return []string{changeCommandLabel + " " + v.(machine.Doctor).Change.Command}
+		},
 		"host install": func(v any) []string {
 			a := v.(machine.HostInstall)
 			return []string{hostInstallFileLabel + " " + a.Settings, hostInstallLineLabel + " " + a.Line, hostInstallConflictLabel + " " + a.Conflict}

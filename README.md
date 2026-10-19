@@ -309,8 +309,16 @@ assistant status               # repository, gate, service, run, branch
 assistant sync                 # how this branch stands against what the pipeline holds, and the plan
 assistant sync --confirm       # carry that plan out
 assistant --json status        # the same answer as one structured document
-assistant doctor               # can a run start at all, and what stops one
+assistant doctor               # can a run start at all, what stops one, and your change's next step
 ```
+
+For a first run, `assistant doctor` is the guide: after `assistant init` it
+also reads where the checkout's change stands and names the one next step,
+in order - a branch of its own when you are on the default branch, a commit
+naming what is untracked, unstaged or staged, then the exact
+`git push assistant BRANCH` line that starts the run, then `assistant
+watch`. Do what it says and run it again. It reads and never writes: every
+step is a command you run.
 
 A working copy whose gate was created before a push learned to wait for a
 run's copy needs `assistant init` once more: that is what points its

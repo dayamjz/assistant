@@ -50,3 +50,14 @@ func WorkerRoute(executable, root string) string { return workerRoute(executable
 // test's stand-in service manager starts a service the way a manager would
 // rather than as a child of the test's own process group.
 func Detach(cmd *exec.Cmd) { detach(cmd) }
+
+// The labels doctor prints its change's machine text after, so a test outside
+// the package can tell those lines from the rows it holds to P13.
+const (
+	ChangeCommandLabel       = changeCommandLabel
+	ChangeDefaultBranchLabel = changeDefaultBranchLabel
+)
+
+// ShellWords splits a printed command line on a POSIX shell's quoting rules,
+// so a test can run a line doctor printed exactly as a person would copy it.
+var ShellWords = shellWords

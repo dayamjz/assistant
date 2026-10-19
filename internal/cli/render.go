@@ -730,15 +730,19 @@ func waitingLine(item machine.Waiting) string {
 }
 
 // readOutDoctor prints a row per check and then the verdict, all through
-// the phrase table. What each check found - a path, a socket, an error, an
-// agent's name - is the structured rendering's, and a row that needs it to be
-// acted on points there.
+// the phrase table, and after the verdict where the change stands when the
+// report carries it, through readOutChange. What each check found - a path,
+// a socket, an error, an agent's name - is the structured rendering's, and a
+// row that needs it to be acted on points there.
 func readOutDoctor(w io.Writer, report machine.Doctor) {
 	for _, check := range report.Checks {
 		writeln(w, machine.CheckPhrase(check))
 	}
 	writeln(w)
 	writeln(w, machine.DoctorPhrase(report))
+	if report.Change != nil {
+		readOutChange(w, *report.Change)
+	}
 }
 
 // readOutLifecycle prints what became of a request to stop or restart the

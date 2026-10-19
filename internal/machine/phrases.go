@@ -1326,9 +1326,14 @@ var (
 )
 
 // DoctorPhrase is the doctor's verdict as a person reads it, read off the
-// decision the report carries rather than inferred from its checks.
+// decision the report carries rather than inferred from its checks. When a
+// run can start and the report carries where the change stands, the verdict
+// points at the change's row rather than saying there is nothing to do.
 func DoctorPhrase(d Doctor) Phrase {
 	if d.CanStartRun {
+		if d.Change != nil {
+			return phraseRunCanStartChange
+		}
 		return phraseRunCanStart
 	}
 	return phraseRunCannotStart
@@ -1598,7 +1603,9 @@ var PhraseNoReading = Phrase{
 // at a run's evidence
 // and the three notices beside it, and the catch-up read's: a heading and an
 // empty row per part, a row per kind of landed record, the row for what a
-// read left out, and the two rows for a mark, and custody's: a row per class
+// read left out, and the two rows for a mark, the rows for where a change
+// stands on the way to a run, one per step and one per kind of uncommitted
+// work, with the verdict that points at them, and custody's: a row per class
 // planned and carried out and as status prints it, a row per refusal, and a
 // row per step, and the coordinator client's: a created task begun and one
 // recorded behind other work, a promotion, a relaunch, a drain with and
@@ -1671,6 +1678,7 @@ func TablePhrases() []Phrase {
 	out = append(out, forkRows()...)
 	out = append(out, managedRows()...)
 	out = append(out, commandsRows()...)
+	out = append(out, changeRows()...)
 	out = append(out, custodyRows()...)
 	return append(out, coordinatorRows()...)
 }

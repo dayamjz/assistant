@@ -3,7 +3,6 @@ package vcs
 import (
 	"context"
 	"errors"
-	"strings"
 )
 
 // Inventory is what a working copy holds that could be work: every local
@@ -106,38 +105,13 @@ func (r *Repository) Inventory(ctx context.Context) (Inventory, error) {
 }
 
 // treeState reports whether a tracked file differs from HEAD and whether an
-// untracked file exists. --no-optional-locks is a git-level option, placed
-// before the subcommand, and it is what keeps this read from taking the index
-// lock a worker's own git may hold.
+// untracked file exists, through the one status read Changes makes, so the
+// inventory and Changes never disagree about a tree. That read is what keeps
+// this one from taking the index lock a worker's own git may hold.
 func (r *Repository) treeState(ctx context.Context) (dirty, untracked bool, err error) {
-	out, err := r.run(ctx, "status", "--no-optional-locks", "status", "--porcelain=v2", "-z",
-		"--untracked-files=all", "--ignored=no", "--no-renames")
+	c, err := r.changes(ctx)
 	if err != nil {
 		return false, false, err
 	}
-	fields := strings.Split(string(out), "\x00")
-	for i := 0; i < len(fields); i++ {
-		entry := fields[i]
-		if entry == "" {
-			continue
-		}
-		switch entry[0] {
-		case '1', 'u':
-			dirty = true
-		case '2':
-			// A rename entry carries its original path in the next field.
-			// Renames are turned off above, so none is expected, and one
-			// that arrives anyway is read correctly rather than as a path.
-			dirty = true
-			i++
-		case '?':
-			untracked = true
-		case '!':
-			// Ignored entries are not asked for; one that arrives changes
-			// nothing, because an ignored file is not an indicator here.
-		default:
-			return false, false, &outputError{op: "status", detail: "unrecognized entry " + entry}
-		}
-	}
-	return dirty, untracked, nil
+	return c.Dirty(), c.Untracked, nil
 }
