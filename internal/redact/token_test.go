@@ -50,6 +50,32 @@ func bareTokens() []bareToken {
 	}
 }
 
+// A prefix counts at a word boundary when the byte before it is not part of
+// that row's character class, so an underscore before ghp_ is a boundary but
+// an alphanumeric byte is not, and for github_pat_ an underscore before the
+// prefix is inside a longer token while a hyphen is a boundary.
+func TestABareTokenPrefixRespectsItsRowBoundary(t *testing.T) {
+	t.Parallel()
+	ghp := synthetic("ghp_", "aB3dE6gH9k", 40)
+	r := redact.New()
+	wantGH := "failed_ghp_" + redact.Marker
+	if got := r.Redact("failed_" + ghp); got != wantGH {
+		t.Fatalf("Redact(%q) = %q, want %q", "failed_"+ghp, got, wantGH)
+	}
+	embedded := "x" + ghp
+	if got := r.Redact(embedded); got != embedded {
+		t.Fatalf("Redact(%q) = %q, want it unchanged", embedded, got)
+	}
+	pat := synthetic("github_pat_", "11AB_cd34E", 40)
+	if got := r.Redact("prefix_" + pat); got != "prefix_"+pat {
+		t.Fatalf("Redact(%q) = %q, want underscore-glued prefix left alone", "prefix_"+pat, got)
+	}
+	wantPAT := "failed-github_pat_" + redact.Marker
+	if got := r.Redact("failed-" + pat); got != wantPAT {
+		t.Fatalf("Redact(%q) = %q, want %q", "failed-"+pat, got, wantPAT)
+	}
+}
+
 // A bare value of each documented shape is cut where it stands: the prefix
 // and the text around it stay and the rest of the value becomes the marker.
 // The near-miss one character short of the row's floor is the control that

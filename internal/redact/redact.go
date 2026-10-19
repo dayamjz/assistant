@@ -73,10 +73,13 @@
 // bearer and bare token shapes wherever they appear in that text, and the
 // residual gap is every other shape.
 //
-// It does not parse. Text arriving here is an error message, a command line,
-// or a log line, and a URL inside one is surrounded by prose that no URL
-// parser accepts, so the scan finds URL-shaped runs and leaves everything else
-// exactly as it stands.
+// It does not parse the whole string into a structure. Text arriving here is
+// an error message, a command line, or a log line, and a URL inside one is
+// surrounded by prose that no URL parser accepts, so credentials in URLs are
+// found by scanning for URL-shaped runs rather than parsing. Bare token values
+// are found the same way, by prefix and character class over the raw text, not
+// by parsing the surrounding line. Bytes that match none of those scans are
+// left as written.
 //
 // It does not report what it removed. A caller that needs the credentialed URL
 // recovers it from the gate, per PRD section 8; nothing here keeps a copy.

@@ -138,7 +138,7 @@ func (t tokenShape) redact(s string) string {
 		for end > start && rest[end-1] == '.' {
 			end--
 		}
-		if (i > 0 && alnumDash.holds(rest[i-1])) || end-i < t.minLength {
+		if (i > 0 && t.class.holds(rest[i-1])) || end-i < t.minLength {
 			out.WriteString(rest[:start])
 			rest = rest[start:]
 			continue
