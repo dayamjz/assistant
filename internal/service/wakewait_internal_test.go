@@ -33,7 +33,12 @@ func TestAnArmedWaitIsWokenByTheLoopsAppendAndNotByItsRecheck(t *testing.T) {
 	task := plantRunning(t, records, "armedwaitaaa", "pane-armed").ID
 	terminals := newScriptedTerminals()
 	terminals.live("pane-armed", "working\n")
-	l := openLoopHooked(t, h, records, terminals, nil, nil, func(hooks *supervisionHooks) { hooks.wakeRecheck = time.Hour })
+	l := openLoopHooked(t, h, records, terminals, nil, nil, func(hooks *supervisionHooks) {
+		// Timed: the pass that reads the terminal dead is one the loop makes
+		// on its own, which is the append whose bell this test is about.
+		hooks.untimed = false
+		hooks.wakeRecheck = time.Hour
+	})
 	served := make(chan error, 1)
 	go func() { served <- l.service.Serve(context.Background()) }()
 	defer func() {

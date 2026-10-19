@@ -36,7 +36,7 @@ func TestALandedOrCompleteTaskWithADeadTerminalRaisesNoTerminalGone(t *testing.T
 	l := openLoop(t, h, records, terminals, nil)
 	defer func() { _ = l.service.Close() }()
 
-	passes := []passReport{l.nextPass(t), l.freshPass(t), l.freshPass(t)}
+	passes := []passReport{l.nextPass(t), l.pass(t), l.pass(t)}
 	if got := detectionsOf(passes[0], control, supervisor.KindTerminalGone); len(got) != 1 ||
 		!strings.HasPrefix(got[0].Marker, "terminal-gone:dead:pane-running:") || got[0].Disposition != store.WakeAppended {
 		t.Fatalf("the running control's terminal-gone detections = %+v, want one appended as dead", got)
