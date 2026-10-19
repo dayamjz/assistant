@@ -3,11 +3,14 @@ package agents
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 )
 
-// Stable reason codes Selection.Reason carries, and the skip reason a
-// runnable adapter that does not cover Need records in Resolution.Skipped.
+// Stable reason codes a worker selection is recorded under. Route returns
+// the first two. The two fallback reasons are the selection of a role's
+// configured backup after its primary failed, which Route does not decide
+// and FallbackReason names. SelectionReasons lists all four.
 const (
 	// ReasonOverride is an explicit operator pin: Override named the entry
 	// that was selected.
@@ -15,7 +18,56 @@ const (
 	// ReasonOrdered is the first runnable entry in the expanded preference
 	// list whose capabilities cover Need.
 	ReasonOrdered = "ordered"
+	// ReasonFallbackUnavailable is a role's configured backup, selected
+	// because its primary could not start (FailureUnavailable).
+	ReasonFallbackUnavailable = "fallback-" + string(FailureUnavailable)
+	// ReasonFallbackQuota is a role's configured backup, selected because
+	// its primary reported a recognized quota failure (FailureQuota).
+	ReasonFallbackQuota = "fallback-" + string(FailureQuota)
 )
+
+// SelectionReasons is every reason a worker selection is recorded under, in
+// the order the constants above declare them. It is the one list a record
+// or a document naming them is checked against.
+func SelectionReasons() []string {
+	return []string{ReasonOverride, ReasonOrdered, ReasonFallbackUnavailable, ReasonFallbackQuota}
+}
+
+// FallbackReason is the selection reason of a backup chosen after its
+// primary failed with f. Only the two failures that reach a backup have
+// one; any other failure is an error, so a caller cannot record a fallback
+// under a reason the fallback path never admits.
+func FallbackReason(f Failure) (string, error) {
+	switch f {
+	case FailureUnavailable:
+		return ReasonFallbackUnavailable, nil
+	case FailureQuota:
+		return ReasonFallbackQuota, nil
+	}
+	return "", fmt.Errorf("agents: a %q failure does not select a backup", f)
+}
+
+// Stable reason codes Unavailability.Reason carries: why Resolve or Route
+// passed over an entry. SkipReasons lists them.
+const (
+	// SkipNamesNoAgent is an entry with no name in it.
+	SkipNamesNoAgent = "names-no-agent"
+	// SkipNotInBuild is a name this build has no adapter for.
+	SkipNotInBuild = "not-in-build"
+	// SkipCannotRun is an adapter whose factory reported it cannot run
+	// here, such as a missing executable.
+	SkipCannotRun = "cannot-run"
+	// SkipMissingCapability is a runnable adapter that does not declare a
+	// capability the path needs. Only Route skips for it, and
+	// Unavailability.Err is then the *CapabilityError naming which.
+	SkipMissingCapability = "missing-capability"
+)
+
+// SkipReasons is every reason an entry is passed over under, in the order
+// the constants above declare them.
+func SkipReasons() []string {
+	return []string{SkipNamesNoAgent, SkipNotInBuild, SkipCannotRun, SkipMissingCapability}
+}
 
 // Selection is the adapter Route chose for a path that needs capabilities,
 // and why. Resolution is what Resolve would have returned for that entry;
@@ -83,8 +135,9 @@ func Route(ctx context.Context, catalog *Catalog, entries []string, need Capabil
 		fields := strings.Fields(entry)
 		if len(fields) == 0 {
 			skipped = append(skipped, Unavailability{
-				Entry: entry,
-				Err:   errors.New("entry names no agent"),
+				Entry:  entry,
+				Reason: SkipNamesNoAgent,
+				Err:    errors.New("entry names no agent"),
 			})
 			continue
 		}
@@ -92,15 +145,16 @@ func Route(ctx context.Context, catalog *Catalog, entries []string, need Capabil
 		factory, ok := catalog.lookup(name)
 		if !ok {
 			skipped = append(skipped, Unavailability{
-				Entry: entry,
-				Name:  name,
-				Err:   errors.New("this build has no adapter named " + name),
+				Entry:  entry,
+				Name:   name,
+				Reason: SkipNotInBuild,
+				Err:    errors.New("this build has no adapter named " + name),
 			})
 			continue
 		}
 		runner, err := factory.New(ctx, args)
 		if err != nil {
-			skipped = append(skipped, Unavailability{Entry: entry, Name: name, Err: err})
+			skipped = append(skipped, Unavailability{Entry: entry, Name: name, Reason: SkipCannotRun, Err: err})
 			continue
 		}
 		declared, err := verifyDeclaration(name, runner)
@@ -112,7 +166,7 @@ func Route(ctx context.Context, catalog *Catalog, entries []string, need Capabil
 			if reason == ReasonOverride {
 				return Selection{}, capErr
 			}
-			skipped = append(skipped, Unavailability{Entry: entry, Name: name, Err: capErr})
+			skipped = append(skipped, Unavailability{Entry: entry, Name: name, Reason: SkipMissingCapability, Err: capErr})
 			continue
 		}
 		return Selection{

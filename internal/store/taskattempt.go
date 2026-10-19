@@ -43,6 +43,13 @@ type TaskAttempt struct {
 	// selection (override or ordered). It is filled with Adapter by
 	// SetAttemptRoute and unknown on the same terms.
 	RouteReason Optional[string] `json:"route_reason"`
+	// RouteSkipped is every entry routing passed over before it chose
+	// Adapter, in the order it considered them, with the stable reason for
+	// each. It is filled with Adapter by SetAttemptRoute, so a known empty
+	// list is a route whose first candidate covered the need, and it is
+	// unknown on Adapter's terms and for an attempt routed before the
+	// column existed.
+	RouteSkipped Optional[[]SkippedAgent] `json:"route_skipped"`
 	// Role is the role name the launch resolved. It is unknown when the task
 	// named no role. It is filled with the route.
 	Role Optional[string] `json:"role"`
@@ -54,15 +61,19 @@ type TaskAttempt struct {
 	Effort Optional[string] `json:"effort"`
 }
 
-const taskAttemptColumns = `SELECT task_id, sequence, started_at, session_ref, adapter, route_reason, role, model, effort`
+const taskAttemptColumns = `SELECT task_id, sequence, started_at, session_ref, adapter, route_reason, route_skipped, role, model, effort`
 
 func scanTaskAttempt(sc scanner) (TaskAttempt, error) {
 	var a TaskAttempt
 	var started string
-	if err := sc.Scan(&a.TaskID, &a.Sequence, &started, &a.SessionRef, &a.Adapter, &a.RouteReason, &a.Role, &a.Model, &a.Effort); err != nil {
+	var skipped Optional[string]
+	if err := sc.Scan(&a.TaskID, &a.Sequence, &started, &a.SessionRef, &a.Adapter, &a.RouteReason, &skipped, &a.Role, &a.Model, &a.Effort); err != nil {
 		return TaskAttempt{}, err
 	}
 	var err error
+	if a.RouteSkipped, err = skippedValue("route_skipped", skipped); err != nil {
+		return TaskAttempt{}, err
+	}
 	if a.StartedAt, err = decodeTime(started); err != nil {
 		return TaskAttempt{}, err
 	}
@@ -148,25 +159,35 @@ func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence i
 	})
 }
 
-// AttemptLaunch is what the launch asked for beyond the adapter. An empty
-// field was not named and is stored unknown, never as one of the named values.
+// AttemptLaunch is what the launch asked for beyond the adapter, and what
+// routing passed over to reach it. An empty Role, Model, or Effort was not
+// named and is stored unknown, never as one of the named values. Skipped is
+// always known once a route is recorded: a nil list is stored as the empty
+// one, because a route that passed over nothing is a fact.
 type AttemptLaunch struct {
-	Role   string
-	Model  string
-	Effort string
+	Role    string
+	Model   string
+	Effort  string
+	Skipped []SkippedAgent
 }
 
 // SetAttemptRoute records the adapter agents.Route selected for the attempt,
-// the reason code it returned, and the role, model identifier, and effort the
-// launch asked for. It is filled once, before the process starts: a second
-// call is refused with ErrAttemptRouteRecorded. An empty adapter or reason is
-// refused, and an attempt that does not exist is ErrNotFound, wrapped.
+// the reason code it returned, the entries it passed over before it, and the
+// role, model identifier, and effort the launch asked for. It is filled once,
+// before the process starts: a second call is refused with
+// ErrAttemptRouteRecorded, and a trigger holds the same rule against a direct
+// rewrite. An empty adapter or reason, and a skipped entry naming no reason,
+// are refused, and an attempt that does not exist is ErrNotFound, wrapped.
 func (s *Store) SetAttemptRoute(ctx context.Context, taskID string, sequence int64, adapter, reason string, asked AttemptLaunch) error {
 	if strings.TrimSpace(adapter) == "" {
 		return fmt.Errorf("store: task %s attempt %d: the routed adapter is empty", taskID, sequence)
 	}
 	if strings.TrimSpace(reason) == "" {
 		return fmt.Errorf("store: task %s attempt %d: the route reason is empty", taskID, sequence)
+	}
+	skipped, err := skippedText("route_skipped", asked.Skipped)
+	if err != nil {
+		return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, err)
 	}
 	return s.inTx(ctx, func(tx *sql.Tx) error {
 		var recordedAdapter, recordedReason Optional[string]
@@ -180,8 +201,8 @@ func (s *Store) SetAttemptRoute(ctx context.Context, taskID string, sequence int
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrAttemptRouteRecorded)
 		}
 		_, err = tx.ExecContext(ctx,
-			`UPDATE task_attempt SET adapter = ?, route_reason = ?, role = ?, model = ?, effort = ? WHERE task_id = ? AND sequence = ?`,
-			adapter, reason, namedOrNull(asked.Role), namedOrNull(asked.Model), namedOrNull(asked.Effort), taskID, sequence)
+			`UPDATE task_attempt SET adapter = ?, route_reason = ?, route_skipped = ?, role = ?, model = ?, effort = ? WHERE task_id = ? AND sequence = ?`,
+			adapter, reason, skipped, namedOrNull(asked.Role), namedOrNull(asked.Model), namedOrNull(asked.Effort), taskID, sequence)
 		if err != nil {
 			return fmt.Errorf("store: task %s attempt %d: recording its route: %w", taskID, sequence, err)
 		}

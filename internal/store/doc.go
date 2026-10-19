@@ -70,12 +70,14 @@
 //
 // The attempt's session_ref is the one record of which session an attempt
 // had, filled once by SetAttemptSession after the process starts. The
-// attempt's adapter and route_reason are the one record of which coding
-// agent agents.Route selected for the worker and why, filled once by
-// SetAttemptRoute before the process starts. The session_ref column
-// migration 1 gave the task table is neither written nor read by this
-// build: it stays declared because a migration may not remove a column, and
-// holds NULL for every task created here.
+// attempt's adapter, route_reason and route_skipped are the one record of
+// which coding agent agents.Route selected for the worker, why, and what it
+// passed over, filled once by SetAttemptRoute before the process starts.
+// The run row's resolved_agent and resolved_skipped are the same record for
+// the agent a run resolved, filled once by SetRunAgentResolution. The
+// session_ref column migration 1 gave the task table is neither written nor
+// read by this build: it stays declared because a migration may not remove a
+// column, and holds NULL for every task created here.
 //
 // # What the terminal tier reads
 //

@@ -52,8 +52,13 @@ func (s *Service) routeTaskWorker(ctx context.Context, task store.Task, attempt 
 		}
 		backup := *role.Fallback
 		selection, err := s.selectWorkerChoice(ctx, backup)
-		selection.Reason = "fallback-" + selected.Reason
-		return selection, backup, err
+		if err != nil {
+			return agents.Selection{}, backup, err
+		}
+		if selection.Reason, err = agents.FallbackReason(agents.Failure(selected.Reason)); err != nil {
+			return agents.Selection{}, backup, err
+		}
+		return selection, backup, nil
 	}
 	selection, _, err := s.routeWorker(ctx, task.Role)
 	if err == nil || role.Fallback == nil || !agents.FallbackAllowed(err) {
@@ -64,10 +69,10 @@ func (s *Service) routeTaskWorker(ctx context.Context, task store.Task, attempt 
 	if nextErr != nil {
 		return agents.Selection{}, role, errors.Join(err, nextErr)
 	}
-	if err = s.store.RecordTaskFallback(ctx, task.ID, store.TaskFallback{Primary: role.Agent, Backup: backup.Agent, Reason: "unavailable", Attempt: attempt}); err != nil {
+	if err = s.store.RecordTaskFallback(ctx, task.ID, store.TaskFallback{Primary: role.Agent, Backup: backup.Agent, Reason: string(agents.FailureUnavailable), Attempt: attempt}); err != nil {
 		return agents.Selection{}, role, err
 	}
-	next.Reason = "fallback-unavailable"
+	next.Reason = agents.ReasonFallbackUnavailable
 	return next, backup, nil
 }
 

@@ -117,6 +117,16 @@ const invocationRoleMigration = "agent invocation role"
 // is a constant.
 const holdResolutionSealMigration = "hold resolution seal"
 
+// runResolutionSkipsMigration names the migration that records what a
+// run's agent resolution passed over, beside the agent it resolved.
+const runResolutionSkipsMigration = "run agent resolution skips"
+
+// taskAttemptRouteSkipsMigration names the migration that records what a
+// worker's route passed over, beside the adapter it chose. It is a migration
+// of its own, apart from the run's, so a test that rebuilds task_attempt can
+// re-apply it alone.
+const taskAttemptRouteSkipsMigration = "task attempt route skips"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1646,6 +1656,50 @@ var schema = []migration{
 				WHEN OLD.resolution IS NOT NULL
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a hold''s resolution is recorded once and is not rewritten');
+				END`,
+		},
+	},
+	{
+		version: 43,
+		name:    runResolutionSkipsMigration,
+		statements: []string{
+			// AGE-300: a selection records what it passed over beside what
+			// it chose. This is the run's: the entries the service's agent
+			// resolution passed over, in order, as a JSON list of
+			// SkippedAgent, written with resolved_agent by
+			// SetRunAgentResolution. NULL means unknown: a row written
+			// before the column, or a run refused before it resolved. The
+			// empty list is a resolution that passed over nothing.
+			`ALTER TABLE run ADD COLUMN resolved_skipped TEXT`,
+			// The resolution is recorded once. The accessor refuses a
+			// second write; this holds the record at the database against a
+			// direct rewrite. A row written before this migration that names
+			// an agent and no skips is held too, so a later write cannot
+			// attach a list to a resolution it did not see.
+			`CREATE TRIGGER run_agent_resolution_is_written_once
+				BEFORE UPDATE OF resolved_agent, resolved_skipped ON run
+				WHEN OLD.resolved_agent IS NOT NULL OR OLD.resolved_skipped IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run''s agent resolution is recorded once and is not rewritten');
+				END`,
+		},
+	},
+	{
+		version: 44,
+		name:    taskAttemptRouteSkipsMigration,
+		statements: []string{
+			// The same for a worker's route: the entries routing passed
+			// over, written with adapter and route_reason by
+			// SetAttemptRoute, on the run column's terms.
+			`ALTER TABLE task_attempt ADD COLUMN route_skipped TEXT`,
+			// The route is recorded once, which SetAttemptRoute already
+			// refuses at the accessor; this holds all three columns at the
+			// database against a direct rewrite.
+			`CREATE TRIGGER task_attempt_route_is_written_once
+				BEFORE UPDATE OF adapter, route_reason, route_skipped ON task_attempt
+				WHEN OLD.adapter IS NOT NULL OR OLD.route_reason IS NOT NULL OR OLD.route_skipped IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: an attempt''s route is recorded once and is not rewritten');
 				END`,
 		},
 	},

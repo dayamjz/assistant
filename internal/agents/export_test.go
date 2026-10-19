@@ -67,3 +67,8 @@ func AvailabilityMarkers() []AvailabilityMarker {
 
 // AvailabilityMessage exposes availabilityMessage.
 var AvailabilityMessage = availabilityMessage
+
+// ClaudeGrantFlags exposes claudeGrantFlags, the Claude adapter's
+// translation of a grant, so a test can derive the command line a role's
+// grant writes rather than restating it.
+var ClaudeGrantFlags = claudeGrantFlags

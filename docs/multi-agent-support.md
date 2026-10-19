@@ -182,9 +182,26 @@ the first runnable entry whose declared capabilities cover the worker need
   and a `fix` entry with no agent uses the `agent` list. A task that names
   `review` or `fix`, or a role that is not configured, is refused at intake
   and not created.
-- Every successful selection records `adapter` and `route_reason`
-  (`override` or `ordered`) on the task attempt before the process starts,
-  and the role, model identifier, and effort when the launch named them.
+- Every successful selection records `adapter`, `route_reason` and
+  `route_skipped` on the task attempt before the process starts, and the
+  role, model identifier, and effort when the launch named them. The record
+  is written once and is not rewritten.
+- `route_reason` is one of `override` (a pin), `ordered` (the first covering
+  entry of a list), `fallback-unavailable` (the role's backup, because the
+  primary could not start) or `fallback-quota` (the role's backup, because
+  the primary reported a recognized quota failure).
+- `route_skipped` lists, in order, each entry passed over before the one
+  chosen: its adapter name and one of `names-no-agent` (an empty entry),
+  `not-in-build` (a name this build has no adapter for), `cannot-run` (the
+  adapter cannot run here, such as a missing executable) or
+  `missing-capability` (it runs but does not declare a capability the worker
+  needs, which is named beside it). An entry's arguments and the error text
+  are not recorded. An empty list means the first candidate was chosen.
+- A run records the same for its own agent: `resolved_agent` and
+  `resolved_skipped` on the run, with the same skip reasons except
+  `missing-capability`, which only worker routing skips for. A review or fix
+  role's agent is recorded per call in the invocation history, with the
+  role, not on the run.
 - A routing refusal records a `route-refused` event; the task resolves
   Failed rather than staying Dispatched. Grants stay `GrantWorker` on the
   ordinary Create path — a miss does not widen permissions.

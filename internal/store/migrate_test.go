@@ -483,7 +483,7 @@ func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
-	var blockers, route, model migration
+	var blockers, route, model, skips migration
 	for _, m := range schema {
 		switch m.name {
 		case taskBlockersMigration:
@@ -492,6 +492,8 @@ func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 			route = m
 		case taskAttemptModelMigration:
 			model = m
+		case taskAttemptRouteSkipsMigration:
+			skips = m
 		}
 	}
 	if blockers.version == 0 {
@@ -502,6 +504,9 @@ func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 	}
 	if model.version == 0 {
 		t.Fatalf("the shipped schema has no migration named %q", taskAttemptModelMigration)
+	}
+	if skips.version == 0 {
+		t.Fatalf("the shipped schema has no migration named %q", taskAttemptRouteSkipsMigration)
 	}
 
 	// Back to the shape migration 13 left. A migration may not do this, which
@@ -518,8 +523,8 @@ func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 	// task_attempt, so re-applying creates the table and then adds the
 	// columns the current accessors select. taskRoleMigration alters task
 	// and is left recorded: that column is still on the table.
-	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version IN (?, ?, ?)`,
-		blockers.version, route.version, model.version); err != nil {
+	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version IN (?, ?, ?, ?)`,
+		blockers.version, route.version, model.version, skips.version); err != nil {
 		t.Fatalf("forgetting the migration: %v", err)
 	}
 	if _, err := s.write.ExecContext(ctx, `

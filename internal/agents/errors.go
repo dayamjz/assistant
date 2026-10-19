@@ -272,6 +272,10 @@ type Unavailability struct {
 	Entry string
 	// Name is the agent name the entry began with.
 	Name string
+	// Reason is the stable code for why the entry was passed over, one of
+	// SkipReasons. It is what a record keeps; Err is the account for a
+	// person and is not a code.
+	Reason string
 	// Err says why it did not resolve.
 	Err error
 }
