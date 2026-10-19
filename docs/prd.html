@@ -1436,7 +1436,10 @@ flowchart TD
   </div>
   <p class="mb-4 opacity-90">
     The mode a project declares is its <b>delivery posture</b>, section 10's <code>delivery</code> key,
-    read only from the trusted copy so a branch cannot lighten its own path (P7). If that copy cannot
+    which only your own configuration may loosen (P7). Your global settings are the floor: a
+    repository copy, trusted or pushed, may name the same posture or a stricter one, and a lighter
+    one refuses the whole resolution, so the run, the intake, or the promotion does not proceed. A
+    stricter posture in a pushed copy affects only that run. If the trusted copy cannot
     be read and parsed, nothing is delivered and the refusal is reported; no posture is assumed in
     its place, not even <code>gated</code>. A posture belongs to a delivery task and never to a run.
   </p>
@@ -1448,7 +1451,8 @@ flowchart TD
       never with the words a passed run uses.</li>
     <li><b>Recorded at intake or promotion.</b> The posture a task was dispatched under is written
       on the task when it is created, or, for an investigation promoted into a delivery task, when
-      it is promoted, read from the trusted copy the same way. It is written once, and that record,
+      it is promoted, read from your global settings and the trusted copy the same way, never from a
+      pushed copy. It is written once, and that record,
       not a later read of the key, decides the task's path.</li>
     <li><b>Only a task's own push.</b> A push a person makes to the gate always starts the full run,
       because that push is consent to validation (P1). Admission places a push inside a registered
@@ -2432,13 +2436,14 @@ flowchart TB
   <h2 class="text-3xl font-bold tracking-tight mb-3">Configuration</h2>
   <p class="mb-6 opacity-80 max-w-3xl">
     Two layers. Global settings live in your home; per-repository settings live in a file at the
-    repository root. The repository layer overrides the global one field by field.
+    repository root. The repository layer overrides the global one field by field, except for a
+    global-only-to-loosen key, which a repository layer may only tighten.
   </p>
 
   <h3 class="text-xl font-semibold mb-3">The trust boundary</h3>
   <p class="mb-4 opacity-90">
     This is P7 made concrete, and it is the security-critical part of the design. Configuration
-    fields fall into four classes by where they are read from.
+    fields fall into five classes by where they are read from.
   </p>
   <div class="prd-mermaid mb-4">
     <pre class="mermaid">
@@ -2448,10 +2453,13 @@ flowchart TB
   global["Your global settings<br />in your home"]
 
   push -->|"read from here"| A["Ignore patterns<br />Fix limits<br />Commit message template<br />Intent settings"]
-  trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Judge paths<br />Instruction suppression<br />No-CI declaration<br />Rerun budget<br />Delivery posture"]
+  trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Judge paths<br />Instruction suppression<br />No-CI declaration<br />Rerun budget"]
   trusted -->|"read from here, unless you opt out"| C["Test, lint, and format commands<br />Agent selection and roles"]
 
   global -->|"read from here only"| D["Checks timeout<br />Session reuse<br />Decision model<br />Merge authority"]
+  global -->|"loosened from here only"| E["Delivery posture"]
+  trusted -.->|"may tighten, never loosen"| E
+  push -.->|"may tighten, never loosen"| E
 
   C -.->|"opt-in, itself trusted-only"| push
   trusted -->|"unreadable or unparseable"| stop["Abort before launching anything"]
@@ -2480,6 +2488,12 @@ flowchart TB
       <div class="card-body">
         <h4 class="card-title text-sm">Global-only</h4>
         <p class="text-xs opacity-90">Fields a repository may not set at all, in either copy. These are operator preferences about how this machine behaves rather than facts about a repository, so a repository should not set them even where doing so could not weaken a check. The test is authority, not harm.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200 border-error/40">
+      <div class="card-body">
+        <h4 class="card-title text-sm">Global-only-to-loosen</h4>
+        <p class="text-xs opacity-90">Fields whose values run from strictest to loosest, where only your own configuration may choose a looser value than the default. Your global settings are the floor: a repository copy, trusted or pushed, may name the value beneath it or a stricter one, and that value takes effect. A looser one refuses the whole resolution rather than being dropped, so the run, the intake, or the promotion does not proceed. A pushed copy is compared with what the trusted copy left, and a stricter value there affects only that run.</p>
       </div>
     </div>
   </div>
@@ -2514,7 +2528,7 @@ flowchart TB
         <tr><td><code>document.ownership</code></td><td>empty</td><td>Which document owns which subject. Without this the document stage guesses, and guessing produces documentation churn on most changes.</td></tr>
         <tr><td><code>suppress_project_instructions</code></td><td><code>false</code></td><td>For a repository whose own instructions would give a validating agent an operator identity. If any resolved agent lacks a verified suppression mechanism, the run fails before launching it.</td></tr>
         <tr><td><code>no_ci</code></td><td><code>false</code></td><td>A positive declaration that this repository has no checks. Only this makes an empty check list count as green.</td></tr>
-        <tr><td><code>delivery</code></td><td><code>gated</code></td><td>The delivery posture of this repository's delivery tasks, section 6: <code>gated</code> or <code>local</code>. Read only from the trusted copy, so a branch cannot choose a lighter path for itself. <code>direct</code> is deferred and is rejected at parse time. It never changes what a person's push to the gate does.</td></tr>
+        <tr><td><code>delivery</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only-to-loosen</span></td><td><code>gated</code></td><td>The delivery posture of this repository's delivery tasks, section 6: <code>gated</code> or <code>local</code>, from strictest to loosest. Only your global settings may loosen it. A repository copy, trusted or pushed, may name the posture beneath it or a stricter one; a lighter one refuses the whole resolution, so the run, the intake, or the promotion does not proceed, and a branch cannot choose a lighter path for itself. A stricter posture in a pushed copy affects only that run. <code>direct</code> is deferred and is rejected at parse time. It never changes what a person's push to the gate does.</td></tr>
         <tr><td><code>autonomy.merge</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td>empty</td><td>The repositories, each named as the code host names it, where section 6's autonomy flag may merge a run that ended <code>checks-passed</code>, after the live read section 6 gives. Empty means the program merges nothing.</td></tr>
         <tr><td><code>allow_pushed_commands</code></td><td><code>false</code></td><td>The opt-out that lets the pushed branch set commands, agent selection, and roles. It is itself readable only from the trusted copy, so a branch cannot enable it for itself.</td></tr>
         <tr><td><code>allow_standing_consent</code></td><td><code>false</code></td><td>Whether a run of this repository may be put under section 9's standing consent. It allows and does not turn on: only the per-run flag section 9 gives puts a run under it, and that flag is refused where this is false. Read only from the trusted copy, so a pushed branch cannot allow standing consent for itself; like every trusted-only key, the operator's own file may also set it, which allows it in every repository of the home.</td></tr>
@@ -3009,6 +3023,11 @@ flowchart TB
           <td class="prd-num">17</td>
           <td>The usage ceiling is <b>a bound on starting an agent call</b>, across the whole home, not on what the calls spend.</td>
           <td>Decided 2026-10-19 (#306, #372). Section 10 gains the five global-only <code>usage_ceiling</code> keys and their window bounds, and section 9's usage view gains the ceiling line. It bounds starts and not spend: a call is counted when it finishes, so one call started under the ceiling can carry the total past it, two concurrent starts can both pass, and calls already running are not cancelled. A worker's own turns and the decision-model checks are not covered.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">18</td>
+          <td>The delivery posture is <b>global-only-to-loosen</b>: only your own configuration may loosen it, and a repository copy may tighten it and never loosen it.</td>
+          <td>Decided 2026-10-19 (#304, #376). This replaces decision 11's trusted-only posture, because a commit on the default branch could turn <code>local</code> on without your consent. Section 10 gains the class, and section 6 and the <code>delivery</code> row say so. Your global settings are the floor; a repository copy, trusted or pushed, that names a lighter posture refuses the whole resolution, so the run, the intake, or the promotion does not proceed, and a stricter posture in a pushed copy affects only that run. On upgrade, a repository whose default branch says <code>local</code> while your global settings say nothing refuses every run, intake, and promotion until your global settings say <code>local</code> or the repository drops the key.</td>
         </tr>
       </tbody>
     </table>
