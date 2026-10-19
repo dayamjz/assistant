@@ -435,6 +435,12 @@ func TestTheShippedAdapterConformsToItsDeclaration(t *testing.T) {
 // anywhere.
 const standinKey = "standin-placeholder-key-0123456789abcdefghij"
 
+// standinToken is the value a terminal worker is given as its OAuth token
+// where a test runs one on the token. It is no credential either, and is
+// distinct from standinKey so a test can tell which of the two reached a
+// worker.
+const standinToken = "standin-placeholder-token-9876543210zyxwvuts"
+
 // withStandinKey is env with standinKey as the key a Claude Code terminal
 // worker reads.
 func withStandinKey(env []string) []string {

@@ -411,14 +411,23 @@ A Claude Code worker under tmux runs the CLI's interactive interface rather
 than its pipe mode, and reaches its conversation without anyone answering
 the CLI's first-run screens: each worker gets a configuration directory of
 its own, in the system's temporary directory, that records onboarding as
-done, trusts the worker's copy, and approves its API key, and the directory
-is removed when the worker ends. Your own `~/.claude.json` is not read or
+done, trusts the worker's copy, and approves its API key when it runs on
+one, and the directory is removed when the worker ends. Your own `~/.claude.json` is not read or
 written; whether the CLI still reads anything else under your home, such as
 your settings, has not been established. That directory carries none of your
-login, so the service needs `ANTHROPIC_API_KEY` in its environment; without
-it every Claude Code launch under tmux is refused with an error naming the
-variable. The directory holds the key's last 20 characters, which is how
-the CLI records an approval, and never the whole key.
+login, so the service needs a credential in its environment: either
+`ANTHROPIC_API_KEY`, an API key, or `CLAUDE_CODE_OAUTH_TOKEN`, the
+long-lived token `claude setup-token` prints for a Pro or Max subscription.
+If both are set the API key wins and the token is removed from the worker's
+environment; each worker is handed exactly one. Without either, every
+Claude Code launch under tmux is refused with an error naming both
+variables. On the API key, the directory holds the key's last 20
+characters, which is how the CLI records an approval, and never the whole
+key; on the token, it holds no part of it. Neither value is recorded
+anywhere by this program, but both reach the worker's tmux server and the
+CLI through their environment, as any variable the service passes does.
+Only presence is checked at start: a key or token the account no longer
+accepts is not detected before the worker launches.
 
 Cursor and Grok are different: those adapters strip `CURSOR_API_KEY` and
 `XAI_API_KEY` and authenticate only through their CLI logins

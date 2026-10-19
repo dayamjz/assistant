@@ -3,6 +3,7 @@ package agents_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -317,22 +318,103 @@ func TestAClaudeTerminalStartIsRefusedWhenNoInterfaceIsDrawn(t *testing.T) {
 	}
 }
 
-// Without a key in its environment a Claude Code terminal worker is refused
-// before anything starts, by an error naming the variable, because the
-// directory it would run with carries no login.
-func TestAClaudeTerminalWorkerIsRefusedWithoutAKey(t *testing.T) {
-	term := terminalFor(t)
-	agent := standin.New(t, standin.Script{},
-		agents.WithBaseEnvironment([]string{"PATH=" + os.Getenv("PATH"), agents.ClaudeKeyVariable + "="}))
-	_, err := agents.OpenTerminalWorker(t.Context(), agent.Runner(), term, workerSpec(t))
-	if !errors.Is(err, agents.ErrNoCredential) || !strings.Contains(err.Error(), agents.ClaudeKeyVariable) {
-		t.Fatalf("a start without a key answered %v, want ErrNoCredential naming %s", err, agents.ClaudeKeyVariable)
+// A Claude Code terminal worker starts on either credential the adapter
+// accepts, and is handed exactly one: the API key when it is set and not
+// empty, so a key beside a token wins, and the OAuth token otherwise. What
+// the worker found is read off the stand-in's own record of its
+// environment, which names the credential variables it saw set and holds no
+// value, so the key winning is the worker not seeing the token at all
+// rather than the adapter saying it chose the key.
+func TestAClaudeTerminalWorkerStartsOnTheOneCredentialItIsHanded(t *testing.T) {
+	key := agents.ClaudeKeyVariable + "=" + standinKey
+	token := agents.ClaudeTokenVariable + "=" + standinToken
+	for _, c := range []struct {
+		name string
+		set  []string
+		want []string
+	}{
+		{"api key", []string{key}, []string{agents.ClaudeKeyVariable}},
+		{"oauth token", []string{token}, []string{agents.ClaudeTokenVariable}},
+		{"oauth token beside an empty key", []string{agents.ClaudeKeyVariable + "=", token}, []string{agents.ClaudeTokenVariable}},
+		{"both, the key wins", []string{token, key}, []string{agents.ClaudeKeyVariable}},
+		{"both, the key wins whichever comes first", []string{key, token}, []string{agents.ClaudeKeyVariable}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			env := append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}, c.set...)
+			spec := workerSpec(t)
+			_, _, agent := openClaudeTerminal(t, standin.Script{}, spec, agents.WithBaseEnvironment(env))
+			call := awaitInteractive(t, agent, answered(1))
+			if call.Lines[0] != spec.Instructions {
+				t.Errorf("the first message was %q, want the instructions %q", call.Lines[0], spec.Instructions)
+			}
+			if !slices.Equal(call.Credentials, c.want) {
+				t.Errorf("the worker found %q set, want exactly %q", call.Credentials, c.want)
+			}
+		})
 	}
-	if _, err := os.Lstat(term.Socket); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("a server was started without a key: %v", err)
+}
+
+// Without a key or a token in its environment a Claude Code terminal worker
+// is refused before anything starts, by an error naming both variables,
+// because the directory it would run with carries no login. A variable set
+// to nothing counts as unset.
+func TestAClaudeTerminalWorkerIsRefusedWithoutACredential(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		set  []string
+	}{
+		{"neither set", nil},
+		{"both empty", []string{agents.ClaudeKeyVariable + "=", agents.ClaudeTokenVariable + "="}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			term := terminalFor(t)
+			agent := standin.New(t, standin.Script{},
+				agents.WithBaseEnvironment(append([]string{"PATH=" + os.Getenv("PATH")}, c.set...)))
+			_, err := agents.OpenTerminalWorker(t.Context(), agent.Runner(), term, workerSpec(t))
+			if !errors.Is(err, agents.ErrNoCredential) {
+				t.Fatalf("a start without a credential answered %v, want ErrNoCredential", err)
+			}
+			for _, name := range []string{agents.ClaudeKeyVariable, agents.ClaudeTokenVariable} {
+				if !strings.Contains(err.Error(), name) {
+					t.Errorf("the refusal %q does not name %s", err, name)
+				}
+			}
+			if _, err := os.Lstat(term.Socket); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("a server was started without a credential: %v", err)
+			}
+			if calls := agent.Calls(); len(calls) != 0 {
+				t.Errorf("a worker without a credential started %d processes", len(calls))
+			}
+		})
 	}
-	if calls := agent.Calls(); len(calls) != 0 {
-		t.Errorf("a worker without a key started %d processes", len(calls))
+}
+
+// A worker on the OAuth token keeps the token out of everything this
+// package and the stand-in write down about it: the stand-in's record of
+// the call, which is evidence off the wire, and the worker's capture, which
+// is what a person peeking at it reads. The scan has a positive control on
+// the same text, the worker's instructions and the message it was sent,
+// which both must carry, so a scan that looked at nothing fails rather than
+// passing.
+func TestAClaudeTerminalWorkersTokenIsInNoRecordOrCapture(t *testing.T) {
+	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), agents.ClaudeTokenVariable + "=" + standinToken}
+	spec := workerSpec(t)
+	worker, _, agent := openClaudeTerminal(t, standin.Script{}, spec, agents.WithBaseEnvironment(env))
+	const sent = "a message after the instructions"
+	if err := worker.Send(t.Context(), sent); err != nil {
+		t.Fatalf("sending to a worker on the token: %v", err)
+	}
+	awaitInteractive(t, agent, answered(2))
+
+	recorded := fmt.Sprintf("%+v", agent.Calls())
+	captured := awaitWorkerOutput(t, worker, sent)
+	for what, text := range map[string]string{"the recorded call": recorded, "the capture": captured} {
+		if !strings.Contains(text, spec.Instructions) || !strings.Contains(text, sent) {
+			t.Fatalf("%s carries neither what the worker was told nor what it was sent, so it shows nothing: %s", what, text)
+		}
+		if strings.Contains(text, standinToken) {
+			t.Errorf("%s carries the token: %s", what, text)
+		}
 	}
 }
 

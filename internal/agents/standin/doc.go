@@ -169,8 +169,11 @@
 // internal/agents runs the same probe against an installed CLI where there
 // is one, and says what the model rests on where there is not. The
 // environment is still not recorded: the key is read to check an approval
-// and is written nowhere, and the configuration directory is a path, which
-// Call.ConfigDir carries.
+// and is written nowhere, the configuration directory is a path, which
+// Call.ConfigDir carries, and of the two credential variables the CLI reads,
+// ANTHROPIC_API_KEY and CLAUDE_CODE_OAUTH_TOKEN, only the names of those set
+// are kept, in Call.Credentials. A token draws no first-run screen, which is
+// what the installed CLI was observed to do with one (#320).
 //
 // In any of the three modes an exchange may Run what the line carries as a
 // shell command, which is how a test has a worker do something rather than say

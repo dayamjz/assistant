@@ -70,6 +70,12 @@ type Call struct {
 	// credential, which is why this one variable is recorded when the rest
 	// of the environment is not.
 	ConfigDir string `json:"config_dir,omitempty"`
+	// Credentials is the name of each credential variable an interactive
+	// worker found set and not empty in its environment, ANTHROPIC_API_KEY
+	// before CLAUDE_CODE_OAUTH_TOKEN, so a test reads which credential an
+	// adapter handed it. It holds names and never a value, which is why it
+	// is recorded when the environment is not.
+	Credentials []string `json:"credentials,omitempty"`
 	// Queued is every message an interactive worker had submitted to it
 	// while it was drawing a turn, in order; each is also in Lines, where it
 	// was answered after that turn ended.

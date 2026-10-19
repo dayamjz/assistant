@@ -153,8 +153,10 @@
 // process's, that everything reaching it is typed, and that its capture is
 // a screen. The scripted adapter declares it over plain lines, and the
 // Claude Code adapter over its interactive interface, reached without a
-// person through a configuration directory of the worker's own and typed
-// into once its screen reads ready; claudeterminal.go states those terms,
+// person through a configuration directory of the worker's own, on an API
+// key or a subscription's OAuth token from the worker's environment, the
+// key winning and the other removed where both are set, and typed into
+// once its screen reads ready; claudeterminal.go states those terms,
 // and capability.go how the declaration is held where no installed CLI is
 // there to probe.
 //
