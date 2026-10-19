@@ -308,13 +308,13 @@
 //     that reaches an Isolation already returned; the second check is the
 //     only thing that runs afterwards, and it is detection by a worker that
 //     chooses to run it. An investigation copy is cut with no remotes for
-//     that reason, and what keeps its worker off the subject after launch
-//     is then the gate's admission alone, which sees only a push addressed
-//     to the gate. A worker that adds a remote toward the subject, or pushes
-//     by the subject's path, is outside this package's assertion and outside
-//     the gate: that push can move a protected tip when the branch is free
-//     to update, and a tip that stays put because the branch is checked out
-//     is git's refusal, not a guarantee here. The worker is a process of the
+//     that reason, and after launch the gate's admission holds every push that
+//     reaches the gate. A worker that adds a remote toward the subject, or
+//     pushes by the subject's path, is outside this package's assertion and
+//     outside the gate: that push is outside the product and can move a
+//     protected tip when the branch is free to update, and a tip that stays
+//     put because the branch is checked out is git's refusal, not a guarantee
+//     here. The worker is a process of the
 //     same user as the service, with git and a shell, so a push URL this
 //     package could set, a remote it could shape and a file mode it could
 //     apply are each something that user undoes with one command, and none

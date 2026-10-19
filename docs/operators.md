@@ -225,11 +225,15 @@ Three things follow for whoever runs the service:
   the cleanup check's proof; the stored report and its holds stay.
 - An investigation copy is cut with no remotes and a detached HEAD, and the
   launch asserts that again before a worker starts. A push its worker makes
-  to the gate, by any remote name or by the gate's path, is refused before
-  any reference moves, whatever it carries, because the task names no
-  branch; a delivery worker's push is held to its own branch, forward and
-  never a deletion. That is the product's whole reach (P11): the launch
-  assertion, and admission for the pushes that arrive at the gate. A worker
+  to the gate, by any remote name or by the gate's path, and whose pushing
+  process the service places as that task's worker, is refused before any
+  reference moves, whatever it carries, because the task names no branch; a
+  delivery worker's push is held to its own branch, forward and never a
+  deletion. If an intermediate process in the push chain exits first and the
+  kernel reparents the chain, placement may read the push as a person's and
+  admission does not apply the worker rule. That
+  is the product's whole reach (P11): the launch assertion, and admission
+  for the pushes that arrive at the gate. A worker
   that later adds a remote toward the subject, or pushes by the subject's
   path, is neither re-checked nor seen by the gate. Such a push can move a
   protected branch tip when that branch is free to update on the subject; a
