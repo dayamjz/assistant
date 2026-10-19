@@ -90,11 +90,14 @@ func (e *OutrankedError) Error() string {
 func (e *OutrankedError) Unwrap() error { return ErrOutranked }
 
 // ErrPostureUnreadable is the class of an intake or a promotion refused
-// because the project's delivery posture could not be read from its trusted
-// copy. PRD
-// section 6 delivers nothing when that copy cannot be read and parsed, and
-// assumes no posture in its place, not even gated.
-var ErrPostureUnreadable = errors.New("tasks: the project's delivery posture could not be read from its trusted configuration")
+// because the project's delivery posture could not be established from its
+// trusted copy: the copy could not be read or parsed, or it named a lighter
+// posture than the operator's own configuration allows, which the wrapped
+// *config.LoosenError says. PRD section 6 delivers nothing when that copy
+// cannot be read and parsed, and assumes no posture in its place, not even
+// gated; a loosening copy is refused on the same terms.
+var ErrPostureUnreadable = errors.New("tasks: the project's delivery posture could not be established from its trusted configuration " +
+	"(read, parsed, or it loosened the home's)")
 
 // ErrLighterPosture is the class every *PostureError belongs to.
 var ErrLighterPosture = errors.New("tasks: a task may not be recorded under a lighter delivery posture than its project's")

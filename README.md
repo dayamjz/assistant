@@ -154,11 +154,16 @@ than worked around.
 
 The one push that starts no run is a delivery task's own, from its worker, when
 the task was recorded, at intake or at promotion, under the `local` delivery
-posture its project's trusted `delivery` key declares: the task holds instead, and
+posture: the task holds instead, and
 answering `approve` fast-forwards your local default branch to the worker's
 commit, anchored to the tip read when the change was offered, without
 validating it and without anything leaving the machine. A person's push to the
-gate always starts the full run.
+gate always starts the full run. Only the operator's own `config.yaml` can turn
+`local` on: the `delivery` key there is the lightest posture the home allows,
+and a repository's `assistant.json`, on the default branch or on a pushed
+branch, may tighten it to `gated` and never loosen it. A repository file naming
+a lighter posture than the one beneath it is refused, stopping the run or the
+intake and naming the file's layer and both postures, rather than ignored.
 
 What each posture requires, publishes, and leaves to whom is one table in
 `internal/config` (`config.Policies`). A delivery task's answer as

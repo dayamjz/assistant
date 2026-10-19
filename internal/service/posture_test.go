@@ -4,9 +4,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -34,17 +36,29 @@ func publishTrusted(t *testing.T, subject, document string) {
 	git(t, subject, "push", "--quiet", "origin", "main")
 }
 
-// Intake records the posture the project's trusted copy declares, read from
-// the upstream's default branch at a fresh fetch through task.create; the
-// coordinator may ask for a stricter one and never a lighter one; and a
-// trusted copy that cannot be read or parsed refuses the intake as
-// unavailable and records nothing, with no posture assumed in its place
-// (P7). Each refusal's control is the request before it that was recorded.
+// homeDelivery writes the operator's own configuration file naming posture,
+// which is the only layer that may loosen the delivery key (#304).
+func homeDelivery(t *testing.T, h *home.Home, posture config.Delivery) {
+	t.Helper()
+	if err := os.WriteFile(h.ConfigFile(), []byte(`{"delivery": "`+string(posture)+`"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Intake records the posture the operator's file and the project's trusted
+// copy resolve to, the copy read from the upstream's default branch at a
+// fresh fetch through task.create; the coordinator may ask for a stricter
+// one and never a lighter one, and a trusted copy may tighten the operator's
+// local to gated; and a trusted copy that cannot be read or parsed refuses
+// the intake as unavailable and records nothing, with no posture assumed in
+// its place (P7). Each refusal's control is the request before it that was
+// recorded.
 func TestTaskCreateRecordsTheTrustedPostureAndOnlyTightensIt(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P7)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
+	homeDelivery(t, h, config.DeliveryLocal)
 	subject := newSubject(t)
 	repository := recordRepository(t, h, subject)
 	publishTrusted(t, subject, `{"delivery": "local"}`)
@@ -78,7 +92,12 @@ func TestTaskCreateRecordsTheTrustedPostureAndOnlyTightensIt(t *testing.T) {
 		}
 		recorded(created, config.DeliveryGated)
 
-		publishTrusted(t, subject, "")
+		publishTrusted(t, subject, `{"delivery": "gated"}`)
+		created, err = create("task/tightened", "")
+		if err != nil {
+			t.Fatalf("a delivery task of a project tightening the operator's local: %v", err)
+		}
+		recorded(created, config.DeliveryGated)
 		before := taskCount(t, h)
 		if _, err := create("task/lighter", "local"); !errors.Is(err, ipc.ErrRefused) {
 			t.Fatalf("local asked of a gated project = %v, want refused", err)
@@ -105,6 +124,62 @@ func TestTaskCreateRecordsTheTrustedPostureAndOnlyTightensIt(t *testing.T) {
 			t.Fatalf("refused intakes recorded %d tasks", got-before)
 		}
 	})
+}
+
+// A trusted copy cannot loosen the operator's posture (#304): with the
+// home's file saying gated, or saying nothing so the default gated stands,
+// an intake over a repository whose trusted copy says local is refused as
+// unavailable, naming the key and the trusted layer, and records nothing:
+// it records neither local nor gated in local's place. The control is the
+// same home and repository once the trusted copy says gated, which records
+// gated, so the refusal is the loosening and not the intake.
+func TestTaskCreateRefusesATrustedCopyLooserThanTheHome(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P7)
+	requiresIdentifiedPeer(t)
+	for _, explicit := range []bool{true, false} {
+		h := newHome(t)
+		if explicit {
+			homeDelivery(t, h, config.DeliveryGated)
+		}
+		subject := newSubject(t)
+		repository := recordRepository(t, h, subject)
+		publishTrusted(t, subject, `{"delivery": "local"}`)
+		withService(t, h, func(running serviceUnderTest) {
+			ctx := t.Context()
+			create := func(branch string) (machine.TaskCreated, error) {
+				var created machine.TaskCreated
+				err := running.client.Call(ctx, ipc.MethodTaskCreate, machine.TaskCreateRequest{
+					Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
+					Repository: repository.ID, Branch: branch,
+				}, &created)
+				return created, err
+			}
+			before := taskCount(t, h)
+			_, err := create("task/loosened")
+			if !errors.Is(err, ipc.ErrUnavailable) {
+				t.Fatalf("home gated (explicit %v), trusted local: intake = %v, want unavailable", explicit, err)
+			}
+			for _, says := range []string{"delivery", `"local"`, "trusted layer"} {
+				if !strings.Contains(err.Error(), says) {
+					t.Errorf("the refusal %q does not say %s", err, says)
+				}
+			}
+			if got := taskCount(t, h); got != before {
+				t.Fatalf("the refused intake recorded %d tasks", got-before)
+			}
+
+			publishTrusted(t, subject, `{"delivery": "gated"}`)
+			created, err := create("task/held")
+			if err != nil {
+				t.Fatalf("home gated (explicit %v), trusted gated: %v", explicit, err)
+			}
+			if stored, err := recordsOf(t, h).Task(ctx, created.Record.ID); err != nil ||
+				stored.Delivery != store.Known(config.DeliveryGated) {
+				t.Fatalf("the task was recorded under %v (%v), want gated", stored.Delivery, err)
+			}
+		})
+	}
 }
 
 // The rows a task's answer is expected to carry, written out rather than

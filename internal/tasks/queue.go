@@ -29,14 +29,17 @@ type BranchInGate func(ctx context.Context, repository store.Repository, branch 
 // working path is recorded under; this package never opens the gate.
 type GatePath func(ctx context.Context, repository store.Repository) (string, error)
 
-// ProjectPosture answers the delivery posture a repository's trusted copy
-// declares, read from its default branch at a freshly fetched commit and
-// resolved with the operator's layer, PRD section 10's delivery key. task is
-// the task being created or promoted, which the producer may name what it
-// fetches after. internal/service is the producer, because it is what reads
-// a trusted copy; this package never fetches one. An error is a copy that
-// could not be read or parsed, and Create and Promote refuse on it rather
-// than assuming a posture.
+// ProjectPosture answers the delivery posture a repository's tasks are held
+// to: PRD section 10's delivery key, resolved from the operator's layer and
+// the repository's trusted copy, read from its default branch at a freshly
+// fetched commit. The operator's layer is the loosest posture allowed, and
+// the trusted copy may tighten it and never loosen it
+// (config.TrustGlobalLoosens). task is the task being created or promoted,
+// which the producer may name what it fetches after. internal/service is the
+// producer, because it is what reads a trusted copy; this package never
+// fetches one. An error is a copy that could not be read or parsed, or one
+// that named a lighter posture than the operator's (*config.LoosenError),
+// and Create and Promote refuse on it rather than assuming a posture.
 type ProjectPosture func(ctx context.Context, repository store.Repository, task string) (config.Delivery, error)
 
 // Deps is what a Queue is built from. Every field but Roles is required.

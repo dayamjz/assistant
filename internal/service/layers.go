@@ -47,16 +47,25 @@ import (
 // dropped: section 10 has invalid configuration fail at parse time even on a
 // branch whose fields are otherwise ignored, because a broken rule should
 // surface before it merges.
+//
+// A copy that loosens a key only the operator's own file may loosen, the
+// delivery posture (config.TrustGlobalLoosens), refuses the resolution with a
+// *config.LoosenError, which is reported under ErrTrustedConfig or
+// ErrPushedConfig by the copy it names: the run stops before anything
+// launches, whatever push started it, because no posture is assumed in the
+// refused one's place.
 
 // ErrTrustedConfig reports that the trusted configuration copy could not be
-// established: the default branch could not be fetched, or the document there
-// could not be read or parsed. PRD section 10 stops the run before launching
-// anything rather than guessing at defaults.
-var ErrTrustedConfig = errors.New("service: the trusted configuration could not be read; the run is stopped rather than run on guessed defaults")
+// established: the default branch could not be fetched, the document there
+// could not be read or parsed, or it loosened a key only the operator's own
+// file may loosen (*config.LoosenError). PRD section 10 stops the run before
+// launching anything rather than guessing at defaults.
+var ErrTrustedConfig = errors.New("service: the trusted configuration could not be established; the run is stopped rather than run on guessed defaults")
 
 // ErrPushedConfig reports that the pushed copy of the repository
-// configuration document is invalid. It is refused rather than ignored so the
-// broken rule surfaces before it merges, per PRD section 10.
+// configuration document is invalid, or loosened a key only the operator's
+// own file may loosen (*config.LoosenError). It is refused rather than
+// ignored so the broken rule surfaces before it merges, per PRD section 10.
 var ErrPushedConfig = errors.New("service: the pushed configuration document is invalid")
 
 // ErrRepositoryAgent reports a repository configuration asking for an agent
@@ -145,7 +154,8 @@ func (s *Service) resolveRunConfig(ctx context.Context, record store.Run) (runRe
 
 	resolution, err := config.ResolveRun(s.global, trusted, pushed)
 	if err != nil {
-		return runResolution{}, fmt.Errorf("service: resolving the configuration of run %s: %w", record.ID, err)
+		return runResolution{}, fmt.Errorf("%w: resolving the configuration of run %s: %w",
+			resolutionRefusal(err), record.ID, err)
 	}
 	rejected := make([]string, 0, len(resolution.Rejected))
 	for _, rejection := range resolution.Rejected {
@@ -219,13 +229,17 @@ func (s *Service) trustedLayerAt(ctx context.Context, bare *vcs.Repository, repo
 func taskTrustedRef(taskID string) string { return "refs/assistant/trusted/task/" + taskID }
 
 // projectPosture is internal/tasks' ProjectPosture: the delivery posture a
-// repository declares, read from its trusted copy at a fresh fetch of the
-// default branch and resolved with the operator's layer, PRD section 10's
-// delivery key. It is read on the terms resolveRunConfig reads a run's
-// trusted copy, with no pushed copy, because the posture is trusted-only: a
-// default branch that cannot be fetched and a document that cannot be read
-// or parsed are ErrTrustedConfig, and internal/tasks refuses the intake or
-// the promotion on it rather than assuming a posture. The reference the fetch landed under is
+// repository's tasks are held to, PRD section 10's delivery key resolved
+// from the operator's layer and the repository's trusted copy at a fresh
+// fetch of the default branch. The operator's layer is the loosest posture
+// allowed and the trusted copy may only tighten it (config.TrustGlobalLoosens).
+// It is read on the terms resolveRunConfig reads a run's trusted copy, with
+// no pushed copy, because a task's posture is recorded at intake or
+// promotion and no branch is under validation then: a default branch that
+// cannot be fetched, a document that cannot be read or parsed, and a trusted
+// copy naming a lighter posture than the operator's are ErrTrustedConfig, and
+// internal/tasks refuses the intake or the promotion on it rather than
+// assuming a posture. The reference the fetch landed under is
 // deleted afterwards, best effort; one left behind is overwritten by the
 // next read for the same task and read by nothing.
 func (s *Service) projectPosture(ctx context.Context, repository store.Repository, taskID string) (config.Delivery, error) {
@@ -241,9 +255,31 @@ func (s *Service) projectPosture(ctx context.Context, repository store.Repositor
 	}
 	resolution, err := config.ResolveRun(s.global, trusted, config.Absent(config.OriginPushed))
 	if err != nil {
-		return "", fmt.Errorf("service: resolving the configuration of task %s: %w", taskID, err)
+		return "", fmt.Errorf("%w: resolving the configuration of task %s: %w", resolutionRefusal(err), taskID, err)
 	}
 	return resolution.Config.Delivery, nil
+}
+
+// errResolution is the class of a resolution refused for a reason that names
+// neither repository copy.
+var errResolution = errors.New("service: the configuration could not be resolved")
+
+// resolutionRefusal is the class a refused resolution is reported under: a
+// *config.LoosenError is the copy that loosened a key only the operator's
+// own file may loosen, so it is ErrTrustedConfig or ErrPushedConfig by the
+// layer it names, and anything else is errResolution. The run or the intake
+// is stopped on any of them, before anything launches; this only says which
+// document to fix.
+func resolutionRefusal(err error) error {
+	var loosened *config.LoosenError
+	switch {
+	case errors.As(err, &loosened) && loosened.Origin == config.OriginTrusted:
+		return ErrTrustedConfig
+	case errors.As(err, &loosened) && loosened.Origin == config.OriginPushed:
+		return ErrPushedConfig
+	default:
+		return errResolution
+	}
 }
 
 // pushedLayer reads the repository document as the run's submitted commit

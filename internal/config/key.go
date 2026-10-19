@@ -188,8 +188,16 @@ const (
 
 	// KeyDelivery is "delivery": PRD section 10's delivery posture, the path
 	// a repository's delivery tasks ship on, section 6's delivery modes. It
-	// is trusted-only, so a branch cannot choose a lighter path for itself
-	// (P7), and its default is DeliveryGated. Its values are Delivery's closed
+	// is TrustGlobalLoosens, the owner's decision on #304: only the
+	// operator's own file may choose a lighter posture than the default, so
+	// no commit, on the default branch or on a pushed branch, turns a lighter
+	// path on without the operator's consent (P7). A repository file may name
+	// the posture beneath it or a stricter one, which takes effect, and
+	// naming a lighter one refuses the resolution with a *LoosenError naming
+	// the layer and both postures. The order compared is Delivery.Lighter.
+	// The operator's posture applies to every repository of the home that
+	// does not tighten it, because the global file has no per-repository
+	// section. Its default is DeliveryGated. Its values are Delivery's closed
 	// set; "direct" is section 12's deferred mode and is refused at parse
 	// time rather than accepted and ignored. It decides only what a task's
 	// own push does, and only through the posture recorded on the task at
@@ -283,15 +291,27 @@ func clonePathRules(rs []PathRule) []PathRule {
 }
 
 // spec is one row of the schema: a key, the origins allowed to set it, the
-// value it takes when nobody sets it, how a JSON value becomes that value, and
-// where the value lands in a Config. Every fact about a key lives in exactly
-// one row, per P14.
+// value it takes when nobody sets it, how a JSON value becomes that value,
+// and where the value lands in a Config. A TrustGlobalLoosens key's order is
+// its value type's, through ordered, so the row names it by its decoder.
+// Every fact about a key lives in exactly one row, per P14.
 type spec struct {
 	key    Key
 	trust  Trust
 	def    any
 	decode func(k Key, v any) (any, error)
 	set    func(c *Config, v any)
+}
+
+// ordered is what a TrustGlobalLoosens key's value type implements: the order
+// its values are compared in, which the type owns rather than the row, so the
+// order has one owner. Delivery's is the policy table's, through Lighter. A
+// test holds every row of that class to a default that implements it, and
+// ResolveRun refuses any compared value that does not implement it.
+type ordered interface {
+	// looserThan reports whether the value is looser than beneath, a value
+	// of the same type.
+	looserThan(beneath any) bool
 }
 
 // specs is the schema. Order is the order keys are applied and the order
@@ -356,7 +376,7 @@ var specs = []spec{
 		func(c *Config, v any) { c.AllowPushedCommands = v.(bool) }},
 	{KeyAutonomyMerge, TrustGlobal, []string(nil), decodeAutonomyMerge,
 		func(c *Config, v any) { c.AutonomyMerge = cloneSlice(v.([]string)) }},
-	{KeyDelivery, TrustTrusted, DefaultDelivery, decodeDelivery,
+	{KeyDelivery, TrustGlobalLoosens, DefaultDelivery, decodeDelivery,
 		func(c *Config, v any) { c.Delivery = v.(Delivery) }},
 	{KeyAllowStandingConsent, TrustTrusted, false, decodeBool,
 		func(c *Config, v any) { c.AllowStandingConsent = v.(bool) }},

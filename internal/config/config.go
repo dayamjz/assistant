@@ -345,6 +345,10 @@ func (d Delivery) Lighter(than Delivery) bool {
 	return a >= 0 && b >= 0 && a > b
 }
 
+// looserThan is ordered's method for the delivery key: Lighter, against a
+// beneath value of the same type.
+func (d Delivery) looserThan(beneath any) bool { return d.Lighter(beneath.(Delivery)) }
+
 // index is d's position in the policy table, strictest first, or -1 for a
 // value outside the closed set.
 func (d Delivery) index() int {

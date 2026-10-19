@@ -1,5 +1,7 @@
 package config
 
+import "fmt"
+
 // Resolution is the outcome of merging the configuration layers.
 type Resolution struct {
 	// Config is the resolved configuration. Every key holds either the value
@@ -75,6 +77,14 @@ func Resolve(global, repo Layer) (Resolution, error) {
 //     one in a repository file, so a layer built by Parse cannot carry one
 //     here; the check below states the rule anyway rather than relying on
 //     that.
+//   - A TrustGlobalLoosens key is taken from every layer, latest winning, but
+//     a repository copy may only hold it or tighten it: each copy's value is
+//     compared with the value beneath it (the global layer's or the default
+//     for the trusted copy, and whatever the trusted copy left for the pushed
+//     one), and a looser one refuses the resolution with a *LoosenError
+//     rather than being dropped. A pushed copy may therefore tighten such a
+//     key for its own run and never loosen it, even back to what the
+//     operator allows when the trusted copy tightened it.
 //
 // A key a repository copy set and its origin may not set is dropped and
 // reported as a Rejection, per the package documentation: it was validated
@@ -100,9 +110,9 @@ func ResolveRun(global, trusted, pushed Layer) (Resolution, error) {
 
 	var res Resolution
 	for _, s := range specs {
-		value := s.def
+		value, from, isDefault := s.def, OriginGlobal, true
 		if v, set := global.values[s.key]; set {
-			value = v
+			value, isDefault = v, false
 		}
 		for _, layer := range []Layer{trusted, pushed} {
 			v, set := layer.values[s.key]
@@ -110,7 +120,23 @@ func ResolveRun(global, trusted, pushed Layer) (Resolution, error) {
 				continue
 			}
 			if s.trust.admits(layer.origin, allowPushed) {
-				value = v
+				if s.trust == TrustGlobalLoosens {
+					candidate, ok := v.(ordered)
+					if !ok {
+						return Resolution{}, &KeyError{
+							Key:    s.key,
+							Value:  fmt.Sprint(v),
+							Detail: "the value carries no order for a global-only-to-loosen key",
+						}
+					}
+					if candidate.looserThan(value) {
+						return Resolution{}, &LoosenError{
+							Key: s.key, Origin: layer.origin, Value: fmt.Sprint(v),
+							Beneath: fmt.Sprint(value), BeneathOrigin: from, BeneathIsDefault: isDefault,
+						}
+					}
+				}
+				value, from, isDefault = v, layer.origin, false
 			} else {
 				res.Rejected = append(res.Rejected, Rejection{
 					Key:    s.key,

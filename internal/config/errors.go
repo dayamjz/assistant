@@ -29,7 +29,50 @@ var (
 	// read from the default branch or from the branch under validation, and
 	// the operator's own file is neither.
 	ErrNotRepositoryLayer = errors.New("config: the repository layer must have a repository origin")
+	// ErrLoosened is the class of every *LoosenError: a resolution refused
+	// because a repository layer named a looser value of a
+	// TrustGlobalLoosens key than the value beneath it.
+	ErrLoosened = errors.New("config: a repository file may tighten this key and never loosen it")
 )
+
+// LoosenError refuses a resolution in which a repository layer named a looser
+// value of a TrustGlobalLoosens key than the value beneath it: the global
+// layer's, the trusted copy's beneath a pushed one, or the schema default
+// when neither set the key. Only the operator's own file may loosen such a
+// key, so this is a refusal of the whole resolution and never a dropped key:
+// nothing is resolved, and no value is assumed in the refused one's place.
+// It wraps ErrLoosened.
+type LoosenError struct {
+	// Key is the key the repository layer loosened.
+	Key Key
+	// Origin is the repository layer that named the looser value,
+	// OriginTrusted or OriginPushed.
+	Origin Origin
+	// Value is the looser value that layer named.
+	Value string
+	// Beneath is the value the layer would have loosened.
+	Beneath string
+	// BeneathOrigin is the layer Beneath was taken from, OriginGlobal or
+	// OriginTrusted. It is meaningless when BeneathIsDefault is set.
+	BeneathOrigin Origin
+	// BeneathIsDefault reports that no layer beneath set the key, so Beneath
+	// is the schema default.
+	BeneathIsDefault bool
+}
+
+// Error names the key, the layer, and both values.
+func (e *LoosenError) Error() string {
+	from := "the " + e.BeneathOrigin.String() + " layer"
+	if e.BeneathIsDefault {
+		from = "the default, which no layer beneath it changed"
+	}
+	return "config: " + string(e.Key) + " = " + quote(e.Value) + " in the " + e.Origin.String() +
+		" layer is looser than " + quote(e.Beneath) + " from " + from +
+		"; only the operator's own configuration may loosen it, and a repository file may only tighten it"
+}
+
+// Unwrap reports ErrLoosened, so errors.Is recognizes every such refusal.
+func (e *LoosenError) Unwrap() error { return ErrLoosened }
 
 // KeyError reports one configuration key that could not be accepted. It names
 // the key and the offending value, because a rule that fails without saying
