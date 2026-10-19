@@ -400,7 +400,7 @@ flowchart TB
         Supervision costs nothing until something is actionable
       </div>
       <div class="collapse-content text-sm opacity-90 space-y-2">
-        <p>A cheap non-model supervisor classifies every wake. It absorbs a wake only on positive evidence that work is genuinely proceeding: an active validation stage attributed to that task's branch, or a live process signal from its terminal. Absence of evidence surfaces; it never absorbs.</p>
+        <p>A cheap non-model supervisor classifies every wake. It absorbs a wake only on positive evidence that work is genuinely proceeding: an active validation stage attributed to that task's branch, or a live process signal from its terminal. Absence of evidence surfaces; it never absorbs. That rule is about wakes that carry evidence: the program's own entries, <code>queued</code> and <code>dispatched</code>, carry no evidence of anything and are absorbed by their kind.</p>
         <p><b>Prevents:</b> two opposite failures. Waking a model on every heartbeat makes a fleet unaffordable. Absorbing wakes on a timer makes a finished or crashed worker invisible.</p>
       </div>
     </div>
@@ -835,7 +835,7 @@ flowchart TD
       <tbody>
         <tr><td><b>Per-stage rounds</b></td><td>Each stage has its own limit. Reaching it parks the stage rather than continuing.</td><td>One stage oscillating between two wrong fixes.</td></tr>
         <tr><td><b>Run-wide budget</b></td><td>A total step budget across the whole run, independent of any stage's limit.</td><td>Several stages each staying under their own limit while the run as a whole never finishes.</td></tr>
-        <tr><td><b>Convergence</b></td><td>A fix round that produces no change ends the loop immediately and parks.</td><td>An agent that reports success each round without editing anything. Neither counter would catch this before exhausting itself.</td></tr>
+        <tr><td><b>Convergence</b></td><td>A fix round that produces no change parks the loop. The measure is over the run's whole state, so the loop parks after its second round that changes nothing, not its first. The automatic loop and the rounds standing consent asks for both park this way; a round you ask for at a hold does not (section 14, decision 8).</td><td>An agent that reports success each round without editing anything. Neither counter would catch this before exhausting itself.</td></tr>
       </tbody>
     </table>
   </div>
@@ -912,8 +912,9 @@ flowchart TD
     test the change edited is reported as an edit, not detected as a weakening; that judgment is the
     reviewer's. And the rule stops the pipeline changing the judge after review, not changing the
     code. A test or lint round's edits to the rest of the code are reviewed before anything is
-    pushed, which section 14's seventh decision records; a checks round runs after the push and is
-    not.
+    pushed, which section 14's seventh decision records; a checks round runs after the push, and its
+    repair passes the review stage again before it is pushed, as "A repair after the push" below
+    records.
   </p>
 
   <h3 class="text-xl font-semibold mb-3">Waiting on checks</h3>
@@ -976,7 +977,37 @@ flowchart TD
     Where that path cannot do its job, the checks stage holds on the conflict instead and says
     why: the run pushed nothing, its head is not the commit it pushed, or the run skips the
     rebase, review, or push stage. A checks fix round's commit is not taken down this path; it
-    still holds, as section 14 decision 8 records.
+    takes a path of its own, back to the review stage, which "A repair after the push" below
+    describes.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">A repair after the push</h3>
+  <p class="mb-4 opacity-90">
+    A check that fails after the push takes the checks stage's fix round, and the repair reaches
+    the pull request only after it is reviewed again: the checks stage sends the run back to the
+    review stage. It adds no stage: it is a path between existing stages, and like every cycle it
+    is bounded. Every repair is one of the checks stage's fix rounds, and fix rounds are per run,
+    so a check still failing after the last round parks the run, and a repair already sent back
+    once counts as a further round rather than being sent back again.
+  </p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>The repair is anchored where the run left the branch.</b> Before it sends the run back,
+      the checks stage observes the branch and goes on only if it still stands at the commit the
+      push stage forwarded and the repair descends from that commit. A branch anybody else moved
+      since holds for you, so a commit someone else pushed there is never dropped.</li>
+    <li><b>The repair is reviewed again before it is pushed.</b> It passes the review stage in a
+      fresh session with no memory of the fix, then the test, document, and lint stages, as the
+      first pass did.</li>
+    <li><b>The second push is a fast-forward from the pushed commit.</b> The push stage updates the
+      branch only on that observation, checked against the live target like any push, so a branch
+      that moved after the checks stage observed it is refused and held.</li>
+    <li><b>You are told the repair was reviewed again</b> before it was added to the pull request,
+      or that it has not been added yet.</li>
+  </ul>
+  <p class="mb-8 opacity-90">
+    Where that path cannot do its job, the checks stage holds on the repair instead and says why:
+    the run pushed nothing, or it skips the review or push stage. A checks stage with no fix rounds
+    makes no repair, and the path is not there.
   </p>
 
   <h3 class="text-xl font-semibold mb-3">What passing the gate means</h3>
@@ -1043,7 +1074,7 @@ stateDiagram-v2
   Running --> Reported: investigation task
   Ready --> Landed: merge proof read from the code host, recorded once
   Held --> Landed: local task approved, fast-forward recorded once
-  Reported --> Complete: findings relayed, decisions recorded, cleanup proof recorded once
+  Reported --> Complete: findings relayed, recorded once
   Landed --> Complete: cleanup proof recorded once
   Running --> Failed: stopped, cannot proceed
   Failed --> Dispatched: relaunched with context
@@ -1056,7 +1087,7 @@ stateDiagram-v2
     terminal facts the program records once each: Landed is derived from the one merge record the
     code-host read writes, the same record the run's <code>passed</code> is derived from, or, for a
     task delivered under the <code>local</code> posture, from the local landing record its
-    approved fast-forward writes; and Complete is the cleanup proof, recorded once the same way. Neither is inferred from a run.
+    approved fast-forward writes; and Complete is, for a delivery task, the cleanup proof recorded once the same way and, for an investigation, the record that its findings were relayed, written once by the coordinator and not inferred from the report or from the cleanup proof. Neither is inferred from a run.
     The relaunch from Failed is bounded by section 10's <code>relaunch_attempts</code>: past it the
     task holds for you, and you decide whether it is retried.
   </p>
@@ -1122,7 +1153,7 @@ stateDiagram-v2
   </div>
   <p class="mb-4 opacity-90">The state resolver answers in a fixed precedence:</p>
   <ol class="list-decimal pl-6 space-y-1.5 mb-4 opacity-90">
-    <li>A terminal record the program wrote once for this task: Landed, derived from the merge record the code-host read writes or, for a <code>local</code> task, from the local landing record, or Complete, the cleanup proof. This outranks a run, because a passed run resolves Ready forever and only a record of what happened after it can move a task past that. A terminal record is final for the task. A run attributed to the same branch afterwards does not displace it. Work that continues after Landed is a new task.</li>
+    <li>A terminal record the program wrote once for this task: Landed, derived from the merge record the code-host read writes or, for a <code>local</code> task, from the local landing record, or Complete, the cleanup proof for a delivery task and the findings relayed record for an investigation. This outranks a run, because a passed run resolves Ready forever and only a record of what happened after it can move a task past that. A terminal record is final for the task. A run attributed to the same branch afterwards does not displace it. Work that continues after Landed is a new task.</li>
     <li>The hold tier: an open hold naming this task, which resolves Held, because the task is waiting on you. It sits below the terminal record and above the run, so a task waiting on you never resolves Failed or Unknown, and a terminal record still outranks it.</li>
     <li>A validation run attributed to this task's own branch, whether active or finished. This outranks everything below, because a worker handed off to the gate stops writing to its own log.</li>
     <li>A stored report: an investigation task whose report is stored resolves Reported. The report is a record the program wrote once, not an event, so it outranks the terminal below it: a worker still running after it filed and a worker whose terminal has ended have both delivered, and neither is a crash. The answer rests on the stored report and never on the log entry that says one was filed. A stored report is not Complete: Complete for an investigation stays the terminal record of the lifecycle's Reported to Complete edge, in the first tier, and is not inferred from the report or from the cleanup proof alone, so a reported investigation whose copy is gone without that record still resolves Reported. A promoted task is a delivery task and is not read by this tier.</li>
@@ -1177,6 +1208,7 @@ flowchart TD
   kind -->|"a run moved to held"| esc
   kind -->|"message unacknowledged"| esc
   kind -->|"no change"| abs["Absorb: advance markers, no model turn"]
+  kind -->|"the program's own entry: queued, dispatched"| abs
   ev -->|yes| abs
   ev -->|no| esc
   st -->|no| esc
@@ -1193,7 +1225,7 @@ flowchart TD
     <div class="card card-border bg-base-200">
       <div class="card-body">
         <h4 class="card-title text-sm">Absence of evidence surfaces</h4>
-        <p class="text-xs opacity-90">A wake is absorbed only when something positively proves work is proceeding. A worker that finished, crashed, or silently stopped produces no such proof, so it surfaces. Never absorb on elapsed time alone. Two kinds surface always and are never read as no change: terminal gone, which is a capture that failed, a probe that could not observe the terminal, or a terminal that died; and a run moved to held, which carries no worker event at all, because the supervisor that notices a stall is the one that notices a hold. A task that resolves Reported from its stored report is not watched for terminal gone: its worker has delivered, so a terminal that ends after the report is the work finishing, not a crash, and the report's own decisions reach you as holds.</p>
+        <p class="text-xs opacity-90">A wake is absorbed only when something positively proves work is proceeding. A worker that finished, crashed, or silently stopped produces no such proof, so it surfaces, unless its task resolves Reported, Landed, or Complete, as the end of this card says. Never absorb on elapsed time alone. The program's own intake and dispatch entries, <code>queued</code> and <code>dispatched</code>, are not a worker's wake at all: they record the program's own act, so they are absorbed and never wake the coordinator. Two kinds surface always and are never read as no change: terminal gone, which is a capture that failed, a probe that could not observe the terminal, or a terminal that died; and a run moved to held, which carries no worker event at all, because the supervisor that notices a stall is the one that notices a hold. A task that resolves Reported from its stored report is not watched for terminal gone: its worker has delivered, so a terminal that ends after the report is the work finishing, not a crash, and the report's own decisions reach you as holds. A task that resolves Landed or Complete is not watched for terminal gone either: its work is delivered, so a terminal that ends after that is the work finishing too.</p>
       </div>
     </div>
     <div class="card card-border bg-base-200">
@@ -1909,7 +1941,7 @@ flowchart TB
         <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write. Draining hands a row out; acknowledging closes it. The coordinator acknowledges a row after it has acted on it, and a row handed out and never acknowledged is handed out again: after a restart, and once the coordinator it was handed to is no longer attached. No row is deleted: closed rows are kept, and a row is actionable until acknowledged.</td></tr>
         <tr><td><b>merge record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the code-host read that ends a run on a merge: the pull request, the head read, and when. The code host owns the merge; this is the program's record that it saw it. The run's <code>passed</code> on a merge and the task's Landed are both derived from this one record, and neither stores the fact again.</td></tr>
         <tr><td><b>local landing record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the approved fast-forward that delivers a <code>local</code> task: the task, the commit, the local default branch's tip before and after, and when. The task's Landed for a <code>local</code> task is derived from it, read in the same tier as the merge record.</td></tr>
-        <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. The task's Complete is derived from it. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>
+        <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. A delivery task's Complete is derived from it; an investigation's Complete is derived from the record that its findings were relayed, never from this one. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>
         <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. One resolution the service makes itself is for the hold the checks stage raises when <code>checks_timeout</code> elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. The other is each answer section 9's standing consent gives, recorded under the resolver that consent has of its own. Every other hold keeps the rule.</td></tr>
         <tr><td><b>message</b></td><td>Authoritative, appended</td><td>One row per message sent to a worker: the task, the attempt, the text with credentials removed, and who sent it, derived from the surface. Each of written, refused, and acknowledged is recorded on it once and never revised, and it is the one place whether a message was delivered is read from. Section 6's steering says what writes each.</td></tr>
         <tr><td><b>seen mark</b></td><td>Authoritative, appended</td><td>One row per merge or cleanup record you were shown and marked seen, keyed the way that record is keyed. One per home. It is what section 9's catch-up reads to decide what landed since you last looked, and nothing else reads it.</td></tr>
@@ -2067,7 +2099,7 @@ flowchart TB
         <tr><td><code>assistant sync</code></td><td>Reconcile your local branch with what the pipeline pushed, or recover work it holds. Prints the exact plan and requires confirmation.</td></tr>
         <tr><td><code>assistant tasks</code></td><td>List fleet work with its resolved current state.</td></tr>
         <tr><td><code>assistant watch</code></td><td>Fleet view: everything in flight, everything waiting on you.</td></tr>
-        <tr><td><code>assistant doctor</code></td><td>Check every dependency, and decisively report whether a run can start at all.</td></tr>
+        <tr><td><code>assistant doctor</code></td><td>Check every dependency, and decisively report whether a run can start at all. Once <code>init</code> has run, also print the one next step of a first run, read from where the checkout's change stands, from making a branch through the push that sends it; that read writes nothing and decides nothing about whether a run can start.</td></tr>
         <tr><td><code>assistant service …</code></td><td>Start, stop, restart, status.</td></tr>
         <tr><td><code>assistant gate …</code></td><td>What the gate's own hooks invoke, not a verb a person drives: <code>admit</code> runs before any reference changes and refuses a push it cannot validate, and <code>notify</code> runs after and starts the run. They are named here because the hooks the gate installs depend on them existing; a person never types either.</td></tr>
         <tr><td><code>assistant host …</code></td><td>The coordinator's host and its hook. <code>install</code> is the one host verb a person types, once, for setup: it is section 6's stop guard installer. The other host verbs are hook plumbing a person never types: <code>stop</code> runs from the hook the host fires at turn end and is section 6's stop guard, answering whether the turn may end and blocking it when work is in flight and no live supervisor is the service holding this home's lock. It is named here because that hook depends on it existing. It is the second command outside the table, and with <code>assistant gate</code> it is not a precedent for a third: each is the interface a hook this program installed or asked for requires.</td></tr>
@@ -2212,8 +2244,11 @@ flowchart TB
     subcommands are <code>create</code>, <code>message</code>, <code>stop</code>, <code>peek</code>,
     <code>relaunch</code>, <code>promote</code>, <code>relayed</code>, <code>wakes</code>,
     <code>await</code>, <code>acknowledge</code>, and <code>supervision</code>. <code>await</code> blocks until the wake
-    queue holds a wake nobody has acknowledged, or until a bound the caller gives elapses, and then
-    lists the queue, acknowledging nothing. <code>peek</code> reads a task's worker's recent output,
+    queue holds a wake on offer to the caller, or until a bound the caller gives elapses, and then
+    hands those wakes out, acknowledging nothing: only <code>acknowledge</code> closes one, and when
+    a wake handed out is handed out again is section 8's <code>wake</code> row. <code>wakes</code>
+    hands wakes out the same way in the machine interface, which is the coordinator's; in a person's
+    rendering it is <code>wakes.peek</code>, a listing of the queued wakes that hands out nothing. <code>peek</code> reads a task's worker's recent output,
     redacted and bounded, and how to attach to its terminal where the provider offers that; the
     output and the attach command travel only in the machine interface, because worker output is
     evidence and never relayed (P13). The worker route, <code>assistant worker …</code>, is the route
@@ -2757,7 +2792,7 @@ flowchart TB
         <h3 class="card-title text-base mb-1">Deferred, with reasons</h3>
         <ul class="text-sm opacity-90 space-y-2.5">
           <li><b>Agent adapters beyond Claude Code.</b> Each one is a week of quirks, and agents without a native output schema need a whole parsing path. Build the interface now, the adapters when you need them.</li>
-          <li><b>Extra forge adapters.</b> Same reasoning. Do not promise breadth ahead of demand.</li>
+          <li><b>Extra forge adapters.</b> Same reasoning. Do not promise breadth ahead of demand. GitLab landed on that demand, addressed by a specifier that names its host, <code>gitlab.com/group/project</code>, where a GitHub one stays <code>owner/name</code>; the program does not merge on GitLab yet. The other code hosts stay deferred.</li>
           <li><b>Extra session providers.</b> One reference provider proves the abstraction, and tmux is now a provider beside it, chosen with <code>session_provider</code>. Claude Code workers run under tmux in the adapter's terminal mode, which section 1's Promise 1 and section 6's steering row describe. Further providers prove nothing new.</li>
           <li><b>Delegate coordinators.</b> The most complex feature in either source project. It only earns its cost at a fleet size you have not reached.</li>
           <li><b>The direct delivery mode.</b> The gate is the thesis, and this is the one mode that shares unvalidated work. When it is promoted, the program forwards the worker's pushed commit from the gate with an anchored update and the worker gains no second remote, and the merge record is its landed record. The local mode is not deferred: it shares nothing, and section 6 specifies it.</li>
@@ -2911,12 +2946,12 @@ flowchart TB
         <tr>
           <td class="prd-num">7</td>
           <td>Commits a fix round writes <b>after review are reviewed before they are pushed</b>, and only when there are some.</td>
-          <td>Closes the gap P5 left open for the test and lint stages, whose rounds were verified only by their own check. When the head is not the commit review read, the push stage reviews the commits between the two in a fresh session, as author code, with each stage's last round summary handed over as a claim, and holds with that review's findings unless all are notes. It is the review stage's own review measured from the reviewed commit, so the evidence rule, both lenses, and the decision-model checks apply unchanged. It adds no stage and no cycle: the stage order and why review comes before test both stand, because the first review still reads the code you wrote and the second reads only what the pipeline wrote. A run whose head is the reviewed commit pays nothing for it. The checks stage's rounds run after the push and are not covered. A pull request the code host reports as conflicting after the push is the one case where the run updates a pushed branch a second time, and it is reviewed by the same rule: the checks stage sends the run back to the rebase stage, which rebases only while the branch still stands at the commit the run pushed and only when the rebase applies cleanly, holding otherwise, so the run never decides conflicting content on its own. The result passes the review stage again in a fresh session, as author code, and the stages after it, and the push stage updates the branch a second time anchored on the commit the first push left there. That path is a cycle between existing stages, bounded at two passes back; it adds no stage, and section 5's "A conflict after the push" carries the detail.</td>
+          <td>Closes the gap P5 left open for the test and lint stages, whose rounds were verified only by their own check. When the head is not the commit review read, the push stage reviews the commits between the two in a fresh session, as author code, with each stage's last round summary handed over as a claim, and holds with that review's findings unless all are notes. It is the review stage's own review measured from the reviewed commit, so the evidence rule, both lenses, and the decision-model checks apply unchanged. It adds no stage and no cycle: the stage order and why review comes before test both stand, because the first review still reads the code you wrote and the second reads only what the pipeline wrote. A run whose head is the reviewed commit pays nothing for it. The checks stage's rounds run after the push, and their repair is reviewed on a path of its own: the checks stage sends the run back to the review stage, and the push stage updates the branch a second time only as a fast-forward from the commit the run pushed, bounded by the checks stage's round limit; section 5's "A repair after the push" carries the detail. A pull request the code host reports as conflicting after the push is the other case where the run updates a pushed branch a second time, and it is reviewed by the same rule: the checks stage sends the run back to the rebase stage, which rebases only while the branch still stands at the commit the run pushed and only when the rebase applies cleanly, holding otherwise, so the run never decides conflicting content on its own. The result passes the review stage again in a fresh session, as author code, and the stages after it, and the push stage updates the branch a second time anchored on the commit the first push left there. That path is a cycle between existing stages, bounded at two passes back; it adds no stage, and section 5's "A conflict after the push" carries the detail.</td>
         </tr>
         <tr>
           <td class="prd-num">8</td>
           <td>A fix round you ask for at a hold is <b>bounded at three per stage per run</b>, by a fixed number rather than a setting.</td>
-          <td>Section 5's Fix action is a second cycle through a stage, and every cycle carries a bound. Each of these rounds is your explicit answer, so the bound is a backstop against a loop nobody is driving rather than a policy a repository tunes, and section 10 gains no key for it. An answer asking for a fourth is refused while the hold is still open, so approve, skip, and cancel remain; the run-wide budget still counts every round. The round is held to the judge rule at every stage it is offered at, review and rebase included, because asking for a round is not approving an edit to a check. It is offered at the stages before push and not at push, pull request, or checks: push forwards a commit, so re-running it would push the round's result before you saw it, and a round at the two stages after it would leave a commit nothing pushes. The checks stage's rebase of a conflicted pull request, which decision 7 records, is not such a round: it is no fixer's work, and it reaches the pull request only through a second review and a second anchored push. A round that changes nothing returns to the hold and says so; it does not end the run on the convergence bound, because every such round is one you asked for.</td>
+          <td>Section 5's Fix action is a second cycle through a stage, and every cycle carries a bound. Each of these rounds is your explicit answer, so the bound is a backstop against a loop nobody is driving rather than a policy a repository tunes, and section 10 gains no key for it. An answer asking for a fourth is refused while the hold is still open, so approve, skip, and cancel remain; the run-wide budget still counts every round. The round is held to the judge rule at every stage it is offered at, review and rebase included, because asking for a round is not approving an edit to a check. It is offered at the stages before push and not at push, pull request, or checks: push forwards a commit, so re-running it would push the round's result before you saw it, and a round at the two stages after it would leave a commit nothing pushes. The checks stage's rebase of a conflicted pull request, which decision 7 records, is not such a round: it is no fixer's work, and it reaches the pull request only through a second review and a second anchored push. A round that changes nothing returns to the hold and says so; it does not end the run on the convergence bound, because every such round is one you asked for. A round standing consent asks for is not one you asked for: one that changes nothing counts toward the convergence bound, so a stuck consented loop parks after its second such round instead of spending this limit.</td>
         </tr>
         <tr>
           <td class="prd-num">9</td>
@@ -2952,6 +2987,11 @@ flowchart TB
           <td class="prd-num">15</td>
           <td><b>Windows is not supported</b>; macOS and Linux are.</td>
           <td>Section 8's process model says so. The build is still vetted for Windows so it does not rot, and the surfaces that already refuse there keep their refusals rather than gaining a Windows implementation. Section 13's end-to-end run is owed on macOS and Linux.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">16</td>
+          <td>P9's rule that a wake is absorbed <b>only on positive evidence</b> is about wakes that carry evidence; the program's own entries are absorbed by their kind.</td>
+          <td>Decided 2026-10-19 (#281, #320). P9 gains one sentence saying so, and section 5's flowchart gains the path: <code>queued</code> and <code>dispatched</code> record the program's own act, carry no evidence of anything, and never wake the coordinator.</td>
         </tr>
       </tbody>
     </table>
