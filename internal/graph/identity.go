@@ -23,6 +23,21 @@ import (
 // early or late with nothing to say it did. The exemption is in for the same
 // reason: it decides whether the fingerprint is compared at all.
 //
+// Whether an edge leaves a halt point also decides whether its fingerprint is
+// recorded and compared, and it is not in the digest, because it is a
+// property of the node the edge leaves rather than of the edge. Leaving it
+// out cannot read a fingerprint against an edge that did not produce it: a
+// recorded fingerprint is the state at a traversal of the same edge, by
+// endpoints and guard, whichever build recorded it. What a graph that adds or
+// removes a halt point under unchanged edges can do is compare against an
+// older traversal of that edge than the last one, or have nothing recorded
+// yet. The first can park, after an unattended answer, a run whose state
+// returned exactly to one it already left that edge in, and the second
+// compares one traversal later;
+// neither lets a loop run past a bound. Adding the property to the rendering
+// would refuse every run in flight under a graph with a halt point, which
+// those outcomes do not warrant.
+//
 // It covers nothing else. Nodes and state keys are outside it, and a
 // checkpoint's position and state are checked against them separately. Node
 // bodies are outside it and outside every other check a checkpoint meets: a

@@ -264,9 +264,17 @@ func (e *Executor) AnswerWith(ctx context.Context, run, answer, detail string) (
 // reason does not hold for an answer nobody attended, so a traversal of an
 // Answered edge that follows this answer is held to the convergence check
 // like any other back edge, and a round that changed no state parks the run
-// StatusConverged. The fact travels in the run's Counters, so it survives a
-// resume between the answer and the traversal, and every answer writes it,
-// so the next answer at a halt point decides afresh.
+// StatusConverged. The answer is also measured on the edge it takes out of
+// the halt point: when the run leaves by that edge in the state its previous
+// traversal left in, the round between the two answers changed nothing, and
+// the run parks StatusConverged there, standing where the edge leads, before
+// the round this answer asks for runs. The answer itself is recorded first,
+// on the checkpoint that claims the run, as any answer is; the package
+// documentation's "Bounding cycles" says why that comparison is the one that
+// parks a loop before it spends its round limit. The fact travels in the
+// run's Counters, so it survives a resume between the answer and the
+// traversal, and every answer writes it, so the next answer at a halt point
+// decides afresh.
 //
 // The second is claimed: when it is non-nil it is called once, with the
 // identifier of the checkpoint carrying the answer, after that checkpoint is
@@ -656,6 +664,10 @@ func (e *Executor) holdsClaim(ctx context.Context, cp Checkpoint) error {
 // The round limit is checked before convergence, matching the order the fix
 // loop uses: a round that is not eligible to happen never happens, so it never
 // gets to report that it changed nothing.
+//
+// Which traversals the convergence check records and compares is
+// Graph.recordsFingerprint and Graph.comparesFingerprint, the one statement of
+// that rule, which validateParkedAt reads too.
 func (e *Executor) checkEdgeBounds(cp *Checkpoint, edge int) (Status, string) {
 	declared := e.graph.edges[edge]
 	if declared.Rounds > 0 && cp.Counters.Traversals[edge] >= declared.Rounds {
@@ -663,19 +675,11 @@ func (e *Executor) checkEdgeBounds(cp *Checkpoint, edge int) (Status, string) {
 			"the edge from %q to %q reached its bound of %d rounds",
 			declared.From, declared.To, declared.Rounds)
 	}
-	if e.graph.back[edge] {
-		// An Answered edge records its fingerprint on every traversal and is
-		// compared only when the answer it follows was unattended, so such a
-		// round is measured against the round before it on this edge whoever
-		// asked for that one.
+	if e.graph.recordsFingerprint(edge) {
 		fingerprint := e.graph.fingerprint(cp.State)
-		held := !declared.Answered || cp.Counters.Unattended
+		held := e.graph.comparesFingerprint(edge, cp.Counters.Unattended)
 		if prev := cp.Counters.Fingerprints[edge]; held && prev != "" && prev == fingerprint {
-			reason := fmt.Sprintf("the round from %q to %q changed no state", declared.From, declared.To)
-			if declared.Answered {
-				reason += ", and the answer that asked for it was not a person's"
-			}
-			return StatusConverged, reason
+			return StatusConverged, e.graph.convergedReason(edge)
 		}
 		cp.Counters.Fingerprints[edge] = fingerprint
 	}

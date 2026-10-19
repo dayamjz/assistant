@@ -552,9 +552,25 @@
 // fixer writes, and not over the whole state. A round asked for by an answer
 // given through graph.Executor.AnswerUnattended, which is how
 // internal/service's standing consent answers, is held to the convergence
-// check over the whole state instead, against the round before it on the same
-// edge; this package builds the same edges either way, and which call
-// answered is the caller's.
+// check over the whole state instead; this package builds the same edges
+// either way, and which call answered is the caller's.
+//
+// Where that check is taken decides how many such rounds a stuck loop spends,
+// and internal/graph takes it in two places. The edge back closes a round
+// before the stage re-runs, and the report the first requested round read is
+// the one report no requested round left a hold in, so there the first two
+// rounds never compare equal and a loop of rounds that change nothing would
+// park only after the third, which with RequestedFixRounds at three is the
+// last the limit allows: the bound would have changed how the loop ended and
+// not what it spent. The edge in, out of the hold, is taken after the re-run,
+// so it compares the run as each answer sends it into a round: when the
+// answer that would start a third round finds the run exactly as the
+// second's did, the run parks converged there, standing at the request node,
+// and the third round never runs. Two rounds that change nothing are
+// therefore the fewest a stuck loop under an unattended answer spends,
+// because the first round's own effect includes the hold it leaves in the
+// stage's re-run report, so it is the second that is first seen to change
+// nothing.
 //
 // Convergence is computed over the whole state, which is internal/graph's
 // definition and not this package's. Two things a round writes therefore

@@ -107,6 +107,22 @@
 // the exemption's reading is: an unattended answer given through AnswerWith
 // keeps the exemption, and nothing here can tell.
 //
+// An unattended answer is also measured where it is given. Every edge leaving
+// a halt point records its fingerprint on every traversal, and one that
+// follows an unattended answer is compared with its previous traversal: equal
+// means the run is being sent on from exactly the state it was sent on from
+// last time, so the round between the two answers changed nothing, and the
+// run parks converged on that edge before the round the answer asks for runs.
+// A back edge closing a round cannot always see that in time, because it is
+// taken before what the round leads back to has run again: when that node
+// reports differently once any round has run, as internal/pipeline's stage
+// does once a requested round has left it a hold, the first two rounds never
+// compare equal there, and a loop that changes nothing would spend a third
+// round before parking. Graph.comparesFingerprint is the one statement of
+// which traversals are compared. The first traversal of an edge out of a
+// halt point has nothing to be compared with, so the earliest this parks is
+// the second answer to send a run along it.
+//
 // All three have to survive a resume intact, and intact means more than the
 // counts. A count is meaningless without the bound it is compared against and
 // the edge it accrued on, so a checkpoint's Counters carry those too: the
