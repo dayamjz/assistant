@@ -310,7 +310,7 @@ curl -fLO "$base/$archive"
 curl -fLO "$base/SHA256SUMS"
 grep -F "$archive" SHA256SUMS | shasum -a 256 -c -   # on Linux: grep -F "$archive" SHA256SUMS | sha256sum -c -
 tar -xzf "$archive"
-install -m 0755 "assistant_${VERSION}_${OS}_${ARCH}/assistant" /usr/local/bin/   # or any directory on PATH
+sudo install -m 0755 "assistant_${VERSION}_${OS}_${ARCH}/assistant" /usr/local/bin/   # or: mkdir -p ~/.local/bin && install -m 0755 ... ~/.local/bin/
 assistant --version   # assistant v0.1.0 COMMIT GO_VERSION
 ```
 
@@ -319,8 +319,10 @@ you downloaded; if the manifest has no line for it, or the digest differs,
 nothing after it runs.
 It shows the archive is the one published beside that `SHA256SUMS`, not who
 published it: both come from the same release, and nothing is signed yet.
-The binaries are built without cgo, so each is one static file with nothing
-else to install. A release build's `--version` names its release tag; any
+The binaries are built without cgo, so each archive holds one executable and
+no separate libraries to install beside it; on macOS that executable still
+links the system libraries the Go runtime uses. A release build's `--version`
+names its release tag; any
 other build names the module version Go recorded, `(devel)` included. There
 is no self-update.
 

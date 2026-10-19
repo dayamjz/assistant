@@ -175,7 +175,9 @@ jobs:
           cache: true
 
       # CGO_ENABLED=0 because the store's driver is pure Go on purpose, so
-      # every binary is static and none needs a C toolchain to build.
+      # none of these builds need a C toolchain. macOS binaries still link
+      # the system libraries Go's runtime uses; the verify step checks
+      # CGO_ENABLED=0 from the build metadata, not static linking.
       - name: Build
         shell: bash
         run: |
