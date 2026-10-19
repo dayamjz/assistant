@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/custody"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
@@ -456,6 +457,16 @@ type Task struct {
 	// copy's path. The person-facing rendering points at this field through
 	// TaskPhrase and never relays these words (P13).
 	Report *InvestigationReport `json:"report,omitempty"`
+	// Policy is what the posture recorded on the task requires, publishes
+	// and leaves to whom: config.Delivery.PolicyForNoCodeHost of that
+	// posture and its noCodeHost argument, whether the task's repository
+	// has no code host as codeHostOf decides for a run's start and taskPolicy
+	// passes as host.none. It is
+	// present exactly when both are known: the record holds a posture, and
+	// the repository the task names can be read and is one a run can start
+	// against. Otherwise it is absent. It is derived on every answer and
+	// never stored.
+	Policy *config.Policy `json:"policy,omitempty"`
 }
 
 // InvestigationReport is what task.get (and every other answer that carries

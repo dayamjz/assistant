@@ -193,7 +193,8 @@ const (
 	// set; "direct" is section 12's deferred mode and is refused at parse
 	// time rather than accepted and ignored. It decides only what a task's
 	// own push does, and only through the posture recorded on the task at
-	// intake: it never changes what a person's push to the gate does.
+	// intake: it never changes what a person's push to the gate does. What each
+	// value requires, publishes and leaves to whom is its Policy, posture.go.
 	KeyDelivery Key = "delivery"
 
 	// KeySessionProvider is "session_provider": which terminal session

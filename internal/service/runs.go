@@ -709,63 +709,89 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 }
 
 // forgeRepositoryFor returns the specifier the code host addresses this
-// repository by, whether the run has no code host, and an error when the run
-// must not start, all read from its record's upstream URL.
+// repository by, the fork's specifier, whether the run has no code host, and
+// an error when the run must not start, all read from its record's upstream
+// URL through codeHostOf, which owns the decision.
+func (s *Service) forgeRepositoryFor(ctx context.Context, repositoryID string) (string, string, bool, error) {
+	repository, err := s.store.Repository(ctx, repositoryID)
+	if err != nil {
+		return "", "", false, fmt.Errorf("service: reading the repository a run acts on: %w", err)
+	}
+	host, err := codeHostOf(repository)
+	if err != nil {
+		return "", "", false, err
+	}
+	return host.repository, host.fork, host.none, nil
+}
+
+// codeHost is where a run of one repository proposes its change, as
+// codeHostOf decided it from the repository's record.
+type codeHost struct {
+	// repository is the specifier the code host addresses the upstream by,
+	// empty when none is true.
+	repository string
+	// fork is the fork's specifier for a record that names a fork, and empty
+	// otherwise.
+	fork string
+	// none is true for a repository with no code host: a local path or
+	// file:// upstream, whose run ends pushed.
+	none bool
+}
+
+// codeHostOf is the one decision of where a run of repository proposes its
+// change. forgeRepositoryFor makes it at run start and taskView states it on
+// a delivery task's answer, so the two cannot disagree. An error is a
+// repository no run can start against.
 //
 // forge.RepositoryOf decides the three-way split issue #283 settled: a
 // repository on a host this build addresses (github.com or gitlab.com), a
 // local path or file:// remote with no code host, or a network host this
 // build cannot talk to. The first yields a specifier, which names its host
 // where the host is gitlab.com, so the service's forge.Hosts opens it on the
-// adapter it belongs to. The second yields an empty specifier and noCodeHost
-// true, so the pull request and checks stages skip after push and the run
-// ends pushed. The third is refused with ErrUnsupportedHost; begin ends the
+// adapter it belongs to. The second yields an empty specifier and none true,
+// so the pull request and checks stages skip after push and the run ends
+// pushed. The third is refused with ErrUnsupportedHost; begin ends the
 // pending record before that refusal returns, so the branch is not left with
 // an unfinished run.
 //
-// The second string result is the fork's specifier, for a record that names a
-// fork, and empty otherwise. A fork is the strict case: a run that names one
-// pushes there and proposes from there, so a record naming a fork that does
-// not resolve, or one on another host than its upstream, or naming one while
-// its upstream does not resolve, or naming the upstream itself as its fork, is
-// refused with ErrForkUnresolved before anything is recorded as running.
-// Pushing to the upstream instead, or to the fork with no pull request to
-// propose, would each be a guess about where the run's work goes. assistant
-// init refuses all four before it records a fork, so this is the record being
-// read as it is rather than a second place the rule is decided.
-func (s *Service) forgeRepositoryFor(ctx context.Context, repositoryID string) (string, string, bool, error) {
-	repository, err := s.store.Repository(ctx, repositoryID)
-	if err != nil {
-		return "", "", false, fmt.Errorf("service: reading the repository a run acts on: %w", err)
-	}
+// A fork is the strict case: a run that names one pushes there and proposes
+// from there, so a record naming a fork that does not resolve, or one on
+// another host than its upstream, or naming one while its upstream does not
+// resolve, or naming the upstream itself as its fork, is refused with
+// ErrForkUnresolved before anything is recorded as running. Pushing to the
+// upstream instead, or to the fork with no pull request to propose, would
+// each be a guess about where the run's work goes. assistant init refuses all
+// four before it records a fork, so this is the record being read as it is
+// rather than a second place the rule is decided.
+func codeHostOf(repository store.Repository) (codeHost, error) {
 	specifier, kind, upstreamResolved := forge.RepositoryOf(repository.UpstreamURL)
 	forkURL, named := repository.ForkURL.Get()
 	if !named {
 		switch {
 		case upstreamResolved:
-			return specifier, "", false, nil
+			return codeHost{repository: specifier}, nil
 		case kind == forge.RemoteLocal:
-			return "", "", true, nil
+			return codeHost{none: true}, nil
 		default:
-			return "", "", false, fmt.Errorf("%w: repository %s upstream %q",
-				ErrUnsupportedHost, repositoryID, repository.UpstreamURL)
+			return codeHost{}, fmt.Errorf("%w: repository %s upstream %q",
+				ErrUnsupportedHost, repository.ID, repository.UpstreamURL)
 		}
 	}
 	fork, forkKind, forkResolved := forge.RepositoryOf(forkURL)
 	switch {
 	case !upstreamResolved:
-		return "", "", false, fmt.Errorf("%w: repository %s names a fork and an upstream that is not a repository on a host "+
-			"this build addresses, so there is nothing to propose its pull request to", ErrForkUnresolved, repositoryID)
+		return codeHost{}, fmt.Errorf("%w: repository %s names a fork and an upstream that is not a repository on a host "+
+			"this build addresses, so there is nothing to propose its pull request to", ErrForkUnresolved, repository.ID)
 	case !forkResolved:
-		return "", "", false, fmt.Errorf("%w: repository %s names a fork that is not a repository on a host this build addresses",
-			ErrForkUnresolved, repositoryID)
+		return codeHost{}, fmt.Errorf("%w: repository %s names a fork that is not a repository on a host this build addresses",
+			ErrForkUnresolved, repository.ID)
 	case forkKind != kind:
-		return "", "", false, fmt.Errorf("%w: repository %s names a fork on %s and an upstream on %s, and a pull request "+
-			"is proposed between two repositories on one host", ErrForkUnresolved, repositoryID, forkKind, kind)
+		return codeHost{}, fmt.Errorf("%w: repository %s names a fork on %s and an upstream on %s, and a pull request "+
+			"is proposed between two repositories on one host", ErrForkUnresolved, repository.ID, forkKind, kind)
 	case strings.EqualFold(fork, specifier):
-		return "", "", false, fmt.Errorf("%w: repository %s names its upstream as its fork", ErrForkUnresolved, repositoryID)
+		return codeHost{}, fmt.Errorf("%w: repository %s names its upstream as its fork", ErrForkUnresolved, repository.ID)
 	}
-	return specifier, fork, false, nil
+	return codeHost{repository: specifier, fork: fork}, nil
 }
 
 // submittedSubject is the subject of the commit a run was submitted, read from

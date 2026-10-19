@@ -142,7 +142,12 @@ func localApprovalOf(key, task string) (commit, tip string, ok bool) {
 var errNotLocal = errors.New("service: the task is not recorded under the local delivery posture")
 
 // localPosture reports whether the task is a delivery task recorded under the
-// local posture.
+// local posture. A delivery task whose row holds no posture (store.Task's
+// Delivery says which rows can) is not local, so its push starts the full
+// run. The task's answer states no policy for that row (taskView), because
+// the answer says what the record holds and the record holds none; the push
+// path defaults to the stricter posture because a push has to take one path
+// or the other.
 func localPosture(task store.Task) bool {
 	posture, ok := task.Delivery.Get()
 	return ok && task.Shape == store.TaskDelivery && posture == config.DeliveryLocal

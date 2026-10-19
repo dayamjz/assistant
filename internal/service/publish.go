@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -165,6 +166,8 @@ func (s *Service) publishHoldByKey(ctx context.Context, key string) {
 // the same body the store holds (P8) rather than inferring it from history.
 // A row that cannot be decoded is omitted rather than inventing an empty
 // report; Basis.ReportStored still says one was filed.
+//
+// Policy is taskPolicy's answer.
 func (s *Service) taskView(ctx context.Context, o taskstate.Observed) machine.Task {
 	t := machine.Task{Record: o.Snapshot.Task, State: o.State}
 	if o.State.State == taskstate.Paused {
@@ -178,7 +181,44 @@ func (s *Service) taskView(ctx context.Context, o taskstate.Observed) machine.Ta
 	if _, ok := o.Snapshot.ReportStoredAt.Get(); ok {
 		t.Report = s.investigationReport(ctx, o.Snapshot.Task.ID)
 	}
+	t.Policy = s.taskPolicy(ctx, o.Snapshot.Task)
 	return t
+}
+
+// taskPolicy is the policy a task's answer states: the row of the posture
+// the task's record holds, with its landing authority taken from codeHostOf,
+// the decision a run of the task's repository starts from, so the answer and
+// the run cannot disagree about where the change lands. It is nil, and the
+// answer states no policy, whenever either fact is not known: the record
+// holds no posture (an investigation, or a delivery task recorded before
+// intake wrote one, whose push localPosture follows as the gate anyway), the
+// task names no repository, the repository row cannot be read, or codeHostOf
+// refuses the repository, so no run of it can start. A recorded posture
+// outside the closed set cannot reach here, because the store refuses to
+// read one back.
+func (s *Service) taskPolicy(ctx context.Context, task store.Task) *config.Policy {
+	posture, ok := task.Delivery.Get()
+	if !ok {
+		return nil
+	}
+	repositoryID, ok := task.RepositoryID.Get()
+	if !ok {
+		return nil
+	}
+	repository, err := s.store.Repository(ctx, repositoryID)
+	if err != nil {
+		s.log.Printf("task %s states no policy: its repository %s could not be read: %v", task.ID, repositoryID, err)
+		return nil
+	}
+	host, err := codeHostOf(repository)
+	if err != nil {
+		return nil
+	}
+	policy, ok := posture.PolicyForNoCodeHost(host.none)
+	if !ok {
+		return nil
+	}
+	return &policy
 }
 
 // investigationReport reads one task's stored report into the shape task.get
