@@ -24,8 +24,10 @@ func TestClassifyRemoteSeparatesGitHubLocalAndUnsupported(t *testing.T) {
 		{`C:\repos\assistant`, forge.RemoteLocal},
 		{`C:/repos/assistant`, forge.RemoteLocal},
 
-		{"https://gitlab.com/dayamjz/assistant.git", forge.RemoteUnsupported},
-		{"git@gitlab.com:dayamjz/assistant.git", forge.RemoteUnsupported},
+		{"https://gitlab.com/dayamjz/assistant.git", forge.RemoteGitLab},
+		{"git@gitlab.com:dayamjz/assistant.git", forge.RemoteGitLab},
+		{"https://gitlab.com/group/sub/project.git", forge.RemoteGitLab},
+		{"https://gitlab.example.com/dayamjz/assistant.git", forge.RemoteUnsupported},
 		{"https://github.example.com/dayamjz/assistant.git", forge.RemoteUnsupported},
 		{"https://notgithub.com/dayamjz/assistant.git", forge.RemoteUnsupported},
 		{"", forge.RemoteUnsupported},

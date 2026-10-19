@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/forge"
+	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -177,6 +178,7 @@ func carriesCredential(args []string, stdin string) (string, bool) {
 // TestMain runs the stand-in provider when the environment asks for it, and
 // the tests otherwise.
 func TestMain(m *testing.M) {
+	forgetest.Main()
 	if dir := os.Getenv(fakeGHDir); dir != "" {
 		os.Exit(fakeGHMain(dir))
 	}

@@ -565,7 +565,7 @@ func (s *Service) answerHeldUnderConsent(ctx context.Context, record store.Run) 
 	if err != nil {
 		return machine.Run{}, err
 	}
-	topo, err := s.topologyFor(built, resolved)
+	topo, err := s.topologyFor(ctx, built, resolved, record.RepositoryID)
 	if err != nil {
 		return machine.Run{}, err
 	}

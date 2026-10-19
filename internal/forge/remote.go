@@ -6,22 +6,24 @@ import (
 )
 
 // RemoteKind is how this build treats a git remote for pull requests and
-// checks. It is the trichotomy issue #283 settled: a host this adapter
-// addresses, a local path with no code host, or a network host this build
-// cannot talk to.
+// checks. It is the split issue #283 settled, plus the GitLab host this
+// build addresses: a host this build talks to, a local path with no code
+// host, or a network host this build cannot talk to.
 type RemoteKind int
 
 const (
 	// RemoteGitHub is a remote on GitHubHostname that GitHubRepository reads.
 	RemoteGitHub RemoteKind = iota
+	// RemoteGitLab is a remote on GitLabHostname that GitLabRepository reads.
+	RemoteGitLab
 	// RemoteLocal is a local path or a file:// remote: there is no code host
 	// to open a pull request on. A run of such a repository skips the pull
 	// request and checks stages after a successful push.
 	RemoteLocal
 	// RemoteUnsupported is a remote that names a network host this build does
-	// not address (GitLab, GitHub Enterprise, an scp-style host that is not
-	// github.com). A run against one is refused at start rather than walked
-	// to the pull request stage and stalled.
+	// not address (a self-hosted GitLab, GitHub Enterprise, an scp-style host
+	// that is not github.com or gitlab.com). A run against one is refused at
+	// start rather than walked to the pull request stage and stalled.
 	RemoteUnsupported
 )
 
@@ -30,6 +32,8 @@ func (k RemoteKind) String() string {
 	switch k {
 	case RemoteGitHub:
 		return "github"
+	case RemoteGitLab:
+		return "gitlab"
 	case RemoteLocal:
 		return "local"
 	case RemoteUnsupported:
@@ -42,10 +46,10 @@ func (k RemoteKind) String() string {
 // ClassifyRemote reports how this build treats remote for pull requests and
 // checks. remote is a git remote URL as internal/store holds it.
 //
-// The three answers are exhaustive and mutually exclusive: a github.com
-// repository this adapter addresses, a local path or file:// remote with no
-// code host, or a network host this build cannot talk to. An empty remote is
-// unsupported rather than local, because there is nothing to push to.
+// The answers are exhaustive and mutually exclusive: a github.com repository,
+// a gitlab.com repository, a local path or file:// remote with no code host,
+// or a network host this build cannot talk to. An empty remote is unsupported
+// rather than local, because there is nothing to push to.
 //
 // A bare name with no slash (for example "remote.git") is local: git accepts
 // that shape as a path, and this classifier does not invent a host for it.
@@ -62,12 +66,15 @@ func ClassifyRemote(remote string) RemoteKind {
 	if _, ok := GitHubRepository(remote); ok {
 		return RemoteGitHub
 	}
+	if _, ok := GitLabRepository(remote); ok {
+		return RemoteGitLab
+	}
 	if scheme, rest, found := strings.Cut(remote, "://"); found {
 		if strings.EqualFold(scheme, "file") {
 			return RemoteLocal
 		}
 		// A non-file scheme names a network resource this build does not
-		// address (GitLab, GHE, https to another host).
+		// address (a self-hosted GitLab, GHE, https to another host).
 		_ = rest
 		return RemoteUnsupported
 	}

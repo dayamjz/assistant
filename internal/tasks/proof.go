@@ -65,6 +65,7 @@ type landing struct {
 // number, and the head the merge was recorded at.
 type pullRequestFact struct {
 	repository string
+	kind       forge.RemoteKind
 	number     int
 	head       string
 }
@@ -98,7 +99,9 @@ func (c *Cleaner) taskLanding(ctx context.Context, task store.Task, copied *vcs.
 		}
 	}
 	if l.pullRequest != nil {
-		l.pullRequest.repository, _ = forge.GitHubRepository(l.upstream)
+		if spec, kind, ok := forge.HostedRepository(l.upstream); ok {
+			l.pullRequest.repository, l.pullRequest.kind = spec, kind
+		}
 	}
 	return l, nil
 }
@@ -118,8 +121,11 @@ func (c *Cleaner) runLanding(ctx context.Context, run store.Run, bare *vcs.Repos
 		return landing{}, err
 	}
 	if found && record.End == store.PullRequestMerged {
-		specifier, _ := forge.GitHubRepository(l.upstream)
-		l.pullRequest = &pullRequestFact{repository: specifier, number: record.PullRequest, head: record.Head}
+		fact := &pullRequestFact{number: record.PullRequest, head: record.Head}
+		if spec, kind, ok := forge.HostedRepository(l.upstream); ok {
+			fact.repository, fact.kind = spec, kind
+		}
+		l.pullRequest = fact
 	}
 	return l, nil
 }
@@ -188,6 +194,26 @@ func (c *Cleaner) remoteBranch(ctx context.Context, l landing) (Removal, string)
 	return Removal{proof: proof, examined: append(append([]string(nil), l.work...), tip), proven: true}, ""
 }
 
+// hostFor returns the host a merge-record proof opens for kind. A GitLab
+// proof with no GitLab host is refused in the returned detail rather than
+// opened on the GitHub host, because the specifier carries no host.
+func (c *Cleaner) hostFor(kind forge.RemoteKind) (forge.Host, string) {
+	switch kind {
+	case forge.RemoteGitHub:
+		if c.forge == nil {
+			return nil, "this build has no GitHub host for the merge record"
+		}
+		return c.forge, ""
+	case forge.RemoteGitLab:
+		if c.gitlab == nil {
+			return nil, "this build has no GitLab host for the merge record"
+		}
+		return c.gitlab, ""
+	default:
+		return nil, ""
+	}
+}
+
 // mergedPullRequest is the second proof: the pull request the merge record
 // names reads merged on the code host, into the default branch the upstream
 // confirms fresh, at the head the merge was recorded at, and that head,
@@ -201,7 +227,14 @@ func (c *Cleaner) mergedPullRequest(ctx context.Context, l landing) (Removal, st
 	if pr.repository == "" {
 		return Removal{proof: proof}, "the upstream is not a repository on the code host this build addresses"
 	}
-	provider, err := c.forge.Open(pr.repository)
+	host, why := c.hostFor(pr.kind)
+	if host == nil {
+		if why == "" {
+			why = "the upstream is not a repository on the code host this build addresses"
+		}
+		return Removal{proof: proof}, why
+	}
+	provider, err := host.Open(pr.repository)
 	if err != nil {
 		return Removal{proof: proof}, "the code host for " + pr.repository + " could not be opened: " + err.Error()
 	}

@@ -146,19 +146,23 @@ func intendedRepository(ctx context.Context, working, upstream, fork, defaultBra
 // forkOf refuses a fork a run could not both push to and propose from, with a
 // forkRefused saying which: a fork that is not a repository on the code host
 // this build proposes changes on, an upstream that is not one, or a fork
-// naming the upstream itself. Both are read through forge.GitHubRepository,
-// the same reading internal/service makes when a run begins, so init records
-// no fork a run would then refuse. It reads the two URLs and asks the code
-// host nothing; whether each repository exists, and whether the fork is a
-// fork of the upstream, are learned when a run first writes to them.
+// naming the upstream itself, or a fork on a different host than the
+// upstream. Both are read through forge.HostedRepository, the same reading
+// internal/service makes when a run begins, so init records no fork a run
+// would then refuse. It reads the two URLs and asks the code host nothing;
+// whether each repository exists, and whether the fork is a fork of the
+// upstream, are learned when a run first writes to them.
 func forkOf(upstream, fork string) error {
-	forkSpec, forkResolved := forge.GitHubRepository(fork)
+	forkSpec, forkKind, forkResolved := forge.HostedRepository(fork)
 	if !forkResolved {
 		return forkRefused{reason: machine.ForkUnaddressable}
 	}
-	upstreamSpec, upstreamResolved := forge.GitHubRepository(upstream)
+	upstreamSpec, upstreamKind, upstreamResolved := forge.HostedRepository(upstream)
 	if !upstreamResolved {
 		return forkRefused{reason: machine.ForkUpstreamUnaddressable}
+	}
+	if forkKind != upstreamKind {
+		return forkRefused{reason: machine.ForkUnaddressable}
 	}
 	if strings.EqualFold(forkSpec, upstreamSpec) {
 		return forkRefused{reason: machine.ForkIsUpstream}
@@ -626,8 +630,8 @@ func upstreamDelivery(ctx context.Context, records *store.Store, working string)
 		}
 	}
 	switch forge.ClassifyRemote(repository.UpstreamURL) {
-	case forge.RemoteGitHub:
-		spec, _ := forge.GitHubRepository(repository.UpstreamURL)
+	case forge.RemoteGitHub, forge.RemoteGitLab:
+		spec, _, _ := forge.HostedRepository(repository.UpstreamURL)
 		return machine.Check{
 			Name:   machine.CheckUpstream,
 			OK:     true,

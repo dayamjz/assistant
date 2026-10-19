@@ -128,7 +128,7 @@ func (s *Service) mergeUnderAutonomy(ctx context.Context, built *driver, record 
 	if err != nil {
 		return fmt.Errorf("service: run %s was not merged, because its configuration could not be read: %w", record.ID, err)
 	}
-	provider, err := s.forge.Open(facts.specifier)
+	provider, err := s.openCodeHost(ctx, record.RepositoryID, facts.specifier)
 	if err != nil {
 		return fmt.Errorf("service: run %s was not merged: %w", record.ID, err)
 	}

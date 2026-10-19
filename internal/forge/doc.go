@@ -3,8 +3,11 @@
 // state, with one interface and one adapter per provider, and PRD section 5's
 // pull request and checks stages are what it answers to.
 //
-// Provider is the interface. GitHub is the adapter over the gh command line,
-// and it is the only implementation in this module.
+// Provider is the interface. GitHub is the adapter over the gh command line.
+// GitLab is the adapter over GitLab's HTTP API. Which one a run gets is the
+// host of the repository row's upstream URL, read by HostedRepository. There
+// is no configuration key for the choice: a key would let a repository
+// document name a host the run record does not.
 //
 // # A provider addresses one repository, and a Host is how it gets one
 //
@@ -14,8 +17,8 @@
 // package splits the two by lifetime. Host holds what is settled once - the
 // command line, the environment, the redactor, the output bound - and
 // Host.Open takes the repository, which is the run's own fact and arrives from
-// the run's record. GitHubRepository is what reads that specifier out of the
-// upstream URL a record holds.
+// the run's record. HostedRepository is what reads that specifier out of the
+// upstream URL a record holds, trying GitHub and then GitLab.
 //
 // GitHubRepository reads a remote on GitHubHostname and no other host, and
 // every invocation is given that host in GH_HOST. Both are there for one
@@ -32,7 +35,8 @@
 // Opening a pull request is outward-facing and cannot be taken back, so the
 // two write operations - Open and UpdateBody - are preceded by a confirmation
 // that the repository the provider resolves this adapter's specifier to is
-// that specifier. An adapter that names no repository cannot write at all,
+// that specifier. Open, UpdateBody, and Merge are the writes, and each is
+// preceded by that confirmation. An adapter that names no repository cannot write at all,
 // because there is nothing for the provider's answer to be checked against.
 //
 // A specifier and the repository behind it are two things, and this package
@@ -156,7 +160,86 @@
 //
 // The GitHub adapter reads the provider's mergeable field and not its
 // merge-state summary, because that summary folds check status into the
-// mergeability answer and would collapse exactly the distinction above.
+// mergeability answer and would collapse exactly the distinction above. The
+// GitLab adapter reads merge_status and not detailed_merge_status for the
+// same reason: the detailed field folds pipelines, approvals, and discussions
+// into one word.
+//
+// # GitLab
+//
+// GitLab speaks GitLab's HTTP API, version 4. It does not shell out to glab
+// or to git. A request is built from https://gitlab.com/api/v4. GITLAB_TOKEN,
+// when the process environment sets it, is sent as the PRIVATE-TOKEN header.
+// It is not a configuration key and it is not put in the URL. A missing token
+// is the host's 401, read as ReasonUnauthenticated.
+//
+// Three measures keep a write on the repository the run named, adapted from
+// the GitHub adapter.
+//
+// GitLabRepository reads a specifier only out of a remote on GitLabHostname.
+// A self-hosted GitLab yields none, so a run against one is refused before a
+// request is built.
+//
+// Every request URL is built from https://gitlab.com/api/v4. The adapter does
+// not read GITLAB_HOST. Redirects are not followed; a 3xx is ReasonRejected
+// and the Location is not included in the refusal. WithGitLabEndpoint accepts
+// only https://gitlab.com or an http URL on a loopback host, which is how
+// labtest is reached. The service does not pass that option. An endpoint
+// carrying userinfo is refused.
+//
+// Before Open, UpdateBody, and Merge, the adapter GETs the project and
+// requires path_with_namespace to equal the specifier, ignoring letter case.
+// Find from a fork does that GET before it uses the numeric project id.
+// Ordinary Find, Get, and Checks do not confirm. The confirmation is not a
+// lock against a later rename, and a resume whose repository row has changed
+// host still carries the specifier its graph state recorded; the confirmation
+// is what refuses the write.
+//
+// Neither adapter reads a host's reviews, approvals, or discussion threads.
+// On GitLab, a merge the host refuses because it is not approved, or because
+// discussions are unresolved, arrives as ReasonRejected from Merge. It is not
+// reported as a check.
+//
+// Status checks differ. The GitHub adapter reads gh's check rollup. The
+// GitLab adapter reads the merge request's pipeline list and the commit
+// statuses on its sha, and drops a pipeline whose sha is an older head of the
+// same merge request. An empty list of both is an empty ChecksReport, and
+// Evaluate does not treat it as green. A pipeline status of canceled, spelled
+// with one L, is CheckStateCancelled, settled, and not a pass. The two-L
+// spelling cancelled is unrecognized and not settled, so the caller waits.
+// manual is pending: the pipeline is waiting for a person to play a job and
+// has not published a conclusion. A word outside the lists GitLab's pipeline
+// and commit-status documentation names is unrecognized.
+//
+// Mergeability on GitLab: can_be_merged is mergeable, cannot_be_merged is
+// conflicted, and unchecked, checking, and cannot_be_merged_recheck stay
+// unknown. The state locked is PullRequestStateUnknown. A project path may
+// name a group under a group; a web URL that inserts /-/ before blob or tree
+// is not read as a project.
+//
+// Merge is bound to the observed head by the merge endpoint's sha parameter.
+// The host rejects the merge unless the source branch's HEAD is that commit.
+// An empty head is refused before any request is sent. The adapter does not
+// send squash or a merge method; the project's own merge_method applies.
+//
+// A 401 on any request, including merge, is ReasonUnauthenticated. GitLab's
+// merge documentation also lists 401 as lacking permission to merge. This
+// adapter does not read the message to tell those apart, so a permission
+// refusal reported as 401 is read as unauthenticated and the host's message
+// is in the refusal's detail.
+//
+// None of this was exercised against a live gitlab.com. The request shapes
+// and the status words are taken from GitLab's documented API for merge
+// requests, pipelines, and commit statuses. labtest answers with those
+// shapes, and the conformance test runs the same assertions against that
+// stand-in and against forgetest. A self-hosted GitLab, a project that is
+// not on gitlab.com, and a port other than the standard one are not
+// addressed. Dropping the port is the same trade GitHubRepository names.
+// The GitLab adapter starts no provider process; the grace deadline and the
+// descendant gap below are the GitHub command's.
+//
+// assistant doctor's code-host row probes the gh command. It does not probe
+// this HTTP client.
 //
 // # A provider that cannot answer refuses
 //

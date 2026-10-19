@@ -14,6 +14,17 @@ import (
 // not address one; what that costs is stated in GitHubRepository.
 const GitHubHostname = "github.com"
 
+// GitLabHostname is the code host the GitLab adapter addresses. It is the
+// only host GitLabRepository will read a specifier out of, and the only
+// network host a GitLab request is sent to. A self-hosted GitLab is a
+// different host and this adapter does not address one, for the same reason
+// GitHubHostname does not address GitHub Enterprise.
+const GitLabHostname = "gitlab.com"
+
+// gitLabAPI is the base URL every GitLab request is built from when no
+// loopback stand-in is named. It is not read from the environment.
+const gitLabAPI = "https://gitlab.com/api/v4"
+
 // GitHubRepository returns the specifier the GitHub adapter addresses the
 // repository at remote by, and reports whether remote named one.
 //
@@ -49,6 +60,49 @@ func GitHubRepository(remote string) (string, bool) {
 		return "", false
 	}
 	return path, true
+}
+
+// GitLabRepository returns the specifier the GitLab adapter addresses the
+// repository at remote by, and reports whether remote named one.
+//
+// It reads only a remote on GitLabHostname, on GitHubRepository's terms: a
+// remote on any other host, including a self-hosted GitLab, is not a
+// repository this adapter can address. Returning a path out of one anyway
+// would send a merge request to the gitlab.com project that happens to share
+// the name, because the path this package puts on a request names no host.
+//
+// A GitLab project path may name a group under a group. Each segment is held
+// to the same characters validRepository allows, and a segment of "." or ".."
+// is refused. A remote it does not recognize is a false second result rather
+// than an error, on GitHubRepository's terms.
+func GitLabRepository(remote string) (string, bool) {
+	host, path, ok := splitRemote(strings.TrimSpace(remote))
+	if !ok || !strings.EqualFold(host, GitLabHostname) {
+		return "", false
+	}
+	path = strings.Trim(path, "/")
+	path = strings.TrimSuffix(path, ".git")
+	if !validGitLabRepository(path) {
+		return "", false
+	}
+	return path, true
+}
+
+// HostedRepository returns the specifier and the host kind remote names when
+// this build addresses that host. A remote it does not address returns a
+// false ok and the kind ClassifyRemote would report, so a caller can tell a
+// local path from a host this build does not talk to without a second parse.
+//
+// GitHub is tried first and GitLab second. The two hostnames do not overlap,
+// so a remote is never a specifier on both.
+func HostedRepository(remote string) (spec string, kind RemoteKind, ok bool) {
+	if spec, ok = GitHubRepository(remote); ok {
+		return spec, RemoteGitHub, true
+	}
+	if spec, ok = GitLabRepository(remote); ok {
+		return spec, RemoteGitLab, true
+	}
+	return "", ClassifyRemote(remote), false
 }
 
 // splitRemote separates a git remote URL into the host it names and the path
@@ -123,6 +177,22 @@ func validRepository(spec string) bool {
 		return false
 	}
 	return validRepositorySegment(owner) && validRepositorySegment(name)
+}
+
+// validGitLabRepository reports whether spec is a GitLab project path: two or
+// more segments, each a repository segment, none of them "." or "..". One
+// segment is a GitLab user or group snippet, not a project, and is refused.
+func validGitLabRepository(spec string) bool {
+	parts := strings.Split(spec, "/")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "." || part == ".." || !validRepositorySegment(part) {
+			return false
+		}
+	}
+	return true
 }
 
 func validRepositorySegment(seg string) bool {

@@ -151,8 +151,16 @@ type Options struct {
 	// command line that cannot be run surfaces from a read as a *forge.Refusal
 	// with forge.ReasonUnavailable, never from Open. It is one host for both
 	// readers on purpose, so what a stage read and what the service re-reads
-	// come from the same place.
+	// come from the same place. It is the GitHub host. A gitlab.com
+	// repository is opened through GitLab, not through this field.
 	Forge forge.Host
+	// GitLab is the host a gitlab.com repository is opened through. Zero
+	// means GitLab over HTTPS to gitlab.com, with GITLAB_TOKEN from the
+	// process environment when one is set. The service does not pass an
+	// endpoint, so a test that needs a stand-in passes a host opened on a
+	// loopback one. A repository document cannot point a run at a different
+	// host than the run record: GitLabRepository reads only gitlab.com.
+	GitLab forge.Host
 	// Terminals is what the supervisor loop observes a task's terminal
 	// through, and what every task reader this service builds probes
 	// through, reconciliation's included. Nil, which is what the product
@@ -228,9 +236,13 @@ type Service struct {
 	// It is built once at Open, from the key in the operator's environment,
 	// with the recorder that feeds the store's decision-model record.
 	judge *judge.Client
-	// forge is the code host, settled at Open from Options.Forge; checkshold.go
-	// is the one reader of it outside the stage dependencies.
-	forge forge.Host
+	// forge is the GitHub host, settled at Open from Options.Forge. gitlab is
+	// the GitLab host, settled from Options.GitLab. codeHost picks which one
+	// a repository row's upstream names; a stage topology is built with that
+	// host, and the reads outside the stages (a checks hold, a merge read, an
+	// autonomy merge) open through the same choice.
+	forge  forge.Host
+	gitlab forge.Host
 	// terminals is Options.Terminals, or heldTerminals over this service's
 	// own provider when none was passed: the one seam a task's terminal is
 	// observed through, which the supervisor loop probes and captures
@@ -506,6 +518,10 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		// makes the one owner of what is removed.
 		s.forge = forge.NewGitHubHost(redact.New())
 	}
+	s.gitlab = o.GitLab
+	if s.gitlab == nil {
+		s.gitlab = forge.NewGitLabHost(redact.New())
+	}
 	if s.catalog == nil {
 		// The shipped adapters are built with the recorder that feeds the
 		// store's agent invocation history, so a run's cost is recorded
@@ -563,7 +579,7 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	if s.queue, err = s.newQueue(); err != nil {
 		return err
 	}
-	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err != nil {
+	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge, GitLab: s.gitlab}); err != nil {
 		return err
 	}
 
@@ -820,13 +836,21 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 // pull request's checks is measured from, because checks_timeout has to
 // survive the segment that began waiting: a resume after a restart or a
 // walked-away caller re-enters the same wait rather than beginning another.
-// It is handed the service's one code host too, so the pull request it reads
-// while it waits and the one this service re-reads at the hold that wait
-// leaves are read through the same adapter.
-func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology, error) {
+// It is handed the host codeHost chooses for this repository, so the pull
+// request it reads while it waits and the one this service re-reads at the
+// hold that wait leaves are read through the same adapter. Two runs that
+// resolve the same documents on different hosts do not share a topology:
+// a GitHub specifier and a GitLab path are not interchangeable, and handing
+// the GitHub host a GitLab path would send the request to github.com.
+func (s *Service) topologyFor(ctx context.Context, built *driver, resolved runResolution, repositoryID string) (*topology, error) {
+	host, kind, err := s.codeHost(ctx, repositoryID)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if topo, ok := s.topologies[resolved.digest]; ok {
+	key := resolved.digest + "\n" + kind.String()
+	if topo, ok := s.topologies[key]; ok {
 		return topo, nil
 	}
 	redactor := redact.New()
@@ -834,7 +858,7 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		agents.NewStageAgent(built.agent.Runner),
 		s.home,
 		resolved.cfg,
-		s.forge,
+		host,
 		redactor,
 		vcs.WithRedactor(redactor),
 	).WithJudge(s.judge).WithChecksWaits(s.store).WithRunRecords(s.store)
@@ -870,8 +894,46 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		return nil, err
 	}
 	topo := &topology{pipeline: pipe, executor: executor, allowsConsent: resolved.cfg.AllowStandingConsent}
-	s.topologies[resolved.digest] = topo
+	s.topologies[key] = topo
 	return topo, nil
+}
+
+// codeHost returns the host the repository row's upstream names. A
+// github.com or local upstream uses the GitHub host; a local upstream's
+// stages skip the pull request, and the host is what a topology still
+// carries. A gitlab.com upstream uses the GitLab host. Any other network
+// host is ErrUnsupportedHost. The choice is the row, not a configuration
+// key and not the checkout's remote.
+func (s *Service) codeHost(ctx context.Context, repositoryID string) (forge.Host, forge.RemoteKind, error) {
+	repository, err := s.store.Repository(ctx, repositoryID)
+	if err != nil {
+		return nil, 0, fmt.Errorf("service: reading the repository a run acts on: %w", err)
+	}
+	kind := forge.ClassifyRemote(repository.UpstreamURL)
+	switch kind {
+	case forge.RemoteGitLab:
+		if s.gitlab == nil {
+			return nil, kind, fmt.Errorf("%w: repository %s", ErrUnsupportedHost, repositoryID)
+		}
+		return s.gitlab, kind, nil
+	case forge.RemoteGitHub, forge.RemoteLocal:
+		return s.forge, kind, nil
+	default:
+		return nil, kind, fmt.Errorf("%w: repository %s upstream %q",
+			ErrUnsupportedHost, repositoryID, repository.UpstreamURL)
+	}
+}
+
+// openCodeHost opens the provider for specifier on the host the repository
+// row names. A specifier is owner/name or a GitLab project path and carries
+// no host, so opening it on the other host would address a different
+// repository that happens to share the path.
+func (s *Service) openCodeHost(ctx context.Context, repositoryID, specifier string) (forge.Provider, error) {
+	host, _, err := s.codeHost(ctx, repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	return host.Open(specifier)
 }
 
 // newInstanceID mints the identifier one serving process is known by. It is

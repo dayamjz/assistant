@@ -569,9 +569,12 @@ run (`no_code_host`), and the run ends `pushed` rather than `checks-passed`
 (checks that did not run are never claimed). Merge the change on the remote
 yourself. `assistant doctor` says so up front on its upstream row.
 
-A remote that names a network host this build does not address (GitLab, GitHub
-Enterprise, an scp-style host that is not github.com) is refused when a run
-starts, with a typed error, rather than walked eight stages and stalled.
+A remote on gitlab.com is addressed by the GitLab adapter. A remote that names
+a network host this build does not address (a self-hosted GitLab, GitHub
+Enterprise, an scp-style host that is not github.com or gitlab.com) is refused
+when a run starts, with a typed error, rather than walked eight stages and
+stalled. `assistant doctor`'s code-host row probes the `gh` command; it does
+not probe the GitLab HTTP client.
 
 ## Merge order and stacking
 

@@ -48,7 +48,7 @@ import (
 //
 // A forge.Provider addresses exactly one repository, so it is not an adapter a
 // service can settle once: one All builds one pipeline and one executor, and
-// those serve every run of that service, so a Provider captured here would
+// those serve every run that resolved the same documents on the same host, so a Provider captured here would
 // send every run's pull request to the repository the first one happened to be
 // for. The same argument that put the isolated copy's path in state rather
 // than on this struct applies to it unchanged.
@@ -56,7 +56,9 @@ import (
 // The two halves land on the two sides. forge.Host is the adapter: the
 // provider command line, the environment it runs in, the redactor, and the
 // output bound are the service's decisions and do not vary with the run, so a
-// Host is built once and lives here. Which repository is the run's own fact,
+// Host is built once for that seam and lives here. A service builds a
+// separate seam for each host kind, because the GitHub host and the GitLab
+// host are not the same adapter. Which repository is the run's own fact,
 // so it is KeyForgeRepository, filled from the run's record the way
 // KeyRepository and KeyRun are, and a body reaches a Provider by opening one
 // on that key.
@@ -124,20 +126,22 @@ type StageDeps struct {
 	// It is PRD section 10's full resolution - the operator's layer, the
 	// repository document's trusted copy, and its pushed copy - which
 	// internal/service resolves per run and builds one of these seams for
-	// each distinct resolution of, so one StageDeps still serves every run
-	// that resolved the same documents.
+	// each distinct resolution of, and one more per host kind, so one
+	// StageDeps still serves every run that resolved the same documents on
+	// the same host.
 	Config config.Config
 	// Forge is the code host the pull request and checks stages open their
 	// provider on. It is a forge.Host and not a forge.Provider because a
 	// Provider addresses one repository and this seam is built once per
-	// service; the repository is pipeline.KeyForgeRepository, and a body
-	// passes it to Open.
+	// resolved configuration and host kind; the repository is
+	// pipeline.KeyForgeRepository, and a body passes it to Open.
 	//
-	// It is nil only where nothing wired it: internal/service builds one
-	// forge.GitHubHost and every run of that service opens through it. A run
-	// whose KeyForgeRepository is empty has no provider to open, because
-	// forge.Host.Open refuses an empty specifier; a body that needs a code
-	// host is to report that rather than proceed without one.
+	// It is nil only where nothing wired it. internal/service builds one
+	// seam per host kind, so a gitlab.com run is handed a forge.GitLabHost
+	// and a github.com run a forge.GitHubHost, and the two do not share a
+	// specifier. A run whose KeyForgeRepository is empty has no provider to
+	// open, because forge.Host.Open refuses an empty specifier; a body that
+	// needs a code host is to report that rather than proceed without one.
 	Forge forge.Host
 	// git are the options every repository opened through Copy is opened
 	// with, which is how the redactor the service configured reaches the

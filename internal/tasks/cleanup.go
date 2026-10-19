@@ -309,7 +309,10 @@ type RunCopy struct {
 	Gate string
 }
 
-// CleanupDeps is what a Cleaner is built from. Every field is required.
+// CleanupDeps is what a Cleaner is built from. Home, Store, and Forge are
+// required. GitLab may be nil: a merge-record proof of a gitlab.com
+// repository then refuses to open a provider rather than sending that
+// project's path to Forge.
 type CleanupDeps struct {
 	// Home says where a task's copy and a run's copy stand.
 	Home *home.Home
@@ -317,17 +320,22 @@ type CleanupDeps struct {
 	// merge record, the stored report, the holds, and the cleanup record
 	// this writes.
 	Store *store.Store
-	// Forge is the code host the merged-pull-request proof reads.
+	// Forge is the GitHub host the merged-pull-request proof reads for a
+	// github.com repository.
 	Forge forge.Host
+	// GitLab is the GitLab host the same proof reads for a gitlab.com
+	// repository. Nil means that proof cannot open one.
+	GitLab forge.Host
 }
 
 // Cleaner is the cleanup decision over one home and one store. It is safe
 // for concurrent use; what serializes two cleanups of one copy is the
 // record's write-once claim.
 type Cleaner struct {
-	home  *home.Home
-	store *store.Store
-	forge forge.Host
+	home   *home.Home
+	store  *store.Store
+	forge  forge.Host
+	gitlab forge.Host
 	// betweenProofAndRemoval runs after the proof is recorded and before
 	// the copy is re-read and removed. It is nil in production and set only
 	// by this package's tests, which use it to change the copy inside the
@@ -340,8 +348,8 @@ type Cleaner struct {
 	betweenDecisionAndClaim func()
 }
 
-// NewCleaner builds a Cleaner, refusing with ErrIncomplete when any
-// dependency is nil.
+// NewCleaner builds a Cleaner, refusing with ErrIncomplete when Home, Store,
+// or Forge is nil. GitLab may be nil.
 func NewCleaner(d CleanupDeps) (*Cleaner, error) {
 	switch {
 	case d.Home == nil:
@@ -351,7 +359,7 @@ func NewCleaner(d CleanupDeps) (*Cleaner, error) {
 	case d.Forge == nil:
 		return nil, fmt.Errorf("%w: no code host", ErrIncomplete)
 	}
-	return &Cleaner{home: d.Home, store: d.Store, forge: d.Forge}, nil
+	return &Cleaner{home: d.Home, store: d.Store, forge: d.Forge, gitlab: d.GitLab}, nil
 }
 
 // CleanUp decides whether a task's copy may be removed and removes it when

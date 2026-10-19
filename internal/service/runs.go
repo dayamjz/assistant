@@ -395,7 +395,7 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 	if err != nil {
 		return machine.Run{}, err
 	}
-	topo, err := s.topologyFor(built, resolved)
+	topo, err := s.topologyFor(ctx, built, resolved, record.RepositoryID)
 	if err != nil {
 		return machine.Run{}, err
 	}
@@ -589,7 +589,7 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 	if err != nil {
 		return machine.Run{}, err
 	}
-	topo, err := s.topologyFor(built, resolved)
+	topo, err := s.topologyFor(ctx, built, resolved, settled.RepositoryID)
 	if err != nil {
 		return machine.Run{}, err
 	}
@@ -692,7 +692,7 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	if err := s.store.SetRunResolvedAgent(ctx, record.ID, built.agent.Name); err != nil {
 		return machine.Run{}, err
 	}
-	topo, err := s.topologyFor(built, resolved)
+	topo, err := s.topologyFor(ctx, built, resolved, record.RepositoryID)
 	if err != nil {
 		return machine.Run{}, err
 	}
@@ -712,13 +712,14 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 // repository by, whether the run has no code host, and an error when the run
 // must not start, all read from its record's upstream URL.
 //
-// forge.ClassifyRemote decides the trichotomy: a github.com repository this
-// build addresses, a local path or file:// remote with no code host, or a
-// network host this build cannot talk to. The first yields a specifier. The
-// second yields an empty specifier and noCodeHost true, so the pull request
-// and checks stages skip after push and the run ends pushed. The third is
-// refused with ErrUnsupportedHost; begin ends the pending record before that
-// refusal returns, so the branch is not left with an unfinished run.
+// forge.ClassifyRemote decides the trichotomy: a github.com or gitlab.com
+// repository this build addresses, a local path or file:// remote with no
+// code host, or a network host this build cannot talk to. The first yields a
+// specifier. The second yields an empty specifier and noCodeHost true, so the
+// pull request and checks stages skip after push and the run ends pushed. The
+// third is refused with ErrUnsupportedHost; begin ends the pending record
+// before that refusal returns, so the branch is not left with an unfinished
+// run. A self-hosted GitLab and a GitHub Enterprise host are the third.
 //
 // The second string result is the fork's specifier, for a record that names a
 // fork, and empty otherwise. A fork is the strict case: a run that names one
@@ -735,12 +736,11 @@ func (s *Service) forgeRepositoryFor(ctx context.Context, repositoryID string) (
 	if err != nil {
 		return "", "", false, fmt.Errorf("service: reading the repository a run acts on: %w", err)
 	}
-	kind := forge.ClassifyRemote(repository.UpstreamURL)
-	specifier, upstreamResolved := forge.GitHubRepository(repository.UpstreamURL)
+	specifier, kind, upstreamResolved := forge.HostedRepository(repository.UpstreamURL)
 	forkURL, named := repository.ForkURL.Get()
 	if !named {
 		switch kind {
-		case forge.RemoteGitHub:
+		case forge.RemoteGitHub, forge.RemoteGitLab:
 			return specifier, "", false, nil
 		case forge.RemoteLocal:
 			return "", "", true, nil
@@ -749,14 +749,14 @@ func (s *Service) forgeRepositoryFor(ctx context.Context, repositoryID string) (
 				ErrUnsupportedHost, repositoryID, repository.UpstreamURL)
 		}
 	}
-	fork, forkResolved := forge.GitHubRepository(forkURL)
+	fork, forkKind, forkResolved := forge.HostedRepository(forkURL)
 	switch {
 	case !upstreamResolved:
-		return "", "", false, fmt.Errorf("%w: repository %s names a fork and an upstream that is not a repository on %s, "+
-			"so there is nothing to propose its pull request to", ErrForkUnresolved, repositoryID, forge.GitHubHostname)
-	case !forkResolved:
-		return "", "", false, fmt.Errorf("%w: repository %s names a fork that is not a repository on %s",
-			ErrForkUnresolved, repositoryID, forge.GitHubHostname)
+		return "", "", false, fmt.Errorf("%w: repository %s names a fork and an upstream this build does not address, "+
+			"so there is nothing to propose its pull request to", ErrForkUnresolved, repositoryID)
+	case !forkResolved || forkKind != kind:
+		return "", "", false, fmt.Errorf("%w: repository %s names a fork that is not a repository on the same host as its upstream",
+			ErrForkUnresolved, repositoryID)
 	case strings.EqualFold(fork, specifier):
 		return "", "", false, fmt.Errorf("%w: repository %s names its upstream as its fork", ErrForkUnresolved, repositoryID)
 	}

@@ -321,7 +321,7 @@ func (s *Service) readPersonMerge(ctx context.Context, record store.Run) (mergeR
 		s.log.Printf("run %s: the read for merges could not build the run service, so nothing was read: %v", record.ID, err)
 		return mergeReadFailed, true
 	}
-	provider, err := s.forge.Open(facts.specifier)
+	provider, err := s.openCodeHost(ctx, record.RepositoryID, facts.specifier)
 	if err != nil {
 		s.log.Printf("run %s: the read for merges could not open the code host for %s: %v", record.ID, facts.specifier, err)
 		return mergeReadFailed, true

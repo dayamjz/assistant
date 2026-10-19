@@ -189,7 +189,7 @@ func (s *Service) readChecksHoldPullRequest(ctx context.Context, record store.Ru
 		s.log.Printf("held run %s stays held: %v", record.ID, err)
 		return none, findings.Report{}, false
 	}
-	provider, err := s.forge.Open(repository)
+	provider, err := s.openCodeHost(ctx, record.RepositoryID, repository)
 	if err != nil {
 		s.log.Printf("held run %s stays held: the code host for %s could not be opened: %v", record.ID, repository, err)
 		return none, findings.Report{}, false

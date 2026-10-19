@@ -68,9 +68,9 @@ func TestInitRecordsAForkBesideItsUpstream(t *testing.T) {
 }
 
 // init refuses a fork a run could neither send its branch to and propose
-// from: one that is not a repository on github.com, one given beside an
-// upstream that is not, and one naming the upstream itself in another
-// spelling. Each refusal is incorrect usage, because the remedy is a flag the
+// from: one on a different host than the upstream, one given beside an
+// upstream this build does not address, and one naming the upstream itself
+// in another spelling. Each refusal is incorrect usage, because the remedy is a flag the
 // caller supplies, is internal/machine's row for its reason in both
 // renderings, and sets up nothing: no gate, no record. The control is the
 // same pair given correctly in the test above.

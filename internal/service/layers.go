@@ -77,11 +77,12 @@ var ErrRepositoryAgent = errors.New("service: this build resolves one agent per 
 var ErrForkUnresolved = errors.New("service: the repository record names a fork this run cannot push to and propose from")
 
 // ErrUnsupportedHost reports a repository whose upstream names a network host
-// this build does not address (GitLab, GitHub Enterprise, an scp-style host
-// that is not github.com, or a scheme-less host/path form). The run is refused
-// rather than walked to the pull request stage and stalled; begin ends any
-// pending record for that refusal before returning, so the branch is not left
-// with an unfinished run. A local path or file:// remote is not this error:
+// this build does not address (a self-hosted GitLab, GitHub Enterprise, an
+// scp-style host that is not github.com or gitlab.com, or a scheme-less
+// host/path form). gitlab.com is addressed. The run is refused rather than
+// walked to the pull request stage and stalled; begin ends any pending
+// record for that refusal before returning, so the branch is not left with
+// an unfinished run. A local path or file:// remote is not this error:
 // those have no code host and the run skips the pull request and checks
 // stages after push.
 var ErrUnsupportedHost = errors.New("service: the repository's upstream names a host this build does not address")
