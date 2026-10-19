@@ -137,6 +137,19 @@ type Exchange struct {
 	// may carry a newline; a script breaking either rule is refused when the
 	// Agent is built.
 	Recorded []string `json:"recorded,omitempty"`
+	// Refuse makes a JSON-RPC worker answer the request that carried the
+	// line with a JSON-RPC error whose message is this text, in place of a
+	// result: in app-server mode the turn/start, in ACP mode the
+	// session/prompt. Nothing else is printed for that turn, so no
+	// turn/completed, idle or agent message follows it, which is the shape
+	// of a server that refuses a request rather than failing a turn it
+	// accepted. The error's code is -32603, JSON-RPC's internal error,
+	// chosen here rather than recorded from a CLI; both adapters read only
+	// the message. Line, stream and interactive workers have no request to
+	// answer that way and exit rather than print anything for such an
+	// exchange. Reply, Run, Write, Recorded and Ends must be unset beside
+	// it; a script breaking that rule is refused when the Agent is built.
+	Refuse string `json:"refuse,omitempty"`
 }
 
 // Wrote is what a worker answers for a line a Write exchange took: the path

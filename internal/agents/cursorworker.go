@@ -53,7 +53,7 @@ func (r *cursorRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 		return nil, err
 	}
 	w := &acpWorker{route: spec.Route, pending: map[uint64]chan acpMessage{}, send: make(chan struct{}, 1)}
-	w.procWorker = &procWorker{cmd: cmd, availability: &workerAvailability{}, stdin: input, out: &tailWriter{limit: r.settings.maxOut}, grace: r.settings.grace, done: make(chan struct{}), slot: make(chan struct{}, 1), frame: plainLine, format: OutputStreamJSON, stdinOpen: true}
+	w.procWorker = &procWorker{cmd: cmd, availability: &workerAvailability{agent: CursorName}, stdin: input, out: &tailWriter{limit: r.settings.maxOut}, grace: r.settings.grace, done: make(chan struct{}), slot: make(chan struct{}, 1), frame: plainLine, format: OutputStreamJSON, stdinOpen: true}
 	cmd.Stdout = &acpLines{worker: w, limit: r.settings.maxOut}
 	cmd.Stderr = w.out
 	cmd.WaitDelay = r.settings.grace
@@ -157,9 +157,19 @@ func (w *acpWorker) call(ctx context.Context, method string, params any) (acpMes
 		return acpMessage{}, ErrWorkerEnded
 	}
 }
+
+// failure is the typed account of a JSON-RPC error the agent answered a
+// request with. One availabilityMarkers recognizes is also recorded, so
+// CurrentWorkerFailure, which a worker handoff polls, reads it rather than
+// FailureNone; an error the table does not recognize is the request's
+// failure and is not recorded.
 func (w *acpWorker) failure(message string) error {
 	category, cause := availabilityCategory(FailureAgent, message)
-	return &WorkerError{Agent: CursorName, Failure: category, Message: message, Err: cause}
+	failure := &WorkerError{Agent: CursorName, Failure: category, Message: message, Err: cause}
+	if category != FailureAgent {
+		w.availability.fail(failure)
+	}
+	return failure
 }
 
 // Send queues one prompt, preserving its turn even if the caller stops waiting for the write.
@@ -206,6 +216,11 @@ func (w *acpWorker) Send(ctx context.Context, text string) error {
 		}
 		select {
 		case response := <-reply:
+			// A refused prompt is recorded when its answer arrives, so the
+			// failure is readable before the next Send returns it.
+			if response.Error != nil {
+				_ = w.failure(response.Error.Message)
+			}
 			turn <- response
 		case <-w.done:
 		}

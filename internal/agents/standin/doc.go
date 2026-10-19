@@ -134,7 +134,10 @@
 // drifts from it fails here. An exchange's Recorded frames replace the
 // agent message and the idle, which is how a test plays back the failed
 // turns recorded beside that fixture, and with Ends a partial turn is an
-// app-server that dies mid-turn.
+// app-server that dies mid-turn. An exchange's Refuse answers the
+// turn/start itself with a JSON-RPC error and prints nothing after it; the
+// error's code is the protocol's generic internal error, chosen here and
+// not recorded from a CLI, because the adapter reads only the message.
 //
 // The same runner's one-shot invocations are `codex exec --json`, which
 // carries no --print: the stand-in tells it apart by exec and --json before

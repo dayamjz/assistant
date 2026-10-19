@@ -290,8 +290,9 @@ type procWorker struct {
 // standard input, and returns the handle. spec.stdin and spec.started are not
 // read: the instructions are written here, after the process exists, and the
 // caller reads the group off the handle rather than being told. frame is how
-// the adapter puts one send on the wire, the instructions among them.
-func startWorker(ctx context.Context, spec procSpec, instructions string, frame func(string) ([]byte, error),
+// the adapter puts one send on the wire, the instructions among them, and
+// agent is the adapter's name, which a recorded availability failure names.
+func startWorker(ctx context.Context, agent string, spec procSpec, instructions string, frame func(string) ([]byte, error),
 	format OutputFormat) (*procWorker, error) {
 	// A send that cannot be framed is refused before any process exists, so
 	// a worker is never started over instructions it could not be given.
@@ -308,7 +309,7 @@ func startWorker(ctx context.Context, spec procSpec, instructions string, frame 
 	out := &tailWriter{limit: spec.maxOut}
 	// One writer for both streams, guarded by its own mutex, so what Capture
 	// reports is the order the writes reached it.
-	availability := &workerAvailability{}
+	availability := &workerAvailability{agent: agent}
 	if format == OutputStreamJSON {
 		cmd.Stdout = &availabilityStream{out: out, state: availability, limit: spec.maxOut}
 	} else {

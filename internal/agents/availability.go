@@ -228,36 +228,74 @@ func WorkerAvailability(c Capture) Failure {
 		if (i == 0 && c.Dropped > 0) || (i == len(lines)-1 && !strings.HasSuffix(c.Text, "\n")) {
 			continue
 		}
-		var e struct {
-			Type    string   `json:"type"`
-			IsError bool     `json:"is_error"`
-			Result  string   `json:"result"`
-			Errors  []string `json:"errors"`
-			Rate    struct {
-				Status string `json:"status"`
-			} `json:"rate_limit_info"`
-		}
-		if json.Unmarshal([]byte(line), &e) != nil {
-			continue
-		}
-		if e.Type == "result" {
-			if !e.IsError {
-				failure = FailureNone
-			} else if classified, _ := availabilityMessage(e.Result + "\n" + strings.Join(e.Errors, "\n")); classified != FailureNone {
-				failure = classified
-			}
-		}
-		if e.Type == "rate_limit_event" && e.Rate.Status == "rejected" {
-			failure = FailureQuota
+		read := readStreamLine([]byte(line))
+		if read.clears {
+			failure = FailureNone
+		} else if read.failure != FailureNone {
+			failure = read.failure
 		}
 	}
 	return failure
+}
+
+// streamLine is what one complete stream-json line says about
+// availability: that it clears a recorded failure, that it is a recognized
+// failure with the typed cause and message its marker row gave, that it is
+// an allowed rate-limit event, or none of these.
+type streamLine struct {
+	clears  bool
+	allowed bool
+	failure Failure
+	cause   error
+	message string
+}
+
+// readStreamLine is the one reading of a stream-json line that
+// WorkerAvailability and a live worker's observe share. A successful
+// result clears; an error result is a failure only where
+// availabilityMessage recognizes its text, and then carries that row's
+// cause; a rejected rate-limit event is a quota failure with no cause. An
+// allowed rate-limit event is reported as allowed, which a live worker reads
+// as clearing and a capture does not.
+func readStreamLine(line []byte) streamLine {
+	var e struct {
+		Type    string   `json:"type"`
+		IsError bool     `json:"is_error"`
+		Result  string   `json:"result"`
+		Errors  []string `json:"errors"`
+		Rate    struct {
+			Status string `json:"status"`
+		} `json:"rate_limit_info"`
+	}
+	if json.Unmarshal(line, &e) != nil {
+		return streamLine{}
+	}
+	var read streamLine
+	if e.Type == "result" {
+		if !e.IsError {
+			return streamLine{clears: true}
+		}
+		read.message = strings.TrimSpace(e.Result + "\n" + strings.Join(e.Errors, "\n"))
+		read.failure, read.cause = availabilityMessage(read.message)
+	}
+	if e.Type == "rate_limit_event" {
+		switch e.Rate.Status {
+		case "rejected":
+			read.failure, read.cause = FailureQuota, nil
+		case "allowed", "allowed_warning":
+			read.allowed = true
+		}
+	}
+	return read
 }
 
 // workerAvailability owns a live worker's last protocol failure. Captured
 // output is evidence, never the source of this state. A queued message and a
 // successful response clear it even when old error output is still retained.
 type workerAvailability struct {
+	// agent is the adapter's name, which a *WorkerError recorded by observe
+	// names.
+	agent   string
 	mu      sync.Mutex
 	failure Failure
 	err     *WorkerError
@@ -282,27 +320,21 @@ func (s *workerAvailability) error() error {
 	}
 	return s.err
 }
+
+// observe updates the live state from one complete stream-json line. A
+// recognized error result is recorded through fail with the cause its
+// marker row carries, so a credential refusal reaches CurrentWorkerError as
+// ErrCredentialRefused; a rejected rate-limit event records the category
+// alone, because nothing typed is known about it beyond that.
 func (s *workerAvailability) observe(line []byte) {
-	var header struct {
-		Type    string `json:"type"`
-		IsError bool   `json:"is_error"`
-		Rate    struct {
-			Status string `json:"status"`
-		} `json:"rate_limit_info"`
-	}
-	if json.Unmarshal(line, &header) != nil {
-		return
-	}
-	if header.Type == "result" && !header.IsError {
+	read := readStreamLine(line)
+	switch {
+	case read.clears || read.allowed:
 		s.set(FailureNone)
-		return
-	}
-	if header.Type == "rate_limit_event" && (header.Rate.Status == "allowed" || header.Rate.Status == "allowed_warning") {
-		s.set(FailureNone)
-		return
-	}
-	if f := WorkerAvailability(Capture{Text: string(line) + "\n", Format: OutputStreamJSON}); f != FailureNone {
-		s.set(f)
+	case read.failure != FailureNone && read.message != "":
+		s.fail(&WorkerError{Agent: s.agent, Failure: read.failure, Message: read.message, Err: read.cause})
+	case read.failure != FailureNone:
+		s.set(read.failure)
 	}
 }
 

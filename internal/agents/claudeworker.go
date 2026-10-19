@@ -42,7 +42,7 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
-	worker, err := startWorker(ctx, procSpec{
+	worker, err := startWorker(ctx, ClaudeName, procSpec{
 		bin:    r.resolved,
 		args:   r.workerArguments(spec),
 		dir:    spec.Dir,
