@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -76,6 +77,37 @@ const (
 // but a kill of the group it was started in ends it.
 const atTerminalNohupChild = "STANDIN_TEST_AT_TERMINAL_NOHUP_CHILD"
 
+// atTerminalDefaultHangup, set to any value, has this binary start over with
+// the hangup signal handled normally before it is anything else, whatever
+// disposition it inherited: it catches the signal, which a Go program does
+// even for a signal it was started ignoring, and then executes itself again
+// without this variable, and an exec resets a caught signal to its default
+// action while an ignored one stays ignored. So a test that needs the hangup
+// to end the binary run again gets that from a test binary run under nohup
+// too, rather than from whatever ran it.
+const atTerminalDefaultHangup = "STANDIN_TEST_AT_TERMINAL_DEFAULT_HANGUP"
+
+// restoreDefaultHangup is atTerminalDefaultHangup's start over, and returns
+// only when that variable is unset.
+func restoreDefaultHangup() {
+	if os.Getenv(atTerminalDefaultHangup) == "" {
+		return
+	}
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGHUP)
+	if err := os.Unsetenv(atTerminalDefaultHangup); err != nil {
+		fmt.Fprintln(os.Stderr, "clearing the variable that restores the hangup signal:", err)
+		os.Exit(1)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "resolving this binary to start it over with the hangup signal handled normally:", err)
+		os.Exit(1)
+	}
+	err = syscall.Exec(self, os.Args, os.Environ())
+	fmt.Fprintln(os.Stderr, "starting this binary over with the hangup signal handled normally:", err)
+	os.Exit(1)
+}
+
 // atTerminalMain makes this binary what a package calling AtTerminal is,
 // when a test started it as one: it calls AtTerminal, and in the binary run
 // again starts a child in its own group, records both, and waits forever,
@@ -85,6 +117,7 @@ func atTerminalMain() {
 	if dir == "" {
 		return
 	}
+	restoreDefaultHangup()
 	AtTerminal()
 	child := exec.Command("/bin/sleep", "3600")
 	if os.Getenv(atTerminalNohupChild) != "" {
@@ -138,16 +171,19 @@ func TestTheBinaryRunAgainEndsWhenItsOuterIsKilled(t *testing.T) {
 // the path #416's review reproduced: an outer started with the hangup signal
 // handled normally passes that on to the binary run again, and killing the
 // outer closes the terminal's master side, whose hangup reaches the binary
-// run again at once, well inside the OwnerPoll its watch sleeps. The binary
-// run again is read from the kernel as not ignoring the hangup signal, the
-// control that the hangup can end it, and its child is started through
+// run again at once, well inside the OwnerPoll its watch sleeps. The outer
+// is started with the hangup signal restored to its default action
+// (atTerminalDefaultHangup), so the path is reached even when this test
+// binary runs under nohup, and the binary run again is still read from the
+// kernel as not ignoring the hangup signal, the control that the hangup can
+// end it and that the restoring worked; its child is started through
 // nohup in its group, so the hangup leaves the child running and only a
 // kill of the group ends it. Then the outer is sent SIGKILL, and both are
 // read as gone within the same bound as above. Where the hangup ends the
 // binary run again before its group is killed, the child is left running
 // with parent 1, and the test fails naming it.
 func TestTheBinaryRunAgainTakesItsGroupWhenTheHangupEndsIt(t *testing.T) {
-	endsWithKilledOuter(t, nil, false, true)
+	endsWithKilledOuter(t, nil, false, true, atTerminalDefaultHangup+"=1")
 }
 
 // endsWithKilledOuter starts this binary as a package calling AtTerminal,
@@ -159,10 +195,11 @@ func TestTheBinaryRunAgainTakesItsGroupWhenTheHangupEndsIt(t *testing.T) {
 // (LeftAfterTests, through Stayed) lists it then, which is the check shown to
 // see it, and then sends the outer SIGKILL and fails unless the binary run
 // again and the child it started in its group, through nohup when nohupChild
-// says so, are both read as gone within OwnerPoll and a margin. Where the
+// says so, are both read as gone within OwnerPoll and a margin. env is added
+// to the outer's environment. Where the
 // binary run again outlives that, the test fails and leaves it running for
 // LeftAfterTests, which then fails the package naming it.
-func endsWithKilledOuter(t *testing.T, wrapper []string, ignoresHUP, nohupChild bool) {
+func endsWithKilledOuter(t *testing.T, wrapper []string, ignoresHUP, nohupChild bool, env ...string) {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
@@ -171,7 +208,7 @@ func endsWithKilledOuter(t *testing.T, wrapper []string, ignoresHUP, nohupChild 
 	dir := t.TempDir()
 	argv := append(append([]string{}, wrapper...), self, "-test.run=^$")
 	outer := exec.Command(argv[0], argv[1:]...)
-	outer.Env = append(os.Environ(), atTerminalVarHelper+"="+dir)
+	outer.Env = append(append(os.Environ(), atTerminalVarHelper+"="+dir), env...)
 	if nohupChild {
 		outer.Env = append(outer.Env, atTerminalNohupChild+"=1")
 	}
