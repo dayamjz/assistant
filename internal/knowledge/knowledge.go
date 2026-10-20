@@ -27,6 +27,10 @@ var ErrTooLarge = errors.New("knowledge: the project knowledge document is large
 // ErrNotText reports a document that is not UTF-8 text.
 var ErrNotText = errors.New("knowledge: the project knowledge document is not UTF-8 text")
 
+// ErrLaunchTooLarge reports that the composed project knowledge section would
+// make a terminal worker's first turn exceed internal/agents' launch bound.
+var ErrLaunchTooLarge = errors.New("knowledge: the project knowledge section makes the worker's first turn too long for a terminal launch")
+
 // Knowledge is one reading of the document: the commit it was read at,
 // whether the commit's tree holds it, the digest of its committed bytes, and
 // its redacted text. Only Read and Absent produce one, so a caller cannot

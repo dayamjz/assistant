@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/knowledge"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -48,7 +53,8 @@ import (
 // # Refusals
 //
 // A document internal/knowledge refuses to compose, over its bound or not
-// text, refuses the launch: knowledge-refused is recorded against the
+// text, or whose section would make a terminal worker's first turn exceed
+// internal/agents' launch bound, refuses the launch: knowledge-refused is recorded against the
 // attempt, anchored to the history the dispatch was decided from, and the
 // task resolves Failed from it rather than starting a worker told part of
 // the document or nothing in its place. A run whose trusted document is
@@ -63,11 +69,12 @@ import (
 //
 // The attempt row names the commit and the digest of the document's bytes
 // there, and nothing else. The text is not stored: it is the repository's,
-// its history is the audit of who changed it and why, and the commit and the
-// digest are enough to reproduce what the worker was told with git alone.
-// The section a worker is sent passes internal/redact first, in
-// internal/knowledge, so a credential that shape recognizes in the document
-// reaches no worker and no reviewer.
+// its history is the audit of who changed it and why, and the commit and
+// digest name what the default branch held there. Reproducing what the worker
+// was told takes internal/redact as well as git, because the section is the
+// redacted text. The section a worker is sent passes internal/redact first,
+// in internal/knowledge, so a credential that shape recognizes in the
+// document reaches no worker and no reviewer.
 
 // ErrTrustedKnowledge reports that the curated knowledge document could not
 // be read from the default branch for a launch: the branch could not be
@@ -151,6 +158,47 @@ func knowledgeSection(k knowledge.Knowledge) string {
 		return ""
 	}
 	return "\n\n" + strings.TrimRight(section, "\n")
+}
+
+// refuseKnowledgeIfTerminalLaunchTooLarge records knowledge-refused when a
+// terminal worker would place firstTurn on its launch command and that
+// command would exceed internal/agents' bound, which launch.go asks after the
+// route is chosen so the command matches what Create would start.
+func (s *Service) refuseKnowledgeIfTerminalLaunchTooLarge(ctx context.Context, d dispatched, runner agents.Runner,
+	isolation tasks.Isolation, firstTurn string, project knowledge.Knowledge, model, effort string) error {
+	if s.cfg.SessionProvider != config.SessionProviderTmux || !project.Present() || knowledgeSection(project) == "" {
+		return nil
+	}
+	terminals, ok := runner.(agents.TerminalWorkerRunner)
+	if !ok {
+		return nil
+	}
+	tmux, err := exec.LookPath("tmux")
+	if err != nil {
+		return nil
+	}
+	tmux, err = filepath.Abs(tmux)
+	if err != nil {
+		return nil
+	}
+	term := agents.Terminal{Tmux: tmux, Socket: s.home.TerminalSocket("0000000000000000")}
+	spec := agents.WorkerSpec{
+		Dir:          isolation.Copy,
+		Instructions: firstTurn,
+		Route:        s.workerRoute,
+		Model:        model,
+		Effort:       effort,
+	}
+	size, measures, err := terminals.TerminalLaunchCommandSize(term, spec)
+	if err != nil {
+		return fmt.Errorf("service: measuring the terminal launch of task %s attempt %d: %w", d.id, d.attempt, err)
+	}
+	if !measures || size <= agents.TerminalCommandLimit {
+		return nil
+	}
+	cause := fmt.Errorf("%w: the terminal launch command is %d bytes and the bound is %d",
+		knowledge.ErrLaunchTooLarge, size, agents.TerminalCommandLimit)
+	return s.refuseKnowledge(ctx, d, cause)
 }
 
 // refuseKnowledge records the refusal as the task's knowledgeRefusedKind

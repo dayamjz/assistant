@@ -162,6 +162,10 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	}); err != nil {
 		return nil, fmt.Errorf("service: recording the route of task %s attempt %d: %w", d.id, d.attempt, err)
 	}
+	firstTurn := string(instructions) + d.note + knowledgeSection(project) + s.routeSection(d.want.Shape)
+	if err := s.refuseKnowledgeIfTerminalLaunchTooLarge(ctx, d, selection.Resolution.Runner, fresh, firstTurn, project, model, role.Effort); err != nil {
+		return nil, err
+	}
 	if err := s.store.SetAttemptKnowledge(ctx, d.id, d.attempt, store.AttemptKnowledge{
 		Commit: project.Commit(), Digest: project.Digest(),
 	}); err != nil {
@@ -171,7 +175,7 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	launched, err := host.Create(ctx, session.Spec{
 		TaskID:       d.id,
 		Isolation:    fresh,
-		Instructions: string(instructions) + d.note + knowledgeSection(project) + s.routeSection(d.want.Shape),
+		Instructions: firstTurn,
 		Route:        s.workerRoute,
 		Model:        model,
 		Effort:       role.Effort,

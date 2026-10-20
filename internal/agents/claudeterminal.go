@@ -90,7 +90,7 @@ import (
 // and was observed to take a prompt placed right after it as a tool name.
 // They are the first message as given, with the leading space the framing
 // below adds where they begin with "!" or "/".
-// The command that starts the terminal is bounded by terminalCommandLimit,
+// The command that starts the terminal is bounded by TerminalCommandLimit,
 // so instructions too long for it are refused before anything starts.
 //
 // # Typing
@@ -129,14 +129,7 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 		return strings.HasPrefix(kv, claudeConfigVariable+"=")
 	}), claudeConfigVariable+"="+configDir)
 
-	args := append(slices.Clone(r.extra), claudeGrantFlags(GrantWorker, spec.Route)...)
-	if spec.Model != "" {
-		args = append(args, "--model", spec.Model)
-	}
-	if spec.Effort != "" {
-		args = append(args, "--effort", spec.Effort)
-	}
-	args = append(args, "--ax-screen-reader", "--session-id", session, "--", defused(spec.Instructions))
+	args := r.claudeTerminalWorkerArgs(spec, session)
 	worker, err := startTerminalWorker(ctx, t, procSpecTerminal{
 		bin:     r.resolved,
 		args:    args,
@@ -151,6 +144,33 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 		return nil, err
 	}
 	return worker, nil
+}
+
+// terminalLaunchSessionMeasure is the session identifier
+// TerminalLaunchCommandSize uses: the same length and shape sessionIdentifier
+// draws, so the measured command size matches what a start would carry.
+const terminalLaunchSessionMeasure = "00000000-0000-4000-8000-000000000000"
+
+// TerminalLaunchCommandSize reports the tmux start command size when this
+// adapter places spec.Instructions on that command.
+func (r *claudeRunner) TerminalLaunchCommandSize(t Terminal, spec WorkerSpec) (int, bool, error) {
+	if err := spec.Validate(); err != nil {
+		return 0, true, err
+	}
+	args := r.claudeTerminalWorkerArgs(spec, terminalLaunchSessionMeasure)
+	size, err := TmuxStartCommandSize(t, spec.Dir, r.resolved, args)
+	return size, true, err
+}
+
+func (r *claudeRunner) claudeTerminalWorkerArgs(spec WorkerSpec, session string) []string {
+	args := append(slices.Clone(r.extra), claudeGrantFlags(GrantWorker, spec.Route)...)
+	if spec.Model != "" {
+		args = append(args, "--model", spec.Model)
+	}
+	if spec.Effort != "" {
+		args = append(args, "--effort", spec.Effort)
+	}
+	return append(args, "--ax-screen-reader", "--session-id", session, "--", defused(spec.Instructions))
 }
 
 // ClaudeKeyVariable is the environment variable a Claude Code terminal

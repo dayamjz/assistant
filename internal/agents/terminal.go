@@ -184,6 +184,13 @@ type TerminalWorkerRunner interface {
 	// process starts, with an error wrapping ErrInvalidInvocation, and so is
 	// a Terminal Validate refuses.
 	StartInTerminal(ctx context.Context, t Terminal, spec WorkerSpec) (TerminalWorker, error)
+
+	// TerminalLaunchCommandSize reports how many bytes the tmux command that
+	// would start spec on t totals, counting each argument with one byte more
+	// for its end, as startTerminalWorker does. ok is false when this adapter
+	// types spec.Instructions into the pane instead of placing them on that
+	// command.
+	TerminalLaunchCommandSize(t Terminal, spec WorkerSpec) (size int, ok bool, err error)
 }
 
 // Terminal is where a terminal worker is hosted: the tmux binary to run and
@@ -371,7 +378,7 @@ type procSpecTerminal struct {
 	cleanup func()
 }
 
-// terminalCommandLimit is the most bytes the arguments of the tmux command
+// TerminalCommandLimit is the most bytes the arguments of the tmux command
 // that starts a server may total, each counted with one byte more for its
 // end. tmux 3.4 refused a new-session command whose arguments totalled
 // about 16.3 KB with "command too long" and accepted one a little under, so
@@ -379,7 +386,7 @@ type procSpecTerminal struct {
 // anything starts, rather than by the server in a message about something
 // else. Another tmux may draw the line elsewhere; this is where the one it
 // was observed on did.
-const terminalCommandLimit = 16000
+const TerminalCommandLimit = 16000
 
 // startTerminalWorker starts spec as a terminal worker on t and, when
 // instructions is not empty, types them, on the terms the mechanism's
@@ -418,11 +425,11 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 	args := append([]string{"-S", t.Socket, "-f", os.DevNull,
 		"new-session", "-d", "-s", terminalTarget, "-x", "200", "-y", "50", "-c", spec.dir,
 		"-P", "-F", "#{pane_pid} #{pid}", "--", spec.bin}, spec.args...)
-	if size := commandSize(args); size > terminalCommandLimit {
+	if size := commandSize(args); size > TerminalCommandLimit {
 		return nil, &invocationFieldError{
 			field: "command",
 			reason: fmt.Sprintf("the command that starts the terminal is %d bytes, over the %d tmux is given, so the instructions it carries are too long for a terminal worker",
-				size, terminalCommandLimit),
+				size, TerminalCommandLimit),
 		}
 	}
 	cmd := exec.CommandContext(ctx, t.Tmux, args...)
@@ -518,6 +525,18 @@ func commandSize(args []string) int {
 		n += len(a) + 1
 	}
 	return n
+}
+
+// TmuxStartCommandSize is commandSize of the tmux arguments startTerminalWorker
+// passes when starting a worker in dir with bin and workerArgs.
+func TmuxStartCommandSize(t Terminal, dir, bin string, workerArgs []string) (int, error) {
+	if err := t.Validate(); err != nil {
+		return 0, err
+	}
+	args := append([]string{"-S", t.Socket, "-f", os.DevNull,
+		"new-session", "-d", "-s", terminalTarget, "-x", "200", "-y", "50", "-c", dir,
+		"-P", "-F", "#{pane_pid} #{pid}", "--", bin}, workerArgs...)
+	return commandSize(args), nil
 }
 
 // await reads the visible screen through the adapter's reader, every

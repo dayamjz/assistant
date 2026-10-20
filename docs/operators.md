@@ -281,9 +281,11 @@ What reaches whom:
   relaunch included, so a worker relaunched after a merge is told the newer
   revision. The task's attempt records that commit and the SHA-256 of the
   file there, `knowledge_commit` and `knowledge_digest` on the task's
-  `task_attempt` row in the home's database, and nothing of the text, so you
-  reproduce exactly what a worker was told with
-  `git show COMMIT:assistant-knowledge.md`. A known commit with no digest
+  `task_attempt` row in the home's database, and nothing of the text. Those
+  fields name what the default branch held there; reproducing what the worker
+  was told takes the same credential removal the program applies, because the
+  section is redacted text, not the raw file. `git show
+  COMMIT:assistant-knowledge.md` is the committed bytes. A known commit with no digest
   means the default branch held no file then. No command prints the record
   yet; it is read from the database.
 - A run's review is told the file as the default branch held it at the
@@ -302,7 +304,11 @@ the file anyway: the removal recognizes a fixed set of shapes and no others.
 A repository with no file composes nothing and refuses nothing. A file
 larger than 32 KiB, or one that is not UTF-8 text, is refused rather than
 cut: a launch records `knowledge-refused` and the task reads `failed`, and a
-run does not start. A default branch the launch cannot fetch leaves the task
+run does not start. With the tmux session provider and an adapter that
+places the first turn on the terminal launch command, a file within 32 KiB
+can still refuse a launch when the composed first turn exceeds that command's
+bound; that is recorded as `knowledge-refused` too, naming the launch limit.
+A default branch the launch cannot fetch leaves the task
 dispatched with no worker started, the way any other launch read that fails
 does, rather than starting a worker told nothing. The file is context and grants nothing: it does not widen what a
 worker may run, does not change what the gate checks, and says so to the

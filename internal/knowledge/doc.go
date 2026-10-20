@@ -14,8 +14,9 @@
 // resolved, the copy PRD section 10 calls trusted and P7 reads executable
 // configuration from, and never from a pushed commit, a working copy, or an
 // agent's output. So the one way to change what a worker or a reviewer is
-// told is a change to the default branch, which in a gated repository is a
-// change the gate validated, and the record of who changed it and why is the
+// told is a change to the default branch; nothing here establishes that the
+// branch passed the gate, because a direct push to the default branch is
+// still possible, and the record of who changed it and why is the
 // repository's own history. Nothing here or anywhere in this build lets an
 // agent's assertion become knowledge on its own: there is no store of
 // knowledge text, no verb that writes one, and no path from a worker's
@@ -30,9 +31,10 @@
 // Read takes the commit the bytes were read at and the bytes, and returns a
 // Knowledge holding the commit, the SHA-256 digest of the bytes exactly as
 // the commit holds them, and the text passed through internal/redact. The
-// digest is of the committed bytes rather than of the redacted text, so a
-// reader holding the commit can reproduce it with git and a hash and nothing
-// of this build, which is what internal/store's launch record is for. Absent
+// digest is of the committed bytes rather than of the redacted text, so the
+// commit and digest name what the default branch holds there; reproducing
+// what a worker was told takes internal/redact as well as git, because the
+// section is the redacted text. Absent
 // is the composition of a commit whose tree holds no document, which is a
 // repository with no curated knowledge: valid, composing nothing, refusing
 // nothing.
@@ -46,9 +48,8 @@
 // inside the document can pass for the end of it only by naming the digest
 // of the document it stands in, and a heading in it reads as part of the
 // document rather than as a section the program wrote. That is framing and
-// not a boundary: the document is the default branch's, which is trusted
-// text already, and an agent that does not keep to the frame is not stopped
-// by it.
+// not a boundary: the document is read from the default branch on the terms
+// above, and an agent that does not keep to the frame is not stopped by it.
 //
 // # Refusals
 //
@@ -57,7 +58,9 @@
 // worker told part of a document, or a reviewer told text the document does
 // not hold, has been told something nobody curated. internal/service turns
 // either into a refusal of the launch or the run rather than proceeding
-// without the document.
+// without the document, and refuses a launch when the composed first turn
+// would exceed the terminal launch bound internal/agents owns, with
+// ErrLaunchTooLarge on the same terms.
 //
 // # Residual gaps
 //

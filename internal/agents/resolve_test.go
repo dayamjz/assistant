@@ -118,6 +118,10 @@ func (r *terminalStubRunner) StartInTerminal(context.Context, agents.Terminal, a
 	return nil, errStubTerminalReached
 }
 
+func (r *terminalStubRunner) TerminalLaunchCommandSize(agents.Terminal, agents.WorkerSpec) (int, bool, error) {
+	return 0, false, nil
+}
+
 // errStubTerminalReached is what a stub adapter's terminal mechanism answers
 // with.
 var errStubTerminalReached = errors.New("the stub adapter starts no terminal worker")
