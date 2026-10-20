@@ -509,10 +509,10 @@ var (
 // bound that parked it, one row per bound in store.ParkBounds, which the
 // vocabulary test derives and checks. They sharpen OutcomeFailed's row the way
 // the executing rows sharpen that outcome's: the failed row has to cover a run
-// that could not proceed as well as all three parks, and a person deciding
+// that could not proceed as well as all four parks, and a person deciding
 // what to do about a park needs to know which bound it was, because what
 // changes the outcome differs by bound. ParkAction is the driving agent's
-// reading of the same three, with the stage and the key a row may not name.
+// reading of the same four, with the stage and the key a row may not name.
 var phraseByPark = map[store.ParkBound]Phrase{
 	store.ParkRoundLimit: {
 		Outcome:     "Automatic fixing of this change reached its round limit with findings still to fix.",
@@ -528,6 +528,11 @@ var phraseByPark = map[store.ParkBound]Phrase{
 		Outcome:     "This run used its whole step budget before the gate reached a verdict.",
 		Consequence: "Nothing more is done with it, and nothing was undone.",
 		Decision:    "Allow a larger step budget and send the change again.",
+	},
+	store.ParkUsageBudget: {
+		Outcome:     "This run reached its usage budget, the agent use one run is allowed, before the gate reached a verdict.",
+		Consequence: "Nothing more is done with it, nothing was undone, and what its agents spent is in the run's usage.",
+		Decision:    "Allow a larger usage budget per run and send the change again, or find what spends so much.",
 	},
 }
 

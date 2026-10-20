@@ -169,14 +169,51 @@
 // holds a recorded edge to one the graph declares, whose bound could have
 // parked the run there. A checkpoint written before ParkedAt existed carries
 // none, and its park is reported without an edge rather than with a guessed
-// one. Status.Parked is Status.Stopped without the hold, which is the line
-// PRD section 5 draws between the two words.
+// one. A usage park carries the reading it was decided on instead of an edge,
+// in Checkpoint.ParkedUsage. Status.Parked is Status.Stopped without the
+// hold, which is the line PRD section 5 draws between the two words.
 //
 // Integrity checking leaves the three bounds three. It decides whether a
 // checkpoint may be resumed at all, and past that each bound still parks runs
 // the other two would not: AdoptBudget releases a run its own budget parked
 // and leaves one parked by a round limit or by convergence exactly where it
 // stands.
+//
+// # The usage budget
+//
+// Beside the three loop bounds sits a run-level bound on spend rather than on
+// the loop: the usage budget, Config.UsageBudget, which catches a run whose
+// steps and rounds all stay inside their bounds while its work costs far more
+// than it was meant to. Zero is no budget, and a run held to none is never
+// metered. This package does not know what is counted or where: a caller's
+// UsageMeter answers what the run has spent, read from the record that owns
+// it, and the reading is never kept here as a running total, because a
+// second total could fall behind the first. A meter that answers from a total
+// of its own is outside what this package can check.
+//
+// It is held on the step budget's terms, by the same code. The run records it
+// in Counters.UsageBudget when it starts, so a resume is compared against the
+// number the run began under; an executor configured with another is refused
+// with ErrUsageBudgetChanged, which errors.Is also matches as
+// ErrBudgetChanged; and AdoptBudget writes both budgets onto a run in one
+// checkpoint, reviving a run either parked. The comparison is made where the
+// step budget's is, by parkOnRunBounds, immediately before every node and
+// before a halt point asks its question, with the step budget compared first:
+// a reading at or past the budget parks the run StatusUsageExhausted in front
+// of that node, as does a reading that reports any unit of the run's work as
+// having counted nothing, since an unknown spend is never room. The
+// checkpoint records the reading it parked on in Checkpoint.ParkedUsage, and
+// Validate refuses a usage park whose reading would not have parked under the
+// budget it records. A reading the meter could not make is ErrUsageUnread,
+// with nothing run and nothing parked.
+//
+// What it bounds is starts. A node that starts with room runs to its end, so
+// a run can pass its budget by everything its last node spent, and it parks
+// in front of the next one. A fork is a run of its own name and the meter is
+// asked by name, so whether a fork's reading includes what its source spent
+// is the meter's to decide and nothing here carries the source's spend
+// across: a meter that reads a record keyed by run, as internal/service's
+// does, starts a fork from nothing.
 //
 // # Trust
 //

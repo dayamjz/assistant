@@ -1273,6 +1273,13 @@ func parkRecord(result graph.Result) (store.RunPark, error) {
 	case graph.StatusBudgetExhausted:
 		record.Bound = store.ParkStepBudget
 		record.Limit = park.Budget
+	case graph.StatusUsageExhausted:
+		record.Bound = store.ParkUsageBudget
+		record.UsageBudget = park.UsageBudget
+		if park.Usage != nil {
+			record.Spent = park.Usage.Spent
+			record.Unreported = park.Usage.Unreported
+		}
 	}
 	if err := record.Validate(); err != nil {
 		return store.RunPark{}, err
@@ -1286,6 +1293,9 @@ func describePark(p store.RunPark, reason string) string {
 	line := fmt.Sprintf("%s at stage %q, node %q", p.Bound, p.Stage, p.Node)
 	if p.Limit > 0 {
 		line += fmt.Sprintf(", limit %d", p.Limit)
+	}
+	if p.UsageBudget > 0 {
+		line += fmt.Sprintf(", %d spent and %d unreported against a usage budget of %d", p.Spent, p.Unreported, p.UsageBudget)
 	}
 	if reason != "" {
 		line += ": " + reason

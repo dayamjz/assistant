@@ -187,6 +187,27 @@ var (
 	// with Executor.AdoptBudget, which records the change in the run's
 	// history.
 	ErrBudgetChanged = errors.New("graph: the run recorded a different run-wide step budget")
+	// ErrUsageBudgetChanged is ErrBudgetChanged for the usage budget: the
+	// run recorded a usage budget other than the one this executor is
+	// configured with. errors.Is matches ErrBudgetChanged on it as well,
+	// because the remedy is the same one: resume under the budget the run
+	// recorded, or move it onto this executor's with Executor.AdoptBudget,
+	// which records the change in the run's history. Its text names the usage
+	// budget, so a refusal does not say the step budget changed when it did
+	// not.
+	ErrUsageBudgetChanged error = &familyError{text: "graph: the run recorded a different usage budget", family: ErrBudgetChanged}
+	// ErrUsageSpent is ErrBudgetSpent for the usage budget: a run standing at
+	// a halt point is asked to go on and its usage budget leaves no room for
+	// that halt point's node, or what the run spent cannot be established.
+	// errors.Is matches ErrBudgetSpent on it as well, and it is refused on the
+	// same terms: nothing is written and the run is left as it stands.
+	ErrUsageSpent error = &familyError{text: "graph: the usage budget leaves no room for the halted node", family: ErrBudgetSpent}
+	// ErrUsageUnread is returned when a run held to a usage budget is about
+	// to be compared against it and the UsageMeter could not say what the
+	// run has spent. Nothing runs and nothing is written: a spend nobody
+	// could read is never taken for room, and an error from the record is not
+	// a fact about the run that a park could record.
+	ErrUsageUnread = errors.New("graph: what the run spent against its usage budget could not be read")
 	// ErrRunCompleted is returned when an operation that only means something
 	// for a run with work left is asked for on one that finished.
 	ErrRunCompleted = errors.New("graph: run has completed")
@@ -199,3 +220,18 @@ var (
 	// were discarded and no checkpoint was written for it.
 	ErrNodeFailed = errors.New("graph: node failed")
 )
+
+// familyError is a sentinel that is its own error and also matches the older
+// sentinel whose remedy it shares, so a caller handling the family handles it
+// and a caller that needs the difference can still tell, while its text names
+// what actually differed rather than the family's.
+type familyError struct {
+	text   string
+	family error
+}
+
+// Error returns the sentinel's own text.
+func (e *familyError) Error() string { return e.text }
+
+// Is reports whether target is the family this sentinel belongs to.
+func (e *familyError) Is(target error) bool { return target == e.family }

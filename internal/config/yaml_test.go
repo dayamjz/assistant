@@ -59,6 +59,8 @@ usage_ceiling:
   cache_creation_tokens: 4
 notify:
   command: notify-me --channel private
+run_usage_budget:
+  output_tokens: 5
 `
 
 const wholeSchemaJSON = `{
@@ -88,7 +90,8 @@ const wholeSchemaJSON = `{
 	"allow_standing_consent": true,
 	"session_provider": "tmux",
 	"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4},
-	"notify": {"command": "notify-me --channel private"}
+	"notify": {"command": "notify-me --channel private"},
+	"run_usage_budget": {"output_tokens": 5}
 }`
 
 func resolvedGlobal(t *testing.T, l Layer) Config {

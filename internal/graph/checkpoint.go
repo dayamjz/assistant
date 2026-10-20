@@ -31,6 +31,11 @@ const (
 	// the previous traversal of the same edge left in. A back edge marked
 	// Edge.Answered produces it only after an unattended answer.
 	StatusConverged
+	// StatusUsageExhausted means the run reached its usage budget: what its
+	// own agent calls reported spending, as its UsageMeter read it, was at or
+	// past the budget the run recorded, or could not be established because
+	// some of those calls reported nothing.
+	StatusUsageExhausted
 )
 
 // String returns the wire name of the status, which is also what appears in
@@ -49,6 +54,8 @@ func (s Status) String() string {
 		return "budget_exhausted"
 	case StatusConverged:
 		return "converged"
+	case StatusUsageExhausted:
+		return "usage_exhausted"
 	case StatusInvalid:
 		return "invalid"
 	default:
@@ -59,17 +66,19 @@ func (s Status) String() string {
 // Stopped reports whether the status is one a run does not advance out of on
 // its own. It covers both of the ways PRD section 5 distinguishes, which is
 // why it is not named after either: StatusHalted is a hold, waiting on a
-// person's decision, and the other three are parks, a bound stopping the run.
+// person's decision, and the other four are parks, a bound stopping the run.
 //
 // A halted run needs a decision. A parked run needs something other than an
 // answer, because Answer takes only a halted run: Executor.AdoptBudget moves a
-// budget-exhausted one onto more room where it stands, and any of the three is
-// taken further by forking the run from an earlier checkpoint and resuming
-// that, which runs on the counters that checkpoint recorded rather than the
-// ones the park is standing on.
+// run either run-level budget parked onto more room where it stands, and any
+// of the four is taken further by forking the run from an earlier checkpoint
+// and resuming that, which runs on the counters that checkpoint recorded
+// rather than the ones the park is standing on. A fork of a usage park is
+// metered under its own run name, so what it is compared against is whatever
+// the meter answers for that name; see the package documentation.
 func (s Status) Stopped() bool {
 	switch s {
-	case StatusHalted, StatusRoundsExhausted, StatusBudgetExhausted, StatusConverged:
+	case StatusHalted, StatusRoundsExhausted, StatusBudgetExhausted, StatusConverged, StatusUsageExhausted:
 		return true
 	case StatusInvalid, StatusRunning, StatusCompleted:
 		return false
@@ -78,14 +87,14 @@ func (s Status) Stopped() bool {
 	}
 }
 
-// Parked reports whether the status is one of the three parks: a bound, not a
+// Parked reports whether the status is one of the four parks: a bound, not a
 // person, stopped the run. It is Stopped without StatusHalted, which is the
 // hold, and it names which bound only through the status itself, so a caller
 // that needs the bound reads Checkpoint.Park or Result.Park rather than
 // switching on the status beside this.
 func (s Status) Parked() bool {
 	switch s {
-	case StatusRoundsExhausted, StatusBudgetExhausted, StatusConverged:
+	case StatusRoundsExhausted, StatusBudgetExhausted, StatusConverged, StatusUsageExhausted:
 		return true
 	case StatusInvalid, StatusRunning, StatusCompleted, StatusHalted:
 		return false
@@ -117,15 +126,15 @@ func (r *EdgeRef) clone() *EdgeRef {
 	return &out
 }
 
-// Park is which of the three bounds parked a run, and where, as the
+// Park is which of the four bounds parked a run, and where, as the
 // checkpoint that recorded the park says. It is read off a checkpoint or a
 // result and is never stored on its own, so it cannot disagree with the
 // checkpoint it describes.
 type Park struct {
-	// Status is the park itself, one of the three statuses Parked accepts:
+	// Status is the park itself, one of the four statuses Parked accepts:
 	// StatusRoundsExhausted for an edge's round limit, StatusConverged for a
 	// round that changed nothing, StatusBudgetExhausted for the run-wide step
-	// budget.
+	// budget, StatusUsageExhausted for the usage budget.
 	Status Status
 	// Node is the node the run stands in front of, which has not run.
 	Node string
@@ -136,13 +145,19 @@ type Park struct {
 	Edge *EdgeRef
 	// Budget is the run-wide step budget the run was held to when it parked.
 	Budget int
+	// UsageBudget is the usage budget the run was held to when it parked,
+	// zero for a run held to none.
+	UsageBudget int64
+	// Usage is the reading a usage park was decided on, as
+	// Checkpoint.ParkedUsage records it. It is nil for every other park.
+	Usage *Usage
 }
 
 // MarshalJSON writes the status as its wire name.
 func (s Status) MarshalJSON() ([]byte, error) {
 	switch s {
 	case StatusRunning, StatusCompleted, StatusHalted,
-		StatusRoundsExhausted, StatusBudgetExhausted, StatusConverged:
+		StatusRoundsExhausted, StatusBudgetExhausted, StatusConverged, StatusUsageExhausted:
 		return json.Marshal(s.String())
 	case StatusInvalid:
 		return nil, fmt.Errorf("cannot encode status %s", s)
@@ -171,6 +186,8 @@ func (s *Status) UnmarshalJSON(b []byte) error {
 		*s = StatusBudgetExhausted
 	case "converged":
 		*s = StatusConverged
+	case "usage_exhausted":
+		*s = StatusUsageExhausted
 	default:
 		return fmt.Errorf("unrecognized status %q", name)
 	}
@@ -254,6 +271,13 @@ func (d *Decision) clone() *Decision {
 // against. A resume that read either of them from somewhere else would leave
 // the run with bounds that still count but no longer bound what they were
 // counting.
+//
+// The usage budget is the one bound here with no count beside it, on purpose.
+// What a run has spent is owned by the record its agent calls are written to,
+// and a UsageMeter reads it from there at every comparison, so a count kept
+// here would be a second total that could fall behind the first. What has to
+// survive a resume is the number the reading is compared against, and that is
+// UsageBudget.
 type Counters struct {
 	// Steps is how many node executions the run has spent against its
 	// run-wide budget.
@@ -265,6 +289,13 @@ type Counters struct {
 	// Executor.AdoptBudget is the one way it changes, and it changes by
 	// writing a checkpoint that says so.
 	Budget int `json:"budget"`
+	// UsageBudget is the usage budget this run is held to, zero for none. It
+	// is recorded when the run starts and changes on exactly Budget's terms:
+	// an executor configured with another is refused with an error wrapping
+	// ErrUsageBudgetChanged, and Executor.AdoptBudget is the one way it
+	// changes. A checkpoint written before the field existed carries zero,
+	// which is how every run then behaved.
+	UsageBudget int64 `json:"usage_budget,omitempty"`
 	// Traversals counts, per edge index, how many times the edge was taken.
 	Traversals []int `json:"traversals"`
 	// Fingerprints holds, per edge index, the state fingerprint recorded the
@@ -308,11 +339,13 @@ func (c Counters) clone() Counters {
 }
 
 // newCounters returns the accounting a run of g starts with under the given
-// run-wide step budget: no steps spent, no edge traversed, and both the bound
-// and the edge vector this run's counters will be read against recorded.
-func (g *Graph) newCounters(budget int) Counters {
+// run-wide step budget and usage budget: no steps spent, no edge traversed,
+// and both bounds and the edge vector this run's counters will be read
+// against recorded.
+func (g *Graph) newCounters(budget int, usageBudget int64) Counters {
 	return Counters{
 		Budget:       budget,
+		UsageBudget:  usageBudget,
 		Traversals:   make([]int, len(g.edges)),
 		Fingerprints: make([]string, len(g.edges)),
 		EdgeDigest:   g.digest,
@@ -351,6 +384,15 @@ type Checkpoint struct {
 	// that names an edge the graph does not declare, or that stands anywhere
 	// but where that edge leads.
 	ParkedAt *EdgeRef `json:"parked_at,omitempty"`
+	// ParkedUsage is the reading a usage park was decided on: what the run's
+	// UsageMeter answered when the run was compared against its usage budget
+	// and stopped. The executor sets it exactly when it parks a run on that
+	// budget and clears it on every other status, so it is evidence of why
+	// the run parked and never a total anything is compared against later.
+	// Graph.Validate refuses one on any other status, and refuses a usage
+	// park without one or with one that does not exhaust the usage budget the
+	// run recorded.
+	ParkedUsage *Usage `json:"parked_usage,omitempty"`
 	// State is the typed record as of this point.
 	State State `json:"state"`
 	// Decision is the open decision, non-nil exactly when Status is
@@ -374,6 +416,7 @@ func (c Checkpoint) clone() Checkpoint {
 	out.Decision = c.Decision.clone()
 	out.Counters = c.Counters.clone()
 	out.ParkedAt = c.ParkedAt.clone()
+	out.ParkedUsage = c.ParkedUsage.clone()
 	if c.ForkedFrom != nil {
 		origin := *c.ForkedFrom
 		out.ForkedFrom = &origin
@@ -390,7 +433,10 @@ func (c Checkpoint) Park() (Park, bool) {
 	if !c.Status.Parked() {
 		return Park{}, false
 	}
-	return Park{Status: c.Status, Node: c.Position, Edge: c.ParkedAt.clone(), Budget: c.Counters.Budget}, true
+	return Park{
+		Status: c.Status, Node: c.Position, Edge: c.ParkedAt.clone(), Budget: c.Counters.Budget,
+		UsageBudget: c.Counters.UsageBudget, Usage: c.ParkedUsage.clone(),
+	}, true
 }
 
 // Result renders the checkpoint as the result a caller of the executor sees,
@@ -407,22 +453,27 @@ func (c Checkpoint) Result() Result {
 		Budget:     c.Counters.Budget,
 		Reason:     c.Reason,
 		ParkedAt:   c.ParkedAt.clone(),
+
+		UsageBudget: c.Counters.UsageBudget,
+		ParkedUsage: c.ParkedUsage.clone(),
 	}
 }
 
 // checkpointJSON is the wire shape. It exists so decoding can refuse unknown
 // fields without the alias recursing into Checkpoint's own unmarshaler.
 type checkpointJSON struct {
-	Run        string        `json:"run"`
-	Seq        int           `json:"seq"`
-	Position   string        `json:"position"`
-	Status     Status        `json:"status"`
-	Reason     string        `json:"reason,omitempty"`
-	ParkedAt   *EdgeRef      `json:"parked_at,omitempty"`
-	State      State         `json:"state"`
-	Decision   *Decision     `json:"decision,omitempty"`
-	Counters   Counters      `json:"counters"`
-	ForkedFrom *CheckpointID `json:"forked_from,omitempty"`
+	Run      string   `json:"run"`
+	Seq      int      `json:"seq"`
+	Position string   `json:"position"`
+	Status   Status   `json:"status"`
+	Reason   string   `json:"reason,omitempty"`
+	ParkedAt *EdgeRef `json:"parked_at,omitempty"`
+	// ParkedUsage is Checkpoint.ParkedUsage.
+	ParkedUsage *Usage        `json:"parked_usage,omitempty"`
+	State       State         `json:"state"`
+	Decision    *Decision     `json:"decision,omitempty"`
+	Counters    Counters      `json:"counters"`
+	ForkedFrom  *CheckpointID `json:"forked_from,omitempty"`
 }
 
 // UnmarshalJSON reads a checkpoint, refusing unknown fields and unrecognized

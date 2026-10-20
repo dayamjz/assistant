@@ -370,6 +370,7 @@ func TestParseRefusesGlobalOnlyKeysInARepositoryFile(t *testing.T) {
 		{KeyUsageCeilingOutputTokens, `{"usage_ceiling": {"output_tokens": 0}}`},
 		{KeyUsageCeilingCacheReadTokens, `{"usage_ceiling": {"cache_read_tokens": 1}}`},
 		{KeyUsageCeilingCacheCreationTokens, `{"usage_ceiling": {"cache_creation_tokens": 1}}`},
+		{KeyRunUsageBudgetOutputTokens, `{"run_usage_budget": {"output_tokens": 1}}`},
 	}
 	for _, c := range cases {
 		for _, origin := range []Origin{OriginTrusted, OriginPushed} {
@@ -436,7 +437,8 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyRelaunchAttempts: true, KeyAutonomyMerge: true, KeySessionProvider: true,
 		KeyUsageCeilingWindow: true, KeyUsageCeilingInputTokens: true, KeyUsageCeilingOutputTokens: true,
 		KeyUsageCeilingCacheReadTokens: true, KeyUsageCeilingCacheCreationTokens: true,
-		KeyNotifyCommand: true,
+		KeyNotifyCommand:              true,
+		KeyRunUsageBudgetOutputTokens: true,
 	}
 	docs := map[Key]string{
 		KeyAgent:                           `{"agent": "claude"}`,
@@ -477,6 +479,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyUsageCeilingCacheReadTokens:     `{"usage_ceiling": {"cache_read_tokens": 1}}`,
 		KeyUsageCeilingCacheCreationTokens: `{"usage_ceiling": {"cache_creation_tokens": 1}}`,
 		KeyNotifyCommand:                   `{"notify": {"command": "notify-me"}}`,
+		KeyRunUsageBudgetOutputTokens:      `{"run_usage_budget": {"output_tokens": 1}}`,
 	}
 	// Every schema key is covered, so a key added without a decision about its
 	// class fails here rather than going untested.
@@ -513,7 +516,7 @@ func TestTrustGlobalIsAssignedToExactlyTheGlobalOnlyKeys(t *testing.T) {
 			global = append(global, k)
 		}
 	}
-	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count,relaunch_attempts,autonomy.merge,session_provider,usage_ceiling.window,usage_ceiling.input_tokens,usage_ceiling.output_tokens,usage_ceiling.cache_read_tokens,usage_ceiling.cache_creation_tokens,notify.command"
+	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count,relaunch_attempts,autonomy.merge,session_provider,usage_ceiling.window,usage_ceiling.input_tokens,usage_ceiling.output_tokens,usage_ceiling.cache_read_tokens,usage_ceiling.cache_creation_tokens,notify.command,run_usage_budget.output_tokens"
 	if got := strings.Join(keyStrings(global), ","); got != want {
 		t.Errorf("TrustGlobal keys = %q, want %s", got, want)
 	}

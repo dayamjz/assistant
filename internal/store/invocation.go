@@ -146,7 +146,16 @@ func (s *Store) AgentInvocationsSince(ctx context.Context, since time.Time) ([]A
 	return s.agentInvocations(ctx, "WHERE started >= ?", []any{encodeTime(since)})
 }
 
-// agentInvocations is the one read both accessors make, with where the
+// AgentInvocationsForRun returns every row of the history whose call named
+// run as the run it served, in the order it was appended. It is the read a
+// per-run usage budget is weighed from: a row naming no run, which every row
+// written before the column existed is, is in no run's rows, so a run started
+// before the column has no recorded spend rather than a guessed one.
+func (s *Store) AgentInvocationsForRun(ctx context.Context, run string) ([]AgentInvocation, error) {
+	return s.agentInvocations(ctx, "WHERE run = ?", []any{run})
+}
+
+// agentInvocations is the one read every accessor here makes, with where the
 // filter its caller adds. Stored instants are fixed-width UTC text, which
 // sorts as the instants do, so the comparison is over the column as stored.
 func (s *Store) agentInvocations(ctx context.Context, where string, args []any) ([]AgentInvocation, error) {

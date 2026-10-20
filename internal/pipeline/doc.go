@@ -346,7 +346,10 @@
 //   - The run-wide step budget. It is carried to the executor, which records it
 //     on the run, and counts every node execution however they are
 //     distributed. It catches several stages each staying under their own
-//     limit while the run as a whole never finishes.
+//     limit while the run as a whole never finishes. The usage budget rides
+//     beside it on the same terms, Options.UsageBudget with its meter, and
+//     parks a run whose own work reported spending it; it bounds spend rather
+//     than the loop, so it is a run-level bound and not a fourth loop bound.
 //   - Convergence. internal/graph fingerprints state at every back edge, and a
 //     round that leaves state identical ends the loop. It catches a fixer that
 //     reports success each round without changing anything, which neither
@@ -563,8 +566,8 @@
 // fire is worse than no bound, because it reads as a bound.
 //
 // A bound that stops a run parks it, and internal/graph parks a run rather
-// than halting it for a decision: no park is answered. A run its own budget
-// parked is moved onto a new one with graph.Executor.AdoptBudget, and a run a
+// than halting it for a decision: no park is answered. A run either of its
+// budgets parked is moved onto new ones with graph.Executor.AdoptBudget, and a run a
 // round limit or convergence parked is taken further by forking it.
 //
 // PRD section 5's hold offers four actions, and all four are hold answers

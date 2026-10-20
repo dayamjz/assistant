@@ -948,6 +948,8 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		Fixer:                       s.observeFixer(s.newFixer(fixDeps), fixDeps.Copy),
 		Rounds:                      resolved.cfg.FixRounds,
 		Budget:                      resolved.cfg.RunBudget,
+		UsageBudget:                 resolved.cfg.RunUsageBudget,
+		Usage:                       s.runUsage,
 		Adapter:                     built.adapterCapabilities(),
 		SuppressProjectInstructions: resolved.cfg.SuppressProjectInstructions,
 	})

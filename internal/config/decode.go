@@ -352,6 +352,19 @@ func decodeTokenCeiling(k Key, v any) (any, error) {
 	return int64(n), nil
 }
 
+// decodeRunUsageBudget accepts a whole number of tokens and refuses a
+// negative one rather than reading it as no budget; zero is no budget.
+func decodeRunUsageBudget(k Key, v any) (any, error) {
+	n, err := asInt(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if n < 0 {
+		return nil, keyErr(k, v, "a run's usage budget cannot be negative; zero is no budget")
+	}
+	return int64(n), nil
+}
+
 // decodeEscalationWindow is decodeBoundedDuration between
 // MinEscalationWindow and MaxEscalationWindow.
 func decodeEscalationWindow(k Key, v any) (any, error) {

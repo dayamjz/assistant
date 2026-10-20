@@ -174,12 +174,13 @@ type Run struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// ParkBound names which of PRD section 5's three loop bounds parked a run. The
-// set is closed: a park this package cannot name is refused where it would be
+// ParkBound names which bound parked a run: one of PRD section 5's three loop
+// bounds, or the usage budget internal/graph holds a run to beside its step
+// budget. The set is closed: a park this package cannot name is refused where it would be
 // recorded rather than stored as a word nobody defined.
 type ParkBound string
 
-// The three bounds.
+// The four bounds.
 const (
 	// ParkRoundLimit is a stage's automatic fix round limit: the stage still
 	// reported findings to fix when the limit was reached.
@@ -189,15 +190,19 @@ const (
 	ParkConvergence ParkBound = "convergence"
 	// ParkStepBudget is the run-wide step budget.
 	ParkStepBudget ParkBound = "step_budget"
+	// ParkUsageBudget is the per-run usage budget: what the run's own agent
+	// calls reported spending reached the budget it was held to, or could not
+	// be established.
+	ParkUsageBudget ParkBound = "usage_budget"
 )
 
 // parkBounds is the closed set ParkBounds reports and Recognized answers from.
-var parkBounds = []ParkBound{ParkRoundLimit, ParkConvergence, ParkStepBudget}
+var parkBounds = []ParkBound{ParkRoundLimit, ParkConvergence, ParkStepBudget, ParkUsageBudget}
 
 // ParkBounds returns the closed set. The result is a copy.
 func ParkBounds() []ParkBound { return slices.Clone(parkBounds) }
 
-// Recognized reports whether b is one of the three bounds.
+// Recognized reports whether b is one of the four bounds.
 func (b ParkBound) Recognized() bool { return slices.Contains(parkBounds, b) }
 
 // RunPark is the record of which bound parked a run and where, written once
@@ -218,8 +223,22 @@ type RunPark struct {
 	// step budget for ParkStepBudget. A convergence park has no limit, and
 	// carries zero, and so does a round limit park whose checkpoint was
 	// written before checkpoints recorded the parking edge, whose limit
-	// nothing recorded.
+	// nothing recorded. A usage budget park carries zero here and its budget
+	// in UsageBudget, because the budget is a token count rather than a count
+	// of steps or rounds.
 	Limit int `json:"limit,omitempty"`
+	// UsageBudget is the usage budget a ParkUsageBudget park was held to, and
+	// Spent and Unreported are the reading it parked on: the total the run's
+	// calls reported and how many reported nothing. All three are zero on
+	// every other bound. The reading is evidence of why the run parked as the
+	// checkpoint recorded it, not a total anything is compared against: the
+	// agent invocation record owns what was spent.
+	UsageBudget int64 `json:"usage_budget,omitempty"`
+	// Spent is the reading's total; see UsageBudget.
+	Spent int64 `json:"spent,omitempty"`
+	// Unreported is how many of the run's calls reported no count when it
+	// parked; see UsageBudget.
+	Unreported int `json:"unreported,omitempty"`
 	// Checkpoint is the sequence number of the checkpoint the park was read
 	// off, which is where the run's state as it parked, the stage reports
 	// among it, is kept.
@@ -228,8 +247,9 @@ type RunPark struct {
 
 // Validate refuses a record whose shape no park has: an unrecognized bound,
 // no node, no checkpoint, a round limit or a convergence park with no stage,
-// a step budget below one, a negative round limit, or a limit on a
-// convergence park.
+// a step budget below one, a negative round limit, a limit on a
+// convergence park, and a usage budget park whose reading leaves room under
+// its budget or whose usage fields sit on another bound.
 func (p RunPark) Validate() error {
 	if !p.Bound.Recognized() {
 		return fmt.Errorf("store: %q is not a bound that parks a run", p.Bound)
@@ -245,7 +265,10 @@ func (p RunPark) Validate() error {
 		if strings.TrimSpace(p.Stage) == "" {
 			return fmt.Errorf("store: a %s park names no stage", p.Bound)
 		}
-	case ParkStepBudget:
+	case ParkStepBudget, ParkUsageBudget:
+	}
+	if err := p.validateUsage(); err != nil {
+		return err
 	}
 	switch p.Bound {
 	case ParkRoundLimit:
@@ -260,6 +283,34 @@ func (p RunPark) Validate() error {
 		if p.Limit != 0 {
 			return fmt.Errorf("store: a convergence park carries a limit of %d, and convergence has none", p.Limit)
 		}
+	case ParkUsageBudget:
+		if p.Limit != 0 {
+			return fmt.Errorf("store: a usage budget park carries a limit of %d, and its budget is UsageBudget", p.Limit)
+		}
+	}
+	return nil
+}
+
+// validateUsage holds the three usage fields to the bound they belong to: on
+// a usage budget park a budget of at least one and a reading that exhausts
+// it, spent at or past it or not established, and on every other bound none
+// of them.
+func (p RunPark) validateUsage() error {
+	if p.Bound != ParkUsageBudget {
+		if p.UsageBudget != 0 || p.Spent != 0 || p.Unreported != 0 {
+			return fmt.Errorf("store: a %s park carries a usage reading, and only a usage budget park has one", p.Bound)
+		}
+		return nil
+	}
+	if p.UsageBudget < 1 {
+		return fmt.Errorf("store: a usage budget park carries a budget of %d", p.UsageBudget)
+	}
+	if p.Spent < 0 || p.Unreported < 0 {
+		return fmt.Errorf("store: a usage budget park records %d spent and %d unreported", p.Spent, p.Unreported)
+	}
+	if p.Unreported == 0 && p.Spent < p.UsageBudget {
+		return fmt.Errorf("store: a usage budget park records %d spent under a budget of %d, which parks nothing",
+			p.Spent, p.UsageBudget)
 	}
 	return nil
 }

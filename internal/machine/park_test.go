@@ -20,6 +20,9 @@ func parkOf(bound store.ParkBound) store.RunPark {
 		return store.RunPark{Bound: bound, Stage: "ci", Node: pipeline.StageCI.FixNode(), Limit: 3, Checkpoint: 4}
 	case store.ParkConvergence:
 		return store.RunPark{Bound: bound, Stage: "review", Node: pipeline.StageReview.Node(), Checkpoint: 4}
+	case store.ParkUsageBudget:
+		return store.RunPark{Bound: bound, Stage: "review", Node: pipeline.StageReview.Node(),
+			UsageBudget: 5000, Spent: 5120, Checkpoint: 4}
 	default:
 		return store.RunPark{Bound: bound, Stage: "test", Node: pipeline.StageTest.Node(), Limit: 12, Checkpoint: 4}
 	}
@@ -48,6 +51,8 @@ func TestAParkRecordDecidesTheOutcomeAndTheAction(t *testing.T) {
 		store.ParkRoundLimit:  {"round limit", "ci stage", "3 automatic rounds", string(config.KeyFixRoundsChecks)},
 		store.ParkConvergence: {"changed nothing", "review stage"},
 		store.ParkStepBudget:  {"step budget of 12", "AdoptBudget", string(config.KeyRunBudget), "no command"},
+		store.ParkUsageBudget: {"usage budget of 5000 output tokens", "reported 5120 output tokens", "AdoptBudget",
+			string(config.KeyRunUsageBudgetOutputTokens), "no command", "runs --usage"},
 	}
 	actions := map[string]store.ParkBound{}
 	for _, bound := range store.ParkBounds() {
@@ -95,6 +100,7 @@ func TestAParkedRunReadsAsItsBoundAndNotAsACancellation(t *testing.T) {
 		store.ParkRoundLimit:  "round limit",
 		store.ParkConvergence: "changed nothing",
 		store.ParkStepBudget:  "step budget",
+		store.ParkUsageBudget: "usage budget",
 	}
 	seen := map[machine.Phrase]store.ParkBound{}
 	for _, bound := range store.ParkBounds() {
