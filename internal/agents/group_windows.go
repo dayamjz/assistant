@@ -22,9 +22,9 @@ func endAbsentGroup(int) GroupEnd { return GroupLeaderGone }
 // leader is looked for again afterwards and a leader still present is
 // ErrGroupSurvived; what this platform cannot say is whether a descendant
 // survived a leader that did not.
-func endPresentGroup(id Identity, grace time.Duration) (GroupEnd, error) {
+func endPresentGroup(id Identity, grace time.Duration, hurry <-chan struct{}) (GroupEnd, error) {
 	_ = sendCtrlBreak(id.PID)
-	if waitAbsent(id, grace) {
+	if waitAbsentOr(id, grace, hurry) {
 		return GroupEnded, nil
 	}
 	if err := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(id.PID)).Run(); err != nil {
@@ -50,6 +50,25 @@ func forcePresentGroup(id Identity, wait time.Duration) (GroupEnd, error) {
 		return GroupEnded, nil
 	}
 	return "", ErrGroupSurvived
+}
+
+// waitAbsentOr is waitAbsent that gives up as soon as hurry is closed.
+func waitAbsentOr(id Identity, grace time.Duration, hurry <-chan struct{}) bool {
+	deadline := time.Now().Add(grace)
+	for {
+		presence, err := id.Presence()
+		if err == nil && presence != PresencePresent {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		select {
+		case <-hurry:
+			return false
+		case <-time.After(pollInterval):
+		}
+	}
 }
 
 // waitAbsent polls until no running process has the identity, or the

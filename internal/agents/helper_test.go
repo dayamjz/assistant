@@ -175,6 +175,12 @@ func helperMain(mode string) {
 		// Both the agent and its child ignore the polite signal, so only the
 		// forceful one ends them.
 		helperSpawn(true, true, true)
+	case "worker-spawn-stubborn-child":
+		// A worker that starts a child ignoring the polite signal, then reads
+		// its standard input until it is closed and exits, leaving the child
+		// in its group: what Close does to a worker is close that input.
+		helperSpawn(true, false, false)
+		_, _ = io.Copy(io.Discard, os.Stdin)
 	case "spawn-stubborn-child":
 		// Only the child ignores the polite signal, so the leader ends on it
 		// and leaves the child running in its group.

@@ -20,8 +20,8 @@ func endAbsentGroup(pgid int) GroupEnd {
 
 // endPresentGroup ends the group on terminateGroup's terms, asking groupGone
 // between steps, and reports whether anything was left.
-func endPresentGroup(id Identity, grace time.Duration) (GroupEnd, error) {
-	if !terminateGroup(id.PID, grace, groupGone, nil) {
+func endPresentGroup(id Identity, grace time.Duration, hurry <-chan struct{}) (GroupEnd, error) {
+	if !terminateGroup(id.PID, grace, groupGone, hurry) {
 		return "", ErrGroupSurvived
 	}
 	return GroupEnded, nil

@@ -295,6 +295,9 @@ type procWorker struct {
 	stdin        io.WriteCloser
 	out          *tailWriter
 	grace        time.Duration
+	// hurry is the hurry channel the worker was started under, on
+	// WithHurry's terms; nil never hurries.
+	hurry <-chan struct{}
 	// done is closed by the wait goroutine once the leader has been reaped
 	// and whatever it left in its group has been terminated.
 	done chan struct{}
@@ -369,6 +372,7 @@ func startWorker(ctx context.Context, agent string, spec procSpec, instructions 
 		stdin:        stdin,
 		out:          out,
 		grace:        spec.grace,
+		hurry:        hurryOf(ctx),
 		done:         make(chan struct{}),
 		slot:         make(chan struct{}, 1),
 		frame:        frame,
@@ -380,7 +384,7 @@ func startWorker(ctx context.Context, agent string, spec procSpec, instructions 
 		_ = cmd.Wait()
 		// The leader has been reaped. Anything still in its group is a child
 		// it left behind, and the worker owns it too.
-		terminateTree(cmd.Process, spec.grace, false, nil, nil)
+		terminateTree(cmd.Process, spec.grace, false, nil, w.hurry)
 	}()
 
 	if err := w.write(ctx, instructions); err != nil {
@@ -501,7 +505,7 @@ func (w *procWorker) Close() {
 			return
 		default:
 		}
-		terminateTree(w.cmd.Process, w.grace, true, w.done, nil)
+		terminateTree(w.cmd.Process, w.grace, true, w.done, w.hurry)
 	})
 	<-w.done
 }

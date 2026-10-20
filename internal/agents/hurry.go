@@ -17,6 +17,11 @@ type hurryKey struct{}
 // holds its leader, so the residual gap is terminateTree's own window, a
 // group checked non-empty that empties and is reused before the signal. A
 // nil hurry, and a context carrying none, never hurries anything.
+//
+// A worker or subordinate coordinator started on the returned context, by
+// OpenWorker, OpenSubordinate or OpenTerminalWorker, keeps the channel for
+// its lifetime, and its own termination, on its leader's exit or on Close,
+// is hurried the same way.
 func WithHurry(ctx context.Context, hurry <-chan struct{}) context.Context {
 	return context.WithValue(ctx, hurryKey{}, hurry)
 }

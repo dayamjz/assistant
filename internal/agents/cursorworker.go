@@ -60,7 +60,7 @@ func (r *cursorRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 		return nil, err
 	}
 	w := &acpWorker{route: spec.Route, grant: spec.Grant(), pending: map[uint64]chan acpMessage{}, send: make(chan struct{}, 1)}
-	w.procWorker = &procWorker{cmd: cmd, availability: &workerAvailability{agent: CursorName}, stdin: input, out: &tailWriter{limit: r.settings.maxOut}, grace: r.settings.grace, done: make(chan struct{}), slot: make(chan struct{}, 1), frame: plainLine, format: OutputStreamJSON, stdinOpen: true}
+	w.procWorker = &procWorker{cmd: cmd, availability: &workerAvailability{agent: CursorName}, stdin: input, out: &tailWriter{limit: r.settings.maxOut}, grace: r.settings.grace, hurry: hurryOf(ctx), done: make(chan struct{}), slot: make(chan struct{}, 1), frame: plainLine, format: OutputStreamJSON, stdinOpen: true}
 	cmd.Stdout = &acpLines{worker: w, limit: r.settings.maxOut}
 	cmd.Stderr = w.out
 	cmd.WaitDelay = r.settings.grace
@@ -71,7 +71,7 @@ func (r *cursorRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 	go func() {
 		defer close(w.done)
 		_ = cmd.Wait()
-		terminateTree(cmd.Process, r.settings.grace, false, nil, nil)
+		terminateTree(cmd.Process, r.settings.grace, false, nil, w.hurry)
 	}()
 	start, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

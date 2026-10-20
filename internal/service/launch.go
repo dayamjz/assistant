@@ -172,7 +172,7 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		return nil, fmt.Errorf("service: recording the knowledge revision of task %s attempt %d: %w", d.id, d.attempt, err)
 	}
 	host := s.sessionHost(selection.Resolution.Runner)
-	launched, err := host.Create(ctx, session.Spec{
+	launched, err := host.Create(s.registry.hurrying(ctx), session.Spec{
 		TaskID:       d.id,
 		Isolation:    fresh,
 		Instructions: firstTurn,

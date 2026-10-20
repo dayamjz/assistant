@@ -85,6 +85,12 @@ func (g GroupEnd) String() string { return string(g) }
 // a group sharing this process's console and not one another process
 // started, so at recovery the forceful step is what is delivered.
 func EndGroup(id Identity, grace time.Duration) (GroupEnd, error) {
+	return endGroup(id, grace, nil)
+}
+
+// endGroup is EndGroup with its polite wait cut short once hurry is closed,
+// on WithHurry's terms, for a worker this package holds the leader of.
+func endGroup(id Identity, grace time.Duration, hurry <-chan struct{}) (GroupEnd, error) {
 	if id.PID <= 0 {
 		return "", fmt.Errorf("agents: process group %d is not one this package started", id.PID)
 	}
@@ -98,7 +104,7 @@ func EndGroup(id Identity, grace time.Duration) (GroupEnd, error) {
 	case PresenceAbsent:
 		return endAbsentGroup(id.PID), nil
 	}
-	return endPresentGroup(id, grace)
+	return endPresentGroup(id, grace, hurry)
 }
 
 // ForceGroup is EndGroup without the polite step, for a caller whose grace

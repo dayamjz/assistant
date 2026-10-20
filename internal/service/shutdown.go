@@ -22,8 +22,9 @@ import (
 // subordinate coordinators. Shutdown is Close under a bound. When the bound
 // is reached first, or the caller forces the stop, it logs which step of
 // Close was still waiting, sends every group it knows of the forceful signal
-// through agents.ForceGroup, hurries every agent invocation's own termination
-// through agents.WithHurry, gives Close forceSettle to finish now that
+// through agents.ForceGroup, hurries the termination of every agent
+// invocation, worker and subordinate coordinator it started through
+// agents.WithHurry, gives Close forceSettle to finish now that
 // nothing it waits on should be running, and returns *StopForcedError so the
 // caller exits rather than waiting any longer.
 //
@@ -43,11 +44,13 @@ import (
 //     passed over rather than signalled by a bare number.
 //   - A group whose leader already ended and whose members remain is not
 //     signalled here, because nothing can tie its identifier back to the
-//     registration (agents.ForceGroup says why). An agent invocation's such
-//     group is ended by the invocation's own termination, which the forced
-//     stop hurries through agents.WithHurry; a worker's or a subordinate
-//     coordinator's is not hurried, and a survivor there outlives the
-//     service.
+//     registration (agents.ForceGroup says why). It is ended by the
+//     termination of the handle that holds its leader, an invocation's, a
+//     worker's or a subordinate coordinator's, which the forced stop hurries
+//     through agents.WithHurry; the hurry reaches every one this service
+//     started, because its wrappers, its launch and its delegation all start
+//     them on the registry's hurry channel. The service gives them
+//     forceSettle and then exits whether or not they are done.
 //   - A tmux-hosted worker is forced by its session's reference and by its
 //     server's identity; anything else the server started is not reached.
 //   - The exit is within stop_grace plus forceSettle, not within stop_grace:
