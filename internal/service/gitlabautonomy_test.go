@@ -30,10 +30,6 @@ const (
 	autonomyLabSpec     = "gitlab.com/" + autonomyLabProject
 	autonomyLabMR       = 7
 	autonomyLabURL      = "https://gitlab.com/" + autonomyLabProject + "/-/merge_requests/7"
-	// mergeAnswerDecoySHA is a nonempty head GitLab's merge_request entity
-	// could carry on an accepted merge (its documented sha field) but that
-	// must not be what the merge record stores; the read after the merge does.
-	mergeAnswerDecoySHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
 
 // gitLabAutonomyWalk is a home and a subject whose recorded upstream is a
@@ -49,10 +45,31 @@ type gitLabAutonomyWalk struct {
 	gh      *forgetest.Provider
 }
 
+// gitLabMerge is how GitLab meets the merge in a walk, stated as what GitLab
+// does rather than as the answer's bytes, because the merge the adapter sends
+// is always bound to the head the run observed and that narrows what GitLab
+// can answer. GitLab compares the bound sha with the source branch's head
+// before it merges and answers 409 when they differ, so a merge it accepted
+// is answered with the merge request entity merged at that same head (the
+// entity's sha is the source branch's head), and the read after it finds the
+// same. The zero gitLabMerge is that accepted merge.
+type gitLabMerge struct {
+	// refusal, when set, is GitLab's error answer to the merge, and the read
+	// after it finds the merge request still open.
+	refusal labtest.Response
+	// sourceHead is the source branch's head the read after a refusal finds;
+	// empty is the walk's head. A 409 names a head other than the bound one,
+	// and this is that head.
+	sourceHead string
+	// readAfter, when set, is GitLab's answer to every read after the merge
+	// in place of the merge request.
+	readAfter labtest.Response
+}
+
 // newGitLabAutonomyWalk arranges the walk. listed is the global-only
 // autonomy.merge the operator's file carries, written as JSON; empty writes
-// no file. merge is what GitLab answers the merge with.
-func newGitLabAutonomyWalk(t *testing.T, listed string, merge labtest.Response) gitLabAutonomyWalk {
+// no file. merge is how GitLab meets the merge.
+func newGitLabAutonomyWalk(t *testing.T, listed string, merge gitLabMerge) gitLabAutonomyWalk {
 	t.Helper()
 	h := newHome(t)
 	subject := newSubject(t)
@@ -74,6 +91,17 @@ func newGitLabAutonomyWalk(t *testing.T, listed string, merge labtest.Response) 
 	}
 	merged := open
 	merged.State = "merged"
+	answer, after := labtest.MergeRequest(merged), labtest.MergeRequest(merged)
+	if merge.refusal != (labtest.Response{}) {
+		unmerged := open
+		if merge.sourceHead != "" {
+			unmerged.SHA = merge.sourceHead
+		}
+		answer, after = merge.refusal, labtest.MergeRequest(unmerged)
+	}
+	if merge.readAfter != (labtest.Response{}) {
+		after = merge.readAfter
+	}
 	lab := labtest.New(t, labtest.Script{
 		labtest.OpProject: {labtest.Project(3, autonomyLabProject)},
 		// The checks stage reads the merge request and then its checks, and
@@ -84,10 +112,10 @@ func newGitLabAutonomyWalk(t *testing.T, listed string, merge labtest.Response) 
 		labtest.OpView: {
 			labtest.MergeRequest(open), labtest.MergeRequest(open),
 			labtest.MergeRequest(open), labtest.MergeRequest(open),
-			labtest.MergeRequest(merged),
+			after,
 		},
 		labtest.OpPipelines: {labtest.Pipelines(labtest.PipelineView{ID: 41, SHA: head, Ref: "work", Status: "success"})},
-		labtest.OpMerge:     {merge},
+		labtest.OpMerge:     {answer},
 	})
 	return gitLabAutonomyWalk{home: h, subject: subject, head: head, lab: lab,
 		gh: forgetest.New(t, forgetest.Script{})}
@@ -164,13 +192,7 @@ func TestAListedGitLabProjectIsMergedAtTheObservedHead(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
 	requiresIdentifiedPeer(t)
-	w := newGitLabAutonomyWalk(t, `["`+autonomyLabSpec+`"]`, labtest.MergeRequest(labtest.MergeRequestView{
-		IID: autonomyLabMR, State: "merged", MergeStatus: "can_be_merged", SourceBranch: "work",
-		TargetBranch: "main", SHA: mergeAnswerDecoySHA, Title: "feat: a change", WebURL: autonomyLabURL,
-	}))
-	// GitLab's accepted merge answers with the merge_request entity, including
-	// sha; the fifth GET names the observed head instead. The record must
-	// match the GET, not this merge answer.
+	w := newGitLabAutonomyWalk(t, `["`+autonomyLabSpec+`"]`, gitLabMerge{})
 	run := w.walk(t)
 
 	merges := w.lab.CallsFor(labtest.OpMerge)
@@ -186,9 +208,6 @@ func TestAListedGitLabProjectIsMergedAtTheObservedHead(t *testing.T) {
 	record := readMergeRecord(t, w.home, run.Record.ID)
 	if record == nil || record.PullRequest != autonomyLabMR || record.Head != w.head || record.End != store.PullRequestMerged {
 		t.Fatalf("the merge record is %+v, want merge request %d merged at %s", record, autonomyLabMR, w.head)
-	}
-	if record.Head == mergeAnswerDecoySHA {
-		t.Fatalf("the merge record head is the merge answer's sha %s, want the read after the merge's %s", mergeAnswerDecoySHA, w.head)
 	}
 	if run.Outcome != machine.OutcomePassed {
 		t.Fatalf("the run reads %s, want passed from the merge record; log:\n%s", run.Outcome, serviceLog(t, w.home))
@@ -213,7 +232,7 @@ func TestAnUnlistedGitLabProjectIsNeverMerged(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			w := newGitLabAutonomyWalk(t, listed, labtest.Error(http.StatusMethodNotAllowed, "405 Method Not Allowed"))
+			w := newGitLabAutonomyWalk(t, listed, gitLabMerge{refusal: labtest.Error(http.StatusMethodNotAllowed, "405 Method Not Allowed")})
 			run := w.walk(t)
 			if run.Outcome != machine.OutcomeChecksPassed {
 				t.Fatalf("the run reads %s, want checks-passed; log:\n%s", run.Outcome, serviceLog(t, w.home))
@@ -234,27 +253,35 @@ func TestAnUnlistedGitLabProjectIsNeverMerged(t *testing.T) {
 }
 
 // A merge GitLab refuses is reported as the refusal it is and never retried
-// around. The statuses are the two GitLab's merge endpoint documents for a
-// merge request it will not merge: 405 for one that cannot be accepted, and
-// 406 for a branch that cannot be merged. Each is asked once, bound to the
-// observed head, the run stays checks-passed for a person, nothing is
-// recorded, and the service log carries GitLab's own status and message.
+// around. The answers are three of the refusals GitLab's merge endpoint
+// documents, each with the status and message its source writes: 405 for a
+// merge request it will not merge now, 409 for a bound sha that is not the
+// source branch's head, which names that head and so can only arrive when the
+// branch moved after the live read, and 422 for a merge it attempted and did
+// not make. Each is asked once, bound to the observed head, the run stays
+// checks-passed for a person, nothing is recorded, and the service log
+// carries GitLab's own status and message.
 // The calls are counted after the service has closed, so a retry made at any
 // point in the service's life would be among them.
 func TestAMergeGitLabRefusesIsReportedAndNotRetried(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
 	requiresIdentifiedPeer(t)
+	moved := strings.Repeat("b", 40)
 	for _, refusal := range []struct {
-		status  int
-		message string
+		status     int
+		message    string
+		sourceHead string
 	}{
-		{http.StatusMethodNotAllowed, "405 Method Not Allowed"},
-		{http.StatusNotAcceptable, "Branch cannot be merged"},
+		{http.StatusMethodNotAllowed, "405 Method Not Allowed", ""},
+		{http.StatusConflict, "SHA does not match HEAD of source branch: " + moved, moved},
+		{http.StatusUnprocessableEntity, "Branch cannot be merged", ""},
 	} {
 		t.Run(http.StatusText(refusal.status), func(t *testing.T) {
 			t.Parallel()
-			w := newGitLabAutonomyWalk(t, `["`+autonomyLabSpec+`"]`, labtest.Error(refusal.status, refusal.message))
+			w := newGitLabAutonomyWalk(t, `["`+autonomyLabSpec+`"]`, gitLabMerge{
+				refusal: labtest.Error(refusal.status, refusal.message), sourceHead: refusal.sourceHead,
+			})
 			run := w.walk(t)
 			merges := w.lab.CallsFor(labtest.OpMerge)
 			if len(merges) != 1 || merges[0].Body != `{"sha":"`+w.head+`"}` {
@@ -272,5 +299,37 @@ func TestAMergeGitLabRefusesIsReportedAndNotRetried(t *testing.T) {
 				t.Fatalf("the service log does not report GitLab's refusal of run %s:\n%s", run.Record.ID, log)
 			}
 		})
+	}
+}
+
+// The merge record is written from a read after the merge and never from the
+// merge's own answer. GitLab's answer to a bound merge it made is the merge
+// request merged at the very head the record would carry, so the two sources
+// cannot be told apart by what they say; they are told apart by a read after
+// the merge that fails, which GitLab can answer at any time, here with its
+// error object under 503. The merge was accepted and asked once, and still no
+// record is written and the run stays checks-passed, because nothing has read
+// the merge request merged; the later pass that reads a person's merge meets
+// the same failure, since the stand-in serves its last answer to every read
+// past the script. The positive control is the listed walk above, whose read
+// after succeeds.
+func TestAnAcceptedGitLabMergeIsRecordedOnlyFromAReadAfterIt(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	w := newGitLabAutonomyWalk(t, `["`+autonomyLabSpec+`"]`, gitLabMerge{
+		readAfter: labtest.Error(http.StatusServiceUnavailable, "503 Service Unavailable"),
+	})
+	run := w.walk(t)
+	if merges := w.lab.CallsFor(labtest.OpMerge); len(merges) != 1 || merges[0].Body != `{"sha":"`+w.head+`"}` {
+		t.Fatalf("the merge was asked as %+v, want once, bound to %s", merges, w.head)
+	}
+	if record := readMergeRecord(t, w.home, run.Record.ID); record != nil {
+		t.Fatalf("a merge whose read after failed wrote the merge record %+v", record)
+	}
+	if run.Outcome != machine.OutcomeChecksPassed {
+		t.Fatalf("the run reads %s, want checks-passed with no record; log:\n%s", run.Outcome, serviceLog(t, w.home))
+	}
+	if log := serviceLog(t, w.home); !strings.Contains(log, "the forge accepted the merge of pull request 7") {
+		t.Fatalf("the service log does not report the accepted merge whose read failed:\n%s", log)
 	}
 }

@@ -783,9 +783,10 @@ never lets the program merge on GitLab:
 {"autonomy": {"merge": ["owner/name", "gitlab.com/group/project"]}}
 ```
 
-A merge the code host refuses (on GitLab, for example, the 405 or 406 its API
-documents for a merge request it will not merge) is written to the service log
-with the host's own status and message and is not asked again; the run stays
+A merge the code host refuses (on GitLab, for example, the 405, 409 or 422 its
+API documents for a merge request it will not merge, whose source branch moved
+past the head the run observed, or that it did not merge) is written to the
+service log with the host's own status and message and is not asked again; the run stays
 `checks-passed` for you to merge. Its outcome vocabulary has `passed` for a merged pull request,
 and otherwise what produces it is a pull request someone merged while the
 checks stage waited on it, or while the hold that wait left was standing, or

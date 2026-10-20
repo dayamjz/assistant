@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -495,6 +496,43 @@ func TestGitLabMergeAsksOnlyForABoundMergeNow(t *testing.T) {
 	merges := p.CallsFor(labtest.OpMerge)
 	if len(merges) != 1 || merges[0].Body != `{"sha":"`+conformanceHead+`"}` || len(merges[0].Query) != 0 {
 		t.Fatalf("the merge was sent as %+v", merges)
+	}
+}
+
+// A merge GitLab refuses arrives from Merge as ReasonRejected carrying
+// GitLab's status and its own message, for each refusal its merge endpoint
+// documents for a merge request it will not merge, with the message GitLab's
+// source writes for it: 405 for one it will not merge now, 409 for a bound
+// sha that is not the source branch's head, and 422 for a merge it attempted
+// and did not make. Each is asked once; the adapter does not ask again.
+func TestGitLabMergeRefusalsAreRejected(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	for _, refusal := range []struct {
+		status  int
+		message string
+	}{
+		{http.StatusMethodNotAllowed, "405 Method Not Allowed"},
+		{http.StatusConflict, "SHA does not match HEAD of source branch: " + strings.Repeat("b", 40)},
+		{http.StatusUnprocessableEntity, "Branch cannot be merged"},
+	} {
+		t.Run(http.StatusText(refusal.status), func(t *testing.T) {
+			p, adapter := openGitLab(t, labtest.Script{
+				labtest.OpProject: {labtest.Project(3, "group/name")},
+				labtest.OpMerge:   {labtest.Error(refusal.status, refusal.message)},
+			})
+			pr, err := adapter.Merge(context.Background(), 12, conformanceHead)
+			if pr != (forge.PullRequest{}) {
+				t.Fatalf("a refused merge answered the pull request %+v", pr)
+			}
+			got := refusalOf(t, err)
+			if got.Reason != forge.ReasonRejected || got.Op != "merge" ||
+				!strings.Contains(got.Detail, "HTTP "+strconv.Itoa(refusal.status)) || !strings.Contains(got.Detail, refusal.message) {
+				t.Fatalf("the refusal is %+v, want rejected carrying HTTP %d and %q", got, refusal.status, refusal.message)
+			}
+			if merges := p.CallsFor(labtest.OpMerge); len(merges) != 1 {
+				t.Fatalf("the refused merge was asked %d times, want once", len(merges))
+			}
+		})
 	}
 }
 
