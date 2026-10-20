@@ -14,4 +14,7 @@ paths: ["internal/agents/standin/**"]
 
 Read `doc.go` for what a recorded `Call` does and does not prove about P4,
 and for the two residual gaps. `tmux.go` owns `standin.Tmux` and
-`terminal_unix.go` owns `standin.AtTerminal`.
+`terminal_unix.go` owns `standin.AtTerminal`. `owner_unix.go` is the one
+owner watch a test's processes end with (P15), the binary `AtTerminal` runs
+again included, and `procs_unix.go`'s `LeftAfterTests` is the check every
+`AtTerminal` package's `TestMain` runs after its tests.

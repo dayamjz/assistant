@@ -34,13 +34,14 @@ import (
 // hook's tests.
 //
 // Every one of those processes ends with the test binary that started it
-// (watchOwner), and once the tests have returned the package fails if any
-// is still running (leftAfterTests): procs_unix_test.go owns both.
+// (standin.WatchOwner), and once the tests have returned the package fails
+// if any is still running (standin.LeftAfterTests): internal/agents/standin
+// owns both, and procs_unix_test.go what a home's processes are.
 func TestMain(m *testing.M) {
 	// The decision-model key is the operator's consent to send changed lines
 	// to a third party, so a test must never inherit one from whoever runs it.
 	_ = os.Unsetenv(judge.KeyVariable)
-	watchOwner()
+	standin.WatchOwner()
 	standin.Main()
 	standInManagerMain()
 	hookMain()
@@ -50,12 +51,12 @@ func TestMain(m *testing.M) {
 	// of its own; a test's push is a person's, and the gate places one by
 	// a terminal's foreground on the pushing chain.
 	standin.AtTerminal()
-	if err := ownProcesses(); err != nil {
+	if err := standin.OwnProcesses(); err != nil {
 		fmt.Fprintln(os.Stderr, "recording this test binary as the owner of what its tests start:", err)
 		os.Exit(1)
 	}
 	code := runQuietly(m)
-	if !leftAfterTests() && code == 0 {
+	if !standin.LeftAfterTests() && code == 0 {
 		code = 1
 	}
 	os.Exit(code)

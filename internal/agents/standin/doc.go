@@ -69,7 +69,16 @@
 // so AtTerminal runs the binary again on a pseudo-terminal of its own when
 // it reads no foreground; it is called after every verb that makes this
 // binary another process, and its doc comment states what it establishes
-// and what it does not.
+// and what it does not, including how the binary run again ends with the
+// outer one.
+//
+// A process a test starts must end with the test binary that started it
+// (P15), and owner_unix.go is the one owner watch that ties the two: the
+// binary AtTerminal runs again watches its outer, and a package whose tests
+// start lasting processes of its binary calls WatchOwner first in TestMain
+// and OwnProcesses after AtTerminal. LeftAfterTests is the check the same
+// TestMain runs once the tests have returned, failing the package naming
+// every process of its binary still running.
 //
 // That wiring serves a caller who can be handed a Runner. One in another
 // process cannot be: internal/agents resolves the configured agent by name off
