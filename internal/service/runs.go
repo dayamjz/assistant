@@ -731,14 +731,19 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 //
 // It answers refusal when the run was ended, and a *RunNotEndedError
 // carrying both when the move was refused or failed, in which case nothing
-// is released and the row stays in whatever status the store read.
+// is released and the row stays in whatever status the store read. That
+// answer does not cross the wire as refused even when the refusal would
+// have: a refused code tells a caller to fix what was decided against and
+// start again, and that start would attach to the run left unfinished, so
+// the refusal it carries is unclassifiedRefusal's and the code is whatever
+// the ending's failure is, internal when that names none.
 func (s *Service) endRefused(ctx context.Context, built *driver, runID string, refusal error) error {
 	if s.beforeRefusalEnd != nil {
 		s.beforeRefusalEnd()
 	}
 	endCtx := context.WithoutCancel(ctx)
 	if _, err := built.runs.Terminate(endCtx, runID); err != nil {
-		return &RunNotEndedError{Run: runID, Refusal: refusal, End: err}
+		return &RunNotEndedError{Run: runID, Refusal: unclassifiedRefusal(refusal), End: err}
 	}
 	s.releaseQueued(endCtx)
 	s.publishRunState(endCtx, runID)

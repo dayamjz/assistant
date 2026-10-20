@@ -434,11 +434,16 @@
 // listing names no run and no task, so a verb that takes an identifier -
 // runs by name, tasks by name - is driven from the structured listing, which
 // keeps every identifier by design. A run's listing row reads from the
-// record alone, so a merged run reads as having cleared the gate, and a run a
-// bound parked reads as that bound only when its record names the park, which
-// machine.RecordPhrase states; a run parked before the record held one reads
-// as ended before a verdict. The run's own rendering has the merge record and
-// the checkpoint and reads them. The structured listing carries, beside each
+// standing the service read for it beside the record (machine.Runs.PhraseOf),
+// so a run waiting on a decision lists as waiting on one and a merged run as
+// merged; a run whose standing could not be read falls back to the record
+// alone, on machine.RecordPhrase's terms, where a merged run reads as having
+// cleared the gate and a run waiting on a decision as in validation. A run a
+// bound parked reads as that bound only when its record names the park; a
+// run parked before the record held one reads as ended before a verdict. The
+// run's own rendering has the merge record and the checkpoint and reads them.
+// The structured listing carries each standing with the next action the
+// run's own answer carries for it (machine.ListedStandingOf), and, beside each
 // record naming a park, the report the parked stage last recorded, and status
 // carries the branch's latest run whole when a bound parked it, so the
 // findings a park stopped on are readable after the run has ended.

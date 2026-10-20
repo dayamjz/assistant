@@ -7,6 +7,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/knowledge"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -138,4 +139,33 @@ func plantDefaultBranchFile(t *testing.T, subject, path, content string) {
 	git(t, subject, "commit", "--quiet", "-m", "curate "+path)
 	git(t, subject, "push", "--quiet", "origin", "main")
 	git(t, subject, "checkout", "--quiet", standing)
+}
+
+// A knowledge document the trusted copy holds and internal/knowledge refuses
+// stops the run before anything launches, and because a document that was
+// read decided against it, the refusal crosses the socket as refused rather
+// than as a fault. The fetch-failure control that stays internal is
+// config_test.go's.
+func TestAnOversizedTrustedKnowledgeDocumentIsRefusedOnTheWire(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P7)
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	plantDefaultBranchFile(t, subject, knowledge.Document, strings.Repeat("x", knowledge.MaxBytes+1))
+	git(t, subject, "rebase", "--quiet", "main")
+
+	withService(t, h, func(running serviceUnderTest) {
+		_, err := startRunErr(t, running.client, subject)
+		if err == nil {
+			t.Fatal("a run whose trusted knowledge document is over the bound was started rather than refused")
+		}
+		if code := wireCode(t, err); code != ipc.CodeRefused {
+			t.Fatalf("the refusal crossed the wire as %q, want %q: %v", code, ipc.CodeRefused, err)
+		}
+		if !strings.Contains(err.Error(), knowledge.Document) {
+			t.Fatalf("the refusal does not name the knowledge document: %v", err)
+		}
+	})
 }

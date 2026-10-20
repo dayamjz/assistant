@@ -331,8 +331,50 @@ func (s *Service) listRuns(ctx context.Context, req machine.RunsRequest) (machin
 		if park, ok := record.Park.Get(); ok {
 			out.Parked = append(out.Parked, s.parkedReport(ctx, record.ID, park))
 		}
+		if listed, ok := s.listedStanding(ctx, record); ok {
+			out.Standings = append(out.Standings, listed)
+		}
 	}
 	return out, nil
+}
+
+// listedStanding reads one listed run's standing on the terms report reads a
+// run's: the record, its merge record, whether a segment is advancing it, and
+// where its execution stands at its latest checkpoint, in that order, decided
+// through machine.ListedStandingOf. A run with no checkpoint is the
+// unrecorded execution it is. A merge record or a checkpoint that is there
+// and cannot be read leaves the run with no standing, false, and the service
+// log saying why, rather than failing the listing, which is about every run
+// and not this one, and rather than reading the run as having no position,
+// which would tell a person to end a run whose history is intact; the
+// listing then reads that run from its record alone.
+func (s *Service) listedStanding(ctx context.Context, record store.Run) (machine.ListedStanding, bool) {
+	standing := machine.Standing{
+		Record:     record.Status,
+		Park:       record.Park,
+		NoCodeHost: record.NoCodeHost,
+		Execution:  machine.ExecutionUnrecorded(),
+	}
+	merge, ended, err := s.store.MergeRecord(ctx, record.ID)
+	if err != nil {
+		s.log.Printf("listing run %s from its record alone: its merge record could not be read: %v", record.ID, err)
+		return machine.ListedStanding{}, false
+	}
+	if ended {
+		standing.PullRequestEnd = merge.End
+	}
+	standing.Advancing = s.isAdvancing(record.ID)
+	latest, err := s.checkpoints.Latest(ctx, record.ID)
+	switch {
+	case err == nil:
+		read := latest.Result()
+		standing.Execution = machine.ExecutionAt(read.Status, read.State)
+	case errors.Is(err, graph.ErrNoSuchRun):
+	default:
+		s.log.Printf("listing run %s from its record alone: its position could not be read: %v", record.ID, err)
+		return machine.ListedStanding{}, false
+	}
+	return machine.ListedStandingOf(record.ID, standing), true
 }
 
 // parkedReport reads the report the stage a park names recorded, off the

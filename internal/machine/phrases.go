@@ -442,8 +442,8 @@ func noteTailed(kind string) bool {
 // outcome alone cannot tell apart, on Run.Advancing's and Execution's terms,
 // so it has three rows beside this one: RunPhrase chooses between them from
 // the same Standing NextActionOf reads, and this table's row is the weaker
-// claim that holds for all three, which is what a listing with no advancing
-// fact says.
+// claim that holds for all three, which is what a record read with no
+// standing beside it says.
 var phraseByOutcome = map[Outcome]Phrase{
 	OutcomeChecksPassed: {
 		Outcome:     "This change cleared the gate.",
@@ -574,7 +574,9 @@ func outcomePhrase(outcome Outcome, park store.Optional[store.RunPark], advancin
 }
 
 // RecordPhrase is what a person reads about a run of which only the record is
-// in hand: a listing, or a run's state travelling as an event. The record
+// in hand: a run's state travelling as an event, a listed run whose standing
+// the service could not read (Runs.PhraseOf), or a lifecycle refusal's
+// active runs. The record
 // carries its status, the park that ended it if a bound did, and whether begin
 // settled no code host, and no merge record, no checkpoint and no advancing
 // fact, so this is the row for the record read through OutcomeOf with the
@@ -598,6 +600,22 @@ func RecordPhrase(r store.Run) Phrase {
 		return p
 	}
 	return phraseByOutcome[OutcomeFailed]
+}
+
+// PhraseOf is what a person reads about record as this listing lists it:
+// the run's standing, when the answer carries one for it, read through the
+// chooser RunPhrase and Run.Phrase use, so a run waiting on a decision lists
+// as waiting on one and an executing run is sharpened as its own answer
+// sharpens it; and RecordPhrase's weaker row for a record the answer carries
+// no standing for. The park is read off the record on either path, as both
+// of those read it.
+func (r Runs) PhraseOf(record store.Run) Phrase {
+	for _, listed := range r.Standings {
+		if listed.Run == record.ID {
+			return outcomePhrase(listed.Outcome, record.Park, listed.Advancing, listed.Recorded)
+		}
+	}
+	return RecordPhrase(record)
 }
 
 // parkPhrase is the bound's row for a failed run whose record names its park,
