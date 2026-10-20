@@ -119,8 +119,28 @@ func admitPush(ctx context.Context, in *invocation) (any, error) {
 	}
 	var admission machine.Admission
 	err = in.callService(ctx, ipc.MethodGateAdmit, request, &admission)
+	if errors.Is(err, ipc.ErrUnplaceable) {
+		return nil, senderUnplaced{err: err}
+	}
 	return admission, err
 }
+
+// senderUnplaced is the service's refusal of a push whose sender it could
+// place as neither a task's worker nor a shell at a terminal, read out in
+// the words a person sending a change is given, with the service's own
+// sentence after them because it names the processes that were read and
+// the person can act on which process it was. It still matches
+// ipc.ErrUnplaceable, so the typed reason survives the rewording, and the
+// row is internal/machine's so that no sentence lives here (P13).
+type senderUnplaced struct{ err error }
+
+// Error is the row a person reads, then what the service read.
+func (e senderUnplaced) Error() string {
+	return machine.PhraseSenderUnplaced.String() + "\n" + e.err.Error()
+}
+
+// Unwrap resolves to the service's refusal.
+func (e senderUnplaced) Unwrap() error { return e.err }
 
 // notifyPush answers the gate's notification hook, which runs once a push has
 // been accepted. This is where a run begins.

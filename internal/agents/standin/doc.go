@@ -63,6 +63,14 @@
 // instead: it puts one handshake invocation through the adapter, and a binary
 // that does not answer it is a fatal error naming the missing TestMain.
 //
+// AtTerminal is the second TestMain call, for a package whose tests push to
+// a gate from the test's own process. The gate places such a push by a
+// terminal's foreground on the pushing chain, which a CI runner has none of,
+// so AtTerminal runs the binary again on a pseudo-terminal of its own when
+// it reads no foreground; it is called after every verb that makes this
+// binary another process, and its doc comment states what it establishes
+// and what it does not.
+//
 // That wiring serves a caller who can be handed a Runner. One in another
 // process cannot be: internal/agents resolves the configured agent by name off
 // PATH and builds the command line itself, so reaching the stand-in from there

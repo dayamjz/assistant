@@ -57,6 +57,18 @@ var (
 	// The message says what to do: run the command at a terminal, in the
 	// foreground.
 	ErrNotAtTerminal = sentinelFor(CodeNotAtTerminal)
+	// ErrUnplaceable reports a push refused at the gate because the service
+	// could place its peer as neither a task's worker nor a shell at a
+	// terminal: no process on the peer's parent chain, read from the kernel
+	// and never from the request, is in a worker group the service holds,
+	// is a worker, hosts a worker's terminal, or is in the foreground of its
+	// controlling terminal. That is the chain of a daemon, of a cron job, of
+	// an ssh session with no pseudo-terminal, and of a process the kernel
+	// reparented when what started it exited. The one method that raises it
+	// is gate.admit, before any reference moves, and the message names the
+	// chain that was read. The coordinator's methods do not raise it: they
+	// refuse a worker and serve everyone else, which is a different rule.
+	ErrUnplaceable = sentinelFor(CodeUnplaceable)
 	// ErrRefused reports a request the handler decided against the records
 	// and refused: a task a coordinator method may not act on as it stands,
 	// such as one not in a state the method is made from, a branch another
@@ -122,6 +134,8 @@ const (
 	CodeNotWorker Code = "not-worker"
 	// CodeNotAtTerminal maps to ErrNotAtTerminal.
 	CodeNotAtTerminal Code = "not-at-terminal"
+	// CodeUnplaceable maps to ErrUnplaceable.
+	CodeUnplaceable Code = "unplaceable"
 	// CodeRefused maps to ErrRefused.
 	CodeRefused Code = "refused"
 	// CodeUnavailable maps to ErrUnavailable.
@@ -181,6 +195,7 @@ var codeRows = []struct {
 	{CodeWorker, "ipc: refused, caller is a task's worker"},
 	{CodeNotWorker, "ipc: refused, caller is not a task's worker"},
 	{CodeNotAtTerminal, "ipc: refused, caller is not in the foreground of a terminal"},
+	{CodeUnplaceable, "ipc: refused, caller is placed as neither a task's worker nor a shell at a terminal"},
 	{CodeRefused, "ipc: refused by the records the request was decided against"},
 	{CodeUnavailable, "ipc: a fact this request depends on could not be established"},
 	{CodeSubscriberStalled, "ipc: subscriber stalled"},

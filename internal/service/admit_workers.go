@@ -54,6 +54,19 @@ import (
 // its environment or its copy's configuration stops a push to a path it
 // names. investigation_isolation_unix_test.go shows both halves.
 //
+// Of the pushes that run the hook, this rule sees the ones gate.go's
+// admitPusher placed as a task's worker: the hook process's parent chain,
+// walked by placement.go, reaches a process in a worker group the service
+// holds, a worker, or the host of a worker's terminal. The other two
+// answers never reach it. A chain with no worker on it and a process in
+// the foreground of its controlling terminal on it is a shell at a
+// terminal, admitted on the terms every push met before this rule existed;
+// a chain with neither is refused there with ipc.ErrUnplaceable, naming
+// what was read, and nothing moves. A chain placement could not read is
+// refused as well, with ipc.ErrUnavailable, never admitted. So a push
+// arrives here only once who is pushing is settled, and what is left to
+// decide is what that worker may move.
+//
 // An investigation task names no branch, so there is no reference its
 // worker may move: its push is refused before any update is read, whatever
 // it carries, a tag and a new branch included.
@@ -80,26 +93,23 @@ import (
 //     walks the pushing process's parent chain, so a push the Claude Code
 //     CLI runs in a process group of its own is held to this rule; a push
 //     whose chain the kernel rewrote, because a process between it and the
-//     worker exited first, is placed as a person's and this rule never sees
-//     it. placement.go names the shape and workers.go which way every rule
-//     then goes. A chain placement could not read is refused, not admitted.
+//     worker exited first, is placed as nobody's and refused at admission
+//     before this rule, unless that rewritten chain carries a terminal's
+//     foreground, as a shell in a window of a second tmux server the worker
+//     started does, in which case it is placed as a shell's and this rule
+//     never sees it. placement.go names both shapes and workers.go which way
+//     every rule then goes. A chain placement could not read is refused,
+//     not admitted.
 //   - Nothing here reads whether the pushed commit is the copy's head, only
 //     that it descends from what the gate holds.
 //   - The gate's standing value and the hook's are two reads; a push that
 //     lands between them is refused by the mismatch rather than raced.
 
-// admitWorkerPush applies the rule to a push whose peer is placed as a task's
-// worker, and does nothing for a peer placed as nobody's. A refusal wraps
-// ipc.ErrWorker and names the update; a fact that could not be established,
-// whether the peer is a worker among them, wraps ipc.ErrUnavailable.
-func (s *Service) admitWorkerPush(ctx context.Context, from ipc.Request, req machine.GateRequest) error {
-	m, ok, err := s.workerPeer(from)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return nil
-	}
+// admitWorkerPush applies the rule to a push whose peer gate.go's admitPusher
+// placed as the worker m names. A refusal wraps ipc.ErrWorker and names the
+// update; a fact that could not be established wraps ipc.ErrUnavailable.
+// Who is pushing is decided before this is reached and never here.
+func (s *Service) admitWorkerPush(ctx context.Context, m session.Membership, req machine.GateRequest) error {
 	task, err := s.store.Task(ctx, m.Task)
 	if err != nil {
 		return fmt.Errorf("%w: the task %s whose worker is pushing could not be read: %w", ipc.ErrUnavailable, m.Task, err)

@@ -198,6 +198,18 @@
 // it witnesses is a terminal's foreground and not a person, which is why the
 // resolver it records stays what Request.HoldResolver derives.
 //
+// gate.admit asks the first and the third relation together, along the
+// whole parent chain rather than of the peer alone, and admits a push only
+// from a peer placed as a task's worker or as a shell at a terminal: one
+// whose chain holds a process in the foreground of its controlling terminal
+// and no worker above it. A peer placed as neither, the chain of a daemon,
+// a cron job or an ssh session with no pseudo-terminal among them, is
+// refused with ErrUnplaceable before any reference moves, and the message
+// names the chain that was read. That is the one method the code is raised
+// by: the coordinator's methods serve a peer that is not a worker whatever
+// its chain ends at, and a person's push is the one request where "not a
+// worker" is not enough, because an admitted push cannot be taken back.
+//
 // ErrRefused is a code of another kind, about no relation and not about the
 // caller at all: it is a handler deciding a request against the records and
 // refusing it, which a caller must tell apart from a request it sent wrong

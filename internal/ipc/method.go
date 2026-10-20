@@ -40,7 +40,11 @@ const (
 	MethodBranchSync Method = "branch.sync"
 	// MethodGateAdmit decides whether a push to a gate may proceed. It is
 	// called from the gate's admission hook, before any reference in the gate
-	// changes, and a refusal is what rejects the push.
+	// changes, and a refusal is what rejects the push. Who is pushing is
+	// read off the hook process's credentials and parent chain: a task's
+	// worker is held to the service's worker rule, a peer with a terminal's
+	// foreground on its chain and no worker above it is a person's shell,
+	// and a peer placed as neither is refused ErrUnplaceable.
 	MethodGateAdmit Method = "gate.admit"
 	// MethodGateNotify reports a push a gate accepted and starts the runs it
 	// calls for. It answers as soon as the runs are recorded rather than when

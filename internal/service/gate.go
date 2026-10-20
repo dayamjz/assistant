@@ -102,16 +102,27 @@ func (s *Service) gateSubject(ctx context.Context, id string) (subject, error) {
 // its own is not, which contain_unix.go's processGroup states; the other gaps
 // are stated on StageStarted rather than implied here.
 //
-// A task's worker is the one pusher that is placed and not refused: its
-// process group is in no stage, so containment passes it, and placement.go
-// places it as the worker by walking its parent chain to a process in the
-// worker group set. What admission then asks of it is admit_workers.go's
-// rule, decided from the same credentials - only the task's own branch, only
-// forward, never a deletion. A person's push meets none of that: a peer
-// placed as no task's worker is held to exactly what this method held every
-// push to before the rule existed. workers.go says which way a push goes
-// when placement cannot tell, and the one shape of a worker's push it places
-// as a person's.
+// Who is pushing is the other thing admission decides from the same
+// credentials, and it is decided by placement.go's walk of the pushing
+// process's parent chain, with three answers. A task's worker: its process
+// group is in no stage, so containment passes it, and the walk places it by
+// reaching a process in the worker group set; what admission then asks of
+// it is admit_workers.go's rule - only the task's own branch, only forward,
+// never a deletion. A shell at a terminal: a chain with no worker on it and
+// a process in the foreground of its controlling terminal on it, which is
+// what a person's shell gives a job it runs, a script that job runs, and a
+// job it backgrounds while it holds the prompt; such a push is held to
+// exactly what this method held every push to before the worker rule
+// existed. Neither: a chain read to its end with no worker and no
+// terminal's foreground on it, which is the chain of a daemon, a cron job,
+// an ssh session with no pseudo-terminal, git-receive-pack under sshd, and
+// a process the kernel reparented when what started it exited. That push is
+// refused with ipc.ErrUnplaceable, before any reference moves, and the
+// refusal names every process the walk read, because an admitted push
+// cannot be taken back and a refused one is sent again (P6). A chain the
+// walk could not read is ipc.ErrUnavailable, never any of the three.
+// workers.go says why the coordinator's methods read the same walk as one
+// question, worker or not, while this reads all three.
 func (s *Service) admit(ctx context.Context, from ipc.Request, req machine.GateRequest) (machine.Admission, error) {
 	// Resolving is the check; the resolution itself is the notification's to
 	// use.
@@ -121,7 +132,7 @@ func (s *Service) admit(ctx context.Context, from ipc.Request, req machine.GateR
 	if err := checkUpdates(req); err != nil {
 		return machine.Admission{}, err
 	}
-	if err := s.admitWorkerPush(ctx, from, req); err != nil {
+	if err := s.admitPusher(ctx, from, req); err != nil {
 		return machine.Admission{}, err
 	}
 	if pushNeedsADriver(req) {
@@ -138,6 +149,30 @@ func (s *Service) admit(ctx context.Context, from ipc.Request, req machine.GateR
 		refs = append(refs, update.Ref)
 	}
 	return machine.Admission{Gate: req.Gate, Refs: refs}, nil
+}
+
+// admitPusher decides who is pushing, on the terms admit states, and holds
+// the push to the rule for that answer: admit_workers.go's for a worker,
+// nothing further for a shell at a terminal, and ipc.ErrUnplaceable for a
+// peer placed as neither, naming the chain that was read. The placement's
+// own failures, an unidentified peer and a chain that could not be read,
+// are refused as they stand.
+func (s *Service) admitPusher(ctx context.Context, from ipc.Request, req machine.GateRequest) error {
+	placed, err := s.placePusher(from)
+	if err != nil {
+		return err
+	}
+	switch placed.kind {
+	case placedWorker:
+		return s.admitWorkerPush(ctx, placed.worker, req)
+	case placedPerson:
+		return nil
+	}
+	return fmt.Errorf("%w: the push to gate %s from %s was read along its parent chain, %s, and no process on it "+
+		"is a task's worker, in a worker group, hosting a worker's terminal, or in the foreground of its "+
+		"controlling terminal; the gate admits a push only from a task's worker or from a shell at a terminal, "+
+		"so nothing moved",
+		ipc.ErrUnplaceable, req.Gate, peerOf(from), placed.read())
 }
 
 // checkUpdates refuses a request describing a push with an update git could

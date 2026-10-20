@@ -135,6 +135,25 @@ pushing elsewhere; the gate is the inner check for work that is handed to it,
 not a barrier around the repository. A forge-side branch protection rule is what
 enforces that for everyone.
 
+Admission also decides who is pushing, from the kernel's record of the
+pushing process and its parents and never from anything the push says, and
+it admits a push from exactly two kinds of sender. A task's worker, placed by
+the service's worker set, is held to its own branch, forward, never a
+deletion. A shell at a terminal is a push with a process in the foreground
+of its controlling terminal somewhere on its chain: your `git push` typed at
+a shell, a script that shell runs, a job it backgrounds while it holds the
+prompt, and a command a coordinator agent's host runs in your terminal all
+qualify, because the chain is read and not only the pushing process. A push
+the service can place as neither is refused with code `unplaceable` before
+any reference moves, and the refusal names every process it read: a cron
+job, a daemon, an `ssh` session with no pseudo-terminal, `git-receive-pack`
+under `sshd`, a GUI client with no terminal, and a process whose starter
+exited so the kernel moved it under `init` are all that shape. Push again
+from your shell. What the service establishes is a terminal's foreground
+above the push and not a person: a program that allocates a terminal of its
+own and pushes from it is admitted as a shell's, and the check does not know
+who is at the keyboard.
+
 A run walks nine stages in a fixed order: intent, rebase, review, test,
 document, lint, push, pull request, and checks. Each stage that cannot decide
 holds for a person, and `assistant status` and `assistant doctor` say where a
@@ -306,8 +325,10 @@ What follows for whoever runs the service:
   reference moves, whatever it carries, because the task names no branch; a
   delivery worker's push is held to its own branch, forward and never a
   deletion. If an intermediate process in the push chain exits first and the
-  kernel reparents the chain, placement may read the push as a person's and
-  admission does not apply the worker rule. That
+  kernel reparents the chain, placement reads the push as nobody's and
+  admission refuses it with code `unplaceable` rather than applying either
+  rule; the commit stays in the worker's copy, and a push the worker runs
+  and waits for is admitted under the worker rule. That
   is the product's whole reach (P11): the launch assertion, and admission
   for the pushes that arrive at the gate. A worker
   that later adds a remote toward the subject, or pushes by the subject's
@@ -665,10 +686,12 @@ a shell command or a slash command. Some limits are worth knowing:
   runs; what it escapes is the CLI's grant, not placement. Do not take
   attach as a guarantee that every keystroke stays inside the worker's
   permissions.
-- A worker that starts a second tmux server, on a socket of its own, or any
-  other daemon, puts what runs there outside its process tree, and a push
-  from there is placed as a person's and starts the full run. The worker's
-  own server is covered; a server it starts is not.
+- A worker that starts a second tmux server, on a socket of its own, puts
+  what runs there outside its process tree, and a push from a window of that
+  server is placed as a shell's, because the second server gives its windows
+  terminals of their own, and starts the full run. The worker's own server
+  is covered; a server it starts is not. Any other daemon a worker starts
+  has no terminal, and a push from there is refused with code `unplaceable`.
 - A long or multi-line message reaches the model wrapped as pasted content
   rather than as bare text.
 - All of this rests on what Claude Code 2.1.301 drew on screen and kept in

@@ -397,9 +397,16 @@
 // platform, Windows included, where no peer can be placed because none is
 // identified. It reads the chain rather than the peer's own group, which is
 // what containment still reads, and a chain it cannot read is a refusal,
-// never "not a worker"; placement.go names the one shape it places wrongly,
+// never "not a worker"; placement.go names the one shape it cannot follow,
 // a chain the kernel rewrote when an intermediate process exited, which
-// places a worker's command as a person's. It is
+// places a worker's command as not the worker's. The same walk reads the
+// terminal's foreground group of every process it passes, and gate.admit
+// alone asks the three-way answer: a worker, a shell at a terminal (a
+// chain with no worker and a terminal's foreground on it), or neither,
+// which it refuses with ipc.ErrUnplaceable before any reference moves, so
+// a rewritten chain, a daemon's and git-receive-pack's under sshd are
+// refused rather than admitted as a person's; the coordinator's methods
+// keep asking only whether the peer is a worker. It is
 // applied by handlers, not by internal/ipc's access class, and that table
 // says why. task.event admits only a worker and appends to its own task's
 // history, holding the kind to internal/taskstate's writer column so a

@@ -3,14 +3,15 @@ package service
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/session"
 )
 
-// Placement: which task's worker a peer is, read off the peer's process
-// ancestry. workers.go says which rules turn on the answer; this file is the
-// answer.
+// Placement: which task's worker a peer is, or whether it is a shell at a
+// terminal, read off the peer's process ancestry. workers.go says which
+// rules turn on the answer; this file is the answer.
 //
 // # Why ancestry and not the peer's own process group
 //
@@ -40,6 +41,44 @@ import (
 // from what the kernel attributes to it, which internal/ipc refuses for
 // containment for the same reason.
 //
+// # The three answers, and the terminal read along the chain
+//
+// The walk has three answers and never a fourth. A worker of a named task,
+// placedWorker, is the first process on the chain the set answers for, as
+// above. A shell at a terminal, placedPerson, is a chain with no worker on
+// it at all and some process on it, the peer included, in the foreground
+// of its controlling terminal: the relation foreground.go asks of the peer
+// alone for the local landing's approval, asked here of every process the
+// walk reads. Neither, placedNobody, is a chain the walk read to its end
+// with no worker and no terminal's foreground on it. An error is a fourth
+// outcome only in the sense that it is not an answer: a chain the walk
+// could not read, which every caller refuses on.
+//
+// The worker answer is taken over the whole chain and the person answer
+// only once the chain is exhausted, so a worker above a terminal's
+// foreground still places the peer as the worker's. That ordering is what
+// keeps a worker from putting a push in a terminal's foreground, with a
+// program that allocates a pseudo-terminal of its own, and having it
+// placed as a person's: the chain from such a push still reaches the
+// worker, and the worker wins. The one terminal a worker's chain does not
+// reach past is one hosted by a process the chain does not descend from,
+// below.
+//
+// The foreground is read along the chain and not of the peer alone because
+// a person's push need not be in the foreground itself. A job a shell runs
+// in the foreground is, and so is a script that job runs and every command
+// of it. A job the shell runs in the background is in a group of its own
+// that the terminal was not handed to, and its parent, the shell at its
+// prompt, holds the terminal's foreground, so the chain places it; while
+// that shell runs another foreground job the background push is placed as
+// nobody's and refused, and sending it again is the cure, which the person
+// is told. A host agent in a person's terminal, the coordinator's among
+// them, runs its commands in a group of their own with the host in the
+// terminal's foreground above them, and the same read places those as the
+// person's shell. What the read establishes is a terminal's foreground
+// somewhere above the peer, which internal/agents' Lineage.Foreground
+// bounds: it is evidence of a terminal and not of a person.
+//
 // # What is read
 //
 // Each process is read through agents.ReadLineage, which internal/agents
@@ -47,12 +86,14 @@ import (
 // its process group, the foreground process group of its controlling
 // terminal (zero for a process with none), and its start time, from
 // /proc/<pid>/stat on Linux and the kern.proc.pid sysctl on macOS, one read
-// per process. The walk reads the parent and the group; the terminal's
-// foreground group is what foreground.go reads off the peer. A walk costs one
-// read per ancestor, it runs only while the set holds a worker, and it ends
-// at the first process with no parent, or as an error past maxAncestry.
-// Every other platform refuses the read; internal/ipc identifies no peer on
-// any of them, so the refusal is upstream of this one.
+// per process. The walk reads the parent, the group and the terminal's
+// foreground group of each; foreground.go reads the last of the peer alone.
+// A walk costs one read per ancestor and ends at the first process with no
+// parent, or as an error past maxAncestry. The worker view, placeByAncestry,
+// runs only while the set holds a worker; the three-way view, placeAlongChain,
+// runs for every push, because a chain with no worker on it still has to be
+// read for a terminal. Every other platform refuses the read; internal/ipc
+// identifies no peer on any of them, so the refusal is upstream of this one.
 //
 // # Under the tmux provider
 //
@@ -83,6 +124,12 @@ import (
 // so their absence would be a tripwire and not a boundary, and an
 // environment is what a process states, as the alternatives above say.
 //
+// The pane's process is in the foreground of the pseudo-terminal tmux gave
+// it, which internal/agents' lineage_terminal_test.go reads off a real
+// pane, so a tmux worker's chain carries a terminal's foreground. The
+// worker answer is taken over the whole chain, above, so that foreground
+// places nothing as a person's while the worker stands in the set.
+//
 // # What it does not cover
 //
 //   - A chain the kernel has already rewritten. When a process between the
@@ -90,16 +137,24 @@ import (
 //     reparented to init or to a subreaper, and nothing the peer's chain
 //     still records names the worker. A
 //     worker's command that backgrounds a push and lets its shell exit,
-//     double-forks, or daemonizes is placed as a person, and the walk cannot
-//     tell that from a person's process, whose chain also ends at init. A
-//     second tmux server the worker starts on a socket of its own is that
-//     shape, since a tmux server daemonizes: the host above is the worker's
-//     own server and no other. That
-//     is the one shape here that places a worker as a person rather than
-//     refusing, and workers.go says which way each rule then goes. A
+//     double-forks, or daemonizes is placed as nobody's, and the walk cannot
+//     tell that from a daemon's process, whose chain also ends at init with
+//     no terminal on it. workers.go says which way each rule then goes: the
+//     gate refuses it, so a worker's push on such a chain is refused rather
+//     than admitted as a person's, which is the side an admission that
+//     cannot be taken back has to err toward. A
 //     subreaper this service started as each worker's parent could keep such
 //     an orphan under the worker on Linux; nothing here builds one, on any
 //     platform.
+//   - A rewritten chain that still carries a terminal's foreground. A
+//     second tmux server the worker starts on a socket of its own
+//     daemonizes, so the chain from a shell in one of its windows ends at
+//     init, and that shell is in the foreground of the pseudo-terminal the
+//     second server gave it: the walk places it as a person's. The host
+//     above is the worker's own server and no other, and a terminal's
+//     foreground is not a person, which is the bound Lineage.Foreground
+//     states. The same holds of any program on a rewritten chain that
+//     allocates a terminal of its own.
 //   - The peer itself. Its process identifier is the one internal/ipc read
 //     when the connection was accepted, and a peer that exited and whose
 //     identifier was reused before the walk is not detected, as it was not
@@ -115,12 +170,13 @@ import (
 //     placed as the worker, as the group read always did.
 //   - The chain is read one process at a time, not as one snapshot. A process
 //     reparented during the walk is followed through whichever parent it had
-//     when it was read.
+//     when it was read, and a terminal's foreground is the group it held
+//     when that process was read.
 //
 // Where the walk cannot read a process it was led to, because the process
 // is gone, because the platform hides it, or because its start time says the
-// identifier was reused, the answer is an error and never "not a worker":
-// the caller refuses on it, which workers.go states per rule.
+// identifier was reused, the answer is an error and never "nobody's" or
+// "a person's": the caller refuses on it, which workers.go states per rule.
 
 // readLineage is agents.ReadLineage with a process that is not running read
 // as an error: the walk was led to it, and a process that has exited cannot
@@ -152,44 +208,107 @@ type placer interface {
 	Hosted(host agents.Identity) (session.Membership, bool)
 }
 
-// placeByAncestry walks the parent chain from pid on the terms above, reading
+// placed is one of the walk's three answers.
+type placed int
+
+const (
+	// placedNobody is a chain read to its end with no worker and no
+	// terminal's foreground on it.
+	placedNobody placed = iota
+	// placedWorker is a chain with a worker the set holds on it.
+	placedWorker
+	// placedPerson is a chain with no worker on it and a process in the
+	// foreground of its controlling terminal on it.
+	placedPerson
+)
+
+// placement is the walk's answer and what it read to give it.
+type placement struct {
+	// kind is the answer.
+	kind placed
+	// worker is the membership, set only for placedWorker.
+	worker session.Membership
+	// chain is every process the walk read, the peer first, which a refusal
+	// names so that whoever is refused can see what was decided from.
+	chain []agents.Lineage
+}
+
+// read renders the chain the way a refusal names it: each process with its
+// group and what its terminal's foreground group was, oldest ancestor last.
+func (p placement) read() string {
+	parts := make([]string, 0, len(p.chain))
+	for _, l := range p.chain {
+		terminal := "no controlling terminal"
+		if l.TerminalGroup > 0 {
+			terminal = fmt.Sprintf("terminal foreground group %d", l.TerminalGroup)
+		}
+		parts = append(parts, fmt.Sprintf("process %d (group %d, %s)", l.PID, l.Group, terminal))
+	}
+	return strings.Join(parts, " <- ")
+}
+
+// placeAlongChain walks the parent chain from pid on the terms above, reading
 // each process with read and asking set about each process's group, where
-// it differs its own identifier, and its identity as a host. It returns the
-// first membership set answers, or false once a process with no parent is
-// reached; an error wraps errAncestry and means no answer, which a caller
+// it differs its own identifier, and its identity as a host. It answers
+// placedWorker with the first membership set answers; otherwise, once a
+// process with no parent is reached, placedPerson when some process read
+// was in the foreground of its controlling terminal and placedNobody when
+// none was. An error wraps errAncestry and means no answer, which a caller
 // refuses on.
-func placeByAncestry(pid int, read func(int) (agents.Lineage, error), set placer) (session.Membership, bool, error) {
+func placeAlongChain(pid int, read func(int) (agents.Lineage, error), set placer) (placement, error) {
 	current, err := read(pid)
 	if err != nil {
-		return session.Membership{}, false, fmt.Errorf("%w: reading process %d: %w", errAncestry, pid, err)
+		return placement{}, fmt.Errorf("%w: reading process %d: %w", errAncestry, pid, err)
 	}
+	out := placement{}
+	foreground := false
 	for range maxAncestry {
+		out.chain = append(out.chain, current)
 		if m, ok := set.Member(current.Group); ok {
-			return m, true, nil
+			out.kind, out.worker = placedWorker, m
+			return out, nil
 		}
 		if current.PID != current.Group {
 			if m, ok := set.Member(current.PID); ok {
-				return m, true, nil
+				out.kind, out.worker = placedWorker, m
+				return out, nil
 			}
 		}
 		if m, ok := set.Hosted(current.Identity); ok {
-			return m, true, nil
+			out.kind, out.worker = placedWorker, m
+			return out, nil
 		}
+		foreground = foreground || current.Foreground()
 		if current.Parent <= 0 || current.Parent == current.PID {
-			return session.Membership{}, false, nil
+			if foreground {
+				out.kind = placedPerson
+			}
+			return out, nil
 		}
 		parent, err := read(current.Parent)
 		if err != nil {
-			return session.Membership{}, false, fmt.Errorf("%w: reading process %d, the parent of %d: %w",
+			return placement{}, fmt.Errorf("%w: reading process %d, the parent of %d: %w",
 				errAncestry, current.Parent, current.PID, err)
 		}
 		if parent.Start > current.Start {
-			return session.Membership{}, false, fmt.Errorf(
+			return placement{}, fmt.Errorf(
 				"%w: process %d started after process %d, which names it as its parent, so the identifier was reused",
 				errAncestry, parent.PID, current.PID)
 		}
 		current = parent
 	}
-	return session.Membership{}, false, fmt.Errorf("%w: the chain from process %d is deeper than %d",
+	return placement{}, fmt.Errorf("%w: the chain from process %d is deeper than %d",
 		errAncestry, pid, maxAncestry)
+}
+
+// placeByAncestry is the worker view of placeAlongChain, for the rules that
+// ask only whether a peer is a task's worker: the membership and true for
+// placedWorker, false for either other answer, and the walk's error as it
+// stands.
+func placeByAncestry(pid int, read func(int) (agents.Lineage, error), set placer) (session.Membership, bool, error) {
+	p, err := placeAlongChain(pid, read, set)
+	if err != nil {
+		return session.Membership{}, false, err
+	}
+	return p.worker, p.kind == placedWorker, nil
 }
