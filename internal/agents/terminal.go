@@ -422,9 +422,10 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 		return nil, err
 	}
 
-	args := append([]string{"-S", t.Socket, "-f", os.DevNull,
-		"new-session", "-d", "-s", terminalTarget, "-x", "200", "-y", "50", "-c", spec.dir,
-		"-P", "-F", "#{pane_pid} #{pid}", "--", spec.bin}, spec.args...)
+	args, err := tmuxNewSessionArgs(t, spec.dir, spec.bin, spec.args)
+	if err != nil {
+		return nil, err
+	}
 	if size := commandSize(args); size > TerminalCommandLimit {
 		return nil, &invocationFieldError{
 			field: "command",
@@ -527,15 +528,24 @@ func commandSize(args []string) int {
 	return n
 }
 
-// TmuxStartCommandSize is commandSize of the tmux arguments startTerminalWorker
-// passes when starting a worker in dir with bin and workerArgs.
-func TmuxStartCommandSize(t Terminal, dir, bin string, workerArgs []string) (int, error) {
+// tmuxNewSessionArgs is the argument vector startTerminalWorker passes to tmux
+// when starting a worker in dir with bin and workerArgs.
+func tmuxNewSessionArgs(t Terminal, dir, bin string, workerArgs []string) ([]string, error) {
 	if err := t.Validate(); err != nil {
+		return nil, err
+	}
+	return append([]string{"-S", t.Socket, "-f", os.DevNull,
+		"new-session", "-d", "-s", terminalTarget, "-x", "200", "-y", "50", "-c", dir,
+		"-P", "-F", "#{pane_pid} #{pid}", "--", bin}, workerArgs...), nil
+}
+
+// TmuxStartCommandSize is commandSize of the tmux arguments tmuxNewSessionArgs
+// builds for the same dir, bin, and workerArgs.
+func TmuxStartCommandSize(t Terminal, dir, bin string, workerArgs []string) (int, error) {
+	args, err := tmuxNewSessionArgs(t, dir, bin, workerArgs)
+	if err != nil {
 		return 0, err
 	}
-	args := append([]string{"-S", t.Socket, "-f", os.DevNull,
-		"new-session", "-d", "-s", terminalTarget, "-x", "200", "-y", "50", "-c", dir,
-		"-P", "-F", "#{pane_pid} #{pid}", "--", bin}, workerArgs...)
 	return commandSize(args), nil
 }
 

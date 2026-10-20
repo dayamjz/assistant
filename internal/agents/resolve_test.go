@@ -110,6 +110,10 @@ func (r *workerStubRunner) Start(context.Context, agents.WorkerSpec) (agents.Wor
 	return nil, errStubWorkerReached
 }
 
+func (r *workerStubRunner) WorkerLaunchRefusal(_ agents.Terminal, spec agents.WorkerSpec) error {
+	return spec.Validate()
+}
+
 // terminalStubRunner carries the terminal worker mechanism and refuses to
 // start one, on workerStubRunner's terms.
 type terminalStubRunner struct{ *stubRunner }
@@ -131,6 +135,10 @@ type sessionWorkerStubRunner struct{ *sessionStubRunner }
 
 func (r *sessionWorkerStubRunner) Start(context.Context, agents.WorkerSpec) (agents.Worker, error) {
 	return nil, errStubWorkerReached
+}
+
+func (r *sessionWorkerStubRunner) WorkerLaunchRefusal(_ agents.Terminal, spec agents.WorkerSpec) error {
+	return spec.Validate()
 }
 
 // errStubWorkerReached is what a stub adapter's worker mechanism answers with.

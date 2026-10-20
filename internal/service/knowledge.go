@@ -53,8 +53,8 @@ import (
 // # Refusals
 //
 // A document internal/knowledge refuses to compose, over its bound or not
-// text, or whose section would make a terminal worker's first turn exceed
-// internal/agents' launch bound, refuses the launch: knowledge-refused is recorded against the
+// text, or whose section would make the composed first turn exceed a launch
+// bound the resolved adapter owns, refuses the launch: knowledge-refused is recorded against the
 // attempt, anchored to the history the dispatch was decided from, and the
 // task resolves Failed from it rather than starting a worker told part of
 // the document or nothing in its place. A run whose trusted document is
@@ -160,28 +160,19 @@ func knowledgeSection(k knowledge.Knowledge) string {
 	return "\n\n" + strings.TrimRight(section, "\n")
 }
 
-// refuseKnowledgeIfTerminalLaunchTooLarge records knowledge-refused when a
-// terminal worker would place firstTurn on its launch command and that
-// command would exceed internal/agents' bound, which launch.go asks after the
-// route is chosen so the command matches what Create would start.
-func (s *Service) refuseKnowledgeIfTerminalLaunchTooLarge(ctx context.Context, d dispatched, runner agents.Runner,
+// refuseKnowledgeIfLaunchTooLarge records knowledge-refused when firstTurn
+// would be refused by the resolved adapter's launch bounds, which launch.go
+// asks through WorkerLaunchRefusal after the route is chosen so the spec
+// matches what Create would start.
+func (s *Service) refuseKnowledgeIfLaunchTooLarge(ctx context.Context, d dispatched, runner agents.Runner,
 	isolation tasks.Isolation, firstTurn string, project knowledge.Knowledge, model, effort string) error {
-	if s.cfg.SessionProvider != config.SessionProviderTmux || !project.Present() || knowledgeSection(project) == "" {
+	if !project.Present() || knowledgeSection(project) == "" {
 		return nil
 	}
-	terminals, ok := runner.(agents.TerminalWorkerRunner)
+	workers, ok := runner.(agents.WorkerRunner)
 	if !ok {
 		return nil
 	}
-	tmux, err := exec.LookPath("tmux")
-	if err != nil {
-		return nil
-	}
-	tmux, err = filepath.Abs(tmux)
-	if err != nil {
-		return nil
-	}
-	term := agents.Terminal{Tmux: tmux, Socket: s.home.TerminalSocket("0000000000000000")}
 	spec := agents.WorkerSpec{
 		Dir:          isolation.Copy,
 		Instructions: firstTurn,
@@ -189,16 +180,25 @@ func (s *Service) refuseKnowledgeIfTerminalLaunchTooLarge(ctx context.Context, d
 		Model:        model,
 		Effort:       effort,
 	}
-	size, measures, err := terminals.TerminalLaunchCommandSize(term, spec)
-	if err != nil {
-		return fmt.Errorf("service: measuring the terminal launch of task %s attempt %d: %w", d.id, d.attempt, err)
+	var term agents.Terminal
+	if s.cfg.SessionProvider == config.SessionProviderTmux {
+		tmux, err := exec.LookPath("tmux")
+		if err != nil {
+			return nil
+		}
+		tmux, err = filepath.Abs(tmux)
+		if err != nil {
+			return nil
+		}
+		term = agents.Terminal{Tmux: tmux, Socket: s.home.TerminalSocket("0000000000000000")}
 	}
-	if !measures || size <= agents.TerminalCommandLimit {
-		return nil
+	if err := workers.WorkerLaunchRefusal(term, spec); err != nil {
+		if !errors.Is(err, agents.ErrInvalidInvocation) {
+			return fmt.Errorf("service: checking the launch of task %s attempt %d: %w", d.id, d.attempt, err)
+		}
+		return s.refuseKnowledge(ctx, d, fmt.Errorf("%w: %w", knowledge.ErrLaunchTooLarge, err))
 	}
-	cause := fmt.Errorf("%w: the terminal launch command is %d bytes and the bound is %d",
-		knowledge.ErrLaunchTooLarge, size, agents.TerminalCommandLimit)
-	return s.refuseKnowledge(ctx, d, cause)
+	return nil
 }
 
 // refuseKnowledge records the refusal as the task's knowledgeRefusedKind

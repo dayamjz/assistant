@@ -162,6 +162,29 @@ func (r *claudeRunner) TerminalLaunchCommandSize(t Terminal, spec WorkerSpec) (i
 	return size, true, err
 }
 
+// WorkerLaunchRefusal reports whether spec cannot be started as this adapter
+// would, including the tmux start command bound when t names a terminal.
+func (r *claudeRunner) WorkerLaunchRefusal(t Terminal, spec WorkerSpec) error {
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+	if t.Tmux == "" {
+		return nil
+	}
+	size, measures, err := r.TerminalLaunchCommandSize(t, spec)
+	if err != nil {
+		return err
+	}
+	if measures && size > TerminalCommandLimit {
+		return &invocationFieldError{
+			field: "command",
+			reason: fmt.Sprintf("the command that starts the terminal is %d bytes, over the %d tmux is given, so the instructions it carries are too long for a terminal worker",
+				size, TerminalCommandLimit),
+		}
+	}
+	return nil
+}
+
 func (r *claudeRunner) claudeTerminalWorkerArgs(spec WorkerSpec, session string) []string {
 	args := append(slices.Clone(r.extra), claudeGrantFlags(GrantWorker, spec.Route)...)
 	if spec.Model != "" {

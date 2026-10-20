@@ -126,6 +126,10 @@ func (r *scriptedRunner) TerminalLaunchCommandSize(Terminal, WorkerSpec) (int, b
 	return 0, false, nil
 }
 
+func (r *scriptedRunner) WorkerLaunchRefusal(_ Terminal, spec WorkerSpec) error {
+	return spec.Validate()
+}
+
 // TerminalLineLimit is the longest line, in bytes and without its newline,
 // the scripted adapter's terminal framing types. The stand-in reads lines in
 // the terminal's line-editing mode, which bounds a line: on Linux a

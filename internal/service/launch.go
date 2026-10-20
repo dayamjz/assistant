@@ -163,7 +163,7 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		return nil, fmt.Errorf("service: recording the route of task %s attempt %d: %w", d.id, d.attempt, err)
 	}
 	firstTurn := string(instructions) + d.note + knowledgeSection(project) + s.routeSection(d.want.Shape)
-	if err := s.refuseKnowledgeIfTerminalLaunchTooLarge(ctx, d, selection.Resolution.Runner, fresh, firstTurn, project, model, role.Effort); err != nil {
+	if err := s.refuseKnowledgeIfLaunchTooLarge(ctx, d, selection.Resolution.Runner, fresh, firstTurn, project, model, role.Effort); err != nil {
 		return nil, err
 	}
 	if err := s.store.SetAttemptKnowledge(ctx, d.id, d.attempt, store.AttemptKnowledge{

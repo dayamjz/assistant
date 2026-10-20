@@ -194,3 +194,83 @@ func TestAKnowledgeDocumentOverTheBoundRefusesTheLaunch(t *testing.T) {
 		}
 	}
 }
+
+// A knowledge document within the file bound can refuse a pipe launch when the
+// composed first turn exceeds agents.MaxPromptBytes. The control is the same
+// document on a short first turn, which still launches.
+func TestAKnowledgeDocumentTooLongForPipeLaunchRefusesTheLaunch(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	const docSize = 20400
+	doc := strings.Repeat("a", docSize)
+
+	t.Run("pipe_refuses_near_limit_first_turn", func(t *testing.T) {
+		sub := newLaunchSubject(t, knowledgeWorker(t, "----- end "+knowledge.Document))
+		curate(t, sub.dispatchSubject, doc, true)
+		section := knowledgeSection(mustKnowledgeAt(t, sub, doc))
+		instructions, err := sub.service.home.TaskInstructions(sub.task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		instructionLen := agents.MaxPromptBytes - len(section) + 1
+		if instructionLen < 1 {
+			t.Fatalf("the knowledge section alone leaves no room for instructions")
+		}
+		if err := os.WriteFile(instructions, []byte(strings.Repeat("x", instructionLen)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		d, err := sub.service.dispatchTask(ctx, sub.task)
+		if err != nil {
+			t.Fatalf("dispatching: %v", err)
+		}
+		_, err = sub.service.launchTask(ctx, d)
+		var refused *knowledgeRefused
+		if !errors.As(err, &refused) || !errors.Is(err, knowledge.ErrLaunchTooLarge) {
+			t.Fatalf("launching = %v, want a *knowledgeRefused over ErrLaunchTooLarge", err)
+		}
+		resolved, err := sub.service.tasks().Task(ctx, sub.task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved.State != taskstate.Failed || resolved.Basis.EventKind != knowledgeRefusedKind {
+			t.Fatalf("the task resolves %+v, want Failed from %s", resolved, knowledgeRefusedKind)
+		}
+		attempts, err := sub.records.TaskAttempts(ctx, sub.task)
+		if err != nil || len(attempts) != 1 || attempts[0].SessionRef.IsKnown() || attempts[0].KnowledgeCommit.IsKnown() {
+			t.Fatalf("attempts %+v (%v), want one with no session and no knowledge revision", attempts, err)
+		}
+		for _, call := range sub.agent.Calls() {
+			if call.Worker {
+				t.Fatal("a worker started over a refused knowledge document")
+			}
+		}
+	})
+
+	t.Run("pipe_still_launches_short_first_turn", func(t *testing.T) {
+		sub := newLaunchSubject(t, knowledgeWorker(t, "----- end "+knowledge.Document))
+		curate(t, sub.dispatchSubject, doc, true)
+		d, err := sub.service.dispatchTask(ctx, sub.task)
+		if err != nil {
+			t.Fatalf("dispatching: %v", err)
+		}
+		if _, err := sub.service.launchTask(ctx, d); err != nil {
+			t.Fatalf("launching on a pipe worker: %v", err)
+		}
+	})
+}
+
+// mustKnowledgeAt reads the curated document at the default branch tip the
+// way launchKnowledge would, for sizing a first turn in tests.
+func mustKnowledgeAt(t *testing.T, sub *launchSubject, doc string) knowledge.Knowledge {
+	t.Helper()
+	repository, err := sub.records.Repository(t.Context(), "subject")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := heldGit(t, repository.UpstreamURL, "rev-parse", "main")
+	read, err := knowledge.Read(commit, []byte(doc), redact.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return read
+}
