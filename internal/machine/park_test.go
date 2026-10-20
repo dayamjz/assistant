@@ -118,6 +118,17 @@ func TestAParkedRunReadsAsItsBoundAndNotAsACancellation(t *testing.T) {
 		if !strings.Contains(fromRecord.Outcome, words[bound]) {
 			t.Errorf("the %s row %q does not say %q", bound, fromRecord.Outcome, words[bound])
 		}
+		// The usage budget's row says where its figures are: the run's answer
+		// carries the budget and the spend, and the home-wide usage view groups
+		// the calls by run. No usage view is scoped to one run, so the row may
+		// not point at one.
+		if bound == store.ParkUsageBudget {
+			for _, want := range []string{"the run's answer gives its budget and what its agents spent", "the usage view lists its calls under the run"} {
+				if !strings.Contains(fromRecord.Consequence, want) {
+					t.Errorf("the usage budget row's consequence %q does not say %q", fromRecord.Consequence, want)
+				}
+			}
+		}
 		if !listed[fromRecord.String()] {
 			t.Errorf("the %s row is not in Phrases, so nothing held it to the rule", bound)
 		}

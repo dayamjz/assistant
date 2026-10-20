@@ -531,7 +531,7 @@ var phraseByPark = map[store.ParkBound]Phrase{
 	},
 	store.ParkUsageBudget: {
 		Outcome:     "This run reached its usage budget, the agent use one run is allowed, before the gate reached a verdict.",
-		Consequence: "Nothing more is done with it, nothing was undone, and what its agents spent is in the run's usage.",
+		Consequence: "Nothing more is done with it and nothing was undone; the run's answer gives its budget and what its agents spent, and the usage view lists its calls under the run.",
 		Decision:    "Allow a larger usage budget per run and send the change again, or find what spends so much.",
 	},
 }

@@ -11,9 +11,16 @@ import (
 // AgentInvocation is one row of the agent invocation history: what one agent
 // call cost, as PRD section 8 lists the record. It is append-only history:
 // nothing here revises a row once it is written, and this package decides
-// nothing from it. One reader does: internal/service sums the rows in a window
-// against the operator's usage ceiling before it starts another agent call,
-// recomputing the sum on every read rather than keeping one beside the rows.
+// nothing from it. Two readers do, and they read different rows, so neither a
+// retention change nor a change to how rows are summed may assume only one.
+// internal/service's usage ceiling reads every run's rows in a window,
+// through AgentInvocationsSince, against the operator's ceiling before it
+// starts another agent call. internal/service's runUsage reads one run's own
+// rows, through AgentInvocationsForRun and with no window, as the spend
+// internal/graph compares against that run's usage budget before each node;
+// a row dropped or aged out of the history is spend that budget no longer
+// sees. Both recompute their sum on every read rather than keeping one beside
+// the rows.
 //
 // The vocabulary fields are text whose meaning belongs to internal/agents,
 // the way run.resolved_agent holds a name the agent catalog owns: this
