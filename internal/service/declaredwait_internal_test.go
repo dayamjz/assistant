@@ -88,8 +88,8 @@ func TestADeclaredWaitIsNotAStallAndArmsTheRecheck(t *testing.T) {
 	if got, err := l.service.tasks().Task(t.Context(), undeclared); err != nil || got.State != taskstate.Running || got.Source != taskstate.SourceEvent {
 		t.Fatalf("the undeclared control resolves %+v (%v), want Running from its log", got, err)
 	}
-	if got, err := l.service.tasks().Task(t.Context(), live); err != nil || got.State != taskstate.Running || got.Source != taskstate.SourceProcess {
-		t.Fatalf("the live control resolves %+v (%v), want Running from its live terminal", got, err)
+	if got := l.observedTask(t, live); got.State != taskstate.Running || got.Source != taskstate.SourceProcess {
+		t.Fatalf("the live control resolves %+v, want Running from its live terminal", got)
 	}
 
 	// noStall fails the test when a pass raised terminal unchanged for the
@@ -216,9 +216,8 @@ func TestADeadTerminalUnderADeclaredWaitSurfacesTerminalGoneOnce(t *testing.T) {
 		gone[0].Disposition != store.WakeAppended || !strings.HasPrefix(gone[0].Marker, "terminal-gone:dead:pane-waiting:") {
 		t.Fatalf("the dead terminal under a declared wait = %+v, want terminal gone surfaced as dead and appended", gone)
 	}
-	got, err := l.service.tasks().Task(t.Context(), task)
-	if err != nil || got.State != taskstate.Unknown || got.Source != taskstate.SourceProcess || got.Basis.Process != taskstate.Dead {
-		t.Fatalf("the task resolves %+v (%v), want Unknown from the dead terminal and not Paused from the declaration", got, err)
+	if got := l.observedTask(t, task); got.State != taskstate.Unknown || got.Source != taskstate.SourceProcess || got.Basis.Process != taskstate.Dead {
+		t.Fatalf("the task resolves %+v, want Unknown from the dead terminal and not Paused from the declaration", got)
 	}
 
 	// Once: inside the escalation window every later pass absorbs it.
@@ -267,12 +266,11 @@ func TestALiveWorkersDeclaredWaitIsNotAStall(t *testing.T) {
 	defer func() { _ = l.service.Close() }()
 	l.nextPass(t)
 
-	got, err := l.service.tasks().Task(t.Context(), declared)
-	if err != nil || got.State != taskstate.Paused || got.Source != taskstate.SourceEvent || got.Basis.Process != taskstate.Live {
-		t.Fatalf("the live declared task resolves %+v (%v), want Paused from its log with the terminal live", got, err)
+	if got := l.observedTask(t, declared); got.State != taskstate.Paused || got.Source != taskstate.SourceEvent || got.Basis.Process != taskstate.Live {
+		t.Fatalf("the live declared task resolves %+v, want Paused from its log with the terminal live", got)
 	}
-	if got, err := l.service.tasks().Task(t.Context(), control); err != nil || got.State != taskstate.Running || got.Source != taskstate.SourceProcess {
-		t.Fatalf("the undeclared control resolves %+v (%v), want Running from its live terminal", got, err)
+	if got := l.observedTask(t, control); got.State != taskstate.Running || got.Source != taskstate.SourceProcess {
+		t.Fatalf("the undeclared control resolves %+v, want Running from its live terminal", got)
 	}
 
 	noStall := func(r passReport, when string) {
@@ -336,8 +334,8 @@ func TestALiveWorkersDeclaredWaitIsNotAStall(t *testing.T) {
 		!strings.HasPrefix(gone[0].Marker, "terminal-gone:dead:pane-declared:") {
 		t.Fatalf("the dead terminal under the declared wait = %+v, want terminal gone surfaced as dead", gone)
 	}
-	if got, err := l.service.tasks().Task(t.Context(), declared); err != nil || got.State != taskstate.Unknown || got.Source != taskstate.SourceProcess {
-		t.Fatalf("the declared task with its terminal dead resolves %+v (%v), want Unknown from the dead terminal", got, err)
+	if got := l.observedTask(t, declared); got.State != taskstate.Unknown || got.Source != taskstate.SourceProcess {
+		t.Fatalf("the declared task with its terminal dead resolves %+v, want Unknown from the dead terminal", got)
 	}
 }
 

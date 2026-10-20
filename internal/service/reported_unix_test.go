@@ -128,7 +128,7 @@ func TestAReportedInvestigationOutranksItsTerminal(t *testing.T) {
 		}
 
 		waitState(t, running.client, reporting, "read Reported from its report with its worker live", reportedFromTheReport(taskstate.Live))
-		if got := taskState(t, running.client, control); !readsRunning(got) {
+		if got := observed(t, taskState, running.client, control); !readsRunning(got) {
 			t.Fatalf("the control investigation resolves %+v while its worker runs, want Running from the process tier", got)
 		}
 

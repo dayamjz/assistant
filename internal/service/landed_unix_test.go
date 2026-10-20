@@ -121,7 +121,7 @@ func TestATaskThatLandsWhileItsWorkerRunsEndsWithTheWorkerGoneAndItsCopyRemoved(
 	principles.Cite(t, principles.P12)
 	streamWorker(t, "task/landing", passingConfig, func(w launched, _ *standin.Agent) {
 		ref := w.session.Reference().String()
-		if got := listedTask(t, w.running.client, w.task); !readsRunning(got) {
+		if got := observed(t, listedTask, w.running.client, w.task); !readsRunning(got) {
 			t.Fatalf("before the landing the task reads %+v, want running", got)
 		}
 		land(t, w, "task/landing")

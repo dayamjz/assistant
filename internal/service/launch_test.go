@@ -109,6 +109,28 @@ func readsRunning(got taskstate.Resolution) bool {
 	return got.State == taskstate.Running && got.Source == taskstate.SourceProcess && got.Basis.Process == taskstate.Live
 }
 
+// observed reads the task with read, listedTask or taskState, until the read
+// observed its terminal, Live or Dead, and returns that resolution. The
+// service gives each probe a bound of its own on the wall clock and answers
+// Unobserved when the bound runs out first, which a busy machine can make
+// happen to a terminal that is there; such a read says nothing about the
+// worker, so it is read again rather than asserted on. A check that expects
+// Unobserved reads once instead.
+func observed(t *testing.T, read func(*testing.T, *ipc.Client, string) taskstate.Resolution, client *ipc.Client, id string) taskstate.Resolution {
+	t.Helper()
+	deadline := time.Now().Add(launchWait)
+	for {
+		got := read(t, client, id)
+		if got.Basis.Process != taskstate.Unobserved {
+			return got
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("no read of task %s observed its terminal: %+v", id, got)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // workerOptions is options with the line-mode worker agent in place of the
 // shipped adapter's stand-in, whose stream-mode worker these tests do not
 // script.
@@ -221,10 +243,10 @@ func TestADispatchedDeliveryTaskIsLaunched(t *testing.T) {
 		if probe := provider.Probe(t.Context(), ref.String()); probe.Liveness != taskstate.Live {
 			t.Fatalf("the launched session probes %+v, want Live through the service's handle", probe)
 		}
-		if got := taskState(t, running.client, id); !readsRunning(got) {
+		if got := observed(t, taskState, running.client, id); !readsRunning(got) {
 			t.Fatalf("after the launch task.get resolves %+v, want Running from the process tier with its terminal live", got)
 		}
-		if got := listedTask(t, running.client, id); !readsRunning(got) {
+		if got := observed(t, listedTask, running.client, id); !readsRunning(got) {
 			t.Fatalf("after the launch tasks.list resolves %+v, want Running from the process tier with its terminal live", got)
 		}
 		waitCapture(t, provider, launched, "the second check was read")
@@ -322,7 +344,7 @@ func TestADispatchedInvestigationTaskIsLaunched(t *testing.T) {
 		provider, launched = launchedSession(t, running.service, id)
 		ref = launched.Reference()
 		waitCapture(t, provider, launched, "worker ready")
-		if got := taskState(t, running.client, id); !readsRunning(got) {
+		if got := observed(t, taskState, running.client, id); !readsRunning(got) {
 			t.Fatalf("after the launch the task resolves %+v, want Running from the process tier", got)
 		}
 		waitCapture(t, provider, launched, "the second check was read")

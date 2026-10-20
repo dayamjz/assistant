@@ -414,10 +414,11 @@ func wakeOf(w machine.Wakes, task string, kind supervisor.Kind) int64 {
 // which the loop surfaces as the actable terminal-gone, and the subordinate
 // asks a promotion of it, which the loop raises as the decision-class
 // escalation; the coordinator's launched worker is ended too. The
-// subordinate's drain hands out its domain's terminal-gone alone, recorded
-// as handed to its member, and the coordinator's drain hands out the
-// escalation and the undelegated task's terminal-gone and not the
-// subordinate's row; a wait armed by the coordinator answers nothing of the
+// subordinate's drain hands out its domain's terminal-gone, recorded as
+// handed to its member, and nothing but its domain's rows of a kind it acts
+// on, and the coordinator's drain hands out the escalation and the
+// undelegated task's terminal-gone and none of the subordinate's rows; a
+// wait armed by the coordinator answers nothing of the
 // subordinate's row either. The subordinate acknowledges its row as its
 // member, is refused the escalation as a kind the first coordinator acts
 // on, and is refused the undelegated task's row as outside its domain.
@@ -444,9 +445,18 @@ func TestAWakeReachesExactlyOneCoordinatorByItsTasksDomainAndKind(t *testing.T) 
 		finishWorker(t, w, own)
 		finishWorker(t, w, w.task)
 
-		// The subordinate is offered its domain's actable row and the
+		// The subordinate is offered its domain's actable rows and the
 		// coordinator everything else; polled until the loop has surfaced
-		// all three.
+		// all three. Which actable rows the domain's task has besides its
+		// terminal-gone is the loop's to decide: until its worker's session
+		// is recorded the task has no terminal to read, and a pass that
+		// finds that empty screen unchanged surfaces terminal unchanged for
+		// want of evidence (P9), which a launch slowed by a busy machine
+		// spans. So the drain is held to the routing rule,
+		// supervisor.SubordinateActable, and not to one kind.
+		actable := func(wake store.Wake) bool {
+			return slices.Contains(supervisor.SubordinateActable(), supervisor.Kind(wake.Kind))
+		}
 		var gone, escalated, base int64
 		deadline := time.Now().Add(60 * time.Second)
 		for gone == 0 || escalated == 0 || base == 0 {
@@ -455,14 +465,16 @@ func TestAWakeReachesExactlyOneCoordinatorByItsTasksDomainAndKind(t *testing.T) 
 			}
 			sub := drainedBy(t, d)
 			for _, wake := range sub.Wakes {
-				if wake.TaskID != own || wake.Kind != string(supervisor.KindTerminalGone) {
-					t.Fatalf("the subordinate's drain handed out %+v, want only its domain's terminal-gone", wake)
+				if wake.TaskID != own || !actable(wake) {
+					t.Fatalf("the subordinate's drain handed out %+v, want only its domain's rows of a kind it acts on", wake)
 				}
-				gone = wake.ID
+			}
+			if id := wakeOf(sub, own, supervisor.KindTerminalGone); id != 0 {
+				gone = id
 			}
 			top := mustList(t, w.running.client)
 			for _, wake := range top.Wakes {
-				if wake.TaskID == own && wake.Kind == string(supervisor.KindTerminalGone) {
+				if wake.TaskID == own && actable(wake) {
 					t.Fatalf("the coordinator's drain handed out the subordinate's row %+v", wake)
 				}
 			}

@@ -72,7 +72,7 @@ func TestARestartRelaunchesADeadCodexWorkerInPlace(t *testing.T) {
 		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
 		second = launched.Reference()
 		waitCapture(t, provider, launched, "the relaunch note was read")
-		if got := taskState(t, running.client, id); !readsRunning(got) {
+		if got := observed(t, taskState, running.client, id); !readsRunning(got) {
 			t.Fatalf("after the relaunch the task resolves %+v, want Running from the process tier through its new session", got)
 		}
 		call = workerCall(t, agent)

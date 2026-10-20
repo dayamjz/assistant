@@ -63,37 +63,47 @@ func subscribed(t *testing.T, h *home.Home, backlog int) *ipc.Stream {
 }
 
 // investigation records an investigation task and appends the events given,
-// each a kind and its detail.
-func investigation(t *testing.T, records *store.Store, id, project string, events ...[2]string) {
+// each a kind and its detail, and returns the sequence of the last one
+// appended, zero when none was. The task and its events are separate
+// writes, so a pass can publish the task between them; the sequence is what
+// lets taskStates wait for the state read after the last of them.
+func investigation(t *testing.T, records *store.Store, id, project string, events ...[2]string) int64 {
 	t.Helper()
 	if _, err := records.CreateTask(t.Context(), store.Task{
 		ID: id, Shape: store.TaskInvestigation, Project: project, Mode: "headless", WorktreePath: "/worktrees/" + id,
 	}, store.Disposition{}); err != nil {
 		t.Fatalf("creating task %s: %v", id, err)
 	}
+	var last int64
 	for _, e := range events {
-		if _, err := records.AppendTaskEvent(t.Context(), id, e[0], e[1]); err != nil {
+		appended, err := records.AppendTaskEvent(t.Context(), id, e[0], e[1])
+		if err != nil {
 			t.Fatalf("appending %s to %s: %v", e[0], id, err)
 		}
+		last = appended.Sequence
 	}
+	return last
 }
 
-// taskStates reads the stream until it has seen a task.state for each of the
-// named tasks, returning every event it read in order, the opening marker
-// included.
-func taskStates(t *testing.T, stream *ipc.Stream, ids ...string) []ipc.Event {
+// taskStates reads the stream until it has seen, for each task named, a
+// task.state resolved from at least the event sequence given for it, and
+// returns every event it read in order, the opening marker included. A
+// state the loop published before the task's last write is read and
+// returned but satisfies nothing, so the wait is on the state the test
+// wrote and not on whichever pass happened to publish the task first.
+func taskStates(t *testing.T, stream *ipc.Stream, want map[string]int64) []ipc.Event {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), streamWait)
 	defer cancel()
-	want := map[string]bool{}
-	for _, id := range ids {
-		want[id] = true
+	pending := make(map[string]int64, len(want))
+	for id, sequence := range want {
+		pending[id] = sequence
 	}
 	var got []ipc.Event
-	for len(want) > 0 {
+	for len(pending) > 0 {
 		event, err := stream.Recv(ctx)
 		if err != nil {
-			t.Fatalf("waiting for the state of %v, having read %d events: %v", want, len(got), err)
+			t.Fatalf("waiting for the state of %v, having read %d events: %v", pending, len(got), err)
 		}
 		got = append(got, event)
 		if event.Type != ipc.TypeTaskState {
@@ -103,7 +113,9 @@ func taskStates(t *testing.T, stream *ipc.Stream, ids ...string) []ipc.Event {
 		if err := json.Unmarshal(event.Payload, &task); err != nil {
 			t.Fatalf("a task.state payload does not read as a task: %v\n%s", err, event.Payload)
 		}
-		delete(want, task.Record.ID)
+		if sequence, ok := pending[task.Record.ID]; ok && task.State.Basis.EventSequence >= sequence {
+			delete(pending, task.Record.ID)
+		}
 	}
 	return got
 }
@@ -123,11 +135,11 @@ func TestWatchRendersEventsRecordedFromTheServicesPublisher(t *testing.T) {
 	stream := subscribed(t, h, 0)
 
 	const waiting = "an upstream release of the parser"
-	investigation(t, records, "parserwaitsa", "the parser", [2]string{"waiting-external", waiting})
-	investigation(t, records, "relaunchedbb", "the indexer", [2]string{"relaunched", "attempt 2 in the same copy"})
-	investigation(t, records, "untouchedccc", "the docs")
-
-	events := taskStates(t, stream, "parserwaitsa", "relaunchedbb", "untouchedccc")
+	events := taskStates(t, stream, map[string]int64{
+		"parserwaitsa": investigation(t, records, "parserwaitsa", "the parser", [2]string{"waiting-external", waiting}),
+		"relaunchedbb": investigation(t, records, "relaunchedbb", "the indexer", [2]string{"relaunched", "attempt 2 in the same copy"}),
+		"untouchedccc": investigation(t, records, "untouchedccc", "the docs"),
+	})
 	if events[0].Type != ipc.TypeGap {
 		t.Fatalf("the stream's first delivery is %s, want the opening gap marker", events[0].Type)
 	}
@@ -177,8 +189,7 @@ func TestATasksStateIsPublishedOncePerChangeAndNotPerPass(t *testing.T) {
 	t.Parallel()
 	h, records := watchedHome(t)
 	stream := subscribed(t, h, 0)
-	investigation(t, records, "oncepertaska", "the parser")
-	first := taskStates(t, stream, "oncepertaska")
+	first := taskStates(t, stream, map[string]int64{"oncepertaska": investigation(t, records, "oncepertaska", "the parser")})
 	published := func(events []ipc.Event) (revision uint64, n int) {
 		for _, e := range events {
 			if e.Type == ipc.TypeTaskState {
@@ -201,10 +212,11 @@ func TestATasksStateIsPublishedOncePerChangeAndNotPerPass(t *testing.T) {
 	}
 
 	// One change publishes once more.
-	if _, err := records.AppendTaskEvent(t.Context(), "oncepertaska", "working", "the worker says so"); err != nil {
+	changed, err := records.AppendTaskEvent(t.Context(), "oncepertaska", "working", "the worker says so")
+	if err != nil {
 		t.Fatal(err)
 	}
-	again := taskStates(t, stream, "oncepertaska")
+	again := taskStates(t, stream, map[string]int64{"oncepertaska": changed.Sequence})
 	after, n := published(again)
 	if n != 1 {
 		t.Fatalf("after one change the task's state arrived %d times, want once", n)
@@ -242,32 +254,26 @@ func TestAStreamThatFallsBehindRendersTheGapMarker(t *testing.T) {
 		t.Fatalf("the first delivery is %s, %v; want the opening marker", opening.Type, err)
 	}
 
-	ids := []string{"behindaaaaaa", "behindbbbbbb", "behindcccccc", "behindcccccd", "behindcccece", "behindcccfff"}
-	for _, id := range ids {
-		investigation(t, records, id, "a project")
+	// Six states published to a two-deep queue nothing reads: the stream
+	// that keeps up shows they were published, and the wait below is on
+	// the overflow itself, the client's queue discarding, rather than on
+	// how long the lagging connection's reader took to get there.
+	published := map[string]int64{}
+	for _, id := range []string{"behindaaaaaa", "behindbbbbbb", "behindcccccc", "behindcccccd", "behindcccece", "behindcccfff"} {
+		published[id] = investigation(t, records, id, "a project")
 	}
-	taskStates(t, current, ids...)
-	// One more change, seen on the stream that keeps up, so the one that
-	// fell behind has had every earlier state on its connection for at
-	// least a pass before it is read.
-	if _, err := records.AppendTaskEvent(t.Context(), ids[0], "working", "the worker says so"); err != nil {
-		t.Fatal(err)
+	taskStates(t, current, published)
+	for !behind.Gapped() {
+		if ctx.Err() != nil {
+			t.Fatalf("the stream that fell behind never discarded anything: %v", ctx.Err())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	taskStates(t, current, ids[0])
 
-	var marker ipc.Event
-	for i := 0; i < 2*len(ids); i++ {
-		event, err := behind.Recv(ctx)
-		if err != nil {
-			t.Fatalf("reading the stream that fell behind: %v", err)
-		}
-		if event.Type == ipc.TypeGap {
-			marker = event
-			break
-		}
-	}
-	if marker.Type != ipc.TypeGap {
-		t.Fatalf("the stream that fell behind delivered no gap marker in %d events", 2*len(ids))
+	// A pending marker is delivered ahead of anything queued.
+	marker, err := behind.Recv(ctx)
+	if err != nil || marker.Type != ipc.TypeGap {
+		t.Fatalf("the stream that fell behind delivered %s, %v; want the gap marker first", marker.Type, err)
 	}
 	gap, err := ipc.GapPayload(marker)
 	if err != nil {
