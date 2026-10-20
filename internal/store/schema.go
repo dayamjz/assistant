@@ -138,8 +138,9 @@ const taskAttemptKnowledgeMigration = "task attempt knowledge revision"
 // reason sealCheckpointTableMigration is a constant.
 const notificationMigration = "wake notification"
 
-// subordinateDomainsMigration names the migration that adds PRD section 2's
-// subordinate domains: the task's domain, the delegation and delegation
+// subordinateDomainsMigration names the migration that adds PRD section 8's
+// records for a subordinate coordinator's domain, which section 2 defines
+// and decision 20 settles: the task's domain, the delegation and delegation
 // attempt records, and the escalation record, for the reason
 // sealCheckpointTableMigration is a constant.
 const subordinateDomainsMigration = "subordinate domains"

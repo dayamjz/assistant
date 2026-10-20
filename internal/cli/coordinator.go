@@ -23,34 +23,40 @@ import (
 // as gateVerbName and hostVerbName are, rather than rows in it; section 9
 // says so beside the table.
 //
-// It is the interface the coordinator agent requires. The methods it calls
-// are internal/ipc's and internal/service decides every one of them: each
-// is restricted, and each is refused for a caller the service places inside
-// a task's worker group from the credentials the socket reports, never from
-// anything this command sends. So this command decides nothing about who
-// may call it and holds no second copy of that rule; a worker that runs it
-// is refused by the service with ipc.ErrWorker, which arrives typed and
-// exits as an operational failure through failureExit like every other
-// refusal.
+// It is the interface the coordinator agent requires, and the one command
+// a subordinate coordinator's grant allows. The methods it calls are
+// internal/ipc's and internal/service decides every one of them: each is
+// restricted, and each is decided for the caller the service places from
+// the credentials the socket reports and the caller's process ancestry,
+// never from anything this command sends. A caller placed inside a task's
+// worker group is refused every one of them; one placed as a domain's
+// subordinate coordinator is admitted the ones it holds over its domain
+// and refused the rest; one placed as neither is the coordinator. So this
+// command decides nothing about who may call it and holds no second copy
+// of that rule; a refusal arrives typed, ipc.ErrWorker, ipc.ErrSubordinate
+// or ipc.ErrOutsideDomain, and exits as an operational failure through
+// failureExit like every other refusal.
 //
 // The refusal is only as good as that placement, which internal/service
-// owns: it walks the caller's parent chain to the first process in a worker
-// group or that is itself a worker, so a worker's descendant in a group of
-// its own is still placed as the worker's, and a chain it cannot read is
-// refused rather than served. The gap this command cannot close is the one
-// internal/service's placement.go names: a chain the kernel rewrote when an
-// intermediate process exited places a worker's command as the
-// coordinator's, and that call is served. What a worker may run at all is
-// its grant's, which allows git without asking and denies nothing else.
+// owns: it walks the caller's parent chain to the first process a worker
+// set, a subordinate set, or the survivors a restart adopted answer for,
+// so a descendant in a group of its own is still placed as its parent's,
+// and a chain it cannot read is refused rather than served. What that
+// placement does not cover, a chain the kernel rewrote among it, is
+// internal/service's to state: placement.go and subordinates.go name the
+// gaps, and this comment does not restate them. What a worker may run at
+// all is its grant's, which allows git without asking and denies nothing
+// else; a subordinate's grant allows this verb's prefix and nothing else.
 //
 // It is one verb rather than one per method, so the door beside the table
 // is one door: the subcommands are coordinatorActions, the one owner of
-// which there are. The methods listing fleet work, tasks.list and task.get,
-// are not here, because section 9's table already serves both as assistant
-// tasks; nor is answering a task's hold, which section 9 makes --answer
-// given --task. task.interrupt is not here either: the service refuses it
-// on every call, because no adapter declares the capability it needs, so a
-// subcommand for it could only ever fail.
+// which there are. tasks and answer are here as well as in section 9's
+// table, as assistant tasks and --answer given --task, because a
+// subordinate reaches the program through this verb alone and needs both;
+// the service decides each the same way whichever spelling asks.
+// task.interrupt is not here: the service refuses it on every call,
+// because no adapter declares the capability it needs, so a subcommand
+// for it could only ever fail.
 const coordinatorVerbName = "coordinator"
 
 // coordinatorActions are the coordinator's subcommands. The list is the one
