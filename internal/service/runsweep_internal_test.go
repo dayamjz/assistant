@@ -111,7 +111,8 @@ func ended(t *testing.T, exited <-chan struct{}, after string) {
 func TestARunsCopyIsSweptOnceTheRunIsFinalAndNeverBefore(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
-	requireSweepClearsHere(t, "the sweep of a finished run's copy")
+	const unestablished = "the sweep of a finished run's copy"
+	requireSweepClearsHere(t, unestablished)
 
 	for _, ending := range []string{"completes", "fails", "is cancelled"} {
 		t.Run(ending, func(t *testing.T) {
@@ -189,7 +190,7 @@ func TestARunsCopyIsSweptOnceTheRunIsFinalAndNeverBefore(t *testing.T) {
 				t.Fatalf("the sweep of the run's copy was not recorded: %v", err)
 			}
 			if sweep.Outcome != store.SweepCleared || sweep.Occasion != store.SweptAtFinish || sweep.Ended.Or(0) < 1 {
-				t.Fatalf("the sweep is recorded as %+v, want cleared at finish with the process ended", sweep)
+				fatalUnlessSweepsStoppedClearing(t, unestablished, "the sweep is recorded as %+v, want cleared at finish with the process ended", sweep)
 			}
 			if answer, err := s.view(ctx, record.ID); err != nil || answer.CopySweep == nil || answer.CopySweep.Outcome != store.SweepCleared {
 				t.Fatalf("the run's status answer carries the sweep %+v (%v)", answer.CopySweep, err)
@@ -285,7 +286,8 @@ func finishedRun(t *testing.T, records *store.Store, id, head string) store.Run 
 func TestRecoverySweepsAFinishedRunsStandingCopyAndNeverAnActiveRunsCopy(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
-	requireSweepClearsHere(t, "the sweep at recovery of a finished run's copy")
+	const unestablished = "the sweep at recovery of a finished run's copy"
+	requireSweepClearsHere(t, unestablished)
 
 	held := newHeldService(t)
 	s := held.service
@@ -341,7 +343,7 @@ func TestRecoverySweepsAFinishedRunsStandingCopyAndNeverAnActiveRunsCopy(t *test
 	}
 	if sweep.Outcome != store.SweepCleared || sweep.Occasion != store.SweptAtRecovery ||
 		sweep.Ended != store.Known(1) || sweep.Remaining != store.Known(0) {
-		t.Fatalf("the finished run's sweep is recorded as %+v, want cleared at recovery with one ended", sweep)
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "the finished run's sweep is recorded as %+v, want cleared at recovery with one ended", sweep)
 	}
 	if _, err := reopened.store.RunCopySweep(ctx, active.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the held run has a sweep recorded (%v), and an active run's copy is never swept", err)

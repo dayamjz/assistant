@@ -123,15 +123,12 @@ func endsWith(kinds []string, suffix ...string) bool {
 func TestTwoRelaunchersOfOneDeadTerminalBeginOneAttempt(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
-	requireSweepClearsHere(t, "that two relaunchers of one dead terminal begin one attempt")
+	const unestablished = "that two relaunchers of one dead terminal begin one attempt"
+	requireSweepClearsHere(t, unestablished)
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
-	var arrived sync.WaitGroup
-	arrived.Add(2)
-	sub.restart.betweenAttemptReadAndClaim = func() {
-		arrived.Done()
-		arrived.Wait()
-	}
+	arrived := newRendezvous(2)
+	sub.restart.betweenAttemptReadAndClaim = arrived.Arrive
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	outs := make([]relaunched, 2)
@@ -139,6 +136,7 @@ func TestTwoRelaunchersOfOneDeadTerminalBeginOneAttempt(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer arrived.Leave()
 			outs[i], errs[i] = sub.restart.relaunchClaimed(ctx, sub.task, "")
 		}()
 	}
@@ -151,7 +149,7 @@ func TestTwoRelaunchersOfOneDeadTerminalBeginOneAttempt(t *testing.T) {
 		case errors.Is(err, store.ErrTaskMoved):
 			lost++
 		default:
-			t.Fatalf("a relauncher failed for a reason other than the claim: %v", err)
+			fatalUnlessSweepsStoppedClearing(t, unestablished, "a relauncher failed for a reason other than the claim: %v", err)
 		}
 	}
 	if won < 0 || lost != 1 {
@@ -185,7 +183,8 @@ func TestTwoRelaunchersOfOneDeadTerminalBeginOneAttempt(t *testing.T) {
 // terminal, and a second pass of reconciliation relaunches nothing.
 func TestARelaunchReusesTheStandingCopyAndASecondPassDoesNotRelaunchAgain(t *testing.T) {
 	t.Parallel()
-	requireSweepClearsHere(t, "a relaunch reusing its standing copy")
+	const unestablished = "a relaunch reusing its standing copy"
+	requireSweepClearsHere(t, unestablished)
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	left := filepath.Join(sub.copy, "left-by-the-first-worker.txt")
@@ -206,7 +205,7 @@ func TestARelaunchReusesTheStandingCopyAndASecondPassDoesNotRelaunchAgain(t *tes
 
 	provider, launched, ok := sub.restart.sessionOf(sub.task)
 	if !ok {
-		t.Fatal("the restarted service holds no session after the relaunch")
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "the restarted service holds no session after the relaunch")
 	}
 	if _, err := os.Stat(left); err != nil {
 		t.Fatalf("the file the first worker left is gone, so the copy was not reused: %v", err)
@@ -400,7 +399,8 @@ func TestARelaunchWaitsOnALiveTaskHoldingTheBranch(t *testing.T) {
 // hand-built service runs no loop.
 func TestAFailedRunIsRelaunchedUpToTheBoundAndThenHeld(t *testing.T) {
 	t.Parallel()
-	requireSweepClearsHere(t, "a failed run relaunched up to its bound")
+	const unestablished = "a failed run relaunched up to its bound"
+	requireSweepClearsHere(t, unestablished)
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	sub.restart.cfg.RelaunchAttempts = 1
@@ -432,7 +432,7 @@ func TestAFailedRunIsRelaunchedUpToTheBoundAndThenHeld(t *testing.T) {
 	sub.restart.work.Wait()
 	attempts, err := sub.records.TaskAttempts(ctx, sub.task)
 	if err != nil || len(attempts) != 2 {
-		t.Fatalf("the task has attempts %+v (%v), want the relaunch's second", attempts, err)
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "the task has attempts %+v (%v), want the relaunch's second", attempts, err)
 	}
 	got, err := sub.restart.tasks().Task(ctx, sub.task)
 	if err != nil || got.Source == taskstate.SourceRun || (got.State != taskstate.Dispatched && got.State != taskstate.Running) {
@@ -489,7 +489,8 @@ func TestAFailedRunIsRelaunchedUpToTheBoundAndThenHeld(t *testing.T) {
 // coordinator.
 func TestARelaunchAcknowledgesOnlyTheWakesItSuperseded(t *testing.T) {
 	t.Parallel()
-	requireSweepClearsHere(t, "a relaunch acknowledging the wakes it superseded")
+	const unestablished = "a relaunch acknowledging the wakes it superseded"
+	requireSweepClearsHere(t, unestablished)
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	ref := sub.first.Reference().String()
@@ -513,7 +514,7 @@ func TestARelaunchAcknowledgesOnlyTheWakesItSuperseded(t *testing.T) {
 	otherKind := append(string(supervisor.KindHoldOpened), "hold:one")
 
 	if _, err := sub.restart.relaunchTask(ctx, sub.task); err != nil {
-		t.Fatalf("relaunching: %v", err)
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "relaunching: %v", err)
 	}
 	wakes, err := sub.records.TaskWakes(ctx, sub.task)
 	if err != nil {
@@ -707,7 +708,8 @@ func TestWithoutAProbeNothingIsRelaunchedOrDispatchedAgain(t *testing.T) {
 // does not return the wake the program acknowledged as superseded.
 func TestASecondHandoutAfterLostAckDoesNotStartASecondAttemptWhenAlreadyRelaunched(t *testing.T) {
 	t.Parallel()
-	requireSweepClearsHere(t, "a second handout after a lost ack with the program already relaunched")
+	const unestablished = "a second handout after a lost ack with the program already relaunched"
+	requireSweepClearsHere(t, unestablished)
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	ref := sub.first.Reference().String()
@@ -741,7 +743,7 @@ func TestASecondHandoutAfterLostAckDoesNotStartASecondAttemptWhenAlreadyRelaunch
 
 	out, err := sub.restart.relaunchTask(ctx, sub.task)
 	if err != nil {
-		t.Fatalf("the program's relaunch after the lost ack: %v", err)
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "the program's relaunch after the lost ack: %v", err)
 	}
 	if out.launch.attempt != 2 || out.superseded != ref {
 		t.Fatalf("the relaunch established %+v, want attempt 2 superseding %s", out, ref)
@@ -774,7 +776,8 @@ func TestASecondHandoutAfterLostAckDoesNotStartASecondAttemptWhenAlreadyRelaunch
 // program so a later drain cannot deliver a duplicate action for that session.
 func TestARestartRelaunchesAFailedDeadTerminalSweepsAndAcknowledgesItsWake(t *testing.T) {
 	t.Parallel()
-	requireSweepClearsHere(t, "a restart relaunching a Failed dead terminal with its wake acknowledged")
+	const unestablished = "a restart relaunching a Failed dead terminal with its wake acknowledged"
+	requireSweepClearsHere(t, unestablished)
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	ref := sub.first.Reference().String()
@@ -820,7 +823,7 @@ func TestARestartRelaunchesAFailedDeadTerminalSweepsAndAcknowledgesItsWake(t *te
 
 	attempts, err := sub.records.TaskAttempts(ctx, sub.task)
 	if err != nil || len(attempts) != 2 {
-		t.Fatalf("after restart reconcile attempts = %+v (%v), want attempt N+1", attempts, err)
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "after restart reconcile attempts = %+v (%v), want attempt N+1", attempts, err)
 	}
 	if attempts[1].SessionRef.Or("") == ref {
 		t.Fatalf("attempt 2 reused the dead session %s", ref)

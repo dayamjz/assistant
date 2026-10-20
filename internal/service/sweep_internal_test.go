@@ -78,6 +78,38 @@ func requireSweepClearsHere(t *testing.T, unestablished string) {
 	t.Skipf("%s; set %s to make that a failure", limit, standin.RequireSweepClearVar)
 }
 
+// fatalUnlessSweepsStoppedClearing fails the test with the failure it is
+// given, unless this host has started refusing every sweep since
+// requireSweepClearsHere let the test run, in which case it skips on that
+// helper's terms, the failure named. requireSweepClearsHere reads the host
+// once, before the test starts anything, and the processes of a host change
+// while a test runs: one whose working directory this service cannot read,
+// and which neither of agents.Sweeper's carve-outs sets aside, can start
+// after that read, and from then on every sweep refuses to clear, the test's
+// own included, which is P6's refusal working (#381 saw a macOS system
+// process do it). A test whose own step depends on a sweep clearing reports
+// that step's failure through this, so the host is asked again at the point
+// of failure, through requireSweepClearsHere and so with a fresh empty copy
+// in a home of its own: a host that refuses now is the standing refusal and
+// the test establishes nothing here; a host that clears now did not cause
+// the failure, and the test fails with it. What happens on a host that
+// refuses is requireSweepClearsHere's to decide, so whatever it does there,
+// this does too.
+//
+// The residual gap is on the loud side: a process that started blocking
+// before the test's sweep and stopped before this second read fails the
+// test. Nothing here decides from the failure's text, so a failure with
+// another cause on a host that refuses every sweep is skipped too; on such a
+// host the test would have been skipped had it started a moment later, and
+// it establishes nothing there either way.
+func fatalUnlessSweepsStoppedClearing(t *testing.T, unestablished, format string, args ...any) {
+	t.Helper()
+	failure := fmt.Sprintf(format, args...)
+	requireSweepClearsHere(t, fmt.Sprintf("%s (this host's sweeps cleared when the test began, and the test then failed with: %s)",
+		unestablished, failure))
+	t.Fatal(failure)
+}
+
 // relaunchedDetail is the detail of the task's newest "relaunched" note, and
 // fails the test when there is none.
 func relaunchedDetail(t *testing.T, records *store.Store, id string) string {
@@ -203,12 +235,8 @@ func TestAnUnsupportedSweepRefusesTheRelaunchUntilARetryAnswer(t *testing.T) {
 	if _, err := sub.records.ResolveHold(ctx, key, machine.AnswerRetry, store.ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
-	var arrived sync.WaitGroup
-	arrived.Add(2)
-	sub.restart.betweenAttemptReadAndClaim = func() {
-		arrived.Done()
-		arrived.Wait()
-	}
+	arrived := newRendezvous(2)
+	sub.restart.betweenAttemptReadAndClaim = arrived.Arrive
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	outs := make([]relaunched, 2)
@@ -216,6 +244,7 @@ func TestAnUnsupportedSweepRefusesTheRelaunchUntilARetryAnswer(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer arrived.Leave()
 			outs[i], errs[i] = sub.restart.relaunchClaimed(ctx, sub.task, "")
 		}()
 	}
@@ -271,9 +300,10 @@ func TestAnUnsupportedSweepRefusesTheRelaunchUntilARetryAnswer(t *testing.T) {
 		t.Logf("%s has no sweep, so the control, a relaunch that raises no hold, is not established here", runtime.GOOS)
 		return
 	}
-	requireSweepClearsHere(t, "the control, a relaunch with a sweep that raises no hold,")
+	const unestablished = "the control, a relaunch with a sweep that raises no hold,"
+	requireSweepClearsHere(t, unestablished)
 	if _, err := control.restart.relaunchTask(ctx, control.task); err != nil {
-		t.Fatalf("relaunching the control: %v", err)
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "relaunching the control: %v", err)
 	}
 	if _, err := control.records.Hold(ctx, relaunchUnsweptKey(control.task, 1)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the control's relaunch with a sweep raised the no-sweep hold: %v", err)
@@ -458,12 +488,8 @@ func TestAnUnsupportedSweepHoldsTheRetriedDispatchUntilARetryAnswer(t *testing.T
 	if _, err := sub.records.ResolveHold(ctx, key, machine.AnswerRetry, store.ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
-	var arrived sync.WaitGroup
-	arrived.Add(2)
-	restart.betweenAttemptReadAndClaim = func() {
-		arrived.Done()
-		arrived.Wait()
-	}
+	arrived := newRendezvous(2)
+	restart.betweenAttemptReadAndClaim = arrived.Arrive
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	outs := make([]dispatched, 2)
@@ -471,6 +497,7 @@ func TestAnUnsupportedSweepHoldsTheRetriedDispatchUntilARetryAnswer(t *testing.T
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer arrived.Leave()
 			outs[i], errs[i] = restart.dispatchClaimed(ctx, sub.task)
 		}()
 	}
@@ -509,11 +536,12 @@ func TestAnUnsupportedSweepHoldsTheRetriedDispatchUntilARetryAnswer(t *testing.T
 		t.Logf("%s has no sweep, so the control, a retried dispatch that raises no hold, is not established here", runtime.GOOS)
 		return
 	}
-	requireSweepClearsHere(t, "the control, a retried dispatch with a sweep that raises no hold,")
+	const unestablished = "the control, a retried dispatch with a sweep that raises no hold,"
+	requireSweepClearsHere(t, unestablished)
 	swept, _ := restartedService(t, control)
 	d, err := swept.dispatchTask(ctx, control.task)
 	if err != nil || d.attempt != 2 {
-		t.Fatalf("the control's retried dispatch returned attempt %d (%v), want attempt 2", d.attempt, err)
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "the control's retried dispatch returned attempt %d (%v), want attempt 2", d.attempt, err)
 	}
 	if _, err := control.records.Hold(ctx, dispatchUnsweptKey(control.task, 1)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the control's dispatch with a sweep raised the no-sweep hold: %v", err)
@@ -731,7 +759,8 @@ func TestAFailedSweepRefusesTheRelaunchBeforeTheClaim(t *testing.T) {
 // process's own exit, not on any record.
 func TestARelaunchReclaimsTheCopyFromAProcessLeftInIt(t *testing.T) {
 	t.Parallel()
-	requireSweepClearsHere(t, "a relaunch reclaiming its copy from a process left in it")
+	const unestablished = "a relaunch reclaiming its copy from a process left in it"
+	requireSweepClearsHere(t, unestablished)
 	sub := newRelaunchSubject(t)
 	if _, err := agents.NewSweeper(sub.restart.home, 0, nil).Sweep(t.Context(), sub.copy); errors.Is(err, agents.ErrSweepUnsupported) {
 		t.Skipf("%s has no sweep, so a relaunch reclaiming its copy is not established here: %v", runtime.GOOS, err)
@@ -751,7 +780,7 @@ func TestARelaunchReclaimsTheCopyFromAProcessLeftInIt(t *testing.T) {
 
 	out, err := sub.restart.relaunchTask(t.Context(), sub.task)
 	if err != nil {
-		t.Fatalf("relaunching over a process left in the copy: %v", err)
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "relaunching over a process left in the copy: %v", err)
 	}
 	select {
 	case <-exited:

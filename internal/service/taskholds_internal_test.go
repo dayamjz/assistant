@@ -26,7 +26,8 @@ import (
 func TestARetryPastTheBoundBeginsOneAttemptAndNoMore(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
-	requireSweepClearsHere(t, "that a retry past the relaunch bound begins one attempt")
+	const unestablished = "that a retry past the relaunch bound begins one attempt"
+	requireSweepClearsHere(t, unestablished)
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	sub.restart.cfg.RelaunchAttempts = 0
@@ -52,12 +53,8 @@ func TestARetryPastTheBoundBeginsOneAttemptAndNoMore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var arrived sync.WaitGroup
-	arrived.Add(2)
-	sub.restart.betweenAttemptReadAndClaim = func() {
-		arrived.Done()
-		arrived.Wait()
-	}
+	arrived := newRendezvous(2)
+	sub.restart.betweenAttemptReadAndClaim = arrived.Arrive
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	outs := make([]relaunched, 2)
@@ -65,6 +62,7 @@ func TestARetryPastTheBoundBeginsOneAttemptAndNoMore(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer arrived.Leave()
 			outs[i], errs[i] = sub.restart.relaunchClaimed(ctx, sub.task, "")
 		}()
 	}
@@ -78,7 +76,7 @@ func TestARetryPastTheBoundBeginsOneAttemptAndNoMore(t *testing.T) {
 		case errors.Is(err, store.ErrTaskMoved):
 			lost++
 		default:
-			t.Fatalf("a relauncher failed for a reason other than the claim: %v", err)
+			fatalUnlessSweepsStoppedClearing(t, unestablished, "a relauncher failed for a reason other than the claim: %v", err)
 		}
 	}
 	if won < 0 || lost != 1 {

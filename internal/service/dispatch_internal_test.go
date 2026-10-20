@@ -121,12 +121,8 @@ func TestConcurrentDispatchOfOneTaskClaimsOneAttempt(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	subject := newDispatchSubject(t)
 	ctx := t.Context()
-	var arrived sync.WaitGroup
-	arrived.Add(2)
-	subject.service.betweenAttemptReadAndClaim = func() {
-		arrived.Done()
-		arrived.Wait()
-	}
+	arrived := newRendezvous(2)
+	subject.service.betweenAttemptReadAndClaim = arrived.Arrive
 
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
@@ -134,6 +130,7 @@ func TestConcurrentDispatchOfOneTaskClaimsOneAttempt(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer arrived.Leave()
 			_, errs[i] = subject.service.dispatchClaimed(ctx, subject.task)
 		}()
 	}

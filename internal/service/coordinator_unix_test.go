@@ -175,7 +175,8 @@ func TestAnInvestigationCannotPromoteItselfAndTheCoordinatorCan(t *testing.T) {
 func TestTheCoordinatorRelaunchesADeadTerminalThroughTheAnchoredRelaunch(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
-	service.RequireSweepClearsHere(t, "a coordinator relaunching a dead terminal in its standing copy")
+	const unestablished = "a coordinator relaunching a dead terminal in its standing copy"
+	service.RequireSweepClearsHere(t, unestablished)
 	launchedWorker(t, "task/relaunch", func(w launched) {
 		running, task := w.running, w.task
 		request := machine.TaskRequest{Task: task}
@@ -208,7 +209,7 @@ func TestTheCoordinatorRelaunchesADeadTerminalThroughTheAnchoredRelaunch(t *test
 		}
 
 		if err := running.client.Call(t.Context(), ipc.MethodTaskRelaunch, request, &relaunched); err != nil {
-			t.Fatalf("task.relaunch of a dead terminal: %v", err)
+			service.FatalUnlessSweepsStoppedClearing(t, unestablished, "task.relaunch of a dead terminal: %v", err)
 		}
 		if relaunched.Task != task || relaunched.Attempt != 2 || relaunched.Superseded != superseded {
 			t.Fatalf("task.relaunch answered %+v, want attempt 2 of task %s superseding %s", relaunched, task, superseded)

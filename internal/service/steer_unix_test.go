@@ -240,7 +240,8 @@ func TestAMessageIsRecordedWrittenAndAcknowledgedFromTheRecord(t *testing.T) {
 func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
-	service.RequireSweepClearsHere(t, "a relaunch after a stop in the stopped worker's copy")
+	const unestablished = "a relaunch after a stop in the stopped worker's copy"
+	service.RequireSweepClearsHere(t, unestablished)
 	streamWorker(t, "task/stop", steerConfig, func(w launched, agent *standin.Agent) {
 		running, task := w.running, w.task
 		request := machine.TaskRequest{Task: task}
@@ -314,7 +315,7 @@ func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T)
 		}
 		if answered.Effect != machine.AnswerRelaunched || answered.Relaunch == nil ||
 			answered.Relaunch.Attempt != 2 || answered.Relaunch.Superseded != stoppedRef || answered.Hold.Key != stopped.Hold.Key {
-			t.Fatalf("the retry answered %+v, want attempt 2 relaunched over %s on hold %s", answered, stoppedRef, stopped.Hold.Key)
+			service.FatalUnlessSweepsStoppedClearing(t, unestablished, "the retry answered %+v, want attempt 2 relaunched over %s on hold %s", answered, stoppedRef, stopped.Hold.Key)
 		}
 		if note, ok := answered.Hold.ResolutionNote.Get(); !ok || note != "narrow it to the parser" {
 			t.Fatalf("the retry left resolution note %+v, want the note recorded with the answer", answered.Hold.ResolutionNote)

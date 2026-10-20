@@ -268,7 +268,8 @@ func TestADispatchedInvestigationTaskIsCutADetachedCloneWithNoRemote(t *testing.
 func TestARetryAfterACrashRefusesTheHalfWrittenCopyAndLeavesIt(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
-	service.RequireSweepClearsHere(t, "a dispatch retry refusing the half-written copy for isolation")
+	const unestablished = "a dispatch retry refusing the half-written copy for isolation"
+	service.RequireSweepClearsHere(t, unestablished)
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)
@@ -301,7 +302,7 @@ func TestARetryAfterACrashRefusesTheHalfWrittenCopyAndLeavesIt(t *testing.T) {
 	withService(t, h, func(running serviceUnderTest) {
 		for _, id := range []string{half, wrong} {
 			if got := taskState(t, running.client, id); got.State != taskstate.Failed || got.Source != taskstate.SourceEvent {
-				t.Fatalf("after the retry task %s resolves %s from %s, want failed from the refusal", id, got.State, got.Source)
+				service.FatalUnlessSweepsStoppedClearing(t, unestablished, "after the retry task %s resolves %s from %s, want failed from the refusal", id, got.State, got.Source)
 			} else if detail := got.Detail.Or(""); strings.Contains(detail, string(taskstate.RefusedNotIsolated)) ||
 				strings.Contains(detail, string(taskstate.RefusedWrongShape)) {
 				t.Fatalf("the resolution of %s carries the reason in its detail %q; the reason is evidence in the "+
