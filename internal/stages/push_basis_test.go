@@ -72,6 +72,11 @@ func TestThePushStageRefusesToReplaceABranchHoldingCommitsTheRunLacks(t *testing
 func TestThePushStageRewritesOnlyWhatTheRunWasGiven(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	run := newPushRun(t)
+	// The rebase stage commits through internal/vcs, which does not see the
+	// identity this package's git helper sets in the environment, so the
+	// copy's repository carries one of its own, as fix_test.go's does.
+	git(t, run.source, "config", "user.name", "test")
+	git(t, run.source, "config", "user.email", "test@example.invalid")
 	git(t, run.source, "push", "--quiet", "origin", run.head+":refs/heads/topic")
 	submitted := run.head
 	run.commitOnTopOfUpstream(t, "main", "base-moved.txt", "the base moved\n")
