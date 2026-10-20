@@ -30,6 +30,10 @@ const (
 	autonomyLabSpec     = "gitlab.com/" + autonomyLabProject
 	autonomyLabMR       = 7
 	autonomyLabURL      = "https://gitlab.com/" + autonomyLabProject + "/-/merge_requests/7"
+	// mergeAnswerDecoySHA is a nonempty head GitLab's merge_request entity
+	// could carry on an accepted merge (its documented sha field) but that
+	// must not be what the merge record stores; the read after the merge does.
+	mergeAnswerDecoySHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
 
 // gitLabAutonomyWalk is a home and a subject whose recorded upstream is a
@@ -162,10 +166,11 @@ func TestAListedGitLabProjectIsMergedAtTheObservedHead(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	w := newGitLabAutonomyWalk(t, `["`+autonomyLabSpec+`"]`, labtest.MergeRequest(labtest.MergeRequestView{
 		IID: autonomyLabMR, State: "merged", MergeStatus: "can_be_merged", SourceBranch: "work",
-		TargetBranch: "main", Title: "feat: a change", WebURL: autonomyLabURL,
+		TargetBranch: "main", SHA: mergeAnswerDecoySHA, Title: "feat: a change", WebURL: autonomyLabURL,
 	}))
-	// The accepted merge's answer carries no head on purpose: what the
-	// record says is the read after the merge's, not the merge's own answer.
+	// GitLab's accepted merge answers with the merge_request entity, including
+	// sha; the fifth GET names the observed head instead. The record must
+	// match the GET, not this merge answer.
 	run := w.walk(t)
 
 	merges := w.lab.CallsFor(labtest.OpMerge)
@@ -181,6 +186,9 @@ func TestAListedGitLabProjectIsMergedAtTheObservedHead(t *testing.T) {
 	record := readMergeRecord(t, w.home, run.Record.ID)
 	if record == nil || record.PullRequest != autonomyLabMR || record.Head != w.head || record.End != store.PullRequestMerged {
 		t.Fatalf("the merge record is %+v, want merge request %d merged at %s", record, autonomyLabMR, w.head)
+	}
+	if record.Head == mergeAnswerDecoySHA {
+		t.Fatalf("the merge record head is the merge answer's sha %s, want the read after the merge's %s", mergeAnswerDecoySHA, w.head)
 	}
 	if run.Outcome != machine.OutcomePassed {
 		t.Fatalf("the run reads %s, want passed from the merge record; log:\n%s", run.Outcome, serviceLog(t, w.home))
