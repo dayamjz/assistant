@@ -262,7 +262,12 @@
 // anchored to the domain's latest delegation on CreateTask's terms, one
 // standing per domain by a partial index, and ended once by EndDelegation,
 // which is the row's one revision; delegation_attempt is task_attempt's
-// shape for a subordinate's starts; escalation is written once by
+// shape for a subordinate's starts, recording with its session reference,
+// in the same one write, the identity of the process hosting the session's
+// terminal (migration 49's two columns), so a restart can place a
+// surviving subordinate's terminal server as the subordinate's;
+// EndDelegation answers in its own transaction the holds its caller names,
+// on DelegationEndClosure's terms; escalation is written once by
 // RecordEscalation, redacted, naming the task and nothing of the domain,
 // which the task's row owns. Why a delegation ended is DelegationEnd, closed
 // on Acknowledger's terms: the coordinator's domain.end, or the answer to
