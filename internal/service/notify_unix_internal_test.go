@@ -540,3 +540,108 @@ func TestARefusedClaimWaitsTheRecheckInterval(t *testing.T) {
 		t.Fatalf("after the fault was lifted the notification is %+v, want sent", n)
 	}
 }
+
+// A wake about a domain reaches the operator's notify command too, once,
+// as the domain wake's row: a delegation whose subordinate's terminal is
+// dead and past relaunch_attempts surfaces subordinate-gone and the bound's
+// hold-opened as domain wakes, and the command is run once for each with
+// that row on standard input, naming the delegation and the domain and no
+// task, each record settled sent in domain_notification. Further passes and
+// a second service of the same home send neither again. A sender reading
+// only the task wake table sends nothing here and fails.
+func TestADomainWakeIsSentOnceToTheOperatorsCommand(t *testing.T) {
+	t.Parallel()
+	out := filepath.Join(t.TempDir(), "sent")
+	encoded, err := json.Marshal("cat >> '" + out + "'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, records := loopHomeConfigured(t, `{"supervision_beacon_interval": "1s", "escalation_window": "1m", "relaunch_attempts": 0, "notify": {"command": `+string(encoded)+`}}`)
+	d := plantDelegation(t, records, "alpha", "sub-crashed")
+	terminals := newScriptedTerminals()
+	terminals.dead("sub-crashed")
+	clock := &fakeClock{now: time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)}
+	l := openLoop(t, h, records, terminals, clock)
+	l.nextPass(t)
+	rows, err := l.records(t).DelegationWakes(t.Context(), d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]int64{}
+	for _, w := range rows {
+		kinds[w.Kind] = w.ID
+	}
+	gone, hold := kinds[string(supervisor.KindSubordinateGone)], kinds[string(supervisor.KindHoldOpened)]
+	if gone == 0 || hold == 0 {
+		t.Fatalf("the delegation's wakes are %+v, want subordinate-gone and hold-opened", rows)
+	}
+	settled := func(records *store.Store, id int64) store.Notification {
+		t.Helper()
+		deadline := time.Now().Add(loopWait)
+		for {
+			n, err := records.DomainNotification(t.Context(), id)
+			switch {
+			case err == nil && n.Settled():
+				return n
+			case err != nil && !errors.Is(err, store.ErrNotFound):
+				t.Fatalf("reading the notification of domain wake %d: %v", id, err)
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the notification of domain wake %d was never settled (last read %+v, %v)", id, n, err)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	for _, id := range []int64{gone, hold} {
+		if n := settled(l.records(t), id); n.Outcome != store.Known(store.NotificationSent) || n.WakeID != id {
+			t.Fatalf("the notification of domain wake %d is %+v, want sent", id, n)
+		}
+	}
+	clock.Advance(10 * time.Second)
+	l.pass(t)
+	l.pass(t)
+	if err := l.service.Close(); err != nil && !errors.Is(err, ErrSupervisionAbandoned) {
+		t.Fatalf("closing the service: %v", err)
+	}
+	l = openLoop(t, h, reopenRecords(t, l), terminals, clock)
+	defer func() { _ = l.service.Close() }()
+	l.pass(t)
+	l.pass(t)
+
+	f, err := os.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	times := map[int64]int{}
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var w store.DomainWake
+		strict := json.NewDecoder(bytes.NewReader(scanner.Bytes()))
+		strict.DisallowUnknownFields()
+		if err := strict.Decode(&w); err != nil || w.ID == 0 || w.Delegation != d.ID || w.Domain != "alpha" {
+			t.Fatalf("the command was sent %q, which does not read as a domain wake of alpha: %v", scanner.Text(), err)
+		}
+		if strings.Contains(scanner.Text(), `"task_id"`) {
+			t.Fatalf("the domain wake's line %q names a task", scanner.Text())
+		}
+		times[w.ID]++
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if times[gone] != 1 || times[hold] != 1 || len(times) != 2 {
+		t.Fatalf("the command was sent %v, want subordinate-gone %d and hold-opened %d once each", times, gone, hold)
+	}
+	for _, w := range []int64{gone, hold} {
+		row, err := l.records(t).DelegationWakes(t.Context(), d.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range row {
+			if r.ID == w && !r.Queued() {
+				t.Errorf("domain wake %d was closed by being sent", w)
+			}
+		}
+	}
+}

@@ -236,3 +236,58 @@ func TestAcknowledgeAllRefusesAMixedBatchWhole(t *testing.T) {
 		t.Fatalf("after the corrected batch the task's wakes are %+v (%v), want it closed", rows, err)
 	}
 }
+
+// A domain wake's notification record is the task wake's on the second
+// shape: pending until claimed, claimed once, settled once, refused once
+// acknowledged, sealed against a delete, and kept apart from the task
+// wake's record of the same identifier.
+func TestADomainWakesNotificationIsClaimedAndSettledOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	d, err := s.Delegate(ctx, DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inc := incarnationOf(t, s)
+	var ids []int64
+	for _, marker := range []string{"gone:1", "gone:2"} {
+		w, err := s.AppendDomainWakeWithMarkers(ctx, inc, DomainWakeRequest{Delegation: d.ID, Kind: "subordinate-gone", Marker: marker}, DelegationMarkerAdvance{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, w.Wake.ID)
+	}
+	pending, err := s.PendingDomainNotifications(ctx, 10)
+	if err != nil || len(pending) != 2 || pending[0].ID != ids[0] || pending[0].Domain != "alpha" {
+		t.Fatalf("PendingDomainNotifications = %+v, %v; want both, oldest first", pending, err)
+	}
+	if _, err := s.ClaimDomainNotification(ctx, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimDomainNotification(ctx, ids[0]); !errors.Is(err, ErrNotificationClaimed) {
+		t.Fatalf("a second claim = %v, want ErrNotificationClaimed", err)
+	}
+	if _, err := s.Notification(ctx, ids[0]); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the task wake record of the same identifier = %v, want none", err)
+	}
+	n, err := s.SettleDomainNotification(ctx, ids[0], NotificationSettlement{Outcome: NotificationSent, ExitCode: Known(0)})
+	if err != nil || !n.Settled() || n.WakeID != ids[0] {
+		t.Fatalf("SettleDomainNotification = %+v, %v", n, err)
+	}
+	if _, err := s.SettleDomainNotification(ctx, ids[0], NotificationSettlement{Outcome: NotificationFailed}); !errors.Is(err, ErrNotificationSettled) {
+		t.Fatalf("a second settlement = %v, want ErrNotificationSettled", err)
+	}
+	if err := s.AcknowledgeDomainWakes(ctx, []int64{ids[1]}, AcknowledgedByCoordinator()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimDomainNotification(ctx, ids[1]); !errors.Is(err, ErrNotificationNotOffered) {
+		t.Fatalf("claiming an acknowledged domain wake = %v, want ErrNotificationNotOffered", err)
+	}
+	if pending, err := s.PendingDomainNotifications(ctx, 10); err != nil || len(pending) != 0 {
+		t.Fatalf("after the claim and the acknowledgement the pending are %+v, %v; want none", pending, err)
+	}
+	if _, err := s.write.ExecContext(ctx, `DELETE FROM domain_notification`); err == nil {
+		t.Fatal("a domain notification record was deleted")
+	}
+}

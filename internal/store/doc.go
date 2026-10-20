@@ -152,7 +152,11 @@
 // one revision. PendingNotifications is the read that offers a wake, the
 // queued ones with no row. It records how a command ended and nothing
 // about the wake: the queue stays the owner of whether a wake is
-// actionable, and nothing reads this table to decide one.
+// actionable, and nothing reads this table to decide one. Migration 50's
+// domain_notification is the same record for the queue's second shape,
+// keyed by the domain wake, with the same seals and the same accessors
+// under Domain names (PendingDomainNotifications, ClaimDomainNotification,
+// SettleDomainNotification), one implementation serving both tables.
 //
 // # The wake queue and the markers it is written with
 //

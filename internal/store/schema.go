@@ -157,6 +157,11 @@ const domainWakesMigration = "domain wakes"
 // is a constant.
 const delegationAttemptHostMigration = "delegation attempt host"
 
+// domainNotificationMigration names the migration that adds the
+// notification record of a domain wake, for the reason
+// sealCheckpointTableMigration is a constant.
+const domainNotificationMigration = "domain wake notification"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1982,6 +1987,44 @@ var schema = []migration{
 			// places them; the reference alone names the pane's process.
 			`ALTER TABLE delegation_attempt ADD COLUMN host_pid INTEGER`,
 			`ALTER TABLE delegation_attempt ADD COLUMN host_start INTEGER`,
+		},
+	},
+	{
+		version: 50,
+		name:    domainNotificationMigration,
+		statements: []string{
+			// Migration 46's notification record for the queue's second
+			// shape: one domain wake offered to the operator's notify
+			// command, claimed before the command runs and settled once,
+			// with the same columns, checks and seals, keyed by the domain
+			// wake it is about.
+			`CREATE TABLE domain_notification (
+				domain_wake_id INTEGER PRIMARY KEY REFERENCES domain_wake(id),
+				claimed_at     TEXT NOT NULL,
+				outcome        TEXT CHECK (outcome IN ('sent', 'failed')),
+				exit_code      INTEGER,
+				detail         TEXT,
+				settled_at     TEXT,
+				CHECK ((outcome IS NULL) = (settled_at IS NULL)),
+				CHECK (outcome IS NOT NULL OR (exit_code IS NULL AND detail IS NULL)),
+				CHECK (outcome IS NOT 'sent' OR exit_code = 0)
+			) STRICT`,
+			`CREATE TRIGGER domain_notification_claim_is_written_once
+				BEFORE UPDATE OF domain_wake_id, claimed_at ON domain_notification
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is claimed once and the claim is not rewritten');
+				END`,
+			`CREATE TRIGGER domain_notification_is_settled_once
+				BEFORE UPDATE OF outcome, exit_code, detail, settled_at ON domain_notification
+				WHEN OLD.outcome IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is settled once and the first outcome stands');
+				END`,
+			`CREATE TRIGGER domain_notification_is_not_removed
+				BEFORE DELETE ON domain_notification
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is kept and is not deleted');
+				END`,
 		},
 	},
 }
