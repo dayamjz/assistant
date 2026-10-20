@@ -64,6 +64,7 @@ func serveCodexExec(control string, args []string) int {
 		return exitNoUse
 	}
 	call.Step = step
+	ignoreTerminate(script, step)
 	seq, err := claimCall(control, call)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "standin: "+err.Error())

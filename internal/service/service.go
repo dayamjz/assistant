@@ -407,7 +407,11 @@ type Service struct {
 	stopOnce   sync.Once
 	closeOnce  sync.Once
 	closeErr   error
-	work       sync.WaitGroup
+	// closing names the step Close is in, which Shutdown reads to say what
+	// was still waiting when stop_grace ran out. It holds a string, and
+	// nothing until Close begins.
+	closing atomic.Value
+	work    sync.WaitGroup
 	// sup is the supervisor loop's state: its beacon writer, its watchdog's
 	// done channel, and what Close reads. It is nil until startSupervision,
 	// which Open runs after recovery, and it is deliberately not registered
@@ -746,7 +750,9 @@ func (s *Service) Stop(restarting bool) {
 }
 
 // Close gives up everything the service opened, in the reverse of the order it
-// took them, and waits for the work it started.
+// took them, and waits for the work it started. Nothing here bounds that
+// wait as a whole; Shutdown is Close under stop_grace, and is what a stop or
+// a signal reaches.
 //
 // The lock is released last, so nothing this service still holds outlives the
 // point at which another service may take the home.
@@ -773,6 +779,7 @@ func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
 		s.Stop(false)
 		var errs []error
+		s.closingAt("closing the protocol server, which waits for every request in flight")
 		if s.server != nil {
 			errs = append(errs, s.server.Close())
 		}
@@ -781,7 +788,9 @@ func (s *Service) Close() error {
 		}
 		s.cancelAdvancing()
 		s.stopWork()
+		s.closingAt("waiting for the background work it registered: runs it was advancing or carrying on, dispatches, launches, sweeps and settlements")
 		s.work.Wait()
+		s.closingAt("stopping the supervisor loop")
 		errs = append(errs, s.stopSupervision())
 		// The workers this service launched are ended here, after the work
 		// that could record against them and before the store they were
@@ -790,8 +799,11 @@ func (s *Service) Close() error {
 		// session.Provider.Close states; a worker an earlier service of this
 		// home launched is no session of this one and goes on, which
 		// launch.go states.
+		s.closingAt("ending the workers it launched")
 		errs = append(errs, s.closeSessions()...)
+		s.closingAt("ending the subordinate coordinators it launched")
 		errs = append(errs, s.closeSubordinates()...)
+		s.closingAt("closing the event streams, the store and the log")
 		if s.events != nil {
 			errs = append(errs, s.events.Close())
 		}

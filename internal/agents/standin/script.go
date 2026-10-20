@@ -398,6 +398,14 @@ type Reply struct {
 	// exiting. It is what a hang is: the invocation ends by being cancelled or
 	// by its deadline elapsing rather than by the agent finishing.
 	Hold time.Duration `json:"hold,omitempty"`
+	// IgnoresTerminate has the stand-in ignore SIGTERM for the whole
+	// invocation, as an agent that does not stop on a polite signal does, so
+	// only the forceful signal ends it before its Hold is over. The
+	// disposition is set before the call is recorded, so a test that has seen
+	// the call in Agent.Calls knows a SIGTERM sent from then on is ignored.
+	// It is honoured by the one-shot invocation modes, Claude Code's and
+	// Codex exec's, and nowhere else.
+	IgnoresTerminate bool `json:"ignores_terminate,omitempty"`
 	// Exit is the status the stand-in exits with once it has printed and
 	// waited.
 	Exit int `json:"exit,omitempty"`
@@ -413,6 +421,10 @@ func (r Reply) WithStderr(text string) Reply { r = r.own(); r.Stderr = text; ret
 // WithHold returns the reply held alive for d after it has printed. An
 // invocation answered by it ends on its context rather than on the agent.
 func (r Reply) WithHold(d time.Duration) Reply { r = r.own(); r.Hold = d; return r }
+
+// WithIgnoredTerminate returns the reply with SIGTERM ignored for the whole
+// invocation, on the terms IgnoresTerminate states.
+func (r Reply) WithIgnoredTerminate() Reply { r = r.own(); r.IgnoresTerminate = true; return r }
 
 // own returns the reply with an envelope and review of its own, so a reply
 // derived from another can be adjusted through either pointer without

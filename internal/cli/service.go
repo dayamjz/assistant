@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -377,8 +378,14 @@ func decideByObservation(ctx context.Context, in *invocation, method ipc.Method,
 // failure exit and not after the success exit a requested stop ends with, so
 // the replacement is the manager's and is one the manager tracks. Whether the
 // manager does so is its own; internal/managed's doc says what was verified.
+//
+// SIGINT and SIGTERM are taken on stopSignals' terms: the first begins the
+// stop, which service.Shutdown bounds by stop_grace, and none is swallowed
+// while the stop runs.
 func (in *invocation) serveHere(parent context.Context, underManager bool) error {
-	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	serving, begin := context.WithCancel(parent)
+	defer begin()
+	ctx, force, stop := stopSignals(serving)
 	defer stop()
 
 	build, err := store.CurrentBuild()
@@ -397,8 +404,16 @@ func (in *invocation) serveHere(parent context.Context, underManager bool) error
 		return err
 	}
 	serveErr := running.Serve(ctx)
+	// The stop has begun, whether a signal or the protocol asked for it, so
+	// a signal from here on forces it.
+	begin()
 	restarting := running.Restarting()
-	closeErr := running.Close()
+	closeErr := running.Shutdown(force)
+	if errors.Is(closeErr, service.ErrStopForced) {
+		// What the stop was still waiting on is abandoned with this process,
+		// so no successor is launched over it; the next start recovers.
+		return errors.Join(serveErr, closeErr)
+	}
 	if err := errors.Join(serveErr, closeErr); err != nil {
 		return err
 	}
@@ -410,4 +425,48 @@ func (in *invocation) serveHere(parent context.Context, underManager bool) error
 		return err
 	}
 	return nil
+}
+
+// stopSignals is how a foreground service hears SIGINT and SIGTERM. The
+// returned context ends at the first one or when parent ends, either of which
+// is the stop beginning; serveHere ends parent once Serve returns, so a stop
+// asked for through the protocol begins it too. A signal arriving after the
+// stop has begun closes force, which service.Shutdown reads as a stop to be forced
+// at once rather than waited out; once force is closed the default handling
+// is restored, so a third signal ends the process the way the operating
+// system ends one. No signal is swallowed at any point, which is what #407
+// found signal.NotifyContext did once its first signal had been taken: its
+// handler stayed installed for the whole shutdown, and every later signal
+// was caught and did nothing.
+//
+// stop releases the handler, and is the caller's to defer.
+func stopSignals(parent context.Context) (context.Context, <-chan struct{}, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	force := make(chan struct{})
+	heard := make(chan os.Signal, 2)
+	signal.Notify(heard, os.Interrupt, syscall.SIGTERM)
+	released := make(chan struct{})
+	go func() {
+		select {
+		case <-heard:
+			cancel()
+		case <-ctx.Done():
+		case <-released:
+			return
+		}
+		select {
+		case <-heard:
+			close(force)
+			signal.Reset(os.Interrupt, syscall.SIGTERM)
+		case <-released:
+		}
+	}()
+	var once sync.Once
+	return ctx, force, func() {
+		once.Do(func() {
+			signal.Stop(heard)
+			close(released)
+			cancel()
+		})
+	}
 }

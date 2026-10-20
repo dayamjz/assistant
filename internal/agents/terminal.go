@@ -358,9 +358,12 @@ type tmuxWorker struct {
 	identity Identity
 	host     Identity
 	grace    time.Duration
-	maxOut   int64
-	typing   terminalTyping
-	cleanup  func()
+	// hurry is the hurry channel the worker was started under, on
+	// WithHurry's terms; nil never hurries.
+	hurry   <-chan struct{}
+	maxOut  int64
+	typing  terminalTyping
+	cleanup func()
 
 	done      chan struct{}
 	closeOnce sync.Once
@@ -497,11 +500,13 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 		identity: identity,
 		host:     host,
 		grace:    spec.grace,
+		hurry:    hurryOf(ctx),
 		maxOut:   spec.maxOut,
 		typing:   typing,
 		done:     make(chan struct{}),
 	}
 	go w.poll()
+	go w.closeOnHurry()
 	if typing.read != nil {
 		bound, cancel := context.WithTimeout(ctx, terminalReadyTimeout)
 		err := w.await(bound, func(s screenState) bool { return s != screenNotDrawn })
@@ -803,6 +808,21 @@ func (w *tmuxWorker) Attach() []string {
 	return []string{w.terminal.Tmux, "-S", w.terminal.Socket, "attach-session", "-t", terminalTarget}
 }
 
+// closeOnHurry is procWorker.closeOnHurry for a terminal-hosted worker: the
+// worker is closed the moment its hurry is closed. The group it ends is
+// named by the identity read when the worker started and verified again by
+// endGroup before anything is signalled.
+func (w *tmuxWorker) closeOnHurry() {
+	if w.hurry == nil {
+		return
+	}
+	select {
+	case <-w.hurry:
+		w.Close()
+	case <-w.done:
+	}
+}
+
 // Close ends the worker on the terms the mechanism states. It is
 // idempotent and returns once done is closed: when the poll reads the
 // process gone, or, if it has not within the grace and the command timeout
@@ -820,7 +840,7 @@ func (w *tmuxWorker) Close() {
 		// The screen is read before the end, so a Capture after Close
 		// answers what the worker last showed rather than nothing.
 		w.Capture()
-		_, _ = EndGroup(w.identity, w.grace)
+		_, _ = endGroup(w.identity, w.grace, w.hurry)
 		killTerminalServer(w.terminal)
 		timer := time.NewTimer(w.grace + terminalCommandTimeout)
 		defer timer.Stop()

@@ -14,6 +14,10 @@ import (
 type stage struct {
 	run   string
 	stage string
+	// leader is the group leader's identity read when the group was
+	// registered, and the zero Identity when it could not be read, which
+	// forceGroups then passes over rather than signals.
+	leader agents.Identity
 }
 
 // registry is what this service knows about the validation stages it started:
@@ -33,25 +37,64 @@ type registry struct {
 	// reap.go owns it. Nil records nothing, which is a registry built
 	// without a store.
 	durable *processJournal
+	// hurry is closed by hurryTerminations and rides every invocation the
+	// wrappers start, through agents.WithHurry, so a forced stop cuts each
+	// invocation's own termination short. hurried closes it once.
+	hurry   chan struct{}
+	hurried sync.Once
 }
 
 // newRegistry returns an empty registry, which is a service that has started
 // no validation stage and therefore contains nobody.
 func newRegistry() *registry {
-	return &registry{groups: make(map[int]stage)}
+	return &registry{groups: make(map[int]stage), hurry: make(chan struct{})}
 }
 
 // add records that a process group is running a stage, and returns the
 // function that forgets it again.
 func (r *registry) add(run, name string, pgid int) func() {
+	entry := stage{run: run, stage: name}
+	if leader, found, err := agents.Identify(pgid); err == nil && found {
+		entry.leader = leader
+	}
 	r.mu.Lock()
-	r.groups[pgid] = stage{run: run, stage: name}
+	r.groups[pgid] = entry
 	r.mu.Unlock()
 	return func() {
 		r.mu.Lock()
 		delete(r.groups, pgid)
 		r.mu.Unlock()
 	}
+}
+
+// hurryTerminations cuts short the termination of every invocation the
+// wrappers started, on agents.WithHurry's terms.
+func (r *registry) hurryTerminations() { r.hurried.Do(func() { close(r.hurry) }) }
+
+// hurrying is ctx carrying this registry's hurry channel.
+func (r *registry) hurrying(ctx context.Context) context.Context {
+	return agents.WithHurry(ctx, r.hurry)
+}
+
+// held reports how many groups are registered.
+func (r *registry) held() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.groups)
+}
+
+// leaders returns the identity of every registered group whose leader could
+// be read when it was registered.
+func (r *registry) leaders() []agents.Identity {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []agents.Identity
+	for _, entry := range r.groups {
+		if entry.leader.PID > 0 {
+			out = append(out, entry.leader)
+		}
+	}
+	return out
 }
 
 // empty reports whether this service is running no validation stage at all.
@@ -212,7 +255,7 @@ func (c containedRunner) Run(ctx context.Context, purpose agents.Purpose, inv ag
 	}
 	inv.Started = c.registry.starter(advancingRun(ctx), string(purpose))
 	inv.Served = servedOn(ctx)
-	result, err := c.inner.Run(ctx, purpose, inv)
+	result, err := c.inner.Run(c.registry.hurrying(ctx), purpose, inv)
 	c.log.write(inv.Served, purpose, result, err)
 	return result, err
 }
@@ -257,7 +300,7 @@ func (c containedFixer) Apply(ctx context.Context, inv agents.Invocation) (agent
 	}
 	inv.Started = c.registry.starter(advancingRun(ctx), string(agents.PurposeFix))
 	inv.Served = servedOn(ctx)
-	result, err := c.inner.Apply(ctx, inv)
+	result, err := c.inner.Apply(c.registry.hurrying(ctx), inv)
 	c.log.write(inv.Served, agents.PurposeFix, result, err)
 	return result, err
 }

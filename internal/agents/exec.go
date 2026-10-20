@@ -113,7 +113,10 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 		ended = spec.started(cmd.Process.Pid)
 	}
 
-	// The watcher terminates the tree the moment the context ends. It is
+	// The watcher terminates the tree the moment the context ends, or the
+	// moment the context's hurry is closed, whichever is first, so a hurry
+	// acts on a tree whose context nobody cancelled and whose Wait is held
+	// by a descendant keeping an output pipe open. It is
 	// joined before this function returns, so no goroutine outlives the call
 	// and nothing is signalled once runProcess has returned. It does not close
 	// the window in which the leader has been reaped and its identifier could
@@ -121,13 +124,16 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 	// terminateTree when the reap lands; what terminateTree does about that
 	// window, and what it leaves open, is stated there.
 	done := make(chan struct{})
+	hurry := hurryOf(ctx)
 	var watcher sync.WaitGroup
 	watcher.Add(1)
 	go func() {
 		defer watcher.Done()
 		select {
 		case <-ctx.Done():
-			terminateTree(cmd.Process, spec.grace, true, done)
+			terminateTree(cmd.Process, spec.grace, true, done, hurry)
+		case <-hurry:
+			terminateTree(cmd.Process, spec.grace, true, done, hurry)
 		case <-done:
 		}
 	}()
@@ -137,7 +143,7 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 	watcher.Wait()
 	// The leader has been reaped. Anything still in its group is a child it
 	// left behind, and the invocation owns it too.
-	terminateTree(cmd.Process, spec.grace, false, nil)
+	terminateTree(cmd.Process, spec.grace, false, nil, hurry)
 	if ended != nil {
 		ended()
 	}

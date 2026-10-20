@@ -597,6 +597,17 @@
 // that, its cadence and its gaps. No verb or protocol method calls the
 // decision except through that stop.
 //
+// # Stopping is bounded, and shutdown.go owns it
+//
+// Close waits for what the service started and bounds only the supervision.
+// Shutdown is Close under the global-only stop_grace, PRD section 8's
+// "stopping is bounded": past the grace, or when its caller forces the stop,
+// it logs the step Close was in, ends every group it registered by force
+// through agents.ForceGroup, and returns *StopForcedError for the caller to
+// exit on. internal/cli's serveHere is its caller, and a further signal is
+// what forces it. shutdown.go's header owns which groups are forced and the
+// residual gaps.
+//
 // # The supervisor loop is here, and supervise.go owns it
 //
 // PRD section 5's supervisor is a loop inside the service, and supervise.go

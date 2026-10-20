@@ -43,6 +43,7 @@ escalation_window: 15m
 recheck_window: 3h
 stall_inspection_count: 5
 relaunch_attempts: 3
+stop_grace: 45s
 commit:
   fix_message: "fix(gate): {summary}"
 allow_pushed_commands: true
@@ -83,6 +84,7 @@ const wholeSchemaJSON = `{
 	"recheck_window": "3h",
 	"stall_inspection_count": 5,
 	"relaunch_attempts": 3,
+	"stop_grace": "45s",
 	"commit": {"fix_message": "fix(gate): {summary}"},
 	"allow_pushed_commands": true,
 	"autonomy": {"merge": ["owner/name"]},

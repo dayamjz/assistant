@@ -639,7 +639,7 @@ func (s *Service) launchSubordinate(ctx context.Context, d store.Delegation, att
 	// cannot tell it from the first coordinator; placeRequest refuses every
 	// unplaced peer until Delegate returns (subordinatesStarting).
 	s.subordinatesStarting.Add(1)
-	launched, err := built.sessions.Delegate(ctx, session.SubordinateSpec{
+	launched, err := built.sessions.Delegate(s.registry.hurrying(ctx), session.SubordinateSpec{
 		Domain:       d.Domain,
 		Dir:          dir,
 		Instructions: string(raw) + s.subordinateSection(d),

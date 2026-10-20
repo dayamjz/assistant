@@ -13,6 +13,4 @@ package principles
 //
 // Check refuses a row whose principle a test does turn out to cite, so a row
 // cannot outlive the gap it describes.
-var unclaimed = map[Principle]string{
-	P15: "P15 has no test claiming it; #405's guard and the kept-work record will.",
-}
+var unclaimed = map[Principle]string{}

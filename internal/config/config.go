@@ -74,6 +74,10 @@ type Config struct {
 	// KeyRelaunchAttempts says why it is a task-level bound and not a loop
 	// bound, and who decides a retry past it.
 	RelaunchAttempts int
+	// StopGrace is how long a stop or SIGTERM waits for the service to give
+	// up its home before the process groups it registered are ended by force
+	// and it exits. KeyStopGrace says who may set it and what it bounds.
+	StopGrace time.Duration
 	// DecisionModel is the mode of the decision-model checks PRD section 5
 	// describes. Whether a request is sent at all also needs the provider's
 	// key in the operator's environment, which this package never reads.
@@ -248,6 +252,8 @@ const (
 	// enough to get past a transient and few enough that a worker which fails
 	// the same way every time reaches a person within the hour.
 	DefaultRelaunchAttempts = 2
+	// DefaultStopGrace is PRD section 10's default for stop_grace.
+	DefaultStopGrace = 30 * time.Second
 	// DefaultDecisionModel is the decision-model mode a run gets when the
 	// operator's file sets none: the checks run where the key is present and
 	// what they find is a note.
@@ -440,6 +446,14 @@ const (
 	// choose. Above the ceiling a worker that fails the same way every time
 	// is restarted for days before a person hears. Chosen, not measured.
 	MaxRelaunchAttempts = 20
+	// MinStopGrace is the shortest stop grace. Below it the groups a stop
+	// asks to end politely have no time to, and every stop is a forced one.
+	// Chosen, not measured.
+	MinStopGrace = time.Second
+	// MaxStopGrace is the longest stop grace. Above it a stop that a stuck
+	// shutdown holds keeps the home from its next service for longer than
+	// an operator waits before reaching for SIGKILL. Chosen, not measured.
+	MaxStopGrace = 10 * time.Minute
 	// MinSupervisionBeaconInterval is the shortest beacon interval. Below it
 	// the loop would spend its passes rewriting the beacon. Chosen, not
 	// measured.

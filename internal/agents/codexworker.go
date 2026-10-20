@@ -89,7 +89,7 @@ func (r *codexRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error
 	}
 	w.procWorker = &procWorker{
 		cmd: cmd, availability: &workerAvailability{agent: CodexName}, stdin: input,
-		out: &tailWriter{limit: r.settings.maxOut}, grace: r.settings.grace,
+		out: &tailWriter{limit: r.settings.maxOut}, grace: r.settings.grace, hurry: hurryOf(ctx),
 		done: make(chan struct{}), slot: make(chan struct{}, 1),
 		frame: plainLine, format: OutputStreamJSON, stdinOpen: true,
 	}
@@ -103,8 +103,9 @@ func (r *codexRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error
 	go func() {
 		defer close(w.done)
 		w.exited(cmd.Wait())
-		terminateTree(cmd.Process, r.settings.grace, false, nil)
+		terminateTree(cmd.Process, r.settings.grace, false, nil, w.hurry)
 	}()
+	go w.closeOnHurry()
 	start, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	success := false

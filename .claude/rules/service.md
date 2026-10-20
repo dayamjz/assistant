@@ -81,6 +81,10 @@ paths: ["internal/service/**"]
   `relaunchTask` is the one relaunch, and `taskholds.go` owns the bound's
   hold and both no-sweep holds. Reconciliation writes no wake and no marker:
   the queue and the markers are the loop's, under its fence.
+- Stopping: `shutdown.go` is P15's stop half. `Shutdown` is `Close` under
+  `stop_grace`; past it, or on a forced stop, it ends every group it
+  registered by force and the caller exits. Its header owns which groups and
+  the gaps.
 - Supervisor loop: PRD section 5's supervisor loop lives in `supervise.go`;
   read its header before changing it, and for the residual gaps. One gap it
   does not state: the verdict's level is not recorded on the wake row.

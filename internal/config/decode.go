@@ -371,6 +371,12 @@ func decodeEscalationWindow(k Key, v any) (any, error) {
 	return decodeBoundedDuration(k, v, "an escalation window", "30m", MinEscalationWindow, MaxEscalationWindow)
 }
 
+// decodeStopGrace is decodeBoundedDuration between MinStopGrace and
+// MaxStopGrace.
+func decodeStopGrace(k Key, v any) (any, error) {
+	return decodeBoundedDuration(k, v, "a stop grace", "30s", MinStopGrace, MaxStopGrace)
+}
+
 // decodeRecheckWindow is decodeBoundedDuration between MinRecheckWindow and
 // MaxRecheckWindow.
 func decodeRecheckWindow(k Key, v any) (any, error) {

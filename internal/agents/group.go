@@ -85,6 +85,12 @@ func (g GroupEnd) String() string { return string(g) }
 // a group sharing this process's console and not one another process
 // started, so at recovery the forceful step is what is delivered.
 func EndGroup(id Identity, grace time.Duration) (GroupEnd, error) {
+	return endGroup(id, grace, nil)
+}
+
+// endGroup is EndGroup with its polite wait cut short once hurry is closed,
+// on WithHurry's terms, for a worker this package holds the leader of.
+func endGroup(id Identity, grace time.Duration, hurry <-chan struct{}) (GroupEnd, error) {
 	if id.PID <= 0 {
 		return "", fmt.Errorf("agents: process group %d is not one this package started", id.PID)
 	}
@@ -98,5 +104,43 @@ func EndGroup(id Identity, grace time.Duration) (GroupEnd, error) {
 	case PresenceAbsent:
 		return endAbsentGroup(id.PID), nil
 	}
-	return endPresentGroup(id, grace)
+	return endPresentGroup(id, grace, hurry)
+}
+
+// ForceGroup is EndGroup without the polite step, for a caller whose grace
+// has already been spent, which is a service whose stop_grace ran out: the
+// group was asked to end politely when the stop began, and asking again would
+// only spend time the caller no longer has. After the same verification, the
+// group is sent the forceful signal at once, and the result is GroupEnded
+// when nothing of it this platform can see is left within wait, or
+// ErrGroupSurvived when something is.
+//
+// A leader that is gone is answered exactly as EndGroup answers it, and
+// nothing is signalled, even when the group still holds a process. A gone
+// leader is the one reading from which a group identifier cannot be tied
+// back to the registration: once the original group has emptied, its
+// identifier may be given to an unrelated leader, and that leader may exit
+// and leave its own child in a group that reads, from here, exactly like a
+// registered leader's survivor. Nothing here can tell the two apart, so the
+// survivor of an invocation's own leader is left to the termination that
+// invocation is still running, which WithHurry is how a caller cuts short.
+//
+// Everything else is EndGroup's: a reused identifier and an unreadable
+// identity signal nothing, and a descendant that moved to a group of its own
+// is not reached.
+func ForceGroup(id Identity, wait time.Duration) (GroupEnd, error) {
+	if id.PID <= 0 {
+		return "", fmt.Errorf("agents: process group %d is not one this package started", id.PID)
+	}
+	presence, err := id.Presence()
+	if err != nil {
+		return "", err
+	}
+	switch presence {
+	case PresenceReplaced:
+		return GroupReplaced, nil
+	case PresenceAbsent:
+		return endAbsentGroup(id.PID), nil
+	}
+	return forcePresentGroup(id, wait)
 }

@@ -295,6 +295,9 @@ type procWorker struct {
 	stdin        io.WriteCloser
 	out          *tailWriter
 	grace        time.Duration
+	// hurry is the hurry channel the worker was started under, on
+	// WithHurry's terms; nil never hurries.
+	hurry <-chan struct{}
 	// done is closed by the wait goroutine once the leader has been reaped
 	// and whatever it left in its group has been terminated.
 	done chan struct{}
@@ -369,6 +372,7 @@ func startWorker(ctx context.Context, agent string, spec procSpec, instructions 
 		stdin:        stdin,
 		out:          out,
 		grace:        spec.grace,
+		hurry:        hurryOf(ctx),
 		done:         make(chan struct{}),
 		slot:         make(chan struct{}, 1),
 		frame:        frame,
@@ -380,8 +384,9 @@ func startWorker(ctx context.Context, agent string, spec procSpec, instructions 
 		_ = cmd.Wait()
 		// The leader has been reaped. Anything still in its group is a child
 		// it left behind, and the worker owns it too.
-		terminateTree(cmd.Process, spec.grace, false, nil)
+		terminateTree(cmd.Process, spec.grace, false, nil, w.hurry)
 	}()
+	go w.closeOnHurry()
 
 	if err := w.write(ctx, instructions); err != nil {
 		w.Close()
@@ -487,6 +492,30 @@ func (w *procWorker) Group() int { return w.cmd.Process.Pid }
 // Done is closed once the leader has been reaped and its tree terminated.
 func (w *procWorker) Done() <-chan struct{} { return w.done }
 
+// closeOnHurry ends the worker the moment its hurry is closed, rather than
+// waiting for a caller's Close or the leader's own exit, and returns when
+// the worker is done either way. It is what makes the hurry act on a tree
+// whose leader exited while a descendant holds its output pipe open, which
+// holds cmd.Wait, and so the wait goroutine's termination, for WaitDelay.
+//
+// What it signals is the group the worker started, by its identifier, on
+// terminateTree's terms. That identifier is still this worker's group: the
+// worker has not finished, so the group either still holds a process, and
+// an identifier is not given to another process while a group of that
+// identifier exists, or it is empty and terminateTree signals nothing. The
+// window left is terminateTree's own, a group that empties between its read
+// and its signal.
+func (w *procWorker) closeOnHurry() {
+	if w.hurry == nil {
+		return
+	}
+	select {
+	case <-w.hurry:
+		w.Close()
+	case <-w.done:
+	}
+}
+
 // Close ends the worker on the terms Worker.Close states.
 func (w *procWorker) Close() {
 	w.closeOnce.Do(func() {
@@ -501,7 +530,7 @@ func (w *procWorker) Close() {
 			return
 		default:
 		}
-		terminateTree(w.cmd.Process, w.grace, true, w.done)
+		terminateTree(w.cmd.Process, w.grace, true, w.done, w.hurry)
 	})
 	<-w.done
 }

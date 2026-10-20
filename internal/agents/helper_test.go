@@ -1,6 +1,7 @@
 package agents_test
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -167,14 +168,31 @@ func helperMain(mode string) {
 		// the completion path: nothing was cancelled and the agent did nothing
 		// wrong, so only the invocation's ownership of the tree ends the
 		// child.
-		helperSpawn(false, false)
+		helperSpawn(false, false, false)
 		fmt.Print(helperEnvelope("finished, and left something running", helperSession()))
 	case "spawn":
-		helperSpawn(false, true)
+		helperSpawn(false, false, true)
 	case "spawn-stubborn":
 		// Both the agent and its child ignore the polite signal, so only the
 		// forceful one ends them.
-		helperSpawn(true, true)
+		helperSpawn(true, true, true)
+	case "spawn-holding-child-and-exit":
+		// Start a child that ignores the polite signal and holds this
+		// process's standard output open, read one line of standard input,
+		// and exit. The leader is gone and the child keeps the pipe the
+		// adapter reads, which holds the process's Wait.
+		helperSpawnHolding()
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	case "worker-spawn-stubborn-child":
+		// A worker that starts a child ignoring the polite signal, then reads
+		// its standard input until it is closed and exits, leaving the child
+		// in its group: what Close does to a worker is close that input.
+		helperSpawn(true, false, false)
+		_, _ = io.Copy(io.Discard, os.Stdin)
+	case "spawn-stubborn-child":
+		// Only the child ignores the polite signal, so the leader ends on it
+		// and leaves the child running in its group.
+		helperSpawn(true, false, true)
 	case "envelope-then-hold":
 		// Print a complete result envelope, say so where the test can see it,
 		// and then outlive the invocation. It is an agent that reported what
@@ -214,14 +232,14 @@ func helperExitCode() int {
 // group, records both process identifiers where the test can read them, and
 // then waits. It is what makes "a cancelled invocation leaves no surviving
 // child process" a claim about a tree rather than about one process.
-func helperSpawn(stubborn, wait bool) {
+func helperSpawn(stubbornChild, stubbornLeader, wait bool) {
 	self, err := os.Executable()
 	if err != nil {
 		os.Exit(3)
 	}
 	child := exec.Command(self)
 	child.Env = []string{helperModeVar + "=hold"}
-	if stubborn {
+	if stubbornChild {
 		child.Env = append(child.Env, helperStderrVar+"=stubborn")
 	}
 	// The child runs outside the invocation's working directory, which the
@@ -244,10 +262,30 @@ func helperSpawn(stubborn, wait bool) {
 	if !wait {
 		return
 	}
-	if stubborn {
+	if stubbornLeader {
 		signal.Ignore(helperPoliteSignals()...)
 	}
 	time.Sleep(helperHold)
+}
+
+// helperSpawnHolding is helperSpawn with a stubborn child that inherits this
+// process's standard output, and no wait.
+func helperSpawnHolding() {
+	self, err := os.Executable()
+	if err != nil {
+		os.Exit(3)
+	}
+	child := exec.Command(self)
+	child.Env = []string{helperModeVar + "=hold", helperStderrVar + "=stubborn"}
+	child.Dir = os.TempDir()
+	child.Stdout = os.Stdout
+	if err := child.Start(); err != nil {
+		os.Exit(4)
+	}
+	line := strconv.Itoa(os.Getpid()) + "\n" + strconv.Itoa(child.Process.Pid) + "\n"
+	if err := os.WriteFile(os.Getenv(helperPidVar), []byte(line), 0o600); err != nil {
+		os.Exit(5)
+	}
 }
 
 // helperSession reports the session identifier the stand-in agent claims. It
