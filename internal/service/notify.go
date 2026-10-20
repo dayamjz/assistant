@@ -99,6 +99,12 @@ import (
 //     while the command ran among them, stays claimed with no outcome, and
 //     its wake is not offered again. Whether it was delivered is unknown,
 //     and the record says unknown rather than guessing.
+//   - A settlement the store refused after the command ran ends the same
+//     way: the claim stands with no outcome, the failure is written to the
+//     service log and the pass goes on, and the wake is not offered again.
+//     The operator may have received it, and the record cannot say so. The
+//     log line names the wake and the store's error and not the command's
+//     outcome, so how the command ended is not kept anywhere.
 //   - Sent means the command exited zero, not that a person read anything.
 //   - A wake the coordinator acknowledged before the sender reached it is not
 //     offered, because PendingNotifications offers queued wakes only; a

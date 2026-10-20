@@ -583,7 +583,11 @@ What is sent, and what is not:
   to the service log. A failed wake is not sent again, because the command
   may already have delivered it, and a wake the service was running the
   command for when it crashed is not sent again either, and its record
-  shows no outcome.
+  shows no outcome. The same holds when the command ran but the service
+  could not then record how it ended: the wake is not sent again, the
+  record shows no outcome although you may have received it, and the
+  service log says the record could not be written but not how the
+  command ended.
 - `sent` means your command exited 0. It does not mean anyone read it.
 - Only a wake still waiting for the coordinator is sent. A wake the
   coordinator acknowledged before the command ran for it is not, and when
