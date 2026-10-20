@@ -182,10 +182,11 @@
 // GitHub one is owner/name. GitLabRepository says why: a specifier is
 // compared wherever a repository is named, and a two-segment GitLab path
 // would otherwise be the same text as a GitHub repository on a different
-// host. In particular internal/config's autonomy.merge reads entries as
-// owner/name, so no entry names a GitLab project and the program merges
-// nothing on GitLab; extending it is a decision about that key, not about
-// this adapter.
+// host. In particular internal/config's autonomy.merge lists a GitLab
+// project by this specifier, host and all, beside a GitHub repository's
+// owner/name, so an entry naming a project's path without its host is a
+// GitHub repository and never authority over the GitLab project. The grammar
+// both packages hold a specifier to is internal/forge/specifier's.
 //
 // The facts a caller acts on are held to the same rules as GitHub's, and the
 // conformance suite runs both adapters through the same assertions: an empty
@@ -203,6 +204,18 @@
 //     detailed_merge_status, which folds pipelines and approvals in.
 //   - A merge sends the head commit and nothing else, so no merge method is
 //     chosen here and no merge is scheduled for when a pipeline succeeds.
+//     The refusals GitLab's merge endpoint documents include 405 for a
+//     merge request it will not merge now, 409 for a sha that is not the
+//     source branch's head, and 422 for a merge it attempted and did not
+//     make. This adapter does not tell them apart: a status outside 2xx and
+//     3xx other than 401 arrives as ReasonRejected with GitLab's status and
+//     message, which the adapter's tests establish for those three over
+//     labtest, and internal/service's autonomy merge reports it and does
+//     not ask again. Two answers carry less. One whose body is over
+//     DefaultMaxOutput is ReasonOversizeAnswer, whatever its status, with
+//     neither the status nor the message, because the body is discarded
+//     before the status is read; a redirect is ReasonRejected naming its
+//     status and not its body or where it pointed.
 //   - Find on an adapter with no fork keeps only a merge request whose source
 //     project is its target project, which is stricter than the GitHub
 //     adapter's read of the same case.

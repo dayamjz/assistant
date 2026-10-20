@@ -300,8 +300,8 @@ func Pipelines(rows ...PipelineView) Response {
 
 // Error is GitLab's error object, {"message": message}, under status, which
 // must not be a success. It is how GitLab answers a merge it refuses (405,
-// 406, 409 or 422 by its documentation), a project or merge request it does
-// not have (404), and a caller it does not permit (403).
+// 409 or 422 among those its documentation lists), a project or merge
+// request it does not have (404), and a caller it does not permit (403).
 func Error(status int, message string) Response {
 	if status < 400 {
 		panic("labtest: Error takes a status of 400 or more; anything else is not an error answer")

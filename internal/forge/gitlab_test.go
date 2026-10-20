@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -498,6 +499,43 @@ func TestGitLabMergeAsksOnlyForABoundMergeNow(t *testing.T) {
 	}
 }
 
+// A merge GitLab refuses arrives from Merge as ReasonRejected carrying
+// GitLab's status and its own message, for each refusal its merge endpoint
+// documents for a merge request it will not merge, with the message GitLab's
+// source writes for it: 405 for one it will not merge now, 409 for a bound
+// sha that is not the source branch's head, and 422 for a merge it attempted
+// and did not make. Each is asked once; the adapter does not ask again.
+func TestGitLabMergeRefusalsAreRejected(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	for _, refusal := range []struct {
+		status  int
+		message string
+	}{
+		{http.StatusMethodNotAllowed, "405 Method Not Allowed"},
+		{http.StatusConflict, "SHA does not match HEAD of source branch: " + strings.Repeat("b", 40)},
+		{http.StatusUnprocessableEntity, "Branch cannot be merged"},
+	} {
+		t.Run(http.StatusText(refusal.status), func(t *testing.T) {
+			p, adapter := openGitLab(t, labtest.Script{
+				labtest.OpProject: {labtest.Project(3, "group/name")},
+				labtest.OpMerge:   {labtest.Error(refusal.status, refusal.message)},
+			})
+			pr, err := adapter.Merge(context.Background(), 12, conformanceHead)
+			if pr != (forge.PullRequest{}) {
+				t.Fatalf("a refused merge answered the pull request %+v", pr)
+			}
+			got := refusalOf(t, err)
+			if got.Reason != forge.ReasonRejected || got.Op != "merge" ||
+				!strings.Contains(got.Detail, "HTTP "+strconv.Itoa(refusal.status)) || !strings.Contains(got.Detail, refusal.message) {
+				t.Fatalf("the refusal is %+v, want rejected carrying HTTP %d and %q", got, refusal.status, refusal.message)
+			}
+			if merges := p.CallsFor(labtest.OpMerge); len(merges) != 1 {
+				t.Fatalf("the refused merge was asked %d times, want once", len(merges))
+			}
+		})
+	}
+}
+
 // Checks reads the pipelines on the head and only those: a pipeline on an
 // earlier head is not a check on this one, and a skipped pipeline ran
 // nothing, so a head whose only pipeline was skipped has no checks and is
@@ -808,6 +846,30 @@ func TestGitLabDiscardsAnOversizeAnswer(t *testing.T) {
 	_, err := adapter.Get(context.Background(), 12)
 	if refusalOf(t, err).Reason != forge.ReasonOversizeAnswer {
 		t.Fatalf("an oversize answer refused as %v", err)
+	}
+}
+
+// A refusal whose body is over the output bound is discarded whole as well:
+// it is ReasonOversizeAnswer and not ReasonRejected, and its detail carries
+// neither GitLab's status nor its message, because the body is bounded
+// before the status is read. This is the exception doc.go names to a merge
+// refusal arriving rejected with both.
+func TestGitLabDiscardsAnOversizeRefusal(t *testing.T) {
+	message := "Branch cannot be merged " + strings.Repeat("x", forge.DefaultMaxOutput)
+	p, adapter := openGitLab(t, labtest.Script{
+		labtest.OpProject: {labtest.Project(3, "group/name")},
+		labtest.OpMerge:   {labtest.Error(http.StatusUnprocessableEntity, message)},
+	})
+	_, err := adapter.Merge(context.Background(), 12, conformanceHead)
+	got := refusalOf(t, err)
+	if got.Reason != forge.ReasonOversizeAnswer || got.Op != "merge" {
+		t.Fatalf("an oversize 422 refused as %+v, want oversize", got)
+	}
+	if strings.Contains(got.Detail, "422") || strings.Contains(got.Detail, "Branch cannot be merged") {
+		t.Fatalf("an oversize refusal's detail %q carries the status or message it discarded", got.Detail)
+	}
+	if merges := p.CallsFor(labtest.OpMerge); len(merges) != 1 {
+		t.Fatalf("the merge was asked %d times, want once", len(merges))
 	}
 }
 

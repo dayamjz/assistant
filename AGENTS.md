@@ -266,7 +266,7 @@ Each has cost this repository more than one round of review.
   gaps: the confirmation precedes a write and not a read, it is not a lock
   against a later rename, and a GitHub Enterprise upstream yields no specifier.
   `Provider.Merge` is bound to a head through gh's `--match-head-commit`
-  and refuses an unbound one; whether a merge is allowed is the host's, and
+  or GitLab's `sha` and refuses an unbound one; whether a merge is allowed is the host's, and
   its refusal is a `ReasonRejected` the caller reports and never retries
   around. `internal/service`'s `autonomy.go` is its one caller: the
   global-only `autonomy.merge` list, the live read, and the read after the
@@ -282,9 +282,11 @@ Each has cost this repository more than one round of review.
   `forge.Hosts` is the one `Host` the product is handed and routes a
   specifier to its adapter, `RepositoryOf` is the one reading of a remote,
   and a GitLab specifier carries its host (`gitlab.com/group/project`) so it
-  never equals a GitHub `owner/name`, which is also why no `autonomy.merge`
-  entry reaches a GitLab run. `doc.go`'s GitLab section owns where its model
-  differs from GitHub's and its gaps.
+  never equals a GitHub `owner/name`, which is also why an `autonomy.merge`
+  entry reaches only the host it names; `internal/forge/specifier` is the one
+  grammar both forms are held to, there and in `internal/config`'s decoder.
+  `doc.go`'s GitLab section owns where its model differs from GitHub's and
+  its gaps.
   Tests outside the package reach a code host through
   `internal/forge/forgetest`, a stand-in `gh` answering over the wire and
   read by the real adapter, scripted with only shapes gh produces, on

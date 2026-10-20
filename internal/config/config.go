@@ -90,9 +90,10 @@ type Config struct {
 	// closed set. internal/tasks records it on a task at intake, and that
 	// record, not a later read of this field, decides the task's path.
 	Delivery Delivery
-	// AutonomyMerge is the repositories, as the code host names them,
-	// where the program may merge a run that ended checks-passed. Empty
-	// means it merges nothing. Ask MergesIn rather than searching it.
+	// AutonomyMerge is the repositories, as internal/forge names them -
+	// owner/name on GitHub, gitlab.com/group/project on GitLab - where the
+	// program may merge a run that ended checks-passed. Empty means it
+	// merges nothing. Ask MergesIn rather than searching it.
 	AutonomyMerge []string
 	// AllowStandingConsent is whether a run of the repository may be put
 	// under standing consent by the per-run flag. It is never taken from a
@@ -119,10 +120,12 @@ type Config struct {
 	Roles Roles
 }
 
-// MergesIn reports whether repository, named as the code host names it, is
-// one AutonomyMerge lists. The comparison ignores letter case, which is how
-// internal/forge compares a specifier with the repository a provider
-// resolves it to; an empty name is listed nowhere.
+// MergesIn reports whether repository, a specifier as internal/forge writes
+// it, is one AutonomyMerge lists. The comparison ignores letter case, which
+// is how both of internal/forge's adapters compare a specifier with the
+// repository a provider resolves it to; an empty name is listed nowhere. A
+// GitHub entry never matches a GitLab specifier, nor the reverse, because
+// internal/forge/specifier's two forms are disjoint with case ignored.
 func (c Config) MergesIn(repository string) bool {
 	if repository == "" {
 		return false

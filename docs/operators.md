@@ -999,7 +999,11 @@ What differs from GitHub, each in the stricter direction:
 - Whether the merge request can be merged is read from GitLab's conflict and
   merge-status fields, not its detailed status, which folds in pipelines and
   approvals.
-- The program never merges on GitLab, as the merge order section says.
+- A merge the program asks for under `autonomy.merge` sends GitLab the
+  merge request's head commit and nothing else: no merge method, no squash
+  choice, and no merge when the pipeline succeeds, so the project's own
+  settings decide how it merges, and a commit pushed after the run's read is
+  not merged.
 
 A fork on gitlab.com is supported beside an upstream on gitlab.com; `assistant
 init` refuses a fork on one host beside an upstream on the other.
@@ -1008,9 +1012,23 @@ init` refuses a fork on one host beside an upstream on the other.
 
 The gate opens or updates one pull request per branch. It merges one only in a
 repository the operator's global-only `autonomy.merge` lists, after the live
-read PRD section 6 gives, and a merge request on GitLab never, because that
-list names repositories as `owner/name` and a GitLab run's repository is named
-with its host. Its outcome vocabulary has `passed` for a merged pull request,
+read PRD section 6 gives, bound to the head the run observed. The list names a
+GitHub repository as `owner/name` and a GitLab project with its host in front,
+`gitlab.com/group/project`, which is how the program names a GitLab run's
+repository; the two forms never match each other, so `group/project` alone
+never lets the program merge on GitLab:
+
+```json
+{"autonomy": {"merge": ["owner/name", "gitlab.com/group/project"]}}
+```
+
+A merge the code host refuses (on GitLab, for example, the 405, 409 or 422 its
+API documents for a merge request it will not merge, whose source branch moved
+past the head the run observed, or that it did not merge) is written to the
+service log and is not asked again. The log line carries the host's own status
+and message, except that on GitLab an answer larger than the output bound is
+reported as oversize with neither, and a redirect with its status alone. The run stays
+`checks-passed` for you to merge. Its outcome vocabulary has `passed` for a merged pull request,
 and otherwise what produces it is a pull request someone merged while the
 checks stage waited on it, or while the hold that wait left was standing, or
 after the run ended `checks-passed`. Merge order, stacked pull
