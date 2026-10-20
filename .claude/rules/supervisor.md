@@ -1,0 +1,25 @@
+---
+paths: ["internal/supervisor/**"]
+---
+
+# internal/supervisor and internal/supervisor/feed
+
+- `internal/supervisor` is the pure core and performs no I/O: its direct
+  imports are `internal/taskstate`, `internal/home` for its lock vocabulary,
+  and the standard library. Its subpackage `feed` is the I/O edge.
+- The two durations derive from the one configured interval,
+  `config.KeySupervisionBeaconInterval`, through `FreshnessFor` and
+  `FirstBeaconWait`; staleness and the first-beacon wait are named multiples
+  and never rows of their own.
+- `inflight.go` (which states owe a supervision cycle) and `terminal.go` (which
+  states have their terminal read at all) are closed tables over
+  `taskstate.States()`, so a new state fails until placed.
+- The kind table's `Subordinate` column is what PRD section 8's wake row
+  routes by, read out by `SubordinateActable` and held to its own oracle in
+  the matrix test. `subordinate-gone` and `subordinate-escalated` are the
+  subordinate's two kinds; the first is carried on `internal/store`'s domain
+  wake, and `InFlightOf` counts those rows as a third input.
+
+Read both `doc.go` files (`doc.go` and `feed/doc.go`) before changing any of
+that, and for the residual gaps; `kind.go` is the one owner of what a wake kind
+means.
