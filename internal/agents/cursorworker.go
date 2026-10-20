@@ -24,6 +24,10 @@ import (
 // commands, once. Unknown requests and shell operators are refused. This is
 // a policy for requests the CLI asks; settings that preapprove tools are not
 // narrowed here. Cursor terminal workers are not declared.
+func (r *cursorRunner) WorkerLaunchRefusal(_ Terminal, spec WorkerSpec) error {
+	return spec.Validate()
+}
+
 func (r *cursorRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err

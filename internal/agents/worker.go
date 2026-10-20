@@ -43,6 +43,14 @@ type WorkerRunner interface {
 	// A spec that cannot be started as written is refused before any process
 	// starts, with an error wrapping ErrInvalidInvocation.
 	Start(ctx context.Context, spec WorkerSpec) (Worker, error)
+
+	// WorkerLaunchRefusal reports whether spec cannot be started the way this
+	// adapter would start it, before any process exists. When the adapter
+	// places spec.Instructions on the tmux start command rather than typing
+	// them, t names the terminal that start would use; otherwise t is ignored.
+	// Every refusal wraps ErrInvalidInvocation and names the field, as Start
+	// does.
+	WorkerLaunchRefusal(t Terminal, spec WorkerSpec) error
 }
 
 // WorkerSpec is everything a worker is started with. It has no purpose and no

@@ -30,6 +30,10 @@ import (
 // declined, and a server request this client does not understand is
 // refused. A command the sandbox runs without asking is the CLI's own.
 // Terminal workers are not declared.
+func (r *codexRunner) WorkerLaunchRefusal(_ Terminal, spec WorkerSpec) error {
+	return spec.Validate()
+}
+
 func (r *codexRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err

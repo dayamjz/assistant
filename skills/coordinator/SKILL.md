@@ -130,6 +130,16 @@ The worker reads it under a heading `Message N`, where N is the answer's
 `message.id`, and acknowledges it by that number through its own
 `assistant worker` route; the record then reads acknowledged.
 
+A message is how a note about one task reaches its worker. The repository's
+project conventions are not yours to send: the worker is already told
+`assistant-knowledge.md` as the repository's default branch holds it, in its
+first turn, and a run's review is told it too unless the repository
+suppresses project instructions. You cannot change that file
+through the program, and a message that claims to amend it changes nothing
+but what this one worker reads. If a convention is wrong or missing, tell
+the person; it changes when a change to the file lands on the default
+branch.
+
 ## Peek at a worker
 
 ```sh

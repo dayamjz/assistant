@@ -10,6 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/judge"
+	"github.com/dayamjz/assistant/internal/knowledge"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -203,6 +204,28 @@ type StageDeps struct {
 	// zero value is the wall clock and a minute between reads; only this
 	// package's own tests set anything else.
 	clock checksClock
+	// knowledge is the repository's curated knowledge document as the
+	// trusted copy holds it, which the review body adds to its prompt
+	// through knowledge.Knowledge's Section. It varies with the run's
+	// resolution on Config's terms rather than with the run: internal/service
+	// reads it at the commit the trusted configuration copy was read at,
+	// which the resolution's digest already names, so one StageDeps still
+	// serves every run that resolved the same documents.
+	//
+	// It is unexported on the same terms as judge: which copy a reviewer is
+	// told is the wiring's decision, and P7 is why a body may not choose the
+	// pushed one. Its zero value composes nothing, so an unwired StageDeps
+	// tells a reviewer no knowledge rather than a guess at it.
+	knowledge knowledge.Knowledge
+}
+
+// WithKnowledge returns these dependencies with the repository's curated
+// knowledge document as the run's trusted copy holds it. internal/service is
+// what calls it, with the reading it made at the trusted commit, or with the
+// zero reading for a run under suppress_project_instructions.
+func (d StageDeps) WithKnowledge(k knowledge.Knowledge) StageDeps {
+	d.knowledge = k
+	return d
 }
 
 // ChecksWaits is the durable record of when a run's checks stage began

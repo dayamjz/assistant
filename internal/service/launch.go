@@ -139,6 +139,10 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	if err != nil {
 		return nil, fmt.Errorf("service: reading task %s to route its worker: %w", d.id, err)
 	}
+	project, err := s.launchKnowledge(ctx, task, d)
+	if err != nil {
+		return nil, err
+	}
 	selection, role, err := s.routeTaskWorker(ctx, task, d.attempt)
 	if err != nil {
 		return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
@@ -158,11 +162,20 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	}); err != nil {
 		return nil, fmt.Errorf("service: recording the route of task %s attempt %d: %w", d.id, d.attempt, err)
 	}
+	firstTurn := string(instructions) + d.note + knowledgeSection(project) + s.routeSection(d.want.Shape)
+	if err := s.refuseKnowledgeIfLaunchTooLarge(ctx, d, selection.Resolution.Runner, fresh, firstTurn, project, model, role.Effort); err != nil {
+		return nil, err
+	}
+	if err := s.store.SetAttemptKnowledge(ctx, d.id, d.attempt, store.AttemptKnowledge{
+		Commit: project.Commit(), Digest: project.Digest(),
+	}); err != nil {
+		return nil, fmt.Errorf("service: recording the knowledge revision of task %s attempt %d: %w", d.id, d.attempt, err)
+	}
 	host := s.sessionHost(selection.Resolution.Runner)
 	launched, err := host.Create(ctx, session.Spec{
 		TaskID:       d.id,
 		Isolation:    fresh,
-		Instructions: string(instructions) + d.note + s.routeSection(d.want.Shape),
+		Instructions: firstTurn,
 		Route:        s.workerRoute,
 		Model:        model,
 		Effort:       role.Effort,

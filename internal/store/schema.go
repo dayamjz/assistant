@@ -127,6 +127,12 @@ const runResolutionSkipsMigration = "run agent resolution skips"
 // re-apply it alone.
 const taskAttemptRouteSkipsMigration = "task attempt route skips"
 
+// taskAttemptKnowledgeMigration names the migration that records which
+// revision of a repository's curated knowledge document a task attempt's
+// worker was launched with, for the reason sealCheckpointTableMigration is a
+// constant.
+const taskAttemptKnowledgeMigration = "task attempt knowledge revision"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1700,6 +1706,31 @@ var schema = []migration{
 				WHEN OLD.adapter IS NOT NULL OR OLD.route_reason IS NOT NULL OR OLD.route_skipped IS NOT NULL
 				BEGIN
 					SELECT RAISE(ABORT, 'store: an attempt''s route is recorded once and is not rewritten');
+				END`,
+		},
+	},
+	{
+		version: 45,
+		name:    taskAttemptKnowledgeMigration,
+		statements: []string{
+			// GAP-13: the launch records which revision of the repository's
+			// curated knowledge document (internal/knowledge's Document) its
+			// worker's first turn carried, so what a worker was told can be
+			// reproduced from the repository: the default-branch commit the
+			// document was read at, and the SHA-256 of its bytes there. The
+			// text itself is not stored; it is the repository's. A NULL
+			// commit is unknown: a row written before these columns, or an
+			// attempt that never reached the read. A known commit with a
+			// NULL digest is a commit whose tree held no document. Both are
+			// written once, by SetAttemptKnowledge, before the process
+			// starts, and this trigger holds that against a direct rewrite.
+			`ALTER TABLE task_attempt ADD COLUMN knowledge_commit TEXT`,
+			`ALTER TABLE task_attempt ADD COLUMN knowledge_digest TEXT`,
+			`CREATE TRIGGER task_attempt_knowledge_is_written_once
+				BEFORE UPDATE OF knowledge_commit, knowledge_digest ON task_attempt
+				WHEN OLD.knowledge_commit IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task attempt''s knowledge revision is written once and is not updated');
 				END`,
 		},
 	},
