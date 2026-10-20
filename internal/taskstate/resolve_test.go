@@ -124,6 +124,14 @@ func TestTheProcessTier(t *testing.T) {
 		{"live terminal, finished run: the run outranks", stale, finished, Live, Ready, SourceRun},
 		{"unobserved terminal falls to the log", stale, nil, Unobserved, Running, SourceEvent},
 		{"an unknown liveness value is unobserved", stale, nil, Liveness("???"), Running, SourceEvent},
+		// The declared wait (#303, the owner's decision that PRD section 5
+		// wins): it outranks a live terminal, never a dead one, and only as
+		// the most recent event.
+		{"live terminal, declared wait: the wait outranks", log("", "started", "waiting-external"), nil, Live, Paused, SourceEvent},
+		{"dead terminal, declared wait: the dead terminal outranks", log("", "started", "waiting-external"), nil, Dead, Unknown, SourceProcess},
+		{"unobserved terminal, declared wait falls to the log", log("", "started", "waiting-external"), nil, Unobserved, Paused, SourceEvent},
+		{"live terminal, a wait the worker ended", log("", "waiting-external", "working"), nil, Live, Running, SourceProcess},
+		{"live terminal, declared wait, finished run: the run outranks", log("", "waiting-external"), finished, Live, Ready, SourceRun},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -361,6 +369,37 @@ func TestTheWriterColumnKeepsTheProgramsKindsFromAWorker(t *testing.T) {
 		if _, ok := Lookup(kind); !ok {
 			t.Errorf("kind %q has no row", kind)
 		}
+	}
+}
+
+// A DeclaredWait row is a worker's own statement that it waits: only a
+// RoleState kind claiming Paused that a worker appends may carry it, so the
+// program cannot outrank a live terminal with a kind of its own, and at
+// least one row carries it, so Resolve's declared-wait branch has a kind to
+// fire on. A live terminal under each such kind resolves Paused, and under
+// every other state kind the live terminal answers, which is the branch
+// read off the table and not off a kind name.
+func TestOnlyAWorkersPausedKindIsADeclaredWait(t *testing.T) {
+	declared := 0
+	for _, row := range Kinds() {
+		got := resolve(log("", "started", row.Kind), nil, Live)
+		switch {
+		case !row.DeclaredWait:
+			if row.Role == RoleState && (got.State != Running || got.Source != SourceProcess) {
+				t.Errorf("kind %q under a live terminal resolved %s from %s, want the live terminal's Running", row.Kind, got.State, got.Source)
+			}
+		case row.Role != RoleState || row.State != Paused || row.Writer != WriterWorker:
+			t.Errorf("kind %q is a declared wait with role %q, state %q and writer %q, want a worker's Paused state kind",
+				row.Kind, row.Role, row.State, row.Writer)
+		default:
+			declared++
+			if got.State != Paused || got.Source != SourceEvent || got.Basis.Process != Live || got.Progress {
+				t.Errorf("kind %q under a live terminal resolved %+v, want Paused from the log with the terminal live and no progress", row.Kind, got)
+			}
+		}
+	}
+	if declared == 0 {
+		t.Fatal("no row is a declared wait, so a live terminal always outranks one")
 	}
 }
 

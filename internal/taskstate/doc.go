@@ -108,6 +108,27 @@
 // no event says the task stopped waiting (P8). Basis.Hold names the hold
 // that was read, so a reader comparing bases sees one open or close.
 //
+// # A declared wait outranks a live terminal and never a dead one
+//
+// PRD section 6 lists a live process signal above the event log, and PRD
+// section 5 says a worker's declared external wait "silences the stall
+// detector but arms a slower recheck". Read together, a worker that said it
+// is waiting while its terminal runs would resolve Running, and its
+// unchanged screen would be watched as a stall. The owner decided on #303
+// that section 5 wins, so the process tier yields to a declared wait when,
+// and only when, the probe answers Live: the log's most recent event is a
+// kind whose row in kind.go is a DeclaredWait, and the task resolves Paused
+// from SourceEvent with Basis.Process still Live. A dead terminal is the
+// exception the decision keeps: Dead still resolves Unknown from
+// SourceProcess, because a declaration is exactly the stale event a dead
+// terminal must not be trusted for, and an unobserved terminal skips the
+// process tier as before, so the log's Paused answers there too and the
+// supervisor surfaces the unobservable terminal on its own reading. Only
+// the most recent event is read, the log tier's own rule, so a worker that
+// declared a wait and then said it is working again resolves Running from
+// its live terminal. PRD section 6's precedence clause does not yet say
+// this; the owner's wording change carries it.
+//
 // The package is read-only and takes no clock. Resolve is pure, and Reader
 // only calls store accessors that read.
 //

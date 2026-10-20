@@ -4,6 +4,7 @@ package agents_test
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
 )
@@ -86,13 +88,19 @@ func requireClearUnlessHostBlocks(t *testing.T, r agents.SweepResult, blockers [
 // skipping, with the limit recorded, when hostBlockers found processes on
 // this host that refuse every sweep: unestablished is the clear the test
 // could not assert. The skip names them as agents.DescribeBlockers does, so
-// a log shows which processes they were. It does nothing where there were
-// none.
+// a log shows which processes they were. Where standin.RequireSweepClearVar
+// is set it fails the test instead, so the lane CI sets it on cannot leave
+// the clear unasserted. It does nothing where there were none.
 func hostLimit(t *testing.T, blockers []agents.Blocker, unestablished string) {
 	t.Helper()
-	if len(blockers) > 0 {
-		t.Skipf("this host has %d process(es) outside the copies under test whose working directory this test cannot read and which neither of Sweeper's carve-outs sets aside (%s), so every sweep here refuses to clear, as P6 requires; %s is not established here, and everything else this test checks was", len(blockers), agents.DescribeBlockers(blockers), unestablished)
+	if len(blockers) == 0 {
+		return
 	}
+	limit := fmt.Sprintf("this host has %d process(es) outside the copies under test whose working directory this test cannot read and which neither of Sweeper's carve-outs sets aside (%s), so every sweep here refuses to clear, as P6 requires; %s is not established here", len(blockers), agents.DescribeBlockers(blockers), unestablished)
+	if os.Getenv(standin.RequireSweepClearVar) != "" {
+		t.Fatalf("%s is set and %s", standin.RequireSweepClearVar, limit)
+	}
+	t.Skipf("%s, and everything else this test checks was; set %s to make that a failure", limit, standin.RequireSweepClearVar)
 }
 
 // sweepBase is a fresh temporary directory for the test, resolved, so the
