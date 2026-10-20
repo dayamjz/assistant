@@ -218,7 +218,12 @@ func (s *Store) EndDelegation(ctx context.Context, id int64, by DelegationEnd, c
 			// it, and RegisterDelegationHold, which reads the delegation in
 			// its own transaction, refuses one after.
 			rows, err := tx.QueryContext(ctx,
-				`SELECT key FROM hold WHERE resolution IS NULL AND substr(key, 1, ?) = ? ORDER BY key`,
+				// substr counts characters over text and bytes over a blob,
+				// so both sides are blobs and the length is Go's byte
+				// length, which makes the match byte for byte whatever the
+				// key holds.
+				`SELECT key FROM hold WHERE resolution IS NULL
+					AND substr(CAST(key AS BLOB), 1, ?) = CAST(? AS BLOB) ORDER BY key`,
 				len(closing.KeyPrefix), closing.KeyPrefix)
 			if err != nil {
 				return err

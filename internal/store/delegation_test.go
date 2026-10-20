@@ -476,6 +476,29 @@ func TestADelegationsEndAnswersTheHoldsItNamesInItsTransaction(t *testing.T) {
 			t.Fatalf("%s outside the prefix reads %+v (%v), want it still open", key, h, err)
 		}
 	}
+
+	// The prefix is compared in bytes, not characters: a key with a
+	// multi-byte character in it is selected by its own byte prefix, and
+	// one whose bytes only share the prefix's characters' count is not.
+	other, err := s.Delegate(ctx, DelegationRequest{Domain: "beta", Delivery: config.DeliveryGated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"é/1/0", "é/10/0", "éa/1/0"} {
+		if _, err := s.RegisterHold(ctx, Hold{Key: key, Subject: "whether"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, closed, err = s.EndDelegation(ctx, other.ID, EndedByCoordinator(),
+		DelegationEndClosure{KeyPrefix: "é/1/", Resolution: "stop", By: ResolvedByMachineInterface()})
+	if err != nil || !slices.Equal(closed, []string{"é/1/0"}) {
+		t.Fatalf("ending with a non-ASCII prefix closed %v (%v), want é/1/0 alone", closed, err)
+	}
+	for _, key := range []string{"é/10/0", "éa/1/0"} {
+		if h, err := s.Hold(ctx, key); err != nil || !h.Open() {
+			t.Fatalf("%s outside the non-ASCII prefix reads %+v (%v), want it still open", key, h, err)
+		}
+	}
 	if h, err := s.Hold(ctx, "d/1/open-one"); err != nil || h.Resolution.Or("") != "stop" || h.ResolvedBy.Or(Resolver{}) != ResolvedByMachineInterface() || h.ResolutionNote.Or("") != "ended" {
 		t.Fatalf("open-one reads %+v (%v), want it answered stop by the machine interface", h, err)
 	}
