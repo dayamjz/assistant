@@ -98,7 +98,8 @@ func remarkValue(raw json.RawMessage) Remark {
 		read := false
 		if json.Unmarshal(raw, &parts) == nil {
 			var t string
-			if json.Unmarshal(parts.Text, &t) == nil {
+			textRaw := strings.TrimSpace(string(parts.Text))
+			if len(parts.Text) > 0 && strings.HasPrefix(textRaw, `"`) && json.Unmarshal(parts.Text, &t) == nil {
 				r.Text, read = t, true
 			}
 			var loc Location

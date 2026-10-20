@@ -219,3 +219,90 @@ func TestStoreReportKeepsUncertaintiesAndFollowUpsAndHoldsNoneOfThem(t *testing.
 		t.Fatalf("a refused report registered holds: %+v, %v", holds, err)
 	}
 }
+
+// A remark whose text is JSON null is not read as an empty string: the object
+// is kept as written so normalization does not drop it. The control is the
+// same shape with a string text, which is read as text. Follow-ups behave
+// the same way.
+func TestStoreReportKeepsRemarkWhoseTextIsJSONNullAsWritten(t *testing.T) {
+	const nullUncertainty = `{"text":null,"question":"Whether retries preserve order"}`
+	const readText = "Whether retries preserve order"
+	ctx := context.Background()
+
+	for _, c := range []struct {
+		name  string
+		raw   string
+		want  string
+		field string
+	}{
+		{
+			name:  "uncertainty with null text",
+			raw:   `{"summary":"looked","findings":[{"action":"note","description":"fine"}],"uncertainties":[` + nullUncertainty + `]}`,
+			want:  nullUncertainty,
+			field: "uncertainties",
+		},
+		{
+			name:  "follow-up with null text",
+			raw:   `{"summary":"looked","findings":[{"action":"note","description":"fine"}],"follow_ups":[` + nullUncertainty + `]}`,
+			want:  nullUncertainty,
+			field: "follow_ups",
+		},
+		{
+			name:  "uncertainty with string text",
+			raw:   `{"summary":"looked","findings":[{"action":"note","description":"fine"}],"uncertainties":[{"text":` + jsonString(readText) + `}]}`,
+			want:  readText,
+			field: "uncertainties",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newCleanupSubject(t, nil)
+			tk := s.investigationTask(t)
+			stored, err := s.cleaner.StoreReport(ctx, tk.id, c.raw)
+			if err != nil {
+				t.Fatalf("StoreReport: %v", err)
+			}
+			record, err := s.store.TaskReport(ctx, tk.id)
+			if err != nil {
+				t.Fatalf("TaskReport: %v", err)
+			}
+			var parsed findings.Report
+			if err := json.Unmarshal(record.Report, &parsed); err != nil {
+				t.Fatalf("decode stored report: %v", err)
+			}
+			var got string
+			switch c.field {
+			case "uncertainties":
+				if len(parsed.Uncertainties) != 1 {
+					t.Fatalf("uncertainties = %+v, want one", parsed.Uncertainties)
+				}
+				got = parsed.Uncertainties[0].Text
+			case "follow_ups":
+				if len(parsed.FollowUps) != 1 {
+					t.Fatalf("follow-ups = %+v, want one", parsed.FollowUps)
+				}
+				got = parsed.FollowUps[0].Text
+			}
+			if got != c.want {
+				t.Fatalf("%s text = %q, want %q", c.field, got, c.want)
+			}
+			if !strings.Contains(record.Body, c.want) {
+				t.Fatalf("body %q does not carry %q", record.Body, c.want)
+			}
+			evidence, err := os.ReadFile(stored.Evidence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(evidence), c.want) {
+				t.Fatalf("evidence copy does not carry %q:\n%s", c.want, evidence)
+			}
+		})
+	}
+}
+
+func jsonString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}

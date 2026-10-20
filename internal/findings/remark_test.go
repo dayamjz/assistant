@@ -108,14 +108,20 @@ func TestARemarkCarryingAnActionIsRefused(t *testing.T) {
 // findings around it nothing.
 func TestARemarkInAnUnreadableShapeIsKeptAsWritten(t *testing.T) {
 	report, err := findings.ParseReport(`{"summary": "s", "findings": [{"action": "ask", "description": "q"}], ` +
-		`"uncertainties": "one bare remark", "follow_ups": [42, {"why": "unasked key"}, {"text": 7, "location": "a.go"}]}`)
+		`"uncertainties": "one bare remark", "follow_ups": [42, {"why": "unasked key"}, {"text": 7, "location": "a.go"}, ` +
+		`{"text": null, "question": "Whether retries preserve order"}]}`)
 	if err != nil {
 		t.Fatalf("ParseReport: %v", err)
 	}
 	if want := (findings.RemarkList{{Text: "one bare remark"}}); !reflect.DeepEqual(report.Uncertainties, want) {
 		t.Fatalf("uncertainties = %#v, want %#v", report.Uncertainties, want)
 	}
-	want := findings.RemarkList{{Text: "42"}, {Text: `{"why": "unasked key"}`}, {Location: findings.Location{Path: "a.go"}}}
+	want := findings.RemarkList{
+		{Text: "42"},
+		{Text: `{"why": "unasked key"}`},
+		{Location: findings.Location{Path: "a.go"}},
+		{Text: `{"text": null, "question": "Whether retries preserve order"}`},
+	}
 	if !reflect.DeepEqual(report.FollowUps, want) {
 		t.Fatalf("follow-ups = %#v, want %#v", report.FollowUps, want)
 	}
