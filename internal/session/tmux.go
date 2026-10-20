@@ -100,7 +100,11 @@ func (t *Tmux) Subordinates() *Subordinates { return t.subordinates }
 
 // Delegate starts a subordinate coordinator on the terms Host.Delegate
 // states, hosted in a tmux server of its own exactly as Create hosts a
-// worker, with the server recorded as the placement's host.
+// worker, with the server recorded as the placement's host and reported
+// by Session.Host. It starts through agents.OpenTerminalSubordinate, so it
+// runs under agents.GrantSubordinate, and an adapter that refuses that
+// grant in a terminal, the Claude Code adapter with
+// agents.ErrTerminalGrantUnobserved, refuses the delegation's start here.
 func (t *Tmux) Delegate(ctx context.Context, spec SubordinateSpec) (*Session, error) {
 	if err := home.ValidDomain(spec.Domain); err != nil {
 		return nil, err
@@ -112,7 +116,7 @@ func (t *Tmux) Delegate(ctx context.Context, spec SubordinateSpec) (*Session, er
 	if _, err := rand.Read(name[:]); err != nil {
 		return nil, fmt.Errorf("session: naming the terminal socket: %w", err)
 	}
-	worker, err := agents.OpenTerminalWorker(ctx, t.runner,
+	worker, err := agents.OpenTerminalSubordinate(ctx, t.runner,
 		agents.Terminal{Tmux: t.tmux, Socket: t.home.TerminalSocket(hex.EncodeToString(name[:]))},
 		agents.WorkerSpec{Dir: spec.Dir, Instructions: spec.Instructions, Route: spec.Route, Model: spec.Model, Effort: spec.Effort})
 	if err != nil {

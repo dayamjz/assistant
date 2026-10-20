@@ -504,3 +504,36 @@ func TestAClaudeTerminalSendLeavesAPersonsUnsentTextAlone(t *testing.T) {
 		t.Errorf("the person's text was answered as %q, want it as they typed it", got)
 	}
 }
+
+// A terminal-hosted subordinate coordinator is refused by the Claude Code
+// adapter before anything starts: its grant runs the interface in the
+// default mode, and the ready screen the adapter reads was observed in
+// acceptEdits only, so OpenTerminalSubordinate is refused with
+// ErrTerminalGrantUnobserved and the stand-in records no call. The control is the same spec through
+// OpenTerminalWorker, which starts under the worker grant.
+func TestAClaudeTerminalSubordinateIsRefusedBeforeItStarts(t *testing.T) {
+	principles.Cite(t, principles.P4)
+	const route = "/opt/assistant/bin/assistant --home /var/lib/assistant coordinator"
+	spec := workerSpec(t)
+	spec.Route = route
+	term := terminalFor(t)
+	agent := standin.New(t, standin.Script{},
+		agents.WithTerminationGrace(300*time.Millisecond), agents.WithBaseEnvironment(claudeTerminalEnv(t)))
+	if _, err := agents.OpenTerminalSubordinate(t.Context(), agent.Runner(), term, spec); !errors.Is(err, agents.ErrTerminalGrantUnobserved) {
+		t.Fatalf("OpenTerminalSubordinate = %v, want ErrTerminalGrantUnobserved", err)
+	}
+	if calls := agent.Calls(); len(calls) != 0 {
+		t.Fatalf("the refused subordinate started %d agent processes, want none", len(calls))
+	}
+	worker, err := agents.OpenTerminalWorker(t.Context(), agent.Runner(), term, spec)
+	if err != nil {
+		t.Fatalf("the control worker: %v", err)
+	}
+	call := awaitInteractive(t, agent, answered(1))
+	worker.Close()
+	want := workerGrant
+	want.allowed += ",Bash(" + route + ":*)"
+	if got := grantOf(call.Args); got != want {
+		t.Errorf("the terminal worker ran under %+v, want %+v", got, want)
+	}
+}

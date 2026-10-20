@@ -69,7 +69,7 @@ func (p *Pipe) Delegate(ctx context.Context, spec SubordinateSpec) (*Session, er
 	if err := home.ValidDomain(spec.Domain); err != nil {
 		return nil, err
 	}
-	worker, err := agents.OpenWorker(ctx, p.runner, agents.WorkerSpec{
+	worker, err := agents.OpenSubordinate(ctx, p.runner, agents.WorkerSpec{
 		Dir: spec.Dir, Instructions: spec.Instructions, Route: spec.Route, Model: spec.Model, Effort: spec.Effort,
 	})
 	if err != nil {

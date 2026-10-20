@@ -372,7 +372,8 @@
 // adapters that do not cover Need (or refuses without fallthrough when
 // Override is set), and returns a Selection naming the adapter and a stable
 // reason code. NeedForWorker builds the worker need. Route does not change
-// grants; a selected worker still starts under GrantWorker.
+// grants; a selected worker still starts under GrantWorker, and a
+// subordinate coordinator under GrantSubordinate by its entry point.
 //
 // "auto" is limited to adapters whose factory declares AutoEligible. Only
 // the Claude adapter declares it, because PRD section 12 makes Claude Code the
@@ -404,7 +405,8 @@
 //
 // It does not sandbox an agent. What it does decide is the Grant a process
 // runs under, from its role (grant.go): a fix round edits, a worker edits and
-// is allowed git on top of its settings' own allow rules, and everything else
+// is allowed git on top of its settings' own allow rules, a subordinate
+// coordinator reads and runs its route and nothing else, and everything else
 // reads only. A grant is a command line the
 // agent's own permission system enforces, so an agent process can still do
 // whatever that agent allows under it in the directory it was pointed at, and

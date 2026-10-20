@@ -12,8 +12,10 @@ import (
 // spec.Instructions as its first message. Having this method is what makes the
 // Claude Code adapter a WorkerRunner, and Capabilities declares the same fact.
 //
-// The command line is the configured entry's own flags, then GrantWorker's
-// flags (claudeGrantFlags), then --model and --effort when the spec names
+// The command line is the configured entry's own flags, then the spec's
+// grant's flags (claudeGrantFlags over WorkerSpec.Grant: GrantWorker, or
+// GrantSubordinate for a spec OpenSubordinate started), then --model and
+// --effort when the spec names
 // them, then the four this mode manages: --print, --input-format stream-json, --output-format
 // stream-json, and --verbose. Those four are the flags the CLI's own --help
 // documents for realtime streaming input, which it offers only with --print;
@@ -35,9 +37,10 @@ import (
 // What this buys is a worker the caller drives and ends on the terms Worker
 // states, over a wire this package frames rather than one it leaves to a
 // terminal. What it does not decide is anything the CLI does with a turn
-// beyond the grant: a worker runs under GrantWorker, and nothing here answers
-// a permission request, so a tool outside that grant is refused by the CLI
-// rather than granted by anything here.
+// beyond the grant: a worker runs under GrantWorker and a subordinate
+// coordinator under GrantSubordinate, and nothing here answers a permission
+// request, so a tool outside that grant is refused by the CLI rather than
+// granted by anything here.
 func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
@@ -57,10 +60,10 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 }
 
 // workerArguments builds a worker's command line: the configured entry's own
-// flags, then the worker's grant with its route, then --model and --effort
+// flags, then the spec's grant with its route, then --model and --effort
 // when the spec names them, then the four Start states.
 func (r *claudeRunner) workerArguments(spec WorkerSpec) []string {
-	args := append(slices.Clone(r.extra), claudeGrantFlags(GrantWorker, spec.Route)...)
+	args := append(slices.Clone(r.extra), claudeGrantFlags(spec.Grant(), spec.Route)...)
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
 	}

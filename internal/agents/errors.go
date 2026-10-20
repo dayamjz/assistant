@@ -134,6 +134,15 @@ func (e *AdapterError) Error() string {
 // Unwrap makes every declaration refusal match ErrAdapterDeclaration.
 func (e *AdapterError) Unwrap() error { return ErrAdapterDeclaration }
 
+// ErrTerminalGrantUnobserved reports a terminal worker whose grant puts the
+// interactive interface in a permission mode its ready screen was never
+// observed in, so nothing could tell when a send may be typed. The Claude
+// Code adapter refuses a subordinate coordinator (GrantSubordinate, default
+// mode) in a terminal with it, before anything starts, rather than start a
+// session whose readiness it would be guessing; a pipe-hosted subordinate
+// reads no screen and is started.
+var ErrTerminalGrantUnobserved = errors.New("agents: the terminal interface was never observed under this grant's permission mode")
+
 // invocationFieldError reports one field of an Invocation that cannot be run
 // as written. It wraps ErrInvalidInvocation and names the field. It is how
 // every pre-start refusal of an Invocation is built, so a caller matching the

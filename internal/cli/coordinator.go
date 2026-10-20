@@ -46,7 +46,11 @@ import (
 // internal/service's to state: placement.go and subordinates.go name the
 // gaps, and this comment does not restate them. What a worker may run at
 // all is its grant's, which allows git without asking and denies nothing
-// else; a subordinate's grant allows this verb's prefix and nothing else.
+// else. A subordinate runs under agents.GrantSubordinate, which the
+// delegation path selects through agents.OpenSubordinate and never a
+// caller: editing and git are denied, this verb's prefix is allowed, and
+// any other command is what the agent's own settings allow, which
+// internal/agents' claudeGrantFlags names as that grant's residual gap.
 //
 // It is one verb rather than one per method, so the door beside the table
 // is one door: the subcommands are coordinatorActions, the one owner of
