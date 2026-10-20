@@ -104,7 +104,8 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"delivery": "local",
 		"allow_standing_consent": true,
 		"session_provider": "tmux",
-		"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4}
+		"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4},
+		"notify": {"command": "notify-me --channel private"}
 	}`
 	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
@@ -168,6 +169,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	}
 	if c.UsageCeiling != (UsageCeiling{Window: 24 * time.Hour, InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3, CacheCreationTokens: 4}) {
 		t.Errorf("UsageCeiling = %+v", c.UsageCeiling)
+	}
+	if c.NotifyCommand != "notify-me --channel private" {
+		t.Errorf("NotifyCommand = %q", c.NotifyCommand)
 	}
 }
 

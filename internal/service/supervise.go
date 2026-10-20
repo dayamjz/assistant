@@ -312,6 +312,14 @@ type supervisionHooks struct {
 	// is positive, so a test can push the recheck past its own bound and
 	// show that the bell this loop rings is what answers the wait.
 	wakeRecheck time.Duration
+	// notifyTimeout replaces notifyBound for the notify command when it is
+	// positive, so a test can reach a command ended by its bound without
+	// waiting the product's bound out. notify.go owns the sender.
+	notifyTimeout time.Duration
+	// notifyRecheck replaces wakeWaitRecheck for the notify sender when it
+	// is positive, so a test can count the sender's attempts against a
+	// store that refuses its claims over several intervals.
+	notifyRecheck time.Duration
 }
 
 // incarnation is one incarnation of the loop: its fence, its context, when it

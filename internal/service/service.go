@@ -585,6 +585,10 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	// recovery is done and then on mergeread.go's interval, on a goroutine
 	// of its own, so serving waits on no code host for it.
 	s.startMergeReads()
+	// The operator's notify command, when one is named, is offered each wake
+	// the loop appends from a goroutine of its own, so the loop only rings
+	// the bell it already rings; notify.go owns the sender.
+	s.startNotifier(o.hooks)
 	return s, nil
 }
 

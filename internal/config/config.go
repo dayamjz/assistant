@@ -108,6 +108,10 @@ type Config struct {
 	// starts an agent call. Its zero counts are no ceiling.
 	// KeyUsageCeilingWindow says who may set it and what it is not.
 	UsageCeiling UsageCeiling
+	// NotifyCommand is the operator's private channel: the command line the
+	// service runs for each wake the loop appends. Empty is no channel.
+	// KeyNotifyCommand says who may set it and what it decides.
+	NotifyCommand string
 	// Roles says which agent, model, and effort each role runs. A Config from
 	// Resolve names the fixer as cursor unless the winning document named the
 	// fix role. A role that names no agent uses Agent. KeyRoles says which

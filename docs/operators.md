@@ -549,6 +549,69 @@ How soon a wake is pushed or answered after a worker stops is set by the
 service's supervision pass, which records the wake, not by the stream or the
 wait.
 
+## Hearing about a wake on a private channel
+
+The coordinator is the one the wake queue wakes. If you also want to hear
+about each wake yourself, somewhere other than a terminal, name a command in
+your own configuration file, `config.yaml` under the home:
+
+```yaml
+notify:
+  command: ~/bin/notify-me
+```
+
+The service runs that command once for each wake its supervision pass
+queues, with the wake on standard input as one line of JSON, followed by
+end of file. The line is the wake object itself (`id`, `task_id`, `kind`,
+`marker` and the rest), not the event `assistant --json coordinator listen`
+prints: a `listen` line wraps the same object as its `payload`, beside
+`type` and `revision`, and the command's line has no such wrapper. The
+command decides where it goes: a script that posts to your own private chat
+channel, writes a desktop notification, or appends to a file. The line is a
+line of shell, run the way `commands.test` is, in the assistant home (by
+default `~/.assistant`) with the service's environment, so it has your credentials; it is given 30
+seconds per wake and is ended after that, together with whatever it started
+that is still in its process group (on Linux and macOS).
+
+What is sent, and what is not:
+
+- Each wake is offered once. The service records, for each wake, that it
+  ran the command and how the command ended: `sent` when it exited with
+  status 0, `failed` when it exited otherwise, could not start, ran past its
+  30 seconds, or was ended by the service stopping, with the exit status and
+  the end of what it printed, credentials removed. A failure is also written
+  to the service log. A failed wake is not sent again, because the command
+  may already have delivered it, and a wake the service was running the
+  command for when it crashed is not sent again either, and its record
+  shows no outcome. The same holds when the command ran but the service
+  could not then record how it ended: the wake is not sent again, the
+  record shows no outcome although you may have received it, and the
+  service log says the record could not be written but not how the
+  command ended.
+- `sent` means your command exited 0. It does not mean anyone read it.
+- Only a wake still waiting for the coordinator is sent. A wake the
+  coordinator acknowledged before the command ran for it is not, and when
+  you name a command for the first time the service sends what is still
+  waiting, not the queue's whole history.
+- The command changes nothing. What it prints and how it exits are recorded
+  and never read as an answer, an acknowledgement or an instruction, and a
+  wake it was sent stays waiting for the coordinator. Replying through the
+  channel is not supported: answer a hold with `assistant --task ID --answer
+  ...` as before.
+- Only your own file may name the command. A repository's `assistant.json`,
+  on the default branch or on a pushed branch, that names `notify.command`
+  is refused when it is read, like every key only your file may set.
+- The service reads the command when it starts. A change reaches the next
+  service, after `assistant service restart`.
+- Commands run one at a time, so a channel that hangs delays the wakes
+  behind it by up to 32 seconds each on Linux and macOS: its 30 seconds,
+  and at most 2 more for what it printed to arrive. It never delays
+  supervision itself.
+- If the service cannot record that it is about to run the command, for
+  example because the disk is full, it writes that to the service log once,
+  stops offering wakes, and tries again about every 5 seconds.
+- With no command named, nothing runs and nothing is recorded.
+
 ## Unattended operating posture
 
 When nobody is at the keyboard, read the fleet against these postures.

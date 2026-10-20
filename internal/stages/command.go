@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/redact"
@@ -56,7 +57,9 @@ import (
 // agent invocation started, and nothing here does the equivalent for a
 // configured command, so a command that starts something and detaches leaves
 // it behind. That is a gap rather than a decision this file is entitled to
-// make quietly.
+// make quietly. The one narrowing is an operator's command, which sets
+// commandSpec.group: on unix its process group is ended when its context
+// is, and endGroupOnCancel says what that still does not reach.
 const commandGrace = 5 * time.Second
 
 // errOutputAbandoned is what a result carries when the command's output was
@@ -74,6 +77,10 @@ type commandSpec struct {
 	command string
 	// dir is the directory it runs in.
 	dir string
+	// stdin is written to the command's standard input, which is then
+	// closed. Empty leaves standard input the null device, which is what
+	// every stage's command gets.
+	stdin string
 	// record receives everything the command wrote, standard output and
 	// standard error interleaved as the command produced them, after redact
 	// has removed what it recognizes. It is the run's test evidence, and it
@@ -91,6 +98,13 @@ type commandSpec struct {
 	// a field rather than the constant read directly so a test can reach the
 	// give-up path without waiting the stage's grace out.
 	grace time.Duration
+	// group, when set, runs the command as the leader of a process group of
+	// its own and has cancelling ctx end that whole group rather than the
+	// interpreter alone (endGroupOnCancel), so a descendant still in the
+	// group cannot hold the output pipe past a cancellation. Only an
+	// operator's command sets it; a stage's command keeps the gap
+	// commandGrace states.
+	group bool
 	// redact is applied to the command's output on its way into the record
 	// and the projection, upstream of both, so that the projection's bound
 	// cannot cut a credential's recognizable shape apart before it is
@@ -187,11 +201,36 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	defer func() { _ = read.Close() }()
 
 	cmd := shellCommand(ctx, spec.command, spec.dir)
+	if spec.group {
+		endGroupOnCancel(cmd)
+	}
 	// Standard input is left unset, which os/exec reads as the null device, so
 	// a command that reads it reaches end of file at once rather than waiting
-	// for a person who is not there. Standard output and standard error are
+	// for a person who is not there. A spec carrying stdin has it written and
+	// then closed, so that command too reaches end of file once it has read
+	// what it was given. Standard output and standard error are
 	// the one descriptor, so the two arrive interleaved as the command wrote
 	// them; os/exec passes the same file to both rather than duplicating it.
+	//
+	// Standard input is a pipe this call writes rather than a reader handed
+	// to os/exec, for the reason the output is: os/exec would copy a reader
+	// on a goroutine Wait then waits on, so a descendant holding the input
+	// unread could hold Wait for a further WaitDelay. Here the writer is
+	// abandoned by closing its end once the output is settled, the way the
+	// output's read is, so no wait of this call is measured against it.
+	var feed *stdinFeed
+	if spec.stdin != "" {
+		inRead, inWrite, err := os.Pipe()
+		if err != nil {
+			_ = write.Close()
+			return settle(commandResult{code: -1,
+				err: fmt.Errorf("opening a pipe for the command's input: %w", err)})
+		}
+		cmd.Stdin = inRead
+		feed = &stdinFeed{file: inWrite}
+		defer func() { _ = inRead.Close() }()
+		defer feed.close()
+	}
 	cmd.Stdout = write
 	cmd.Stderr = write
 	cmd.WaitDelay = spec.grace
@@ -199,6 +238,13 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	if err := cmd.Start(); err != nil {
 		_ = write.Close()
 		return settle(commandResult{code: -1, err: err})
+	}
+	if feed != nil {
+		// The child holds its own copy of the read end. Closing this
+		// process's means a write no remaining process will read fails
+		// rather than blocking on a reader that is this process.
+		_ = cmd.Stdin.(*os.File).Close()
+		go feed.write(spec.stdin)
 	}
 	// os/exec does not close a descriptor a caller supplied, and the child now
 	// holds its own copy. Closing the parent's is what lets the read below
@@ -238,6 +284,23 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	}
 	return settle(res)
 }
+
+// stdinFeed writes a command's standard input and then closes it, so the
+// command reaches end of file once it has read what it was given. close may
+// be called at any point and more than once: it ends a write still blocked
+// on a full pipe, which then fails, and the command sees end of file or a
+// broken pipe. Nothing waits for the write to return.
+type stdinFeed struct {
+	file *os.File
+	once sync.Once
+}
+
+func (f *stdinFeed) write(text string) {
+	_, _ = io.WriteString(f.file, text)
+	f.close()
+}
+
+func (f *stdinFeed) close() { f.once.Do(func() { _ = f.file.Close() }) }
 
 // awaitOutput waits for the read of the command's output to finish and returns
 // nil when it reached the end of it. It is called after the command has ended,

@@ -369,7 +369,9 @@
 // and only the agent: the configured commands the test, document and lint
 // bodies run, and the provider command the pull request and checks bodies
 // launch, are started outside internal/agents and register no group, so a
-// push made from inside one of those is not contained. That is stated rather
+// push made from inside one of those is not contained. The notify command
+// notify.go runs registers none either, and a call it makes is answered as
+// the operator's own, which is whose command it is. That is stated rather
 // than implied, because a restricted method reads as a guarded one.
 //
 // What the relation deliberately excludes is a task's worker. A worker's push
@@ -588,6 +590,21 @@
 // landed, raises no terminal-gone wake, while one that never reported or
 // landed still does; supervise.go's header says why, and what landed.go
 // still reads of such a terminal.
+//
+// # A wake reaches the operator's private channel once, and notify.go owns it
+//
+// Where the operator's file names config.KeyNotifyCommand, each wake the
+// loop appends is offered once to that command, with the wake's row on
+// standard input, from a goroutine this service owns and Close waits for,
+// rung by the same wakeBell an armed wakes.wait takes, so the loop does no
+// more than it did. The command runs through internal/stages'
+// RunOperatorCommand, the runner the commands.* keys run through, and no
+// second process starter is written here. The record is
+// store.ClaimNotification before the command and store.SettleNotification
+// after, so a wake is sent at most once and a failure stays on its record
+// and in the service log. Nothing the command does is read back, so a
+// notification authorizes nothing and answers nothing. notify.go's header
+// owns what is sent, the bound, and the residual gaps.
 //
 // # Four state events have a producer here, and publish.go owns two
 //
