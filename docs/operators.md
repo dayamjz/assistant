@@ -723,7 +723,9 @@ and its answer says the budget and what the run's calls reported
 `spent`, and `unreported`). A run whose calls include one that reported no
 output token count is parked the same way, because what it spent is not
 known; set a budget only on a count your agents report. To go on, raise the
-budget and start a fresh run.
+budget, run `assistant service restart` so the service reads it, and start a
+fresh run: the service reads your file when it opens, so a run started before
+the restart is held to the old budget.
 
 What it does not do:
 

@@ -44,6 +44,7 @@ func TestAnUnestablishedUsageParkNamesTheUnreportedCalls(t *testing.T) {
 		t.Fatal("the reached and the unestablished usage parks share one action")
 	}
 	for _, want := range []string{"2 of its agent calls reported no output token count", "to zero",
+		"run assistant service restart so the service reads the change, and start a fresh run",
 		string(config.KeyRunUsageBudgetOutputTokens)} {
 		if !strings.Contains(b, want) {
 			t.Errorf("the unestablished action does not say %q:\n%s", want, b)

@@ -52,7 +52,7 @@ func TestAParkRecordDecidesTheOutcomeAndTheAction(t *testing.T) {
 		store.ParkConvergence: {"changed nothing", "review stage"},
 		store.ParkStepBudget:  {"step budget of 12", "AdoptBudget", string(config.KeyRunBudget), "no command"},
 		store.ParkUsageBudget: {"usage budget of 5000 output tokens", "reported 5120 output tokens", "AdoptBudget",
-			string(config.KeyRunUsageBudgetOutputTokens), "no command", "spend so much. assistant runs --usage reports what each of the run's stages spent."},
+			string(config.KeyRunUsageBudgetOutputTokens), "no command", "run assistant service restart so the service reads it, and start a fresh run", "spend so much. assistant runs --usage reports what each of the run's stages spent."},
 	}
 	actions := map[string]store.ParkBound{}
 	for _, bound := range store.ParkBounds() {

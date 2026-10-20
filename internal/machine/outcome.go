@@ -426,13 +426,15 @@ func ParkAction(p store.RunPark) string {
 func usageParkAction(p store.RunPark) string {
 	spent := fmt.Sprintf("its agent calls reported %d output tokens", p.Spent)
 	remedy := "Raise " + string(config.KeyRunUsageBudgetOutputTokens) + " in the operator's configuration, which no " +
-		"repository copy can set, and start a fresh run, or find what makes the run spend so much."
+		"repository copy can set, run assistant service restart so the service reads it, and start a fresh run, or " +
+		"find what makes the run spend so much."
 	if p.Unreported > 0 {
 		spent = fmt.Sprintf("%d of its agent calls reported no output token count, so the %d the others reported is "+
 			"not what it spent and the budget could not be weighed", p.Unreported, p.Spent)
 		remedy = "A budget on a count the agent does not report parks every run it holds. Find which calls reported " +
 			"none in the usage view, then set " + string(config.KeyRunUsageBudgetOutputTokens) + " to zero in the " +
-			"operator's configuration or move to an agent that reports the count, and start a fresh run."
+			"operator's configuration or move to an agent that reports the count, run assistant service restart so the " +
+			"service reads the change, and start a fresh run."
 	}
 	return fmt.Sprintf("The per-run usage budget of %d output tokens parked this run before node %s could run: %s. "+
 		"internal/graph's AdoptBudget moves a run its budget parked onto a larger budget where it stands, without "+
