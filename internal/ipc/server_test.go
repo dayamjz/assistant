@@ -1073,9 +1073,18 @@ func TestAStalledRelayQueueReleasesTheServiceStream(t *testing.T) {
 // two-deep queue, with nothing reading, makes the queue discard, and the
 // stream reads gapped; the marker it then delivers first counts what was
 // discarded, and once it is delivered the stream reads ungapped again.
+//
+// Exactly one state more than the queue holds is published, so the one
+// discard happens when the last published state arrives: by the time the
+// stream reads gapped nothing is still on its way to it, and no later
+// discard can raise a second, legitimate gap before the assertion that the
+// marker cleared it. The stream is then drained to that last state, which
+// the queue keeps because it discards the oldest state, so the claim also
+// holds with the queue empty and the stream at a known end.
 func TestAStreamReportsItsOwnQueuesGap(t *testing.T) {
+	const backlog = 2
 	h := serveOnSocket(t, nil)
-	c := h.dial(t, ipc.ClientConfig{Backlog: 2})
+	c := h.dial(t, ipc.ClientConfig{Backlog: backlog})
 	ctx, cancel := callCtx(t)
 	defer cancel()
 
@@ -1091,12 +1100,12 @@ func TestAStreamReportsItsOwnQueuesGap(t *testing.T) {
 		t.Fatal("the stream reads gapped with nothing discarded by its own queue")
 	}
 
-	for i := uint64(1); i <= 5; i++ {
+	for i := uint64(1); i <= backlog+1; i++ {
 		publish(t, h.events, state(fmt.Sprintf("s%d", i), i))
 	}
 	for !stream.Gapped() {
 		if ctx.Err() != nil {
-			t.Fatalf("five states to a two-deep queue nothing reads never gapped it: %v", ctx.Err())
+			t.Fatalf("three states to a two-deep queue nothing reads never gapped it: %v", ctx.Err())
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -1104,11 +1113,20 @@ func TestAStreamReportsItsOwnQueuesGap(t *testing.T) {
 	if err != nil || marker.Type != ipc.TypeGap {
 		t.Fatalf("the gapped stream delivered %q, %v; want its marker first", marker.Type, err)
 	}
-	if gap, err := ipc.GapPayload(marker); err != nil || gap.Dropped == 0 {
-		t.Fatalf("the marker reads %+v (%v), want what the queue discarded counted", gap, err)
+	if gap, err := ipc.GapPayload(marker); err != nil || gap.Dropped != 1 {
+		t.Fatalf("the marker reads %+v (%v), want the one state the queue discarded counted", gap, err)
 	}
 	if stream.Gapped() {
 		t.Fatal("the stream still reads gapped after its marker was delivered")
+	}
+	for _, want := range []string{"s2", "s3"} {
+		e, err := stream.Recv(ctx)
+		if err != nil || e.Type != "run.state" || label(t, e) != want {
+			t.Fatalf("after the marker the stream delivered %q, %v; want the kept state %s", e.Type, err, want)
+		}
+	}
+	if stream.Gapped() {
+		t.Fatal("the stream reads gapped with every published state delivered and nothing discarded since its marker")
 	}
 }
 
