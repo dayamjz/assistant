@@ -475,10 +475,11 @@ func TestANotifyCommandsChildHoldingItsOutputDoesNotExtendTheBound(t *testing.T)
 // abort of the notification insert, planted through the store. While it
 // stands the loop is kicked with a new hold every few tens of milliseconds,
 // so the bell rings far more often than the interval elapses, and the
-// service log, where each failed pass writes its one line, is counted over
-// the window: at least two attempts, so the sender kept trying, and no more
-// than the window holds intervals, with one of slack for the attempt the
-// window opened on. Once the fault is lifted the wakes are sent, which is
+// service log, where each failed pass writes its one line, is counted: the
+// bell rings until two more attempts are logged, so the sender kept trying,
+// and for at least the window, and the attempts are no more than the time
+// that passed holds intervals, with one of slack for the attempt the count
+// opened on. Once the fault is lifted the wakes are sent, which is
 // the control that the refusal was the store's.
 func TestARefusedClaimWaitsTheRecheckInterval(t *testing.T) {
 	t.Parallel()
@@ -519,16 +520,26 @@ func TestARefusedClaimWaitsTheRecheckInterval(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	// The bell rings until the sender has tried twice more, which is the
+	// event "it kept trying" means, and for at least the window, so the
+	// bell has rung many times per interval. Only the upper bound is held
+	// to the clock, and to the time that actually passed: a busy machine
+	// can make the sender try less often, never more.
 	before := refusals()
-	end := time.Now().Add(window)
-	for i := 0; time.Now().Before(end); i++ {
+	began := time.Now()
+	end := began.Add(window)
+	deadline = began.Add(loopWait)
+	for i := 0; time.Now().Before(end) || refusals()-before < 2; i++ {
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the sender tried %d times more in %s with a %s recheck, want it to keep trying", refusals()-before, loopWait, recheck)
+		}
 		holdFor(t, l.records(t), task, "task/"+task+"/ring"+strconv.Itoa(i))
 		l.pass(t)
 		time.Sleep(30 * time.Millisecond)
 	}
-	attempts := refusals() - before
-	if most := int(window/recheck) + 1; attempts < 2 || attempts > most {
-		t.Fatalf("the sender tried %d times in %s with a %s recheck, want between 2 and %d", attempts, window, recheck, most)
+	attempts, elapsed := refusals()-before, time.Since(began)
+	if most := int(elapsed/recheck) + 1; attempts > most {
+		t.Fatalf("the sender tried %d times in %s with a %s recheck, want at most %d", attempts, elapsed, recheck, most)
 	}
 
 	if err := lift(); err != nil {
