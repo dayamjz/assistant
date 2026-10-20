@@ -46,33 +46,50 @@ func installedClaude(t *testing.T) string {
 	return ""
 }
 
-// installedWaitDelay is how long askInstalled waits, after ending the
-// process group it started, for the output pipe to close, before it closes
-// the pipe itself and returns. A process that left the group, which ending
-// the group cannot reach, would otherwise hold the pipe open and the wait
-// with it.
+// installedWaitDelay is how long askInstalled waits for the output pipe to
+// close, once the bound has elapsed or once the command has exited, before
+// it closes the pipe itself and returns. A process still holding the pipe,
+// one the command left behind or one that left the group, would otherwise
+// hold the wait with it.
 const installedWaitDelay = 5 * time.Second
 
-// askInstalled runs bin with args under env, in a process group of its own,
-// and returns what it printed on standard output. bound limits the whole
-// read: when it elapses the group is sent SIGKILL, the wait for the output
-// pipe is cut off installedWaitDelay later, and the error names the command
-// and the bound it did not answer within. A hung installed CLI therefore
-// fails the probe instead of holding the package to its timeout, and what
-// it started in its group is ended with it rather than left running after
-// the test binary exits. On Windows the process is killed and nothing it
-// started is reached, which no test there exercises.
+// askInstalled runs bin with args under env, in a processGroup, and returns
+// what it printed on standard output. bound limits the whole read: when it
+// elapses the group is sent SIGKILL, the wait for the output pipe is cut off
+// installedWaitDelay later, and the error names the command and the bound
+// it did not answer within. A command that exits leaving a process on its
+// output pipe is cut off installedWaitDelay after it exits and is an error
+// naming the command. Whatever the read returns, the group is killed before
+// askInstalled does, so nothing started in it outlives the read. A hung
+// installed CLI therefore fails the probe instead of holding the package to
+// its timeout and leaving what it started running after the test binary
+// exits. A process that left the group is reached by neither. On Windows
+// the process is killed at the bound and nothing it started is reached,
+// which no test there exercises.
 func askInstalled(ctx context.Context, bound time.Duration, bin string, env []string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
+	group, err := startGroup()
+	if err != nil {
+		return nil, err
+	}
+	// Ended on every return, not only when the bound elapses: a command that
+	// exits and leaves a child holding its output pipe returns
+	// exec.ErrWaitDelay without its Cancel ever running.
+	defer group.end()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env = env
 	cmd.WaitDelay = installedWaitDelay
-	ownGroup(cmd)
+	group.join(cmd)
 	out, err := cmd.Output()
+	command := bin + " " + strings.Join(args, " ")
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, fmt.Errorf("%s %s did not answer within %v, so its process group was killed: %w (%w)",
-			bin, strings.Join(args, " "), bound, ctxErr, err)
+		return nil, fmt.Errorf("%s did not answer within %v, so its process group was killed: %w (%w)",
+			command, bound, ctxErr, err)
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return nil, fmt.Errorf("%s exited and left a process holding its output open for %v, so its process group was killed: %w",
+			command, installedWaitDelay, err)
 	}
 	return out, err
 }

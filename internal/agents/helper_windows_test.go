@@ -28,6 +28,13 @@ func helperDetach() {
 	os.Exit(9)
 }
 
-// ownGroup leaves cmd as exec.CommandContext made it: a context ending kills
-// cmd and reaches nothing it started, which no test on Windows exercises.
-func ownGroup(cmd *exec.Cmd) {}
+// processGroup has no counterpart on Windows: join leaves cmd as
+// exec.CommandContext made it, so a context ending kills cmd and reaches
+// nothing it started, and end does nothing. No test on Windows exercises it.
+type processGroup struct{}
+
+func startGroup() (*processGroup, error) { return &processGroup{}, nil }
+
+func (*processGroup) join(*exec.Cmd) {}
+
+func (*processGroup) end() {}
