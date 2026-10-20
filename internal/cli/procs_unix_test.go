@@ -25,9 +25,9 @@ import (
 // nothing in the product can tell the two apart, so the test ties it to
 // itself: newHome's cleanup ends every process this binary runs for the
 // home, standin.WatchOwner has such a process end itself once the test
-// binary that owns it is gone, and standin.LeftAfterTests is the check
-// TestMain runs after the package, which fails the package naming every
-// process of this binary still running. internal/agents/standin owns the
+// binary that owns it is gone, and standin.RunOwned runs the check after the
+// package's tests, which fails the package naming every process of this
+// binary still running. internal/agents/standin owns the
 // watch and the check; this file owns what a home's processes are.
 
 // serves reports whether p was started for h, which is the command line

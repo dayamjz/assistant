@@ -4,6 +4,7 @@ package standin
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,10 +21,11 @@ import (
 
 // The variables a test hands this binary when it starts it as a test binary
 // that owns a tmux server (tmuxOwnerMain): the directory it records itself
-// in, the tmux it starts, the socket it starts it on, and what it does then.
+// in, the socket it starts the server on, and what it does then. It resolves
+// the tmux it starts itself, through Tmux, since the one this test's Tmux
+// names puts this test's owner identity back and not that binary's.
 const (
 	tmuxOwnerDirVar    = "STANDIN_TEST_TMUX_OWNER_DIR"
-	tmuxOwnerTmuxVar   = "STANDIN_TEST_TMUX_OWNER_TMUX"
 	tmuxOwnerSocketVar = "STANDIN_TEST_TMUX_OWNER_SOCKET"
 	tmuxOwnerModeVar   = "STANDIN_TEST_TMUX_OWNER_MODE"
 	tmuxOwnerRecord    = "record"
@@ -36,28 +38,39 @@ const (
 
 // The modes of tmuxOwnerMain. ownerWaits leaves the server running and
 // waits forever, so nothing but the owner sweep can end the server once the
-// owner is killed; ownerLeaves leaves it running and runs LeftAfterTests, the
-// way a package's TestMain does once its tests return; ownerCleans ends it
-// first and then runs LeftAfterTests, the control that the check passes when
-// nothing is left; ownerUnowned skips OwnProcesses and asks Tmux's refusal.
+// owner is killed; ownerStrips does the same with the server started under
+// an environment built from nothing, without the owner identity, the way
+// the adapter starts one under a test's base environment; ownerLeaves leaves
+// it running and returns, so RunOwned runs its check the way a package's
+// TestMain does once its tests return; ownerCleans ends it first and then
+// returns, the control that the check passes when nothing is left;
+// ownerUnowned asks Tmux outside RunOwned, with no ownership recorded;
+// ownerUnchecked records ownership, as a TestMain that started the sweep
+// and wired no check would, and asks Tmux outside RunOwned.
 const (
-	ownerWaits   = "wait"
-	ownerLeaves  = "leave"
-	ownerCleans  = "clean"
-	ownerUnowned = "unowned"
+	ownerWaits     = "wait"
+	ownerStrips    = "strip"
+	ownerLeaves    = "leave"
+	ownerCleans    = "clean"
+	ownerUnowned   = "unowned"
+	ownerUnchecked = "unchecked"
 )
 
-// exitLeft is the status tmuxOwnerMain exits with when LeftAfterTests
-// reported false, and exitRefused the one when Tmux's refusal fired.
+// exitLeft is the status tmuxOwnerMain exits with when RunOwned's check
+// failed, which is RunOwned's 1 for tests that passed; exitBroken the one
+// when the owner could not do what its mode says; and exitRefused the one
+// when Tmux's refusal fired.
 const (
-	exitLeft    = 3
+	exitLeft    = 1
+	exitBroken  = 2
 	exitRefused = 4
 )
 
 // tmuxOwnerMain makes this binary a test binary whose test started a tmux
 // server and did not end it, when a test started it as one, and returns
-// otherwise. It records its owner identity, the server's and its pane's
-// process identifiers and its sweep's, and then does what its mode says.
+// otherwise. Inside RunOwned, as a package's tests run, it records its owner
+// identity, the server's and its pane's process identifiers, its sweep's,
+// and the tmux wrapper Tmux named, and then does what its mode says.
 func tmuxOwnerMain() {
 	if slices.Contains(os.Args[1:], tmuxPaneArg) {
 		for {
@@ -69,29 +82,45 @@ func tmuxOwnerMain() {
 		return
 	}
 	mode := os.Getenv(tmuxOwnerModeVar)
-	if mode == ownerUnowned {
-		refused := &refusalTB{}
-		Tmux(refused)
-		if refused.message != "" {
-			fmt.Fprint(os.Stderr, refused.message)
+	if mode == ownerUnowned || mode == ownerUnchecked {
+		if mode == ownerUnchecked {
+			if err := ownProcesses(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(exitBroken)
+			}
+		}
+		if _, refusal := tmuxOutsideATest(); refusal != "" {
+			fmt.Fprint(os.Stderr, refusal)
 			os.Exit(exitRefused)
 		}
 		os.Exit(0)
 	}
+	os.Exit(RunOwned(func() int { return tmuxOwnerTests(dir, mode) }))
+}
+
+// tmuxOwnerTests is the tests of the binary tmuxOwnerMain makes, run inside
+// RunOwned: it starts the server, records it, and leaves it running, ends
+// it, or waits, as mode says.
+func tmuxOwnerTests(dir, mode string) int {
 	fail := func(what string, err error) {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", what, err)
-		os.Exit(1)
-	}
-	if err := OwnProcesses(); err != nil {
-		fail("owning what this binary starts", err)
+		os.Exit(exitBroken)
 	}
 	self, err := os.Executable()
 	if err != nil {
 		fail("locating this binary", err)
 	}
-	tmux, socket := os.Getenv(tmuxOwnerTmuxVar), os.Getenv(tmuxOwnerSocketVar)
-	if out, err := exec.Command(tmux, "-S", socket, "-f", os.DevNull, "new-session", "-d", "-s", "owned",
-		"-x", "80", "-y", "24", "--", self, "-test.run=^$", tmuxPaneArg).CombinedOutput(); err != nil {
+	tmux, refusal := tmuxOutsideATest()
+	if refusal != "" {
+		fail("resolving tmux", errors.New(refusal))
+	}
+	socket := os.Getenv(tmuxOwnerSocketVar)
+	start := exec.Command(tmux, "-S", socket, "-f", os.DevNull, "new-session", "-d", "-s", "owned",
+		"-x", "80", "-y", "24", "--", self, "-test.run=^$", tmuxPaneArg)
+	if mode == ownerStrips {
+		start.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + dir}
+	}
+	if out, err := start.CombinedOutput(); err != nil {
 		fail("starting a tmux server", fmt.Errorf("%w: %s", err, out))
 	}
 	pids, err := exec.Command(tmux, "-S", socket, "display-message", "-p", "#{pid} #{pane_pid}").Output()
@@ -99,12 +128,12 @@ func tmuxOwnerMain() {
 		fail("reading the tmux server's process identifiers", err)
 	}
 	value, sweeper := owned()
-	record := fmt.Sprintf("%s %s %d", value, strings.TrimSpace(string(pids)), sweeper.PID)
+	record := fmt.Sprintf("%s %s %d %s", value, strings.TrimSpace(string(pids)), sweeper.PID, tmux)
 	if err := os.WriteFile(filepath.Join(dir, tmuxOwnerRecord), []byte(record), 0o600); err != nil {
 		fail("recording the tmux server", err)
 	}
 	switch mode {
-	case ownerWaits:
+	case ownerWaits, ownerStrips:
 		for {
 			time.Sleep(time.Hour)
 		}
@@ -113,42 +142,55 @@ func tmuxOwnerMain() {
 			fail("ending the tmux server", err)
 		}
 	}
-	if !LeftAfterTests() {
-		os.Exit(exitLeft)
-	}
-	os.Exit(0)
+	return 0
 }
 
-// refusalTB is a testing.TB that records the message of a Fatalf, which is
-// how tmuxOwnerMain reads Tmux's refusal outside a test. Its other methods
-// are the nil TB's and panic, so a Tmux that reached for any other would
-// fail the test rather than pass it.
+// tmuxOutsideATest is what Tmux answers outside a test, which is how
+// tmuxOwnerMain reads it: the path it names, or the message of the Fatalf
+// that refused. The testing.TB it is given records that message and ends
+// Tmux there, as a test's Fatalf ends the test; its other methods are the
+// nil TB's and panic, so a Tmux that reached for any other, a skip among
+// them, ends this binary with the panic rather than reading as either.
+func tmuxOutsideATest() (path, refusal string) {
+	tb := &refusalTB{}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if _, ok := recovered.(refused); !ok {
+				panic(recovered)
+			}
+			refusal = tb.message
+		}
+	}()
+	return Tmux(tb), ""
+}
+
+// refusalTB is the testing.TB tmuxOutsideATest gives Tmux.
 type refusalTB struct {
 	testing.TB
 	message string
 }
 
+// refused is what refusalTB's Fatalf panics with, so tmuxOutsideATest
+// recovers that and nothing else.
+type refused struct{}
+
 func (r *refusalTB) Helper() {}
 
-func (r *refusalTB) Fatalf(format string, args ...any) { r.message = fmt.Sprintf(format, args...) }
-
-// withOwner is env with this process's owner identity added, for a test
-// that starts a tmux server with an environment it builds from nothing,
-// which would otherwise carry no identity for the sweep and the check to
-// find the server by.
-func withOwner(env []string) []string {
-	return append(env, OwnerVar+"="+os.Getenv(OwnerVar))
+func (r *refusalTB) Fatalf(format string, args ...any) {
+	r.message = fmt.Sprintf(format, args...)
+	panic(refused{})
 }
 
 // tmuxOwned is what a test binary started by startTmuxOwner recorded: the
 // owner identity its processes carry, its tmux server and the server's pane,
-// and its owner sweep.
+// its owner sweep, and the tmux wrapper its Tmux named.
 type tmuxOwned struct {
 	cmd                  *exec.Cmd
 	done                 chan struct{}
 	stderr               *bytes.Buffer
 	value                string
 	server, pane, sweep  agents.Identity
+	wrapper              string
 	tmux, socket, record string
 }
 
@@ -166,7 +208,7 @@ func startTmuxOwner(t *testing.T, mode string) *tmuxOwned {
 	dir := t.TempDir()
 	o.record = filepath.Join(dir, tmuxOwnerRecord)
 	o.cmd = exec.Command(self, "-test.run=^$")
-	o.cmd.Env = append(os.Environ(), tmuxOwnerDirVar+"="+dir, tmuxOwnerTmuxVar+"="+o.tmux,
+	o.cmd.Env = append(os.Environ(), tmuxOwnerDirVar+"="+dir,
 		tmuxOwnerSocketVar+"="+o.socket, tmuxOwnerModeVar+"="+mode)
 	o.cmd.Stderr = o.stderr
 	o.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -182,7 +224,7 @@ func startTmuxOwner(t *testing.T, mode string) *tmuxOwned {
 			<-o.done
 		}
 		_ = exec.Command(o.tmux, "-S", o.socket, "kill-server").Run()
-		for _, id := range []agents.Identity{o.sweep, o.pane, o.server} {
+		for _, id := range []agents.Identity{o.pane, o.server} {
 			if id.PID == 0 {
 				continue
 			}
@@ -190,8 +232,18 @@ func startTmuxOwner(t *testing.T, mode string) *tmuxOwned {
 				_ = syscall.Kill(id.PID, syscall.SIGKILL)
 			}
 		}
+		// The sweep is given the time it takes to notice its owner is gone,
+		// sweep what is left and remove the wrapper, which a kill would
+		// leave behind; one still running then is killed and fails the test.
+		if o.sweep.PID != 0 && !(Process{Identity: o.sweep}).GoneWithin(OwnerPoll+EndGrace+5*time.Second) {
+			t.Errorf("the owner's sweep %v was still running long after its owner was gone", o.sweep)
+			_ = syscall.Kill(o.sweep.PID, syscall.SIGKILL)
+			if o.wrapper != "" {
+				_ = os.RemoveAll(filepath.Dir(o.wrapper))
+			}
+		}
 	})
-	if mode == ownerUnowned {
+	if mode == ownerUnowned || mode == ownerUnchecked {
 		return o
 	}
 	deadline := time.Now().Add(30 * time.Second)
@@ -199,10 +251,10 @@ func startTmuxOwner(t *testing.T, mode string) *tmuxOwned {
 		raw, err := os.ReadFile(o.record)
 		if err == nil {
 			fields := strings.Fields(string(raw))
-			if len(fields) != 4 {
+			if len(fields) != 5 {
 				t.Fatalf("the owner recorded %q", raw)
 			}
-			o.value = fields[0]
+			o.value, o.wrapper = fields[0], fields[4]
 			// An owner that ends its server ends it before this read can, so
 			// a process already gone is a zero identity, which nothing
 			// below signals.
@@ -250,12 +302,32 @@ func identifyRunning(t *testing.T, field string) agents.Identity {
 // while the owner runs, which is the control that the read sees a real tmux
 // server at all; and the sweep is read as running. Then the owner is sent
 // SIGKILL, and the server, the pane's process and the sweep itself are all
-// read as gone within OwnerPoll and a margin. The pane runs this binary, as a
+// read as gone within OwnerPoll and a margin, and so is the directory of the
+// tmux wrapper the owner's Tmux named. The pane runs this binary, as a
 // stand-in worker's does, since on macOS the read finds no environment for
 // some programs, an Apple-signed /bin/sleep among them.
+//
+// It holds for a server started under the owner's environment and for one
+// started under an environment built from nothing, without the owner
+// identity, the way the adapter starts one under a test's base environment
+// (claudeTerminalEnv in internal/agents), because the tmux Tmux names puts
+// the identity back. For the second, the pane's environment is read as the
+// one built from nothing, the control that it is what the server started
+// with.
 func TestATmuxServerATestLeavesEndsWhenItsOwnerIsKilled(t *testing.T) {
 	t.Parallel()
-	o := startTmuxOwner(t, ownerWaits)
+	for _, mode := range []string{ownerWaits, ownerStrips} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			tmuxServerEndsWithItsOwner(t, mode)
+		})
+	}
+}
+
+// tmuxServerEndsWithItsOwner is TestATmuxServerATestLeavesEndsWhenItsOwnerIsKilled
+// for an owner in mode.
+func tmuxServerEndsWithItsOwner(t *testing.T, mode string) {
+	o := startTmuxOwner(t, mode)
 	owner := o.cmd.Process.Pid
 	if o.server.PID == 0 || o.pane.PID == 0 || o.sweep.PID == 0 {
 		t.Fatalf("the owner's server %v, pane %v or sweep %v was gone before the owner was killed", o.server, o.pane, o.sweep)
@@ -287,6 +359,15 @@ func TestATmuxServerATestLeavesEndsWhenItsOwnerIsKilled(t *testing.T) {
 	if presence, err := o.sweep.Presence(); err != nil || presence != agents.PresencePresent {
 		t.Fatalf("the owner's sweep reads %v (%v) while the owner runs; want it running", presence, err)
 	}
+	if mode == ownerStrips {
+		env, err := startEnvironment(o.pane.PID)
+		if err != nil || !slices.Contains(env, "PATH=/usr/bin:/bin") {
+			t.Fatalf("the pane's environment reads %q (%v); want the one built from nothing, or this case shows nothing the other does not", env, err)
+		}
+	}
+	if _, err := os.Stat(o.wrapper); err != nil {
+		t.Fatalf("the owner's tmux wrapper %s reads %v while the owner runs; want it there", o.wrapper, err)
+	}
 
 	_ = syscall.Kill(owner, syscall.SIGKILL)
 	<-o.done
@@ -299,17 +380,22 @@ func TestATmuxServerATestLeavesEndsWhenItsOwnerIsKilled(t *testing.T) {
 			t.Errorf("%s, %v, was still running %v after the owner was killed", p.name, p.id, bound)
 		}
 	}
+	if _, err := os.Stat(filepath.Dir(o.wrapper)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the owner's tmux wrapper directory %s reads %v once its sweep is gone; want it removed", filepath.Dir(o.wrapper), err)
+	}
 }
 
-// LeftAfterTests fails a package whose tests leave a tmux server running,
+// RunOwned's check fails a package whose tests leave a tmux server running,
 // although the server runs another executable than the package's binary: the
-// owner leaves one and runs the check the way its TestMain would, and the
-// check reports false, names the server's process on standard error, and has
-// ended it by the time the owner exits, which is before the sweep could have
-// (it waits OwnerPoll after the owner is gone). The control is the same owner
-// ending its server first, which the check passes, so the failure above is
-// the server's doing and not the check's.
-func TestLeftAfterTestsFailsAPackageThatLeavesATmuxServer(t *testing.T) {
+// owner's tests leave one and return inside RunOwned, the way a package's
+// tests do, and the check reports false, names the server's process on
+// standard error, and has ended it by the time the owner exits, which is
+// before the sweep could have (it waits OwnerPoll after the owner is gone).
+// It leaves this test binary's own sweep running, which is a process of the
+// same binary that no test started. The control is the same owner ending its
+// server first, which the check passes, so the failure above is the server's
+// doing and not the check's.
+func TestRunOwnedFailsAPackageThatLeavesATmuxServer(t *testing.T) {
 	t.Parallel()
 	left := startTmuxOwner(t, ownerLeaves)
 	if left.server.PID == 0 {
@@ -325,6 +411,15 @@ func TestLeftAfterTestsFailsAPackageThatLeavesATmuxServer(t *testing.T) {
 	if presence, err := left.server.Presence(); err != nil || presence == agents.PresencePresent {
 		t.Errorf("the tmux server reads %v (%v) once the check returned; want it ended by the check", presence, err)
 	}
+	// The owner is this binary, so its check lists this binary's processes,
+	// and this test binary's own sweep is one; it is not one the owner's
+	// tests left, and ending it would leave this binary with nothing to end
+	// what its tests leave if it is killed.
+	if _, sweeper := owned(); sweeper.PID == 0 {
+		t.Fatal("this test binary records no sweep of its own")
+	} else if presence, err := sweeper.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Errorf("this test binary's own sweep %v reads %v (%v) once the owner's check returned; want it left running", sweeper, presence, err)
+	}
 
 	clean := startTmuxOwner(t, ownerCleans)
 	<-clean.done
@@ -333,10 +428,11 @@ func TestLeftAfterTestsFailsAPackageThatLeavesATmuxServer(t *testing.T) {
 	}
 }
 
-// Tmux refuses a test in a binary that did not call OwnProcesses, so a
-// package cannot start terminal servers with nothing to end the ones its
-// tests leave; the refusal names the call to add. The control is every other
-// test in this package, which calls Tmux in a binary that did.
+// Tmux refuses a test that does not run inside RunOwned, in a binary that
+// recorded no ownership, so a package cannot start terminal servers with
+// nothing to end the ones its tests leave; the refusal names the call to
+// add. The control is every other test in this package, which calls Tmux
+// inside RunOwned.
 func TestTmuxRefusesABinaryThatDoesNotOwnWhatItStarts(t *testing.T) {
 	t.Parallel()
 	o := startTmuxOwner(t, ownerUnowned)
@@ -344,7 +440,24 @@ func TestTmuxRefusesABinaryThatDoesNotOwnWhatItStarts(t *testing.T) {
 	if code := o.cmd.ProcessState.ExitCode(); code != exitRefused {
 		t.Fatalf("the unowned binary exited %d, want %d from Tmux's refusal: %s", code, exitRefused, o.stderr)
 	}
-	if !strings.Contains(o.stderr.String(), "standin.OwnProcesses()") {
+	if !strings.Contains(o.stderr.String(), "standin.RunOwned(") {
+		t.Errorf("the refusal does not name the call to add:\n%s", o.stderr)
+	}
+}
+
+// Tmux refuses a test in a binary that recorded itself as the owner of what
+// its tests start and did not wire the check that runs after them, so a
+// TestMain cannot start the sweep and leave a server its tests leave running
+// unreported, which #423's first form of the guard let through. The control
+// is every other test in this package, which calls Tmux inside RunOwned.
+func TestTmuxRefusesABinaryThatDoesNotRunTheCheckAfterItsTests(t *testing.T) {
+	t.Parallel()
+	o := startTmuxOwner(t, ownerUnchecked)
+	<-o.done
+	if code := o.cmd.ProcessState.ExitCode(); code != exitRefused {
+		t.Fatalf("the binary that skipped the check exited %d, want %d from Tmux's refusal: %s", code, exitRefused, o.stderr)
+	}
+	if !strings.Contains(o.stderr.String(), "standin.RunOwned(") {
 		t.Errorf("the refusal does not name the call to add:\n%s", o.stderr)
 	}
 }

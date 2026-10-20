@@ -3,7 +3,6 @@ package standin
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,15 +26,7 @@ func TestMain(m *testing.M) {
 	Main()
 	atTerminalMain()
 	tmuxOwnerMain()
-	if err := OwnProcesses(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	code := m.Run()
-	if !LeftAfterTests() && code == 0 {
-		code = 1
-	}
-	os.Exit(code)
+	os.Exit(RunOwned(m.Run))
 }
 
 // invocation is a valid Invocation in a directory the test owns.

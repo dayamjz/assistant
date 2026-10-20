@@ -71,8 +71,8 @@ func helperModeFromArgs() string {
 // flag, so the two cannot claim the same process.
 //
 // The tests start tmux servers, which leave this binary's process group, so
-// it owns what they start (standin.OwnProcesses) and fails once they have
-// returned if anything they started is still running (standin.LeftAfterTests).
+// they run inside standin.RunOwned, which owns what they start and fails the
+// package once they have returned if anything they started is still running.
 func TestMain(m *testing.M) {
 	standin.Main()
 	mode := os.Getenv(helperModeVar)
@@ -83,15 +83,7 @@ func TestMain(m *testing.M) {
 		helperMain(mode)
 		return
 	}
-	if err := standin.OwnProcesses(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	code := m.Run()
-	if !standin.LeftAfterTests() && code == 0 {
-		code = 1
-	}
-	os.Exit(code)
+	os.Exit(standin.RunOwned(m.Run))
 }
 
 // helperMain is the stand-in agent. Each mode is one thing an agent can do to

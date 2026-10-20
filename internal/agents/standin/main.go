@@ -20,15 +20,16 @@ import (
 //
 // The flags are spelled distinctly enough that a test binary cannot be handed
 // one by accident, which matters because being handed one is what turns a test
-// binary into an agent, or, for sweepFlag, into the owner sweep OwnProcesses
-// starts (owner_unix.go).
+// binary into an agent, or, for sweepFlag and the sweepDirFlag beside it,
+// into the owner sweep RunOwned starts (owner_unix.go).
 const (
 	controlFlag   = "--standin-control="
 	handshakeFlag = "--standin-handshake="
 	sweepFlag     = "--standin-sweep="
+	sweepDirFlag  = "--standin-sweep-dir="
 )
 
-// mainCalled records that Main ran in this process, which OwnProcesses
+// mainCalled records that Main ran in this process, which ownProcesses
 // checks before it starts this binary again as the owner sweep: a binary
 // whose TestMain does not call Main would not be the sweep when started as
 // one, so nothing would end what its tests leave behind.
@@ -69,7 +70,7 @@ const (
 //	}
 //
 // It never returns when this process is a stand-in, because the process is the
-// agent and has no tests to run, or when it is the owner sweep OwnProcesses
+// agent and has no tests to run, or when it is the owner sweep RunOwned
 // started. It always returns when it is not, so calling
 // it unconditionally costs a test binary one scan of its arguments.
 //
@@ -80,7 +81,8 @@ func Main() {
 	mainCalled = true
 	args := os.Args[1:]
 	if owner, ok := flagValue(args, sweepFlag); ok {
-		os.Exit(sweep(owner))
+		dir, _ := flagValue(args, sweepDirFlag)
+		os.Exit(sweep(owner, dir))
 	}
 	if token, ok := flagValue(args, handshakeFlag); ok {
 		os.Exit(handshake(token))

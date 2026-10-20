@@ -36,7 +36,7 @@ import (
 //
 // Every process of this binary the tests start ends with the test binary
 // that started it (standin.WatchOwner), and once the tests have returned the
-// package fails if any is still running (standin.LeftAfterTests).
+// package fails if any is still running (standin.RunOwned).
 func TestMain(m *testing.M) {
 	// The decision-model key is the operator's consent to send changed lines
 	// to a third party, so a test must never inherit one from whoever runs it.
@@ -53,15 +53,7 @@ func TestMain(m *testing.M) {
 	// take no terminal of their own; a test's push is a person's, and the
 	// gate places one by a terminal's foreground on the pushing chain.
 	standin.AtTerminal()
-	if err := standin.OwnProcesses(); err != nil {
-		fmt.Fprintln(os.Stderr, "recording this test binary as the owner of what its tests start:", err)
-		os.Exit(1)
-	}
-	code := runQuietly(m)
-	if !standin.LeftAfterTests() && code == 0 {
-		code = 1
-	}
-	os.Exit(code)
+	os.Exit(standin.RunOwned(func() int { return runQuietly(m) }))
 }
 
 // runQuietly runs the tests with git's automatic maintenance off for every

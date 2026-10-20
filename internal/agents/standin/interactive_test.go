@@ -34,8 +34,8 @@ func startInteractive(t *testing.T, state, key string) string {
 		"-c", dir, "--", self}, agent.Arguments()...)
 	args = append(args, "--permission-mode", "acceptEdits", screenReaderFlag, "--", "hello there")
 	cmd := exec.Command(tmux, args...)
-	cmd.Env = withOwner([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "CLAUDE_CONFIG_DIR=" + config,
-		"ANTHROPIC_API_KEY=" + key})
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "CLAUDE_CONFIG_DIR=" + config,
+		"ANTHROPIC_API_KEY=" + key}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("starting the interactive stand-in: %v: %s", err, out)
 	}

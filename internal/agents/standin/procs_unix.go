@@ -28,7 +28,10 @@ func (p Process) String() string {
 
 // ProcessesOf lists every process whose executable is binary, other than
 // this process, its ancestors, which include the test binary AtTerminal ran
-// this one from, and the owner sweep OwnProcesses started. The executable
+// this one from, and every owner sweep (isSweep): this process's own, and
+// one an outer test binary's RunOwned started, which is a process of the
+// same binary when this one is the outer's tests' and ends with the outer
+// rather than with anything this one's tests did. The executable
 // and the arguments are read per process from the kernel (commandLine),
 // never split out of a listing, so a path or an argument with a space in it
 // is read whole. A list that cannot be read is an error and never an empty
@@ -44,7 +47,7 @@ func ProcessesOf(binary string) ([]Process, error) {
 // carrying lists every process started with OwnerVar set to value in its
 // environment (startEnvironment), whatever its executable, leaving out the
 // same processes ProcessesOf does. It is how the owner sweep and
-// LeftAfterTests find a terminal server a test started, and the processes in
+// leftAfterTests find a terminal server a test started, and the processes in
 // its panes, which run another program and are in no group or session of the
 // test's. A process whose environment cannot be read, one that has exited
 // or one of another user's, is passed over, as ProcessesOf passes one over,
@@ -60,7 +63,7 @@ func carrying(value string) ([]Process, error) {
 }
 
 // processesWhere lists every process match accepts, other than this
-// process, its ancestors and the owner sweep, each with its identity and its
+// process, its ancestors and every owner sweep, each with its identity and its
 // arguments read from the kernel. A list that cannot be read is an error and
 // never an empty list.
 func processesWhere(match func(pid int) bool) ([]Process, error) {
@@ -73,7 +76,6 @@ func processesWhere(match func(pid int) bool) ([]Process, error) {
 		}
 		pid = lineage.Parent
 	}
-	_, sweeper := owned()
 	pids, err := processIDs()
 	if err != nil {
 		return nil, fmt.Errorf("listing processes: %w", err)
@@ -84,16 +86,26 @@ func processesWhere(match func(pid int) bool) ([]Process, error) {
 			continue
 		}
 		_, args, err := commandLine(pid)
-		if err != nil {
+		if err != nil || isSweep(args) {
 			continue
 		}
 		id, present, err := agents.Identify(pid)
-		if err != nil || !present || id == sweeper {
+		if err != nil || !present {
 			continue
 		}
 		found = append(found, Process{Identity: id, Args: args})
 	}
 	return found, nil
+}
+
+// isSweep reports whether args, argv[0] first, are an owner sweep's, which
+// startSweep starts with sweepFlag as its first argument. A sweep outlives
+// the tests by design and ends once its owner is gone and it has swept, so no
+// check counts one as left behind; what that does not cover is a sweep that
+// never ends, whose owner's identity reads as present forever (sweep), which
+// no check reports.
+func isSweep(args []string) bool {
+	return len(args) > 1 && strings.HasPrefix(args[1], sweepFlag)
 }
 
 // End sends p SIGTERM and waits up to EndGrace for it to go, then sends
@@ -137,7 +149,7 @@ func (p Process) GoneWithin(wait time.Duration) bool {
 }
 
 // Stayed is every process of binary that match accepts and that is still
-// running grace after it was listed, which is LeftAfterTests' question asked
+// running grace after it was listed, which is leftAfterTests' question asked
 // of a subset, so a test can ask it of the processes it started while other
 // tests' processes run.
 func Stayed(binary string, match func(Process) bool, grace time.Duration) ([]Process, error) {
@@ -161,34 +173,27 @@ func stayed(ps []Process, grace time.Duration) []Process {
 	return left
 }
 
-// LeftAfterTests is the check a package's TestMain runs once m.Run has
-// returned, and its result decides the package's status with the tests'
-// own:
-//
-//	code := m.Run()
-//	if !standin.LeftAfterTests() && code == 0 {
-//		code = 1
-//	}
-//
-// Every process still running this binary is then one the tests started and
-// did not end: a service, a stand-in agent or hook, or a test binary
-// AtTerminal ran again on behalf of a test that started this binary as an
-// outer one. So is every process started with this process's owner identity
-// in its environment once OwnProcesses has been called, whatever it runs,
-// a terminal server and what runs in its panes among them. It gives each
-// EndGrace to finish exiting, then names every one still running on
-// standard error, ends it, and reports false, so the package fails and
-// leaves nothing behind. A process list that cannot be read fails the
-// package too, since a check that read nothing would pass.
+// leftAfterTests is the check RunOwned runs once the tests have returned,
+// and its result decides the package's status with the tests' own. Every
+// process still running this binary is then one the tests started and did
+// not end: a service, a stand-in agent or hook, or a test binary AtTerminal
+// ran again on behalf of a test that started this binary as an outer one. So
+// is every process started with this process's owner identity in its
+// environment, whatever it runs, a terminal server and what runs in its
+// panes among them. It gives each EndGrace to finish exiting, then names
+// every one still running on standard error, ends it, and reports false, so
+// the package fails and leaves nothing behind. A process list that cannot be
+// read fails the package too, since a check that read nothing would pass.
 //
 // What it does not see: a process running another executable that was
-// started with an environment without OwnerVar, or before OwnProcesses was
-// called, or whose environment the read cannot find (carrying); and
-// anything at all once this binary is gone, so the binary
+// started with an environment without OwnerVar, unless it is a tmux the
+// wrapper ran (ownProcesses) or a process in that tmux's panes, or before
+// ownership was recorded, or whose environment the read cannot find
+// (carrying); and anything at all once this binary is gone, so the binary
 // AtTerminal ran again outliving a killed outer one is watchOuter's to end,
 // and a terminal server outliving a killed owner the owner sweep's, and no
 // check in that run reports either.
-func LeftAfterTests() bool {
+func leftAfterTests() bool {
 	self, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: could not resolve this binary to check for processes the tests left running: %v\n", err)

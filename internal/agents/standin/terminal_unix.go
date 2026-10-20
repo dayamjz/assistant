@@ -87,7 +87,7 @@ const exitNotAtTerminal = 12
 // fails, which counts as the outer running and so ends nothing. What the
 // tests started outside that group is not reached by the kill: a service the
 // product launched in a session of its own ends through its own owner watch
-// where the package calls OwnProcesses and WatchOwner, and anything else the
+// where the package calls RunOwned and WatchOwner, and anything else the
 // package's tests start that way is theirs to end. A binary run again that
 // is stopped by a signal runs no watch, and one ended by the quit signal, by
 // SIGKILL, or by a panic, a test timeout among them, ends alone, as
