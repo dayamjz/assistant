@@ -257,9 +257,20 @@ func (s *Service) superviseDelegation(c *incarnation, d store.Delegation, now ti
 	}
 	// The bound's hold: registered here once the latest attempt is dead
 	// and past the bound, so a delegation never stands silently past it,
-	// and read as it stands whether this pass or reconciliation registered
-	// it.
-	if o.liveness == taskstate.Dead && o.relaunches >= s.cfg.RelaunchAttempts {
+	// and otherwise read as it stands on every other reading, so a hold
+	// reconciliation registered for an attempt that never recorded a
+	// session, which probes no liveness at all, is surfaced too.
+	if o.liveness != taskstate.Dead || o.relaunches < s.cfg.RelaunchAttempts {
+		ctx, cancel = s.sup.bound(c.ctx)
+		h, err := s.store.Hold(ctx, domainBoundKey(d, o.attempt))
+		cancel()
+		switch {
+		case err == nil:
+			o.hold = &h
+		case !errors.Is(err, store.ErrNotFound):
+			return taskReport{Watched: true, Err: err}
+		}
+	} else {
 		past := fmt.Sprintf("its subordinate coordinator's terminal %s is gone, it has been relaunched %d times and relaunch_attempts is %d",
 			o.ref, o.relaunches, s.cfg.RelaunchAttempts)
 		ctx, cancel = s.sup.bound(c.ctx)

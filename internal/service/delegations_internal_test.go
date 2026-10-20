@@ -304,8 +304,8 @@ func TestASecondDelegationOfADomainHoldsAtTheBoundOnItsOwnKey(t *testing.T) {
 // An attempt that has recorded no session is starting, not gone: the claim
 // is written before the process and the session after, so a pass landing
 // between the two reads a delegation whose subordinate is coming up. Inside
-// escalation_window from the attempt's StartedAt the pass surfaces nothing
-// and writes no marker; past it, with still no session, the subordinate is
+// escalation_window from the attempt's StartedAt the pass surfaces no
+// subordinate-gone and starts no unobserved clock; past it, with still no session, the subordinate is
 // read as unobservable and surfaced as gone, which is what a start that
 // failed looks like. The window is read off the attempt row (P8). The
 // counterfeit is the same observation with the attempt claimed longer ago
@@ -327,15 +327,18 @@ func TestAnAttemptWithNoSessionIsStartingInsideTheWindowAndGonePastIt(t *testing
 	l := openLoop(t, h, records, newScriptedTerminals(), clock)
 	defer func() { _ = l.service.Close() }()
 
+	// The restart's reconciliation held this delegation at the bound, since
+	// relaunch_attempts is zero, and the pass surfaces that hold; what the
+	// starting window governs is the subordinate-gone reading alone.
 	first := l.nextPass(t)
-	if r := first.Delegations["alpha"]; r.Err != nil || len(r.Detections) != 0 {
-		t.Fatalf("the pass over a starting subordinate reported %+v, want nothing detected", r)
+	if r := first.Delegations["alpha"]; r.Err != nil || len(domainDetections(first, "alpha", supervisor.KindSubordinateGone)) != 0 {
+		t.Fatalf("the pass over a starting subordinate reported %+v, want no subordinate-gone detected", r)
 	}
-	if _, has, err := l.records(t).DelegationMarkers(ctx, d.ID); err != nil || has {
-		t.Fatalf("the pass over a starting subordinate wrote markers (%v, %v)", has, err)
+	if m, _, err := l.records(t).DelegationMarkers(ctx, d.ID); err != nil || m.UnobservedSince.IsKnown() || m.GoneSurfacedAt.IsKnown() {
+		t.Fatalf("the pass over a starting subordinate started its unobserved clock: %+v (%v)", m, err)
 	}
-	if rows, err := l.records(t).DelegationWakes(ctx, d.ID); err != nil || len(rows) != 0 {
-		t.Fatalf("the pass over a starting subordinate queued %+v (%v)", rows, err)
+	if rows := domainWakesOfKind(t, l.records(t), d.ID, supervisor.KindSubordinateGone); len(rows) != 0 {
+		t.Fatalf("the pass over a starting subordinate queued %+v", rows)
 	}
 
 	clock.Advance(2 * time.Minute)
@@ -595,5 +598,47 @@ func TestAnEndAnswersTheHoldOfADelegationWhoseFirstAttemptWasNeverRecorded(t *te
 		if strings.HasPrefix(h.Key, domainBoundKeyPrefix(d)) {
 			t.Fatalf("hold %s of the ended delegation is still open", h.Key)
 		}
+	}
+}
+
+// A start refused before it recorded a session, with relaunch_attempts at
+// zero, holds at the bound from the restart's reconciliation, and the
+// loop surfaces that hold as a hold-opened domain wake once, which the
+// coordinator's drain then hands out: the loop reads the delegation's bound
+// hold on every liveness reading, not only on a dead one, since an attempt
+// that never recorded a session probes none. A loop that read the hold only
+// past a dead probe leaves it open with nothing told about it.
+func TestABoundHoldRegisteredAtRecoveryReachesTheDrain(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P8)
+	h, records := loopHomeConfigured(t, `{"supervision_beacon_interval": "1s", "escalation_window": "1m", "relaunch_attempts": 0}`)
+	ctx := t.Context()
+	d, err := records.Delegate(ctx, store.DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.BeginDelegationAttempt(ctx, d.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	l := openLoop(t, h, records, newScriptedTerminals(), &fakeClock{now: time.Now().UTC()})
+	defer func() { _ = l.service.Close() }()
+	key := domainBoundKey(d, 1)
+	if hold, err := l.records(t).Hold(ctx, key); err != nil || !hold.Open() {
+		t.Fatalf("after the restart the bound's hold reads %+v (%v), want it open", hold, err)
+	}
+	l.nextPass(t)
+	l.pass(t)
+	drained, err := l.service.drainBoth(ctx, 10, l.service.wakeHandout(ipc.Request{}, placedPeer{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var opened []store.DomainWake
+	for _, w := range drained.DomainWakes {
+		if w.Kind == string(supervisor.KindHoldOpened) && w.Marker == "hold:"+key {
+			opened = append(opened, w)
+		}
+	}
+	if len(opened) != 1 || opened[0].Delegation != d.ID {
+		t.Fatalf("the coordinator's drain handed out %+v, want one hold-opened wake for %s", drained.DomainWakes, key)
 	}
 }
