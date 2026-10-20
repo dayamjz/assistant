@@ -389,10 +389,20 @@ func Coverage() []Established {
 				"establishes nothing about it. internal/principles and internal/pipeline's schema test " +
 				"claim it, and internal/store's shape transition test claims it for a task's shape, " +
 				"repository and branch: one row, flipped in one write."},
-		{principles.P15, ReachNone,
-			"No journey here ends an owner and then looks for what it left running, and the " +
-				"kept-work record P15 names does not exist in this build, so nothing is driven for it. " +
-				"internal/principles declares the gap in its unclaimed table."},
+		{principles.P15, ReachBinary,
+			"The stop half of ending an owner is driven, for the service as the owner of the agent " +
+				"groups it registered: a service serving in the foreground with stop_grace set in the " +
+				"home's own file is sent SIGTERM while a run's review agent ignores SIGTERM and holds, " +
+				"and the walk checks that the service exits within the grace plus a margin under the " +
+				"adapter's own termination grace, that no process of the groups the run process record " +
+				"names is left, and that the service log names the step still waiting; a second walk " +
+				"with the default grace checks that a second SIGTERM forces the stop at once. Nothing " +
+				"else P15 asks is driven: a run's, a worker's, a delegation's or a notify command's " +
+				"processes ended by their normal path or by a killed service, a descendant that left " +
+				"its group, a check by working directory, and the kept-work record, which does not " +
+				"exist in this build. Both walks drive a run through methods internal/ipc restricts, " +
+				"so on a platform where that package reads no local socket peer credentials they are " +
+				"skipped rather than passing, and they build only on unix."},
 	}
 }
 

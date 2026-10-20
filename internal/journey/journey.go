@@ -668,6 +668,46 @@ func (j *Journey) Kill() error {
 	return errors.Join(errs...)
 }
 
+// Signal sends sig to the serving process, the way an operator or a service
+// manager asks a service to stop, and returns without waiting for it to act.
+// AwaitExit is what then says whether it did.
+func (j *Journey) Signal(sig os.Signal) error {
+	if j.service == nil {
+		return errors.New("journey: this journey is not serving")
+	}
+	if err := j.service.cmd.Process.Signal(sig); err != nil {
+		return fmt.Errorf("journey: signalling the service: %w", err)
+	}
+	return nil
+}
+
+// AwaitExit waits up to within for the serving process to exit on its own,
+// and reports whether it did and how. A service that exited is released the
+// way Kill releases one, so the journey is no longer serving; one still
+// running is left as it is, for the caller to signal again or to Kill.
+//
+// It answers from this journey's reaper and nothing else, so an exit is the
+// process's own and never a reading of a socket or a process listing.
+func (j *Journey) AwaitExit(within time.Duration) (bool, string, error) {
+	if j.service == nil {
+		return false, "", errors.New("journey: this journey is not serving")
+	}
+	service := j.service
+	select {
+	case <-service.done:
+	case <-time.After(within):
+		return false, "", nil
+	}
+	how := describeExit(service.cmd, service.err)
+	j.service = nil
+	if service.log != nil {
+		if err := service.log.Close(); err != nil {
+			return true, how, fmt.Errorf("journey: closing the service log %s: %w", j.harnessLog(), err)
+		}
+	}
+	return true, how, nil
+}
+
 // describeExit renders how a serving process ended, for a failure that says
 // what happened rather than that nothing answered.
 func describeExit(cmd *exec.Cmd, waited error) string {

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -195,6 +197,7 @@ func serve(control string, args []string) int {
 		return exitNoUse
 	}
 	call.Step = step
+	ignoreTerminate(script, step)
 	seq, err := claimCall(control, call)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "standin: "+err.Error())
@@ -320,6 +323,16 @@ func choose(control string, script Script, call Call) (int, error) {
 		}
 	}
 	return -1, nil
+}
+
+// ignoreTerminate sets this process to ignore SIGTERM when the step that
+// answers it says so, before the call is recorded, which is the ordering
+// Reply.IgnoresTerminate promises. A step of -1 answers nothing and changes
+// nothing.
+func ignoreTerminate(script Script, step int) {
+	if step >= 0 && script.Steps[step].Reply.IgnoresTerminate {
+		signal.Ignore(syscall.SIGTERM)
+	}
 }
 
 // emit does what a reply says: prints standard error, then standard output in

@@ -100,3 +100,32 @@ func EndGroup(id Identity, grace time.Duration) (GroupEnd, error) {
 	}
 	return endPresentGroup(id, grace)
 }
+
+// ForceGroup is EndGroup without the polite step: after the same
+// verification, the group the verified leader leads is sent the forceful
+// signal at once, and the result is GroupEnded when nothing of it this
+// platform can see is left within wait, or ErrGroupSurvived when something
+// is. It is for a caller whose grace has already been spent, which is a
+// service whose stop_grace ran out: the group was asked to end politely when
+// the stop began, and asking again would only spend time the caller no
+// longer has.
+//
+// Everything else is EndGroup's, the three residual gaps included: a reused
+// identifier, an absent leader and an unreadable identity signal nothing, and
+// a descendant that moved to a group of its own is not reached.
+func ForceGroup(id Identity, wait time.Duration) (GroupEnd, error) {
+	if id.PID <= 0 {
+		return "", fmt.Errorf("agents: process group %d is not one this package started", id.PID)
+	}
+	presence, err := id.Presence()
+	if err != nil {
+		return "", err
+	}
+	switch presence {
+	case PresenceReplaced:
+		return GroupReplaced, nil
+	case PresenceAbsent:
+		return endAbsentGroup(id.PID), nil
+	}
+	return forcePresentGroup(id, wait)
+}

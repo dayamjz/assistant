@@ -726,6 +726,23 @@ handouts pinned under that stretch until the process ends; this build does
 not expire or heartbeat that attachment. Acknowledge as you go, and do not
 leave a detached `listen` running.
 
+## Stopping the service
+
+`assistant service stop`, SIGTERM and SIGINT all stop the service the same
+way: it stops taking requests, cancels the runs it is advancing, which asks
+each agent it started to end, and ends its workers. That is bounded by
+`stop_grace` in your own configuration file (30s unless configured, between
+1s and 10m; a repository file naming it is refused). When the grace runs out
+before the stop is done, the service log names the step it was still
+waiting on, every process group the service registered is ended by force,
+and the service exits within about a second more. A second SIGTERM or SIGINT
+while it stops forces the same thing at once, and a third gets the
+operating system's default handling. A forced stop exits with a failure
+status and does not start a replacement after a restart; the next start
+recovers whatever it left. A process that moved out of its group, and a
+configured command's or notify command's children, are not among the groups
+ended by force.
+
 ## Standing consent
 
 `assistant --standing-consent` starts or attaches to this branch's run and puts

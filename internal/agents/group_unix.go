@@ -27,6 +27,16 @@ func endPresentGroup(id Identity, grace time.Duration) (GroupEnd, error) {
 	return GroupEnded, nil
 }
 
+// forcePresentGroup sends the group SIGKILL and waits up to wait for groupGone
+// to answer yes, on ForceGroup's terms.
+func forcePresentGroup(id Identity, wait time.Duration) (GroupEnd, error) {
+	_ = syscall.Kill(-id.PID, syscall.SIGKILL)
+	if !waitForEmpty(id.PID, wait, groupGone) {
+		return "", ErrGroupSurvived
+	}
+	return GroupEnded, nil
+}
+
 // groupGone reports whether nothing of the group is still running. It is
 // groupEmpty with one widening, and the widening is what a group an earlier
 // service started needs: that group's members were orphaned when the service

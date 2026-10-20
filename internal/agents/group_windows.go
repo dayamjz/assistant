@@ -38,6 +38,20 @@ func endPresentGroup(id Identity, grace time.Duration) (GroupEnd, error) {
 	return "", ErrGroupSurvived
 }
 
+// forcePresentGroup is endPresentGroup's forceful step alone, on
+// ForceGroup's terms: the tree kill at once, then the wait for the leader.
+func forcePresentGroup(id Identity, wait time.Duration) (GroupEnd, error) {
+	if err := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(id.PID)).Run(); err != nil {
+		if proc, findErr := os.FindProcess(id.PID); findErr == nil {
+			_ = proc.Kill()
+		}
+	}
+	if waitAbsent(id, wait) {
+		return GroupEnded, nil
+	}
+	return "", ErrGroupSurvived
+}
+
 // waitAbsent polls until no running process has the identity, or the
 // identifier has been given to another process, or the deadline passes, and
 // reports whether the identity's process was gone.

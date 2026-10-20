@@ -143,6 +143,17 @@ const (
 	// PRD section 10's keys table has its row and the limits table its
 	// ceiling; the floor is zero.
 	KeyRelaunchAttempts Key = "relaunch_attempts"
+	// KeyStopGrace is "stop_grace": how long a stop or SIGTERM waits for
+	// the service's shutdown, and with it the process groups the service
+	// registered, before it ends those groups by force and exits, PRD
+	// section 8's "stopping is bounded" and section 10's row. It is
+	// global-only for KeySupervisionBeaconInterval's reason: the stop is the
+	// service's act on the operator's machine. It is not a loop bound and
+	// stops no run on its own; it bounds how long giving up the home may
+	// take. internal/service's Shutdown is the one reader. The default is
+	// the PRD's; the floor and ceiling are chosen, not measured, and PRD
+	// section 10's limits table has no row for them yet.
+	KeyStopGrace Key = "stop_grace"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
 	// template. It shapes the subject line and nothing else: a fix commit
 	// also carries a body, the fixer's whole account of the round, which
@@ -420,6 +431,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.StallInspectionCount = v.(int) }},
 	{KeyRelaunchAttempts, TrustGlobal, DefaultRelaunchAttempts, decodeRelaunchAttempts,
 		func(c *Config, v any) { c.RelaunchAttempts = v.(int) }},
+	{KeyStopGrace, TrustGlobal, DefaultStopGrace, decodeStopGrace,
+		func(c *Config, v any) { c.StopGrace = v.(time.Duration) }},
 	{KeyCommitFixMessage, TrustPushed, DefaultCommitFixMessage, decodeFixMessage,
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},
 	{KeyAllowPushedCommands, TrustTrusted, false, decodeBool,

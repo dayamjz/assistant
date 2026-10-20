@@ -37,6 +37,8 @@ func TestARefusedPushedConfigurationCrossesAsRefused(t *testing.T) {
 		{"unparseable", `{"ignore_patterns": ["vendor/**",]}`, []string{"pushed configuration"}},
 		{"global-only key", `{"` + string(config.KeySessionReuse) + `": false}`,
 			[]string{"pushed configuration", string(config.KeySessionReuse)}},
+		{"stop grace", `{"` + string(config.KeyStopGrace) + `": "10m"}`,
+			[]string{"pushed configuration", string(config.KeyStopGrace), "global-only"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

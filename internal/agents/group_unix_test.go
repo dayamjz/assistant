@@ -264,3 +264,49 @@ func TestEndGroupCountsAnExitedUnreapedMemberAsGone(t *testing.T) {
 	}
 	reaped = true
 }
+
+// TestForceGroupEndsAGroupThatIgnoresThePoliteSignalAtOnce establishes what
+// ForceGroup adds to EndGroup: a group whose leader ignores SIGTERM is ended
+// without the polite step's wait, well inside a grace EndGroup would have
+// spent first, and a reused identifier is still left alone. The leader is the
+// stubborn stand-in, which ignores the polite signals for the whole hold.
+func TestForceGroupEndsAGroupThatIgnoresThePoliteSignalAtOnce(t *testing.T) {
+	requiresIdentityRead(t)
+	cmd := exec.Command(helperBinary(t))
+	cmd.Env = []string{helperModeVar + "=hold", helperStderrVar + "=stubborn"}
+	cmd.Dir = os.TempDir()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting the stubborn stand-in: %v", err)
+	}
+	waited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(waited) }()
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-waited
+	})
+	id, found, err := agents.Identify(cmd.Process.Pid)
+	if err != nil || !found {
+		t.Fatalf("identifying the stubborn stand-in: %+v, %v, %v", id, found, err)
+	}
+
+	if end, err := agents.ForceGroup(agents.Identity{PID: id.PID, Start: id.Start + 1}, time.Second); err != nil || end != agents.GroupReplaced {
+		t.Fatalf("ForceGroup(reused identifier) = %s, %v, want %s", end, err, agents.GroupReplaced)
+	}
+	if !groupAlive(id.PID) {
+		t.Fatalf("the group %d was ended on a reused identifier", id.PID)
+	}
+
+	started := time.Now()
+	end, err := agents.ForceGroup(id, 5*time.Second)
+	took := time.Since(started)
+	if err != nil || end != agents.GroupEnded {
+		t.Fatalf("ForceGroup = %s, %v, want %s", end, err, agents.GroupEnded)
+	}
+	if took > 2*time.Second {
+		t.Fatalf("ForceGroup took %v to end the group, want it at once rather than after a polite wait", took)
+	}
+	if groupAlive(id.PID) {
+		t.Fatalf("the group %d still holds a process after ForceGroup reported it ended", id.PID)
+	}
+}
