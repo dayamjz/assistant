@@ -179,9 +179,15 @@ Each has cost this repository more than one round of review.
   `EndDelegation` the delegation's one revision; the task row's `domain` is
   written at `CreateTask` and never moved, and a wake's recipient is decided
   at `DrainWakes` by its task's domain and a `WakeRoute` of kinds the caller
-  passes as words, stored on no row (P14). `AcknowledgedBySubordinate` and
+  passes as words, stored on no row (P14). Migration 47's `domain_wake` is
+  the queue's second shape, a wake about a domain owned by the delegation
+  row, with its own identifiers, the wake table's seals and accessors
+  (`AppendDomainWakeWithMarkers` beside `delegation_marker`,
+  `DrainDomainWakes`, `AcknowledgeDomainWakes`), and offered to no
+  subordinate's route. `AcknowledgedBySubordinate` and
   `SentBySubordinate` are the two closed sets' members for a subordinate,
-  produced only by `internal/service` from placement.
+  produced only by `internal/service` from placement; `DelegationEnd`'s
+  second member, `EndedByAnswer`, is the answer to the bound's hold.
   The task row's `mode` column is the launch notation and never the delivery
   posture: the posture is the `delivery` column localLandingMigration adds,
   written once by `CreateTask` or, for a promoted task, by
@@ -738,7 +744,8 @@ Each has cost this repository more than one round of review.
   table's `Subordinate` column is what PRD section 8's wake row routes by,
   read out by `SubordinateActable` and held to its own oracle in the matrix
   test; `subordinate-gone` and `subordinate-escalated` are the subordinate's
-  two kinds, the first with no producer yet for the reason its row states.
+  two kinds, the first carried on `internal/store`'s domain wake, the
+  queue's second shape, and counted by `InFlightOf`'s third input.
   `terminal.go` is the same kind of closed table for which states have their
   terminal read at all, every state but `Reported`, `Landed` and
   `Complete`, so a delivered task raises no `terminal-gone`. Read its
