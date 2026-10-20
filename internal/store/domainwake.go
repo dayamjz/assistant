@@ -504,8 +504,10 @@ func scanDomainWake(sc scanner) (DomainWake, error) {
 // update of a domain wake, so a drain's second half fails the way it does
 // on a store that cannot write, and returns the function that lifts it. It
 // is a fault injector on RefuseNotificationClaimsForTest's terms and
-// nothing else: no production path plants one, it takes a testing.TB so it
-// cannot be called from anything but a test, and it refuses a nil one.
+// nothing else: no production path plants one, and it takes a testing.TB
+// and refuses a nil one, so a production path does not reach it by
+// accident; that does not stop a deliberate caller that builds a testing.T
+// of its own.
 func (s *Store) RefuseDomainDrainsForTest(ctx context.Context, tb testing.TB) (func() error, error) {
 	if tb == nil {
 		return nil, fmt.Errorf("store: RefuseDomainDrainsForTest is a test's fault injector and takes the test")

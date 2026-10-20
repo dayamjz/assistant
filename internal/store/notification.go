@@ -297,8 +297,9 @@ func (s *Store) notification(ctx context.Context, shape notificationShape, wakeI
 //
 // The fault is a trigger in the database itself, so it holds for every
 // connection to the file until it is lifted; a test lifts it before the
-// store is closed. It takes a testing.TB so it cannot be called from
-// anything but a test, and it refuses a nil one.
+// store is closed. It takes a testing.TB and refuses a nil one, so a
+// production path does not reach it by accident; that does not stop a
+// deliberate caller that builds a testing.T of its own.
 func (s *Store) RefuseNotificationClaimsForTest(ctx context.Context, tb testing.TB) (func() error, error) {
 	if tb == nil {
 		return nil, fmt.Errorf("store: RefuseNotificationClaimsForTest is a test's fault injector and takes the test")
