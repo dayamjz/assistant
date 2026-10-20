@@ -150,6 +150,10 @@ type Session struct {
 	// attach is the command a person runs to attach to the worker's
 	// terminal, and nil for a worker that has none.
 	attach []string
+	// host is the identity of the process hosting the worker's terminal,
+	// the one its membership or placement joined the set with, and zero
+	// for a worker with none.
+	host agents.Identity
 	// leave takes the worker's group out of the provider's Workers; it is
 	// idempotent and runs when the process ends and when Close ends it.
 	leave func()
@@ -158,6 +162,14 @@ type Session struct {
 // Reference is the session's identity, which the caller records as the
 // attempt's session reference.
 func (s *Session) Reference() Reference { return s.ref }
+
+// Host is the identity of the process hosting the session's terminal, a
+// tmux server's, as the session's membership or placement carries it, and
+// zero for a session with no terminal. A caller records it beside the
+// reference where a placement must outlive the handle, as a subordinate's
+// delegation attempt does, because the reference names the pane's process
+// and not the server whose other windows are the same session's.
+func (s *Session) Host() agents.Identity { return s.host }
 
 // AvailabilityFailure reads this held process's adapter-owned failure without
 // copying its transcript. None is absence of failure evidence, not liveness.

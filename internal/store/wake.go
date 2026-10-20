@@ -795,25 +795,58 @@ func (s *Store) AcknowledgeWakes(ctx context.Context, ids []int64, by Acknowledg
 		return fmt.Errorf("store: acknowledging wakes: %w", err)
 	}
 	now := encodeTime(nowUTC())
+	return s.inTx(ctx, func(tx *sql.Tx) error { return acknowledgeWakesTx(ctx, tx, ids, who, now) })
+}
+
+// acknowledgeWakesTx is AcknowledgeWakes inside a transaction: every row is
+// checked before any is written, so a refusal writes nothing.
+func acknowledgeWakesTx(ctx context.Context, tx *sql.Tx, ids []int64, who, now string) error {
+	for _, id := range ids {
+		var handled Optional[string]
+		err := tx.QueryRowContext(ctx, `SELECT handled_at FROM wake WHERE id = ?`, id).Scan(&handled)
+		switch {
+		case isNoRows(err):
+			return &WakeIDError{ID: id, Reason: ErrWakeUnknown}
+		case err != nil:
+			return fmt.Errorf("store: acknowledging wake %d: %w", id, err)
+		case handled.IsKnown():
+			return &WakeIDError{ID: id, Reason: ErrWakeAcknowledged}
+		}
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE wake SET handled_at = ?, acknowledged_by = ? WHERE id = ? AND handled_at IS NULL`,
+			now, who, id); err != nil {
+			return fmt.Errorf("store: acknowledging wake %d: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// AcknowledgeAll acknowledges task wakes and domain wakes in one
+// transaction, on AcknowledgeWakes' and AcknowledgeDomainWakes' terms for
+// each shape: every row of both shapes is checked before any is written,
+// so a batch naming one row of either shape that is unknown or already
+// acknowledged closes nothing, which is the whole-batch refusal an
+// acknowledgement naming both shapes is held to. A batch naming no row of
+// either shape is refused.
+func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes []int64, by Acknowledger) error {
+	if len(wakes)+len(domainWakes) == 0 {
+		return errors.New("store: an acknowledgement names no wakes")
+	}
+	who, err := acknowledgerText(by)
+	if err != nil {
+		return fmt.Errorf("store: acknowledging wakes: %w", err)
+	}
+	now := encodeTime(nowUTC())
 	return s.inTx(ctx, func(tx *sql.Tx) error {
-		for _, id := range ids {
-			var handled Optional[string]
-			err := tx.QueryRowContext(ctx, `SELECT handled_at FROM wake WHERE id = ?`, id).Scan(&handled)
-			switch {
-			case isNoRows(err):
-				return &WakeIDError{ID: id, Reason: ErrWakeUnknown}
-			case err != nil:
-				return fmt.Errorf("store: acknowledging wake %d: %w", id, err)
-			case handled.IsKnown():
-				return &WakeIDError{ID: id, Reason: ErrWakeAcknowledged}
+		if len(wakes) > 0 {
+			if err := acknowledgeWakesTx(ctx, tx, wakes, who, now); err != nil {
+				return err
 			}
 		}
-		for _, id := range ids {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE wake SET handled_at = ?, acknowledged_by = ? WHERE id = ? AND handled_at IS NULL`,
-				now, who, id); err != nil {
-				return fmt.Errorf("store: acknowledging wake %d: %w", id, err)
-			}
+		if len(domainWakes) > 0 {
+			return acknowledgeDomainWakesTx(ctx, tx, domainWakes, who, now)
 		}
 		return nil
 	})

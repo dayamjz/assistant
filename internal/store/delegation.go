@@ -176,13 +176,30 @@ func (s *Store) Delegate(ctx context.Context, req DelegationRequest) (Delegation
 // why. A delegation already ended is refused with ErrDelegationEnded, an
 // unknown identifier is ErrNotFound, and the zero DelegationEnd is refused
 // with ErrNoDelegationEnd, all with nothing written. It records who and
-// does not gate on it.
-func (s *Store) EndDelegation(ctx context.Context, id int64, by DelegationEnd) (Delegation, error) {
+// does not gate on it. The holds closing names are answered in the same
+// transaction on DelegationEndClosure's terms, and the keys it closed are
+// returned; a closure naming keys with no resolution is ErrNoResolution and
+// one naming nobody is ErrNoResolver, before anything is written.
+func (s *Store) EndDelegation(ctx context.Context, id int64, by DelegationEnd, closing DelegationEndClosure) (Delegation, []string, error) {
 	why, err := delegationEndText(by)
 	if err != nil {
-		return Delegation{}, fmt.Errorf("store: ending delegation %d: %w", id, err)
+		return Delegation{}, nil, fmt.Errorf("store: ending delegation %d: %w", id, err)
+	}
+	var resolver string
+	if len(closing.Keys) > 0 {
+		if strings.TrimSpace(closing.Resolution) == "" {
+			return Delegation{}, nil, fmt.Errorf("%w: ending delegation %d", ErrNoResolution, id)
+		}
+		if resolver, err = resolverText(closing.By); err != nil {
+			return Delegation{}, nil, fmt.Errorf("store: ending delegation %d: %w", id, err)
+		}
+	}
+	var noteCol any
+	if strings.TrimSpace(closing.Note) != "" {
+		noteCol = s.redact.Redact(closing.Note)
 	}
 	var out Delegation
+	var closed []string
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		d, err := delegationByID(ctx, tx, id)
 		if err != nil {
@@ -191,20 +208,57 @@ func (s *Store) EndDelegation(ctx context.Context, id int64, by DelegationEnd) (
 		if !d.Standing() {
 			return fmt.Errorf("%w: delegation %d of domain %s", ErrDelegationEnded, id, d.Domain)
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE delegation SET ended_at = ?, end_reason = ? WHERE id = ?`,
-			encodeTime(nowUTC()), why, id); err != nil {
+		now := encodeTime(nowUTC())
+		if _, err := tx.ExecContext(ctx, `UPDATE delegation SET ended_at = ?, end_reason = ? WHERE id = ?`, now, why, id); err != nil {
 			return err
+		}
+		for _, key := range closing.Keys {
+			result, err := tx.ExecContext(ctx,
+				`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE key = ? AND resolution IS NULL`,
+				closing.Resolution, now, resolver, noteCol, key)
+			if err != nil {
+				return fmt.Errorf("closing hold %s: %w", key, err)
+			}
+			if n, err := result.RowsAffected(); err != nil {
+				return err
+			} else if n == 1 {
+				closed = append(closed, key)
+			}
 		}
 		out, err = delegationByID(ctx, tx, id)
 		return err
 	})
 	if err != nil {
 		if errors.Is(err, ErrDelegationEnded) || errors.Is(err, ErrNotFound) {
-			return Delegation{}, err
+			return Delegation{}, nil, err
 		}
-		return Delegation{}, fmt.Errorf("store: ending delegation %d: %w", id, err)
+		return Delegation{}, nil, fmt.Errorf("store: ending delegation %d: %w", id, err)
 	}
-	return out, nil
+	return out, closed, nil
+}
+
+// DelegationEndClosure is the holds a delegation's end answers in the same
+// transaction, so the end and the answer are one write and neither is
+// recorded without the other. It is for a hold whose question the end
+// itself answers, as internal/service's relaunch-bound hold asks whether to
+// end the delegation; the resolution is the caller's, recorded under the
+// Resolver it names, and nothing here decides that an end answers a hold.
+// Each key still open is resolved on ResolveHoldNoted's terms and reported
+// closed; a key already resolved, or registered nowhere, is left as it
+// stands and not reported, since the end is the fact the transaction exists
+// for. The zero value closes nothing.
+type DelegationEndClosure struct {
+	// Keys are the holds to close.
+	Keys []string
+	// Resolution is what the end decided for them, refused empty with
+	// ErrNoResolution when Keys is not.
+	Resolution string
+	// Note is free text recorded with the resolution, redacted, and empty
+	// leaves ResolutionNote unknown.
+	Note string
+	// By is who decided, refused as the zero Resolver when Keys is not
+	// empty.
+	By Resolver
 }
 
 // Delegation returns the domain's latest delegation, standing or ended, and
@@ -314,7 +368,25 @@ type DelegationAttempt struct {
 	// process starts; an attempt whose process never started keeps it
 	// unknown.
 	SessionRef Optional[string] `json:"session_ref"`
+	// Host is the identity of the process hosting the session's terminal,
+	// recorded with SessionRef, and zero for a session with none or one
+	// recorded before migration 49.
+	Host SessionHost `json:"host"`
 }
+
+// SessionHost is the identity of the process hosting a terminal session, a
+// tmux server's, as the delegation attempt records it: the identifier and
+// the start time internal/agents' Identity carries, which is what a
+// placement by ancestry compares. The zero value is no host.
+type SessionHost struct {
+	// PID is the host process's identifier.
+	PID int `json:"pid"`
+	// Start is the platform's reading of its start time.
+	Start uint64 `json:"start"`
+}
+
+// Known reports whether the host names a process.
+func (h SessionHost) Known() bool { return h.PID > 0 }
 
 // BeginDelegationAttempt records the next attempt of a delegation, anchored
 // to the highest attempt sequence the caller had seen, on BeginTaskAttempt's
@@ -359,10 +431,12 @@ func (s *Store) BeginDelegationAttempt(ctx context.Context, id int64, expectedLa
 }
 
 // SetDelegationAttemptSession records the session the attempt's process runs
-// in, once, on SetAttemptSession's terms: a second call is refused with
+// in, once, with the identity of the process hosting its terminal, zero for
+// none, on SetAttemptSession's terms: a second call is refused with
 // ErrAttemptSessionRecorded, an empty reference is refused, and an attempt
-// that does not exist is ErrNotFound, wrapped.
-func (s *Store) SetDelegationAttemptSession(ctx context.Context, id, sequence int64, sessionRef string) error {
+// that does not exist is ErrNotFound, wrapped. A delegation that has ended
+// is ErrDelegationEnded, read in the same transaction.
+func (s *Store) SetDelegationAttemptSession(ctx context.Context, id, sequence int64, sessionRef string, host SessionHost) error {
 	if strings.TrimSpace(sessionRef) == "" {
 		return fmt.Errorf("store: delegation %d attempt %d: the session reference is empty", id, sequence)
 	}
@@ -387,9 +461,13 @@ func (s *Store) SetDelegationAttemptSession(ctx context.Context, id, sequence in
 		if recorded.IsKnown() {
 			return fmt.Errorf("store: delegation %d attempt %d: %w", id, sequence, ErrAttemptSessionRecorded)
 		}
+		var hostPID, hostStart any
+		if host.Known() {
+			hostPID, hostStart = host.PID, int64(host.Start)
+		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE delegation_attempt SET session_ref = ? WHERE delegation = ? AND sequence = ?`,
-			sessionRef, id, sequence); err != nil {
+			`UPDATE delegation_attempt SET session_ref = ?, host_pid = ?, host_start = ? WHERE delegation = ? AND sequence = ?`,
+			sessionRef, hostPID, hostStart, id, sequence); err != nil {
 			return fmt.Errorf("store: delegation %d attempt %d: recording its session: %w", id, sequence, err)
 		}
 		return nil
@@ -403,7 +481,7 @@ func (s *Store) DelegationAttempts(ctx context.Context, id int64) ([]DelegationA
 		return nil, err
 	}
 	rows, err := s.read.QueryContext(ctx,
-		`SELECT delegation, sequence, started_at, session_ref FROM delegation_attempt WHERE delegation = ? ORDER BY sequence`, id)
+		`SELECT delegation, sequence, started_at, session_ref, host_pid, host_start FROM delegation_attempt WHERE delegation = ? ORDER BY sequence`, id)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading the attempts of delegation %d: %w", id, err)
 	}
@@ -412,8 +490,12 @@ func (s *Store) DelegationAttempts(ctx context.Context, id int64) ([]DelegationA
 	for rows.Next() {
 		var a DelegationAttempt
 		var started string
-		if err := rows.Scan(&a.Delegation, &a.Sequence, &started, &a.SessionRef); err != nil {
+		var hostPID, hostStart Optional[int64]
+		if err := rows.Scan(&a.Delegation, &a.Sequence, &started, &a.SessionRef, &hostPID, &hostStart); err != nil {
 			return nil, fmt.Errorf("store: reading the attempts of delegation %d: %w", id, err)
+		}
+		if pid, ok := hostPID.Get(); ok && pid > 0 {
+			a.Host = SessionHost{PID: int(pid), Start: uint64(hostStart.Or(0))}
 		}
 		if a.StartedAt, err = decodeTime(started); err != nil {
 			return nil, fmt.Errorf("store: reading the attempts of delegation %d: %w", id, err)

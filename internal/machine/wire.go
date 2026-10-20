@@ -1008,6 +1008,12 @@ type DelegationEnded struct {
 	// and ended it; false when the session was an earlier service's or had
 	// already ended, which the delegation's attempts say more about.
 	SessionEnded bool `json:"session_ended"`
+	// Holds are the delegation's relaunch-bound holds the end answered, in
+	// the end's own transaction: the end is the stop that hold asks about,
+	// made by the same caller over the same surface, so each is resolved
+	// stop under the resolver the request derives. Empty when none was
+	// open.
+	Holds []store.Hold `json:"holds,omitempty"`
 }
 
 // TaskMessaged is the answer to task.message: the message record as the

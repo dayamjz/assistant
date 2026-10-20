@@ -191,7 +191,7 @@ func TestADelegationEndedByAnAnswerReadsBackAsSuch(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	d := seedDelegation(t, s, "beta")
-	ended, err := s.EndDelegation(ctx, d.ID, EndedByAnswer())
+	ended, _, err := s.EndDelegation(ctx, d.ID, EndedByAnswer(), DelegationEndClosure{})
 	if err != nil || ended.EndedBy != Known(EndedByAnswer()) || ended.Standing() {
 		t.Fatalf("EndDelegation = %+v, %v", ended, err)
 	}
@@ -200,5 +200,39 @@ func TestADelegationEndedByAnAnswerReadsBackAsSuch(t *testing.T) {
 	}
 	if _, err := s.BeginDelegationAttempt(ctx, d.ID, 1); !errors.Is(err, ErrDelegationEnded) {
 		t.Fatalf("an attempt after the answer ended the delegation = %v, want ErrDelegationEnded", err)
+	}
+}
+
+// AcknowledgeAll is one batch over both shapes: a valid task wake beside a
+// domain wake no row has is refused and left queued, and the batch less
+// the bad row closes it.
+func TestAcknowledgeAllRefusesAMixedBatchWhole(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedTask(t, s, "abcdefghij23")
+	inc, err := s.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appended, err := s.AppendWakeWithMarkers(ctx, inc, WakeRequest{TaskID: "abcdefghij23", Kind: "terminal-gone", Marker: "m"}, MarkerAdvance{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := appended.Wake.ID
+	if err := s.AcknowledgeAll(ctx, []int64{id}, []int64{99}, AcknowledgedByCoordinator()); !errors.Is(err, ErrWakeUnknown) {
+		t.Fatalf("the mixed batch = %v, want ErrWakeUnknown", err)
+	}
+	if rows, err := s.TaskWakes(ctx, "abcdefghij23"); err != nil || len(rows) != 1 || !rows[0].Queued() {
+		t.Fatalf("after the refusal the task's wakes are %+v (%v), want the one still queued", rows, err)
+	}
+	if err := s.AcknowledgeAll(ctx, nil, nil, AcknowledgedByCoordinator()); err == nil {
+		t.Fatal("an empty batch was accepted")
+	}
+	if err := s.AcknowledgeAll(ctx, []int64{id}, nil, AcknowledgedByCoordinator()); err != nil {
+		t.Fatal(err)
+	}
+	if rows, err := s.TaskWakes(ctx, "abcdefghij23"); err != nil || rows[0].Queued() {
+		t.Fatalf("after the corrected batch the task's wakes are %+v (%v), want it closed", rows, err)
 	}
 }

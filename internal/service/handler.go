@@ -173,9 +173,14 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		})
 	case ipc.MethodWakesSubscribe:
 		// The wake stream is internal/ipc's to open and pump; what the
-		// handler is asked is only whether this caller may hold it, and
-		// the answer is wakes.list's.
-		return nil, s.admitWakeStream(req)
+		// handler is asked is whether this caller may hold it, the answer
+		// wakes.list's, and for a subordinate coordinator which stream it
+		// holds, its own domain's, answered as an ipc.StreamChoice.
+		choice, err := s.admitWakeStream(req)
+		if err != nil || choice.Name == "" {
+			return nil, err
+		}
+		return json.Marshal(choice)
 	case ipc.MethodSupervisionAssert:
 		return call(ctx, req, func(ctx context.Context, _ struct{}) (supervisor.Arm, error) {
 			return s.assertSupervision(ctx, req)

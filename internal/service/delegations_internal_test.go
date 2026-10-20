@@ -1,11 +1,14 @@
 package service
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
@@ -24,7 +27,7 @@ func plantDelegation(t *testing.T, records *store.Store, domain, ref string) sto
 	if _, err := records.BeginDelegationAttempt(ctx, d.ID, 0); err != nil {
 		t.Fatalf("beginning the attempt of %s: %v", domain, err)
 	}
-	if err := records.SetDelegationAttemptSession(ctx, d.ID, 1, ref); err != nil {
+	if err := records.SetDelegationAttemptSession(ctx, d.ID, 1, ref, store.SessionHost{}); err != nil {
 		t.Fatalf("recording the session of %s: %v", domain, err)
 	}
 	return d
@@ -255,7 +258,7 @@ func TestASecondDelegationOfADomainHoldsAtTheBoundOnItsOwnKey(t *testing.T) {
 	if _, err := l.records(t).ResolveHold(ctx, counterfeit, "retry", store.ResolvedByPerson()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.records(t).EndDelegation(ctx, first.ID, store.EndedByCoordinator()); err != nil {
+	if _, _, err := l.records(t).EndDelegation(ctx, first.ID, store.EndedByCoordinator(), store.DelegationEndClosure{}); err != nil {
 		t.Fatal(err)
 	}
 	second, err := l.records(t).Delegate(ctx, store.DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated, Expected: first.ID})
@@ -265,7 +268,7 @@ func TestASecondDelegationOfADomainHoldsAtTheBoundOnItsOwnKey(t *testing.T) {
 	if _, err := l.records(t).BeginDelegationAttempt(ctx, second.ID, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := l.records(t).SetDelegationAttemptSession(ctx, second.ID, 1, "sub-two"); err != nil {
+	if err := l.records(t).SetDelegationAttemptSession(ctx, second.ID, 1, "sub-two", store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	secondKey := domainBoundKey(second, 1)
@@ -353,5 +356,70 @@ func TestAnAttemptWithNoSessionIsStartingInsideTheWindowAndGonePastIt(t *testing
 	stale.started = now.Add(-2 * time.Minute)
 	if decided := decideDelegation(stale, cfg, now); len(decided.detections) != 1 || !decided.detections[0].Verdict.Surfaces() {
 		t.Fatalf("an attempt claimed before the window with no session decided %+v, want subordinate-gone surfaced", decided)
+	}
+}
+
+// A delegation's relaunch-bound hold is answerable from what catch-up says
+// and is answered by the delegation's end. The loop raises the hold past
+// the bound; catch-up lists it with --domain naming the domain, then
+// --answer, which is how task.respond closes it, and never --answer alone,
+// which would name the current checkout's run. The coordinator's
+// domain.end then answers it stop, in the end's own transaction, under the
+// resolver the request derives, so no hold is left open that only a
+// standing delegation could have answered, and catch-up no longer lists it.
+func TestADomainsBoundHoldIsAnsweredGivenTheDomainAndClosedByItsEnd(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P8)
+	h, records := loopHomeConfigured(t, `{"supervision_beacon_interval": "1s", "escalation_window": "1m", "relaunch_attempts": 0}`)
+	d := plantDelegation(t, records, "alpha", "sub-crashed")
+	terminals := newScriptedTerminals()
+	terminals.dead("sub-crashed")
+	clock := &fakeClock{now: time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)}
+	l := openLoop(t, h, records, terminals, clock)
+	defer func() { _ = l.service.Close() }()
+	ctx := t.Context()
+	if err := l.nextPass(t).Delegations["alpha"].Err; err != nil {
+		t.Fatalf("the pass over the delegation failed: %v", err)
+	}
+	key := domainBoundKey(d, 1)
+	if hold, err := l.records(t).Hold(ctx, key); err != nil || !hold.Open() {
+		t.Fatalf("the bound's hold reads %+v (%v), want it open", hold, err)
+	}
+
+	waitingOn := func() *machine.Waiting {
+		t.Helper()
+		read, err := l.service.catchUp(ctx)
+		if err != nil {
+			t.Fatalf("catchUp: %v", err)
+		}
+		for i, w := range read.Waiting {
+			if w.Hold != nil && w.Hold.Key == key {
+				return &read.Waiting[i]
+			}
+		}
+		return nil
+	}
+	w := waitingOn()
+	if w == nil {
+		t.Fatal("catch-up does not list the domain's hold")
+	}
+	if want := []string{"--domain", "alpha", "--answer"}; !slices.Equal(w.Answer.Args, want) {
+		t.Fatalf("catch-up answers the domain's hold with %q, want %q", w.Answer.Args, want)
+	}
+
+	ended, err := l.service.endDelegation(ctx, ipc.Request{}, machine.DomainEndRequest{Domain: "alpha"})
+	if err != nil {
+		t.Fatalf("domain.end: %v", err)
+	}
+	if ended.Record.Standing() || len(ended.Holds) != 1 || ended.Holds[0].Key != key {
+		t.Fatalf("domain.end answered %+v, want the delegation ended answering its hold %s", ended, key)
+	}
+	hold, err := l.records(t).Hold(ctx, key)
+	if err != nil || hold.Open() || hold.Resolution.Or("") != machine.AnswerStop ||
+		hold.ResolvedBy.Or(store.Resolver{}) != (ipc.Request{}).HoldResolver() {
+		t.Fatalf("after the end the hold reads %+v (%v), want it answered stop under the request's resolver", hold, err)
+	}
+	if w := waitingOn(); w != nil {
+		t.Fatalf("after the end catch-up still lists the hold: %+v", w)
 	}
 }

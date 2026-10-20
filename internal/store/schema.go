@@ -151,6 +151,12 @@ const subordinateDomainsMigration = "subordinate domains"
 // it, for the reason sealCheckpointTableMigration is a constant.
 const domainWakesMigration = "domain wakes"
 
+// delegationAttemptHostMigration names the migration that records, beside
+// a delegation attempt's session reference, the identity of the process
+// hosting the session's terminal, for the reason sealCheckpointTableMigration
+// is a constant.
+const delegationAttemptHostMigration = "delegation attempt host"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1960,6 +1966,22 @@ var schema = []migration{
 				gone_surfaced_at TEXT,
 				updated_at       TEXT NOT NULL
 			) STRICT`,
+		},
+	},
+	{
+		version: 49,
+		name:    delegationAttemptHostMigration,
+		statements: []string{
+			// The identity of the process hosting the attempt's terminal,
+			// a tmux server's, as internal/session's Placement.Host carries
+			// it for a held session: its identifier and start time, NULL
+			// for a session with no terminal. It is written in the same
+			// update as session_ref, which the trigger above admits once,
+			// so a restart can place a surviving subordinate's server
+			// descendants as that subordinate's, exactly as the held set
+			// places them; the reference alone names the pane's process.
+			`ALTER TABLE delegation_attempt ADD COLUMN host_pid INTEGER`,
+			`ALTER TABLE delegation_attempt ADD COLUMN host_start INTEGER`,
 		},
 	},
 }

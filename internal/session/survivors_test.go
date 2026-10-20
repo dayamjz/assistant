@@ -3,6 +3,7 @@ package session_test
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -41,7 +42,7 @@ func TestASurvivorIsPlacedFromItsRecordedReferenceWhileItsProcessIsPresent(t *te
 	if _, ok := survivors.Member(ref.PID); ok {
 		t.Fatal("a set that adopted nothing places the subordinate's group")
 	}
-	placed, adopted, err := survivors.Adopt(marker, text)
+	placed, adopted, err := survivors.Adopt(marker, text, agents.Identity{})
 	if err != nil || !adopted || placed != (session.Placement{Domain: "alpha", Group: ref.PID}) {
 		t.Fatalf("Adopt(%q) = %+v, %v, %v; want the domain's placement adopted with no error", text, placed, adopted, err)
 	}
@@ -49,7 +50,29 @@ func TestASurvivorIsPlacedFromItsRecordedReferenceWhileItsProcessIsPresent(t *te
 		t.Fatalf("Member(%d) = %+v, %v after the adoption; want the placement", ref.PID, got, ok)
 	}
 	if _, ok := survivors.Hosted(agents.Identity{PID: ref.PID, Start: ref.Start}); ok {
-		t.Fatal("a survivor's own identity hosts it: the reference records no host")
+		t.Fatal("a survivor's own identity hosts it: it was adopted with no host")
+	}
+	if _, ok := survivors.Hosted(agents.Identity{}); ok {
+		t.Fatal("the zero identity hosts a survivor")
+	}
+	// A survivor adopted with the identity of the server hosting its
+	// terminal, as the attempt records one: this process stands in for the
+	// server, since what Hosted reads of it is its presence alone.
+	server, found, err := agents.Identify(os.Getpid())
+	if err != nil || !found {
+		t.Fatalf("this process's identity: %+v, %v, %v", server, found, err)
+	}
+	if _, adopted, err := survivors.Adopt(marker, text, server); err != nil || !adopted {
+		t.Fatalf("adopting with a host = %v, %v", adopted, err)
+	}
+	if got, ok := survivors.Hosted(server); !ok || got != (session.Placement{Domain: "alpha", Group: ref.PID, Host: server}) {
+		t.Fatalf("Hosted(the server) = %+v, %v; want the survivor's placement carrying the host", got, ok)
+	}
+	if _, ok := survivors.Hosted(agents.Identity{PID: server.PID, Start: server.Start + 1}); ok {
+		t.Fatal("an identity with another start time hosts the survivor")
+	}
+	if _, ok := survivors.Member(ref.PID); !ok {
+		t.Fatal("the survivor adopted with a host is not placed by its group")
 	}
 	if survivors.Empty() {
 		t.Fatal("the set reads empty while it holds the survivor")
@@ -60,17 +83,18 @@ func TestASurvivorIsPlacedFromItsRecordedReferenceWhileItsProcessIsPresent(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, adopted, err := survivors.Adopt(marker, workerText); !errors.Is(err, session.ErrReference) || adopted {
+	if _, adopted, err := survivors.Adopt(marker, workerText, agents.Identity{}); !errors.Is(err, session.ErrReference) || adopted {
 		t.Fatalf("adopting a worker's reference = %v, %v; want ErrReference and nothing adopted", adopted, err)
 	}
-	if _, adopted, err := survivors.Adopt("0123456789abcdef0123456789abcdef", text); !errors.Is(err, session.ErrReference) || adopted {
+	if _, adopted, err := survivors.Adopt("0123456789abcdef0123456789abcdef", text, agents.Identity{}); !errors.Is(err, session.ErrReference) || adopted {
 		t.Fatalf("adopting another home's reference = %v, %v; want ErrReference and nothing adopted", adopted, err)
 	}
-	if _, adopted, err := survivors.Adopt(marker, "not a reference"); !errors.Is(err, session.ErrReference) || adopted {
+	if _, adopted, err := survivors.Adopt(marker, "not a reference", agents.Identity{}); !errors.Is(err, session.ErrReference) || adopted {
 		t.Fatalf("adopting a malformed reference = %v, %v; want ErrReference and nothing adopted", adopted, err)
 	}
 
-	// The production forced off: the group asked of a set that forgot it.
+	// The production forced off: the group and the host asked of a set
+	// that forgot it.
 	identity, forgotten := survivors.Forget("alpha")
 	if !forgotten || identity != (agents.Identity{PID: ref.PID, Start: ref.Start}) {
 		t.Fatalf("Forget(alpha) = %+v, %v; want the identity the survivor was held to", identity, forgotten)
@@ -78,13 +102,16 @@ func TestASurvivorIsPlacedFromItsRecordedReferenceWhileItsProcessIsPresent(t *te
 	if _, ok := survivors.Member(ref.PID); ok || !survivors.Empty() {
 		t.Fatal("a forgotten survivor is still placed")
 	}
+	if _, ok := survivors.Hosted(server); ok {
+		t.Fatal("a forgotten survivor is still placed by its host")
+	}
 	if _, forgotten := survivors.Forget("alpha"); forgotten {
 		t.Fatal("a domain with no survivor was forgotten twice")
 	}
 
 	// Adopted again while it runs, then ended: the membership ends with
 	// the process, read at the ask.
-	if _, adopted, err := survivors.Adopt(marker, text); err != nil || !adopted {
+	if _, adopted, err := survivors.Adopt(marker, text, agents.Identity{}); err != nil || !adopted {
 		t.Fatalf("adopting the live survivor again = %v, %v", adopted, err)
 	}
 	if err := p.Send(context.Background(), s, "finish"); err != nil {
@@ -101,7 +128,7 @@ func TestASurvivorIsPlacedFromItsRecordedReferenceWhileItsProcessIsPresent(t *te
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if _, adopted, err := survivors.Adopt(marker, text); err != nil || adopted {
+	if _, adopted, err := survivors.Adopt(marker, text, agents.Identity{}); err != nil || adopted {
 		t.Fatalf("adopting the ended subordinate's reference = %v, %v; want not adopted and no error", adopted, err)
 	}
 }

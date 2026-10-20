@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -318,7 +320,6 @@ func TestASubordinateHoldsTheCoordinatorsCommandsOverItsDomainAndNothingElse(t *
 			{ipc.MethodDomainDelegate, machine.DomainDelegateRequest{Domain: "beta", Delivery: "gated", Instructions: "x"}},
 			{ipc.MethodDomainEnd, machine.DomainEndRequest{Domain: "alpha"}},
 			{ipc.MethodTaskInterrupt, machine.TaskRequest{Task: own}},
-			{ipc.MethodWakesSubscribe, struct{}{}},
 		}
 		for _, r := range refusals {
 			if _, code := callAs(t, d.as, r.method, r.params); code != ipc.CodeSubordinate {
@@ -802,7 +803,7 @@ func TestASurvivingSubordinateIsPlacedFromItsRecordAfterARestartAndEndedByTheDom
 	if _, err := records.BeginDelegationAttempt(ctx, delegation.ID, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.SetDelegationAttemptSession(ctx, delegation.ID, 1, ref); err != nil {
+	if err := records.SetDelegationAttemptSession(ctx, delegation.ID, 1, ref, store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := records.Close(); err != nil {
@@ -960,6 +961,58 @@ func TestTheWakeStreamCarriesOnlyTheRowsTheCoordinatorsDrainOffers(t *testing.T)
 		}
 		if routed, err := r.WakeRouted(ctx, ownGone, store.WakeRoute{}); err != nil || !routed {
 			t.Fatalf("WakeRouted(own, the zero route) = %v, %v; want true, which is the row the stream would have carried with the routing forced off", routed, err)
+		}
+	})
+}
+
+// A subordinate coordinator holds its own domain's wake stream, which PRD
+// section 9 grants it for its domain's rows alone (P14): from a process the
+// subordinate runs, wakes.subscribe is admitted and attached to the stream
+// of the domain the placement derived, and the terminal-gone of a task in
+// the domain, which the coordinator's stream does not carry, is pushed on
+// it. A subscription the service attached to the coordinator's stream
+// instead would be pushed nothing for that row and time out here.
+func TestASubordinateHoldsItsOwnDomainsWakeStream(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P14)
+	launchedWorker(t, "task/stream-domain", func(w launched) {
+		d := delegateDomain(t, w, "alpha", "gated")
+		own := createdBy(t, d, machine.TaskCreateRequest{
+			Shape: "investigation", Project: "alpha listen", Instructions: "Look into it.\n", Repository: w.repository.ID,
+		}).Record.ID
+		waitRunning(t, w, own)
+
+		ready := filepath.Join(t.TempDir(), "ready")
+		ran := make(chan standin.Ran, 1)
+		go func() {
+			ran <- asWorker(t, d.as, shellQuote(testCommand(t), listenVerb, w.running.service.Socket(), ready))
+		}()
+		deadline := time.Now().Add(60 * time.Second)
+		for {
+			if _, err := os.Stat(ready); err == nil {
+				break
+			}
+			select {
+			case r := <-ran:
+				t.Fatalf("the subordinate's listen ended before its stream opened: %+v", r)
+			default:
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatal("the subordinate's stream never opened")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		finishWorker(t, w, own)
+		r := <-ran
+		if r.Exit != 0 {
+			t.Fatalf("the subordinate's listen = %+v, want a pushed wake", r)
+		}
+		var row store.Wake
+		if err := json.Unmarshal([]byte(r.Stdout), &row); err != nil {
+			t.Fatalf("the pushed wake %q does not read as a wake row: %v", r.Stdout, err)
+		}
+		if row.TaskID != own {
+			t.Fatalf("the subordinate's stream carried %+v, want a wake of its own domain's task %s", row, own)
 		}
 	})
 }

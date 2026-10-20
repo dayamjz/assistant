@@ -407,28 +407,32 @@ func (s *Store) AcknowledgeDomainWakes(ctx context.Context, ids []int64, by Ackn
 		return fmt.Errorf("store: acknowledging domain wakes: %w", err)
 	}
 	now := encodeTime(nowUTC())
-	return s.inTx(ctx, func(tx *sql.Tx) error {
-		for _, id := range ids {
-			var handled Optional[string]
-			err := tx.QueryRowContext(ctx, `SELECT handled_at FROM domain_wake WHERE id = ?`, id).Scan(&handled)
-			switch {
-			case isNoRows(err):
-				return &WakeIDError{ID: id, Reason: ErrWakeUnknown}
-			case err != nil:
-				return fmt.Errorf("store: acknowledging domain wake %d: %w", id, err)
-			case handled.IsKnown():
-				return &WakeIDError{ID: id, Reason: ErrWakeAcknowledged}
-			}
+	return s.inTx(ctx, func(tx *sql.Tx) error { return acknowledgeDomainWakesTx(ctx, tx, ids, who, now) })
+}
+
+// acknowledgeDomainWakesTx is AcknowledgeDomainWakes inside a transaction,
+// on acknowledgeWakesTx's terms.
+func acknowledgeDomainWakesTx(ctx context.Context, tx *sql.Tx, ids []int64, who, now string) error {
+	for _, id := range ids {
+		var handled Optional[string]
+		err := tx.QueryRowContext(ctx, `SELECT handled_at FROM domain_wake WHERE id = ?`, id).Scan(&handled)
+		switch {
+		case isNoRows(err):
+			return &WakeIDError{ID: id, Reason: ErrWakeUnknown}
+		case err != nil:
+			return fmt.Errorf("store: acknowledging domain wake %d: %w", id, err)
+		case handled.IsKnown():
+			return &WakeIDError{ID: id, Reason: ErrWakeAcknowledged}
 		}
-		for _, id := range ids {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE domain_wake SET handled_at = ?, acknowledged_by = ? WHERE id = ? AND handled_at IS NULL`,
-				now, who, id); err != nil {
-				return fmt.Errorf("store: acknowledging domain wake %d: %w", id, err)
-			}
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE domain_wake SET handled_at = ?, acknowledged_by = ? WHERE id = ? AND handled_at IS NULL`,
+			now, who, id); err != nil {
+			return fmt.Errorf("store: acknowledging domain wake %d: %w", id, err)
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 const domainWakeColumns = `SELECT domain_wake.id, domain_wake.delegation, delegation.domain, domain_wake.kind,

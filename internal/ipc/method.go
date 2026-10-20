@@ -178,7 +178,9 @@ const (
 	// held is not handed out again until it ends. It is restricted, and its
 	// handler refuses a task's worker on MethodWakesList's terms before
 	// anything is written, so neither a contained caller nor a worker is
-	// sent a coordinator's wake.
+	// sent a coordinator's wake. A subordinate coordinator holds its own
+	// domain's stream, the one its handler chooses through a StreamChoice,
+	// which carries the rows its drain is offered and no other.
 	MethodWakesSubscribe Method = "wakes.subscribe"
 	// MethodSupervisionAssert is PRD section 5's arm verification over the
 	// socket: it answers whether the supervisor loop of the service that
@@ -330,7 +332,7 @@ var specs = []Spec{
 	{MethodWakesPeek, KindRequest, AccessRestricted, "List the queued wakes without handing out or acknowledging any."},
 	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator acted on the named wakes, which closes them."},
 	{MethodWakesWait, KindRequest, AccessRestricted, "Block until the wake queue holds a wake on offer or a bound elapses, then drain it."},
-	{MethodWakesSubscribe, KindStream, AccessRestricted, "Open the coordinator's wake stream, which pushes each wake as it is queued."},
+	{MethodWakesSubscribe, KindStream, AccessRestricted, "Open the caller's wake stream, the coordinator's or a subordinate coordinator's for its domain, which pushes each wake as it is queued."},
 	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},
 	{MethodCatchUpRead, KindRequest, AccessOpen, "Read what waits on you, what landed unseen, what is under way, and what stopped."},
 	{MethodCatchUpMark, KindRequest, AccessRestricted, "Mark seen exactly the landed records a catch-up read showed."},

@@ -533,18 +533,11 @@ func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machi
 		}
 		return err
 	}
-	// The two shapes are two batches, each all or nothing on the store's
-	// terms; a refused second batch leaves the first closed, which the
-	// refusal says by naming the row.
-	if len(r.Wakes) > 0 {
-		if err := s.store.AcknowledgeWakes(ctx, r.Wakes, by); err != nil {
-			return machine.Acknowledged{}, refusal(err)
-		}
-	}
-	if len(r.DomainWakes) > 0 {
-		if err := s.store.AcknowledgeDomainWakes(ctx, r.DomainWakes, by); err != nil {
-			return machine.Acknowledged{}, fmt.Errorf("domain wakes (the %d task wake(s) named were closed): %w", len(r.Wakes), refusal(err))
-		}
+	// The two shapes are one batch, all or nothing: store.AcknowledgeAll
+	// checks every row of both before it writes any, in one transaction,
+	// so a refused domain row leaves every task row named open too.
+	if err := s.store.AcknowledgeAll(ctx, r.Wakes, r.DomainWakes, by); err != nil {
+		return machine.Acknowledged{}, refusal(err)
 	}
 	return machine.Acknowledged{Wakes: r.Wakes, DomainWakes: r.DomainWakes, By: by.String()}, nil
 }

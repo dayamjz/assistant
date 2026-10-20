@@ -48,7 +48,7 @@ func (h *held) adoptSubordinate(domain string, worker agents.Worker, attach []st
 		worker.Close()
 		return nil, fmt.Errorf("%w: process %d was not running when looked for", ErrIdentity, pid)
 	}
-	s, err := h.newSession(Reference{Home: h.marker, Domain: domain, PID: pid, Start: identity.Start}, worker, attach)
+	s, err := h.newSession(Reference{Home: h.marker, Domain: domain, PID: pid, Start: identity.Start}, worker, attach, host)
 	if err != nil {
 		return nil, err
 	}
@@ -68,13 +68,13 @@ func (h *held) adoptSubordinate(domain string, worker agents.Worker, attach []st
 // Encode refuses is a defect in the caller, which names one owner by
 // construction, and it ends the worker and refuses rather than holding a
 // session under a key no record could carry.
-func (h *held) newSession(ref Reference, worker agents.Worker, attach []string) (*Session, error) {
+func (h *held) newSession(ref Reference, worker agents.Worker, attach []string, host agents.Identity) (*Session, error) {
 	key, err := ref.Encode()
 	if err != nil {
 		worker.Close()
 		return nil, err
 	}
-	return &Session{ref: ref, key: key, owner: h.owner, worker: worker, attach: attach}, nil
+	return &Session{ref: ref, key: key, owner: h.owner, worker: worker, attach: attach, host: host}, nil
 }
 
 // adopt makes worker a held session of task: it reads the worker's identity,
@@ -97,7 +97,7 @@ func (h *held) adopt(task string, worker agents.Worker, attach []string, host ag
 		worker.Close()
 		return nil, fmt.Errorf("%w: process %d was not running when looked for", ErrIdentity, pid)
 	}
-	s, err := h.newSession(Reference{Home: h.marker, Task: task, PID: pid, Start: identity.Start}, worker, attach)
+	s, err := h.newSession(Reference{Home: h.marker, Task: task, PID: pid, Start: identity.Start}, worker, attach, host)
 	if err != nil {
 		return nil, err
 	}

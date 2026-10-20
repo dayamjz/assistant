@@ -26,13 +26,16 @@ import (
 // answers for is the coordinator's own; a survivor placed here is what keeps
 // a restart from handing a subordinate the first coordinator's commands.
 //
-// What a survivor's placement cannot carry: the identity of a tmux server
-// hosting its terminal, which the reference does not record, so a window
-// the survivor opens on its server is placed as nobody's until the
-// delegation is next started by this service; and, where the platform
-// reads no start time, a process later given the survivor's identifier,
-// which Member then places as the subordinate until the delegation ends.
-// Both err toward the subordinate, the side that claims less.
+// A survivor hosted in a tmux server is placed by the server too: the
+// delegation attempt records the server's identity beside the reference,
+// as Placement.Host carries it for a held session, Adopt is given it, and
+// Hosted answers for it while the server is present, so a window the
+// survivor opens on its own server places as that subordinate exactly as it
+// does under a held session. What the placement cannot tell, where the
+// platform reads no start time, is a process later given the survivor's or
+// its server's identifier, which Member and Hosted then place as the
+// subordinate until the delegation ends; that errs toward the subordinate,
+// the side that claims less.
 //
 // A Survivors is safe for concurrent use.
 type Survivors struct {
@@ -40,11 +43,13 @@ type Survivors struct {
 	entries map[int]survivor
 }
 
-// survivor is one adopted entry: the placement and the identity it is held
-// to.
+// survivor is one adopted entry: the placement, the identity it is held
+// to, and the identity of the server hosting its terminal, zero for a
+// survivor with none.
 type survivor struct {
 	placement Placement
 	identity  agents.Identity
+	host      agents.Identity
 }
 
 // NewSurvivors returns an empty set, which places nobody.
@@ -53,8 +58,10 @@ func NewSurvivors() *Survivors {
 }
 
 // Adopt derives a subordinate's placement from the reference a delegation
-// attempt recorded, as store.DelegationAttempt.SessionRef holds it, for a
-// provider whose home marker is marker. A reference ParseReference refuses,
+// attempt recorded, as store.DelegationAttempt.SessionRef holds it, and the
+// identity of the server hosting its terminal as the attempt recorded it
+// beside the reference, zero for a session with none, for a provider whose
+// home marker is marker. A reference ParseReference refuses,
 // one of another home, or a worker's is refused with an error wrapping
 // ErrReference and nothing is adopted. A process the presence read proves
 // absent, or replaced by one with another start time, is not adopted and
@@ -64,7 +71,7 @@ func NewSurvivors() *Survivors {
 // because a peer in that group is then the subordinate's or nobody's and
 // the subordinate claims less; the reported error says which. A domain
 // already adopted is replaced.
-func (s *Survivors) Adopt(marker, text string) (Placement, bool, error) {
+func (s *Survivors) Adopt(marker, text string, host agents.Identity) (Placement, bool, error) {
 	ref, err := ParseReference(text)
 	if err != nil {
 		return Placement{}, false, err
@@ -85,10 +92,10 @@ func (s *Survivors) Adopt(marker, text string) (Placement, bool, error) {
 	case err != nil:
 		err = fmt.Errorf("session: survivor %s records no start time this platform reads, so it is placed unverified: %w", text, err)
 	}
-	p := Placement{Domain: ref.Domain, Group: ref.PID}
+	p := Placement{Domain: ref.Domain, Group: ref.PID, Host: host}
 	s.mu.Lock()
 	s.forgetLocked(ref.Domain)
-	s.entries[ref.PID] = survivor{placement: p, identity: identity}
+	s.entries[ref.PID] = survivor{placement: p, identity: identity, host: host}
 	s.mu.Unlock()
 	return p, true, err
 }
@@ -113,8 +120,28 @@ func (s *Survivors) Member(group int) (Placement, bool) {
 	return entry.placement, true
 }
 
-// Hosted answers for no identity: a survivor's reference records no host.
-func (s *Survivors) Hosted(agents.Identity) (Placement, bool) {
+// Hosted reports the placement of the survivor whose terminal the identity
+// hosts, on Subordinates.Hosted's terms: never for the zero identity, and
+// read again at every ask like Member, so a server proven absent or
+// replaced is forgotten with its survivor and one whose presence cannot be
+// read stays a host.
+func (s *Survivors) Hosted(host agents.Identity) (Placement, bool) {
+	if host == (agents.Identity{}) {
+		return Placement{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for group, entry := range s.entries {
+		if entry.host != host {
+			continue
+		}
+		presence, err := entry.host.Presence()
+		if err == nil && presence != agents.PresencePresent {
+			delete(s.entries, group)
+			return Placement{}, false
+		}
+		return entry.placement, true
+	}
 	return Placement{}, false
 }
 

@@ -52,17 +52,17 @@ func TestADelegationIsWrittenOnceAndItsEndIsItsOneRevision(t *testing.T) {
 		moved.Expected != 0 || moved.Stands != first.ID || !errors.Is(err, ErrDelegationMoved) {
 		t.Fatalf("an outrun anchor = %v, want a *DelegationMovedError naming %d", err, first.ID)
 	}
-	if _, err := s.EndDelegation(ctx, first.ID, DelegationEnd{}); !errors.Is(err, ErrNoDelegationEnd) {
+	if _, _, err := s.EndDelegation(ctx, first.ID, DelegationEnd{}, DelegationEndClosure{}); !errors.Is(err, ErrNoDelegationEnd) {
 		t.Fatalf("ending with nobody = %v, want ErrNoDelegationEnd", err)
 	}
-	ended, err := s.EndDelegation(ctx, first.ID, EndedByCoordinator())
+	ended, _, err := s.EndDelegation(ctx, first.ID, EndedByCoordinator(), DelegationEndClosure{})
 	if err != nil || ended.Standing() || ended.EndedBy != Known(EndedByCoordinator()) {
 		t.Fatalf("EndDelegation = %+v, %v", ended, err)
 	}
-	if _, err := s.EndDelegation(ctx, first.ID, EndedByCoordinator()); !errors.Is(err, ErrDelegationEnded) {
+	if _, _, err := s.EndDelegation(ctx, first.ID, EndedByCoordinator(), DelegationEndClosure{}); !errors.Is(err, ErrDelegationEnded) {
 		t.Fatalf("ending twice = %v, want ErrDelegationEnded", err)
 	}
-	if _, err := s.EndDelegation(ctx, 99, EndedByCoordinator()); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.EndDelegation(ctx, 99, EndedByCoordinator(), DelegationEndClosure{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("ending an unknown delegation = %v, want ErrNotFound", err)
 	}
 	latest, found, err := s.Delegation(ctx, "alpha")
@@ -109,16 +109,16 @@ func TestADelegationAttemptIsAnchoredAndRecordsItsSessionOnce(t *testing.T) {
 	if _, err := s.BeginDelegationAttempt(ctx, d.ID, 0); !errors.As(err, &moved) || !moved.Attempt || moved.Stands != 1 {
 		t.Fatalf("a second attempt against the same anchor = %v, want a *DelegationMovedError on the attempts", err)
 	}
-	if err := s.SetDelegationAttemptSession(ctx, d.ID, 1, ""); err == nil {
+	if err := s.SetDelegationAttemptSession(ctx, d.ID, 1, "", SessionHost{}); err == nil {
 		t.Fatal("an empty reference was recorded")
 	}
-	if err := s.SetDelegationAttemptSession(ctx, d.ID, 1, "ref-one"); err != nil {
+	if err := s.SetDelegationAttemptSession(ctx, d.ID, 1, "ref-one", SessionHost{}); err != nil {
 		t.Fatalf("SetDelegationAttemptSession: %v", err)
 	}
-	if err := s.SetDelegationAttemptSession(ctx, d.ID, 1, "ref-two"); !errors.Is(err, ErrAttemptSessionRecorded) {
+	if err := s.SetDelegationAttemptSession(ctx, d.ID, 1, "ref-two", SessionHost{}); !errors.Is(err, ErrAttemptSessionRecorded) {
 		t.Fatalf("a second session = %v, want ErrAttemptSessionRecorded", err)
 	}
-	if err := s.SetDelegationAttemptSession(ctx, d.ID, 2, "ref-two"); !errors.Is(err, ErrNotFound) {
+	if err := s.SetDelegationAttemptSession(ctx, d.ID, 2, "ref-two", SessionHost{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a session on no attempt = %v, want ErrNotFound", err)
 	}
 	second, err := s.BeginDelegationAttempt(ctx, d.ID, 1)
@@ -135,7 +135,7 @@ func TestADelegationAttemptIsAnchoredAndRecordsItsSessionOnce(t *testing.T) {
 	if _, err := s.write.ExecContext(ctx, `DELETE FROM delegation_attempt WHERE delegation = ?`, d.ID); err == nil {
 		t.Error("the database deleted an attempt")
 	}
-	if _, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator()); err != nil {
+	if _, _, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator(), DelegationEndClosure{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.BeginDelegationAttempt(ctx, d.ID, 2); !errors.Is(err, ErrDelegationEnded) {
@@ -146,7 +146,7 @@ func TestADelegationAttemptIsAnchoredAndRecordsItsSessionOnce(t *testing.T) {
 	// attempt reads as one that never recorded a session. The second
 	// attempt recorded none before the end, which is the positive control
 	// for the refusal being the end's and not the attempt's.
-	if err := s.SetDelegationAttemptSession(ctx, d.ID, 2, "ref-late"); !errors.Is(err, ErrDelegationEnded) {
+	if err := s.SetDelegationAttemptSession(ctx, d.ID, 2, "ref-late", SessionHost{}); !errors.Is(err, ErrDelegationEnded) {
 		t.Fatalf("a session recorded on an ended delegation = %v, want ErrDelegationEnded", err)
 	}
 	if attempts, err := s.DelegationAttempts(ctx, d.ID); err != nil || len(attempts) != 2 || attempts[1].SessionRef.IsKnown() {
@@ -337,7 +337,7 @@ func TestAWakeIsOfferedToExactlyOneCoordinatorByItsTasksDomainAndKind(t *testing
 	}
 
 	again := queue(inside, "no-change")
-	if _, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator()); err != nil {
+	if _, _, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator(), DelegationEndClosure{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := ids(drain("alpha")); len(got) != 0 {
@@ -396,5 +396,84 @@ func TestTheSubordinateMembersCarryTheirDomainAndRefuseAnInvalidOne(t *testing.T
 	}
 	if _, err := s.TaskWakes(ctx, task.ID); !errors.Is(err, ErrUnknownAcknowledger) {
 		t.Fatalf("a wake column outside the set read back as %v, want ErrUnknownAcknowledger", err)
+	}
+}
+
+// An attempt records the identity of the process hosting its terminal with
+// its session, once, in the same write: it reads back as recorded, a zero
+// host reads back zero, and nothing records a host after the session.
+func TestAnAttemptRecordsItsSessionsHostWithItsReference(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	d, err := s.Delegate(ctx, DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for seq := int64(1); seq <= 2; seq++ {
+		if _, err := s.BeginDelegationAttempt(ctx, d.ID, seq-1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	host := SessionHost{PID: 4242, Start: 1792483494420481}
+	if err := s.SetDelegationAttemptSession(ctx, d.ID, 1, "ref-one", host); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetDelegationAttemptSession(ctx, d.ID, 2, "ref-two", SessionHost{}); err != nil {
+		t.Fatal(err)
+	}
+	attempts, err := s.DelegationAttempts(ctx, d.ID)
+	if err != nil || len(attempts) != 2 {
+		t.Fatalf("DelegationAttempts = %+v, %v", attempts, err)
+	}
+	if attempts[0].Host != host || attempts[1].Host != (SessionHost{}) {
+		t.Fatalf("the attempts record hosts %+v and %+v, want %+v and none", attempts[0].Host, attempts[1].Host, host)
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE delegation_attempt SET host_pid = 1 WHERE delegation = ? AND sequence = 2`, d.ID); err == nil {
+		t.Fatal("a host was recorded after the session")
+	}
+}
+
+// A delegation's end answers the holds it names in the same transaction:
+// an open one is resolved under the resolver given and reported, one
+// already resolved is left as it stood and not reported, and a closure
+// with keys and no resolution or nobody is refused with nothing written,
+// the delegation still standing.
+func TestADelegationsEndAnswersTheHoldsItNamesInItsTransaction(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	d, err := s.Delegate(ctx, DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"open-one", "answered-one"} {
+		if _, err := s.RegisterHold(ctx, Hold{Key: key, Subject: "whether"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.ResolveHold(ctx, "answered-one", "retry", ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"open-one", "answered-one", "nowhere"}
+	if _, _, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator(), DelegationEndClosure{Keys: keys, By: ResolvedByMachineInterface()}); !errors.Is(err, ErrNoResolution) {
+		t.Fatalf("a closure with no resolution = %v, want ErrNoResolution", err)
+	}
+	if _, _, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator(), DelegationEndClosure{Keys: keys, Resolution: "stop"}); !errors.Is(err, ErrNoResolver) {
+		t.Fatalf("a closure naming nobody = %v, want ErrNoResolver", err)
+	}
+	if latest, _, err := s.Delegation(ctx, "alpha"); err != nil || !latest.Standing() {
+		t.Fatalf("after the refusals the delegation reads %+v (%v), want it standing", latest, err)
+	}
+	ended, closed, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator(),
+		DelegationEndClosure{Keys: keys, Resolution: "stop", Note: "ended", By: ResolvedByMachineInterface()})
+	if err != nil || ended.Standing() || !slices.Equal(closed, []string{"open-one"}) {
+		t.Fatalf("EndDelegation = %+v, %v, %v; want it ended answering open-one alone", ended, closed, err)
+	}
+	if h, err := s.Hold(ctx, "open-one"); err != nil || h.Resolution.Or("") != "stop" || h.ResolvedBy.Or(Resolver{}) != ResolvedByMachineInterface() || h.ResolutionNote.Or("") != "ended" {
+		t.Fatalf("open-one reads %+v (%v), want it answered stop by the machine interface", h, err)
+	}
+	if h, err := s.Hold(ctx, "answered-one"); err != nil || h.Resolution.Or("") != "retry" {
+		t.Fatalf("answered-one reads %+v (%v), want its own answer kept", h, err)
 	}
 }

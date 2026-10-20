@@ -205,6 +205,13 @@ func TaskAnswering(task string) Answering {
 	return Answering{Args: []string{"--task", task, "--answer"}}
 }
 
+// DomainAnswering is how a delegated domain's decision is answered, the
+// hold its relaunch bound raised: --domain naming the domain, then
+// --answer.
+func DomainAnswering(domain string) Answering {
+	return Answering{Args: []string{"--domain", domain, "--answer"}}
+}
+
 // RunAnswering is how a run's decision is answered: from the run's
 // checkout, on its branch.
 func RunAnswering(workingPath, branch string) Answering {

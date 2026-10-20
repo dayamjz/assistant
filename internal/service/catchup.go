@@ -218,16 +218,21 @@ func (s *Service) catchUpRuns(ctx context.Context) ([]heldRun, []machine.Run, er
 }
 
 // answeringHold is how one open hold record is answered: given the task for
-// a hold naming a task and no run, which is what task.respond closes, and
-// from the run's checkout otherwise. A hold naming a run that no longer has
-// a record is answered given its task when it names one, and with --answer
-// alone otherwise, because no checkout is left to name.
+// a hold naming a task and no run, which is what task.respond closes, given
+// the domain for a delegation's relaunch-bound hold, which names neither
+// and which task.respond closes given the domain, and from the run's
+// checkout otherwise. A hold naming a run that no longer has a record is
+// answered given its task when it names one, and with --answer alone
+// otherwise, because no checkout is left to name.
 func (s *Service) answeringHold(ctx context.Context, h store.Hold) (machine.Answering, error) {
 	task, named := h.TaskID.Get()
 	run, ofRun := h.RunID.Get()
 	if !ofRun {
 		if named {
 			return machine.TaskAnswering(task), nil
+		}
+		if domain, ok := domainOfBoundKey(h.Key); ok {
+			return machine.DomainAnswering(domain), nil
 		}
 		return machine.Answering{Args: []string{"--answer"}}, nil
 	}

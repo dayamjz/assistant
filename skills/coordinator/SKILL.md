@@ -355,15 +355,17 @@ required; the subordinate records no posture of its own). The answer comes
 once the records are written and before the subordinate exists. The
 subordinate is placed by its process, as a worker is: it creates tasks that
 are written into its domain, and it holds `create`, `tasks`, `message`,
-`stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`, `acknowledge` and
-`supervision` over that domain's tasks alone, with `tasks` listing the
-domain alone. It is refused `promote`, `answer`, `listen`, both delegation
-subcommands, marking the catch-up read, the run commands, `sync`, and the
-service's stop and restart, with code `subordinate`; a task outside its
-domain is refused with `outside-domain`. Its grant allows the
-`assistant coordinator` prefix alone, which is why `tasks` and `answer` are
-subcommands here as well as the `assistant tasks` and
-`assistant --task --answer` a first coordinator runs.
+`stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`, `acknowledge`,
+`listen` and `supervision` over that domain's tasks alone, with `tasks`
+listing the domain alone and `listen` its own domain's stream. It is refused
+`promote`, `answer`, both delegation subcommands, marking the catch-up read,
+the run commands, `sync`, and the service's stop and restart, with code
+`subordinate`; a task outside its domain is refused with `outside-domain`.
+Its grant denies editing and git and allows the `assistant coordinator`
+prefix, which is why `tasks` and `answer` are subcommands here as well as
+the `assistant tasks` and `assistant --task --answer` a first coordinator
+runs. With the Claude Code adapter a subordinate starts only under the pipe
+session provider; under `tmux` its start is refused and logged.
 
 While a delegation stands, wakes about the domain's tasks that the
 subordinate can act on are handed to it and not to you, and decisions about
@@ -379,6 +381,7 @@ A subordinate whose session ends reaches you as a `subordinate-gone` wake
 about the domain, once per `escalation_window` while it stays gone; the
 service relaunches it at a restart up to `relaunch_attempts` times, and past
 that the delegation holds for you as a `hold-opened` wake about the domain.
+`end-delegation` answers that hold `stop` as it ends the delegation.
 A subordinate still running across a restart is placed from its record and
 its process, so it stays the subordinate of its domain and `end-delegation`
 ends it.
@@ -392,9 +395,6 @@ assistant --domain DOMAIN --answer stop      # end the delegation
 ```
 
 ## Known gaps in this build
-
-- **A subordinate cannot hold `listen`.** It waits with `await`, which is
-  routed to its domain; the stream is the first coordinator's alone.
 
 - **Waking depends on the watch.** A push and a wait both follow the
   service's supervision recording a wake, so how soon either reaches you

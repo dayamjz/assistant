@@ -216,6 +216,15 @@ type Service struct {
 	// It is a publisher of its own rather than events because events is
 	// open to every caller and a wake is the coordinator's.
 	wakes *ipc.Publisher
+	// domainWakes is each domain's wake stream, the publisher a subordinate
+	// coordinator's wakes.subscribe attaches to, made on the first
+	// subscription and closed by Close; wakewait.go's publishWake is its
+	// one producer and pushes it only the rows that domain's drain offers.
+	// It is guarded by domainWakesMu rather than mu, because a publish is
+	// made from the loop's record while mu may be held elsewhere.
+	domainWakes       map[string]*ipc.Publisher
+	domainWakesClosed bool
+	domainWakesMu     sync.Mutex
 
 	listener net.Listener
 	server   *ipc.Server
@@ -321,10 +330,13 @@ type Service struct {
 	// session here, and launch.go owns the map.
 	launched map[string]launchedWorker
 	// delegated holds, per domain, the session host and session
-	// subordinates.go started for the domain's subordinate coordinator, on
-	// launched's terms: this service's memory, with the delegation attempt
-	// carrying the reference, ended by Close and by domain.end.
-	delegated map[string]launchedWorker
+	// subordinates.go started for the domain's subordinate coordinator and
+	// the delegation it was started for, on launched's terms: this
+	// service's memory, with the delegation attempt carrying the reference,
+	// ended by Close and by domain.end. An entry is written and removed
+	// only by the launch of its own delegation or the end of it, which
+	// subordinates.go's launchSubordinate states.
+	delegated map[string]launchedSubordinate
 	// survivors is the placer for the subordinate coordinators that
 	// outlived the service that started them, adopted by recovery from the
 	// delegation attempts' recorded references on session.Survivors' terms
@@ -547,7 +559,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		isolated:   make(map[string]tasks.Isolation),
 		claiming:   make(map[string]bool),
 		launched:   make(map[string]launchedWorker),
-		delegated:  make(map[string]launchedWorker),
+		delegated:  make(map[string]launchedSubordinate),
 		survivors:  session.NewSurvivors(),
 		starting:   make(map[branchKey]*branchGate),
 		stopping:   make(chan struct{}),
@@ -674,6 +686,12 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 		Ancestry: ancestry,
 		Events:   s.events,
 		Streams:  map[ipc.Method]*ipc.Publisher{ipc.MethodWakesSubscribe: s.wakes},
+		StreamFor: func(m ipc.Method, name string) (*ipc.Publisher, error) {
+			if m != ipc.MethodWakesSubscribe {
+				return nil, fmt.Errorf("%w: %s publishes no named stream", ipc.ErrUnavailable, m)
+			}
+			return s.domainWakeStream(name)
+		},
 		ReportPanic: func(value any, stack []byte) {
 			s.log.Printf("a handler panicked: %v\n%s", value, stack)
 		},
@@ -772,6 +790,7 @@ func (s *Service) Close() error {
 		if s.wakes != nil {
 			errs = append(errs, s.wakes.Close())
 		}
+		errs = append(errs, s.closeDomainWakeStreams()...)
 		if s.store != nil {
 			errs = append(errs, s.store.Close())
 		}

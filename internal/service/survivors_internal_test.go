@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,7 +49,7 @@ func TestASurvivorIsPlacedAlongTheChainUntilItIsForgotten(t *testing.T) {
 	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(dir, "release"), nil, 0o600) })
 
 	survivors := session.NewSurvivors()
-	if _, adopted, err := survivors.Adopt(marker, text); err != nil || !adopted {
+	if _, adopted, err := survivors.Adopt(marker, text, agents.Identity{}); err != nil || !adopted {
 		t.Fatalf("Adopt = %v, %v; want the running survivor adopted", adopted, err)
 	}
 	for _, pid := range []int{group, child} {
@@ -158,10 +159,10 @@ func TestALaunchThatLandsAfterTheDelegationEndedIsEndedWithIt(t *testing.T) {
 	errs := make(chan error, 1)
 	go func() { errs <- l.service.launchSubordinate(ctx, alpha, 1) }()
 	<-host.entered
-	if _, err := l.records(t).EndDelegation(ctx, alpha.ID, store.EndedByCoordinator()); err != nil {
+	if _, _, err := l.records(t).EndDelegation(ctx, alpha.ID, store.EndedByCoordinator(), store.DelegationEndClosure{}); err != nil {
 		t.Fatal(err)
 	}
-	if l.service.endSubordinate("alpha") {
+	if l.service.endSubordinate("alpha", alpha.ID) {
 		t.Fatal("the end found a session to end before one had started")
 	}
 	close(host.release)
@@ -187,7 +188,7 @@ func TestALaunchThatLandsAfterTheDelegationEndedIsEndedWithIt(t *testing.T) {
 
 	// Ended before starting: nothing is started.
 	gamma := delegate("gamma")
-	if _, err := l.records(t).EndDelegation(ctx, gamma.ID, store.EndedByCoordinator()); err != nil {
+	if _, _, err := l.records(t).EndDelegation(ctx, gamma.ID, store.EndedByCoordinator(), store.DelegationEndClosure{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := l.service.launchSubordinate(ctx, gamma, 1); !errors.Is(err, store.ErrDelegationEnded) || host.started != 1 {
@@ -212,10 +213,128 @@ func TestALaunchThatLandsAfterTheDelegationEndedIsEndedWithIt(t *testing.T) {
 	if attempts, err := l.records(t).DelegationAttempts(ctx, beta.ID); err != nil || len(attempts) != 1 || attempts[0].SessionRef.Or("") != ref {
 		t.Fatalf("beta's attempts are %+v (%v), want the one recording %s", attempts, err, ref)
 	}
-	if _, err := l.records(t).EndDelegation(ctx, beta.ID, store.EndedByCoordinator()); err != nil {
+	if _, _, err := l.records(t).EndDelegation(ctx, beta.ID, store.EndedByCoordinator(), store.DelegationEndClosure{}); err != nil {
 		t.Fatal(err)
 	}
-	if !l.service.endSubordinate("beta") || host.closed != 2 {
+	if !l.service.endSubordinate("beta", beta.ID) || host.closed != 2 {
 		t.Fatalf("the end after the launch found nothing to end (closed %d)", host.closed)
+	}
+}
+
+// firstGatedHost is gatedHost for the first Delegate alone: the first call
+// waits to be released once it has been entered, and every later one
+// starts at once, so a test can hold one launch while another runs.
+type firstGatedHost struct {
+	session.Host
+	entered, release chan struct{}
+	mu               sync.Mutex
+	calls            int
+}
+
+func (g *firstGatedHost) Delegate(ctx context.Context, spec session.SubordinateSpec) (*session.Session, error) {
+	g.mu.Lock()
+	g.calls++
+	first := g.calls == 1
+	g.mu.Unlock()
+	if first {
+		close(g.entered)
+		<-g.release
+	}
+	return g.Host.Delegate(ctx, spec)
+}
+
+// A launch paused across its delegation's end and a new delegation of the
+// same domain can neither replace nor erase the newer delegation's
+// session: the old launch is held inside its start, the delegation is
+// ended, the domain is delegated again and the new launch starts and holds
+// its session, and the old launch is then released. The old launch is
+// refused with ErrDelegationEnded and ends its own session, and the domain
+// still holds the new delegation's session, which the new delegation's end
+// then finds and ends. A map keyed by the domain alone, written and
+// cleared by whichever launch came last, fails this by holding nothing.
+func TestAnOldLaunchLeavesANewerDelegationsSessionHeld(t *testing.T) {
+	t.Parallel()
+	h, records := loopHomeConfigured(t, `{"supervision_beacon_interval": "1s"}`)
+	l := openLoop(t, h, records, newScriptedTerminals(), nil)
+	defer func() { _ = l.service.Close() }()
+	ctx := t.Context()
+	agent := workerStandIn(t)
+	pipe := session.NewPipe(h, agent.Runner())
+	host := &firstGatedHost{Host: pipe, entered: make(chan struct{}), release: make(chan struct{})}
+	l.service.mu.Lock()
+	l.service.built = &driver{sessions: host}
+	l.service.mu.Unlock()
+	dir, err := h.Domain("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegate := func() store.Delegation {
+		t.Helper()
+		latest, found, err := l.records(t).Delegation(ctx, "alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var expected int64
+		if found {
+			expected = latest.ID
+		}
+		d, err := l.records(t).Delegate(ctx, store.DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated, Expected: expected})
+		if err != nil {
+			t.Fatalf("delegating alpha: %v", err)
+		}
+		if _, err := l.records(t).BeginDelegationAttempt(ctx, d.ID, 0); err != nil {
+			t.Fatalf("claiming the attempt: %v", err)
+		}
+		if _, err := l.service.writeDomainInstructions(dir, "alpha", "Coordinate alpha.\n"); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+
+	old := delegate()
+	errs := make(chan error, 1)
+	go func() { errs <- l.service.launchSubordinate(ctx, old, 1) }()
+	<-host.entered
+	if _, _, err := l.records(t).EndDelegation(ctx, old.ID, store.EndedByCoordinator(), store.DelegationEndClosure{}); err != nil {
+		t.Fatal(err)
+	}
+	if l.service.endSubordinate("alpha", old.ID) {
+		t.Fatal("the end found a session to end before the old launch had one")
+	}
+	newer := delegate()
+	if err := l.service.launchSubordinate(ctx, newer, 1); err != nil {
+		t.Fatalf("the newer delegation's launch: %v", err)
+	}
+	_, held, ok := l.service.subordinateSessionOf("alpha")
+	if !ok {
+		t.Fatal("the newer delegation's session is not held")
+	}
+	close(host.release)
+	if err := <-errs; !errors.Is(err, store.ErrDelegationEnded) {
+		t.Fatalf("the old launch = %v, want ErrDelegationEnded", err)
+	}
+	_, still, ok := l.service.subordinateSessionOf("alpha")
+	if !ok || still != held {
+		t.Fatalf("after the old launch the domain holds %v (%v), want the newer delegation's session %v", still, ok, held)
+	}
+	ref, err := held.Reference().Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempts, err := l.records(t).DelegationAttempts(ctx, newer.ID); err != nil || len(attempts) != 1 || attempts[0].SessionRef.Or("") != ref {
+		t.Fatalf("the newer delegation's attempts are %+v (%v), want the one recording %s", attempts, err, ref)
+	}
+	if _, _, err := l.records(t).EndDelegation(ctx, newer.ID, store.EndedByCoordinator(), store.DelegationEndClosure{}); err != nil {
+		t.Fatal(err)
+	}
+	if !l.service.endSubordinate("alpha", newer.ID) {
+		t.Fatal("the newer delegation's end found no session to end")
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for !pipe.Subordinates().Empty() {
+		if !time.Now().Before(deadline) {
+			t.Fatal("a subordinate session outlived both ends")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
