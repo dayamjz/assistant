@@ -164,3 +164,24 @@ func TestInstalledCodexAppServerWorker(t *testing.T) {
 		}
 	}
 }
+
+// The Codex adapter refuses a subordinate coordinator before anything
+// starts, with ErrGrantUnenforced, both at the launch-refusal ask and at
+// OpenSubordinate, and the stand-in records no call; the same spec through
+// OpenWorker starts, the control that the refusal is the grant's.
+func TestCodexRefusesASubordinateItCannotHoldToItsGrant(t *testing.T) {
+	principles.Cite(t, principles.P4)
+	agent := standin.NewCodex(t, standin.Script{Worker: &standin.WorkerScript{}})
+	spec := agents.WorkerSpec{Dir: t.TempDir(), Instructions: "Coordinate the domain.", Route: "echo routed"}
+	if _, err := agents.OpenSubordinate(t.Context(), agent.Runner(), spec); !errors.Is(err, agents.ErrGrantUnenforced) {
+		t.Fatalf("OpenSubordinate on Codex = %v, want ErrGrantUnenforced", err)
+	}
+	if calls := agent.Calls(); len(calls) != 0 {
+		t.Fatalf("the refused subordinate started %d processes", len(calls))
+	}
+	worker, err := agents.OpenWorker(t.Context(), agent.Runner(), spec)
+	if err != nil {
+		t.Fatalf("the control worker: %v", err)
+	}
+	worker.Close()
+}

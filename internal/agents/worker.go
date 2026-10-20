@@ -275,7 +275,10 @@ func OpenWorker(ctx context.Context, r Runner, spec WorkerSpec) (Worker, error) 
 // difference that the process runs under GrantSubordinate: it is the only
 // route to that grant, and a spec given to OpenWorker runs under
 // GrantWorker whatever it says. The adapter starts it as it starts a
-// worker, so a worker-capable adapter is a subordinate-capable one.
+// worker and holds it to the grant, or refuses it before anything starts
+// when it cannot: the Codex adapter refuses with ErrGrantUnenforced, and
+// the scripted adapter, which ships in no catalog, models no tool
+// permissions at all.
 func OpenSubordinate(ctx context.Context, r Runner, spec WorkerSpec) (Worker, error) {
 	spec.subordinate = true
 	return OpenWorker(ctx, r, spec)

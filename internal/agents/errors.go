@@ -143,6 +143,14 @@ func (e *AdapterError) Unwrap() error { return ErrAdapterDeclaration }
 // reads no screen and is started.
 var ErrTerminalGrantUnobserved = errors.New("agents: the terminal interface was never observed under this grant's permission mode")
 
+// ErrGrantUnenforced reports a worker start under a grant the adapter has
+// no mechanism to hold the agent to. The Codex adapter refuses a
+// subordinate coordinator (GrantSubordinate) with it before anything
+// starts: its app-server runs sandboxed commands without asking, so no
+// approval this client answers can deny git or every command but the
+// route, and starting one would promise a grant nothing enforces.
+var ErrGrantUnenforced = errors.New("agents: the adapter cannot enforce this grant")
+
 // invocationFieldError reports one field of an Invocation that cannot be run
 // as written. It wraps ErrInvalidInvocation and names the field. It is how
 // every pre-start refusal of an Invocation is built, so a caller matching the

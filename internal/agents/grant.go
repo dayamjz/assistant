@@ -21,7 +21,10 @@ package agents
 // one command line its route names, the coordinator client, so what it does
 // to a home through the program is what the service admits that client to.
 // Like a review it is denied only what its grant names, so another command
-// its agent's own settings allow stays allowed. Which of the two
+// its agent's own settings allow stays allowed. The Claude Code adapter
+// writes it as flags, the Cursor adapter holds every permission request to
+// it, and the Codex adapter, which cannot, refuses a subordinate with
+// ErrGrantUnenforced. Which of the two
 // a started process runs under is the entry point's, OpenWorker or
 // OpenSubordinate, and never the spec's: WorkerSpec.Grant reads a field only
 // those set.
