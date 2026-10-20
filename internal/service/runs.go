@@ -685,6 +685,11 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 		// fresh start replaces once the document is fixed.
 		if _, ended := built.runs.Terminate(context.WithoutCancel(ctx), record.ID); ended != nil {
 			s.log.Printf("run %s could not be ended after its configuration was refused: %v", record.ID, ended)
+		} else {
+			// The run finished, so a task queued behind the one it was
+			// attributed to may have cleared; tasks.go names this among the
+			// sites that release.
+			s.releaseQueued(context.WithoutCancel(ctx))
 		}
 		return machine.Run{}, err
 	}
