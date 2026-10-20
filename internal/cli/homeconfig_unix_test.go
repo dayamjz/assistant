@@ -46,12 +46,6 @@ func instanceOf(t *testing.T, h *home.Home) string {
 	return health.Instance
 }
 
-// stopForCleanup stops whatever service a test left up for h before its home
-// is removed.
-func stopForCleanup(t *testing.T, h *home.Home) {
-	t.Cleanup(func() { run(t, h, "", "service", "stop", "--force") })
-}
-
 // A start on a home configuration file the service would refuse launches
 // nothing and says why: internal/machine's row, then the file's refusal,
 // which names the file and the key. The same home with the file corrected
@@ -65,7 +59,6 @@ func TestAStartOnABadHomeConfigurationLaunchesNothingAndSaysWhy(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P7)
 	h := newHome(t)
-	stopForCleanup(t, h)
 	writeHomeConfig(t, h, badHomeConfig)
 
 	got := run(t, h, "", "service", "start")
@@ -107,7 +100,6 @@ func TestAStartOnABadHomeConfigurationLaunchesNothingAndSaysWhy(t *testing.T) {
 func TestARestartOnABadHomeConfigurationLeavesTheServiceUp(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
-	stopForCleanup(t, h)
 	if got := run(t, h, "", "service", "start"); got.code != machine.ExitOK {
 		t.Fatalf("starting the service exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
@@ -190,7 +182,6 @@ func TestAServiceThatCannotStartWritesWhyToItsLog(t *testing.T) {
 func TestAStartWhoseServiceExitsSaysSoAndPointsAtTheLog(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
-	stopForCleanup(t, h)
 	if err := os.MkdirAll(h.Database(), 0o700); err != nil {
 		t.Fatal(err)
 	}
