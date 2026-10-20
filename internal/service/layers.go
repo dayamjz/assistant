@@ -73,7 +73,10 @@ import (
 // internal. The classification is applied where a run's resolution and
 // standing consent's read answer a request, and not inside trustedLayerAt,
 // because intake and promotion read the same copy and answer for it through
-// internal/tasks' ErrPostureUnreadable, which crosses as unavailable.
+// internal/tasks' ErrPostureUnreadable, which crosses as unavailable. A
+// refused run whose record then could not be ended is not a clean refusal
+// either: begin answers it as a *RunNotEndedError, which endRefused strips of
+// this classification, so it crosses on its ending's failure instead.
 
 // ErrTrustedConfig reports that the trusted configuration copy could not be
 // established: the default branch could not be fetched, the document there
@@ -358,6 +361,19 @@ func (c configRefused) Error() string { return c.err.Error() }
 
 // Unwrap resolves to the wire category and to the refusal.
 func (c configRefused) Unwrap() []error { return []error{ipc.ErrRefused, c.err} }
+
+// unclassifiedRefusal is err without the wire classification refusedConfig
+// gave it: a configRefused answers with the refusal beneath it, which still
+// matches ErrTrustedConfig or ErrPushedConfig and the document refusal, and
+// anything else is returned as it is. endRefused is its one caller, for a
+// refused run whose record could not be ended.
+func unclassifiedRefusal(err error) error {
+	var refused configRefused
+	if errors.As(err, &refused) {
+		return refused.err
+	}
+	return err
+}
 
 // refusedConfig classifies a failure to establish a run's configuration for
 // the wire, on the terms the file's opening comment states: a document that

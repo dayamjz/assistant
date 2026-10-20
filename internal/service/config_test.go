@@ -20,6 +20,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -475,6 +476,64 @@ func TestARepositoryAgentThisBuildCannotHonourIsRefused(t *testing.T) {
 		}
 		if code := wireCode(t, err); code != ipc.CodeRefused {
 			t.Fatalf("the refusal crossed the wire as %q, want %q: %v", code, ipc.CodeRefused, err)
+		}
+	})
+}
+
+// A run refused on its pushed document whose record then cannot be ended is
+// answered as left unended, and that answer does not cross the wire as
+// refused: a refused code tells a caller to fix the document and start again,
+// and that start would attach to the run left unfinished. It crosses as
+// internal, as the code-host refusal's unended answer does, and still names
+// the pushed copy and the failed ending. The ending is made to fail the way
+// TestARefusedRunThatCannotBeEndedIsReportedUnended makes it, by moving the
+// run out of pending first.
+func TestAConfigurationRefusedRunThatCannotBeEndedDoesNotCrossAsRefused(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P7)
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	plantPushedDocument(t, subject, `{"ignore_patterns": ["vendor/**",]}`)
+
+	withService(t, h, func(running serviceUnderTest) {
+		moved := make(chan error, 1)
+		running.service.SetBeforeRefusalEndForTest(func() {
+			ctx := context.Background()
+			records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
+			if err != nil {
+				moved <- err
+				return
+			}
+			defer func() { _ = records.Close() }()
+			runs, err := records.RunsForRepository(ctx, "subject")
+			if err == nil && len(runs) != 1 {
+				err = errors.New("want exactly one run to move")
+			}
+			if err == nil {
+				_, err = records.TransitionRun(ctx, runs[0].ID, []store.RunStatus{store.RunPending}, store.RunFailed)
+			}
+			moved <- err
+		})
+		defer running.service.SetBeforeRefusalEndForTest(nil)
+		_, err := startRunErr(t, running.client, subject)
+		if m := <-moved; m != nil {
+			t.Fatalf("moving the run before its ending: %v", m)
+		}
+		if err == nil {
+			t.Fatal("a run carrying an unparseable pushed document was started rather than refused")
+		}
+		for _, want := range []string{"could not be ended", "pushed configuration"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the answer for a refused run left unended does not carry %q: %v", want, err)
+			}
+		}
+		if code := wireCode(t, err); code != ipc.CodeInternal {
+			t.Fatalf("a refused run left unended crossed the wire as %q, want %q: %v", code, ipc.CodeInternal, err)
+		}
+		if record := onlyRun(t, h); record.Status != store.RunFailed {
+			t.Fatalf("the run is recorded as %s, want the status the store read left as it stood", record.Status)
 		}
 	})
 }
