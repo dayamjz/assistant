@@ -173,11 +173,12 @@
 // in Checkpoint.ParkedUsage. Status.Parked is Status.Stopped without the
 // hold, which is the line PRD section 5 draws between the two words.
 //
-// Integrity checking leaves the three bounds three. It decides whether a
+// Integrity checking leaves the three loop bounds three. It decides whether a
 // checkpoint may be resumed at all, and past that each bound still parks runs
-// the other two would not: AdoptBudget releases a run its own budget parked
-// and leaves one parked by a round limit or by convergence exactly where it
-// stands.
+// the other two would not: AdoptBudget adopts both run-level budgets, the step
+// budget and the usage budget below, and re-decides a run either of them
+// parked, and it leaves one parked by a round limit or by convergence exactly
+// where it stands.
 //
 // # The usage budget
 //

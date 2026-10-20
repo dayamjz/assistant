@@ -160,7 +160,8 @@ func (r Result) Park() (Park, bool) {
 // that already existed instead of honouring the claim.
 //
 // Run returns when the graph completes, halts before a halt point, or is
-// parked by one of the three bounds. A node that returns an error stops the
+// parked: by one of the three loop bounds, or by the usage budget when the
+// run is held to one. A node that returns an error stops the
 // run with that error; its writes are discarded and no checkpoint records it.
 func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, error) {
 	if run == "" {
