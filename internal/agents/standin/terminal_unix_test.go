@@ -71,6 +71,11 @@ const (
 	atTerminalPIDs      = "pids"
 )
 
+// atTerminalNohupChild, set to any value, has the binary run again start its
+// child through nohup, so the child ignores the hangup signal and nothing
+// but a kill of the group it was started in ends it.
+const atTerminalNohupChild = "STANDIN_TEST_AT_TERMINAL_NOHUP_CHILD"
+
 // atTerminalMain makes this binary what a package calling AtTerminal is,
 // when a test started it as one: it calls AtTerminal, and in the binary run
 // again starts a child in its own group, records both, and waits forever,
@@ -82,6 +87,14 @@ func atTerminalMain() {
 	}
 	AtTerminal()
 	child := exec.Command("/bin/sleep", "3600")
+	if os.Getenv(atTerminalNohupChild) != "" {
+		nohup, err := exec.LookPath("nohup")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "nohup, which the child of the binary run again is started through, is not on PATH:", err)
+			os.Exit(1)
+		}
+		child = exec.Command(nohup, "/bin/sleep", "3600")
+	}
 	if err := child.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "starting the child of the binary run again:", err)
 		os.Exit(1)
@@ -117,13 +130,51 @@ func TestTheBinaryRunAgainEndsWhenItsOuterIsKilled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nohup, which starts the outer the way #414's leak was started, is not on PATH: %v", err)
 	}
+	endsWithKilledOuter(t, []string{nohup}, true, false)
+}
+
+// The test binary AtTerminal runs again takes its group with it when the
+// terminal's hangup, rather than its owner watch, is what ends it, which is
+// the path #416's review reproduced: an outer started with the hangup signal
+// handled normally passes that on to the binary run again, and killing the
+// outer closes the terminal's master side, whose hangup reaches the binary
+// run again at once, well inside the OwnerPoll its watch sleeps. The binary
+// run again is read from the kernel as not ignoring the hangup signal, the
+// control that the hangup can end it, and its child is started through
+// nohup in its group, so the hangup leaves the child running and only a
+// kill of the group ends it. Then the outer is sent SIGKILL, and both are
+// read as gone within the same bound as above. Where the hangup ends the
+// binary run again before its group is killed, the child is left running
+// with parent 1, and the test fails naming it.
+func TestTheBinaryRunAgainTakesItsGroupWhenTheHangupEndsIt(t *testing.T) {
+	endsWithKilledOuter(t, nil, false, true)
+}
+
+// endsWithKilledOuter starts this binary as a package calling AtTerminal,
+// under the command prefix wrapper, in a session of its own with no
+// terminal, so AtTerminal runs it again on a pseudo-terminal. It checks that
+// the binary run again is the outer's child at the terminal and that the
+// kernel records it ignoring the hangup signal exactly when ignoresHUP says,
+// that it stays running while the outer runs and the package's own check
+// (LeftAfterTests, through Stayed) lists it then, which is the check shown to
+// see it, and then sends the outer SIGKILL and fails unless the binary run
+// again and the child it started in its group, through nohup when nohupChild
+// says so, are both read as gone within OwnerPoll and a margin. Where the
+// binary run again outlives that, the test fails and leaves it running for
+// LeftAfterTests, which then fails the package naming it.
+func endsWithKilledOuter(t *testing.T, wrapper []string, ignoresHUP, nohupChild bool) {
+	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	outer := exec.Command(nohup, self, "-test.run=^$")
+	argv := append(append([]string{}, wrapper...), self, "-test.run=^$")
+	outer := exec.Command(argv[0], argv[1:]...)
 	outer.Env = append(os.Environ(), atTerminalVarHelper+"="+dir)
+	if nohupChild {
+		outer.Env = append(outer.Env, atTerminalNohupChild+"=1")
+	}
 	outer.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := outer.Start(); err != nil {
 		t.Fatalf("starting the outer: %v", err)
@@ -182,8 +233,8 @@ func TestTheBinaryRunAgainEndsWhenItsOuterIsKilled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading whether the binary run again ignores the hangup signal: %v", err)
 	}
-	if !ignored {
-		t.Fatal("the binary run again does not ignore the hangup signal, so the terminal's hangup alone would end it and this test would show nothing about the owner watch")
+	if ignored != ignoresHUP {
+		t.Fatalf("the binary run again reads ignoring the hangup signal %v; want %v, or this test would not show the path it names", ignored, ignoresHUP)
 	}
 
 	select {

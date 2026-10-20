@@ -5,6 +5,7 @@ package standin
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
@@ -131,22 +132,61 @@ func WatchOwner() {
 }
 
 // watchOuter has the test binary AtTerminal ran again end, with its whole
-// process group, once the outer binary named by value is gone. It is
-// WatchOwner's watch with a different ending: the binary run again is a
-// test binary with nobody left to report to, not a service with a shutdown
-// of its own to run, so it kills its group at once rather than asking
-// first, and everything the tests started in that group goes with it.
+// process group, once the outer binary named by value is gone, and on every
+// signal that would otherwise end it without its group. It is WatchOwner's
+// watch with a different ending: the binary run again is a test binary with
+// nobody left to report to, not a service with a shutdown of its own to run,
+// so it kills its group at once rather than asking first, and everything the
+// tests started in that group goes with it.
+//
+// The watch alone does not reach the ending when a signal ends this process
+// first, which the outer's death sends it: the terminal's master side closes
+// with the outer and the kernel hangs the terminal up, which ends a process
+// with the hangup signal handled normally at once, well inside the OwnerPoll
+// the watch sleeps, and leaves the group behind. So the hangup, termination
+// and interrupt signals, each of which ends a Go program by default and the
+// outer forwards, are caught and lead to the same ending, endGroup, rather
+// than a second one. A signal this process was started ignoring is left
+// ignored, because catching it would undo the caller's choice and it ends
+// nothing; the watch is what ends this process then. What reaches neither:
+// the quit signal, which is left to the runtime so a test timeout's goroutine
+// dump is kept, SIGKILL, a signal arriving before AtTerminal runs, and a
+// panic, each of which ends this process alone.
 func watchOuter(value string) error {
 	outer, err := parseOwner(value)
 	if err != nil {
 		return err
 	}
+	var caught []os.Signal
+	for _, sig := range []os.Signal{syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT} {
+		if !signal.Ignored(sig) {
+			caught = append(caught, sig)
+		}
+	}
+	ending := make(chan os.Signal, 1)
+	if len(caught) > 0 {
+		signal.Notify(ending, caught...)
+	}
+	gone := make(chan struct{})
 	go func() {
 		awaitGone(outer)
-		if group, err := syscall.Getpgid(0); err == nil && group == os.Getpid() {
-			_ = syscall.Kill(-group, syscall.SIGKILL)
+		close(gone)
+	}()
+	go func() {
+		select {
+		case <-ending:
+		case <-gone:
 		}
-		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+		endGroup()
 	}()
 	return nil
+}
+
+// endGroup kills this process's group when it leads one, which the binary
+// AtTerminal ran again does, and then this process.
+func endGroup() {
+	if group, err := syscall.Getpgid(0); err == nil && group == os.Getpid() {
+		_ = syscall.Kill(-group, syscall.SIGKILL)
+	}
+	_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 }

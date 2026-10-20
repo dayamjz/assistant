@@ -69,23 +69,31 @@ const exitNotAtTerminal = 12
 // The binary run again ends with the outer one by whatever path the outer
 // ends. A normal exit and a forwarded signal follow from the outer waiting on
 // it. A killed outer does not: the binary run again leads a session of its
-// own, so a kill of the outer's group misses it. The terminal's master side
-// closing with the outer ended it in #414's reproduction only where the
-// hangup signal was not ignored: a test binary started under nohup, or under
-// a tool that starts its commands that way, has it ignored, so does the
-// binary run again, and that one went on running the suite with parent 1.
-// So the outer hands the binary run again its own identity, and the binary
-// run again watches it with WatchOwner's watch, polling every OwnerPoll, and
-// once the outer is gone kills its own process group at once, the tests'
-// stand-ins, hooks and gits with it. The residual window is OwnerPoll after the outer is gone, plus a
-// read of the outer's identity that fails, which counts as the outer running
-// and so ends nothing. What the tests started outside that group is not
-// reached by the kill: a service the product launched in a session of its
-// own ends through its own owner watch where the package calls
-// OwnProcesses and WatchOwner, and anything else the package's tests start
-// that way is theirs to end. A binary run again that is stopped by a signal
-// runs no watch. On a platform internal/ipc identifies no peer on the gate
-// refuses every push before any placement, and AtTerminal returns at once.
+// own, so a kill of the outer's group misses it. Two things reach it then,
+// and both end its whole process group, the tests' stand-ins, hooks and gits
+// with it, through one ending, watchOuter's. The terminal's master side
+// closes with the outer and the kernel hangs the terminal up, which a binary
+// run again with the hangup signal handled normally reads at once; it
+// catches that signal, and the termination and interrupt signals the outer
+// forwards, and kills its group rather than exiting alone, which ended it in
+// #416's review leaving a child that ignores the hangup running with parent
+// 1. A test binary started under nohup, or under a tool that starts its
+// commands that way, has the hangup ignored, so does the binary run again,
+// and the hangup ends nothing, as #414 found; so the outer hands the binary
+// run again its own identity, the binary run again watches it with
+// WatchOwner's watch, polling every OwnerPoll, and kills its group once the
+// outer is gone. The residual window is OwnerPoll after the outer is gone
+// where the hangup is ignored, plus a read of the outer's identity that
+// fails, which counts as the outer running and so ends nothing. What the
+// tests started outside that group is not reached by the kill: a service the
+// product launched in a session of its own ends through its own owner watch
+// where the package calls OwnProcesses and WatchOwner, and anything else the
+// package's tests start that way is theirs to end. A binary run again that
+// is stopped by a signal runs no watch, and one ended by the quit signal, by
+// SIGKILL, or by a panic, a test timeout among them, ends alone, as
+// watchOuter states. On a platform internal/ipc identifies no peer on the
+// gate refuses every push before any placement, and AtTerminal returns at
+// once.
 //
 // What this does not establish: a test that pushes from a process it put in
 // a session of its own, with no terminal, is placed as nobody's whatever
