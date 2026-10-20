@@ -36,7 +36,7 @@ func TestTheCoordinatorVerbServesItsTableAndNothingElse(t *testing.T) {
 	}
 	// The operands each subcommand's usage line names, which its flag set
 	// cannot say for itself.
-	operands := map[string]string{"message": "<task> ", "stop": "<task> ", "relaunch": "<task> ", "promote": "<task> ", "acknowledge": "<wake>... "}
+	operands := map[string]string{"message": "<task> ", "stop": "<task> ", "relaunch": "<task> ", "promote": "<task> ", "acknowledge": "<wake>... ", "delegate": "<domain> ", "end-delegation": "<domain> "}
 	for _, row := range rows {
 		for _, flag := range []string{"--help", "-h", "-help"} {
 			got := run(t, h, subject, "coordinator", row[0], flag)

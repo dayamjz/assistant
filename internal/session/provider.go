@@ -40,13 +40,30 @@ var ErrNotAttachable = errors.New("session: this session's worker has no termina
 // the two in this build.
 //
 // It is not a widening of Provider: the five operations stay the whole of
-// what PRD section 8's row names, and these three are what a service needs
-// of a provider it holds, which a second implementation of the row would
-// owe as well.
+// what PRD section 8's row names, and these are what a service needs of a
+// provider it holds, which a second implementation of the row would owe as
+// well. The subordinate coordinator's start is among them because PRD
+// section 9's domain.delegate starts that session through the same provider
+// a worker is started through, and a provider that hosts one and not the
+// other would be two mechanisms for one placement.
 type Host interface {
 	Provider
 	// Workers is the worker group set, on the terms Workers states.
 	Workers() *Workers
+	// Subordinates is the subordinate coordinator set, on the terms
+	// Subordinates states, produced by Delegate as Workers is by Create.
+	Subordinates() *Subordinates
+	// Delegate starts one subordinate coordinator's host session for a
+	// domain, PRD section 9's domain.delegate, through the same adapter and
+	// mechanism Create starts a worker through and in the directory the
+	// spec names rather than a proven copy, because a subordinate edits
+	// nothing and no isolation is asserted of it. It refuses a domain
+	// home.ValidDomain refuses with that package's error and whatever
+	// agents.OpenWorker refuses with that package's error wrapped, and the
+	// session it returns answers Capture, Send, Probe and Close on
+	// Provider's terms. The caller records Session.Reference through
+	// store.SetDelegationAttemptSession.
+	Delegate(ctx context.Context, spec SubordinateSpec) (*Session, error)
 	// CaptureReference is Capture addressed by an encoded reference.
 	CaptureReference(ctx context.Context, ref string) (Capture, error)
 	// AttachReference is the command line a person runs to attach to the

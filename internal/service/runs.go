@@ -1448,6 +1448,11 @@ func (s *Service) recover(ctx context.Context) {
 	// goroutine of this service's, so a home with several dead terminals
 	// comes back serving after the claims and not after the launches.
 	s.reconcileTasks(ctx)
+	// PRD section 11's row for a subordinate coordinator's terminal gone,
+	// after the tasks: every standing delegation's session is re-probed on
+	// the same terms, and a dead one is relaunched as a new delegation
+	// attempt; subordinates.go owns the decision and its bound.
+	s.reconcileSubordinates(ctx)
 	// A blocker may have cleared while no service was serving the home, so
 	// the queued tasks are released once the records are reconciled, before
 	// anything is served: the Queued row of the reconciliation table is this

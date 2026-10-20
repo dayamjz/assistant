@@ -542,6 +542,12 @@ type Task struct {
 	// copy's path. The person-facing rendering points at this field through
 	// TaskPhrase and never relays these words (P13).
 	Report *InvestigationReport `json:"report,omitempty"`
+	// Escalations are the decisions the task's domain's subordinate
+	// coordinator handed up about it, oldest first, PRD section 8's
+	// escalation records, and absent for a task with none. Each is the
+	// subordinate's own words, redacted, for the coordinator to read; the
+	// person-facing rendering never relays them (P13).
+	Escalations []store.Escalation `json:"escalations,omitempty"`
 	// Policy is what the posture recorded on the task requires, publishes
 	// and leaves to whom: config.Delivery.PolicyForNoCodeHost of that
 	// posture and its noCodeHost argument, whether the task's repository
@@ -970,6 +976,34 @@ type TaskRelayed struct {
 	Record store.TaskRelay `json:"record"`
 	// Event is the findings-relayed entry the task's history now carries.
 	Event store.TaskEvent `json:"event"`
+}
+
+// Delegated is the answer to domain.delegate: the delegation record as
+// stored and the attempt the subordinate coordinator's start was claimed
+// as. It answers once the records are written and before the subordinate's
+// session exists, on TaskCreated's terms: whether the subordinate came up
+// is read afterwards, from the delegation's attempts, and a start that
+// fails leaves the delegation standing for the coordinator to end.
+type Delegated struct {
+	// Record is the delegation as stored.
+	Record store.Delegation `json:"record"`
+	// Attempt is the delegation attempt the start was claimed as.
+	Attempt int64 `json:"attempt"`
+	// Instructions is the file the subordinate's instructions were written
+	// to, under the domain's directory.
+	Instructions string `json:"instructions"`
+}
+
+// DelegationEnded is the answer to domain.end: the delegation record with
+// its end written, and whether the subordinate's session this service held
+// was ended with it.
+type DelegationEnded struct {
+	// Record is the delegation as stored, ended.
+	Record store.Delegation `json:"record"`
+	// SessionEnded is whether this service held the subordinate's session
+	// and ended it; false when the session was an earlier service's or had
+	// already ended, which the delegation's attempts say more about.
+	SessionEnded bool `json:"session_ended"`
 }
 
 // TaskMessaged is the answer to task.message: the message record as the

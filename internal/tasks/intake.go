@@ -56,6 +56,14 @@ type Request struct {
 	// worker role. review, fix, a name that is not a role name, and a name
 	// no configured role has are refused and the task is not created.
 	Role string
+	// Domain is the domain the task is written into, PRD section 8's domain
+	// column, and empty for the coordinator's own. It is never on the wire:
+	// internal/service sets it from the caller's placement when the caller
+	// is a domain's subordinate coordinator, and no request field names it,
+	// which is what keeps a task's domain the service's fact and not a
+	// caller's claim. A name home.ValidDomain refuses is refused with
+	// ErrRequest.
+	Domain string
 }
 
 // Cause says why a task was queued.
@@ -138,6 +146,11 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 	if _, err := q.roles.ForTask(req.Role); err != nil {
 		return Created{}, fmt.Errorf("%w: %w", ErrRequest, err)
 	}
+	if req.Domain != "" {
+		if err := home.ValidDomain(req.Domain); err != nil {
+			return Created{}, fmt.Errorf("%w: %w", ErrRequest, err)
+		}
+	}
 	branch := strings.TrimSpace(req.Branch)
 	switch shape {
 	case store.TaskDelivery:
@@ -181,7 +194,7 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 	}
 	task := store.Task{
 		ID: id, Shape: shape, Project: req.Project, Mode: req.Mode, Role: strings.TrimSpace(req.Role),
-		WorktreePath: copyPath,
+		WorktreePath: copyPath, Domain: req.Domain,
 	}
 	if req.Repository != "" {
 		task.RepositoryID = store.Known(repository.ID)

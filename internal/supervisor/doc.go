@@ -106,6 +106,17 @@
 // or completed is not one either (the owner's decision on #320). A state the
 // table does not decide is answered watched.
 //
+// The kind table carries one more column, Subordinate: whether a domain's
+// subordinate coordinator can act on the kind with the commands PRD section
+// 9 gives it, which is what section 8's wake row routes by. The
+// progress-class kinds are marked and the decision-class kinds are not, and
+// the matrix test holds the column to a recipient oracle written from that
+// row. SubordinateActable reads the column out for internal/service, which
+// passes it to internal/store as words. Two kinds are the subordinate's own,
+// KindSubordinateGone, resurfacing once per window on KindTerminalGone's
+// terms, and KindSubordinateEscalated, always actionable; both reach the
+// first coordinator and never the subordinate.
+//
 // # What the matrix establishes and what it does not
 //
 // The matrix is cited for P9 and it establishes the table only. Whether a
@@ -130,7 +141,10 @@
 // # Residual gaps
 //
 //   - KindCheckResult has no producer in this build. Its row says so, and
-//     the matrix rows over it test a path nothing walks.
+//     the matrix rows over it test a path nothing walks. KindSubordinateGone
+//     has none either: the queue's row names a task and a subordinate is
+//     not one, so how a wake about a domain is carried is a decision
+//     internal/service's subordinates.go names as the follow-up.
 //   - A kind that closes a decision is read as an event with no decision
 //     verb, on taskstate's terms that a close claims no state. Whether a
 //     close should surface on its own is not decided here.

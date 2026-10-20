@@ -298,6 +298,12 @@ var renderings = []rendering{
 	{name: "supervision", voice: VoicePhrased, of: typeOf[supervisor.Arm](), render: func(w io.Writer, v any) {
 		writeln(w, machine.ArmPhrase(v.(supervisor.Arm)))
 	}},
+	{name: "domain delegated", voice: VoicePhrased, of: typeOf[machine.Delegated](), render: func(w io.Writer, v any) {
+		writeln(w, machine.DelegatedPhrase(v.(machine.Delegated)))
+	}},
+	{name: "delegation ended", voice: VoicePhrased, of: typeOf[machine.DelegationEnded](), render: func(w io.Writer, v any) {
+		writeln(w, machine.DelegationEndedPhrase(v.(machine.DelegationEnded)))
+	}},
 	{name: "worker event", voice: VoicePhrased, of: typeOf[machine.Appended](), render: func(w io.Writer, v any) {
 		writeln(w, machine.AppendedPhrase(v.(machine.Appended)))
 	}},

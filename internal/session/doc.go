@@ -148,6 +148,23 @@
 // and Workers' doc says why: a worker registered as a stage would have every
 // push it makes refused before admission.
 //
+// # The subordinate set
+//
+// Subordinates is the second held set, beside Workers and on its terms: the
+// live subordinate coordinator sessions a provider started through
+// Host.Delegate, PRD section 9's domain.delegate, keyed by the process group
+// each leads and naming its domain, joined by Delegate and left when the
+// process ends or Close ends the session, with the join unexported. It is a
+// set of its own rather than a second meaning of Workers because one map
+// answering "which task's worker" and "which domain's subordinate" would be
+// two facts under one key (P14); internal/service asks both and errs toward
+// the side that claims less. A subordinate's reference names its domain in
+// the task's place under a prefix of its own, so ParseReference refuses a
+// task identifier where a domain belongs and the reverse. Delegate starts
+// the session the way Create does, through the same adapter under the same
+// environment, in a directory of the home's rather than a proven copy,
+// because a subordinate edits nothing and no isolation is asserted of it.
+//
 // # The tmux provider
 //
 // Tmux hosts each worker as the one process of a tmux server of its own,

@@ -208,16 +208,28 @@ type placer interface {
 	Hosted(host agents.Identity) (session.Membership, bool)
 }
 
-// placed is one of the walk's three answers.
+// subordinatePlacer is placer's shape for the second held set,
+// internal/session's Subordinates: the subordinate coordinator a process
+// group leads, and the one whose terminal a process hosts. subordinates.go
+// composes one over every set the service holds.
+type subordinatePlacer interface {
+	Member(group int) (session.Placement, bool)
+	Hosted(host agents.Identity) (session.Placement, bool)
+}
+
+// placed is one of the walk's answers.
 type placed int
 
 const (
-	// placedNobody is a chain read to its end with no worker and no
-	// terminal's foreground on it.
+	// placedNobody is a chain read to its end with no worker, no
+	// subordinate coordinator and no terminal's foreground on it.
 	placedNobody placed = iota
 	// placedWorker is a chain with a worker the set holds on it.
 	placedWorker
-	// placedPerson is a chain with no worker on it and a process in the
+	// placedSubordinate is a chain with no worker on it and a subordinate
+	// coordinator the second set holds on it.
+	placedSubordinate
+	// placedPerson is a chain with neither on it and a process in the
 	// foreground of its controlling terminal on it.
 	placedPerson
 )
@@ -228,6 +240,9 @@ type placement struct {
 	kind placed
 	// worker is the membership, set only for placedWorker.
 	worker session.Membership
+	// subordinate is the placement in the second set, set only for
+	// placedSubordinate.
+	subordinate session.Placement
 	// chain is every process the walk read, the peer first, which a refusal
 	// names so that whoever is refused can see what was decided from.
 	chain []agents.Lineage
@@ -249,13 +264,16 @@ func (p placement) read() string {
 
 // placeAlongChain walks the parent chain from pid on the terms above, reading
 // each process with read and asking set about each process's group, where
-// it differs its own identifier, and its identity as a host. It answers
-// placedWorker with the first membership set answers; otherwise, once a
-// process with no parent is reached, placedPerson when some process read
-// was in the foreground of its controlling terminal and placedNobody when
-// none was. An error wraps errAncestry and means no answer, which a caller
-// refuses on.
-func placeAlongChain(pid int, read func(int) (agents.Lineage, error), set placer) (placement, error) {
+// it differs its own identifier, and its identity as a host, and then
+// subordinates the same three questions, nil asking nothing. It answers
+// placedWorker with the first membership set answers and placedSubordinate
+// with the first placement subordinates answers, the worker sets asked of
+// each process first so a peer both would answer for is the worker, the
+// side that claims less; otherwise, once a process with no parent is
+// reached, placedPerson when some process read was in the foreground of
+// its controlling terminal and placedNobody when none was. An error wraps
+// errAncestry and means no answer, which a caller refuses on.
+func placeAlongChain(pid int, read func(int) (agents.Lineage, error), set placer, subordinates subordinatePlacer) (placement, error) {
 	current, err := read(pid)
 	if err != nil {
 		return placement{}, fmt.Errorf("%w: reading process %d: %w", errAncestry, pid, err)
@@ -277,6 +295,22 @@ func placeAlongChain(pid int, read func(int) (agents.Lineage, error), set placer
 		if m, ok := set.Hosted(current.Identity); ok {
 			out.kind, out.worker = placedWorker, m
 			return out, nil
+		}
+		if subordinates != nil {
+			if p, ok := subordinates.Member(current.Group); ok {
+				out.kind, out.subordinate = placedSubordinate, p
+				return out, nil
+			}
+			if current.PID != current.Group {
+				if p, ok := subordinates.Member(current.PID); ok {
+					out.kind, out.subordinate = placedSubordinate, p
+					return out, nil
+				}
+			}
+			if p, ok := subordinates.Hosted(current.Identity); ok {
+				out.kind, out.subordinate = placedSubordinate, p
+				return out, nil
+			}
 		}
 		foreground = foreground || current.Foreground()
 		if current.Parent <= 0 || current.Parent == current.PID {
@@ -306,7 +340,7 @@ func placeAlongChain(pid int, read func(int) (agents.Lineage, error), set placer
 // placedWorker, false for either other answer, and the walk's error as it
 // stands.
 func placeByAncestry(pid int, read func(int) (agents.Lineage, error), set placer) (session.Membership, bool, error) {
-	p, err := placeAlongChain(pid, read, set)
+	p, err := placeAlongChain(pid, read, set, nil)
 	if err != nil {
 		return session.Membership{}, false, err
 	}

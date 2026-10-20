@@ -614,6 +614,35 @@ type AcknowledgeRequest struct {
 	Wakes []int64 `json:"wakes"`
 }
 
+// DomainDelegateRequest delegates a named domain of tasks to a subordinate
+// coordinator the service starts, PRD section 9's domain.delegate. It
+// carries nothing about who is asking: the service refuses a caller placed
+// as a task's worker or as a domain's subordinate from the caller's
+// credentials, before anything is read.
+type DomainDelegateRequest struct {
+	// Domain is the domain's name, as internal/home's ValidDomain accepts
+	// it: one to thirty-two lower-case letters, digits and inner dashes.
+	Domain string `json:"domain"`
+	// Delivery is the delivery posture every task the subordinate creates
+	// in the domain takes, "gated" or "local". It is refused empty, because
+	// a subordinate records no posture of its own and the delegation is the
+	// one place the domain's is written; at each task it is held to
+	// intake's rule against that task's project, never lighter.
+	Delivery string `json:"delivery"`
+	// Instructions is what the subordinate coordinator is started with:
+	// what the domain is for and what the coordinator wants of it. The
+	// service appends what the subordinate may run and how it is placed.
+	Instructions string `json:"instructions"`
+}
+
+// DomainEndRequest ends a domain's delegation, PRD section 9's domain.end:
+// the delegation record's one revision, after which the domain's wakes
+// reach the coordinator again and its subordinate's session is ended.
+type DomainEndRequest struct {
+	// Domain is the domain whose standing delegation ends.
+	Domain string `json:"domain"`
+}
+
 // MarkSeenRequest moves the seen mark PRD section 9's catching up reads. It
 // names the landed records a read showed, which CatchUp.Shown returns, and
 // nothing else: the mark moves only on an explicit mark of what a read

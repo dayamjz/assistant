@@ -57,6 +57,22 @@ const (
 	// detection only once the window has elapsed from the record's written
 	// instant and only once per message, and nothing here resends it.
 	KindMessageUnacknowledged Kind = "message-unacknowledged"
+	// KindSubordinateGone is a subordinate coordinator's terminal observed
+	// dead or not observable, PRD section 6's "subordinate gone": it reaches
+	// the first coordinator and never the subordinate, and it is of
+	// ClassResurface on KindTerminalGone's terms, once per escalation
+	// window while it stays gone. It has no producer in this build, and its
+	// row says so: the queue's row names a task and a subordinate is not
+	// one, so what carries a wake about a domain is a decision
+	// internal/service's doc names as the follow-up; the kind is kept so
+	// the table and the flowchart stay one list, as KindCheckResult is.
+	KindSubordinateGone Kind = "subordinate-gone"
+	// KindSubordinateEscalated is a decision a subordinate coordinator
+	// handed up to the first coordinator, PRD section 6's "subordinate
+	// escalated": section 8's escalation record, raised once per record. It
+	// is always actionable, and it reaches the first coordinator and never
+	// the subordinate.
+	KindSubordinateEscalated Kind = "subordinate-escalated"
 )
 
 // Class is how the flowchart decides a kind.
@@ -97,27 +113,59 @@ type Row struct {
 	// and marked so a matrix row over it is not mistaken for a test of a
 	// path something walks.
 	Produced bool
+	// Subordinate is whether a domain's subordinate coordinator can act on
+	// the kind with the commands PRD section 9 gives it, which is what
+	// section 8's wake row routes by: while a delegation stands, a kind
+	// marked here of a delegated task reaches the subordinate, and every
+	// other kind reaches the first coordinator. The progress-class kinds
+	// are marked, since a subordinate messages, stops, reads and
+	// relaunches a worker; the decision-class kinds are not, since a hold
+	// waits on a person and a subordinate answers none, and neither of the
+	// subordinate's own two kinds is, since both are about it. The column
+	// decides routing and nothing about the verdict, which Class alone
+	// decides.
+	Subordinate bool
 }
 
 // kinds is the one owner of what a wake kind means. The flowchart in PRD
 // section 5 is what each row was written from, and the matrix test's oracle
 // is written from the flowchart again, independently, so a row that drifts
-// from the flowchart fails there rather than agreeing with itself.
+// from the flowchart fails there rather than agreeing with itself; the
+// Subordinate column has an oracle of its own there, written from section
+// 8's wake row.
 var kinds = []Row{
-	{Kind: KindCheckResult, Class: ClassActionable, Produced: false},
-	{Kind: KindDecisionEvent, Class: ClassActionable, Produced: true},
-	{Kind: KindPlainEvent, Class: ClassEvidence, Produced: true},
-	{Kind: KindTerminalUnchanged, Class: ClassEvidence, Produced: true},
-	{Kind: KindDeclaredWait, Class: ClassWait, Produced: true},
-	{Kind: KindNoChange, Class: ClassAbsorb, Produced: true},
-	{Kind: KindTerminalGone, Class: ClassResurface, Produced: true},
-	{Kind: KindHoldOpened, Class: ClassActionable, Produced: true},
-	{Kind: KindMessageUnacknowledged, Class: ClassActionable, Produced: true},
+	{Kind: KindCheckResult, Class: ClassActionable, Produced: false, Subordinate: false},
+	{Kind: KindDecisionEvent, Class: ClassActionable, Produced: true, Subordinate: false},
+	{Kind: KindPlainEvent, Class: ClassEvidence, Produced: true, Subordinate: true},
+	{Kind: KindTerminalUnchanged, Class: ClassEvidence, Produced: true, Subordinate: true},
+	{Kind: KindDeclaredWait, Class: ClassWait, Produced: true, Subordinate: true},
+	{Kind: KindNoChange, Class: ClassAbsorb, Produced: true, Subordinate: true},
+	{Kind: KindTerminalGone, Class: ClassResurface, Produced: true, Subordinate: true},
+	{Kind: KindHoldOpened, Class: ClassActionable, Produced: true, Subordinate: false},
+	{Kind: KindMessageUnacknowledged, Class: ClassActionable, Produced: true, Subordinate: true},
+	{Kind: KindSubordinateGone, Class: ClassResurface, Produced: false, Subordinate: false},
+	{Kind: KindSubordinateEscalated, Class: ClassActionable, Produced: true, Subordinate: false},
 }
 
 // Kinds returns every kind's row, in the flowchart's order. The result is a
 // copy.
 func Kinds() []Row { return slices.Clone(kinds) }
+
+// SubordinateActable returns the kinds a domain's subordinate coordinator
+// can act on, in table order: the rows whose Subordinate column is set,
+// which is what a drain for a subordinate is offered and what the first
+// coordinator is not offered of a delegated task. It is the one owner of
+// that list, read by internal/service and passed to internal/store as
+// words.
+func SubordinateActable() []Kind {
+	var out []Kind
+	for _, r := range kinds {
+		if r.Subordinate {
+			out = append(out, r.Kind)
+		}
+	}
+	return out
+}
 
 // Lookup returns the row for a kind, or false for a word this package defines
 // no meaning for. That is a normal answer rather than an error.

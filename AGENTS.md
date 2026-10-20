@@ -174,6 +174,14 @@ Each has cost this repository more than one round of review.
   branch and posture with the `promoted` entry in one anchored transaction,
   one way only, and refuses `ErrCleanupRecorded` by reading the claim the
   same way, so the two writes have exactly one loser in either order.
+  Migration 47's `delegation`, `delegation_attempt` and `escalation` are PRD
+  section 8's subordinate-domain records, each written once and sealed, with
+  `EndDelegation` the delegation's one revision; the task row's `domain` is
+  written at `CreateTask` and never moved, and a wake's recipient is decided
+  at `DrainWakes` by its task's domain and a `WakeRoute` of kinds the caller
+  passes as words, stored on no row (P14). `AcknowledgedBySubordinate` and
+  `SentBySubordinate` are the two closed sets' members for a subordinate,
+  produced only by `internal/service` from placement.
   The task row's `mode` column is the launch notation and never the delivery
   posture: the posture is the `delivery` column localLandingMigration adds,
   written once by `CreateTask` or, for a promoted task, by
@@ -467,7 +475,12 @@ Each has cost this repository more than one round of review.
   where state may still be collapsed into a gap marker and why that is not the
   strict rule relaxed. Four state types have a
   producer, all in `internal/service`; two the table names have none, and the
-  table keeps them because a row is not a promise of a producer.
+  table keeps them because a row is not a promise of a producer. Whether a
+  peer is a domain's subordinate coordinator is the same relation's second
+  answer, decided by the handler and never a third access class;
+  `ErrSubordinate` and `ErrOutsideDomain` are its two refusals, and
+  `domain.delegate` and `domain.end` the two coordinator-only methods that
+  start and end it.
 - `internal/pipeline` is the nine stages as a graph definition, not a second
   executor: `internal/graph` owns execution, halting, and all three bounds. P2
   is structural there rather than checked. A `Stages` is nine named fields, so
@@ -660,6 +673,11 @@ Each has cost this repository more than one round of review.
   record's reference out of the same held set `Probe` answers `Live` from,
   so the reference to handle lookup has one owner. Three things there are
   mechanism rather than rule.
+  `Subordinates` is the second held set, beside `Workers` on its terms,
+  joined only by `Host.Delegate`, PRD section 9's domain.delegate, which
+  starts a subordinate coordinator's session the way `Create` starts a
+  worker's, in a directory of the home's rather than a proven copy; a
+  subordinate's `Reference` names its domain under a prefix of its own.
   `Probe` answers `taskstate.Liveness`, that package's word, with a typed
   `Reason`, and the `reasons` table is the one place a reason's liveness is
   decided: `Live` only through a handle this provider holds whose process
@@ -716,7 +734,11 @@ Each has cost this repository more than one round of review.
   owe a supervision cycle: a closed table over `taskstate.States()` that its
   test derives from that function, so a new state fails until placed, and
   `InFlightOf` reads it beside `store.UnacknowledgedWakes`, because a hold
-  nobody has been told about is in flight whatever its state says.
+  nobody has been told about is in flight whatever its state says. The kind
+  table's `Subordinate` column is what PRD section 8's wake row routes by,
+  read out by `SubordinateActable` and held to its own oracle in the matrix
+  test; `subordinate-gone` and `subordinate-escalated` are the subordinate's
+  two kinds, the first with no producer yet for the reason its row states.
   `terminal.go` is the same kind of closed table for which states have their
   terminal read at all, every state but `Reported`, `Landed` and
   `Complete`, so a delivered task raises no `terminal-gone`. Read its
@@ -936,6 +958,15 @@ Each has cost this repository more than one round of review.
   on the task row, or otherwise its intake instructions, as its intent,
   recorded under the source `task` and never `supplied`, which `workers.go`'s
   `pushIntent` decides from the same relation; a person's push carries none.
+  `subordinates.go` is PRD section 9's subordinate coordinator: `domain.delegate`
+  and `domain.end`, the session started through the driver's provider under
+  the coordinator route, the placement a third way over the same credentials
+  and chain (worker first, the side that claims less), the grant decided per
+  method from it with `scopeTask` holding a named task to the domain's row,
+  the escalation a refused `task.promote` or `task.respond` records, the wake
+  route `wakeRouteOf` composes from the kind table, and the restart relaunch
+  bounded by `relaunch_attempts`; its residual gaps own what a wake about a
+  subordinate itself and the wake stream wait on.
   Three state events have producers here and `publish.go` owns two: `task.state` is
   published from the supervisor loop's pass, the one reader that resolves
   every task, once per change by `taskstate.Basis` equality and not per pass,

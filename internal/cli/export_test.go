@@ -46,6 +46,10 @@ func Subcommands() map[string][][2]string {
 // itself gives its workers the route the product would.
 func WorkerRoute(executable, root string) string { return workerRoute(executable, root) }
 
+// CoordinatorRoute is the route the service start gives a domain's
+// subordinate coordinator, on WorkerRoute's terms.
+func CoordinatorRoute(executable, root string) string { return coordinatorRoute(executable, root) }
+
 // Detach is what launching the service does to the process it starts, so a
 // test's stand-in service manager starts a service the way a manager would
 // rather than as a child of the test's own process group.

@@ -478,6 +478,61 @@ var ErrNoSender = errors.New("store: a message records who sent it")
 // sender.go names, on ErrUnknownAcknowledger's terms.
 var ErrUnknownSender = errors.New("store: message sender is outside the closed set")
 
+// ErrDomainDelegated is returned by Delegate when the domain's latest
+// delegation still stands: a domain is delegated to one subordinate
+// coordinator at a time, and the standing delegation ends only by its own
+// revision, so a second is refused rather than recorded beside it.
+var ErrDomainDelegated = errors.New("store: the domain's delegation still stands")
+
+// ErrDelegationEnded is returned by EndDelegation for a delegation already
+// ended, and by BeginDelegationAttempt for one that no longer stands: the
+// end is a delegation's one revision, and nothing starts a subordinate for
+// a domain nobody delegates any more.
+var ErrDelegationEnded = errors.New("store: the delegation has ended")
+
+// ErrNoDelegationEnd is returned by EndDelegation for the zero
+// DelegationEnd: a delegation's end records why, on Hold's terms for who
+// resolved one.
+var ErrNoDelegationEnd = errors.New("store: a delegation's end records why it ended")
+
+// ErrUnknownDelegationEnd is returned when an end reason is outside the
+// closed set delegation.go names, on ErrUnknownAcknowledger's terms.
+var ErrUnknownDelegationEnd = errors.New("store: delegation end reason is outside the closed set")
+
+// ErrDelegationMoved is the class every *DelegationMovedError belongs to,
+// on ErrTaskMoved's terms: Delegate and BeginDelegationAttempt are anchored
+// to what the caller had read of a domain's delegations or a delegation's
+// attempts, and refuse when that record has moved since.
+var ErrDelegationMoved = errors.New("store: the domain's delegation record moved since the position this write is anchored to")
+
+// DelegationMovedError reports an anchored delegation write refused because
+// the record moved, naming where it actually stands.
+type DelegationMovedError struct {
+	// Domain is the domain the write was for.
+	Domain string
+	// Attempt is whether the anchor was on the delegation's attempts rather
+	// than on the domain's delegations.
+	Attempt bool
+	// Expected is the position the caller said it had observed.
+	Expected int64
+	// Stands is the position the record actually reaches.
+	Stands int64
+}
+
+// Error names the domain, the record and both positions.
+func (e *DelegationMovedError) Error() string {
+	record := "delegations"
+	if e.Attempt {
+		record = "delegation attempts"
+	}
+	return fmt.Sprintf("store: domain %s: its %s stand at %d, and this write was anchored to %d",
+		e.Domain, record, e.Stands, e.Expected)
+}
+
+// Unwrap makes every refused anchored delegation write match
+// ErrDelegationMoved.
+func (e *DelegationMovedError) Unwrap() error { return ErrDelegationMoved }
+
 // ErrMessageDelivery is returned by MarkMessageWritten and
 // MarkMessageRefused for a message whose delivery is already recorded,
 // written or refused: that fact is recorded once and the first record

@@ -184,7 +184,7 @@ func (h *Home) ManagedServiceOutput() string {
 // created by a build that listed one keeps an empty queue/ directory that
 // nothing reads, and nothing here removes it: Create makes directories and
 // removes none.
-var directories = []string{"worktrees", "evidence", "tasks", "logs", "terminals"}
+var directories = []string{"worktrees", "evidence", "tasks", "logs", "terminals", "domains"}
 
 // Create makes the home root and the directories under it, and is safe to run
 // against a home that already exists.

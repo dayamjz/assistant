@@ -138,6 +138,18 @@ const taskAttemptKnowledgeMigration = "task attempt knowledge revision"
 // reason sealCheckpointTableMigration is a constant.
 const notificationMigration = "wake notification"
 
+// subordinateDomainsMigration names the migration that adds PRD section 2's
+// subordinate domains: the task's domain, the delegation and delegation
+// attempt records, and the escalation record, for the reason
+// sealCheckpointTableMigration is a constant.
+const subordinateDomainsMigration = "subordinate domains"
+
+// domainWakesMigration names the migration that adds the wake about a
+// domain rather than a task, PRD section 8's queue for a subordinate
+// coordinator's own kinds, with the delegation's detector markers beside
+// it, for the reason sealCheckpointTableMigration is a constant.
+const domainWakesMigration = "domain wakes"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1779,6 +1791,174 @@ var schema = []migration{
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a notification is kept and is not deleted');
 				END`,
+		},
+	},
+	{
+		version: 47,
+		name:    subordinateDomainsMigration,
+		statements: []string{
+			// PRD section 8's task row gains its domain: written once at
+			// intake from the creator's placement, kept by promotion and
+			// relaunch, and never moved, because section 11 says ownership
+			// never transfers. NULL is the first coordinator's own, which is
+			// what every row written before this column reads as. The
+			// trigger refuses every change of it, from NULL included: a
+			// task is placed in a domain by the write that creates it and
+			// by nothing after.
+			`ALTER TABLE task ADD COLUMN domain TEXT`,
+			`CREATE TRIGGER task_domain_is_written_once
+				BEFORE UPDATE OF domain ON task
+				WHEN NEW.domain IS NOT OLD.domain
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s domain is written at intake and never moved');
+				END`,
+			// The delegation record: one row per domain the coordinator
+			// delegated, with the delivery posture its tasks take and the
+			// anchor the write was decided against, the highest delegation
+			// of the same domain the caller had seen. It is written once;
+			// ended_at with its closed end_reason is its one revision, and
+			// the delegation stands until that revision is written. The
+			// partial index keeps one standing delegation per domain, the
+			// first trigger refuses every update that is not that one
+			// revision made once, and the second refuses every delete.
+			`CREATE TABLE delegation (
+				id         INTEGER PRIMARY KEY,
+				domain     TEXT NOT NULL,
+				delivery   TEXT NOT NULL,
+				anchor     INTEGER NOT NULL,
+				created_at TEXT NOT NULL,
+				ended_at   TEXT,
+				end_reason TEXT
+			) STRICT`,
+			`CREATE UNIQUE INDEX delegation_one_standing_per_domain ON delegation(domain) WHERE ended_at IS NULL`,
+			`CREATE TRIGGER delegation_ends_once
+				BEFORE UPDATE ON delegation
+				WHEN OLD.ended_at IS NOT NULL
+					OR NEW.ended_at IS NULL OR NEW.end_reason IS NULL
+					OR NEW.id IS NOT OLD.id OR NEW.domain IS NOT OLD.domain OR NEW.delivery IS NOT OLD.delivery
+					OR NEW.anchor IS NOT OLD.anchor OR NEW.created_at IS NOT OLD.created_at
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a delegation is written once, and its end with its reason is its one revision');
+				END`,
+			`CREATE TRIGGER delegation_is_not_removed
+				BEFORE DELETE ON delegation
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a delegation is never deleted');
+				END`,
+			// One row per start of a domain's subordinate coordinator, on
+			// task_attempt's terms: the record precedes the process, and
+			// the session reference is filled once after it starts. A
+			// relaunch is a new row anchored to the attempt history read.
+			`CREATE TABLE delegation_attempt (
+				delegation  INTEGER NOT NULL REFERENCES delegation(id),
+				sequence    INTEGER NOT NULL,
+				started_at  TEXT NOT NULL,
+				session_ref TEXT,
+				PRIMARY KEY (delegation, sequence)
+			) STRICT`,
+			`CREATE TRIGGER delegation_attempt_session_is_recorded_once
+				BEFORE UPDATE ON delegation_attempt
+				WHEN OLD.session_ref IS NOT NULL OR NEW.session_ref IS NULL
+					OR NEW.delegation IS NOT OLD.delegation OR NEW.sequence IS NOT OLD.sequence
+					OR NEW.started_at IS NOT OLD.started_at
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a delegation attempt records its session once and nothing else');
+				END`,
+			`CREATE TRIGGER delegation_attempt_is_not_removed
+				BEFORE DELETE ON delegation_attempt
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a delegation attempt is never deleted');
+				END`,
+			// One row per decision a subordinate coordinator hands up to the
+			// first coordinator, naming the task it is about and carrying
+			// the text redacted, sealed on task_relay's terms. It is raised
+			// as a wake of its own kind by the supervisor loop, which reads
+			// this table and never the history.
+			`CREATE TABLE escalation (
+				id         INTEGER PRIMARY KEY,
+				task_id    TEXT NOT NULL REFERENCES task(id),
+				text       TEXT NOT NULL,
+				created_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TRIGGER escalation_is_written_once
+				BEFORE UPDATE ON escalation
+				BEGIN
+					SELECT RAISE(ABORT, 'store: an escalation is written once and is not updated');
+				END`,
+			`CREATE TRIGGER escalation_is_not_removed
+				BEFORE DELETE ON escalation
+				BEGIN
+					SELECT RAISE(ABORT, 'store: an escalation is written once and is not deleted');
+				END`,
+		},
+	},
+	{
+		version: 48,
+		name:    domainWakesMigration,
+		statements: []string{
+			// A wake about a domain rather than a task: PRD section 6's
+			// subordinate gone and the hold the relaunch bound raises for a
+			// delegation, which the wake table cannot carry because its row
+			// names a task and a subordinate coordinator is not one. The
+			// row is owned by the delegation (P14): the domain is read off
+			// that row and recorded nowhere here. It is the wake table's
+			// shape with the task replaced by the delegation, under the
+			// same seals: no column but the acknowledgement and the handout
+			// may change, an acknowledgement is written once, a handout is
+			// written only while the row is queued and counted once, and
+			// no row is deleted. Its identifiers are a sequence of their
+			// own, so a drain carries the two shapes apart.
+			`CREATE TABLE domain_wake (
+				id               INTEGER PRIMARY KEY,
+				delegation       INTEGER NOT NULL REFERENCES delegation(id),
+				kind             TEXT NOT NULL,
+				marker           TEXT NOT NULL,
+				created_at       TEXT NOT NULL,
+				handled_at       TEXT,
+				acknowledged_by  TEXT,
+				handed_out_at    TEXT,
+				handed_out_to    TEXT,
+				handed_out_under TEXT,
+				handouts         INTEGER,
+				UNIQUE (delegation, kind, marker)
+			) STRICT`,
+			`CREATE INDEX domain_wake_unacknowledged ON domain_wake(delegation, id) WHERE handled_at IS NULL`,
+			`CREATE TRIGGER domain_wake_is_appended
+				BEFORE UPDATE OF id, delegation, kind, marker, created_at ON domain_wake
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a domain wake is appended by the loop that observed it and is not rewritten');
+				END`,
+			`CREATE TRIGGER domain_wake_is_acknowledged_once
+				BEFORE UPDATE OF handled_at, acknowledged_by ON domain_wake
+				WHEN OLD.handled_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a domain wake is acknowledged once and the first acknowledgement stands');
+				END`,
+			`CREATE TRIGGER domain_wake_is_handed_out_while_queued
+				BEFORE UPDATE OF handed_out_at, handed_out_to, handed_out_under, handouts ON domain_wake
+				WHEN OLD.handled_at IS NOT NULL
+					OR NEW.handed_out_at IS NULL OR NEW.handed_out_to IS NULL OR NEW.handed_out_under IS NULL
+					OR NEW.handouts IS NOT coalesce(OLD.handouts, 0) + 1
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a domain wake is handed out only while it is queued, and each handout is counted once');
+				END`,
+			`CREATE TRIGGER domain_wake_is_not_removed
+				BEFORE DELETE ON domain_wake
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a domain wake is kept after it is drained and is not deleted');
+				END`,
+			// The detector markers of one delegation, on wake_marker's
+			// terms: what the loop had observed of the subordinate's
+			// terminal when it last passed over the delegation, rewritten
+			// in place in the transaction that appends the wake they
+			// stand beside. A delegation has no screen to digest and no
+			// events, so the two columns are the terminal-gone ones.
+			`CREATE TABLE delegation_marker (
+				delegation       INTEGER PRIMARY KEY REFERENCES delegation(id),
+				unobserved_since TEXT,
+				gone_surfaced_at TEXT,
+				updated_at       TEXT NOT NULL
+			) STRICT`,
 		},
 	},
 }

@@ -64,7 +64,11 @@ func (Request) HoldResolver() store.Resolver {
 // The vocabulary is internal/store's, per P14, and that package says why the
 // set has no member meaning a person: no surface here witnesses one, and the
 // queue is the coordinator's. This package chooses which member the protocol
-// may produce and owns no part of what the members mean.
+// may produce and owns no part of what the members mean. The subordinate's
+// member is not produced here: internal/service substitutes it when the
+// kernel's credentials place the caller as a domain's subordinate
+// coordinator, which is a fact about a process this package does not hold,
+// and still never a field a caller writes.
 func (Request) WakeAcknowledger() store.Acknowledger {
 	return store.AcknowledgedByCoordinator()
 }

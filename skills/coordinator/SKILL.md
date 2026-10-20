@@ -1,6 +1,6 @@
 ---
 name: coordinator
-description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, peek at, stop, relaunch and promote them, record an investigation's findings relayed, listen to, wait on, drain and acknowledge the wake queue, and verify supervision
+description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, peek at, stop, relaunch and promote them, record an investigation's findings relayed, listen to, wait on, drain and acknowledge the wake queue, verify supervision, and delegate a domain of tasks to a subordinate coordinator
 ---
 
 # coordinator
@@ -341,7 +341,45 @@ assistant --json coordinator await --timeout 5m   # blocks, then drains
   by the program, so the wait no longer returns it. After a restart read
   `assistant tasks` as well as the queue.
 
+## Delegate a domain
+
+```sh
+assistant coordinator delegate DOMAIN --delivery gated --instructions "what the domain is for"
+assistant coordinator end-delegation DOMAIN
+```
+
+`delegate` records a domain of tasks as delegated and has the service start
+a subordinate coordinator for it, in this home, with the instructions you
+give and the posture every task of the domain takes (`--delivery` is
+required; the subordinate records no posture of its own). The answer comes
+once the records are written and before the subordinate exists. The
+subordinate is placed by its process, as a worker is: it creates tasks that
+are written into its domain, and it holds `create`, `message`, `stop`,
+`peek`, `relaunch`, `relayed`, `wakes`, `await`, `acknowledge` and
+`supervision` over that domain's tasks alone, with `tasks` listing the
+domain alone. It is refused `promote`, `listen`, both delegation
+subcommands, answering a hold, marking the catch-up read, the run commands,
+`sync`, and the service's stop and restart, with code `subordinate`; a task
+outside its domain is refused with `outside-domain`.
+
+While a delegation stands, wakes about the domain's tasks that the
+subordinate can act on are handed to it and not to you, and decisions about
+them, holds among them, are handed to you and not to it. A promotion or a
+hold's answer it asks for arrives as a `subordinate-escalated` wake, with
+its words on the task's `--json` answer under `escalations`; act on it or
+not, and acknowledge the wake. `end-delegation` takes the domain back: the
+subordinate's session is ended, and from the next drain on its rows are
+yours. If you are a subordinate yourself, the program told you so when it
+started you; keep to your domain and ask for a promotion when you want one.
+
 ## Known gaps in this build
+
+- **A subordinate's own ending raises no wake yet.** The service re-probes
+  a delegated domain's subordinate at restart and relaunches a dead one up
+  to `relaunch_attempts` times, but while the service runs nothing tells
+  you its session ended, and past the bound the delegation stands until you
+  end it. Read `assistant --json tasks` for the domain and the service log.
+  A subordinate cannot hold `listen`; it waits with `await`.
 
 - **Waking depends on the watch.** A push and a wait both follow the
   service's supervision recording a wake, so how soon either reaches you

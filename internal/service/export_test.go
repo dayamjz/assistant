@@ -26,6 +26,13 @@ func (s *Service) SetBeforeRefusalEndForTest(f func()) {
 	s.beforeRefusalEnd = f
 }
 
+// SubordinateSessionOf exposes to this package's external tests the
+// terminal session the service started for a domain's subordinate
+// coordinator, with the host that holds it, on SessionOf's terms.
+func (s *Service) SubordinateSessionOf(domain string) (session.Host, *session.Session, bool) {
+	return s.subordinateSessionOf(domain)
+}
+
 // AbandonSessionsForTest forgets every session this service launched
 // without ending it, so Close ends none of them. It is the shape a service
 // killed with SIGKILL leaves, which a test cannot produce of its own

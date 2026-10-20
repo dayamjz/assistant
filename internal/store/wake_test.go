@@ -294,10 +294,10 @@ func TestDrainingHandsOutAndOnlyAnAcknowledgementCloses(t *testing.T) {
 	if third, err := s.DrainWakes(ctx, 10, handout("a", "a")); err != nil || len(third) != 0 {
 		t.Fatalf("the third drain = %+v (%v), want none while a is held", third, err)
 	}
-	if n, err := s.OfferedWakes(ctx, []string{"a"}); err != nil || n != 0 {
+	if n, err := s.OfferedWakes(ctx, []string{"a"}, WakeRoute{}); err != nil || n != 0 {
 		t.Fatalf("OfferedWakes(a) = %d (%v), want 0", n, err)
 	}
-	if n, err := s.OfferedWakes(ctx, nil); err != nil || n != 3 {
+	if n, err := s.OfferedWakes(ctx, nil, WakeRoute{}); err != nil || n != 3 {
 		t.Fatalf("OfferedWakes() = %d (%v), want 3", n, err)
 	}
 

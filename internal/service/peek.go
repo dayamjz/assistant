@@ -70,11 +70,15 @@ var errNotPeekable = errors.New("service: this service holds no session for the 
 
 // peekTask is task.peek, on the file comment's terms.
 func (s *Service) peekTask(ctx context.Context, req ipc.Request, r machine.TaskRequest) (machine.TaskPeek, error) {
-	if err := s.refuseWorker(req); err != nil {
+	p, err := s.admitted(req)
+	if err != nil {
 		return machine.TaskPeek{}, err
 	}
 	if strings.TrimSpace(r.Task) == "" {
 		return machine.TaskPeek{}, fmt.Errorf("%w: a peek names the task whose worker it reads", ipc.ErrInvalidRequest)
+	}
+	if err := s.scopeTask(ctx, req, p, r.Task); err != nil {
+		return machine.TaskPeek{}, err
 	}
 	latest, ok, err := s.latestAttempt(ctx, r.Task)
 	if err != nil {

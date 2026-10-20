@@ -1,23 +1,30 @@
 package store
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/dayamjz/assistant/internal/home"
+)
 
 // Acknowledger says who acknowledged a wake, which is the act that takes a
 // row off the queue and, once internal/supervisor's in-flight table reads the
 // queue, releases the stop guard for a task nothing else holds in flight.
 // The same set says who a drain handed a row out to, which closes nothing. It
 // is a closed set on Resolver's terms, and for Resolver's reason: a struct
-// with one unexported field and no conversion into it, so outside this
-// package the only values are the two the functions below return and the
-// zero, and nothing decoded from a wire, a file or an agent's output is one.
-// Who acknowledged is decided in source at the surface recording it, never
-// read out of a request, on the terms internal/ipc's Request.HoldResolver
-// sets for holds.
+// with unexported fields and no conversion into it, so outside this package
+// the only values are the ones the functions below return and the zero, and
+// nothing decoded from a wire, a file or an agent's output is one. Who
+// acknowledged is decided in source at the surface recording it, never read
+// out of a request, on the terms internal/ipc's Request.HoldResolver sets for
+// holds: the coordinator's member is what that package produces, and the
+// subordinate's is what internal/service substitutes when the kernel's
+// credentials place the caller as a domain's subordinate coordinator.
 //
 // There is no value meaning a person acknowledged, and that is the design:
 // no surface in this repository witnesses a person, and the queue is the
-// coordinator's, so a wake is acknowledged by the coordinator's turn or by
-// the program and by nothing else.
+// coordinators', so a wake is acknowledged by a coordinator's turn or by the
+// program and by nothing else.
 //
 // Nothing reads an Acknowledger to decide whether an acknowledgement may
 // proceed. AcknowledgeWakes treats every member identically, and the only
@@ -27,7 +34,12 @@ import "fmt"
 // thought about the question holds. AcknowledgeWakes refuses it with
 // ErrNoAcknowledger rather than recording an acknowledgement with nobody
 // attached to it.
-type Acknowledger struct{ name string }
+type Acknowledger struct {
+	name string
+	// domain is set for the subordinate member alone: which domain's
+	// subordinate coordinator acknowledged.
+	domain string
+}
 
 // AcknowledgedByCoordinator is an acknowledgement made by the coordinator's
 // turn, which PRD section 5 says drains the queue before doing anything else.
@@ -49,31 +61,58 @@ func AcknowledgedByCoordinator() Acknowledger { return Acknowledger{name: "coord
 // marker names the superseded session; every other row stays queued.
 func AcknowledgedByProgram() Acknowledger { return Acknowledger{name: "program"} }
 
+// AcknowledgedBySubordinate is an acknowledgement made by the subordinate
+// coordinator of the named domain, PRD section 8's "the coordinator that
+// drained a row acknowledges it". Its one producer is internal/service,
+// which substitutes it for the coordinator's member when the kernel's
+// credentials and the caller's parent chain place the caller as that
+// domain's subordinate, never from anything the caller sends. A domain
+// home.ValidDomain refuses is refused at the write with
+// ErrUnknownAcknowledger, so no row records a domain that names nothing.
+func AcknowledgedBySubordinate(domain string) Acknowledger {
+	return Acknowledger{name: subordinateMember, domain: domain}
+}
+
+// Domain is the domain of the subordinate member, and empty for every other
+// member, so a reader can say which subordinate a row was handed to without
+// a text form of the member existing.
+func (a Acknowledger) Domain() string { return a.domain }
+
 // String renders who acknowledged, or "nobody" for the zero Acknowledger, so
 // a formatted record cannot print an empty who as though it were a value.
 func (a Acknowledger) String() string {
-	if a.name == "" {
+	switch {
+	case a.name == "":
 		return "nobody"
+	case a.domain != "":
+		return a.name + " of domain " + a.domain
 	}
 	return a.name
 }
 
-// acknowledgers is the closed set, and the only place it is written down. The
-// write encodes through it and the read decodes through it, so the column
-// cannot come to hold a value a read would then refuse.
-func acknowledgers() []Acknowledger {
-	return []Acknowledger{AcknowledgedByCoordinator(), AcknowledgedByProgram()}
-}
+// subordinateMember is the name of the member a domain's subordinate
+// coordinator records as, and the prefix its column text carries before the
+// domain.
+const subordinateMember = "subordinate"
 
 // acknowledgerText returns what the column holds for a. The zero Acknowledger
 // is ErrNoAcknowledger, and anything else outside the set is
 // ErrUnknownAcknowledger, which is unreachable from outside this package for
-// resolverText's reason and kept for the same one.
+// resolverText's reason except through a subordinate member naming a domain
+// home.ValidDomain refuses, and kept for the same one. The column text is
+// the member's name, or for the subordinate member the name, a colon and
+// the domain, which acknowledgerValue reads back.
 func acknowledgerText(a Acknowledger) (string, error) {
 	if a == (Acknowledger{}) {
 		return "", ErrNoAcknowledger
 	}
-	for _, known := range acknowledgers() {
+	if a.name == subordinateMember {
+		if err := home.ValidDomain(a.domain); err != nil {
+			return "", fmt.Errorf("%w: %w", ErrUnknownAcknowledger, err)
+		}
+		return subordinateMember + ":" + a.domain, nil
+	}
+	for _, known := range []Acknowledger{AcknowledgedByCoordinator(), AcknowledgedByProgram()} {
 		if a == known {
 			return a.name, nil
 		}
@@ -91,7 +130,13 @@ func acknowledgerValue(o Optional[string], column string) (Optional[Acknowledger
 	if !ok {
 		return Unknown[Acknowledger](), nil
 	}
-	for _, known := range acknowledgers() {
+	if domain, found := strings.CutPrefix(s, subordinateMember+":"); found {
+		if err := home.ValidDomain(domain); err != nil {
+			return Unknown[Acknowledger](), fmt.Errorf("store: column %s: %w: %w", column, ErrUnknownAcknowledger, err)
+		}
+		return Known(AcknowledgedBySubordinate(domain)), nil
+	}
+	for _, known := range []Acknowledger{AcknowledgedByCoordinator(), AcknowledgedByProgram()} {
 		if s == known.name {
 			return Known(known), nil
 		}

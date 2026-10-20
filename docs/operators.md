@@ -612,6 +612,49 @@ What is sent, and what is not:
   stops offering wakes, and tries again about every 5 seconds.
 - With no command named, nothing runs and nothing is recorded.
 
+### Delegating a domain
+
+A coordinator can hand a named set of tasks to a coordinator of its own,
+started by the service in this same home:
+
+```sh
+assistant coordinator delegate DOMAIN --delivery gated --instructions "what the domain is for"
+assistant coordinator end-delegation DOMAIN
+```
+
+The domain is one to thirty-two lower-case letters, digits and inner dashes.
+The service records the delegation, with the posture every task of the
+domain takes, and starts the subordinate coordinator through the same
+session provider and adapter it starts a worker through, in
+`domains/DOMAIN` under the home, with the `assistant coordinator` route as
+the one command its grant allows. It is placed by the process it runs in,
+exactly as a worker is, so every task it creates is written into its domain
+and it reaches only that domain's tasks: it holds `create`, `message`,
+`stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`, `acknowledge` and
+`supervision` over them, its `tasks` listing shows the domain alone, and it
+is refused `promote`, `listen`, `delegate`, `end-delegation`, answering a
+hold, marking the catch-up read, starting, rerunning or cancelling a run,
+`sync`, and stopping or restarting the service, with code `subordinate`; a
+task outside its domain is refused with code `outside-domain`. A promotion
+or a hold's answer it asks for is refused and recorded as a decision it
+handed up, which reaches you as a `subordinate-escalated` wake and sits on
+the task's `--json` answer as `escalations`.
+
+Wakes are routed by kind: while the delegation stands, a wake about a task
+in the domain that the subordinate can act on (its worker gone, idle, or
+unacknowledged, among them) is handed to the subordinate's drains alone,
+and a decision (a hold, an escalation) to yours alone, so no wake is handed
+to both. `end-delegation` ends the delegation, its one revision, ends the
+subordinate's session this service holds, and the next drain of yours is
+offered the domain's rows; the tasks stay in their domain. Nothing else
+ends a delegation: not a restart, which re-probes the subordinate's
+session and relaunches a dead one up to `relaunch_attempts` times, and not
+a dropped connection. What this build does not do: a subordinate whose
+session is gone raises no wake of its own yet, so read the service log and
+`assistant --json tasks` for the domain after a restart; past the relaunch
+bound the delegation stands until you end it; and a subordinate cannot hold
+`listen`, so it waits with `await`.
+
 ## Unattended operating posture
 
 When nobody is at the keyboard, read the fleet against these postures.

@@ -16,8 +16,9 @@ import (
 // one implementation and a second provider cannot answer Live on terms of
 // its own.
 type held struct {
-	marker  string
-	workers *Workers
+	marker       string
+	workers      *Workers
+	subordinates *Subordinates
 	// owner is the provider the sessions belong to, compared by identity so
 	// a session one provider created is never another's.
 	owner any
@@ -27,7 +28,41 @@ type held struct {
 }
 
 func newHeld(marker string, owner any) *held {
-	return &held{marker: marker, workers: NewWorkers(), owner: owner, sessions: map[string]*Session{}}
+	return &held{marker: marker, workers: NewWorkers(), subordinates: NewSubordinates(), owner: owner, sessions: map[string]*Session{}}
+}
+
+// adoptSubordinate is adopt for a subordinate coordinator's session: the
+// identity is read the same way, the group joins Subordinates rather than
+// Workers for the process's lifetime, and the reference names the domain
+// rather than a task.
+func (h *held) adoptSubordinate(domain string, worker agents.Worker, attach []string, host agents.Identity) (*Session, error) {
+	pid := worker.Group()
+	identity, found, err := agents.Identify(pid)
+	switch {
+	case errors.Is(err, agents.ErrIdentityUnreadable):
+		identity = agents.Identity{}
+	case err != nil:
+		worker.Close()
+		return nil, fmt.Errorf("%w: process %d: %w", ErrIdentity, pid, err)
+	case !found:
+		worker.Close()
+		return nil, fmt.Errorf("%w: process %d was not running when looked for", ErrIdentity, pid)
+	}
+	s := &Session{
+		ref:    Reference{Home: h.marker, Domain: domain, PID: pid, Start: identity.Start},
+		owner:  h.owner,
+		worker: worker,
+		attach: attach,
+	}
+	s.leave = h.subordinates.join(Placement{Domain: domain, Group: pid, Host: host}, worker.Done())
+	go func() {
+		<-worker.Done()
+		s.leave()
+	}()
+	h.mu.Lock()
+	h.sessions[s.ref.String()] = s
+	h.mu.Unlock()
+	return s, nil
 }
 
 // adopt makes worker a held session of task: it reads the worker's identity,

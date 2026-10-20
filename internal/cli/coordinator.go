@@ -74,6 +74,20 @@ var coordinatorActions = []struct {
 	{"listen", "", "Hold the wake stream: print each wake as it is queued, until interrupted, handing out none.", coordinatorListen},
 	{"acknowledge", "<wake>...", "Record that the named wakes were acted on, which closes them, so no drain hands them out again.", coordinatorAcknowledge},
 	{"supervision", "", "Verify that this home's service is watching the fleet.", coordinatorSupervision},
+	{"delegate", "<domain>", "Delegate a named domain of tasks to a coordinator of its own, begun by the service under the posture given.", coordinatorDelegate},
+	{"end-delegation", "<domain>", "End a domain's delegation, so its notices come back to you and its coordinator is ended.", coordinatorEndDelegation},
+}
+
+// coordinatorRoute is the route the service gives a domain's subordinate
+// coordinator: this program's absolute path, --home naming root, and this
+// verb, composed as workerRoute composes the worker's. It is the one
+// composition of that text; cli's service start passes it to
+// internal/service, which hands it to the grant and the subordinate's
+// instructions alike, so the commands a subordinate is told it may run and
+// the prefix its grant allows are one text. What the service then admits
+// of each subcommand is decided there from the caller's placement.
+func coordinatorRoute(executable, root string) string {
+	return shellQuote(executable) + " --" + homeFlagName + " " + shellQuote(root) + " " + coordinatorVerbName
 }
 
 // coordinatorVerb runs the subcommand the command line names, which has to
@@ -441,8 +455,48 @@ func coordinatorSupervision(ctx context.Context, in *invocation) (any, error) {
 	return arm, err
 }
 
+// coordinatorDelegate is domain.delegate: the domain named as the operand,
+// the posture its tasks take, and what its coordinator is started with,
+// from --instructions or --instructions-file on coordinatorCreate's terms.
+// Which names and postures the service accepts is its own; a request it
+// cannot read is incorrect usage, and a domain already delegated is its
+// refusal. The answer comes once the delegation is recorded and before the
+// domain's coordinator exists.
+func coordinatorDelegate(ctx context.Context, in *invocation) (any, error) {
+	var request machine.DomainDelegateRequest
+	var instructions, instructionsFile string
+	domain, err := in.taskOperand(coordinatorCommand("delegate"), func(set *flag.FlagSet) {
+		set.StringVar(&request.Delivery, "delivery", "", `"gated" or "local": the posture every task of the domain takes`)
+		set.StringVar(&instructions, "instructions", "", "what the domain's coordinator is started with")
+		set.StringVar(&instructionsFile, "instructions-file", "", "a file holding what the domain's coordinator is started with, in place of --instructions")
+	})
+	if err != nil {
+		return nil, err
+	}
+	request.Domain = domain
+	if request.Instructions, err = in.textOrFile("instructions", instructions, instructionsFile); err != nil {
+		return nil, err
+	}
+	var delegated machine.Delegated
+	err = in.callService(ctx, ipc.MethodDomainDelegate, request, &delegated)
+	return delegated, err
+}
+
+// coordinatorEndDelegation is domain.end: the domain named as the operand.
+// A domain with no standing delegation is the service's refusal.
+func coordinatorEndDelegation(ctx context.Context, in *invocation) (any, error) {
+	domain, err := in.taskOperand(coordinatorCommand("end-delegation"), func(*flag.FlagSet) {})
+	if err != nil {
+		return nil, err
+	}
+	var ended machine.DelegationEnded
+	err = in.callService(ctx, ipc.MethodDomainEnd, machine.DomainEndRequest{Domain: domain}, &ended)
+	return ended, err
+}
+
 // taskOperand parses a subcommand that names exactly one task as its
-// operand, and returns it.
+// operand, and returns it. A domain is parsed on the same terms, since both
+// are one word the service decides the meaning of.
 func (in *invocation) taskOperand(name string, declare func(*flag.FlagSet)) (string, error) {
 	if err := in.parseArgs(name, 1, declare); err != nil {
 		return "", err

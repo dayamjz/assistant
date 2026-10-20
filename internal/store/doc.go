@@ -250,6 +250,36 @@
 // it replaced. This records and does not gate: every member closes a row on
 // the same terms.
 //
+// # Subordinate domains
+//
+// PRD section 8's domain, delegation, delegation attempt and escalation
+// records are migration 47's. A task's domain is a column of its row,
+// written by CreateTask from what the caller derived of the creator's
+// placement and never moved: a trigger refuses every later write of it,
+// from NULL included, because section 11 has ownership never transfer, and
+// NULL is the first coordinator's own, which is what every row written
+// before the column reads as. delegation is written once by Delegate,
+// anchored to the domain's latest delegation on CreateTask's terms, one
+// standing per domain by a partial index, and ended once by EndDelegation,
+// which is the row's one revision; delegation_attempt is task_attempt's
+// shape for a subordinate's starts; escalation is written once by
+// RecordEscalation, redacted, naming the task and nothing of the domain,
+// which the task's row owns. Why a delegation ended is DelegationEnd, closed
+// on Acknowledger's terms, with one member in this build.
+//
+// A wake's recipient is decided at the drain and stored on no row (P14):
+// DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain
+// the drain is for and the kinds a subordinate can act on as words, and
+// join the task row and the delegation table in the drain's own
+// transaction, so a delegated task's actable row is offered to its
+// subordinate alone while the delegation stands and every other row to the
+// first coordinator. What a kind means stays internal/supervisor's; this
+// package compares the words. AcknowledgedBySubordinate and
+// SentBySubordinate are the two closed sets' members for a subordinate,
+// carrying its domain, which internal/service alone produces from the
+// placement; WakeScopes is the read an acknowledgement is held to a domain
+// with.
+//
 // # A read-only open
 //
 // OpenReadOnly is for a caller that has to read the record without being the

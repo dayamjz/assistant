@@ -183,9 +183,11 @@ func (b *wakeBell) ring() {
 // the bound, because the caller went away or the service is closing, is
 // ipc.ErrUnavailable wrapping the context's error, and drains nothing.
 func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.WakeWaitRequest) (machine.Wakes, error) {
-	if err := s.refuseWorker(req); err != nil {
+	p, err := s.admitted(req)
+	if err != nil {
 		return machine.Wakes{}, err
 	}
+	handout := s.wakeHandout(req, p)
 	bound, limit, err := r.Bounds()
 	if err != nil {
 		return machine.Wakes{}, fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
@@ -203,7 +205,11 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	defer recheck.Stop()
 	for {
 		rung := s.wakeBell.armed()
-		offered, err := s.store.OfferedWakes(ctx, s.wakeHandout(req).Held)
+		// The handout is composed per read, because the stretch it is
+		// made under is the one open now; the route is the placement's and
+		// does not move.
+		handout = s.wakeHandout(req, p)
+		offered, err := s.store.OfferedWakes(ctx, handout.Held, handout.Route)
 		if err != nil {
 			return machine.Wakes{}, err
 		}
@@ -211,7 +217,7 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 			if ctx.Err() != nil {
 				return machine.Wakes{}, ended()
 			}
-			wakes, err := s.store.DrainWakes(ctx, limit, s.wakeHandout(req))
+			wakes, err := s.store.DrainWakes(ctx, limit, handout)
 			if err != nil {
 				return machine.Wakes{}, err
 			}
@@ -226,7 +232,7 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 			if ctx.Err() != nil {
 				return machine.Wakes{}, ended()
 			}
-			wakes, err := s.store.DrainWakes(ctx, limit, s.wakeHandout(req))
+			wakes, err := s.store.DrainWakes(ctx, limit, s.wakeHandout(req, p))
 			if err != nil {
 				return machine.Wakes{}, err
 			}
@@ -238,14 +244,17 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 }
 
 // wakeHandout is what a coordinator's drain made now hands rows out as, on
-// the terms above: to who req.WakeAcknowledger says, under the stretch of
+// the terms above: to who the caller's placement says, subordinates.go's
+// acknowledgerOf, on the route the placement gives, under the stretch of
 // the wake stream that is open, holding that stretch, or, with no stretch
-// open, under a name nothing holds and holding nothing. A service with no
-// wake publisher, which Open never builds and this package's internal tests
-// build by hand, is never attached.
-func (s *Service) wakeHandout(req ipc.Request) store.WakeHandout {
-	h := store.WakeHandout{To: req.WakeAcknowledger(), Under: s.instance + "/unattached"}
-	if s.wakes == nil {
+// open, under a name nothing holds and holding nothing. A subordinate never
+// holds the stream, so its handouts are always unattached and it is handed
+// a row on every drain until it acknowledges it, as a polling coordinator
+// is. A service with no wake publisher, which Open never builds and this
+// package's internal tests build by hand, is never attached.
+func (s *Service) wakeHandout(req ipc.Request, p placedPeer) store.WakeHandout {
+	h := store.WakeHandout{To: s.acknowledgerOf(req, p), Under: s.instance + "/unattached", Route: wakeRouteOf(p)}
+	if s.wakes == nil || p.isSubordinate {
 		return h
 	}
 	if number, open := s.wakes.Attachment(); open {
@@ -257,10 +266,14 @@ func (s *Service) wakeHandout(req ipc.Request) store.WakeHandout {
 
 // admitWakeStream is the handler's half of wakes.subscribe: internal/ipc
 // has already refused a contained caller, and this refuses a task's worker
-// on wakes.list's terms. It returns nil to admit, and the stream itself is
-// internal/ipc's to open and pump.
+// on wakes.list's terms and a subordinate coordinator with
+// ipc.ErrSubordinate, on subordinates.go's terms: the stream is one
+// publisher that pushes every row and counts as the coordinator's
+// attachment, so it is the coordinator's alone in this build. It returns
+// nil to admit, and the stream itself is internal/ipc's to open and pump.
 func (s *Service) admitWakeStream(req ipc.Request) error {
-	return s.refuseWorker(req)
+	_, err := s.refuseSubordinate(req)
+	return err
 }
 
 // publishWake pushes a row the loop appended to the coordinator's wake

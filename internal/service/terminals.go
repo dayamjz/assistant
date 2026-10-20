@@ -147,11 +147,17 @@ func (h heldTerminals) Capture(ctx context.Context, ref string) (session.Capture
 }
 
 // hostForReference reports the per-task host this service holds for the
-// session ref names, when the reference parses and names a launched task.
+// session ref names, when the reference parses and names a launched task,
+// or the host holding a domain's subordinate coordinator when it names a
+// delegated domain.
 func (s *Service) hostForReference(ref string) (session.Host, bool) {
 	parsed, err := session.ParseReference(ref)
 	if err != nil {
 		return nil, false
+	}
+	if parsed.Subordinate() {
+		host, _, ok := s.subordinateSessionOf(parsed.Domain)
+		return host, ok
 	}
 	host, _, ok := s.sessionOf(parsed.Task)
 	return host, ok

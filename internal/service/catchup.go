@@ -276,7 +276,7 @@ func landedOf(o taskstate.Observed, task machine.Task) []machine.Landed {
 // not a landed one refuses the whole batch as ipc.ErrInvalidRequest naming
 // it, with nothing written.
 func (s *Service) markSeen(ctx context.Context, req ipc.Request, r machine.MarkSeenRequest) (machine.Marked, error) {
-	if err := s.refuseWorker(req); err != nil {
+	if _, err := s.refuseSubordinate(req); err != nil {
 		return machine.Marked{}, err
 	}
 	if len(r.Records) == 0 {

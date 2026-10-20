@@ -181,6 +181,17 @@ func (s *Service) taskView(ctx context.Context, o taskstate.Observed) machine.Ta
 	if _, ok := o.Snapshot.ReportStoredAt.Get(); ok {
 		t.Report = s.investigationReport(ctx, o.Snapshot.Task.ID)
 	}
+	if o.Snapshot.Task.Domain != "" {
+		// The decisions the domain's subordinate handed up about the task,
+		// read from the escalation record; a read that fails is logged and
+		// the answer carries none, which Basis says nothing about either
+		// way, so nothing here invents an empty list as a fact.
+		escalations, err := s.store.TaskEscalations(ctx, o.Snapshot.Task.ID)
+		if err != nil {
+			s.log.Printf("the escalations about task %s could not be read for its answer: %v", o.Snapshot.Task.ID, err)
+		}
+		t.Escalations = escalations
+	}
 	t.Policy = s.taskPolicy(ctx, o.Snapshot.Task)
 	return t
 }

@@ -220,6 +220,19 @@ const (
 	// resumes, which is what P4 separates, but it is named here rather than
 	// left for a reader to assume the two reads are the same.
 	MethodRunLog Method = "run.log"
+	// MethodDomainDelegate delegates a named domain of tasks to a
+	// subordinate coordinator, PRD section 9's domain.delegate: it writes
+	// section 8's delegation record and starts the domain's subordinate
+	// coordinator through the session provider, placed from then on by the
+	// same credentials and lineage as a worker. It is the coordinator's on
+	// MethodTaskCreate's terms, and refused for a subordinate coordinator
+	// as for a worker, with ErrSubordinate.
+	MethodDomainDelegate Method = "domain.delegate"
+	// MethodDomainEnd ends a delegation, PRD section 9's domain.end: the
+	// delegation record's one revision, after which the domain's wakes
+	// reach the first coordinator again. It is the coordinator's on
+	// MethodDomainDelegate's terms.
+	MethodDomainEnd Method = "domain.end"
 	// MethodServiceStop stops the service.
 	MethodServiceStop Method = "service.stop"
 	// MethodServiceRestart restarts the service.
@@ -246,13 +259,15 @@ const (
 // an active validation stage.
 //
 // It is the whole of what the server decides about a caller. A second
-// relation, whether the caller is a task's worker, is decided by the handler
-// from the same Credentials and is not a third class here: the methods that
-// refuse a worker, and the one that admits only a worker, each say so in
-// their own doc, and internal/service's worker group set is the input. The
-// table stays about containment because a class that meant "coordinator
-// only" would need that set as an input of this package, which owns no
-// process this service started.
+// relation, whether the caller is a task's worker or a domain's subordinate
+// coordinator, is decided by the handler from the same Credentials and is
+// not a third class here: the methods that refuse a worker, the ones that
+// admit a subordinate within its domain alone and the ones that refuse it,
+// and the one that admits only a worker, each say so in their own doc, and
+// internal/service's two held sets are the input. The table stays about
+// containment because a class that meant "coordinator only" would need
+// those sets as an input of this package, which owns no process this
+// service started.
 type Access uint8
 
 const (
@@ -321,6 +336,8 @@ var specs = []Spec{
 	{MethodCatchUpMark, KindRequest, AccessRestricted, "Mark seen exactly the landed records a catch-up read showed."},
 	{MethodUsageRead, KindRequest, AccessOpen, "Read what the agent calls recorded in a window cost."},
 	{MethodRunLog, KindRequest, AccessOpen, "Read the end of one stage's log in one run."},
+	{MethodDomainDelegate, KindRequest, AccessRestricted, "Delegate a domain of tasks to a subordinate coordinator this service starts, for the coordinator."},
+	{MethodDomainEnd, KindRequest, AccessRestricted, "End a domain's delegation, after which its wakes reach the coordinator again."},
 	{MethodServiceStop, KindRequest, AccessRestricted, "Stop the service."},
 	{MethodServiceRestart, KindRequest, AccessRestricted, "Restart the service."},
 	{MethodEventsSubscribe, KindStream, AccessOpen, "Open the event stream."},

@@ -80,6 +80,16 @@ var (
 		Consequence: "A worker that stops or needs a decision may go unnoticed.",
 		Decision:    "Run assistant service restart.",
 	}
+	phraseDomainDelegated = Phrase{
+		Outcome:     "The domain was recorded as delegated, and a coordinator of its own is being begun for it.",
+		Consequence: "Notices about work in that domain that its coordinator can act on go to it; decisions still come to you.",
+		Decision:    "Nothing to decide now; run assistant coordinator end-delegation to take the domain back.",
+	}
+	phraseDelegationEnded = Phrase{
+		Outcome:     "The domain's delegation is recorded as ended.",
+		Consequence: "Its work stays where it is, and every notice about it comes to you from now on.",
+		Decision:    "Nothing to decide.",
+	}
 )
 
 // TaskCreatedPhrase is what a person reads about a task.create answer: the
@@ -125,6 +135,15 @@ func TaskRelaunchedPhrase(TaskRelaunched) Phrase { return phraseTaskRelaunched }
 // relay the records refused is a refusal and never an answer, so there is
 // one row.
 func TaskRelayedPhrase(TaskRelayed) Phrase { return phraseTaskRelayed }
+
+// DelegatedPhrase is what a person reads about a domain.delegate answer. A
+// delegation the records refused is a refusal and never an answer, so
+// there is one row, and it says the subordinate's start follows the answer,
+// as TaskCreatedPhrase does of a worker.
+func DelegatedPhrase(Delegated) Phrase { return phraseDomainDelegated }
+
+// DelegationEndedPhrase is what a person reads about a domain.end answer.
+func DelegationEndedPhrase(DelegationEnded) Phrase { return phraseDelegationEnded }
 
 // WakesPhrase is what a person reads about a drain of the wake queue: how
 // many rows the drain handed out, or that none were on offer. A drain closes
@@ -208,6 +227,16 @@ var (
 		Consequence: "Its structured form says what it is.",
 		Decision:    "Repeat with --json to read it.",
 	}
+	phraseNoticeDomainCoordinatorGone = Phrase{
+		Outcome:     "The coordinator of this work's domain has ended, or could not be checked.",
+		Consequence: "Nothing in that domain is watched by it until it is begun again or the domain is taken back.",
+		Decision:    "Run assistant tasks to see how the domain's work stands.",
+	}
+	phraseNoticeHandedUp = Phrase{
+		Outcome:     "The coordinator of this work's domain handed a decision about it up to you.",
+		Consequence: "It asked for something it is not allowed to do itself, and nothing was done.",
+		Decision:    "Read what it asked with assistant --json tasks, and act on it or not.",
+	}
 )
 
 // noticeRows is which row each wake kind reads as. A kind with no entry
@@ -222,6 +251,8 @@ var noticeRows = map[supervisor.Kind]Phrase{
 	supervisor.KindTerminalUnchanged:     phraseNoticeIdle,
 	supervisor.KindDeclaredWait:          phraseNoticeOutsideWait,
 	supervisor.KindCheckResult:           phraseNoticeCheckResult,
+	supervisor.KindSubordinateGone:       phraseNoticeDomainCoordinatorGone,
+	supervisor.KindSubordinateEscalated:  phraseNoticeHandedUp,
 }
 
 // QueuedWakePhrase is the row one listed notice reads as, chosen by its
@@ -280,8 +311,9 @@ func coordinatorRows() []Phrase {
 		QueuedWakesPhrase(QueuedWakes{Wakes: make([]QueuedWake, 1)}),
 		phraseNoticeHold, phraseNoticeWorkerGone, phraseNoticeMessage, phraseNoticeDecisionRaised,
 		phraseNoticeUnproven, phraseNoticeIdle, phraseNoticeOutsideWait, phraseNoticeCheckResult, phraseNoticeUnfamiliar,
+		phraseNoticeDomainCoordinatorGone, phraseNoticeHandedUp,
 		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched, phraseWorkerRecorded,
-		phrasePeekAttachable, phrasePeekUnattached,
+		phrasePeekAttachable, phrasePeekUnattached, phraseDomainDelegated, phraseDelegationEnded,
 	}
 }
 
