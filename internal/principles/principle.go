@@ -26,12 +26,13 @@ const (
 	P12
 	P13
 	P14
+	P15
 )
 
 // last is the final constant above. All counts to it, so a principle added to
 // the block belongs to this package the moment it is written down, and the
 // only way to add one that All does not report is to add it out of order.
-const last = P14
+const last = P15
 
 // All returns the principles this package has an identifier for, ascending.
 // It is what Check compares against the PRD's own list.

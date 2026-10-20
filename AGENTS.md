@@ -9,7 +9,7 @@ independently reviewed, tested, documented, and linted.
 `docs/prd.html` is the product requirements, and it is the contract this code
 answers to. Read the section you are working in before you change behavior.
 
-The PRD's section 4 lists fourteen numbered principles, `P1` through `P14`. They
+The PRD's section 4 lists fifteen numbered principles, `P1` through `P15`. They
 are acceptance criteria, not aspirations. Each one exists because the failure it
 describes actually happened in a system this design draws from. A change that
 violates one is wrong even when it works and even when its tests pass.

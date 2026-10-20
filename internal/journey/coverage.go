@@ -389,6 +389,10 @@ func Coverage() []Established {
 				"establishes nothing about it. internal/principles and internal/pipeline's schema test " +
 				"claim it, and internal/store's shape transition test claims it for a task's shape, " +
 				"repository and branch: one row, flipped in one write."},
+		{principles.P15, ReachNone,
+			"No journey here ends an owner and then looks for what it left running, and the " +
+				"kept-work record P15 names does not exist in this build, so nothing is driven for it. " +
+				"internal/principles declares the gap in its unclaimed table."},
 	}
 }
 
