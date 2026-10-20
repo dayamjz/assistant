@@ -53,7 +53,10 @@ func TestASecondUpdateIsAnchoredOnlyWhereTheRunsOwnUpdateLeftTheBranch(t *testin
 				if err != nil {
 					t.Fatalf("RequireObservedAt refused the branch standing at the run's own commit: %v", err)
 				}
-				decision, err := guard.Decide(context.Background(), safety.Update{Target: target, Proposed: "r2", Anchor: obs})
+				// The basis is the run's first push, c2, which is what an
+				// anchored force over this observation may drop.
+				decision, err := guard.Decide(context.Background(),
+					safety.Update{Target: target, Proposed: "r2", Anchor: obs, Basis: []string{"c2"}})
 				if err != nil {
 					t.Fatalf("Decide: %v", err)
 				}

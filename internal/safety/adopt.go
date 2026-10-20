@@ -177,12 +177,15 @@ func (a *Adoption) Prove(ctx context.Context, target Target, current, proposed s
 
 // Decide answers whether u may move a person's branch from the anchor to the
 // proposed commit when the proposed commit does not contain it: Guard.Decide
-// first, then the custody half DecideFastForward also applies, then the
-// proof over the anchor's commit and the proposed commit. A refusal from
-// Decide is returned as Decide made it; a branch that was absent is
-// ReasonNotFastForward, since there is nothing to adopt over; a proof that
-// finds the two not equivalent is ReasonNotEquivalent naming what the move
-// would drop.
+// first, less its basis rule, then the custody half DecideFastForward also
+// applies, then the proof over the anchor's commit and the proposed commit.
+// A refusal from Decide is returned as Decide made it; a branch that was
+// absent is ReasonNotFastForward, since there is nothing to adopt over; a
+// proof that finds the two not equivalent is ReasonNotEquivalent naming what
+// the move would drop. Update.Basis is not read: the proof is what narrows an
+// adoption's drop, to commits whose content the proposed tree already holds,
+// a rule about content rather than reachability, and the one PRD section 11
+// names for this row.
 //
 // A proposal that is a fast-forward passes the proof trivially and is
 // allowed the same way, so a caller is never told to take the weaker path
@@ -193,7 +196,7 @@ func (a *Adoption) Prove(ctx context.Context, target Target, current, proposed s
 // proof is taken against that anchor's commit, which Decide has just
 // confirmed the branch still names.
 func (a *Adoption) Decide(ctx context.Context, u Update, c Checkout) (Decision, error) {
-	decision, err := a.guard.Decide(ctx, u)
+	decision, err := a.guard.decideShape(ctx, u)
 	if err != nil {
 		return Decision{}, err
 	}

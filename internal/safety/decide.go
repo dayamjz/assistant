@@ -20,6 +20,23 @@ type Update struct {
 	// anchor that is not an observation of this target is
 	// ErrAnchorNotObserved.
 	Anchor Observation
+	// Basis names the commits the run worked from: the commit submitted to
+	// it, and the commit an earlier update by the same run left on Target,
+	// where there was one. Guard.Decide allows an update that is not a
+	// fast-forward only where every commit it drops is reachable from one of
+	// them, so what it drops is history the run held and rewrote rather than
+	// history somebody else put on the target. Empty means the run worked
+	// from nothing it can name, and then Decide refuses every such update.
+	// Guard.DecideFastForward and Adoption.Decide do not read it: the first
+	// allows no drop, and the second allows one on its equivalence proof.
+	//
+	// Each entry is resolved in the local repository, so it has to exist
+	// there; one that does not is ReasonUnverifiable. Which commits a run
+	// worked from is the caller's word, read from the record the run keeps,
+	// so it carries the provenance of that record and nothing more: an entry
+	// naming the target's current commit permits dropping everything the
+	// target holds, and nothing here can tell it from one the run received.
+	Basis []string
 }
 
 // Kind says what shape of update was allowed.
@@ -35,12 +52,14 @@ const (
 	// KindAnchoredForce is the target still names the commit the run
 	// observed, and the proposed commit does not contain it, so the update
 	// drops commits the branch holds. Decision.Rewritten names every one of
-	// them.
+	// them, and what licenses dropping them depends on which decision
+	// allowed it: Decision.Rewritten states both.
 	KindAnchoredForce Kind = "anchored-force"
 )
 
 // Decision is permission to perform one update, and it is only ever produced
-// by Decide. Its fields are unexported and it carries no setter, so a caller
+// by this package's three decisions: Guard.Decide, Guard.DecideFastForward
+// and Adoption.Decide. Its fields are unexported and it carries no setter, so a caller
 // cannot assemble one, and cannot widen one it was given into permission for a
 // different target or a different commit.
 //
@@ -85,12 +104,26 @@ func (d Decision) Anchor() Observation { return d.anchor }
 // not contain, and that this update therefore drops from the branch. It is
 // empty for KindCreate and KindFastForward.
 //
-// What is enforced is that the target still names the commit the run observed,
-// so the drop is anchored to a state the run saw, and that every commit the
-// update drops is named here. Who wrote them is not established: this package
-// never learns the run's base, so a commit that reached the target before the
-// observation is indistinguishable from one the run submitted. A caller reports
-// this list; it does not have to act on it.
+// What is enforced for every producer is that the target still names the
+// commit the run observed, so the drop is anchored to a state the run saw, and
+// that every commit the update drops is named here. What licenses the drop is
+// the producer's, and the two that allow one guarantee different things:
+//
+//   - Through Guard.Decide, every commit dropped is reachable from a commit in
+//     Update.Basis, so it is history the run worked from and its own work
+//     rewrote. Its content is not checked: a rewrite that did not carry a
+//     commit's change forward drops that change.
+//   - Through Adoption.Decide, Update.Basis is not read, and a dropped commit
+//     need not be reachable from anything the run held. What it guarantees
+//     instead is the equivalence proof: merging the observed commit into the
+//     proposed one over their one merge base reproduces the proposed tree, so
+//     the net change the dropped commits brought, measured from that merge
+//     base, is already in the proposed tree. Their messages, authorship and
+//     commit boundaries are not kept.
+//
+// Guard.DecideFastForward allows no drop, so it never returns one. Who wrote
+// the dropped commits is not established by either. A caller reports this
+// list; it does not have to act on it.
 //
 // Each call returns a fresh slice, so a holder cannot edit the record of what
 // this decision drops.
@@ -117,14 +150,23 @@ func (d Decision) String() string {
 //     creates it, leased on absence.
 //   - The run observed a commit, the target still names it, and the proposed
 //     commit contains it. Nothing on the target is lost.
-//   - The run observed a commit, the target still names it, and the proposed
-//     commit does not contain it. The update drops the commits the target
-//     holds that the proposed commit does not contain, anchored to the state
-//     the run observed. Decision.Rewritten names them.
+//   - The run observed a commit, the target still names it, the proposed
+//     commit does not contain it, and every commit the target holds that the
+//     proposed commit does not contain is reachable from a commit in
+//     Update.Basis. The update drops those commits, anchored to the state the
+//     run observed. Decision.Rewritten names them.
 //
-// Everything else is a *Refusal. A target that moved since the observation is
-// refused whether or not commits would be lost, because an anchor that does
-// not describe the target protects nothing. A fact that could not be
+// Everything else is a *Refusal. A target the run observed holding a commit
+// that neither the proposed commit nor any commit the run worked from
+// contains is ReasonWouldDiscard, naming exactly those commits, even though
+// the target has not moved: the anchor describes the target and a lease on it
+// would hold, which is why the lease alone protects nothing there. That is a
+// branch somebody else pushed to before the run observed it, whether the
+// run's commit diverged from it or stands behind it.
+//
+// A target that moved since the observation is refused whether or not
+// commits would be lost, because an anchor that does not describe the target
+// protects nothing. A fact that could not be
 // established is refused rather than assumed: an unreadable remote, a
 // revision that does not resolve, a comparison git could not answer, and two
 // histories with no common ancestor are all refusals, and none of them has a
@@ -147,6 +189,27 @@ func (d Decision) String() string {
 // names, at the observation and at the fresh read alike. A caller that cannot
 // rely on already holding it fetches the target before deciding.
 func (g *Guard) Decide(ctx context.Context, u Update) (Decision, error) {
+	decision, err := g.decideShape(ctx, u)
+	if err != nil {
+		return Decision{}, err
+	}
+	if decision.kind != KindAnchoredForce {
+		return decision, nil
+	}
+	if err := g.requireBasis(ctx, u, decision); err != nil {
+		return Decision{}, err
+	}
+	return decision, nil
+}
+
+// decideShape is Decide without the basis rule: the anchor, the fresh read,
+// and the shape of the update, with an anchored force allowed over whatever
+// the observed target holds. Decide narrows it with requireBasis,
+// DecideFastForward refuses every shape but a fast-forward over it, and
+// Adoption.Decide allows an anchored force over it only on its equivalence
+// proof, so no caller outside this package reaches an anchored force that
+// none of the three narrowed.
+func (g *Guard) decideShape(ctx context.Context, u Update) (Decision, error) {
 	if err := u.Target.validate(); err != nil {
 		return Decision{}, err
 	}
@@ -210,6 +273,54 @@ func (g *Guard) Decide(ctx context.Context, u Update) (Decision, error) {
 		rewritten: rewritten,
 		allowed:   true,
 	}, nil
+}
+
+// requireBasis refuses an anchored force that would drop a commit no commit in
+// Update.Basis contains. The commits it names are the decision's rewritten
+// commits less every one reachable from a basis commit, in the decision's
+// order, so the refusal names what would be lost and not what the run's own
+// work rewrote.
+//
+// A basis commit that does not resolve, or a comparison git could not
+// answer, is ReasonUnverifiable rather than a smaller list: an entry that
+// could not be compared contains nothing as far as this package can say.
+func (g *Guard) requireBasis(ctx context.Context, u Update, d Decision) error {
+	current := u.Anchor.State()
+	unheld := slices.Clone(d.rewritten)
+	for _, basis := range u.Basis {
+		if len(unheld) == 0 {
+			break
+		}
+		resolved, err := g.git.ResolveCommit(ctx, basis)
+		if err != nil {
+			return &Refusal{
+				Reason:   ReasonUnverifiable,
+				Target:   u.Target,
+				Anchor:   u.Anchor,
+				Observed: current,
+				Detail: resolveCommitDetail("the commit "+basis+" the run worked from", "locally", err,
+					"so what it contains of "+u.Target.Ref+" cannot be established"),
+				Cause: err,
+			}
+		}
+		outside, err := g.commitsNotIn(ctx, u, current, resolved)
+		if err != nil {
+			return err
+		}
+		unheld = slices.DeleteFunc(unheld, func(c string) bool { return !slices.Contains(outside, c) })
+	}
+	if len(unheld) == 0 {
+		return nil
+	}
+	return &Refusal{
+		Reason:    ReasonWouldDiscard,
+		Target:    u.Target,
+		Anchor:    u.Anchor,
+		Observed:  current,
+		Discarded: unheld,
+		Detail: u.Target.Ref + " holds commits that " + d.proposed + " does not contain and that no " +
+			"commit this run worked from contains, so replacing it would lose them",
+	}
 }
 
 // refuseMoved builds the refusal for a target that no longer stands where the

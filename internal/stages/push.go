@@ -46,6 +46,22 @@ import (
 // since the observation is refused twice over: by internal/safety against its
 // fresh read, and by the remote against the lease.
 //
+// # A branch that already held work the run lacks (P6)
+//
+// A lease protects nothing against a commit the target already held when the
+// run observed it: the anchor names that commit, so the lease holds, and an
+// update that does not contain it would replace it. That is a branch somebody
+// else pushed to before the run began, with the run's commit diverged from it
+// or standing behind it (#396). The decision is told what the run worked from,
+// safety.Update.Basis: the commit submitted to it, pipeline.KeySubmitted, and
+// on a second push the commit the first one left there, pipeline.KeyPushed.
+// internal/safety allows an update that drops commits only where every one of
+// them is in that history, which is the run's own rebase rewriting what it was
+// given, and refuses anything else as would-discard naming exactly the
+// commits that would be lost. This stage relays that refusal as it relays any
+// other. The basis is read from the run's own state, so it carries the
+// provenance the anchor's checkpoint carries and nothing more.
+//
 // # A second push (P6)
 //
 // A run the checks stage sent back to rebase, or back to review with a repair
@@ -150,6 +166,7 @@ func Push(deps StageDeps) pipeline.Implementation {
 		pipeline.KeyBranch,
 		pipeline.KeyBase,
 		pipeline.KeyHead,
+		pipeline.KeySubmitted,
 		pipeline.KeyPushAnchor,
 		pipeline.KeyPushed,
 		pipeline.KeyIntent,
@@ -261,6 +278,7 @@ func pushVerifiedCommit(ctx context.Context, deps StageDeps, in pipeline.Input) 
 		Target:   target,
 		Proposed: facts.head,
 		Anchor:   facts.anchor,
+		Basis:    facts.basis(),
 	})
 	if err != nil {
 		var refusal *safety.Refusal
@@ -403,9 +421,10 @@ func fetchTargetForDecision(ctx context.Context, repo *vcs.Repository, target sa
 // pushedReport says what was forwarded and what it cost the target.
 //
 // A push that dropped commits says so and names them. internal/safety allowed
-// it because the target still stood where this run observed it, which is what
-// makes the drop anchored rather than blind; it is not a reason to report the
-// push as though nothing happened to the branch.
+// it because the target still stood where this run observed it and every
+// commit dropped is in the history the run worked from, which is what makes
+// the drop the run's own rewrite rather than a loss; it is not a reason to
+// report the push as though nothing happened to the branch.
 func pushedReport(decision safety.Decision) findings.Report {
 	dropped := decision.Rewritten()
 	if len(dropped) == 0 {
@@ -427,9 +446,10 @@ func pushedReport(decision safety.Decision) findings.Report {
 					"The push replaced %s, which named %s when this run observed it, and the commit "+
 						"forwarded does not contain %d commit(s) that branch held: %s.\n\nThe update was "+
 						"anchored to the state this run observed, so nothing that arrived after the "+
-						"observation was overwritten without the anchor failing first. Who wrote the "+
-						"dropped commits is not established here: a commit that reached the branch "+
-						"before the observation looks the same as one this run submitted.",
+						"observation was overwritten without the anchor failing first, and every "+
+						"dropped commit is in the history this run was submitted or pushed earlier, "+
+						"so what was dropped is what this run's own work rewrote. Who wrote the "+
+						"dropped commits before the run received them is not established here.",
 					decision.Target(), decision.Anchor().State(), len(dropped), strings.Join(dropped, ", ")),
 			},
 		},
@@ -671,6 +691,9 @@ type pushState struct {
 	branch     string
 	base       string
 	head       string
+	// submitted is the commit submitted to the run, which is the first commit
+	// of its basis.
+	submitted string
 	// pushed is the commit an earlier execution of this stage forwarded, and
 	// empty until one did. It is what makes this execution a second push.
 	pushed string
@@ -697,6 +720,21 @@ type pushState struct {
 	laterRounds []laterRound
 }
 
+// basis is what the run worked from, as safety.Update.Basis takes it: the
+// commit submitted to it, and the commit an earlier push of this run left on
+// the branch when there was one. An empty value is left out rather than
+// passed, so a run that recorded neither has an empty basis and every update
+// that would drop a commit is refused.
+func (facts pushState) basis() []string {
+	var basis []string
+	for _, commit := range []string{facts.submitted, facts.pushed} {
+		if commit != "" {
+			basis = append(basis, commit)
+		}
+	}
+	return basis
+}
+
 // readPushState reads the run's state, the review stage's result, and the
 // anchor the run recorded.
 func readPushState(state pipeline.Reader) (pushState, error) {
@@ -710,6 +748,7 @@ func readPushState(state pipeline.Reader) (pushState, error) {
 		{pipeline.KeyBranch, &facts.branch},
 		{pipeline.KeyBase, &facts.base},
 		{pipeline.KeyHead, &facts.head},
+		{pipeline.KeySubmitted, &facts.submitted},
 		{pipeline.KeyPushed, &facts.pushed},
 		{pipeline.KeyIntent, &facts.intent},
 		{pipeline.KeyForkRepository, &facts.fork},

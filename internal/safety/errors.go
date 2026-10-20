@@ -46,7 +46,8 @@ const (
 	ReasonTargetMoved Reason = "target-moved"
 	// ReasonWouldDiscard is the target holds commits the proposed commit does
 	// not contain, so the update would drop them from the branch. The refusal
-	// names them.
+	// names them. Either the target moved since the observation, or it did
+	// not and the commits are ones no commit in Update.Basis contains.
 	ReasonWouldDiscard Reason = "would-discard"
 	// ReasonUnrelatedHistories is the two commits compared share no ancestor,
 	// so no statement about what one contains of the other is available.
@@ -80,12 +81,15 @@ type Refusal struct {
 	// proposed commit does not contain. It is populated for ReasonWouldDiscard
 	// and is empty for every other reason.
 	//
-	// It is not narrowed to commits the run never observed. A refusal means
-	// the anchor no longer describes the target, so the run cannot claim to
-	// have incorporated anything, and this names everything the update would
-	// drop. Its order is vcs.CommitsNotIn's, most recent first; this package
-	// does not reorder it. It is unbounded, so a caller rendering it uses
-	// DiscardedText rather than joining it.
+	// On a target that moved it is not narrowed to commits the run never
+	// observed: the anchor no longer describes the target, so the run cannot
+	// claim to have incorporated anything, and this names everything the
+	// update would drop. On a target that did not move it is narrowed to the
+	// commits no commit in Update.Basis contains, which are what the update
+	// would lose; the ones the basis contains are the run's own history being
+	// rewritten. Its order is vcs.CommitsNotIn's, most recent first; this
+	// package does not reorder it. It is unbounded, so a caller rendering it
+	// uses DiscardedText rather than joining it.
 	Discarded []string
 	// Detail states what specifically could not be established or what
 	// changed, in a sentence a caller can report without adding to it.

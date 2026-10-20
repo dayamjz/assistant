@@ -35,6 +35,9 @@ func Example() {
 		Target:   target,
 		Proposed: "rebased",
 		Anchor:   observed,
+		// What the run worked from. Every commit the update drops has to be
+		// in it, so what is dropped is the run's own work being rewritten.
+		Basis: []string{"submitted"},
 	})
 	if err != nil {
 		fmt.Println(err)
