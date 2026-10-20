@@ -249,7 +249,7 @@ func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T)
 		if _, code := callAs(t, w, ipc.MethodTaskStop, request); code != ipc.CodeWorker {
 			t.Fatalf("task.stop from the worker answered %q, want %q", code, ipc.CodeWorker)
 		}
-		if got := listedTask(t, running.client, task); !readsRunning(got) {
+		if got := observed(t, listedTask, running.client, task); !readsRunning(got) {
 			t.Fatalf("after the refused stop the task reads %+v, want still running", got)
 		}
 
@@ -422,7 +422,7 @@ func TestAnInterruptIsRefusedAsUndeclared(t *testing.T) {
 		if !declared.Has(agents.CapabilityWorkerSessions) || declared.Has(agents.Capability("interrupt")) {
 			t.Fatalf("the worker's adapter declares %s, want worker sessions and no interrupt", declared)
 		}
-		if got := listedTask(t, running.client, task); !readsRunning(got) {
+		if got := observed(t, listedTask, running.client, task); !readsRunning(got) {
 			t.Fatalf("after the refused interrupt the task reads %+v, want still running", got)
 		}
 	})

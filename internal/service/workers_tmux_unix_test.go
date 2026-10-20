@@ -195,7 +195,7 @@ func TestARestartUnderTmuxRelaunchesADeadTerminalInPlace(t *testing.T) {
 		}
 		second = launched.Reference()
 		waitCapture(t, provider, launched, "worker ready")
-		if got := taskState(t, running.client, id); !readsRunning(got) {
+		if got := observed(t, taskState, running.client, id); !readsRunning(got) {
 			t.Fatalf("after the relaunch the task resolves %+v, want Running through its new tmux session", got)
 		}
 	})
@@ -386,7 +386,7 @@ func TestUnderTmuxTwoWorkersArePeekedMessagedAndStoppedIndependently(t *testing.
 		if held.State != taskstate.Held || held.Source != taskstate.SourceHold || held.Basis.Process != taskstate.Dead {
 			t.Fatalf("stopped A reads %+v, want Held over a dead terminal", held)
 		}
-		if got := listedTask(t, a.running.client, b.task); !readsRunning(got) {
+		if got := observed(t, listedTask, a.running.client, b.task); !readsRunning(got) {
 			t.Fatalf("B after A's stop reads %+v, want still Running", got)
 		}
 		if obs := b.provider.Probe(t.Context(), refB.String()); obs.Liveness != taskstate.Live {
@@ -421,7 +421,7 @@ func TestUnderTmuxKillingOneWindowSurfacesTerminalGoneAndLeavesTheSibling(t *tes
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		if got := listedTask(t, a.running.client, b.task); !readsRunning(got) {
+		if got := observed(t, listedTask, a.running.client, b.task); !readsRunning(got) {
 			t.Fatalf("B after A's window was killed reads %+v, want still Running", got)
 		}
 		if obs := b.provider.Probe(t.Context(), b.session.Reference().String()); obs.Liveness != taskstate.Live {

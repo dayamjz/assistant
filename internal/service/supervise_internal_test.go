@@ -260,7 +260,11 @@ func openLoopHooked(t *testing.T, h *home.Home, records *store.Store, terminals 
 // returns is the kicked pass's own report, whatever other passes did: no
 // report of a pass the loop made on its own can be returned in its place.
 // When no incarnation is idle to take the kick, or the kicked pass is never
-// reported, the test fails rather than read some other pass's report.
+// reported, the test fails rather than read some other pass's report. It
+// fails too when the pass reports a failure, of the fleet read or over any
+// task, rather than hand back a report whose missing detections would read
+// as the loop deciding nothing: on the untimed loop no wall-clock bound can
+// cause one, so one there is a fault the test should name.
 func (l *loopSubject) pass(t *testing.T) passReport {
 	t.Helper()
 	reply := make(chan passReport, 1)
@@ -271,6 +275,14 @@ func (l *loopSubject) pass(t *testing.T) passReport {
 	}
 	select {
 	case r := <-reply:
+		if r.Err != nil {
+			t.Fatalf("the kicked pass could not read the fleet: %v", r.Err)
+		}
+		for id, task := range r.Tasks {
+			if task.Err != nil {
+				t.Fatalf("the kicked pass failed over task %s: %v", id, task.Err)
+			}
+		}
 		return r
 	case <-time.After(loopWait):
 		t.Fatal("the kicked pass was not reported")
@@ -280,15 +292,46 @@ func (l *loopSubject) pass(t *testing.T) passReport {
 
 // nextPass waits for the next report of a pass the loop made on its own,
 // whichever incarnation made it: an incarnation's first pass, or, on a
-// timed loop, a pass at the interval. A kicked pass is never read here.
+// timed loop, a pass at the interval. A kicked pass is never read here. A
+// pass whose fleet read failed fails the test, as pass does; a failure over
+// one task is returned in the report, because a replaced incarnation's
+// pass is expected to carry one.
 func (l *loopSubject) nextPass(t *testing.T) passReport {
 	t.Helper()
 	select {
 	case r := <-l.passes:
+		if r.Err != nil {
+			t.Fatalf("the reported pass could not read the fleet: %v", r.Err)
+		}
 		return r
 	case <-time.After(loopWait):
 		t.Fatal("no pass was reported")
 		return passReport{}
+	}
+}
+
+// observedTask reads the task through the service's own task surface until
+// the read observed its terminal, Live or Dead, and returns that
+// resolution. The surface gives each probe a bound of its own on the wall
+// clock and answers Unobserved when the bound runs out first, which a busy
+// machine can make happen to a terminal that is there; such a read says
+// nothing about the terminal, so it is read again rather than asserted on.
+// A test that expects Unobserved by construction reads once instead.
+func (l *loopSubject) observedTask(t *testing.T, id string) taskstate.Resolution {
+	t.Helper()
+	deadline := time.Now().Add(loopWait)
+	for {
+		got, err := l.service.tasks().Task(t.Context(), id)
+		if err != nil {
+			t.Fatalf("reading task %s: %v", id, err)
+		}
+		if got.Basis.Process != taskstate.Unobserved {
+			return got
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("no read of task %s observed its terminal: %+v", id, got)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -929,8 +972,8 @@ func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 	waitCaptured(t, provider, launched, "still working on it")
-	if got, err := l.service.tasks().Task(ctx, id); err != nil || got.State != taskstate.Running || got.Basis.Process != taskstate.Live {
-		t.Fatalf("the launched task resolves %+v (%v), want Running from the live terminal", got, err)
+	if got := l.observedTask(t, id); got.State != taskstate.Running || got.Basis.Process != taskstate.Live {
+		t.Fatalf("the launched task resolves %+v, want Running from the live terminal", got)
 	}
 
 	// The screen's first reading, then the unchanged one, absorbed. Each
@@ -974,8 +1017,8 @@ func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 	if len(rows) != 1 || !rows[0].Queued() || !strings.HasPrefix(rows[0].Marker, "terminal-gone:dead:"+ref+":") {
 		t.Fatalf("the terminal-gone wakes = %+v, want one queued row for the dead terminal", rows)
 	}
-	if got, err := l.service.tasks().Task(ctx, id); err != nil || got.State != taskstate.Unknown || got.Source != taskstate.SourceProcess {
-		t.Fatalf("the finished task resolves %+v (%v), want Unknown from the dead terminal", got, err)
+	if got := l.observedTask(t, id); got.State != taskstate.Unknown || got.Source != taskstate.SourceProcess {
+		t.Fatalf("the finished task resolves %+v, want Unknown from the dead terminal", got)
 	}
 }
 

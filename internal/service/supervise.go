@@ -307,6 +307,15 @@ type supervisionHooks struct {
 	// an injected clock the test moved can replace an incarnation that
 	// is not wedged. A test of the interval itself, the beacon or the
 	// watchdog leaves it unset.
+	//
+	// It also lifts the per-operation bound: every blocking call of a pass
+	// runs under the incarnation's context alone rather than one interval
+	// of the wall clock. A test that moves the clock by hand owns the time
+	// a pass sees, and a bound on the real one decided its result whenever
+	// the machine was busy enough for a read to outlast an interval, which
+	// is a fact about the machine and not about the pass the test asked
+	// for. Such a test bounds the pass instead, by its wait for the kicked
+	// report. A test of the bound itself leaves it unset.
 	untimed bool
 	// wakeRecheck replaces wakeWaitRecheck for an armed wakes.wait when it
 	// is positive, so a test can push the recheck past its own bound and
@@ -393,7 +402,11 @@ func (s *Service) startSupervision(hooks supervisionHooks, terminals Terminals) 
 
 // bound is the per-operation context every blocking call of a pass runs
 // under: the parent, which is the incarnation's, and one beacon interval.
+// Under the untimed hook it is the parent alone, on that hook's terms.
 func (sv *supervision) bound(parent context.Context) (context.Context, context.CancelFunc) {
+	if sv.hooks.untimed {
+		return context.WithCancel(parent)
+	}
 	return context.WithTimeout(parent, sv.interval)
 }
 

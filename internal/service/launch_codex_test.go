@@ -44,7 +44,7 @@ func TestACodexWorkerLaunchesForDeliveryAndInvestigation(t *testing.T) {
 				provider, launched = launchedSession(t, running.service, id)
 				ref = launched.Reference()
 				waitCapture(t, provider, launched, "the second check was read")
-				if got := taskState(t, running.client, id); !readsRunning(got) {
+				if got := observed(t, taskState, running.client, id); !readsRunning(got) {
 					t.Fatalf("after the launch the task resolves %+v, want Running from the process tier", got)
 				}
 				if err := provider.Send(t.Context(), launched, "status?"); err != nil {

@@ -54,7 +54,7 @@ func TestAnInvestigationWorkerCannotRelyOnRuntimeIsolationAgainstTheSubject(t *t
 	withServiceOptions(t, o, func(running serviceUnderTest) {
 		provider, session := waitSession(t, running.service, id)
 		waitCapture(t, provider, session, "worker ready")
-		if got := taskState(t, running.client, id); !readsRunning(got) {
+		if got := observed(t, taskState, running.client, id); !readsRunning(got) {
 			t.Fatalf("the investigation resolves %+v, want Running", got)
 		}
 

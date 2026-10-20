@@ -193,7 +193,7 @@ func TestUnderTmuxAServerKilledOutrightReadsDeadAndARestartRelaunches(t *testing
 		}
 		second = launched.Reference()
 		waitCapture(t, provider, launched, "worker ready")
-		if got := taskState(t, running.client, id); !readsRunning(got) {
+		if got := observed(t, taskState, running.client, id); !readsRunning(got) {
 			t.Fatalf("after the relaunch the task resolves %+v, want Running through its new tmux session", got)
 		}
 	})
