@@ -159,7 +159,8 @@ func TestDecideAllowsAFastForwardAndAnchorsOnTheObservedCommit(t *testing.T) {
 func TestDecideAllowsAnAnchoredForceAndNamesWhatItRewrites(t *testing.T) {
 	t.Parallel()
 	// c2 and c3 are the run's own submitted commits; r3 is the rebased
-	// replacement. The target still stands where the run observed it.
+	// replacement. The target still stands where the run observed it, and
+	// the run's basis, its submitted c3, contains everything dropped.
 	git := &fakeGit{
 		parents: map[string][]string{
 			"c1": nil,
@@ -171,7 +172,8 @@ func TestDecideAllowsAnAnchoredForceAndNamesWhatItRewrites(t *testing.T) {
 	}
 	guard := safety.New(git)
 	obs := observe(t, guard)
-	decision, err := guard.Decide(context.Background(), safety.Update{Target: target, Proposed: "r3", Anchor: obs})
+	decision, err := guard.Decide(context.Background(),
+		safety.Update{Target: target, Proposed: "r3", Anchor: obs, Basis: []string{"c3"}})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -624,7 +626,8 @@ func TestRewrittenCannotBeEditedThroughTheDecision(t *testing.T) {
 	}
 	guard := safety.New(git)
 	obs := observe(t, guard)
-	decision, err := guard.Decide(context.Background(), safety.Update{Target: target, Proposed: "r2", Anchor: obs})
+	decision, err := guard.Decide(context.Background(),
+		safety.Update{Target: target, Proposed: "r2", Anchor: obs, Basis: []string{"c2"}})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
@@ -662,7 +665,8 @@ func TestDecideDecidesOnTheResolvedCommitNotTheSubmittedRevision(t *testing.T) {
 			}
 			guard := safety.New(git)
 			obs := observe(t, guard)
-			decision, err := guard.Decide(context.Background(), safety.Update{Target: target, Proposed: "head", Anchor: obs})
+			decision, err := guard.Decide(context.Background(),
+				safety.Update{Target: target, Proposed: "head", Anchor: obs, Basis: []string{"c2"}})
 			if err != nil {
 				t.Fatalf("Decide: %v", err)
 			}

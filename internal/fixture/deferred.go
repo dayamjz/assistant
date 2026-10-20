@@ -46,8 +46,10 @@ func runnerFor(s Scenario, opts ...Option) (*gitRunner, error) {
 // It has to be called after the run has observed the branch on the remote and
 // before the run submits its update. Which point in the run that is belongs to
 // the harness; what this states is only that an advance before the observation
-// exercises nothing, because the run would then observe the advanced state and
-// its anchor would describe the target correctly.
+// exercises nothing of this condition, because the run would then observe the
+// advanced state and its anchor would describe the target correctly. A branch
+// already holding a commit the run lacks when it observes it is a different
+// condition, which internal/journey drives for #396 without this plant.
 //
 // The advance is a real push from a real second clone. A reference written
 // directly into the bare repository would leave the same two identifiers in

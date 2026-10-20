@@ -165,7 +165,7 @@ func Coverage() []Established {
 				"that it stands at the same stage and still offers what it offered, which a checkpoint " +
 				"round trip can lose; that it offers something nobody was offered is not claimed, " +
 				"because internal/pipeline gives every hold the same fixed rendering and internal/graph " +
-				"copies it through, so no run can report one. Two runs here reach " +
+				"copies it through, so no run can report one. Three runs here reach " +
 				"the push stage's decision on a stand-in reviewer scripted clean. The delivery walk's " +
 				"remote is one nobody advanced, and it establishes that the push stage forwards the " +
 				"submitted commit and moves the remote's branch to it. The lease walk's remote is " +
@@ -174,12 +174,16 @@ func Coverage() []Established {
 				"it establishes that the push stage holds on a would-discard refusal whose anchor is " +
 				"the commit the run observed rather than where the branch stood at the decision, that " +
 				"names as discarded exactly the commit somebody else landed and states internal/safety's " +
-				"remedy, and that the remote still holds that commit. What the lease walk does not " +
+				"remedy, and that the remote still holds that commit. The third walk's remote holds a " +
+				"commit somebody else pushed before the run began, so the run observes it and a lease " +
+				"on that anchor would hold; once diverged from it and once behind it, it establishes " +
+				"that the push stage holds on a would-discard refusal naming exactly that commit, " +
+				"anchored on it, and that the remote keeps it. What the lease walk does not " +
 				"establish is held at package reach: that following the remedy makes the decision allow " +
-				"a fast-forward, which no surface here drives a run through. Both walks need a " +
+				"a fast-forward, which no surface here drives a run through. All three walks need a " +
 				"service and a run, so they are skipped rather " +
 				"than passing where internal/ipc reads no peer credentials or no local socket " +
-				"transport exists. The pull request and checks stages are skipped on both, because no " +
+				"transport exists. The pull request and checks stages are skipped on all three, because no " +
 				"record here names a repository on a code host and this fixture has none for " +
 				"internal/forge to address. The killed run, and the contention check beside it, are " +
 				"driven through methods internal/ipc restricts, so on a platform where that package reads " +

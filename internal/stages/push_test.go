@@ -132,7 +132,9 @@ func TestThePushStageRefusesWhenTheBranchMovedSinceTheRunObservedIt(t *testing.T
 //
 // The control is the same branch and the same anchor in a run that has not
 // pushed, which is a first push: the decision over that anchor allows the
-// update, so the refusal above is the second-push rule and nothing else.
+// update, so the refusal above is the second-push rule and nothing else. Both
+// runs are submitted the commit the branch stood at, so the commit the control
+// drops is in what it worked from, and the basis rule does not refuse it.
 func TestASecondPushIsAnchoredOnlyWhereTheFirstLeftTheBranch(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	for _, tc := range []struct {
@@ -146,6 +148,7 @@ func TestASecondPushIsAnchoredOnlyWhereTheFirstLeftTheBranch(t *testing.T) {
 			run := newPushRun(t)
 			before := run.commitOnUpstreamBranch(t, "topic", "before.txt", "where the branch stood\n")
 			run.anchor = run.anchorFor(t, "refs/heads/topic", true, before)
+			run.submitted = before
 			if tc.second {
 				// The commit the run's first push forwarded. The branch no
 				// longer holds it, which is the branch put back.
@@ -465,7 +468,9 @@ type pushRun struct {
 	anchor string
 	// pushed is the commit an earlier push of this run forwarded, empty for a
 	// run that has not pushed.
-	pushed         string
+	pushed string
+	// submitted is the commit submitted to the run, which starts as the head.
+	submitted      string
 	reviewedCommit string
 	reviewOutcome  pipeline.Outcome
 }
@@ -516,6 +521,7 @@ func newPushRun(t *testing.T) *pushRun {
 	git(t, source, "worktree", "add", "--quiet", "--detach", run.copy, run.head)
 
 	run.reviewedCommit = run.head
+	run.submitted = run.head
 	run.anchor = run.anchorFor(t, "refs/heads/topic", false, "")
 	run.deps = stages.NewStageDeps(agents.StageAgent{}, run.home, config.Defaults(), nil, redact.New())
 	return run
@@ -629,6 +635,7 @@ func (r *pushRun) state(t *testing.T) map[pipeline.Key]graph.Value {
 		pipeline.KeyBranch:                graph.TextValue("topic"),
 		pipeline.KeyBase:                  graph.TextValue("main"),
 		pipeline.KeyHead:                  graph.TextValue(r.head),
+		pipeline.KeySubmitted:             graph.TextValue(r.submitted),
 		pipeline.KeyPushAnchor:            graph.TextValue(r.anchor),
 		pipeline.KeyPushed:                graph.TextValue(r.pushed),
 		pipeline.StageReview.ReportKey():  graph.TextValue(string(review)),

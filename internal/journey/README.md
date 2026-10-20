@@ -51,7 +51,7 @@ That is the stage machinery reached through the binary against a local remote;
 it is not review quality, the reviewer answered what it was scripted to, and it
 still reaches no code host.
 
-Two more walks take the same path to the push stage's decision and change one
+Three more walks take the same path to the push stage's decision and change one
 thing each, on a remote of their own copied from the walkable scenario's:
 
 - `TestAPushOverARemoteThatMovedUnderTheRunIsRefused` lands a commit on the
@@ -66,6 +66,15 @@ thing each, on a remote of their own copied from the walkable scenario's:
   remote still holds the landed commit. The remedy being followed is held at
   package reach only, because no surface here re-runs a run onto its new
   upstream.
+- `TestAPushOverARemoteHoldingCommitsTheRunLacksIsRefused` lands a commit on
+  the remote's branch from a second clone before the run starts, so the
+  rebase stage observes the branch standing at it and a lease on that anchor
+  would hold (#396). Once with the working copy committing beside it
+  (diverged) and once committing nothing (behind), it asserts the push stage
+  holds on a would-discard refusal naming exactly that commit, whose anchor is
+  that commit, and that the remote still holds it. An anchored force over
+  history the run was given is held at package reach, by `internal/stages`'
+  push tests, because no walk here rewrites history the remote already holds.
 - `TestCommitsAFixRoundWroteAfterReviewAreReviewedBeforeThePush` configures a
   lint command that appends a line to the change and fails the first time it
   runs. The automatic fix round launches the stand-in, which changes nothing,

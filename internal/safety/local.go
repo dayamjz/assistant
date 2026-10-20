@@ -55,14 +55,16 @@ type Checkout struct {
 // DecideFastForward answers whether a local task's approved fast-forward may
 // proceed, on the terms this file's opening comment states: Decide, then the
 // two narrowings. Every refusal is a *Refusal matching ErrRefused, and a
-// refusal Decide made is returned as Decide made it.
+// refusal Decide made is returned as Decide made it. Update.Basis is not
+// read: Decide's basis rule narrows an anchored force, and this refuses
+// every anchored force as ReasonNotFastForward before that rule would ask.
 //
 // The anchor rule is Decide's, and P6's trap applies to it unchanged: an
 // anchor observed immediately before this call protects nothing. The caller
 // observes the branch when it offers the change for approval and decides
 // against that observation when the approval arrives.
 func (g *Guard) DecideFastForward(ctx context.Context, u Update, c Checkout) (Decision, error) {
-	decision, err := g.Decide(ctx, u)
+	decision, err := g.decideShape(ctx, u)
 	if err != nil {
 		return Decision{}, err
 	}

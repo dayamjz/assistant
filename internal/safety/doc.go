@@ -89,14 +89,31 @@
 //   - KindCreate. The run observed the target absent and it is still absent.
 //   - KindFastForward. The target still names the observed commit, and the
 //     proposed commit contains it, so nothing on the branch is lost.
-//   - KindAnchoredForce. The target still names the observed commit, and the
-//     proposed commit does not contain it. The update drops the commits the
-//     target holds that the proposed commit does not contain, and
+//   - KindAnchoredForce. The target still names the observed commit, the
+//     proposed commit does not contain it, and every commit the update drops
+//     is reachable from a commit in Update.Basis, what the run worked from.
 //     Decision.Rewritten names every one of them. The drop is anchored to a
-//     state the run observed; that the run wrote what is dropped is not
-//     established, because this package never learns the run's base and so
-//     cannot tell a commit that reached the target before the observation from
-//     one the run submitted.
+//     state the run observed and limited to history the run held, so it is
+//     the run's own rewrite of what it was given; who wrote that history
+//     before the run received it is not established.
+//
+// # A lease protects nothing against what the target already held
+//
+// An anchor that still describes the target holds as a lease whatever the
+// target held when it was observed. A branch somebody else pushed to before
+// the run observed it is the case that leaves: the anchor names their commit,
+// the lease on it succeeds, and an update whose commit does not contain it
+// replaces it (#396). So the anchor answers only whether the target moved, and
+// the basis answers what the update may drop. A commit the target holds that
+// neither the proposed commit nor any basis commit contains is
+// ReasonWouldDiscard, named in Refusal.Discarded, on a target that did not
+// move. An empty basis refuses every anchored force, and a basis commit that
+// does not resolve is ReasonUnverifiable.
+//
+// The basis is the caller's word, on the same terms as a restored anchor: it
+// is read from the record the run keeps, and nothing here can tell a basis
+// that names the target's current commit, which would permit dropping
+// everything, from the commit the run was submitted.
 //
 // A target that moved since the observation is refused whether or not commits
 // would be lost. Where loss was identified the refusal names every commit the
