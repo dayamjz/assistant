@@ -184,3 +184,14 @@ func TestASignalledAgentIsAProcessFailureThatSaysWhatEndedIt(t *testing.T) {
 		t.Errorf("records are %+v, want one recording the process failure", rec.records)
 	}
 }
+
+// mustAwaitFile is awaitFile on the test's own goroutine, where failing is
+// allowed. Only the unix tests read a process tree, so only they use it.
+func mustAwaitFile(t *testing.T, path string) []byte {
+	t.Helper()
+	content, err := awaitFile(path)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	return content
+}

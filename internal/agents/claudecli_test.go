@@ -1,6 +1,7 @@
 package agents_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,54 @@ func installedClaude(t *testing.T) string {
 		"and the terminal_workers declaration rests on the stand-in's model of version %s; set %s to make that a failure",
 		agents.ClaudeName, err, agents.ClaudeObservedVersion, requireClaudeVar)
 	return ""
+}
+
+// installedWaitDelay is how long askInstalled waits for the output pipe to
+// close, once the bound has elapsed or once the command has exited, before
+// it closes the pipe itself and returns. A process still holding the pipe,
+// one the command left behind or one that left the group, would otherwise
+// hold the wait with it.
+const installedWaitDelay = 5 * time.Second
+
+// askInstalled runs bin with args under env, in a processGroup, and returns
+// what it printed on standard output. bound limits the whole read: when it
+// elapses the group is sent SIGKILL, the wait for the output pipe is cut off
+// installedWaitDelay later, and the error names the command and the bound
+// it did not answer within. A command that exits leaving a process on its
+// output pipe is cut off installedWaitDelay after it exits and is an error
+// naming the command. Whatever the read returns, the group is killed before
+// askInstalled does, so nothing started in it outlives the read. A hung
+// installed CLI therefore fails the probe instead of holding the package to
+// its timeout and leaving what it started running after the test binary
+// exits. A process that left the group is reached by neither. On Windows
+// the process is killed at the bound and nothing it started is reached,
+// which no test there exercises.
+func askInstalled(ctx context.Context, bound time.Duration, bin string, env []string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, bound)
+	defer cancel()
+	group, err := startGroup()
+	if err != nil {
+		return nil, err
+	}
+	// Ended on every return, not only when the bound elapses: a command that
+	// exits and leaves a child holding its output pipe returns
+	// exec.ErrWaitDelay without its Cancel ever running.
+	defer group.end()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = env
+	cmd.WaitDelay = installedWaitDelay
+	group.join(cmd)
+	out, err := cmd.Output()
+	command := bin + " " + strings.Join(args, " ")
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, fmt.Errorf("%s did not answer within %v, so its process group was killed: %w (%w)",
+			command, bound, ctxErr, err)
+	}
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return nil, fmt.Errorf("%s exited and left a process holding its output open for %v, so its process group was killed: %w",
+			command, installedWaitDelay, err)
+	}
+	return out, err
 }
 
 // fakeMessages is a local stand-in for the model's Messages API: it answers
@@ -258,9 +307,7 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 		"DISABLE_AUTOUPDATER=1",
 	}
 
-	ask := exec.Command(claude, "--version")
-	ask.Env = env
-	version, err := ask.Output()
+	version, err := askInstalled(t.Context(), probeWait, claude, env, "--version")
 	if err != nil {
 		t.Fatalf("asking %s its version: %v", claude, err)
 	}
@@ -289,9 +336,11 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 	// flag unless they follow "--".
 	spec := agents.WorkerSpec{Dir: t.TempDir(), Instructions: "- probe instructions alpha"}
 	term := agents.Terminal{Tmux: tmux, Socket: filepath.Join(standin.SocketDir(t), "p")}
-	worker, err := agents.OpenTerminalWorker(t.Context(), runner, term, spec)
+	start, cancel := bounded(t.Context())
+	worker, err := agents.OpenTerminalWorker(start, runner, term, spec)
+	cancel()
 	if err != nil {
-		t.Fatalf("starting a terminal worker on the installed CLI: %v", err)
+		t.Fatalf("starting a terminal worker on the installed CLI, bounded by %v: %v", probeWait, err)
 	}
 	defer worker.Close()
 	api.awaitReceived(t, worker, "- probe instructions alpha")
@@ -304,8 +353,12 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 		{"!touch probe-bang", []string{" !touch probe-bang"}},
 		{"/probe-slash command", []string{" /probe-slash command"}},
 	} {
-		if err := worker.Send(t.Context(), c.send); err != nil {
-			t.Fatalf("Send(%q) to the installed CLI: %v", c.send, err)
+		send, cancel := bounded(t.Context())
+		err = worker.Send(send, c.send)
+		cancel()
+		if err != nil {
+			t.Fatalf("Send(%q) to the installed CLI, bounded by %v: %v\nThe screen:\n%s",
+				c.send, probeWait, err, worker.Capture().Text)
 		}
 		api.awaitReceived(t, worker, c.want...)
 	}

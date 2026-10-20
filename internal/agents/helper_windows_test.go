@@ -2,7 +2,10 @@
 
 package agents_test
 
-import "os"
+import (
+	"os"
+	"os/exec"
+)
 
 // helperPoliteSignals are the signals the stand-in agent ignores in its
 // stubborn modes, so that only the forceful step of the escalation ends it.
@@ -24,3 +27,14 @@ func helperSelfKill() {
 func helperDetach() {
 	os.Exit(9)
 }
+
+// processGroup has no counterpart on Windows: join leaves cmd as
+// exec.CommandContext made it, so a context ending kills cmd and reaches
+// nothing it started, and end does nothing. No test on Windows exercises it.
+type processGroup struct{}
+
+func startGroup() (*processGroup, error) { return &processGroup{}, nil }
+
+func (*processGroup) join(*exec.Cmd) {}
+
+func (*processGroup) end() {}
