@@ -170,7 +170,7 @@ func TestPlacementFollowsTheChainAndLosesItWhenTheKernelRewritesIt(t *testing.T)
 	if orphan.Foreground() {
 		t.Fatalf("the orphaned sleep reads %+v, in the foreground of a terminal, so the three-way answer below is not about the rewritten chain", orphan)
 	}
-	if p, err := placeAlongChain(child, readLineage, member); err != nil || p.kind != placedNobody {
+	if p, err := placeAlongChain(child, readLineage, member, nil); err != nil || p.kind != placedNobody {
 		t.Fatalf("the orphaned sleep was placed %v, %v by the three-way walk; placement.go says nobody's", p.kind, err)
 	}
 	select {
@@ -341,7 +341,7 @@ func TestPlacementReadsATerminalAlongTheChainAndAWorkerAboveItWins(t *testing.T)
 		}, placedWorker, 2},
 	} {
 		read := scriptedChain(c.chain...)
-		p, err := placeAlongChain(c.chain[0].PID, read, worker)
+		p, err := placeAlongChain(c.chain[0].PID, read, worker, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -366,7 +366,7 @@ func TestPlacementReadsATerminalAlongTheChainAndAWorkerAboveItWins(t *testing.T)
 	}
 	// The reading says which processes had a terminal, so a refusal names
 	// what was read rather than only that something was.
-	p, err := placeAlongChain(500, scriptedChain(process(500, 500, init, 0), process(init, init, 0, 0)), worker)
+	p, err := placeAlongChain(500, scriptedChain(process(500, 500, init, 0), process(init, init, 0, 0)), worker, nil)
 	if err != nil || p.read() != "process 500 (group 500, no controlling terminal) <- process 1 (group 1, no controlling terminal)" {
 		t.Fatalf("the reading of a daemon's chain is %q, %v", p.read(), err)
 	}

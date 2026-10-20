@@ -106,6 +106,21 @@
 // or completed is not one either (the owner's decision on #320). A state the
 // table does not decide is answered watched.
 //
+// The kind table carries one more column, Subordinate: whether a domain's
+// subordinate coordinator can act on the kind with the commands PRD section
+// 9 gives it, which is what section 8's wake row routes by. The
+// progress-class kinds are marked and the decision-class kinds are not, and
+// the matrix test holds the column to a recipient oracle written from that
+// row. SubordinateActable reads the column out for internal/service, which
+// passes it to internal/store as words. Two kinds are the subordinate's own,
+// KindSubordinateGone, resurfacing once per window on KindTerminalGone's
+// terms, and KindSubordinateEscalated, always actionable; both reach the
+// first coordinator and never the subordinate, and the first is carried on
+// the queue's second shape, internal/store's domain wake, since a
+// subordinate is no task. InFlightOf counts those rows beside the per-task
+// ones, so a subordinate gone nobody has acknowledged keeps the home in
+// flight.
+//
 // # What the matrix establishes and what it does not
 //
 // The matrix is cited for P9 and it establishes the table only. Whether a

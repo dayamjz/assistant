@@ -165,6 +165,13 @@ func (s *Service) admitPusher(ctx context.Context, from ipc.Request, req machine
 	switch placed.kind {
 	case placedWorker:
 		return s.admitWorkerPush(ctx, placed.worker, req)
+	case placedSubordinate:
+		// A subordinate coordinator has no branch to move: it coordinates
+		// in a directory of the home's that is no copy, so its push is
+		// refused outright, on subordinates.go's terms, before anything a
+		// shell's push would be admitted to.
+		return fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, which has no branch to push to gate %s",
+			ipc.ErrSubordinate, peerOf(from), placed.subordinate.Domain, req.Gate)
 	case placedPerson:
 		return nil
 	}

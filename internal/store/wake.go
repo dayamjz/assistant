@@ -436,14 +436,40 @@ func (s *Store) QueuedWakes(ctx context.Context, limit int) ([]Wake, error) {
 	return out, nil
 }
 
+// WakeRoute is which coordinator a drain is made for, and so which rows it
+// is offered: PRD section 8's "which coordinator a wake reaches is decided
+// by its kind, and every wake has exactly one recipient". A wake's domain is
+// its task's row, read in the drain's own transaction and stored on no row
+// (P14); whether that domain is delegated is the delegation table's, read
+// the same way. The kinds a subordinate can act on are the caller's,
+// internal/supervisor's table passed as words, because what a kind means is
+// that table's and this package reads none of it.
+//
+// A subordinate coordinator of a domain is offered the rows of tasks in
+// that domain whose kind is in Actable, while the domain's delegation
+// stands, and nothing else. The first coordinator, the zero route, is
+// offered every other row: a task in no domain, a task whose domain's
+// delegation has ended, and a kind outside Actable whatever the domain. The
+// two sets partition the queue, so no row is on offer to both.
+type WakeRoute struct {
+	// Subordinate is the domain the drain is made for the subordinate
+	// coordinator of, and empty for the first coordinator.
+	Subordinate string
+	// Actable is the kinds a subordinate coordinator can act on, as words.
+	// Empty offers a subordinate nothing and the first coordinator
+	// everything.
+	Actable []string
+}
+
 // WakeHandout is what a drain hands rows out as: who to, under which
-// attachment, and which attachments are still attached.
+// attachment, which attachments are still attached, and for which
+// coordinator.
 //
 // The attachments are the caller's: internal/service composes them from its
 // own identity and the coordinator's wake stream, and this package compares
 // them as text and never interprets one. What it promises is the comparison:
 // a queued row last handed out under an attachment named in Held is not
-// handed out again, and every other queued row is.
+// handed out again, and every other queued row on the route is.
 type WakeHandout struct {
 	// To is who the rows are handed to. The zero Acknowledger is refused
 	// with ErrNoAcknowledger.
@@ -454,8 +480,10 @@ type WakeHandout struct {
 	Under string
 	// Held are the attachments still attached. A row last handed out under
 	// one of them is held for it and not offered; empty holds nothing, so
-	// every queued row is offered.
+	// every queued row on the route is offered.
 	Held []string
+	// Route is which coordinator the drain is for, on WakeRoute's terms.
+	Route WakeRoute
 }
 
 func (h WakeHandout) validate() error {
@@ -469,34 +497,149 @@ func (h WakeHandout) validate() error {
 }
 
 // offeredClause is the condition a queued row is offered on, with its
-// arguments: never handed out, or handed out under an attachment held does
-// not name.
-func offeredClause(held []string) (string, []any) {
-	clause := `handled_at IS NULL`
-	if len(held) == 0 {
-		return clause, nil
+// arguments, over wake joined to task: never handed out, or handed out
+// under an attachment held does not name, and on the route.
+func offeredClause(held []string, route WakeRoute) (string, []any) {
+	clause := `wake.handled_at IS NULL`
+	var args []any
+	if len(held) > 0 {
+		marks := make([]string, len(held))
+		for i, h := range held {
+			marks[i] = "?"
+			args = append(args, h)
+		}
+		clause += ` AND (wake.handed_out_under IS NULL OR wake.handed_out_under NOT IN (` + strings.Join(marks, ",") + `))`
 	}
-	marks := make([]string, len(held))
-	args := make([]any, len(held))
-	for i, h := range held {
-		marks[i], args[i] = "?", h
+	routed, routeArgs := routeClause(route)
+	return clause + ` AND ` + routed, append(args, routeArgs...)
+}
+
+// routeClause is the route's half of offeredClause: the rows a subordinate
+// of the route's domain is offered, or their complement for the first
+// coordinator, on WakeRoute's terms.
+func routeClause(route WakeRoute) (string, []any) {
+	standing := `task.domain IS NOT NULL AND task.domain IN (SELECT domain FROM delegation WHERE ended_at IS NULL)`
+	var args []any
+	actable := `0`
+	if len(route.Actable) > 0 {
+		marks := make([]string, len(route.Actable))
+		for i, kind := range route.Actable {
+			marks[i] = "?"
+			args = append(args, kind)
+		}
+		actable = `wake.kind IN (` + strings.Join(marks, ",") + `)`
 	}
-	return clause + ` AND (handed_out_under IS NULL OR handed_out_under NOT IN (` + strings.Join(marks, ",") + `))`, args
+	delegated := `(` + standing + ` AND ` + actable + `)`
+	if route.Subordinate == "" {
+		return `NOT ` + delegated, args
+	}
+	return `(task.domain = ? AND ` + delegated + `)`, append([]any{route.Subordinate}, args...)
 }
 
 // OfferedWakes reports how many queued rows a drain made now with held as
-// its WakeHandout.Held would offer, and hands out none. It is a read, for a
-// wait that has to know whether a drain is worth its write.
-func (s *Store) OfferedWakes(ctx context.Context, held []string) (int, error) {
+// its WakeHandout.Held and route as its WakeHandout.Route would offer, and
+// hands out none. It is a read, for a wait that has to know whether a drain
+// is worth its write.
+func (s *Store) OfferedWakes(ctx context.Context, held []string, route WakeRoute) (int, error) {
 	if err := s.live(); err != nil {
 		return 0, err
 	}
-	clause, args := offeredClause(held)
+	clause, args := offeredClause(held, route)
 	var n int
-	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM wake WHERE `+clause, args...).Scan(&n); err != nil {
+	if err := s.read.QueryRowContext(ctx,
+		`SELECT count(*) FROM wake JOIN task ON task.id = wake.task_id WHERE `+clause, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("store: counting the offered wakes: %w", err)
 	}
 	return n, nil
+}
+
+// QueuedWakesFor is QueuedWakes narrowed to one coordinator's route: the
+// queued rows, handed out or not, that a drain for that route would ever
+// offer, oldest first, at most limit of them, with nothing handed out. It
+// is a subordinate coordinator's listing of its domain's rows and the
+// first coordinator's of everything else; the whole queue is QueuedWakes.
+func (s *Store) QueuedWakesFor(ctx context.Context, limit int, route WakeRoute) ([]Wake, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("store: a limit of %d queued wakes is not a batch size", limit)
+	}
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	routed, args := routeClause(route)
+	rows, err := s.read.QueryContext(ctx, wakeJoinedColumns+` FROM wake JOIN task ON task.id = wake.task_id
+		WHERE wake.handled_at IS NULL AND `+routed+` ORDER BY wake.id LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the queued wakes: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out, err := collectWakes(rows)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the queued wakes: %w", err)
+	}
+	return out, nil
+}
+
+// WakeRouted reports whether a drain made now on route would ever offer
+// the named wake: the same routing a drain, OfferedWakes and QueuedWakesFor
+// apply, read for one row, whether the row is queued or closed. It is the
+// read a push to a coordinator's stream makes before pushing, so the stream
+// carries exactly the rows the coordinator's drain would offer (P14). An
+// identifier no wake has is a *WakeIDError with ErrWakeUnknown.
+func (s *Store) WakeRouted(ctx context.Context, id int64, route WakeRoute) (bool, error) {
+	if err := s.live(); err != nil {
+		return false, err
+	}
+	routed, args := routeClause(route)
+	var n int
+	if err := s.read.QueryRowContext(ctx,
+		`SELECT count(*) FROM wake JOIN task ON task.id = wake.task_id WHERE wake.id = ? AND `+routed,
+		append([]any{id}, args...)...).Scan(&n); err != nil {
+		return false, fmt.Errorf("store: reading whether wake %d is routed: %w", id, err)
+	}
+	if n == 0 {
+		var exists int
+		if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM wake WHERE id = ?`, id).Scan(&exists); err != nil {
+			return false, fmt.Errorf("store: reading wake %d: %w", id, err)
+		}
+		if exists == 0 {
+			return false, &WakeIDError{ID: id, Reason: ErrWakeUnknown}
+		}
+	}
+	return n > 0, nil
+}
+
+// WakeScope is what decides which coordinator a wake is for: the domain of
+// its task, read from the task row and stored on no wake row (P14), and its
+// kind.
+type WakeScope struct {
+	// Domain is the task's domain, and empty for a task in none.
+	Domain string
+	// Kind is the wake's kind, as recorded.
+	Kind string
+}
+
+// WakeScopes returns the scope of each named wake, keyed by wake
+// identifier, read in one read per wake. An identifier no wake has is a
+// *WakeIDError with ErrWakeUnknown.
+func (s *Store) WakeScopes(ctx context.Context, ids []int64) (map[int64]WakeScope, error) {
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	out := make(map[int64]WakeScope, len(ids))
+	for _, id := range ids {
+		var domain Optional[string]
+		var kind string
+		err := s.read.QueryRowContext(ctx,
+			`SELECT task.domain, wake.kind FROM wake JOIN task ON task.id = wake.task_id WHERE wake.id = ?`, id).Scan(&domain, &kind)
+		switch {
+		case isNoRows(err):
+			return nil, &WakeIDError{ID: id, Reason: ErrWakeUnknown}
+		case err != nil:
+			return nil, fmt.Errorf("store: reading the scope of wake %d: %w", id, err)
+		}
+		out[id] = WakeScope{Domain: domain.Or(""), Kind: kind}
+	}
+	return out, nil
 }
 
 // DrainWakes is PRD section 8's drain as the owner amended it: draining
@@ -508,12 +651,15 @@ func (s *Store) OfferedWakes(ctx context.Context, held []string) (int, error) {
 // off the queue.
 //
 // A row is on offer when it is queued and was never handed out, or was last
-// handed out under an attachment h.Held does not name. So a row handed out
-// is not handed out again for as long as the caller names its attachment as
-// held, and is handed out again by the first drain that does not, which is
-// how a coordinator that drained and then went away before acting gets the
-// row back: delivery is at least once. When an attachment stops being held
-// is the caller's to decide; nothing here reads a clock to decide it.
+// handed out under an attachment h.Held does not name, and it is on h.Route,
+// on WakeRoute's terms: the task's domain and the delegation table are read
+// in this transaction and nothing about the route is written. So a row
+// handed out is not handed out again for as long as the caller names its
+// attachment as held, and is handed out again by the first drain on its
+// route that does not, which is how a coordinator that drained and then
+// went away before acting gets the row back: delivery is at least once.
+// When an attachment stops being held is the caller's to decide; nothing
+// here reads a clock to decide it.
 //
 // The limit must be positive and the handout must name who and under what,
 // all before anything is read; the zero Acknowledger is ErrNoAcknowledger. A
@@ -525,51 +671,91 @@ func (s *Store) DrainWakes(ctx context.Context, limit int, h WakeHandout) ([]Wak
 	if err := h.validate(); err != nil {
 		return nil, fmt.Errorf("store: draining wakes: %w", err)
 	}
-	to, _ := acknowledgerText(h.To)
-	clause, args := offeredClause(h.Held)
 	var out []Wake
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT id FROM wake WHERE `+clause+` ORDER BY id LIMIT ?`, append(args, limit)...)
-		if err != nil {
-			return err
-		}
-		var ids []int64
-		for rows.Next() {
-			var id int64
-			if err := rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			ids = append(ids, id)
-		}
-		if err := rows.Close(); err != nil {
-			return err
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		now := encodeTime(nowUTC())
-		out = make([]Wake, 0, len(ids))
-		for _, id := range ids {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE wake SET handed_out_at = ?, handed_out_to = ?, handed_out_under = ?,
-					handouts = coalesce(handouts, 0) + 1
-				WHERE id = ? AND handled_at IS NULL`,
-				now, to, h.Under, id); err != nil {
-				return err
-			}
-			drained, err := scanWake(tx.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE id = ?`, id))
-			if err != nil {
-				return err
-			}
-			out = append(out, drained)
-		}
-		return nil
+		var err error
+		out, err = drainWakesTx(ctx, tx, limit, h)
+		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: draining wakes: %w", err)
 	}
 	return out, nil
+}
+
+// drainWakesTx is DrainWakes inside a transaction the caller holds.
+func drainWakesTx(ctx context.Context, tx *sql.Tx, limit int, h WakeHandout) ([]Wake, error) {
+	to, _ := acknowledgerText(h.To)
+	clause, args := offeredClause(h.Held, h.Route)
+	rows, err := tx.QueryContext(ctx, `SELECT wake.id FROM wake JOIN task ON task.id = wake.task_id WHERE `+clause+
+		` ORDER BY wake.id LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	now := encodeTime(nowUTC())
+	out := make([]Wake, 0, len(ids))
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE wake SET handed_out_at = ?, handed_out_to = ?, handed_out_under = ?,
+				handouts = coalesce(handouts, 0) + 1
+			WHERE id = ? AND handled_at IS NULL`,
+			now, to, h.Under, id); err != nil {
+			return nil, err
+		}
+		drained, err := scanWake(tx.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE id = ?`, id))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, drained)
+	}
+	return out, nil
+}
+
+// DrainBoth is DrainWakes and DrainDomainWakes under one handout in one
+// transaction: the task rows, then the domain rows, each bounded by limit,
+// and the second none on a subordinate's route. Either both shapes are
+// handed out or neither is, so a drain whose second half fails, or whose
+// context ends between the two, leaves no row handed out that its caller
+// was not given.
+func (s *Store) DrainBoth(ctx context.Context, limit int, h WakeHandout) ([]Wake, []DomainWake, error) {
+	if limit < 1 {
+		return nil, nil, fmt.Errorf("store: a drain limit of %d is not a batch size", limit)
+	}
+	if err := h.validate(); err != nil {
+		return nil, nil, fmt.Errorf("store: draining wakes: %w", err)
+	}
+	var wakes []Wake
+	var domainWakes []DomainWake
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		if wakes, err = drainWakesTx(ctx, tx, limit, h); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		domainWakes, err = drainDomainWakesTx(ctx, tx, limit, h)
+		return err
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: draining wakes: %w", err)
+	}
+	return wakes, domainWakes, nil
 }
 
 // TaskWakes returns every wake of a task, acknowledged or not, oldest first.
@@ -648,25 +834,58 @@ func (s *Store) AcknowledgeWakes(ctx context.Context, ids []int64, by Acknowledg
 		return fmt.Errorf("store: acknowledging wakes: %w", err)
 	}
 	now := encodeTime(nowUTC())
+	return s.inTx(ctx, func(tx *sql.Tx) error { return acknowledgeWakesTx(ctx, tx, ids, who, now) })
+}
+
+// acknowledgeWakesTx is AcknowledgeWakes inside a transaction: every row is
+// checked before any is written, so a refusal writes nothing.
+func acknowledgeWakesTx(ctx context.Context, tx *sql.Tx, ids []int64, who, now string) error {
+	for _, id := range ids {
+		var handled Optional[string]
+		err := tx.QueryRowContext(ctx, `SELECT handled_at FROM wake WHERE id = ?`, id).Scan(&handled)
+		switch {
+		case isNoRows(err):
+			return &WakeIDError{ID: id, Reason: ErrWakeUnknown}
+		case err != nil:
+			return fmt.Errorf("store: acknowledging wake %d: %w", id, err)
+		case handled.IsKnown():
+			return &WakeIDError{ID: id, Reason: ErrWakeAcknowledged}
+		}
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE wake SET handled_at = ?, acknowledged_by = ? WHERE id = ? AND handled_at IS NULL`,
+			now, who, id); err != nil {
+			return fmt.Errorf("store: acknowledging wake %d: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// AcknowledgeAll acknowledges task wakes and domain wakes in one
+// transaction, on AcknowledgeWakes' and AcknowledgeDomainWakes' terms for
+// each shape: every row of both shapes is checked before any is written,
+// so a batch naming one row of either shape that is unknown or already
+// acknowledged closes nothing, which is the whole-batch refusal an
+// acknowledgement naming both shapes is held to. A batch naming no row of
+// either shape is refused.
+func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes []int64, by Acknowledger) error {
+	if len(wakes)+len(domainWakes) == 0 {
+		return errors.New("store: an acknowledgement names no wakes")
+	}
+	who, err := acknowledgerText(by)
+	if err != nil {
+		return fmt.Errorf("store: acknowledging wakes: %w", err)
+	}
+	now := encodeTime(nowUTC())
 	return s.inTx(ctx, func(tx *sql.Tx) error {
-		for _, id := range ids {
-			var handled Optional[string]
-			err := tx.QueryRowContext(ctx, `SELECT handled_at FROM wake WHERE id = ?`, id).Scan(&handled)
-			switch {
-			case isNoRows(err):
-				return &WakeIDError{ID: id, Reason: ErrWakeUnknown}
-			case err != nil:
-				return fmt.Errorf("store: acknowledging wake %d: %w", id, err)
-			case handled.IsKnown():
-				return &WakeIDError{ID: id, Reason: ErrWakeAcknowledged}
+		if len(wakes) > 0 {
+			if err := acknowledgeWakesTx(ctx, tx, wakes, who, now); err != nil {
+				return err
 			}
 		}
-		for _, id := range ids {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE wake SET handled_at = ?, acknowledged_by = ? WHERE id = ? AND handled_at IS NULL`,
-				now, who, id); err != nil {
-				return fmt.Errorf("store: acknowledging wake %d: %w", id, err)
-			}
+		if len(domainWakes) > 0 {
+			return acknowledgeDomainWakesTx(ctx, tx, domainWakes, who, now)
 		}
 		return nil
 	})
@@ -674,6 +893,12 @@ func (s *Store) AcknowledgeWakes(ctx context.Context, ids []int64, by Acknowledg
 
 const wakeColumns = `SELECT id, task_id, kind, marker, created_at, handled_at, acknowledged_by,
 	handed_out_at, handed_out_to, handed_out_under, handouts`
+
+// wakeJoinedColumns is wakeColumns for a read joined to the task table,
+// where the unqualified names would be ambiguous. The order is the same, so
+// scanWake reads both.
+const wakeJoinedColumns = `SELECT wake.id, wake.task_id, wake.kind, wake.marker, wake.created_at, wake.handled_at,
+	wake.acknowledged_by, wake.handed_out_at, wake.handed_out_to, wake.handed_out_under, wake.handouts`
 
 func wakeByKey(ctx context.Context, q querier, w WakeRequest) (Wake, error) {
 	return scanWake(q.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE task_id = ? AND kind = ? AND marker = ?`,

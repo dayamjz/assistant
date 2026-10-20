@@ -59,6 +59,25 @@ func (p *Pipe) Create(ctx context.Context, spec Spec) (*Session, error) {
 	return p.adopt(spec.TaskID, worker, nil, agents.Identity{})
 }
 
+// Subordinates is the set of live subordinate coordinators this provider
+// has started, on the terms Subordinates states.
+func (p *Pipe) Subordinates() *Subordinates { return p.subordinates }
+
+// Delegate starts a subordinate coordinator on the terms Host.Delegate
+// states, through agents.OpenWorker as Create does.
+func (p *Pipe) Delegate(ctx context.Context, spec SubordinateSpec) (*Session, error) {
+	if err := home.ValidDomain(spec.Domain); err != nil {
+		return nil, err
+	}
+	worker, err := agents.OpenSubordinate(ctx, p.runner, agents.WorkerSpec{
+		Dir: spec.Dir, Instructions: spec.Instructions, Route: spec.Route, Model: spec.Model, Effort: spec.Effort,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("session: starting the subordinate coordinator of domain %s: %w", spec.Domain, err)
+	}
+	return p.adoptSubordinate(spec.Domain, worker, nil, agents.Identity{})
+}
+
 // Capture returns the retained output and its digest, on the terms
 // Provider.Capture states.
 func (p *Pipe) Capture(s *Session) (Capture, error) { return p.capture(s) }

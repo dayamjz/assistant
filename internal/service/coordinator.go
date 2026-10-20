@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -36,17 +37,26 @@ import (
 //
 // # Who may ask
 //
-// Each is coordinator-only, on two checks over the caller's credentials and
-// nothing the caller says about itself. internal/ipc declares all three
+// Each is a coordinator's, on two checks over the caller's credentials and
+// nothing the caller says about itself. internal/ipc declares all four
 // restricted, so a caller it cannot identify is refused with
 // ipc.ErrUnidentifiedPeer and a caller contained by a validation stage with
-// ipc.ErrContained before this file runs. Then refuseWorker, the placement
-// workers.go derives for the wakes methods and supervision.assert, refuses
-// with ipc.ErrWorker a caller the worker group set places in any task's
-// worker group, before anything is read or written. That second check is
-// what keeps an investigation from promoting itself: its worker's own
-// process group is in the set while it runs, so the request is refused
-// whatever task it names. No second placement check is built here.
+// ipc.ErrContained before this file runs. Then the placement
+// subordinates.go derives, the one the wakes methods and supervision.assert
+// read too, decides who is asking before anything is read or written: a
+// caller the worker group set places in any task's worker group is refused
+// with ipc.ErrWorker, which is what keeps an investigation from promoting
+// itself, since its worker's own process group is in the set while it runs
+// and the request is refused whatever task it names. A caller the
+// subordinate set places as a domain's subordinate coordinator is admitted
+// to three of the four within that domain, PRD section 9's grant:
+// task.create, whose task is written into the domain from the placement
+// and takes the delegation's posture, and task.relaunch and task.relay,
+// each refused with ipc.ErrOutsideDomain for a task whose row is outside
+// the domain. task.promote is the one it is refused, with
+// ipc.ErrSubordinate, and the refused ask is recorded as its escalation;
+// subordinates.go owns that and the rest of the grant. No second placement
+// check is built here.
 //
 // # How a refusal crosses the wire
 //
@@ -83,22 +93,48 @@ import (
 //     task and its attempts rather than from this answer.
 
 // createTask records a new task through internal/tasks' intake, for the
-// coordinator, and then dispatches what is due in the background, as
+// coordinator or, within its domain and under its delegation's posture, for
+// a subordinate coordinator, and then dispatches what is due in the background, as
 // releaseQueued does after a release: a task intake recorded independent
 // resolves Dispatched and is cut its copy by dispatch.go.
 func (s *Service) createTask(ctx context.Context, req ipc.Request, r machine.TaskCreateRequest) (machine.TaskCreated, error) {
-	if err := s.refuseWorker(req); err != nil {
+	p, err := s.admitted(req)
+	if err != nil {
 		return machine.TaskCreated{}, err
 	}
-	created, err := s.queue.Create(ctx, tasks.Request{
+	request := tasks.Request{
 		Shape: r.Shape, Project: r.Project, Instructions: r.Instructions, Mode: r.Mode,
 		Repository: r.Repository, Branch: r.Branch, Overlaps: r.Overlaps, Delivery: r.Delivery,
 		Role: r.Role,
-	})
+	}
+	if p.isSubordinate {
+		// PRD section 6: a subordinate records no posture, and section 9:
+		// the domain is written from the placement and named by no field.
+		// The delivery posture is the delegation's, read now and held to
+		// intake's rule against the task's project by intake itself; a
+		// request asking for one of its own is refused rather than
+		// compared, and an investigation takes none, as intake says.
+		if strings.TrimSpace(r.Delivery) != "" {
+			return machine.TaskCreated{}, fmt.Errorf("%w: the subordinate coordinator of domain %s records no delivery posture; "+
+				"its tasks take the delegation's", ipc.ErrInvalidRequest, p.subordinate.Domain)
+		}
+		d, found, err := s.store.Delegation(ctx, p.subordinate.Domain)
+		if err != nil {
+			return machine.TaskCreated{}, err
+		}
+		if !found || !d.Standing() {
+			return machine.TaskCreated{}, fmt.Errorf("%w: %w: domain %s", ipc.ErrRefused, errNotDelegated, p.subordinate.Domain)
+		}
+		request.Domain = p.subordinate.Domain
+		if store.TaskShape(strings.TrimSpace(r.Shape)) == store.TaskDelivery {
+			request.Delivery = string(d.Delivery)
+		}
+	}
+	created, err := s.queue.Create(ctx, request)
 	if err != nil {
 		return machine.TaskCreated{}, refusalOf(err)
 	}
-	s.log.Printf("task %s was created by %s (%s)", created.Task.ID, peerOf(req), created.Cause)
+	s.log.Printf("task %s was created by %s (%s)%s", created.Task.ID, peerOf(req), created.Cause, inDomain(created.Task.Domain))
 	s.dispatchInBackground()
 	return machine.TaskCreated{
 		Record: created.Task, Cause: string(created.Cause), BlockerState: created.BlockerState,
@@ -115,7 +151,8 @@ func (s *Service) createTask(ctx context.Context, req ipc.Request, r machine.Tas
 // the same agents.WorkerEnvironment(os.Environ(), nil) assertCopy uses, and
 // never one the caller states.
 func (s *Service) promoteTask(ctx context.Context, req ipc.Request, r machine.TaskPromoteRequest) (machine.TaskPromoted, error) {
-	if err := s.refuseWorker(req); err != nil {
+	if _, err := s.refuseDecision(ctx, req, r.Task, fmt.Sprintf("asked to promote task %s to a delivery on %s in repository %s: %s",
+		r.Task, r.Branch, r.Repository, r.Intent)); err != nil {
 		return machine.TaskPromoted{}, err
 	}
 	promoted, err := s.queue.Promote(ctx, tasks.Promotion{
@@ -181,7 +218,7 @@ func (s *Service) briefPromoted(ctx context.Context, req ipc.Request, task, brie
 		return unsent("the worker of attempt %d (session %s) is not one this service can reach: the probe answered %s (%s)",
 			latest.Sequence, ref, observed.Liveness, observed.Detail)
 	}
-	m, err := s.deliverMessage(ctx, req, task, latest.Sequence, ref, brief)
+	m, err := s.deliverMessage(ctx, req, req.MessageSender(), task, latest.Sequence, ref, brief)
 	if err != nil {
 		b := machine.Briefing{Unsent: err.Error()}
 		if m.ID != 0 {
@@ -193,16 +230,22 @@ func (s *Service) briefPromoted(ctx context.Context, req ipc.Request, task, brie
 }
 
 // relaunchTaskFor relaunches a task whose terminal is gone, for the
-// coordinator, through relaunchTask and launchInBackground: the claim, the
-// records and the launch reconciliation makes, and nothing else. A task the
-// reconciliation table does not relaunch, a live terminal among them, is
-// refused there and not here.
+// coordinator or for the subordinate coordinator of the task's domain,
+// through relaunchTask and launchInBackground: the claim, the records and
+// the launch reconciliation makes, and nothing else. A worker is refused, a
+// subordinate naming a task outside its domain is refused
+// ipc.ErrOutsideDomain, and a task the reconciliation table does not
+// relaunch, a live terminal among them, is refused there and not here.
 func (s *Service) relaunchTaskFor(ctx context.Context, req ipc.Request, r machine.TaskRequest) (machine.TaskRelaunched, error) {
-	if err := s.refuseWorker(req); err != nil {
+	p, err := s.admitted(req)
+	if err != nil {
 		return machine.TaskRelaunched{}, err
 	}
 	if r.Task == "" {
 		return machine.TaskRelaunched{}, fmt.Errorf("%w: a relaunch names no task", ipc.ErrInvalidRequest)
+	}
+	if err := s.scopeTask(ctx, req, p, r.Task); err != nil {
+		return machine.TaskRelaunched{}, err
 	}
 	out, err := s.relaunchTask(ctx, r.Task)
 	if err != nil {
@@ -216,8 +259,11 @@ func (s *Service) relaunchTaskFor(ctx context.Context, req ipc.Request, r machin
 	}, nil
 }
 
-// relayTask records, for the coordinator, that a reported investigation's
-// findings were relayed: PRD section 6's Reported to Complete edge. The task
+// relayTask records, for the coordinator or for the subordinate coordinator
+// of the task's domain, that a reported investigation's findings were
+// relayed: PRD section 6's Reported to Complete edge. A worker is refused
+// and a subordinate naming a task outside its domain is refused
+// ipc.ErrOutsideDomain, on relaunchTaskFor's terms. The task
 // is read through the service's reader for the history position to anchor
 // to, and the record is written by store.RecordTaskRelay, which decides in
 // its own transaction whether the records make the task a reported
@@ -237,11 +283,15 @@ func (s *Service) relaunchTaskFor(ctx context.Context, req ipc.Request, r machin
 // its branch, so in this build only a run its own row names could reach it,
 // and no production path names one for an investigation.
 func (s *Service) relayTask(ctx context.Context, req ipc.Request, r machine.TaskRequest) (machine.TaskRelayed, error) {
-	if err := s.refuseWorker(req); err != nil {
+	p, err := s.admitted(req)
+	if err != nil {
 		return machine.TaskRelayed{}, err
 	}
 	if r.Task == "" {
 		return machine.TaskRelayed{}, fmt.Errorf("%w: a relay names no task", ipc.ErrInvalidRequest)
+	}
+	if err := s.scopeTask(ctx, req, p, r.Task); err != nil {
+		return machine.TaskRelayed{}, err
 	}
 	resolved, err := s.tasks().Resolved(ctx, r.Task)
 	if err != nil {
@@ -255,6 +305,15 @@ func (s *Service) relayTask(ctx context.Context, req ipc.Request, r machine.Task
 	s.log.Printf("task %s's findings were recorded relayed by %s", r.Task, peerOf(req))
 	s.settleInBackground(r.Task)
 	return machine.TaskRelayed{Record: relay, Event: event}, nil
+}
+
+// inDomain is the words a log line adds for a task in a domain, and nothing
+// for one in none.
+func inDomain(domain string) string {
+	if domain == "" {
+		return ""
+	}
+	return " in domain " + domain
 }
 
 // settleInBackground runs settleLanded for the task on a goroutine

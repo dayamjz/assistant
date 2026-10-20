@@ -7,8 +7,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -18,13 +20,20 @@ import (
 //
 // # The push
 //
-// wakes.subscribe is the coordinator's wake stream. Every row the supervisor
-// loop appends is pushed on it by publishWake, from the loop's record, after
-// the write that appended it committed, so a coordinator holding the stream
-// is woken without asking again. The stream's publisher is this service's
-// wakes and never events, which is open to every caller; internal/ipc opens
-// the stream only after admitWakeStream, wakes.list's worker refusal, has
-// admitted the caller, so a task's worker is never sent a wake. The event is
+// wakes.subscribe is the caller's wake stream: the coordinator's, or, for a
+// subordinate coordinator, its own domain's, which PRD section 9 grants it
+// for its domain's rows alone. Every row the supervisor loop appends is
+// pushed by publishWake, from the loop's record, after the write that
+// appended it committed, on exactly one stream: the one whose drain would
+// offer the row, read on the same route that drain is made on, so a
+// coordinator holding its stream is woken without asking again and never
+// by a row that is another coordinator's (P14). The coordinator's publisher
+// is this service's wakes, and each domain's is made on its subordinate's
+// first subscription, never events, which is open to every caller;
+// internal/ipc opens the stream only after admitWakeStream, wakes.list's
+// worker refusal, has admitted the caller and chosen the stream, so a
+// task's worker is never sent a wake and a subordinate is attached to the
+// domain the placement derived and to no other. The event is
 // a notice, ipc.TypeWakeQueued with the row as it was appended, and it hands
 // out and acknowledges nothing: pushing is not draining. It is state on
 // internal/ipc's terms, so an overflowing stream never drops it as noise and
@@ -129,10 +138,11 @@ import (
 //     acknowledging that stops that, and a wait it arms before
 //     acknowledging answers at once.
 //   - A subscription internal/ipc opened for a caller its admission then
-//     refuses, such as a task's worker, is counted as open for as long as
-//     the admission takes, so it can begin or extend a stretch for that
-//     moment. That can only hold rows handed out in that moment, and only
-//     until the stretch ends.
+//     refuses, such as a task's worker, or moves onto a domain's stream,
+//     a subordinate's, is counted on the coordinator's stream for as long
+//     as the admission takes, so it can begin or extend a stretch of the
+//     coordinator's for that moment. That can only hold rows handed out in
+//     that moment, and only until the stretch ends.
 //   - A pushed wake reaches only a coordinator attached when it is
 //     published; one attached later learns of it from the gap marker it
 //     opens with and the drain that follows.
@@ -183,9 +193,11 @@ func (b *wakeBell) ring() {
 // the bound, because the caller went away or the service is closing, is
 // ipc.ErrUnavailable wrapping the context's error, and drains nothing.
 func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.WakeWaitRequest) (machine.Wakes, error) {
-	if err := s.refuseWorker(req); err != nil {
+	p, err := s.admitted(req)
+	if err != nil {
 		return machine.Wakes{}, err
 	}
+	handout := s.wakeHandout(req, p)
 	bound, limit, err := r.Bounds()
 	if err != nil {
 		return machine.Wakes{}, fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
@@ -203,20 +215,28 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	defer recheck.Stop()
 	for {
 		rung := s.wakeBell.armed()
-		offered, err := s.store.OfferedWakes(ctx, s.wakeHandout(req).Held)
+		// The handout is composed per read, because the stretch it is
+		// made under is the one open now; the route is the placement's and
+		// does not move.
+		handout = s.wakeHandout(req, p)
+		offered, err := s.store.OfferedWakes(ctx, handout.Held, handout.Route)
 		if err != nil {
 			return machine.Wakes{}, err
 		}
-		if offered > 0 {
+		offeredDomain, err := s.store.OfferedDomainWakes(ctx, handout.Held, handout.Route)
+		if err != nil {
+			return machine.Wakes{}, err
+		}
+		if offered+offeredDomain > 0 {
 			if ctx.Err() != nil {
 				return machine.Wakes{}, ended()
 			}
-			wakes, err := s.store.DrainWakes(ctx, limit, s.wakeHandout(req))
+			wakes, err := s.drainBoth(ctx, limit, handout)
 			if err != nil {
 				return machine.Wakes{}, err
 			}
-			if len(wakes) > 0 {
-				return machine.Wakes{Wakes: wakes}, nil
+			if len(wakes.Wakes)+len(wakes.DomainWakes) > 0 {
+				return wakes, nil
 			}
 		}
 		select {
@@ -226,30 +246,49 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 			if ctx.Err() != nil {
 				return machine.Wakes{}, ended()
 			}
-			wakes, err := s.store.DrainWakes(ctx, limit, s.wakeHandout(req))
-			if err != nil {
-				return machine.Wakes{}, err
-			}
-			return machine.Wakes{Wakes: wakes}, nil
+			return s.drainBoth(ctx, limit, s.wakeHandout(req, p))
 		case <-ctx.Done():
 			return machine.Wakes{}, ended()
 		}
 	}
 }
 
+// drainBoth is one drain of both shapes under one handout, the one both
+// wakes.list and wakes.wait answer with: the task rows, then the domain
+// rows, each bounded by limit, and the second none on a subordinate's
+// route, handed out in one store transaction (store.DrainBoth), so a drain
+// that fails or is cancelled between the two hands out nothing it does not
+// return.
+func (s *Service) drainBoth(ctx context.Context, limit int, handout store.WakeHandout) (machine.Wakes, error) {
+	wakes, domainWakes, err := s.store.DrainBoth(ctx, limit, handout)
+	if err != nil {
+		return machine.Wakes{}, err
+	}
+	return machine.Wakes{Wakes: wakes, DomainWakes: domainWakes}, nil
+}
+
 // wakeHandout is what a coordinator's drain made now hands rows out as, on
-// the terms above: to who req.WakeAcknowledger says, under the stretch of
-// the wake stream that is open, holding that stretch, or, with no stretch
-// open, under a name nothing holds and holding nothing. A service with no
-// wake publisher, which Open never builds and this package's internal tests
-// build by hand, is never attached.
-func (s *Service) wakeHandout(req ipc.Request) store.WakeHandout {
-	h := store.WakeHandout{To: req.WakeAcknowledger(), Under: s.instance + "/unattached"}
-	if s.wakes == nil {
+// the terms above: to who the caller's placement says, subordinates.go's
+// acknowledgerOf, on the route the placement gives, under the stretch of
+// the caller's own wake stream that is open, holding that stretch, or,
+// with no stretch open, under a name nothing holds and holding nothing.
+// The caller's own stream is the coordinator's for the coordinator and its
+// domain's for a subordinate, so a subordinate holding its stream is
+// attached on the same terms as the coordinator and one that only polls is
+// handed a row on every drain until it acknowledges it. A service with no
+// wake publisher, which Open never builds and this package's internal
+// tests build by hand, is never attached.
+func (s *Service) wakeHandout(req ipc.Request, p placedPeer) store.WakeHandout {
+	h := store.WakeHandout{To: s.acknowledgerOf(req, p), Under: s.instance + "/unattached", Route: wakeRouteOf(p)}
+	stream, prefix := s.wakes, s.instance+"/stream/"
+	if p.isSubordinate {
+		stream, prefix = s.existingDomainWakeStream(p.subordinate.Domain), s.instance+"/domain/"+p.subordinate.Domain+"/stream/"
+	}
+	if stream == nil {
 		return h
 	}
-	if number, open := s.wakes.Attachment(); open {
-		h.Under = fmt.Sprintf("%s/stream/%d", s.instance, number)
+	if number, open := stream.Attachment(); open {
+		h.Under = fmt.Sprintf("%s%d", prefix, number)
 		h.Held = []string{h.Under}
 	}
 	return h
@@ -257,28 +296,125 @@ func (s *Service) wakeHandout(req ipc.Request) store.WakeHandout {
 
 // admitWakeStream is the handler's half of wakes.subscribe: internal/ipc
 // has already refused a contained caller, and this refuses a task's worker
-// on wakes.list's terms. It returns nil to admit, and the stream itself is
-// internal/ipc's to open and pump.
-func (s *Service) admitWakeStream(req ipc.Request) error {
-	return s.refuseWorker(req)
+// on wakes.list's terms, admits the coordinator to the method's own
+// publisher, the coordinator's stream, and admits a subordinate coordinator
+// to its own domain's, which PRD section 9 grants it ("listing, awaiting,
+// subscribing to, and acknowledging the wake queue, for its domain's rows
+// alone"), by answering a choice naming the domain the placement derived,
+// never one the request names. It returns the zero choice and nil to admit
+// the coordinator, and the stream itself is internal/ipc's to open and
+// pump.
+func (s *Service) admitWakeStream(req ipc.Request) (ipc.StreamChoice, error) {
+	p, err := s.admitted(req)
+	if err != nil {
+		return ipc.StreamChoice{}, err
+	}
+	if p.isSubordinate {
+		return ipc.StreamChoice{Name: p.subordinate.Domain}, nil
+	}
+	return ipc.StreamChoice{}, nil
 }
 
-// publishWake pushes a row the loop appended to the coordinator's wake
-// stream, as ipc.TypeWakeQueued with the row's identifier as its revision.
-// A publication is not a record: a payload that cannot be encoded or
-// published is logged, and the row is still queued for a drain to take. A
-// service with no wake publisher, which Open never builds and this
-// package's internal tests build by hand, publishes nothing.
-func (s *Service) publishWake(w store.Wake) {
+// domainWakeStream is the wake stream of a domain, made on the first ask,
+// which internal/ipc attaches a subordinate's subscription to through
+// ServerConfig.StreamFor once admitWakeStream chose the domain. A name
+// home.ValidDomain refuses is refused, and a service closing makes none.
+func (s *Service) domainWakeStream(domain string) (*ipc.Publisher, error) {
+	if err := home.ValidDomain(domain); err != nil {
+		return nil, fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
+	}
+	s.domainWakesMu.Lock()
+	defer s.domainWakesMu.Unlock()
+	if s.domainWakesClosed {
+		return nil, fmt.Errorf("%w: the service is closing", ipc.ErrUnavailable)
+	}
+	if pub, ok := s.domainWakes[domain]; ok {
+		return pub, nil
+	}
+	if s.domainWakes == nil {
+		s.domainWakes = make(map[string]*ipc.Publisher)
+	}
+	pub, err := ipc.NewPublisher(ipc.PublisherConfig{})
+	if err != nil {
+		return nil, err
+	}
+	s.domainWakes[domain] = pub
+	return pub, nil
+}
+
+// existingDomainWakeStream is the domain's wake stream if one was made,
+// and nil otherwise: a push or a handout never makes one, since a stream
+// nobody subscribed to has nobody to wake and holds no stretch.
+func (s *Service) existingDomainWakeStream(domain string) *ipc.Publisher {
+	s.domainWakesMu.Lock()
+	defer s.domainWakesMu.Unlock()
+	return s.domainWakes[domain]
+}
+
+// closeDomainWakeStreams closes every domain's wake stream, for Close.
+func (s *Service) closeDomainWakeStreams() []error {
+	s.domainWakesMu.Lock()
+	streams := s.domainWakes
+	s.domainWakes, s.domainWakesClosed = nil, true
+	s.domainWakesMu.Unlock()
+	var errs []error
+	for _, pub := range streams {
+		errs = append(errs, pub.Close())
+	}
+	return errs
+}
+
+// publishWake pushes a row the loop appended to the one wake stream whose
+// drain would offer it, as ipc.TypeWakeQueued with the row's identifier as
+// its revision: the coordinator's when the coordinator's route offers it,
+// and otherwise the stream of the row's task's domain when that domain's
+// subordinate's route offers it, each read through store.WakeRouted in the
+// row's own task and delegation rows, so a row reaches at most one stream
+// and it is the one whose drain is offered it (P14). A publication is not a
+// record: a payload that cannot be encoded or published is logged, and the
+// row is still queued for a drain to take; a route that cannot be read is
+// logged and nothing is pushed, since a push that might be another
+// coordinator's is the one error a stream cannot take back. A service with
+// no wake publisher, which Open never builds and this package's internal
+// tests build by hand, publishes nothing.
+func (s *Service) publishWake(ctx context.Context, w store.Wake) {
 	if s.wakes == nil {
 		return
+	}
+	stream := s.wakes
+	routed, err := s.store.WakeRouted(ctx, w.ID, wakeRouteOf(placedPeer{}))
+	if err != nil {
+		s.log.Printf("could not read whether wake %d of task %s is the coordinator's, so it is not pushed: %v", w.ID, w.TaskID, err)
+		return
+	}
+	if !routed {
+		scopes, err := s.store.WakeScopes(ctx, []int64{w.ID})
+		if err != nil {
+			s.log.Printf("could not read the domain of wake %d of task %s, so it is not pushed: %v", w.ID, w.TaskID, err)
+			return
+		}
+		domain := scopes[w.ID].Domain
+		if domain == "" {
+			return
+		}
+		if stream = s.existingDomainWakeStream(domain); stream == nil {
+			return
+		}
+		sub := placedPeer{subordinate: session.Placement{Domain: domain}, isSubordinate: true}
+		if routed, err = s.store.WakeRouted(ctx, w.ID, wakeRouteOf(sub)); err != nil {
+			s.log.Printf("could not read whether wake %d of task %s is domain %s's, so it is not pushed: %v", w.ID, w.TaskID, domain, err)
+			return
+		}
+		if !routed {
+			return
+		}
 	}
 	payload, err := json.Marshal(w)
 	if err != nil {
 		s.log.Printf("could not encode wake %d of task %s: %v", w.ID, w.TaskID, err)
 		return
 	}
-	if err := s.wakes.Publish(ipc.Event{Type: ipc.TypeWakeQueued, Revision: uint64(w.ID), Payload: payload}); err != nil {
+	if err := stream.Publish(ipc.Event{Type: ipc.TypeWakeQueued, Revision: uint64(w.ID), Payload: payload}); err != nil {
 		s.log.Printf("could not push wake %d of task %s: %v", w.ID, w.TaskID, err)
 	}
 }

@@ -81,7 +81,10 @@
 // internal/store's row, and this package says only where the copy goes.
 // The rule is applied to a string and not to a filesystem: it says an
 // identifier is one path element, and nothing about whether the directory it
-// names exists, is empty, or belongs to the task that claims it.
+// names exists, is empty, or belongs to the task that claims it. A domain
+// name is the same kind of rule for domains/: ValidDomain is a grammar
+// rather than a fixed length, since a domain is a word the coordinator
+// chooses, and Domain and DomainInstructions refuse what it refuses.
 //
 // # A copy is answered by where it stands, not by how it is named
 //

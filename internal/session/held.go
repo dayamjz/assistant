@@ -16,8 +16,9 @@ import (
 // one implementation and a second provider cannot answer Live on terms of
 // its own.
 type held struct {
-	marker  string
-	workers *Workers
+	marker       string
+	workers      *Workers
+	subordinates *Subordinates
 	// owner is the provider the sessions belong to, compared by identity so
 	// a session one provider created is never another's.
 	owner any
@@ -27,7 +28,53 @@ type held struct {
 }
 
 func newHeld(marker string, owner any) *held {
-	return &held{marker: marker, workers: NewWorkers(), owner: owner, sessions: map[string]*Session{}}
+	return &held{marker: marker, workers: NewWorkers(), subordinates: NewSubordinates(), owner: owner, sessions: map[string]*Session{}}
+}
+
+// adoptSubordinate is adopt for a subordinate coordinator's session: the
+// identity is read the same way, the group joins Subordinates rather than
+// Workers for the process's lifetime, and the reference names the domain
+// rather than a task.
+func (h *held) adoptSubordinate(domain string, worker agents.Worker, attach []string, host agents.Identity) (*Session, error) {
+	pid := worker.Group()
+	identity, found, err := agents.Identify(pid)
+	switch {
+	case errors.Is(err, agents.ErrIdentityUnreadable):
+		identity = agents.Identity{}
+	case err != nil:
+		worker.Close()
+		return nil, fmt.Errorf("%w: process %d: %w", ErrIdentity, pid, err)
+	case !found:
+		worker.Close()
+		return nil, fmt.Errorf("%w: process %d was not running when looked for", ErrIdentity, pid)
+	}
+	s, err := h.newSession(Reference{Home: h.marker, Domain: domain, PID: pid, Start: identity.Start}, worker, attach, host)
+	if err != nil {
+		return nil, err
+	}
+	s.leave = h.subordinates.join(Placement{Domain: domain, Group: pid, Host: host}, worker.Done())
+	go func() {
+		<-worker.Done()
+		s.leave()
+	}()
+	h.mu.Lock()
+	h.sessions[s.key] = s
+	h.mu.Unlock()
+	return s, nil
+}
+
+// newSession is the handle for a reference this provider wrote, with the
+// reference encoded once as the key every lookup here uses. A reference
+// Encode refuses is a defect in the caller, which names one owner by
+// construction, and it ends the worker and refuses rather than holding a
+// session under a key no record could carry.
+func (h *held) newSession(ref Reference, worker agents.Worker, attach []string, host agents.Identity) (*Session, error) {
+	key, err := ref.Encode()
+	if err != nil {
+		worker.Close()
+		return nil, err
+	}
+	return &Session{ref: ref, key: key, owner: h.owner, worker: worker, attach: attach, host: host}, nil
 }
 
 // adopt makes worker a held session of task: it reads the worker's identity,
@@ -50,11 +97,9 @@ func (h *held) adopt(task string, worker agents.Worker, attach []string, host ag
 		worker.Close()
 		return nil, fmt.Errorf("%w: process %d was not running when looked for", ErrIdentity, pid)
 	}
-	s := &Session{
-		ref:    Reference{Home: h.marker, Task: task, PID: pid, Start: identity.Start},
-		owner:  h.owner,
-		worker: worker,
-		attach: attach,
+	s, err := h.newSession(Reference{Home: h.marker, Task: task, PID: pid, Start: identity.Start}, worker, attach, host)
+	if err != nil {
+		return nil, err
 	}
 	// The group is a member from here until the process ends: Member reads
 	// the done signal itself, and the goroutine takes the entry out once it
@@ -65,7 +110,7 @@ func (h *held) adopt(task string, worker agents.Worker, attach []string, host ag
 		s.leave()
 	}()
 	h.mu.Lock()
-	h.sessions[s.ref.String()] = s
+	h.sessions[s.key] = s
 	h.mu.Unlock()
 	return s, nil
 }
@@ -78,7 +123,7 @@ func (h *held) holds(s *Session) bool {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.sessions[s.ref.String()] == s
+	return h.sessions[s.key] == s
 }
 
 // lookup is the held session a reference names, if any.
@@ -94,7 +139,7 @@ func (h *held) release(s *Session) error {
 	if s == nil || s.owner != h.owner {
 		return ErrNotHeld
 	}
-	key := s.ref.String()
+	key := s.key
 	h.mu.Lock()
 	current, ok := h.sessions[key]
 	if ok && current == s {

@@ -428,6 +428,31 @@
 // stage, so containment passes its push and the rule is what admission asks
 // of it; a person's push meets the rule nowhere.
 //
+// The same credentials and the same chain place a peer a third way, as a
+// domain's subordinate coordinator, through internal/session's subordinate
+// set; subordinates.go owns PRD section 9's domain.delegate and domain.end,
+// which start that session through the driver's provider and end its
+// delegation, and the grant decided per method from the placement: within
+// its domain a subordinate holds the coordinator's task, wake and
+// supervision methods, scoped to its domain's tasks by the task's own row
+// and refused ErrOutsideDomain past it, and it is refused ErrSubordinate
+// every method section 9 lists, with a promotion or a hold's answer it asks
+// for recorded as section 8's escalation. Wake routing is the kind table's
+// Subordinate column passed to internal/store as a route, so a wake is on
+// offer to exactly one coordinator, and the coordinator's wake stream is
+// pushed that same partition. A subordinate's own terminal is the
+// loop's to watch, in delegations.go: a dead or unobservable one surfaces
+// as subordinate gone on the queue's second shape, internal/store's domain
+// wake, once per escalation window, to the first coordinator alone; a dead
+// one is relaunched at restart by reconcileSubordinates, bounded by
+// relaunch_attempts, and one still running is placed from its record as
+// internal/session's survivor, never as the coordinator; and past the
+// bound the delegation holds for a person, from the loop and from
+// reconciliation alike, on a hold keyed by the delegation and the attempt
+// and answered through task.respond given the domain, whose retry begins
+// the subordinate once more and whose stop ends the delegation by the
+// answer.
+//
 // # A task is dispatched here, and launched here
 //
 // PRD section 6 moves a task from Dispatched to Running only when isolation

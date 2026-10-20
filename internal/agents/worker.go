@@ -97,6 +97,21 @@ type WorkerSpec struct {
 	// Effort is the effort the adapter starts, empty when none was named.
 	// low, medium, and high are the values a spec may carry.
 	Effort string
+	// subordinate is set by OpenSubordinate and OpenTerminalSubordinate
+	// alone, which is what makes the grant the entry point's and not the
+	// caller's: a spec a caller builds cannot name it.
+	subordinate bool
+}
+
+// Grant is the grant the process started from this spec runs under:
+// GrantSubordinate for a spec OpenSubordinate or OpenTerminalSubordinate
+// started, GrantWorker for every other, which is what a caller can build.
+// An adapter translating grants reads this and not a constant.
+func (s WorkerSpec) Grant() Grant {
+	if s.subordinate {
+		return GrantSubordinate
+	}
+	return GrantWorker
 }
 
 // routeRefused is the characters a Route may not carry, because a grant's
@@ -253,6 +268,20 @@ func OpenWorker(ctx context.Context, r Runner, spec WorkerSpec) (Worker, error) 
 		return nil, declaredWithoutMechanism(r.Name(), CapabilityWorkerSessions)
 	}
 	return workers.Start(ctx, spec)
+}
+
+// OpenSubordinate starts a subordinate coordinator's host process on r, on
+// OpenWorker's terms and through the same mechanism, with the one
+// difference that the process runs under GrantSubordinate: it is the only
+// route to that grant, and a spec given to OpenWorker runs under
+// GrantWorker whatever it says. The adapter starts it as it starts a
+// worker and holds it to the grant, or refuses it before anything starts
+// when it cannot: the Codex adapter refuses with ErrGrantUnenforced, and
+// the scripted adapter, which ships in no catalog, models no tool
+// permissions at all.
+func OpenSubordinate(ctx context.Context, r Runner, spec WorkerSpec) (Worker, error) {
+	spec.subordinate = true
+	return OpenWorker(ctx, r, spec)
 }
 
 // procWorker is the Worker over one process this package started. It owns

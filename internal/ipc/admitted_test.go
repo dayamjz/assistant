@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -163,5 +164,79 @@ func TestAStreamNothingPublishesIsRefused(t *testing.T) {
 	}
 	if _, err := c.SubscribeTo(ctx, ipc.MethodWakesList, nil); !errors.Is(err, ipc.ErrInvalidRequest) {
 		t.Fatalf("SubscribeTo a request method = %v, want ErrInvalidRequest", err)
+	}
+}
+
+// A restricted stream's handler may choose the publisher the stream attaches
+// to, which is how a subordinate coordinator holds its own domain's wake
+// stream: a handler answering a StreamChoice naming a stream moves the
+// subscription onto the publisher StreamFor answers for the name, so the
+// stream carries that publisher's events and nothing the method's own
+// publisher pushes; a handler answering nothing attaches to the method's
+// own, the positive control; and a choice this server has no StreamFor for,
+// or one StreamFor refuses, closes the stream with the refusal before
+// anything is written.
+func TestARestrictedStreamsHandlerMayChooseItsPublisher(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	wakes := publisher(t, ipc.PublisherConfig{})
+	alpha := publisher(t, ipc.PublisherConfig{})
+	refused := errors.New("no such domain")
+	h := serveOnSocket(t, func(sc *ipc.ServerConfig) {
+		sc.Streams = map[ipc.Method]*ipc.Publisher{ipc.MethodWakesSubscribe: wakes}
+		sc.StreamFor = func(m ipc.Method, name string) (*ipc.Publisher, error) {
+			if m != ipc.MethodWakesSubscribe {
+				return nil, fmt.Errorf("%w: %s", ipc.ErrUnavailable, m)
+			}
+			if name == "alpha" {
+				return alpha, nil
+			}
+			return nil, fmt.Errorf("%w: %w", ipc.ErrRefused, refused)
+		}
+	})
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	h.handler.result = json.RawMessage(`{"stream":"alpha"}`)
+	chosen, err := c.SubscribeTo(ctx, ipc.MethodWakesSubscribe, nil)
+	if err != nil {
+		t.Fatalf("SubscribeTo with a choice: %v", err)
+	}
+	defer chosen.Close()
+	if first, err := chosen.Recv(ctx); err != nil || first.Type != ipc.TypeGap {
+		t.Fatalf("first delivery = %+v (%v), want the opening gap marker", first, err)
+	}
+	publish(t, wakes, wakeEvent(7))
+	publish(t, alpha, wakeEvent(9))
+	if got, err := chosen.Recv(ctx); err != nil || got.Type != ipc.TypeWakeQueued || got.Revision != 9 {
+		t.Fatalf("delivery = %+v (%v), want alpha's wake at revision 9 and nothing from the method's own publisher", got, err)
+	}
+	if n := alpha.Subscribers(); n != 1 {
+		t.Fatalf("alpha has %d subscribers, want the one moved onto it", n)
+	}
+	if n := wakes.Subscribers(); n != 0 {
+		t.Fatalf("the method's own publisher has %d subscribers, want none: the provisional subscription is closed", n)
+	}
+
+	h.handler.result = nil
+	own, err := c.SubscribeTo(ctx, ipc.MethodWakesSubscribe, nil)
+	if err != nil {
+		t.Fatalf("SubscribeTo with no choice: %v", err)
+	}
+	defer own.Close()
+	if first, err := own.Recv(ctx); err != nil || first.Type != ipc.TypeGap {
+		t.Fatalf("first delivery = %+v (%v), want the opening gap marker", first, err)
+	}
+	publish(t, wakes, wakeEvent(11))
+	if got, err := own.Recv(ctx); err != nil || got.Revision != 11 {
+		t.Fatalf("delivery = %+v (%v), want the method's own wake at revision 11", got, err)
+	}
+
+	h.handler.result = json.RawMessage(`{"stream":"beta"}`)
+	if _, err := c.SubscribeTo(ctx, ipc.MethodWakesSubscribe, nil); !errors.Is(err, ipc.ErrRefused) {
+		t.Fatalf("SubscribeTo with a choice StreamFor refuses = %v, want ErrRefused", err)
+	}
+	if n := wakes.Subscribers(); n != 1 {
+		t.Fatalf("after the refusal the method's own publisher has %d subscribers, want the one open stream", n)
 	}
 }

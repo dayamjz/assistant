@@ -355,6 +355,17 @@ func TestTheTaskFlagIsReadOnlyWithAnAnswerOrConsent(t *testing.T) {
 		{"--task", "abcdefghij23", "--standing-consent", "--intent", "something"},
 		{"--task", "abcdefghij23", "--standing-consent", "--skip", "lint"},
 		{"--task", "abcdefghij23", "--standing-consent", "--cancel"},
+		// A domain's hold is answered on its own: --domain takes a name, is
+		// read only with --answer, excludes --task, --hold, --run,
+		// --standing-consent and --cancel, and offers no fix round.
+		{"--domain", "alpha"},
+		{"--domain", "", "--answer", "retry"},
+		{"--domain", "alpha", "--answer", "retry", "--task", "abcdefghij23"},
+		{"--domain", "alpha", "--answer", "retry", "--hold", "finding-1"},
+		{"--domain", "alpha", "--answer", "retry", "--run"},
+		{"--domain", "alpha", "--answer", "retry", "--standing-consent"},
+		{"--domain", "alpha", "--answer", "retry", "--cancel"},
+		{"--domain", "alpha", "--answer", string(pipeline.OutcomeFixRequested)},
 	} {
 		if got := run(t, h, dir, args...); got.code != machine.ExitUsage {
 			t.Errorf("assistant %s exited %s, want incorrect usage:\n%s", strings.Join(args, " "), got.code, got.stderr)

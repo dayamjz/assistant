@@ -56,23 +56,28 @@ func TaskInFlight(s taskstate.State, unacknowledged int) (inFlight, decided bool
 }
 
 // InFlightOf is the in-flight reading over a fleet: states is each task's
-// resolved state keyed by task identifier, and unacknowledged is how many
+// resolved state keyed by task identifier, unacknowledged is how many
 // queued wakes each task has, keyed the same way, which store.UnacknowledgedWakes
-// returns. A task is in flight when its state is, on inFlightByState's
+// returns, and domainWakes is how many queued wakes about a domain rather
+// than a task there are, which store.UnacknowledgedDomainWakes returns. A
+// task is in flight when its state is, on inFlightByState's
 // terms, or when it has a queued wake, whatever its state: a hold nobody has
 // been told about keeps the guard, and acknowledging the wake is what
 // releases it: a drain hands a row out and releases nothing, so a wake keeps
 // its task in flight until the coordinator acknowledges it acted. A task
-// present only in unacknowledged counts too.
+// present only in unacknowledged counts too, and so does a queued wake
+// about a domain, on the same terms: a subordinate coordinator gone, or a
+// delegation holding for a person, that nobody has acknowledged keeps the
+// home in flight whatever every task says.
 //
 // The answer is InFlightSome when any task is in flight, InFlightNone when
 // none is, including over an empty fleet, and InFlightUnknown when any task's
 // state is one the table does not decide, because a reading that guessed
 // about one task would be a reading, and the safe direction is to block.
-// It is pure, and the two inputs are the caller's reads, taken as of
+// It is pure, and the three inputs are the caller's reads, taken as of
 // whatever consistency the caller arranged.
-func InFlightOf(states map[string]taskstate.State, unacknowledged map[string]int) InFlight {
-	some := false
+func InFlightOf(states map[string]taskstate.State, unacknowledged map[string]int, domainWakes int) InFlight {
+	some := domainWakes > 0
 	for task, state := range states {
 		inFlight, decided := TaskInFlight(state, unacknowledged[task])
 		if !decided {

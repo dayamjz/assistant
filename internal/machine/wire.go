@@ -542,6 +542,12 @@ type Task struct {
 	// copy's path. The person-facing rendering points at this field through
 	// TaskPhrase and never relays these words (P13).
 	Report *InvestigationReport `json:"report,omitempty"`
+	// Escalations are the decisions the task's domain's subordinate
+	// coordinator handed up about it, oldest first, PRD section 8's
+	// escalation records, and absent for a task with none. Each is the
+	// subordinate's own words, redacted, for the coordinator to read; the
+	// person-facing rendering never relays them (P13).
+	Escalations []store.Escalation `json:"escalations,omitempty"`
 	// Policy is what the posture recorded on the task requires, publishes
 	// and leaves to whom: config.Delivery.PolicyForNoCodeHost of that
 	// posture and its noCodeHost argument, whether the task's repository
@@ -602,8 +608,12 @@ type TaskAnswered struct {
 	// and only AnswerRetryDeferred leaves it to a later start to read. For
 	// AnswerRetryUndispatchable it names what in the record was refused.
 	NotRelaunched string `json:"not_relaunched,omitempty"`
-	// Task is the task as it stands after the answer.
+	// Task is the task as it stands after the answer, and the zero Task for
+	// an answer to a domain's hold, which names no task.
 	Task Task `json:"task"`
+	// Domain is the domain whose hold was answered, for an answer given
+	// with TaskRespondRequest.Domain, and empty for a task's.
+	Domain string `json:"domain,omitempty"`
 }
 
 // AnswerEffect is what answering a task's hold did. The set is closed and
@@ -972,6 +982,40 @@ type TaskRelayed struct {
 	Event store.TaskEvent `json:"event"`
 }
 
+// Delegated is the answer to domain.delegate: the delegation record as
+// stored and the attempt the subordinate coordinator's start was claimed
+// as. It answers once the records are written and before the subordinate's
+// session exists, on TaskCreated's terms: whether the subordinate came up
+// is read afterwards, from the delegation's attempts, and a start that
+// fails leaves the delegation standing for the coordinator to end.
+type Delegated struct {
+	// Record is the delegation as stored.
+	Record store.Delegation `json:"record"`
+	// Attempt is the delegation attempt the start was claimed as.
+	Attempt int64 `json:"attempt"`
+	// Instructions is the file the subordinate's instructions were written
+	// to, under the domain's directory.
+	Instructions string `json:"instructions"`
+}
+
+// DelegationEnded is the answer to domain.end: the delegation record with
+// its end written, and whether the subordinate's session this service held
+// was ended with it.
+type DelegationEnded struct {
+	// Record is the delegation as stored, ended.
+	Record store.Delegation `json:"record"`
+	// SessionEnded is whether this service held the subordinate's session
+	// and ended it; false when the session was an earlier service's or had
+	// already ended, which the delegation's attempts say more about.
+	SessionEnded bool `json:"session_ended"`
+	// Holds are the delegation's relaunch-bound holds the end answered, in
+	// the end's own transaction: the end is the stop that hold asks about,
+	// made by the same caller over the same surface, so each is resolved
+	// stop under the resolver the request derives. Empty when none was
+	// open.
+	Holds []store.Hold `json:"holds,omitempty"`
+}
+
 // TaskMessaged is the answer to task.message: the message record as the
 // send left it, which is the one place delivery is read from (P8). Delivery
 // is written when the provider's Send returned and refused, with the
@@ -1080,6 +1124,11 @@ type Wakes struct {
 	// Wakes are the rows handed out, oldest first, at most the requested
 	// limit.
 	Wakes []store.Wake `json:"wakes"`
+	// DomainWakes are the rows of the queue's second shape handed out, the
+	// wakes about a domain rather than a task, oldest first under the same
+	// limit and numbered apart from Wakes. They reach the first coordinator
+	// alone; a subordinate's drain carries none.
+	DomainWakes []store.DomainWake `json:"domain_wakes,omitempty"`
 }
 
 // QueuedWakes is the answer to a person's reading of the wake queue: every
@@ -1089,6 +1138,9 @@ type Wakes struct {
 type QueuedWakes struct {
 	// Wakes are the queued rows, oldest first, at most the requested limit.
 	Wakes []QueuedWake `json:"wakes"`
+	// DomainWakes are the queued rows about a domain rather than a task,
+	// oldest first under the same limit, on Wakes.DomainWakes' terms.
+	DomainWakes []store.DomainWake `json:"domain_wakes,omitempty"`
 }
 
 // QueuedWake is one queued row and the project of the task it is about,
@@ -1109,6 +1161,9 @@ type QueuedWake struct {
 type Acknowledged struct {
 	// Wakes are the identifiers the batch closed, as the request named them.
 	Wakes []int64 `json:"wakes"`
+	// DomainWakes are the domain wake identifiers the batch closed, as the
+	// request named them.
+	DomainWakes []int64 `json:"domain_wakes,omitempty"`
 	// By is who the rows record as having acknowledged them, rendered the
 	// way internal/store renders the closed set.
 	By string `json:"by"`

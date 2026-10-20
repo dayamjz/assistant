@@ -152,7 +152,11 @@
 // one revision. PendingNotifications is the read that offers a wake, the
 // queued ones with no row. It records how a command ended and nothing
 // about the wake: the queue stays the owner of whether a wake is
-// actionable, and nothing reads this table to decide one.
+// actionable, and nothing reads this table to decide one. Migration 50's
+// domain_notification is the same record for the queue's second shape,
+// keyed by the domain wake, with the same seals and the same accessors
+// under Domain names (PendingDomainNotifications, ClaimDomainNotification,
+// SettleDomainNotification), one implementation serving both tables.
 //
 // # The wake queue and the markers it is written with
 //
@@ -249,6 +253,57 @@
 // internal/service's relaunch, for the terminal-gone rows about the session
 // it replaced. This records and does not gate: every member closes a row on
 // the same terms.
+//
+// # Subordinate domains
+//
+// PRD section 8's domain, delegation, delegation attempt and escalation
+// records are migration 47's. A task's domain is a column of its row,
+// written by CreateTask from what the caller derived of the creator's
+// placement and never moved: a trigger refuses every later write of it,
+// from NULL included, because section 11 has ownership never transfer, and
+// NULL is the first coordinator's own, which is what every row written
+// before the column reads as. delegation is written once by Delegate,
+// anchored to the domain's latest delegation on CreateTask's terms, one
+// standing per domain by a partial index, and ended once by EndDelegation,
+// which is the row's one revision; delegation_attempt is task_attempt's
+// shape for a subordinate's starts, recording with its session reference,
+// in the same one write, the identity of the process hosting the session's
+// terminal (migration 49's two columns), so a restart can place a
+// surviving subordinate's terminal server as the subordinate's;
+// EndDelegation answers in its own transaction the holds its caller names,
+// on DelegationEndClosure's terms; escalation is written once by
+// RecordEscalation, redacted, naming the task and nothing of the domain,
+// which the task's row owns. Why a delegation ended is DelegationEnd, closed
+// on Acknowledger's terms: the coordinator's domain.end, or the answer to
+// the hold the relaunch bound raised for it.
+//
+// A wake about a domain rather than a task is the queue's second shape,
+// migration 48's domain_wake, because the wake table's row names a task
+// and a subordinate coordinator is not one: the same columns with the task
+// replaced by the delegation, which owns the row (P14), the domain read off
+// the delegation's row at every read, the same seals, and identifiers of
+// its own, so a drain carries the two shapes apart and an acknowledgement
+// names them apart. AppendDomainWakeWithMarkers is the one append and
+// advances the delegation's markers, delegation_marker, in the same
+// transaction under the same incarnation fence; DrainDomainWakes,
+// OfferedDomainWakes and QueuedDomainWakes are the wake accessors' terms
+// over it, with one difference the route decides: a subordinate's route is
+// offered none, since every kind here is about a subordinate.
+// UnacknowledgedDomainWakes is the count internal/supervisor's InFlightOf
+// adds to the per-task one.
+//
+// A wake's recipient is decided at the drain and stored on no row (P14):
+// DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain
+// the drain is for and the kinds a subordinate can act on as words, and
+// join the task row and the delegation table in the drain's own
+// transaction, so a delegated task's actable row is offered to its
+// subordinate alone while the delegation stands and every other row to the
+// first coordinator. What a kind means stays internal/supervisor's; this
+// package compares the words. AcknowledgedBySubordinate and
+// SentBySubordinate are the two closed sets' members for a subordinate,
+// carrying its domain, which internal/service alone produces from the
+// placement; WakeScopes is the read an acknowledgement is held to a domain
+// with.
 //
 // # A read-only open
 //

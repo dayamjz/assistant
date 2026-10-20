@@ -23,34 +23,48 @@ import (
 // as gateVerbName and hostVerbName are, rather than rows in it; section 9
 // says so beside the table.
 //
-// It is the interface the coordinator agent requires. The methods it calls
-// are internal/ipc's and internal/service decides every one of them: each
-// is restricted, and each is refused for a caller the service places inside
-// a task's worker group from the credentials the socket reports, never from
-// anything this command sends. So this command decides nothing about who
-// may call it and holds no second copy of that rule; a worker that runs it
-// is refused by the service with ipc.ErrWorker, which arrives typed and
-// exits as an operational failure through failureExit like every other
-// refusal.
+// It is the interface the coordinator agent requires, and the one command
+// a subordinate coordinator's grant allows. The methods it calls are
+// internal/ipc's and internal/service decides every one of them, for the
+// caller the service places from the credentials the socket reports and
+// the caller's process ancestry, never from anything this command sends.
+// Every subcommand but tasks calls a restricted method: a caller placed
+// inside a task's worker group is refused every one of those; one placed as
+// a domain's subordinate coordinator is admitted the ones it holds over its
+// domain and refused the rest; one placed as neither is the coordinator.
+// tasks calls tasks.list and task.get, which internal/ipc's method table
+// makes open, the same reads assistant tasks makes for anyone: a worker is
+// answered them as any caller is, and a subordinate is answered its own
+// domain's tasks alone, which the service scopes. So this
+// command decides nothing about who may call it and holds no second copy
+// of that rule; a refusal arrives typed, ipc.ErrWorker, ipc.ErrSubordinate
+// or ipc.ErrOutsideDomain, and exits as an operational failure through
+// failureExit like every other refusal.
 //
 // The refusal is only as good as that placement, which internal/service
-// owns: it walks the caller's parent chain to the first process in a worker
-// group or that is itself a worker, so a worker's descendant in a group of
-// its own is still placed as the worker's, and a chain it cannot read is
-// refused rather than served. The gap this command cannot close is the one
-// internal/service's placement.go names: a chain the kernel rewrote when an
-// intermediate process exited places a worker's command as the
-// coordinator's, and that call is served. What a worker may run at all is
-// its grant's, which allows git without asking and denies nothing else.
+// owns: it walks the caller's parent chain to the first process a worker
+// set, a subordinate set, or the survivors a restart adopted answer for,
+// so a descendant in a group of its own is still placed as its parent's,
+// and a chain it cannot read is refused rather than served. What that
+// placement does not cover, a chain the kernel rewrote among it, is
+// internal/service's to state: placement.go and subordinates.go name the
+// gaps, and this comment does not restate them. What a worker may run at
+// all is its grant's, which allows git without asking and denies nothing
+// else. A subordinate runs under agents.GrantSubordinate, which the
+// delegation path selects through agents.OpenSubordinate and never a
+// caller: editing and git are denied, this verb's prefix is allowed, and
+// any other command is what the agent's own settings allow, which
+// internal/agents' claudeGrantFlags names as that grant's residual gap.
 //
 // It is one verb rather than one per method, so the door beside the table
 // is one door: the subcommands are coordinatorActions, the one owner of
-// which there are. The methods listing fleet work, tasks.list and task.get,
-// are not here, because section 9's table already serves both as assistant
-// tasks; nor is answering a task's hold, which section 9 makes --answer
-// given --task. task.interrupt is not here either: the service refuses it
-// on every call, because no adapter declares the capability it needs, so a
-// subcommand for it could only ever fail.
+// which there are. tasks and answer are here as well as in section 9's
+// table, as assistant tasks and --answer given --task, because a
+// subordinate reaches the program through this verb alone and needs both;
+// the service decides each the same way whichever spelling asks.
+// task.interrupt is not here: the service refuses it on every call,
+// because no adapter declares the capability it needs, so a subcommand
+// for it could only ever fail.
 const coordinatorVerbName = "coordinator"
 
 // coordinatorActions are the coordinator's subcommands. The list is the one
@@ -63,17 +77,33 @@ var coordinatorActions = []struct {
 	run      func(context.Context, *invocation) (any, error)
 }{
 	{"create", "", "Record a new task through intake; a task nothing blocks has its worker begun after the answer.", coordinatorCreate},
+	{"tasks", "[<task>]", "List fleet work with its resolved current state, or one task when it is named, as assistant tasks does.", coordinatorTasks},
 	{"message", "<task>", "Send the worker of a running task a message, recorded before it is written.", coordinatorMessage},
 	{"stop", "<task>", "End a task's worker, prove it ended, and hold the task for an answer.", coordinatorStop},
 	{"peek", "<task>", "Read a task's worker's recent output, redacted and bounded, and how to attach to its terminal.", coordinatorPeek},
 	{"relaunch", "<task>", "Begin a new attempt of a task whose worker is gone, in its own copy.", coordinatorRelaunch},
 	{"promote", "<task>", "Turn an investigation task into a delivery on a branch, in its own copy.", coordinatorPromote},
 	{"relayed", "<task>", "Record that a reported investigation's findings were relayed, which finishes it.", coordinatorRelayed},
+	{"answer", "<task>", "Answer the hold a task is waiting on, as assistant --task --answer does; a subordinate's ask is handed up.", coordinatorAnswer},
 	{"wakes", "", "With --json, drain the queued wakes, oldest first: hand them out, closing none; without it, list them and take none.", coordinatorWakes},
 	{"await", "", "Block until a wake is on offer or the bound elapses, then drain the queued wakes.", coordinatorAwait},
 	{"listen", "", "Hold the wake stream: print each wake as it is queued, until interrupted, handing out none.", coordinatorListen},
 	{"acknowledge", "<wake>...", "Record that the named wakes were acted on, which closes them, so no drain hands them out again.", coordinatorAcknowledge},
 	{"supervision", "", "Verify that this home's service is watching the fleet.", coordinatorSupervision},
+	{"delegate", "<domain>", "Delegate a named domain of tasks to a coordinator of its own, begun by the service under the posture given.", coordinatorDelegate},
+	{"end-delegation", "<domain>", "End a domain's delegation, so its notices come back to you and its coordinator is ended.", coordinatorEndDelegation},
+}
+
+// coordinatorRoute is the route the service gives a domain's subordinate
+// coordinator: this program's absolute path, --home naming root, and this
+// verb, composed as workerRoute composes the worker's. It is the one
+// composition of that text; cli's service start passes it to
+// internal/service, which hands it to the grant and the subordinate's
+// instructions alike, so the commands a subordinate is told it may run and
+// the prefix its grant allows are one text. What the service then admits
+// of each subcommand is decided there from the caller's placement.
+func coordinatorRoute(executable, root string) string {
+	return shellQuote(executable) + " --" + homeFlagName + " " + shellQuote(root) + " " + coordinatorVerbName
 }
 
 // coordinatorVerb runs the subcommand the command line names, which has to
@@ -263,6 +293,49 @@ func coordinatorPromote(ctx context.Context, in *invocation) (any, error) {
 	return promoted, err
 }
 
+// coordinatorTasks is tasks.list, or task.get when a task is named: the
+// listing assistant tasks answers, under the coordinator verb so that a
+// subordinate coordinator, whose grant allows this verb's prefix alone,
+// reads its domain's tasks; the service scopes the listing to the caller's
+// domain from its placement and the request names none.
+func coordinatorTasks(ctx context.Context, in *invocation) (any, error) {
+	if err := in.parseArgs(coordinatorCommand("tasks"), 1, func(*flag.FlagSet) {}); err != nil {
+		return nil, err
+	}
+	if len(in.args) == 1 {
+		var task machine.Task
+		err := in.callService(ctx, ipc.MethodTaskGet, machine.TaskRequest{Task: in.args[0]}, &task)
+		return task, err
+	}
+	var tasks machine.Tasks
+	err := in.callService(ctx, ipc.MethodTasksList, nil, &tasks)
+	return tasks, err
+}
+
+// coordinatorAnswer is task.respond for the task named, the answer
+// assistant --task --answer gives, under the coordinator verb for
+// coordinatorTasks' reason: a subordinate coordinator asking it is refused
+// by the service and its ask recorded as a decision handed up, which is
+// the one way it asks for a hold's answer. --answer is required, --hold
+// names one hold where more than one is open, and --note rides on the
+// resolution; what an answer means is the service's, as it is for the
+// flag.
+func coordinatorAnswer(ctx context.Context, in *invocation) (any, error) {
+	var answer, hold, note string
+	task, err := in.taskOperand(coordinatorCommand("answer"), func(set *flag.FlagSet) {
+		set.StringVar(&answer, "answer", "", "the answer to the hold the task is waiting on")
+		set.StringVar(&hold, "hold", "", "which open hold is answered, by key or finding id, where more than one is open")
+		set.StringVar(&note, "note", "", "a note recorded with the resolution")
+	})
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(answer) == "" {
+		return nil, usagef("assistant %s names the answer with --answer", coordinatorCommand("answer"))
+	}
+	return in.answerTask(ctx, task, answer, hold, note)
+}
+
 // coordinatorRelayed is task.relay: the coordinator's record that it relayed
 // the findings of the investigation named, PRD section 6's Reported to
 // Complete edge. Whether the task has findings to relay, an investigation
@@ -368,9 +441,18 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	}
 	request := machine.AcknowledgeRequest{Wakes: make([]int64, 0, len(in.args))}
 	for _, arg := range in.args {
-		id, err := strconv.ParseInt(arg, 10, 64)
+		// A wake about a domain is numbered apart from a task's and is
+		// named with the prefix the --json listing shows it under, so the
+		// two cannot be confused by number.
+		text, domain := strings.CutPrefix(arg, domainWakePrefix)
+		id, err := strconv.ParseInt(text, 10, 64)
 		if err != nil {
-			return nil, usagef("assistant %s takes wake identifiers, and %q is not one", name, printable(arg))
+			return nil, usagef("assistant %s takes wake identifiers, as a number or %sNUMBER for a notice about a domain, and %q is not one",
+				name, domainWakePrefix, printable(arg))
+		}
+		if domain {
+			request.DomainWakes = append(request.DomainWakes, id)
+			continue
 		}
 		request.Wakes = append(request.Wakes, id)
 	}
@@ -378,6 +460,12 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	err := in.callService(ctx, ipc.MethodWakesAcknowledge, request, &acknowledged)
 	return acknowledged, err
 }
+
+// domainWakePrefix is what a wake about a domain is named with on the
+// acknowledge command line, before its number: the queue's second shape
+// numbers its rows apart from the task wakes, so a bare number is always a
+// task wake and a prefixed one always a domain wake.
+const domainWakePrefix = "d"
 
 // coordinatorListen is wakes.subscribe, the coordinator's wake stream: the
 // service pushes each wake as the supervisor queues it, PRD section 5's
@@ -441,8 +529,48 @@ func coordinatorSupervision(ctx context.Context, in *invocation) (any, error) {
 	return arm, err
 }
 
+// coordinatorDelegate is domain.delegate: the domain named as the operand,
+// the posture its tasks take, and what its coordinator is started with,
+// from --instructions or --instructions-file on coordinatorCreate's terms.
+// Which names and postures the service accepts is its own; a request it
+// cannot read is incorrect usage, and a domain already delegated is its
+// refusal. The answer comes once the delegation is recorded and before the
+// domain's coordinator exists.
+func coordinatorDelegate(ctx context.Context, in *invocation) (any, error) {
+	var request machine.DomainDelegateRequest
+	var instructions, instructionsFile string
+	domain, err := in.taskOperand(coordinatorCommand("delegate"), func(set *flag.FlagSet) {
+		set.StringVar(&request.Delivery, "delivery", "", `"gated" or "local": the posture every task of the domain takes`)
+		set.StringVar(&instructions, "instructions", "", "what the domain's coordinator is started with")
+		set.StringVar(&instructionsFile, "instructions-file", "", "a file holding what the domain's coordinator is started with, in place of --instructions")
+	})
+	if err != nil {
+		return nil, err
+	}
+	request.Domain = domain
+	if request.Instructions, err = in.textOrFile("instructions", instructions, instructionsFile); err != nil {
+		return nil, err
+	}
+	var delegated machine.Delegated
+	err = in.callService(ctx, ipc.MethodDomainDelegate, request, &delegated)
+	return delegated, err
+}
+
+// coordinatorEndDelegation is domain.end: the domain named as the operand.
+// A domain with no standing delegation is the service's refusal.
+func coordinatorEndDelegation(ctx context.Context, in *invocation) (any, error) {
+	domain, err := in.taskOperand(coordinatorCommand("end-delegation"), func(*flag.FlagSet) {})
+	if err != nil {
+		return nil, err
+	}
+	var ended machine.DelegationEnded
+	err = in.callService(ctx, ipc.MethodDomainEnd, machine.DomainEndRequest{Domain: domain}, &ended)
+	return ended, err
+}
+
 // taskOperand parses a subcommand that names exactly one task as its
-// operand, and returns it.
+// operand, and returns it. A domain is parsed on the same terms, since both
+// are one word the service decides the meaning of.
 func (in *invocation) taskOperand(name string, declare func(*flag.FlagSet)) (string, error) {
 	if err := in.parseArgs(name, 1, declare); err != nil {
 		return "", err

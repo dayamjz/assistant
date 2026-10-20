@@ -31,12 +31,24 @@ import (
 // Authority is decided before this is called. internal/ipc refuses a
 // restricted method to a caller its Ancestry places inside an active
 // validation stage, so nothing here asks whether a caller is contained. The
-// one question a handler asks of a caller is the other relation,
-// whether it is a task's worker, and workers.go derives that from the same
-// credentials for the methods whose answer depends on it: the six there,
-// wakewait.go's wakes.wait and wakes.subscribe, coordinator.go's three, steer.go's three,
-// taskholds.go's task.respond, catchup.go's catchup.mark and custody.go's
-// branch.sync. wakes.subscribe is a stream, so internal/ipc asks this only
+// one question a handler asks of a caller is the other relation, with its
+// three answers: a task's worker, a domain's subordinate coordinator, or
+// neither, which is the coordinator's own client or a person's. workers.go
+// derives the worker half and subordinates.go's placeRequest composes the
+// whole from the same credentials and the same parent chain, asking the
+// worker sets first. It is asked for the methods whose answer turns on it:
+// workers.go's six and wakewait.go's wakes.wait and wakes.subscribe, where
+// a worker is refused and a subordinate is served on the route of its
+// domain; coordinator.go's four, steer.go's three and peek.go's task.peek,
+// where a worker is refused and a subordinate is served within its domain
+// and refused ErrOutsideDomain past it, or refused ErrSubordinate outright
+// for a decision it hands up; taskholds.go's task.respond, catchup.go's
+// catchup.mark, custody.go's branch.sync, the two delegation methods and
+// the stream, where a subordinate is refused as a worker is; and the run
+// methods and the service's lifecycle below, where refuseSubordinateOnly
+// refuses a subordinate and holds a worker to nothing new. tasks.list and
+// task.get, open methods, ask placeOpen so a subordinate reads its domain
+// alone. wakes.subscribe is a stream, so internal/ipc asks this only
 // whether the caller may hold it, and an error here is its refusal.
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
 	switch req.Method {
@@ -55,16 +67,32 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		})
 	case ipc.MethodRunStart:
 		return call(ctx, req, func(ctx context.Context, r machine.StartRequest) (machine.Run, error) {
+			if err := s.refuseSubordinateOnly(req); err != nil {
+				return machine.Run{}, err
+			}
 			return s.startTo(ctx, req, r)
 		})
 	case ipc.MethodRunRerun:
-		return call(ctx, req, s.rerun)
+		return call(ctx, req, func(ctx context.Context, r machine.RerunRequest) (machine.Run, error) {
+			if err := s.refuseSubordinateOnly(req); err != nil {
+				return machine.Run{}, err
+			}
+			return s.rerun(ctx, r)
+		})
 	case ipc.MethodRunRespond:
 		return call(ctx, req, func(ctx context.Context, r machine.RespondRequest) (machine.Run, error) {
+			if err := s.refuseSubordinateOnly(req); err != nil {
+				return machine.Run{}, err
+			}
 			return s.respondTo(ctx, req, r)
 		})
 	case ipc.MethodRunCancel:
-		return call(ctx, req, s.cancel)
+		return call(ctx, req, func(ctx context.Context, r machine.CancelRequest) (machine.Run, error) {
+			if err := s.refuseSubordinateOnly(req); err != nil {
+				return machine.Run{}, err
+			}
+			return s.cancel(ctx, r)
+		})
 	case ipc.MethodBranchSync:
 		return call(ctx, req, func(ctx context.Context, r machine.SyncRequest) (machine.Plan, error) {
 			return s.syncBranch(ctx, req, r)
@@ -81,10 +109,12 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		return call(ctx, req, s.stageReport)
 	case ipc.MethodTasksList:
 		return call(ctx, req, func(ctx context.Context, _ struct{}) (machine.Tasks, error) {
-			return s.listTasks(ctx)
+			return s.listTasksFor(ctx, req)
 		})
 	case ipc.MethodTaskGet:
-		return call(ctx, req, s.task)
+		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (machine.Task, error) {
+			return s.taskFor(ctx, req, r)
+		})
 	case ipc.MethodTaskEvent:
 		return call(ctx, req, func(ctx context.Context, r machine.TaskEventRequest) (machine.Appended, error) {
 			return s.taskEvent(ctx, req, r)
@@ -143,9 +173,14 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		})
 	case ipc.MethodWakesSubscribe:
 		// The wake stream is internal/ipc's to open and pump; what the
-		// handler is asked is only whether this caller may hold it, and
-		// the answer is wakes.list's.
-		return nil, s.admitWakeStream(req)
+		// handler is asked is whether this caller may hold it, the answer
+		// wakes.list's, and for a subordinate coordinator which stream it
+		// holds, its own domain's, answered as an ipc.StreamChoice.
+		choice, err := s.admitWakeStream(req)
+		if err != nil || choice.Name == "" {
+			return nil, err
+		}
+		return json.Marshal(choice)
 	case ipc.MethodSupervisionAssert:
 		return call(ctx, req, func(ctx context.Context, _ struct{}) (supervisor.Arm, error) {
 			return s.assertSupervision(ctx, req)
@@ -164,12 +199,26 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		})
 	case ipc.MethodRunLog:
 		return call(ctx, req, s.runLog)
+	case ipc.MethodDomainDelegate:
+		return call(ctx, req, func(ctx context.Context, r machine.DomainDelegateRequest) (machine.Delegated, error) {
+			return s.delegateDomain(ctx, req, r)
+		})
+	case ipc.MethodDomainEnd:
+		return call(ctx, req, func(ctx context.Context, r machine.DomainEndRequest) (machine.DelegationEnded, error) {
+			return s.endDelegation(ctx, req, r)
+		})
 	case ipc.MethodServiceStop:
 		return call(ctx, req, func(ctx context.Context, r machine.LifecycleRequest) (machine.Lifecycle, error) {
+			if err := s.refuseSubordinateOnly(req); err != nil {
+				return machine.Lifecycle{}, err
+			}
 			return s.lifecycle(ctx, req, r, false)
 		})
 	case ipc.MethodServiceRestart:
 		return call(ctx, req, func(ctx context.Context, r machine.LifecycleRequest) (machine.Lifecycle, error) {
+			if err := s.refuseSubordinateOnly(req); err != nil {
+				return machine.Lifecycle{}, err
+			}
 			return s.lifecycle(ctx, req, r, true)
 		})
 	default:
@@ -418,7 +467,7 @@ func (s *Service) parkedReport(ctx context.Context, runID string, park store.Run
 	return out
 }
 
-// listTasks reports fleet work with its resolved current state.
+// listTasksIn reports fleet work with its resolved current state.
 //
 // The state is resolved by internal/taskstate from the records that own the
 // facts, not read from a stored copy and not taken from the event log, which
@@ -428,19 +477,81 @@ func (s *Service) parkedReport(ctx context.Context, runID string, park store.Run
 // and what precedence gives with Dead once it has exited. Each task is
 // composed through taskView, which is also what the supervisor loop
 // publishes, so a paused worker's declared wait reaches the answer here on
-// the same terms it reaches the stream.
-func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
+// the same terms it reaches the stream. A caller placed as a domain's
+// subordinate coordinator is answered its domain's tasks alone, which
+// listTasksFor decides and scoped carries: set, only the tasks whose row
+// names domain are answered.
+func (s *Service) listTasksIn(ctx context.Context, domain string, scoped bool) (machine.Tasks, error) {
 	observed, err := s.tasks().Observe(ctx)
 	if err != nil {
 		return machine.Tasks{}, err
 	}
 	out := machine.Tasks{Tasks: make([]machine.Task, 0, len(observed))}
 	for _, o := range observed {
+		if scoped && o.Snapshot.Task.Domain != domain {
+			continue
+		}
 		out.Tasks = append(out.Tasks, s.taskView(ctx, o))
 	}
 	supervision := s.supervision(ctx)
 	out.Supervision = &supervision
 	return out, nil
+}
+
+// listTasksFor is tasks.list for a request: the whole fleet for the
+// coordinator, a person and a worker, and the caller's domain alone for a
+// subordinate coordinator, PRD section 9's "within its domain". The method
+// is open, so a peer the platform cannot identify is answered as before,
+// since nothing places it anywhere; a chain that cannot be read while a
+// subordinate is live is refused, on placement's terms.
+func (s *Service) listTasksFor(ctx context.Context, req ipc.Request) (machine.Tasks, error) {
+	p, err := s.placeOpen(req)
+	if err != nil {
+		return machine.Tasks{}, err
+	}
+	return s.listTasksIn(ctx, p.domain(), p.isSubordinate)
+}
+
+// taskFor is task.get for a request, on listTasksFor's terms: a subordinate
+// naming a task outside its domain is refused with ipc.ErrOutsideDomain.
+func (s *Service) taskFor(ctx context.Context, req ipc.Request, r machine.TaskRequest) (machine.Task, error) {
+	p, err := s.placeOpen(req)
+	if err != nil {
+		return machine.Task{}, err
+	}
+	if err := s.scopeTask(ctx, req, p, r.Task); err != nil {
+		return machine.Task{}, err
+	}
+	return s.task(ctx, r)
+}
+
+// placeOpen is placeRequest for an open method: a peer the kernel cannot
+// identify is placed as nobody rather than refused, because an open method
+// is served without credentials and nothing can place such a peer in a
+// domain; every other failure to place is the refusal placeRequest gives.
+func (s *Service) placeOpen(req ipc.Request) (placedPeer, error) {
+	p, err := s.placeRequest(req)
+	if errors.Is(err, ipc.ErrUnidentifiedPeer) {
+		return placedPeer{}, nil
+	}
+	return p, err
+}
+
+// refuseSubordinateOnly refuses a request from a peer placed as a domain's
+// subordinate coordinator with ipc.ErrSubordinate and admits every other
+// peer, a worker included, for the methods PRD section 9 refuses a
+// subordinate and which held a worker to nothing before: the run methods
+// and the service's lifecycle. It changes nothing for a worker.
+func (s *Service) refuseSubordinateOnly(req ipc.Request) error {
+	p, err := s.placeRequest(req)
+	if err != nil {
+		return err
+	}
+	if p.isSubordinate {
+		return fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, and %s is one it does not hold",
+			ipc.ErrSubordinate, peerOf(req), p.subordinate.Domain, req.Method)
+	}
+	return nil
 }
 
 // supervision is the pull guard over this home, computed for an answer the

@@ -68,6 +68,7 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 	cases := map[string]struct {
 		states         map[string]taskstate.State
 		unacknowledged map[string]int
+		domainWakes    int
 		want           supervisor.InFlight
 	}{
 		"an empty fleet": {want: supervisor.InFlightNone},
@@ -94,6 +95,9 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 		"a task known only by its queued wake": {
 			unacknowledged: map[string]int{"gone": 2}, want: supervisor.InFlightSome,
 		},
+		"a queued wake about a domain beside a fleet nobody waits on": {
+			states: map[string]taskstate.State{"a": taskstate.Held}, domainWakes: 1, want: supervisor.InFlightSome,
+		},
 		"an unknown state": {
 			states: map[string]taskstate.State{"a": taskstate.Unknown}, want: supervisor.InFlightSome,
 		},
@@ -104,7 +108,7 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if got := supervisor.InFlightOf(c.states, c.unacknowledged); got != c.want {
+			if got := supervisor.InFlightOf(c.states, c.unacknowledged, c.domainWakes); got != c.want {
 				t.Fatalf("InFlightOf = %s, want %s", got, c.want)
 			}
 		})
@@ -127,7 +131,7 @@ func TestTaskInFlightIsTheRuleInFlightOfApplies(t *testing.T) {
 			if want := alone || queued > 0; inFlight != want {
 				t.Errorf("%s with %d queued: in flight %v, want %v", state, queued, inFlight, want)
 			}
-			fleet := supervisor.InFlightOf(map[string]taskstate.State{"t": state}, map[string]int{"t": queued})
+			fleet := supervisor.InFlightOf(map[string]taskstate.State{"t": state}, map[string]int{"t": queued}, 0)
 			if (fleet == supervisor.InFlightSome) != inFlight {
 				t.Errorf("%s with %d queued: the fleet reads %v and the task in flight %v", state, queued, fleet, inFlight)
 			}

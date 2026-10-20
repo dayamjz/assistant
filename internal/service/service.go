@@ -181,6 +181,13 @@ type Options struct {
 	// which is logged and leaves the task dispatched, on launch.go's terms
 	// for a launch that fails.
 	WorkerRoute string
+	// CoordinatorRoute is the command line prefix a subordinate coordinator
+	// this service starts reaches it through, on subordinates.go's terms:
+	// internal/cli passes the absolute path of the program, --home naming
+	// this home, and its coordinator verb. Empty, which a test that opens
+	// the service without internal/cli passes, starts every subordinate
+	// with git alone and tells it of no route.
+	CoordinatorRoute string
 	// hooks are the seams this package's tests drive the loop through. They
 	// are here rather than on the Service because the loop starts inside
 	// Open; supervise.go says what each is, and the product sets none.
@@ -209,6 +216,23 @@ type Service struct {
 	// It is a publisher of its own rather than events because events is
 	// open to every caller and a wake is the coordinator's.
 	wakes *ipc.Publisher
+	// domainWakes is each domain's wake stream, the publisher a subordinate
+	// coordinator's wakes.subscribe attaches to, made on the first
+	// subscription and closed by Close; wakewait.go's publishWake is its
+	// one producer and pushes it only the rows that domain's drain offers.
+	// It is guarded by domainWakesMu rather than mu, because a publish is
+	// made from the loop's record while mu may be held elsewhere.
+	domainWakes       map[string]*ipc.Publisher
+	domainWakesClosed bool
+	domainWakesMu     sync.Mutex
+	// subordinatesStarting counts the subordinate coordinator launches in
+	// flight, from before a host session is asked for until it returns,
+	// which is after the process has joined its subordinate set: while it
+	// is above zero, a peer placement reads as neither a worker nor a
+	// subordinate is refused rather than taken for the first coordinator,
+	// because the starting subordinate is such a peer until it joins.
+	// subordinates.go's placeRequest reads it.
+	subordinatesStarting atomic.Int64
 
 	listener net.Listener
 	server   *ipc.Server
@@ -267,6 +291,9 @@ type Service struct {
 	cleaner *tasks.Cleaner
 	// workerRoute is Options.WorkerRoute, fixed when the service opens.
 	workerRoute string
+	// coordinatorRoute is Options.CoordinatorRoute, fixed when the service
+	// opens.
+	coordinatorRoute string
 
 	// stageLogMu serializes appends to the per-stage logs and the reads of
 	// them, so a section stagelog.go writes is never interleaved with another
@@ -310,6 +337,20 @@ type Service struct {
 	// restarts holds none of these and relaunches. Close ends every
 	// session here, and launch.go owns the map.
 	launched map[string]launchedWorker
+	// delegated holds, per domain, the session host and session
+	// subordinates.go started for the domain's subordinate coordinator and
+	// the delegation it was started for, on launched's terms: this
+	// service's memory, with the delegation attempt carrying the reference,
+	// ended by Close and by domain.end. An entry is written and removed
+	// only by the launch of its own delegation or the end of it, which
+	// subordinates.go's launchSubordinate states.
+	delegated map[string]launchedSubordinate
+	// survivors is the placer for the subordinate coordinators that
+	// outlived the service that started them, adopted by recovery from the
+	// delegation attempts' recorded references on session.Survivors' terms
+	// and asked after every held set; subordinates.go owns the adoption and
+	// the end.
+	survivors *session.Survivors
 	// wakeBell is rung when the supervisor loop appends a wake, so an armed
 	// wakes.wait reads the queue again; wakewait.go owns it and says why it
 	// is a hint and never a record.
@@ -526,10 +567,13 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		isolated:   make(map[string]tasks.Isolation),
 		claiming:   make(map[string]bool),
 		launched:   make(map[string]launchedWorker),
+		delegated:  make(map[string]launchedSubordinate),
+		survivors:  session.NewSurvivors(),
 		starting:   make(map[branchKey]*branchGate),
 		stopping:   make(chan struct{}),
 
-		workerRoute: o.WorkerRoute,
+		workerRoute:      o.WorkerRoute,
+		coordinatorRoute: o.CoordinatorRoute,
 	}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.WithoutCancel(ctx))
 	// The terminal seam is the service's own provider unless a test passed
@@ -650,6 +694,12 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 		Ancestry: ancestry,
 		Events:   s.events,
 		Streams:  map[ipc.Method]*ipc.Publisher{ipc.MethodWakesSubscribe: s.wakes},
+		StreamFor: func(m ipc.Method, name string) (*ipc.Publisher, error) {
+			if m != ipc.MethodWakesSubscribe {
+				return nil, fmt.Errorf("%w: %s publishes no named stream", ipc.ErrUnavailable, m)
+			}
+			return s.domainWakeStream(name)
+		},
 		ReportPanic: func(value any, stack []byte) {
 			s.log.Printf("a handler panicked: %v\n%s", value, stack)
 		},
@@ -741,12 +791,14 @@ func (s *Service) Close() error {
 		// home launched is no session of this one and goes on, which
 		// launch.go states.
 		errs = append(errs, s.closeSessions()...)
+		errs = append(errs, s.closeSubordinates()...)
 		if s.events != nil {
 			errs = append(errs, s.events.Close())
 		}
 		if s.wakes != nil {
 			errs = append(errs, s.wakes.Close())
 		}
+		errs = append(errs, s.closeDomainWakeStreams()...)
 		if s.store != nil {
 			errs = append(errs, s.store.Close())
 		}

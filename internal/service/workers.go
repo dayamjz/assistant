@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,6 +53,14 @@ import (
 // session.Tmux's, for the worker process's lifetime, and this service reaches it through the driver that
 // holds the provider. session.Workers' doc says why it is not a second
 // meaning of the containment registry.
+//
+// A third answer over the same credentials is which domain the peer is the
+// subordinate coordinator of, derived by the same walk over
+// internal/session's subordinate set, which subordinates.go's placeRequest
+// composes with this file's answer: the worker sets are asked first, so a
+// peer in both is the worker, the side that claims less, and a chain that
+// cannot be read refuses as it does here. Which methods turn on that answer,
+// and which way each goes, is subordinates.go's.
 //
 // # The derivation
 //
@@ -178,7 +187,7 @@ func (s *Service) workerOf(c ipc.Credentials) (session.Membership, bool, error) 
 // the chain, is there to read with no worker launched at all. An error is a
 // chain that could not be read, which the caller refuses on.
 func (s *Service) placeOf(c ipc.Credentials) (placement, error) {
-	p, err := placeAlongChain(c.PID, readLineage, s.workerSets())
+	p, err := placeAlongChain(c.PID, readLineage, s.workerSets(), s.subordinateSets())
 	if err != nil {
 		return placement{}, fmt.Errorf("placing %s: %w", c, err)
 	}
@@ -205,6 +214,16 @@ func (s *Service) workerSets() workerSets {
 // workerSets is the placer over every worker set this service holds: the
 // first set answering for a group or a host answers for all.
 type workerSets []*session.Workers
+
+// empty reports whether no set holds a worker at all.
+func (sets workerSets) empty() bool {
+	for _, set := range sets {
+		if set != nil && !set.Empty() {
+			return false
+		}
+	}
+	return true
+}
 
 // Member is session.Workers.Member over every set.
 func (sets workerSets) Member(group int) (session.Membership, bool) {
@@ -368,42 +387,50 @@ func (s *Service) publishTaskEvent(event store.TaskEvent) {
 	}
 }
 
-// listWakes drains the queue for the coordinator, on store.DrainWakes'
-// terms and wakewait.go's: oldest first, bounded, handing out the rows on
-// offer to req.WakeAcknowledger under the wake stream's open stretch, and
-// closing none. A worker is refused before anything is read or written.
+// listWakes drains the queue for the coordinator that asks, on
+// store.DrainWakes' terms and wakewait.go's: oldest first, bounded, handing
+// out the rows on offer to the caller's acknowledger under the wake
+// stream's open stretch, and closing none. The route is the caller's
+// placement, subordinates.go's wakeRouteOf: a subordinate is handed its
+// domain's actable rows and the coordinator every other row. A worker is
+// refused before anything is read or written.
 func (s *Service) listWakes(ctx context.Context, req ipc.Request, r machine.WakesRequest) (machine.Wakes, error) {
-	if err := s.refuseWorker(req); err != nil {
+	p, err := s.admitted(req)
+	if err != nil {
 		return machine.Wakes{}, err
 	}
 	limit, err := wakesLimit(r)
 	if err != nil {
 		return machine.Wakes{}, err
 	}
-	wakes, err := s.store.DrainWakes(ctx, limit, s.wakeHandout(req))
-	if err != nil {
-		return machine.Wakes{}, err
-	}
-	return machine.Wakes{Wakes: wakes}, nil
+	return s.drainBoth(ctx, limit, s.wakeHandout(req, p))
 }
 
 // peekWakes is a person's reading of the queue: every queued row, handed
 // out or not, oldest first, beside the project of the task it names, read
-// through store.QueuedWakes, which hands out and acknowledges nothing. A
-// worker is refused before anything is read, on listWakes' terms. A row
-// whose task cannot be read fails the reading rather than being shown
-// without its project.
+// through store.QueuedWakesFor on the caller's route, which hands out and
+// acknowledges nothing, so a subordinate coordinator lists its domain's
+// rows alone and everyone else the coordinator's. A worker is refused
+// before anything is read, on listWakes' terms. A row whose task cannot be
+// read fails the reading rather than being shown without its project.
 func (s *Service) peekWakes(ctx context.Context, req ipc.Request, r machine.WakesRequest) (machine.QueuedWakes, error) {
-	if err := s.refuseWorker(req); err != nil {
+	p, err := s.admitted(req)
+	if err != nil {
 		return machine.QueuedWakes{}, err
 	}
 	limit, err := wakesLimit(r)
 	if err != nil {
 		return machine.QueuedWakes{}, err
 	}
-	queued, err := s.store.QueuedWakes(ctx, limit)
+	queued, err := s.store.QueuedWakesFor(ctx, limit, wakeRouteOf(p))
 	if err != nil {
 		return machine.QueuedWakes{}, err
+	}
+	var domainWakes []store.DomainWake
+	if !p.isSubordinate {
+		if domainWakes, err = s.store.QueuedDomainWakes(ctx, limit); err != nil {
+			return machine.QueuedWakes{}, err
+		}
 	}
 	projects := make(map[string]string)
 	out := machine.QueuedWakes{Wakes: make([]machine.QueuedWake, 0, len(queued))}
@@ -419,6 +446,7 @@ func (s *Service) peekWakes(ctx context.Context, req ipc.Request, r machine.Wake
 		}
 		out.Wakes = append(out.Wakes, machine.QueuedWake{Wake: w, Project: project})
 	}
+	out.DomainWakes = domainWakes
 	return out, nil
 }
 
@@ -438,26 +466,69 @@ func wakesLimit(r machine.WakesRequest) (int, error) {
 // acknowledgeWakes records that the coordinator acted on the named wakes,
 // which is what closes them: rows a drain handed it, or rows it learned of
 // from the wake stream or a task's history, on the same terms. Who
-// acknowledged is req.WakeAcknowledger, derived from the surface and read
-// from nothing the caller sent. A worker is refused; a batch the store
+// acknowledged is the caller's acknowledger, subordinates.go's
+// acknowledgerOf: derived from the surface and the placement and read from
+// nothing the caller sent. A worker is refused; a subordinate naming a row
+// whose task is outside its domain, read from the task's row, is refused
+// with ipc.ErrOutsideDomain and nothing is closed; a batch the store
 // refuses, for an unknown or an already acknowledged identifier, writes
 // nothing and the refusal is the store's.
 func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machine.AcknowledgeRequest) (machine.Acknowledged, error) {
-	if err := s.refuseWorker(req); err != nil {
+	p, err := s.admitted(req)
+	if err != nil {
 		return machine.Acknowledged{}, err
 	}
-	if len(r.Wakes) == 0 {
+	if len(r.Wakes)+len(r.DomainWakes) == 0 {
 		return machine.Acknowledged{}, fmt.Errorf("%w: an acknowledgement names no wakes", ipc.ErrInvalidRequest)
 	}
-	by := req.WakeAcknowledger()
-	if err := s.store.AcknowledgeWakes(ctx, r.Wakes, by); err != nil {
+	if p.isSubordinate && len(r.DomainWakes) > 0 {
+		// Every wake about a domain is about a subordinate, and the first
+		// coordinator alone acts on one.
+		return machine.Acknowledged{}, fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, and a wake about a domain is the first coordinator's to close",
+			ipc.ErrSubordinate, peerOf(req), p.subordinate.Domain)
+	}
+	if p.isSubordinate {
+		// A subordinate closes the rows it could have been handed and no
+		// other: its domain's, read off each wake's task row, and of a
+		// kind it can act on; a decision-class row about its domain's task
+		// is the first coordinator's to close, and refused as a command the
+		// subordinate does not hold.
+		scopes, err := s.store.WakeScopes(ctx, r.Wakes)
+		if err != nil {
+			var refused *store.WakeIDError
+			if errors.As(err, &refused) {
+				return machine.Acknowledged{}, fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
+			}
+			return machine.Acknowledged{}, err
+		}
+		actable := wakeRouteOf(p).Actable
+		for _, id := range r.Wakes {
+			scope := scopes[id]
+			if scope.Domain != p.subordinate.Domain {
+				return machine.Acknowledged{}, fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, and wake %d is about a task %s",
+					ipc.ErrOutsideDomain, peerOf(req), p.subordinate.Domain, id, domainWords(scope.Domain))
+			}
+			if !slices.Contains(actable, scope.Kind) {
+				return machine.Acknowledged{}, fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, and wake %d is of a kind the first coordinator acts on",
+					ipc.ErrSubordinate, peerOf(req), p.subordinate.Domain, id)
+			}
+		}
+	}
+	by := s.acknowledgerOf(req, p)
+	refusal := func(err error) error {
 		var refused *store.WakeIDError
 		if errors.As(err, &refused) {
-			return machine.Acknowledged{}, fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
+			return fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
 		}
-		return machine.Acknowledged{}, err
+		return err
 	}
-	return machine.Acknowledged{Wakes: r.Wakes, By: by.String()}, nil
+	// The two shapes are one batch, all or nothing: store.AcknowledgeAll
+	// checks every row of both before it writes any, in one transaction,
+	// so a refused domain row leaves every task row named open too.
+	if err := s.store.AcknowledgeAll(ctx, r.Wakes, r.DomainWakes, by); err != nil {
+		return machine.Acknowledged{}, refusal(err)
+	}
+	return machine.Acknowledged{Wakes: r.Wakes, DomainWakes: r.DomainWakes, By: by.String()}, nil
 }
 
 // assertSupervision is PRD section 5's arm verification over this home,
@@ -468,7 +539,7 @@ func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machi
 // refused. A context that ends before the verdict settles is answered as
 // the failed arm VerifyArm gives with the context's error.
 func (s *Service) assertSupervision(ctx context.Context, req ipc.Request) (supervisor.Arm, error) {
-	if err := s.refuseWorker(req); err != nil {
+	if _, err := s.admitted(req); err != nil {
 		return supervisor.Arm{}, err
 	}
 	return feed.VerifyArm(ctx, s.home, s.cfg.SupervisionBeaconInterval, time.Now)

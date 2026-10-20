@@ -1,6 +1,7 @@
 package agents_test
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -178,5 +179,49 @@ func TestAWorkerRouteThatWouldReshapeTheToolListIsRefused(t *testing.T) {
 	}
 	if err := (agents.WorkerSpec{Dir: t.TempDir(), Instructions: "Work.", Route: "'/a b/assistant' --home /h worker"}).Validate(); err != nil {
 		t.Errorf("a quoted route with spaces was refused: %v", err)
+	}
+}
+
+// A subordinate coordinator runs under the subordinate grant, which only
+// the subordinate entry point selects: started through OpenSubordinate with
+// a route, the Claude Code adapter writes the default permission mode, the
+// editing tools denied and the route alone allowed, so it edits nothing,
+// runs no git, and runs the coordinator client without a prompt; with no
+// route it is denied the shell too, which is the read grant's list. The
+// same spec through OpenWorker runs under the worker grant, which is the
+// control and what a caller can select: WorkerSpec.Grant is the worker's
+// for every spec a caller builds.
+func TestTheClaudeSubordinateRunsUnderTheSubordinateGrant(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P4)
+	const route = "/opt/assistant/bin/assistant --home /var/lib/assistant coordinator"
+	if got := (agents.WorkerSpec{Route: route}).Grant(); got != agents.GrantWorker {
+		t.Fatalf("a spec a caller builds reads grant %s, want the worker's: the subordinate grant is the entry point's alone", got)
+	}
+	for _, c := range []struct {
+		name  string
+		route string
+		open  func(context.Context, agents.Runner, agents.WorkerSpec) (agents.Worker, error)
+		want  grantFlags
+	}{
+		{"a subordinate with a route", route, agents.OpenSubordinate,
+			grantFlags{mode: "default", denied: "Edit,Write,NotebookEdit,Bash(git:*)", allowed: "Bash(" + route + ":*)"}},
+		{"a subordinate with no route", "", agents.OpenSubordinate, readGrant},
+		{"a worker with the same route", route, agents.OpenWorker,
+			grantFlags{mode: "acceptEdits", allowed: "Bash(git:*),Bash(" + route + ":*)"}},
+	} {
+		agent := standin.New(t, standin.Script{Worker: &standin.WorkerScript{}},
+			agents.WithTerminationGrace(300*time.Millisecond))
+		worker, err := c.open(t.Context(), agent.Runner(), agents.WorkerSpec{
+			Dir: t.TempDir(), Instructions: "Coordinate the domain.", Route: c.route,
+		})
+		if err != nil {
+			t.Fatalf("%s: starting: %v", c.name, err)
+		}
+		args := workerArgs(t, agent)
+		worker.Close()
+		if got := grantOf(args); got != c.want {
+			t.Errorf("%s ran under %+v, want %+v (command line %q)", c.name, got, c.want, args)
+		}
 	}
 }

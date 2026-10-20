@@ -163,6 +163,15 @@ type ServerConfig struct {
 	// restricted stream's events on Events would have published them to
 	// every caller, which this package cannot see.
 	Streams map[Method]*Publisher
+	// StreamFor is the publisher a restricted stream attaches to when its
+	// handler answers a StreamChoice naming one: the stream's method and
+	// the name the handler chose, answered with the publisher or the
+	// refusal the caller gets. It is how a stream turns on a relation this
+	// package does not own and the handler decides, such as which domain's
+	// wake stream a subordinate coordinator holds. Nil, or a method it
+	// refuses, refuses a stream whose handler chose a name with
+	// ErrUnavailable; a handler that answers no choice attaches to Streams.
+	StreamFor func(m Method, name string) (*Publisher, error)
 	// Backlog is the per-subscriber queue depth. Zero means DefaultBacklog.
 	Backlog int
 	// MaxFrameBytes bounds one frame in either direction. Zero means
@@ -745,6 +754,17 @@ func (c *conn) acknowledgeStream(f frame, sub *Subscription) {
 	}()
 }
 
+// StreamChoice is what a restricted stream's handler answers to attach the
+// stream to a publisher other than the method's own: the name is given to
+// ServerConfig.StreamFor with the method. A handler answering nothing, or
+// an empty name, attaches the stream to ServerConfig.Streams. It is the
+// handler's result on the wire, so a handler built over HandlerFunc
+// returns the value and one written to Handler returns its JSON.
+type StreamChoice struct {
+	// Name is what the handler chose, in the vocabulary StreamFor reads.
+	Name string `json:"stream"`
+}
+
 // startAdmittedStream opens a restricted stream: the access check a
 // restricted request gets, and then the handler, both on a goroutine of
 // their own, before anything the stream carries is written.
@@ -758,11 +778,21 @@ func (c *conn) acknowledgeStream(f frame, sub *Subscription) {
 // and answers the caller, so a refused caller is never written an event.
 //
 // The handler is asked with a Request naming the stream's method, and its
-// error is the refusal; its result is not read. That is how a stream turns
-// on a relation this package does not own, such as whether the caller is a
-// task's worker: the same handler that decides it for a request decides it
-// here, from the same Credentials. A handler that does not recognize the
-// method refuses it, so a stream is closed until its handler says otherwise.
+// error is the refusal; its result is read as a StreamChoice, and a choice
+// naming a publisher moves the stream onto the one ServerConfig.StreamFor
+// answers for the name, in place of the method's own: the subscription
+// opened on the method's publisher is closed unread and the new one is
+// registered under the same identifier, unless a cancel took the stream
+// meanwhile, in which case the new one is closed too and nobody is
+// answered. An event the method's publisher pushed between the open and
+// the move reaches a moved stream no more than one the other publisher
+// pushed before the open did; the stream opens in the gap state either
+// way. That is how a stream turns on a relation this package does not own,
+// such as whether the caller is a task's worker or which domain's stream a
+// subordinate coordinator holds: the same handler that decides it for a
+// request decides it here, from the same Credentials. A handler that does
+// not recognize the method refuses it, so a stream is closed until its
+// handler says otherwise.
 //
 // The decision is counted against ServerConfig.MaxStreams rather than
 // MaxInFlight, because the registration it runs behind already holds one of
@@ -776,18 +806,32 @@ func (c *conn) startAdmittedStream(f frame, spec Spec, peer Peer) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		_, err := c.serveRequest(f, spec, peer, &answered{})
+		result, err := c.serveRequest(f, spec, peer, &answered{})
+		var chosen *Subscription
+		if err == nil {
+			chosen, err = c.chooseStream(f.Method, result)
+		}
 		c.mu.Lock()
 		held, open := c.streams[f.ID]
 		open = open && held == sub
 		if open && err != nil {
 			delete(c.streams, f.ID)
 		}
+		if open && chosen != nil {
+			c.streams[f.ID] = chosen
+		}
 		c.mu.Unlock()
 		switch {
 		case !open:
 			// A cancel or the connection ending took the stream while the
-			// decision ran, and closed it; there is nobody to answer.
+			// decision ran, and closed it; there is nobody to answer, and
+			// a subscription chosen meanwhile is closed unread.
+			if chosen != nil {
+				chosen.Close()
+			}
+		case err == nil && chosen != nil:
+			sub.Close()
+			c.acknowledgeStream(f, chosen)
 		case err == nil:
 			c.acknowledgeStream(f, sub)
 		default:
@@ -795,6 +839,32 @@ func (c *conn) startAdmittedStream(f frame, spec Spec, peer Peer) {
 			c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
 		}
 	}()
+}
+
+// chooseStream reads an admitted restricted stream's handler result as a
+// StreamChoice and subscribes to the publisher the choice names through
+// ServerConfig.StreamFor, on startAdmittedStream's terms: nil for no
+// choice, and an error wrapping ErrUnavailable for a choice this server
+// cannot answer.
+func (c *conn) chooseStream(m Method, result json.RawMessage) (*Subscription, error) {
+	if len(result) == 0 {
+		return nil, nil
+	}
+	var choice StreamChoice
+	if err := json.Unmarshal(result, &choice); err != nil || choice.Name == "" {
+		return nil, nil
+	}
+	if c.srv.cfg.StreamFor == nil {
+		return nil, fmt.Errorf("%w: this service publishes no named stream for %q", ErrUnavailable, m)
+	}
+	pub, err := c.srv.cfg.StreamFor(m, choice.Name)
+	if err != nil {
+		return nil, err
+	}
+	if pub == nil {
+		return nil, fmt.Errorf("%w: this service publishes no stream named %q for %q", ErrUnavailable, choice.Name, m)
+	}
+	return pub.Subscribe(c.srv.cfg.Backlog)
 }
 
 // pump moves events from a subscription onto the connection. It blocks on the

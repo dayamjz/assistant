@@ -253,8 +253,16 @@ type RespondRequest struct {
 // resolved a hold is derived from the surface by internal/ipc's
 // Request.HoldResolver and never read from a request.
 type TaskRespondRequest struct {
-	// Task is the task whose hold is answered.
-	Task string `json:"task"`
+	// Task is the task whose hold is answered. It is empty when Domain is
+	// set, and one of the two is required.
+	Task string `json:"task,omitempty"`
+	// Domain is the domain whose hold is answered instead of a task's: the
+	// one the relaunch bound raises for a delegation whose subordinate
+	// coordinator's terminal is gone, PRD section 11's "past the bound it
+	// holds for you". It offers AnswerRetry, which begins the subordinate
+	// once more, and AnswerStop, which ends the delegation; Hold is not
+	// read with it, since a delegation holds on one key at a time.
+	Domain string `json:"domain,omitempty"`
 	// Hold names which open hold to close: the hold's full key, or a
 	// finding id that resolves to task/<Task>/finding/<id>. Empty answers
 	// the only open hold naming the task and no run, and is refused when
@@ -612,6 +620,39 @@ type AcknowledgeRequest struct {
 	// handed out or not. A subset leaves the rest queued; an identifier no
 	// wake has, or one already acknowledged, refuses the whole batch.
 	Wakes []int64 `json:"wakes"`
+	// DomainWakes are the identifiers of the queued rows about a domain the
+	// caller acted on, numbered apart from Wakes, on the same terms. A
+	// subordinate coordinator may name none, since no such row is its.
+	DomainWakes []int64 `json:"domain_wakes,omitempty"`
+}
+
+// DomainDelegateRequest delegates a named domain of tasks to a subordinate
+// coordinator the service starts, PRD section 9's domain.delegate. It
+// carries nothing about who is asking: the service refuses a caller placed
+// as a task's worker or as a domain's subordinate from the caller's
+// credentials, before anything is read.
+type DomainDelegateRequest struct {
+	// Domain is the domain's name, as internal/home's ValidDomain accepts
+	// it: one to thirty-two lower-case letters, digits and inner dashes.
+	Domain string `json:"domain"`
+	// Delivery is the delivery posture every task the subordinate creates
+	// in the domain takes, "gated" or "local". It is refused empty, because
+	// a subordinate records no posture of its own and the delegation is the
+	// one place the domain's is written; at each task it is held to
+	// intake's rule against that task's project, never lighter.
+	Delivery string `json:"delivery"`
+	// Instructions is what the subordinate coordinator is started with:
+	// what the domain is for and what the coordinator wants of it. The
+	// service appends what the subordinate may run and how it is placed.
+	Instructions string `json:"instructions"`
+}
+
+// DomainEndRequest ends a domain's delegation, PRD section 9's domain.end:
+// the delegation record's one revision, after which the domain's wakes
+// reach the coordinator again and its subordinate's session is ended.
+type DomainEndRequest struct {
+	// Domain is the domain whose standing delegation ends.
+	Domain string `json:"domain"`
 }
 
 // MarkSeenRequest moves the seen mark PRD section 9's catching up reads. It

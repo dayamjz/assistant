@@ -46,6 +46,19 @@ var (
 	// worker may make and the peer is placed as no task's worker, so there is
 	// no task to attribute it to.
 	ErrNotWorker = sentinelFor(CodeNotWorker)
+	// ErrSubordinate reports a request refused because its peer is a
+	// domain's subordinate coordinator, placed there by the kernel's
+	// credentials through the subordinate set the service holds, and the
+	// request is one PRD section 9 refuses a subordinate: promoting a task,
+	// answering a hold, marking the catch-up read seen, starting, rerunning
+	// or cancelling a run, synchronizing a branch, stopping or restarting
+	// the service, or the two delegation methods. The message says which.
+	ErrSubordinate = sentinelFor(CodeSubordinate)
+	// ErrOutsideDomain reports a request refused because its peer is a
+	// domain's subordinate coordinator and the task the request names, or
+	// the wake it acknowledges, is outside that domain, read from the task's
+	// own row and never from the request.
+	ErrOutsideDomain = sentinelFor(CodeOutsideDomain)
 	// ErrNotAtTerminal reports a request refused because it is one answered
 	// only from the foreground of a terminal and the peer is not there: the
 	// kernel reports it with no controlling terminal, or in a process group
@@ -132,6 +145,10 @@ const (
 	CodeWorker Code = "worker"
 	// CodeNotWorker maps to ErrNotWorker.
 	CodeNotWorker Code = "not-worker"
+	// CodeSubordinate maps to ErrSubordinate.
+	CodeSubordinate Code = "subordinate"
+	// CodeOutsideDomain maps to ErrOutsideDomain.
+	CodeOutsideDomain Code = "outside-domain"
 	// CodeNotAtTerminal maps to ErrNotAtTerminal.
 	CodeNotAtTerminal Code = "not-at-terminal"
 	// CodeUnplaceable maps to ErrUnplaceable.
@@ -194,6 +211,8 @@ var codeRows = []struct {
 	{CodeContained, "ipc: refused, caller is contained by an active validation stage"},
 	{CodeWorker, "ipc: refused, caller is a task's worker"},
 	{CodeNotWorker, "ipc: refused, caller is not a task's worker"},
+	{CodeSubordinate, "ipc: refused, caller is a domain's subordinate coordinator"},
+	{CodeOutsideDomain, "ipc: refused, the task is outside the caller's domain"},
 	{CodeNotAtTerminal, "ipc: refused, caller is not in the foreground of a terminal"},
 	{CodeUnplaceable, "ipc: refused, caller is placed as neither a task's worker nor a shell at a terminal"},
 	{CodeRefused, "ipc: refused by the records the request was decided against"},

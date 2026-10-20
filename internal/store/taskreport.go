@@ -174,8 +174,10 @@ func (s *Store) TaskReport(ctx context.Context, taskID string) (TaskReport, erro
 // report with one of its hold rows deleted here, with the unmutated state as
 // the positive control.
 //
-// It takes a testing.TB so it cannot be called from anything but a test, and
-// it refuses a nil one. A key with no row is reported as ErrNotFound.
+// It takes a testing.TB and refuses a nil one, so a production path does
+// not reach it by accident; that does not stop a deliberate caller that
+// builds a testing.T of its own. A key with no row is reported as
+// ErrNotFound.
 func (s *Store) ForgetHoldForTest(ctx context.Context, tb testing.TB, key string) error {
 	if tb == nil {
 		return fmt.Errorf("store: ForgetHoldForTest is a test's counterfeit builder and takes the test")

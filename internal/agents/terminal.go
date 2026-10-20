@@ -278,6 +278,17 @@ func OpenTerminalWorker(ctx context.Context, r Runner, t Terminal, spec WorkerSp
 	return terminals.StartInTerminal(ctx, t, spec)
 }
 
+// OpenTerminalSubordinate is OpenSubordinate for a terminal-hosted
+// subordinate coordinator, on OpenTerminalWorker's terms: the same
+// mechanism, under GrantSubordinate, which only it and OpenSubordinate
+// select. An adapter whose terminal interface was not observed under that
+// grant refuses it, as the Claude Code adapter does with
+// ErrTerminalGrantUnobserved.
+func OpenTerminalSubordinate(ctx context.Context, r Runner, t Terminal, spec WorkerSpec) (TerminalWorker, error) {
+	spec.subordinate = true
+	return OpenTerminalWorker(ctx, r, t, spec)
+}
+
 // terminalPoll is how often a terminal worker's identity is read to learn
 // that its process has gone.
 const terminalPoll = 100 * time.Millisecond

@@ -153,6 +153,56 @@ var oracle = map[cell]supervisor.Level{
 	{supervisor.KindMessageUnacknowledged, proof, open, true}:      supervisor.Surface,
 	{supervisor.KindMessageUnacknowledged, proof, elapsed, false}:  supervisor.Surface,
 	{supervisor.KindMessageUnacknowledged, proof, elapsed, true}:   supervisor.Surface,
+
+	// "subordinate gone" -> Surface, "both surface always", and then the
+	// card's sentence: "subordinate gone surfaces once per escalation_window
+	// while it stays gone", which is terminal gone's spacing. Evidence is
+	// not read: the subordinate's terminal is nobody's progress.
+	{supervisor.KindSubordinateGone, absent, open, false}:    supervisor.Surface,
+	{supervisor.KindSubordinateGone, absent, open, true}:     supervisor.Absorb,
+	{supervisor.KindSubordinateGone, absent, elapsed, false}: supervisor.Surface,
+	{supervisor.KindSubordinateGone, absent, elapsed, true}:  supervisor.Surface,
+	{supervisor.KindSubordinateGone, proof, open, false}:     supervisor.Surface,
+	{supervisor.KindSubordinateGone, proof, open, true}:      supervisor.Absorb,
+	{supervisor.KindSubordinateGone, proof, elapsed, false}:  supervisor.Surface,
+	{supervisor.KindSubordinateGone, proof, elapsed, true}:   supervisor.Surface,
+
+	// "subordinate escalated" -> Surface: "both surface always". A decision
+	// handed up is actionable whatever the evidence, the window or the flag
+	// say.
+	{supervisor.KindSubordinateEscalated, absent, open, false}:    supervisor.Surface,
+	{supervisor.KindSubordinateEscalated, absent, open, true}:     supervisor.Surface,
+	{supervisor.KindSubordinateEscalated, absent, elapsed, false}: supervisor.Surface,
+	{supervisor.KindSubordinateEscalated, absent, elapsed, true}:  supervisor.Surface,
+	{supervisor.KindSubordinateEscalated, proof, open, false}:     supervisor.Surface,
+	{supervisor.KindSubordinateEscalated, proof, open, true}:      supervisor.Surface,
+	{supervisor.KindSubordinateEscalated, proof, elapsed, false}:  supervisor.Surface,
+	{supervisor.KindSubordinateEscalated, proof, elapsed, true}:   supervisor.Surface,
+}
+
+// recipient is PRD section 8's wake row, written out one kind at a time
+// from the document and not from the table's column: "a progress-class
+// kind of a delegated task, one the subordinate can act on with the
+// commands it holds, reaches the subordinate; a decision-class kind, one
+// whose action the subordinate is refused, a hold among them, reaches the
+// first coordinator", and section 6's "both reach the first coordinator and
+// never the subordinate" for the subordinate's own two kinds. true is the
+// subordinate.
+var recipient = map[supervisor.Kind]bool{
+	// A check result needs a run answered, which section 9 refuses it.
+	supervisor.KindCheckResult: false,
+	// An event with a decision verb is a decision; a hold waits on a person.
+	supervisor.KindDecisionEvent: false,
+	supervisor.KindHoldOpened:    false,
+	// Progress: the subordinate reads, messages, stops and relaunches.
+	supervisor.KindPlainEvent:            true,
+	supervisor.KindTerminalUnchanged:     true,
+	supervisor.KindDeclaredWait:          true,
+	supervisor.KindNoChange:              true,
+	supervisor.KindTerminalGone:          true,
+	supervisor.KindMessageUnacknowledged: true,
+	supervisor.KindSubordinateGone:       false,
+	supervisor.KindSubordinateEscalated:  false,
 }
 
 // eventKindWithRole picks a task event kind of the given role from
@@ -234,6 +284,52 @@ func TestTheClassifierMatchesTheFlowchartForEveryKindAndEvidence(t *testing.T) {
 		if _, ok := supervisor.Lookup(at.kind); !ok {
 			t.Errorf("the oracle has a row for %s, which the table does not have", at.kind)
 		}
+	}
+}
+
+// The recipient column: every kind in the real table is held to the
+// recipient oracle written from PRD section 8's wake row, a kind the table
+// gains without an oracle row fails, SubordinateActable is exactly the
+// kinds the oracle gives the subordinate, and a counterfeit column that
+// routed a hold to the subordinate is caught by the same walk.
+func TestTheRecipientColumnMatchesTheWakeRowForEveryKind(t *testing.T) {
+	t.Parallel()
+	var actable []supervisor.Kind
+	for _, row := range supervisor.Kinds() {
+		want, ok := recipient[row.Kind]
+		if !ok {
+			t.Errorf("%s: the table has this kind and the recipient oracle has no row for it", row.Kind)
+			continue
+		}
+		if row.Subordinate != want {
+			t.Errorf("%s: the table routes it to the subordinate=%v, the wake row says %v", row.Kind, row.Subordinate, want)
+		}
+		if want {
+			actable = append(actable, row.Kind)
+		}
+	}
+	for kind := range recipient {
+		if _, ok := supervisor.Lookup(kind); !ok {
+			t.Errorf("the recipient oracle has a row for %s, which the table does not have", kind)
+		}
+	}
+	if got := supervisor.SubordinateActable(); !slices.Equal(got, actable) {
+		t.Errorf("SubordinateActable = %v, want %v", got, actable)
+	}
+	counterfeit := slices.Clone(supervisor.Kinds())
+	for i := range counterfeit {
+		if counterfeit[i].Kind == supervisor.KindHoldOpened {
+			counterfeit[i].Subordinate = true
+		}
+	}
+	caught := false
+	for _, row := range counterfeit {
+		if row.Subordinate != recipient[row.Kind] {
+			caught = true
+		}
+	}
+	if !caught {
+		t.Fatal("a column routing a hold to the subordinate passed the oracle, so the oracle holds the column to nothing")
 	}
 }
 
@@ -353,9 +449,10 @@ func TestSurfacedOnceReachesOnlyTheUnchangedTerminalAndTheResurfacingKind(t *tes
 // not surfaced surfaces as actionable whatever the window says; once it has
 // surfaced it is absorbed while the window since that surface is open, and
 // surfaces again for the window when it has elapsed, with evidence read in
-// neither case and the repetition count raising nothing. Terminal gone is
-// the one kind of the class, so a kind moved into it or out of it is a
-// change this test sees.
+// neither case and the repetition count raising nothing. Terminal gone and
+// subordinate gone, which PRD section 6 spaces the same way, are the two
+// kinds of the class, so a kind moved into it or out of it is a change this
+// test sees.
 func TestASilentCrashSurfacesOncePerWindow(t *testing.T) {
 	t.Parallel()
 	var resurfacing []supervisor.Kind
@@ -364,26 +461,28 @@ func TestASilentCrashSurfacesOncePerWindow(t *testing.T) {
 			resurfacing = append(resurfacing, row.Kind)
 		}
 	}
-	if !slices.Equal(resurfacing, []supervisor.Kind{supervisor.KindTerminalGone}) {
-		t.Fatalf("the resurfacing kinds are %v, want exactly terminal gone", resurfacing)
+	if !slices.Equal(resurfacing, []supervisor.Kind{supervisor.KindTerminalGone, supervisor.KindSubordinateGone}) {
+		t.Fatalf("the resurfacing kinds are %v, want exactly terminal gone and subordinate gone", resurfacing)
 	}
-	gone := wakeOf(t, supervisor.KindTerminalGone)
 	stalled := supervisor.Stall{Repetitions: 99, InspectAt: 1}
-	for _, evidence := range []supervisor.Evidence{absent, proof} {
-		for _, stall := range []supervisor.Stall{noStall, stalled} {
-			for _, window := range []supervisor.WindowState{open, elapsed} {
-				got := supervisor.Classify(gone, evidence, window, false, stall)
-				if got != (supervisor.Verdict{Level: supervisor.Surface, Reason: supervisor.ReasonActionable}) {
-					t.Errorf("not yet surfaced, evidence=%s window=%s stall=%+v: got %+v, want a surface as actionable", evidence, window, stall, got)
+	for _, kind := range resurfacing {
+		gone := wakeOf(t, kind)
+		for _, evidence := range []supervisor.Evidence{absent, proof} {
+			for _, stall := range []supervisor.Stall{noStall, stalled} {
+				for _, window := range []supervisor.WindowState{open, elapsed} {
+					got := supervisor.Classify(gone, evidence, window, false, stall)
+					if got != (supervisor.Verdict{Level: supervisor.Surface, Reason: supervisor.ReasonActionable}) {
+						t.Errorf("%s not yet surfaced, evidence=%s window=%s stall=%+v: got %+v, want a surface as actionable", kind, evidence, window, stall, got)
+					}
 				}
-			}
-			got := supervisor.Classify(gone, evidence, open, true, stall)
-			if got != (supervisor.Verdict{Level: supervisor.Absorb, Reason: supervisor.ReasonSurfacedThisWindow}) {
-				t.Errorf("surfaced and within the window, evidence=%s stall=%+v: got %+v, want absorbed as surfaced this window", evidence, stall, got)
-			}
-			got = supervisor.Classify(gone, evidence, elapsed, true, stall)
-			if got != (supervisor.Verdict{Level: supervisor.Surface, Reason: supervisor.ReasonWindowElapsed}) {
-				t.Errorf("surfaced and past the window, evidence=%s stall=%+v: got %+v, want a surface for the window", evidence, stall, got)
+				got := supervisor.Classify(gone, evidence, open, true, stall)
+				if got != (supervisor.Verdict{Level: supervisor.Absorb, Reason: supervisor.ReasonSurfacedThisWindow}) {
+					t.Errorf("%s surfaced and within the window, evidence=%s stall=%+v: got %+v, want absorbed as surfaced this window", kind, evidence, stall, got)
+				}
+				got = supervisor.Classify(gone, evidence, elapsed, true, stall)
+				if got != (supervisor.Verdict{Level: supervisor.Surface, Reason: supervisor.ReasonWindowElapsed}) {
+					t.Errorf("%s surfaced and past the window, evidence=%s stall=%+v: got %+v, want a surface for the window", kind, evidence, stall, got)
+				}
 			}
 		}
 	}
@@ -529,8 +628,8 @@ func TestEvidenceIsProgressAlone(t *testing.T) {
 
 // The two event kinds are derived and Of refuses to state them, as it
 // refuses a word outside the table, so the table's kinds are the only ones
-// a wake can carry. The one kind with no producer is the check result and
-// only that one.
+// a wake can carry. The kinds with no producer are the check result and
+// subordinate gone, each for the reason its row states, and only those.
 func TestTheTableIsClosedAndTheProducerlessKindIsNamed(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []supervisor.Kind{supervisor.KindDecisionEvent, supervisor.KindPlainEvent, "terminal-vanished", ""} {
@@ -547,7 +646,7 @@ func TestTheTableIsClosedAndTheProducerlessKindIsNamed(t *testing.T) {
 			t.Errorf("%s is in Kinds and Lookup does not find it", row.Kind)
 		}
 	}
-	if len(unproduced) != 1 || unproduced[0] != supervisor.KindCheckResult {
+	if !slices.Equal(unproduced, []supervisor.Kind{supervisor.KindCheckResult}) {
 		t.Errorf("the kinds marked as having no producer are %v, want exactly the check result", unproduced)
 	}
 }

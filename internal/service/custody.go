@@ -57,7 +57,7 @@ import (
 // an error, because it is a typed result a person reads and a driving agent
 // decides on; an error is a record or a repository that could not be read.
 func (s *Service) syncBranch(ctx context.Context, req ipc.Request, r machine.SyncRequest) (machine.Plan, error) {
-	if err := s.refuseWorker(req); err != nil {
+	if _, err := s.refuseSubordinate(req); err != nil {
 		return machine.Plan{}, err
 	}
 	repository, err := s.repositoryAt(ctx, r.WorkingPath)

@@ -298,6 +298,12 @@ var renderings = []rendering{
 	{name: "supervision", voice: VoicePhrased, of: typeOf[supervisor.Arm](), render: func(w io.Writer, v any) {
 		writeln(w, machine.ArmPhrase(v.(supervisor.Arm)))
 	}},
+	{name: "domain delegated", voice: VoicePhrased, of: typeOf[machine.Delegated](), render: func(w io.Writer, v any) {
+		writeln(w, machine.DelegatedPhrase(v.(machine.Delegated)))
+	}},
+	{name: "delegation ended", voice: VoicePhrased, of: typeOf[machine.DelegationEnded](), render: func(w io.Writer, v any) {
+		writeln(w, machine.DelegationEndedPhrase(v.(machine.DelegationEnded)))
+	}},
 	{name: "worker event", voice: VoicePhrased, of: typeOf[machine.Appended](), render: func(w io.Writer, v any) {
 		writeln(w, machine.AppendedPhrase(v.(machine.Appended)))
 	}},
@@ -729,6 +735,11 @@ func readOutQueuedWakes(w io.Writer, q machine.QueuedWakes) {
 	writeln(w, machine.QueuedWakesPhrase(q))
 	for _, row := range q.Wakes {
 		writef(w, "%s: %s %s\n", printable(row.Project), machine.QueuedWakePhrase(row), machine.QueuedWakeStanding(row))
+	}
+	// A notice about a domain is listed by the domain's name, which is the
+	// coordinator's own word and escaped, on the same terms.
+	for _, row := range q.DomainWakes {
+		writef(w, "%s: %s %s\n", printable(row.Domain), machine.QueuedDomainWakePhrase(row), machine.QueuedDomainWakeStanding(row))
 	}
 }
 

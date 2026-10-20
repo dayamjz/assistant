@@ -240,7 +240,8 @@ func (s *Service) latestAttempt(ctx context.Context, id string) (store.TaskAttem
 
 // messageTask is task.message, on the file comment's terms.
 func (s *Service) messageTask(ctx context.Context, req ipc.Request, r machine.TaskMessageRequest) (machine.TaskMessaged, error) {
-	if err := s.refuseWorker(req); err != nil {
+	p, err := s.admitted(req)
+	if err != nil {
 		return machine.TaskMessaged{}, err
 	}
 	switch {
@@ -254,6 +255,9 @@ func (s *Service) messageTask(ctx context.Context, req ipc.Request, r machine.Ta
 	case !utf8.ValidString(r.Text):
 		return machine.TaskMessaged{}, fmt.Errorf("%w: a message to task %s is not valid UTF-8", ipc.ErrInvalidRequest, r.Task)
 	}
+	if err := s.scopeTask(ctx, req, p, r.Task); err != nil {
+		return machine.TaskMessaged{}, err
+	}
 	latest, ok, err := s.latestAttempt(ctx, r.Task)
 	if err != nil {
 		return machine.TaskMessaged{}, err
@@ -262,7 +266,7 @@ func (s *Service) messageTask(ctx context.Context, req ipc.Request, r machine.Ta
 	if !ok || !launched {
 		return machine.TaskMessaged{}, fmt.Errorf("%w: %w: task %s", ipc.ErrRefused, errNoWorker, r.Task)
 	}
-	m, err := s.deliverMessage(ctx, req, r.Task, latest.Sequence, ref, r.Text)
+	m, err := s.deliverMessage(ctx, req, s.senderOf(req, p), r.Task, latest.Sequence, ref, r.Text)
 	var refused *messageRefused
 	if errors.As(err, &refused) {
 		return machine.TaskMessaged{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
@@ -275,13 +279,15 @@ func (s *Service) messageTask(ctx context.Context, req ipc.Request, r machine.Ta
 
 // deliverMessage is a message's record and send, on the file comment's
 // terms, for every caller that sends a worker text: task.message, and a
-// promotion's brief. It appends the record naming the attempt, sends what
-// the record holds framed by framedMessage to the worker ref names, and
-// records the send's answer once. It returns the record written, or the
-// record refused inside a *messageRefused, or an error from a record that
-// could not be read or written, beside whatever record it had by then.
-func (s *Service) deliverMessage(ctx context.Context, req ipc.Request, task string, attempt int64, ref, text string) (store.Message, error) {
-	m, err := s.store.AppendMessage(ctx, task, attempt, text, req.MessageSender())
+// promotion's brief. It appends the record naming the attempt, with by as
+// who sent it, which the caller derived from the surface and the placement
+// through senderOf, sends what the record holds framed by framedMessage to
+// the worker ref names, and records the send's answer once. It returns the
+// record written, or the record refused inside a *messageRefused, or an
+// error from a record that could not be read or written, beside whatever
+// record it had by then.
+func (s *Service) deliverMessage(ctx context.Context, req ipc.Request, by store.Sender, task string, attempt int64, ref, text string) (store.Message, error) {
+	m, err := s.store.AppendMessage(ctx, task, attempt, text, by)
 	if err != nil {
 		return store.Message{}, err
 	}
@@ -336,11 +342,15 @@ func (s *Service) claimSteer(id string) (func(), error) {
 
 // stopTask is task.stop, on the file comment's terms.
 func (s *Service) stopTask(ctx context.Context, req ipc.Request, r machine.TaskRequest) (machine.TaskStopped, error) {
-	if err := s.refuseWorker(req); err != nil {
+	p, err := s.admitted(req)
+	if err != nil {
 		return machine.TaskStopped{}, err
 	}
 	if strings.TrimSpace(r.Task) == "" {
 		return machine.TaskStopped{}, fmt.Errorf("%w: a stop names the task whose worker it ends", ipc.ErrInvalidRequest)
+	}
+	if err := s.scopeTask(ctx, req, p, r.Task); err != nil {
+		return machine.TaskStopped{}, err
 	}
 	if s.terminals == nil {
 		return machine.TaskStopped{}, fmt.Errorf("%w: %w", ipc.ErrUnavailable, errRelaunchUnprobed)
@@ -384,7 +394,7 @@ func (s *Service) stopTask(ctx context.Context, req ipc.Request, r machine.TaskR
 		Subject: "whether to begin this work again after its worker was stopped",
 		Detail: fmt.Sprintf("task %s: the %s stopped attempt %d's worker (session %s), which %s, and its copy was left as it was. "+
 			"Answer %q to relaunch it once in the same copy, optionally with a note, or %q to leave it where it stopped.",
-			r.Task, req.MessageSender(), latest.Sequence, ref, ended, machine.AnswerRetry, machine.AnswerStop),
+			r.Task, s.senderOf(req, p), latest.Sequence, ref, ended, machine.AnswerRetry, machine.AnswerStop),
 	})
 	if err != nil {
 		return machine.TaskStopped{}, fmt.Errorf("service: the worker of task %s was stopped and its hold could not be registered: %w", r.Task, err)
@@ -469,7 +479,7 @@ func (s *Service) endHeldWorker(id, ref string) (bool, error) {
 // is refused first, so the answer a worker reads is the one every
 // coordinator-only method gives it.
 func (s *Service) interruptTask(ctx context.Context, req ipc.Request, r machine.TaskRequest) (struct{}, error) {
-	if err := s.refuseWorker(req); err != nil {
+	if _, err := s.refuseSubordinate(req); err != nil {
 		return struct{}{}, err
 	}
 	if strings.TrimSpace(r.Task) == "" {

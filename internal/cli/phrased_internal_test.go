@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/custody"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
@@ -329,6 +330,15 @@ func fixtures(t *testing.T) map[string]any {
 			Attach:  []string{"/usr/bin/tmux", "-S", filepath.Join(root, "terminals", "0123456789abcdef"), "attach-session", "-t", "worker"},
 		},
 		"task relaunch": machine.TaskRelaunched{Task: sampleID, Attempt: 2, Superseded: sampleID, Swept: "swept " + filepath.Join(root, "tasks", sampleID, "copy")},
+		"domain delegated": machine.Delegated{
+			Record:       store.Delegation{ID: 3, Domain: "parser", Delivery: config.DeliveryGated},
+			Attempt:      1,
+			Instructions: filepath.Join(root, "domains", "parser", "instructions.md"),
+		},
+		"delegation ended": machine.DelegationEnded{
+			Record:       store.Delegation{ID: 3, Domain: "parser", Delivery: config.DeliveryGated, EndedAt: store.Known(time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC))},
+			SessionEnded: true,
+		},
 		"task relay": machine.TaskRelayed{
 			Record: store.TaskRelay{TaskID: sampleID, Event: 6, RecordedAt: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)},
 			Event:  store.TaskEvent{TaskID: sampleID, Sequence: 6, Kind: store.FindingsRelayedEventKind},
@@ -463,6 +473,7 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 	carriesNothing := map[string]string{
 		"wakes acknowledged": "an acknowledgement answers with the wake rows' numbers and who the record says acknowledged them, and the set forbids neither",
 		"managed removal":    "a removal answers with the manager's name and the definition's path, which is in the user's own folders and not under the home, and the set forbids neither",
+		"delegation ended":   "an ended delegation answers with the record's domain, posture and instants and whether a session was ended, and the set forbids none of them",
 	}
 	phrased := 0
 	for _, r := range Renderings() {
@@ -917,7 +928,7 @@ func TestEveryEventTypeHasAPhrase(t *testing.T) {
 			if line != machine.PhraseWorkerSpoke.String() {
 				t.Errorf("a worker's history entry renders %q", line)
 			}
-		case ipc.TypeWakeQueued:
+		case ipc.TypeWakeQueued, ipc.TypeDomainWakeQueued:
 			if line != machine.PhraseNoticeQueued.String() {
 				t.Errorf("a pushed wake renders %q", line)
 			}

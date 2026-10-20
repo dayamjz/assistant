@@ -105,6 +105,14 @@ type Task struct {
 	// at creation and never moves; whether the blocker has cleared is
 	// resolved from the blocker's own records, never stored here.
 	BlockerTask Optional[string] `json:"blocker_task"`
+	// Domain is the domain the task belongs to, PRD section 8's domain
+	// column: written once at intake from the creator's placement, kept by
+	// promotion and relaunch, and never moved, because section 11 has
+	// ownership never transfer. Empty is the first coordinator's own, which
+	// is what every row written before the column existed reads as.
+	// CreateTask refuses a name home.ValidDomain refuses, and the schema
+	// refuses every later write of it.
+	Domain string `json:"domain,omitempty"`
 	// CreatedAt is when the task was recorded.
 	CreatedAt time.Time `json:"created_at"`
 	// StartSnapshot is what the task's isolated copy held when its latest
@@ -142,19 +150,23 @@ type Disposition struct {
 }
 
 const taskColumns = `SELECT rowid, id, shape, project, mode, worktree_path, run_id, pull_request,
-	repository_id, branch, blocker_task, created_at, start_snapshot, delivery, delivery_intent, role`
+	repository_id, branch, blocker_task, created_at, start_snapshot, delivery, delivery_intent, role, domain`
 
 func scanTask(sc scanner) (Task, error) {
 	var t Task
 	var shape, created string
-	var snapshot, delivery, role Optional[string]
+	var snapshot, delivery, role, domain Optional[string]
 	if err := sc.Scan(&t.Row, &t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath, &t.RunID,
-		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created, &snapshot, &delivery, &t.DeliveryIntent, &role); err != nil {
+		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created, &snapshot, &delivery, &t.DeliveryIntent, &role,
+		&domain); err != nil {
 		return Task{}, err
 	}
 	t.Shape = TaskShape(shape)
 	if text, ok := role.Get(); ok {
 		t.Role = text
+	}
+	if text, ok := domain.Get(); ok {
+		t.Domain = text
 	}
 	if text, ok := delivery.Get(); ok {
 		// A word outside the set was not written by CreateTask, and reading
@@ -232,6 +244,11 @@ func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, er
 	if t.DeliveryIntent.IsKnown() {
 		return Task{}, fmt.Errorf("store: task %s: a delivery intent is recorded by promotion, never at intake", t.ID)
 	}
+	if t.Domain != "" {
+		if err := home.ValidDomain(t.Domain); err != nil {
+			return Task{}, fmt.Errorf("store: task %s: %w", t.ID, err)
+		}
+	}
 	var delivery Optional[string]
 	if posture, ok := t.Delivery.Get(); ok {
 		if !posture.Recognized() {
@@ -265,10 +282,11 @@ func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, er
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO task (id, shape, project, mode, worktree_path, run_id, pull_request,
-				repository_id, branch, blocker_task, created_at, delivery, role)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				repository_id, branch, blocker_task, created_at, delivery, role, domain)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.ID, string(t.Shape), t.Project, t.Mode, t.WorktreePath,
-			t.RunID, t.PullRequest, t.RepositoryID, t.Branch, d.Blocker, encodeTime(now), delivery, role); err != nil {
+			t.RunID, t.PullRequest, t.RepositoryID, t.Branch, d.Blocker, encodeTime(now), delivery, role,
+			namedOrNull(t.Domain)); err != nil {
 			return err
 		}
 		kinds := []string{OpeningEventKind}

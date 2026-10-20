@@ -79,8 +79,9 @@ import (
 //
 // # Command line
 //
-// The configured entry's own flags, then GrantWorker's flags with
-// spec.Route exactly as Start writes them for a pipe worker, then
+// The configured entry's own flags, then the spec's grant's flags with
+// spec.Route exactly as Start writes them for a pipe worker, a grant
+// claudeTerminalGrantRefusal admits being GrantWorker's alone, then
 // --ax-screen-reader, which draws the interface as flat text, and
 // --session-id with an identifier drawn here, so the conversation is a new
 // one under a name this package chose and never one resumed. The
@@ -104,6 +105,9 @@ import (
 // if that ctx ends first.
 func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec WorkerSpec) (TerminalWorker, error) {
 	if err := spec.Validate(); err != nil {
+		return nil, err
+	}
+	if err := claudeTerminalGrantRefusal(spec); err != nil {
 		return nil, err
 	}
 	env, key, err := claudeTerminalCredential(WorkerEnvironment(r.settings.base, spec.Env), r.name)
@@ -171,6 +175,9 @@ func (r *claudeRunner) WorkerLaunchRefusal(t Terminal, spec WorkerSpec) error {
 	if t.Tmux == "" {
 		return nil
 	}
+	if err := claudeTerminalGrantRefusal(spec); err != nil {
+		return err
+	}
 	size, measures, err := r.TerminalLaunchCommandSize(t, spec)
 	if err != nil {
 		return err
@@ -185,8 +192,28 @@ func (r *claudeRunner) WorkerLaunchRefusal(t Terminal, spec WorkerSpec) error {
 	return nil
 }
 
+// claudeTerminalGrantRefusal refuses, with ErrTerminalGrantUnobserved, a
+// terminal spec whose grant runs the interface outside acceptEdits: the
+// ready screen claudeScreen reads, claudeFooterMark among it, was observed
+// in acceptEdits mode only, and GrantSubordinate runs in the default mode
+// so that it edits nothing. Widening the subordinate's grant to the
+// observed mode is not this package's decision, so the terminal-hosted
+// subordinate is refused and the pipe-hosted one, which reads no screen, is
+// the one this adapter starts.
+func claudeTerminalGrantRefusal(spec WorkerSpec) error {
+	if spec.Grant() == GrantWorker {
+		return nil
+	}
+	return &invocationFieldError{
+		field: "grant",
+		reason: fmt.Sprintf("a terminal worker under the %s grant runs the interface outside acceptEdits, where its ready screen was never observed",
+			spec.Grant()),
+		also: ErrTerminalGrantUnobserved,
+	}
+}
+
 func (r *claudeRunner) claudeTerminalWorkerArgs(spec WorkerSpec, session string) []string {
-	args := append(slices.Clone(r.extra), claudeGrantFlags(GrantWorker, spec.Route)...)
+	args := append(slices.Clone(r.extra), claudeGrantFlags(spec.Grant(), spec.Route)...)
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
 	}

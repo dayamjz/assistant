@@ -46,6 +46,8 @@ func TestMethodTableIsWrittenDownHere(t *testing.T) {
 		"catchup.mark":       true,
 		"usage.read":         false,
 		"run.log":            false,
+		"domain.delegate":    true,
+		"domain.end":         true,
 		"service.stop":       true,
 		"service.restart":    true,
 		"events.subscribe":   false,

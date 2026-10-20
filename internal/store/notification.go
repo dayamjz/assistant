@@ -49,7 +49,9 @@ var ErrNotificationSettled = errors.New("store: the notification is already sett
 var ErrUnknownNotification = errors.New("store: notification record is outside the closed set")
 
 // Notification is the record of one wake offered to the operator's notify
-// command, keyed by the wake. It is claimed before the command runs and
+// command, keyed by the wake: a task wake's in the notification table and a
+// domain wake's in domain_notification, WakeID naming the row of whichever
+// shape the accessor read. It is claimed before the command runs and
 // settled once after it ends, and the claim and the settlement are the
 // only two writes it takes; the table is sealed against every other. A
 // record claimed and not settled is a command whose end was not recorded,
@@ -129,6 +131,36 @@ func (s *Store) PendingNotifications(ctx context.Context, limit int) ([]Wake, er
 	return out, nil
 }
 
+// PendingDomainNotifications is PendingNotifications for the queue's
+// second shape: the queued domain wakes with no domain_notification
+// record, oldest first, at most limit of them, on the same terms.
+func (s *Store) PendingDomainNotifications(ctx context.Context, limit int) ([]DomainWake, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("store: a limit of %d pending domain notifications is not a batch size", limit)
+	}
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	return s.queryDomainWakes(ctx, "the pending domain notifications",
+		domainWakeColumns+` WHERE domain_wake.handled_at IS NULL
+		AND NOT EXISTS (SELECT 1 FROM domain_notification n WHERE n.domain_wake_id = domain_wake.id)
+		ORDER BY domain_wake.id LIMIT ?`, limit)
+}
+
+// notificationShape is which of the two notification records an accessor
+// writes: the task wake's, migration 46's notification keyed by wake_id,
+// or the domain wake's, migration 50's domain_notification keyed by
+// domain_wake_id. The two are the same record over the queue's two shapes,
+// so one implementation serves both and neither can drift from the other.
+type notificationShape struct {
+	table, key, wakes, noun string
+}
+
+var (
+	taskNotifications   = notificationShape{table: "notification", key: "wake_id", wakes: "wake", noun: "wake"}
+	domainNotifications = notificationShape{table: "domain_notification", key: "domain_wake_id", wakes: "domain_wake", noun: "domain wake"}
+)
+
 // ClaimNotification writes the claim for a wake and returns the record as
 // stored. The caller runs the command only after a claim it made succeeds,
 // so a wake two callers both read as pending is run by one of them. It
@@ -136,29 +168,39 @@ func (s *Store) PendingNotifications(ctx context.Context, limit int) ([]Wake, er
 // with ErrNotFound, one acknowledged with ErrNotificationNotOffered, and
 // one already claimed with ErrNotificationClaimed, each wrapped.
 func (s *Store) ClaimNotification(ctx context.Context, wakeID int64) (Notification, error) {
+	return s.claimNotification(ctx, taskNotifications, wakeID)
+}
+
+// ClaimDomainNotification is ClaimNotification for a domain wake, on the
+// same terms, in domain_notification.
+func (s *Store) ClaimDomainNotification(ctx context.Context, domainWakeID int64) (Notification, error) {
+	return s.claimNotification(ctx, domainNotifications, domainWakeID)
+}
+
+func (s *Store) claimNotification(ctx context.Context, shape notificationShape, wakeID int64) (Notification, error) {
 	now := encodeTime(nowUTC())
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		var handled Optional[string]
-		if err := tx.QueryRowContext(ctx, `SELECT handled_at FROM wake WHERE id = ?`, wakeID).Scan(&handled); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT handled_at FROM `+shape.wakes+` WHERE id = ?`, wakeID).Scan(&handled); err != nil {
 			return errNoRows(err)
 		}
 		if handled.IsKnown() {
 			return ErrNotificationNotOffered
 		}
 		var one int
-		switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM notification WHERE wake_id = ?`, wakeID).Scan(&one); {
+		switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM `+shape.table+` WHERE `+shape.key+` = ?`, wakeID).Scan(&one); {
 		case err == nil:
 			return ErrNotificationClaimed
 		case !isNoRows(err):
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO notification (wake_id, claimed_at) VALUES (?, ?)`, wakeID, now)
+		_, err := tx.ExecContext(ctx, `INSERT INTO `+shape.table+` (`+shape.key+`, claimed_at) VALUES (?, ?)`, wakeID, now)
 		return err
 	})
 	if err != nil {
-		return Notification{}, fmt.Errorf("store: claiming the notification of wake %d: %w", wakeID, err)
+		return Notification{}, fmt.Errorf("store: claiming the notification of %s %d: %w", shape.noun, wakeID, err)
 	}
-	return s.Notification(ctx, wakeID)
+	return s.notification(ctx, shape, wakeID)
 }
 
 // SettleNotification writes how the command ended onto a claimed record
@@ -167,28 +209,38 @@ func (s *Store) ClaimNotification(ctx context.Context, wakeID int64) (Notificati
 // with no claim with ErrNotFound, and a record already settled with
 // ErrNotificationSettled, each wrapped.
 func (s *Store) SettleNotification(ctx context.Context, wakeID int64, n NotificationSettlement) (Notification, error) {
+	return s.settleNotification(ctx, taskNotifications, wakeID, n)
+}
+
+// SettleDomainNotification is SettleNotification for a domain wake's
+// claim, on the same terms.
+func (s *Store) SettleDomainNotification(ctx context.Context, domainWakeID int64, n NotificationSettlement) (Notification, error) {
+	return s.settleNotification(ctx, domainNotifications, domainWakeID, n)
+}
+
+func (s *Store) settleNotification(ctx context.Context, shape notificationShape, wakeID int64, n NotificationSettlement) (Notification, error) {
 	if err := n.valid(); err != nil {
-		return Notification{}, fmt.Errorf("store: settling the notification of wake %d: %w", wakeID, err)
+		return Notification{}, fmt.Errorf("store: settling the notification of %s %d: %w", shape.noun, wakeID, err)
 	}
 	detail := s.redact.Redact(n.Detail)
 	now := encodeTime(nowUTC())
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		var outcome Optional[string]
-		if err := tx.QueryRowContext(ctx, `SELECT outcome FROM notification WHERE wake_id = ?`, wakeID).Scan(&outcome); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT outcome FROM `+shape.table+` WHERE `+shape.key+` = ?`, wakeID).Scan(&outcome); err != nil {
 			return errNoRows(err)
 		}
 		if outcome.IsKnown() {
 			return ErrNotificationSettled
 		}
 		_, err := tx.ExecContext(ctx,
-			`UPDATE notification SET outcome = ?, exit_code = ?, detail = ?, settled_at = ? WHERE wake_id = ? AND outcome IS NULL`,
+			`UPDATE `+shape.table+` SET outcome = ?, exit_code = ?, detail = ?, settled_at = ? WHERE `+shape.key+` = ? AND outcome IS NULL`,
 			string(n.Outcome), optionalInt64(n.ExitCode), detail, now, wakeID)
 		return err
 	})
 	if err != nil {
-		return Notification{}, fmt.Errorf("store: settling the notification of wake %d: %w", wakeID, err)
+		return Notification{}, fmt.Errorf("store: settling the notification of %s %d: %w", shape.noun, wakeID, err)
 	}
-	return s.Notification(ctx, wakeID)
+	return s.notification(ctx, shape, wakeID)
 }
 
 // Notification returns the notification record of a wake, or ErrNotFound,
@@ -196,6 +248,16 @@ func (s *Store) SettleNotification(ctx context.Context, wakeID int64, n Notifica
 // a home that names no notify command. A stored outcome outside the closed
 // set is ErrUnknownNotification, wrapped.
 func (s *Store) Notification(ctx context.Context, wakeID int64) (Notification, error) {
+	return s.notification(ctx, taskNotifications, wakeID)
+}
+
+// DomainNotification is Notification for a domain wake, whose identifier
+// the record's WakeID then carries.
+func (s *Store) DomainNotification(ctx context.Context, domainWakeID int64) (Notification, error) {
+	return s.notification(ctx, domainNotifications, domainWakeID)
+}
+
+func (s *Store) notification(ctx context.Context, shape notificationShape, wakeID int64) (Notification, error) {
 	if err := s.live(); err != nil {
 		return Notification{}, err
 	}
@@ -204,22 +266,22 @@ func (s *Store) Notification(ctx context.Context, wakeID int64) (Notification, e
 	var outcome, settled Optional[string]
 	var code Optional[int64]
 	err := s.read.QueryRowContext(ctx,
-		`SELECT wake_id, claimed_at, outcome, exit_code, detail, settled_at FROM notification WHERE wake_id = ?`, wakeID).
+		`SELECT `+shape.key+`, claimed_at, outcome, exit_code, detail, settled_at FROM `+shape.table+` WHERE `+shape.key+` = ?`, wakeID).
 		Scan(&n.WakeID, &claimed, &outcome, &code, &n.Detail, &settled)
 	if err != nil {
-		return Notification{}, fmt.Errorf("store: reading the notification of wake %d: %w", wakeID, errNoRows(err))
+		return Notification{}, fmt.Errorf("store: reading the notification of %s %d: %w", shape.noun, wakeID, errNoRows(err))
 	}
 	if n.ClaimedAt, err = decodeTime(claimed); err != nil {
-		return Notification{}, fmt.Errorf("store: reading the notification of wake %d: %w", wakeID, err)
+		return Notification{}, fmt.Errorf("store: reading the notification of %s %d: %w", shape.noun, wakeID, err)
 	}
 	if n.SettledAt, err = optionalTimeValue(settled, "settled_at"); err != nil {
-		return Notification{}, fmt.Errorf("store: reading the notification of wake %d: %w", wakeID, err)
+		return Notification{}, fmt.Errorf("store: reading the notification of %s %d: %w", shape.noun, wakeID, err)
 	}
 	n.ExitCode = optionalIntValue(code)
 	if o, ok := outcome.Get(); ok {
 		n.Outcome = Known(NotificationOutcome(o))
 		if err := (NotificationSettlement{Outcome: NotificationOutcome(o), ExitCode: n.ExitCode}).valid(); err != nil {
-			return Notification{}, fmt.Errorf("store: reading the notification of wake %d: %w", wakeID, err)
+			return Notification{}, fmt.Errorf("store: reading the notification of %s %d: %w", shape.noun, wakeID, err)
 		}
 	}
 	return n, nil
@@ -235,8 +297,9 @@ func (s *Store) Notification(ctx context.Context, wakeID int64) (Notification, e
 //
 // The fault is a trigger in the database itself, so it holds for every
 // connection to the file until it is lifted; a test lifts it before the
-// store is closed. It takes a testing.TB so it cannot be called from
-// anything but a test, and it refuses a nil one.
+// store is closed. It takes a testing.TB and refuses a nil one, so a
+// production path does not reach it by accident; that does not stop a
+// deliberate caller that builds a testing.T of its own.
 func (s *Store) RefuseNotificationClaimsForTest(ctx context.Context, tb testing.TB) (func() error, error) {
 	if tb == nil {
 		return nil, fmt.Errorf("store: RefuseNotificationClaimsForTest is a test's fault injector and takes the test")

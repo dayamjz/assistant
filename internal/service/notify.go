@@ -25,9 +25,15 @@ import (
 // next service of the home and not this one. Empty, the default, starts
 // nothing: no goroutine, no command, no record.
 //
-// For each wake the supervisor loop appends, the command is run once with
-// the wake's row on standard input: one line of the JSON store.Wake encodes
-// to, as the record holds it when it is offered, and then end of file. That
+// For each wake the supervisor loop appends, of either of the queue's two
+// shapes, the command is run once with the wake's row on standard input:
+// one line of the JSON store.Wake encodes to for a wake about a task, or of
+// the JSON store.DomainWake encodes to for a wake about a domain, as the
+// record holds it when it is offered, and then end of file. A task wake's
+// line names the task in "task_id"; a domain wake's names the delegation in
+// "delegation" and the domain in "domain" and carries no "task_id", so the
+// command tells the two apart by those fields, and "kind" is
+// subordinate-gone, subordinate-escalated or hold-opened for the second. That
 // is the row bare, not the ipc.Event wakes.subscribe pushes: the stream
 // carries the same encoding as an event's payload, beside its type and
 // revision, and the command is given no such envelope. Every field of that row is a closed word,
@@ -63,13 +69,16 @@ import (
 // the bell before each read, so a row appended after the read is not
 // missed. What it sends is decided from the record and never from the
 // ring: store.PendingNotifications is the queued wakes with no notification
-// record, oldest first, so a wake appended before a restart and not yet
-// offered is offered by the next service.
+// record, oldest first, and store.PendingDomainNotifications the same for
+// the domain wakes, so a wake appended before a restart and not yet offered
+// is offered by the next service. A pass offers the task wakes first.
 //
-// Each wake is claimed before its command runs (store.ClaimNotification),
-// and the claim is the whole of what keeps it from being sent twice: a wake
-// with any record is never offered again, so delivery is at most once. The
-// claim is settled once when the command ends (store.SettleNotification):
+// Each wake is claimed before its command runs (store.ClaimNotification,
+// or store.ClaimDomainNotification for a domain wake, in a record of its
+// own), and the claim is the whole of what keeps it from being sent twice:
+// a wake with any record is never offered again, so delivery is at most
+// once. The claim is settled once when the command ends
+// (store.SettleNotification, store.SettleDomainNotification):
 // sent for a command that exited zero, failed for one that exited non-zero,
 // could not start, ran past notifyBound, or was ended by the service
 // closing, each with its exit status when it reported one and a detail
@@ -184,9 +193,9 @@ func (s *Service) startNotifier(hooks supervisionHooks) {
 }
 
 // notifyPending offers every pending wake to the command, oldest first,
-// until a read finds none or ctx ends, and reports true. It reports false,
-// having logged why once, when the store refused the read or a claim, which
-// ends the pass at that wake.
+// task wakes and then domain wakes, until a read of each finds none or ctx
+// ends, and reports true. It reports false, having logged why once, when
+// the store refused a read or a claim, which ends the pass at that wake.
 func (s *Service) notifyPending(ctx context.Context, line string, bound time.Duration) bool {
 	for ctx.Err() == nil {
 		pending, err := s.store.PendingNotifications(ctx, notifyBatch)
@@ -196,14 +205,29 @@ func (s *Service) notifyPending(ctx context.Context, line string, bound time.Dur
 			}
 			return false
 		}
-		if len(pending) == 0 {
+		pendingDomain, err := s.store.PendingDomainNotifications(ctx, notifyBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				s.log.Printf("could not read the domain wakes to notify: %v", err)
+			}
+			return false
+		}
+		if len(pending)+len(pendingDomain) == 0 {
 			return true
 		}
 		for _, w := range pending {
 			if ctx.Err() != nil {
 				return true
 			}
-			if !s.notifyOne(ctx, line, bound, w) {
+			if !s.notifyOne(ctx, line, bound, taskNotice(s.store, w)) {
+				return false
+			}
+		}
+		for _, w := range pendingDomain {
+			if ctx.Err() != nil {
+				return true
+			}
+			if !s.notifyOne(ctx, line, bound, domainNotice(s.store, w)) {
 				return false
 			}
 		}
@@ -211,34 +235,73 @@ func (s *Service) notifyPending(ctx context.Context, line string, bound time.Dur
 	return true
 }
 
+// notice is one wake of either shape as the sender offers it: what names
+// it in the log, the row the command is given, and the claim and the
+// settlement of its own record, so the once-only terms are written once.
+type notice struct {
+	label  string
+	row    any
+	claim  func(context.Context) error
+	settle func(context.Context, store.NotificationSettlement) error
+}
+
+// taskNotice is a task wake's notice: its row as store.Wake encodes it,
+// claimed and settled in the notification table.
+func taskNotice(records *store.Store, w store.Wake) notice {
+	return notice{
+		label: fmt.Sprintf("wake %d of task %s", w.ID, w.TaskID),
+		row:   w,
+		claim: func(ctx context.Context) error { _, err := records.ClaimNotification(ctx, w.ID); return err },
+		settle: func(ctx context.Context, n store.NotificationSettlement) error {
+			_, err := records.SettleNotification(ctx, w.ID, n)
+			return err
+		},
+	}
+}
+
+// domainNotice is a domain wake's notice: its row as store.DomainWake
+// encodes it, which names the delegation and the domain where a task
+// wake's names a task, claimed and settled in domain_notification.
+func domainNotice(records *store.Store, w store.DomainWake) notice {
+	return notice{
+		label: fmt.Sprintf("domain wake %d of domain %s", w.ID, w.Domain),
+		row:   w,
+		claim: func(ctx context.Context) error { _, err := records.ClaimDomainNotification(ctx, w.ID); return err },
+		settle: func(ctx context.Context, n store.NotificationSettlement) error {
+			_, err := records.SettleDomainNotification(ctx, w.ID, n)
+			return err
+		},
+	}
+}
+
 // notifyOne claims one wake, runs the command for it, and settles the claim.
 // A wake already claimed or acknowledged since the read is passed over. It
 // reports false, having logged why, only when the store refused the claim
 // for another reason, so nothing was run.
-func (s *Service) notifyOne(ctx context.Context, line string, bound time.Duration, w store.Wake) bool {
-	if _, err := s.store.ClaimNotification(ctx, w.ID); err != nil {
+func (s *Service) notifyOne(ctx context.Context, line string, bound time.Duration, n notice) bool {
+	if err := n.claim(ctx); err != nil {
 		if errors.Is(err, store.ErrNotificationClaimed) || errors.Is(err, store.ErrNotificationNotOffered) || ctx.Err() != nil {
 			return true
 		}
-		s.log.Printf("could not claim the notification of wake %d, and the pass ends there: %v", w.ID, err)
+		s.log.Printf("could not claim the notification of %s, and the pass ends there: %v", n.label, err)
 		return false
 	}
-	settlement := s.runNotify(ctx, line, bound, w)
+	settlement := s.runNotify(ctx, line, bound, n.row)
 	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notifySettleBound)
 	defer cancel()
-	if _, err := s.store.SettleNotification(settleCtx, w.ID, settlement); err != nil {
-		s.log.Printf("could not record how the notification of wake %d ended: %v", w.ID, err)
+	if err := n.settle(settleCtx, settlement); err != nil {
+		s.log.Printf("could not record how the notification of %s ended: %v", n.label, err)
 		return true
 	}
 	if settlement.Outcome == store.NotificationFailed {
-		s.log.Printf("the notify command failed for wake %d of task %s: %s", w.ID, w.TaskID, redact.New().Redact(settlement.Detail))
+		s.log.Printf("the notify command failed for %s: %s", n.label, redact.New().Redact(settlement.Detail))
 	}
 	return true
 }
 
 // runNotify runs the command once with the wake's row on standard input and
 // says how it ended.
-func (s *Service) runNotify(ctx context.Context, line string, bound time.Duration, w store.Wake) store.NotificationSettlement {
+func (s *Service) runNotify(ctx context.Context, line string, bound time.Duration, w any) store.NotificationSettlement {
 	row, err := json.Marshal(w)
 	if err != nil {
 		return store.NotificationSettlement{Outcome: store.NotificationFailed,

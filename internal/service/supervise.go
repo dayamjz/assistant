@@ -341,6 +341,9 @@ type passReport struct {
 	// Err is a failure that ended the pass before any task was read.
 	Err   error
 	Tasks map[string]taskReport
+	// Delegations is the pass over every standing delegation, keyed by
+	// domain, on delegations.go's terms; nil when none stands.
+	Delegations map[string]taskReport
 }
 
 // taskReport is one task's part of a pass.
@@ -500,6 +503,14 @@ func (s *Service) passAndReport(c *incarnation, reply chan<- passReport) (replac
 			}
 		}
 	}
+	for domain, dr := range report.Delegations {
+		if dr.Err != nil {
+			s.log.Printf("supervisor incarnation %d could not record its pass over domain %s: %v", c.inc.Epoch(), domain, dr.Err)
+			if errors.Is(dr.Err, store.ErrStaleIncarnation) {
+				replaced = true
+			}
+		}
+	}
 	switch {
 	case reply != nil:
 		reply <- report
@@ -553,6 +564,10 @@ func (s *Service) pass(c *incarnation) passReport {
 		id := o.Snapshot.Task.ID
 		report.Tasks[id] = s.superviseTask(c, o, probes, unacknowledged[id] > 0, unread[id], now, &providerWideSurfaced)
 	}
+	// The delegations after the tasks, on delegations.go's terms: each
+	// standing one's subordinate probed, its gone surfaced on the queue's
+	// second shape, and the bound's hold registered for one past it.
+	report.Delegations = s.superviseDelegations(c, now)
 	return report
 }
 
@@ -579,6 +594,17 @@ func (s *Service) superviseTask(c *incarnation, o taskstate.Observed, probes map
 	obs.surfaced = make(map[string]bool, len(wakes))
 	for _, w := range wakes {
 		obs.surfaced[surfacedKey(supervisor.Kind(w.Kind), w.Marker)] = true
+	}
+	if o.Snapshot.Task.Domain != "" {
+		// A task in a domain may carry decisions its subordinate handed up,
+		// read from the escalation record and never from the history (P8);
+		// a task in no domain has none, so the read is spared.
+		ctx, cancel = s.sup.bound(c.ctx)
+		obs.escalations, err = s.store.TaskEscalations(ctx, id)
+		cancel()
+		if err != nil {
+			return taskReport{Watched: obs.watched, Err: err}
+		}
 	}
 	if n := len(o.Snapshot.Attempts); n > 0 {
 		obs.ref, _ = o.Snapshot.Attempts[n-1].SessionRef.Get()
@@ -642,7 +668,9 @@ func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 		out.Detections[i].Disposition = appended.Disposition
 		if appended.Disposition == store.WakeAppended {
 			s.wakeBell.ring()
-			s.publishWake(appended.Wake)
+			ctx, cancel := s.sup.bound(c.ctx)
+			s.publishWake(ctx, appended.Wake)
+			cancel()
 		}
 	}
 	if surfaced == 0 && d.write {
@@ -685,6 +713,10 @@ type observation struct {
 	// unread is every message to the task the record says was written and
 	// not acknowledged, oldest first, read from the message record (P8).
 	unread []store.Message
+	// escalations is every decision the task's domain's subordinate
+	// coordinator handed up about it, oldest first, read from the
+	// escalation record (P8), and empty for a task in no domain.
+	escalations []store.Escalation
 }
 
 // decision is what decide composed for one task: the detections with their
@@ -708,10 +740,11 @@ func surfacedKey(kind supervisor.Kind, marker string) string { return string(kin
 // run whose record stands held and whose hold has not surfaced, unless an
 // open hold record names that run, which already carries it, a message
 // written and not acknowledged once escalation_window has elapsed from the
-// instant the record says it was written, not yet surfaced, and for a
-// watched task each event past the marker's sequence and then its terminal.
-// The first three are made for every task, watched or not, and each
-// surfaces once: its key is in the wake table afterwards. The
+// instant the record says it was written, not yet surfaced, a decision the
+// task's domain's subordinate coordinator handed up, not yet surfaced, and
+// for a watched task each event past the marker's sequence and then its
+// terminal. The first four are made for every task, watched or not, and
+// each surfaces once: its key is in the wake table afterwards. The
 // terminal
 // reading is one of: terminal gone, with the case and the unobserved-since
 // instant in the marker, surfaced once per reference and case and then
@@ -772,6 +805,14 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 		}
 		wake, _ := supervisor.Of(supervisor.KindMessageUnacknowledged)
 		detect(wake, marker, supervisor.WindowElapsed, false, supervisor.Stall{})
+	}
+	for _, e := range o.escalations {
+		marker := escalationMarker(e.ID)
+		if seen(supervisor.KindSubordinateEscalated, marker) {
+			continue
+		}
+		wake, _ := supervisor.Of(supervisor.KindSubordinateEscalated)
+		detect(wake, marker, supervisor.WindowOpen, false, supervisor.Stall{})
 	}
 	if !o.watched {
 		d.write = len(d.detections) > 0
@@ -870,6 +911,11 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 // already in the wake table is not made again and the store holds the pair
 // unique.
 func messageUnacknowledgedMarker(id int64) string { return fmt.Sprintf("message:%d", id) }
+
+// escalationMarker composes a handed-up decision's wake marker on
+// messageUnacknowledgedMarker's terms: the escalation record's identifier,
+// so each record surfaces once.
+func escalationMarker(id int64) string { return fmt.Sprintf("escalation:%d", id) }
 
 // runHeldMarker composes the marker of the wake for a run moved to held:
 // the run and how many moves into held its record counts, which

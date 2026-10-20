@@ -41,6 +41,7 @@ func TestMain(m *testing.M) {
 	forgetest.Main()
 	hookMain()
 	callMain()
+	listenMain()
 	service.EarlierServiceMain()
 	// After every verb this binary answers as another process, because a
 	// hook, a call and an earlier service are the processes they are and
@@ -181,6 +182,62 @@ func callMain() {
 	}
 	fmt.Fprint(os.Stdout, string(answer))
 	os.Exit(0)
+}
+
+// listenVerb is the first argument that makes this binary hold the wake
+// stream and report the first wake it is pushed.
+const listenVerb = "ipc-listen"
+
+// listenMain lets this binary hold wakes.subscribe from a process a test
+// placed, as callMain makes one call, so the stream the service attaches it
+// to is decided from that process's credentials. It takes the socket and a
+// file it creates once the stream opened with its gap marker, then writes
+// the first ipc.TypeWakeQueued event's payload to standard output and exits
+// zero; a refusal writes the wire code to standard error and exits one, and
+// a stream that pushed no wake within a minute exits three. Nothing here
+// decides anything: it is internal/ipc's client over its arguments.
+func listenMain() {
+	if len(os.Args) != 4 || os.Args[1] != listenVerb {
+		return
+	}
+	socket, ready := os.Args[2], os.Args[3]
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	client, err := ipc.Dial(ctx, socket, ipc.ClientConfig{})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dial:", err)
+		os.Exit(2)
+	}
+	defer func() { _ = client.Close() }()
+	stream, err := client.SubscribeTo(ctx, ipc.MethodWakesSubscribe, nil)
+	if err != nil {
+		var wire *ipc.Error
+		if errors.As(err, &wire) {
+			fmt.Fprint(os.Stderr, string(wire.Code))
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "subscribe:", err)
+		os.Exit(2)
+	}
+	defer stream.Close()
+	for {
+		event, err := stream.Recv(ctx)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "recv:", err)
+			os.Exit(3)
+		}
+		if event.Type == ipc.TypeGap {
+			if err := os.WriteFile(ready, nil, 0o600); err != nil {
+				fmt.Fprintln(os.Stderr, "ready:", err)
+				os.Exit(2)
+			}
+			continue
+		}
+		if event.Type == ipc.TypeWakeQueued {
+			fmt.Fprint(os.Stdout, string(event.Payload))
+			os.Exit(0)
+		}
+	}
 }
 
 // platformIdentifiesPeers reports whether internal/ipc has a read for local

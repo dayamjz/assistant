@@ -386,11 +386,12 @@ func (in *invocation) serveHere(parent context.Context, underManager bool) error
 		return err
 	}
 	running, err := service.Open(ctx, service.Options{
-		Home:        in.home,
-		NewStages:   stages.All,
-		NewFixer:    stages.Fix,
-		Build:       build,
-		WorkerRoute: workerRoute(in.env.Executable, in.home.Root()),
+		Home:             in.home,
+		NewStages:        stages.All,
+		NewFixer:         stages.Fix,
+		Build:            build,
+		WorkerRoute:      workerRoute(in.env.Executable, in.home.Root()),
+		CoordinatorRoute: coordinatorRoute(in.env.Executable, in.home.Root()),
 	})
 	if err != nil {
 		return err

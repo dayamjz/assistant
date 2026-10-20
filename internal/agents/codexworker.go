@@ -30,12 +30,36 @@ import (
 // declined, and a server request this client does not understand is
 // refused. A command the sandbox runs without asking is the CLI's own.
 // Terminal workers are not declared.
+//
+// A subordinate coordinator is refused with ErrGrantUnenforced before
+// anything starts: the commands the workspace-write sandbox runs without
+// asking never reach this client, so it cannot deny git, or every command
+// but the route, as GrantSubordinate states.
 func (r *codexRunner) WorkerLaunchRefusal(_ Terminal, spec WorkerSpec) error {
-	return spec.Validate()
+	if err := spec.Validate(); err != nil {
+		return err
+	}
+	return codexGrantRefusal(spec)
+}
+
+// codexGrantRefusal refuses a spec whose grant this adapter cannot hold
+// the agent to, on WorkerLaunchRefusal's terms.
+func codexGrantRefusal(spec WorkerSpec) error {
+	if spec.Grant() == GrantWorker {
+		return nil
+	}
+	return &invocationFieldError{
+		field:  "grant",
+		reason: fmt.Sprintf("the Codex app-server runs sandboxed commands without asking, so the %s grant cannot be enforced", spec.Grant()),
+		also:   ErrGrantUnenforced,
+	}
 }
 
 func (r *codexRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error) {
 	if err := spec.Validate(); err != nil {
+		return nil, err
+	}
+	if err := codexGrantRefusal(spec); err != nil {
 		return nil, err
 	}
 	if !utf8.ValidString(spec.Instructions) {

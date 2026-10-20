@@ -16,7 +16,18 @@ package agents
 // did without a person answering a prompt. Its grant allows those rather
 // than denying everything else, so it does not narrow what the agent's own
 // settings already allow, and git runs whatever a repository's hooks and
-// configuration name.
+// configuration name. A subordinate coordinator coordinates and edits
+// nothing: it reads, it is denied editing and git, and it is allowed the
+// one command line its route names, the coordinator client, so what it does
+// to a home through the program is what the service admits that client to.
+// Like a review it is denied only what its grant names, so another command
+// its agent's own settings allow stays allowed. The Claude Code adapter
+// writes it as flags, the Cursor adapter holds every permission request to
+// it, and the Codex adapter, which cannot, refuses a subordinate with
+// ErrGrantUnenforced. Which of the two
+// a started process runs under is the entry point's, OpenWorker or
+// OpenSubordinate, and never the spec's: WorkerSpec.Grant reads a field only
+// those set.
 //
 // What a grant buys is the command line an adapter writes for it, and an
 // adapter states its translation beside its argument builder. Claude Code,
@@ -49,6 +60,12 @@ const (
 	// line, so what the route runs with whatever follows the prefix is the
 	// routed program's to refuse.
 	GrantWorker
+	// GrantSubordinate reads and runs commands beginning with
+	// WorkerSpec.Route when the spec names one, and is denied editing and
+	// git, and, with no route, every command. It is a subordinate
+	// coordinator's, which the route reaches the program through and which
+	// edits nothing.
+	GrantSubordinate
 )
 
 // String names the grant for a record or a test's failure message.
@@ -60,6 +77,8 @@ func (g Grant) String() string {
 		return "edit"
 	case GrantWorker:
 		return "worker"
+	case GrantSubordinate:
+		return "subordinate"
 	}
 	return "unknown"
 }

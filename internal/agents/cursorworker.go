@@ -21,9 +21,12 @@ import (
 // the process through Close; startup's context does not own its lifetime.
 //
 // Permission requests allow file reads/edits and literal git or worker-route
-// commands, once. Unknown requests and shell operators are refused. This is
-// a policy for requests the CLI asks; settings that preapprove tools are not
-// narrowed here. Cursor terminal workers are not declared.
+// commands, once. Unknown requests and shell operators are refused. Under
+// GrantSubordinate, which only OpenSubordinate selects, the same handler
+// allows reads and searches and the literal route command alone: an edit
+// and a git command are refused. This is a policy for requests the CLI
+// asks; settings that preapprove tools are not narrowed here, which is the
+// residual gap either grant has. Cursor terminal workers are not declared.
 func (r *cursorRunner) WorkerLaunchRefusal(_ Terminal, spec WorkerSpec) error {
 	return spec.Validate()
 }
@@ -56,7 +59,7 @@ func (r *cursorRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 	if err != nil {
 		return nil, err
 	}
-	w := &acpWorker{route: spec.Route, pending: map[uint64]chan acpMessage{}, send: make(chan struct{}, 1)}
+	w := &acpWorker{route: spec.Route, grant: spec.Grant(), pending: map[uint64]chan acpMessage{}, send: make(chan struct{}, 1)}
 	w.procWorker = &procWorker{cmd: cmd, availability: &workerAvailability{agent: CursorName}, stdin: input, out: &tailWriter{limit: r.settings.maxOut}, grace: r.settings.grace, done: make(chan struct{}), slot: make(chan struct{}, 1), frame: plainLine, format: OutputStreamJSON, stdinOpen: true}
 	cmd.Stdout = &acpLines{worker: w, limit: r.settings.maxOut}
 	cmd.Stderr = w.out
@@ -123,6 +126,9 @@ type acpWorker struct {
 	send           chan struct{}
 	turn           <-chan acpMessage
 	session, route string
+	// grant is the grant the worker was started under, which the
+	// permission handler holds every request to.
+	grant Grant
 }
 
 func (w *acpWorker) request(ctx context.Context, method string, params any) (<-chan acpMessage, error) {
@@ -327,11 +333,15 @@ func (w *acpWorker) permission(params json.RawMessage) string {
 	if json.Unmarshal(params, &p) != nil {
 		return ""
 	}
-	allowed := p.Tool.Kind == "read" || p.Tool.Kind == "edit" || p.Tool.Kind == "search"
+	// A subordinate coordinator edits nothing and runs no git: only its
+	// route is a command it may run.
+	subordinate := w.grant == GrantSubordinate
+	allowed := p.Tool.Kind == "read" || p.Tool.Kind == "search" || (p.Tool.Kind == "edit" && !subordinate)
 	if p.Tool.Kind == "execute" {
 		command := strings.TrimSpace(p.Tool.Input.Command)
 		literal := command != "" && !strings.ContainsAny(command, ";&|><`$()\r\n")
-		allowed = literal && (command == "git" || strings.HasPrefix(command, "git ") || (w.route != "" && (command == w.route || strings.HasPrefix(command, w.route+" "))))
+		git := !subordinate && (command == "git" || strings.HasPrefix(command, "git "))
+		allowed = literal && (git || (w.route != "" && (command == w.route || strings.HasPrefix(command, w.route+" "))))
 	}
 	if allowed {
 		for _, option := range p.Options {

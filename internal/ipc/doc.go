@@ -186,6 +186,15 @@
 // a class meaning "the coordinator only" would need that set as an input of
 // this package, and the set is a fact about processes a service started.
 // ErrWorker and ErrNotWorker are the two refusals that cross the wire for it.
+// The same relation has a second answer, whether the peer is a domain's
+// subordinate coordinator, decided by the handler from internal/service's
+// subordinate set over the same credentials and still not a class here: PRD
+// section 9's grant admits such a peer to the coordinator's task and wake
+// methods within its domain and refuses it the rest, and ErrSubordinate and
+// ErrOutsideDomain are the two refusals that cross the wire for it, the
+// second for a task the handler reads as outside the peer's domain.
+// MethodDomainDelegate and MethodDomainEnd are the two methods that start
+// and end that placement, both coordinator-only.
 //
 // A third relation over the same credentials, whether the peer is in the
 // foreground of its controlling terminal, is decided the same way and is not
