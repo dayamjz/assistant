@@ -190,7 +190,7 @@ func TestARestrictedStreamsHandlerMayChooseItsPublisher(t *testing.T) {
 			if name == "alpha" {
 				return alpha, nil
 			}
-			return nil, fmt.Errorf("%w: %v", ipc.ErrRefused, refused)
+			return nil, fmt.Errorf("%w: %w", ipc.ErrRefused, refused)
 		}
 	})
 	c := h.dial(t, ipc.ClientConfig{})
