@@ -384,6 +384,49 @@ func TaskPhrase(t Task) Phrase {
 	return phraseByState[taskstate.Unknown]
 }
 
+// UncertaintiesPhrase is the row counting the uncertainties an
+// investigation's stored report names. It carries the count and never a
+// remark's text, which is the worker's and reaches a person only through
+// the structured answer it points at (P13). An uncertainty holds nothing,
+// which the row says, because one that needs a decision is filed as an ask
+// and is answered as the task's hold.
+func UncertaintiesPhrase(n int) Phrase {
+	return Phrase{
+		Outcome:     fmt.Sprintf("Its report names %d question(s) the worker could not settle.", n),
+		Consequence: "None of them is waiting on you; anything that needs your decision is asked of you separately.",
+		Decision:    "Read them with assistant --json tasks and the work's identifier.",
+	}
+}
+
+// FollowUpsPhrase is the row counting the follow-ups an investigation's
+// stored report recommends, on UncertaintiesPhrase's terms: the count and
+// never the text. A follow-up starts nothing, which the row says.
+func FollowUpsPhrase(n int) Phrase {
+	return Phrase{
+		Outcome:     fmt.Sprintf("Its report recommends %d piece(s) of further work.", n),
+		Consequence: "Nothing starts from them on its own.",
+		Decision:    "Read them with assistant --json tasks and the work's identifier, then decide whether to take any of them up.",
+	}
+}
+
+// ReportRemarkPhrases is the rows a person reads below a task's line about
+// its stored report's remarks: UncertaintiesPhrase when the report names
+// any, then FollowUpsPhrase when it recommends any. A task with no stored
+// report, or a report with neither, has none.
+func ReportRemarkPhrases(t Task) []Phrase {
+	if t.Report == nil {
+		return nil
+	}
+	var out []Phrase
+	if n := len(t.Report.Uncertainties); n > 0 {
+		out = append(out, UncertaintiesPhrase(n))
+	}
+	if n := len(t.Report.FollowUps); n > 0 {
+		out = append(out, FollowUpsPhrase(n))
+	}
+	return out
+}
+
 // noteTailed reports whether kind is one of internal/taskstate's note kinds the
 // program appends about its own decisions: a kind that claims no state and
 // that a worker may not write. A worker's own note is a different thing, a
@@ -1797,7 +1840,8 @@ var PhraseNoReading = Phrase{
 // which is what the vocabulary test walks: the pull guard's three rows, the
 // stop guard's two turn rows, a row per task state, the hold tier's row,
 // NoWordYet, the local landing row and the two rows for an answer given a
-// task that reached no decision, a row per outcome and the three OutcomeExecuting splits into,
+// task that reached no decision, the two rows counting a stored report's
+// uncertainties and follow-ups, a row per outcome and the three OutcomeExecuting splits into,
 // the three hold rows (open, answered, and open naming a task), the six
 // rows for an answer to a task's hold and the two cleanup rows, the row for
 // a turn-end check that would run in the background, the
@@ -1842,6 +1886,7 @@ func TablePhrases() []Phrase {
 		}
 	}
 	out = append(out, phraseTaskHeld, NoWordYet, phraseWorkerUnseen, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
+	out = append(out, UncertaintiesPhrase(2), FollowUpsPhrase(1))
 	for _, outcome := range Outcomes() {
 		if p, ok := phraseByOutcome[outcome]; ok {
 			out = append(out, p)

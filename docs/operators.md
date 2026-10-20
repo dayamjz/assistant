@@ -246,7 +246,7 @@ does not stay in the copy; a report the service refuses leaves the file in
 place to be corrected. `--file -` still reads the report from standard
 input.
 
-Three things follow for whoever runs the service:
+What follows for whoever runs the service:
 
 - The prefix is fixed when the service starts. A binary moved or replaced
   afterwards, or a home moved, is not seen by a running service's workers
@@ -263,6 +263,18 @@ Three things follow for whoever runs the service:
   worker has ended, which it does when it exits on its own or when the
   coordinator stops it, and only on the cleanup check's proof. A report
   filed by a worker that is still running keeps its copy.
+- Beside its findings and evidence, a report may carry `uncertainties`,
+  what the worker could not settle, and `follow_ups`, further work it
+  recommends, each a list of `{"text": ..., "location": ...}` with the
+  location optional. Neither is a finding: they register no hold, start
+  nothing, and do not keep the task `held`, so a question the worker needs
+  a person to decide has to be an `ask` finding. A report that puts an
+  `action` on an uncertainty or a follow-up is refused (the defect
+  `action-outside-finding`, naming the entry) and nothing is filed. A
+  credential written into either is removed before the report is stored,
+  as it is from every other part of the report. The plain `assistant tasks`
+  line counts each list on a line of its own and never prints their text;
+  `assistant --json tasks ID` carries both under `report`.
 - Once its report is stored, an investigation reads `reported` whether its
   worker is still running or has ended, and `held` only while a decision the
   report raised is open. A worker that ends after filing is not a crash: a
@@ -273,10 +285,11 @@ Three things follow for whoever runs the service:
 - The stored report survives a service restart: after stop and reopen,
   `assistant --json tasks ID` still reads `reported` (or `held` while a
   decision is open), the same open holds, and the same report body at
-  `report` (`summary`, `findings`, `evidence`, `evidence_file`,
-  `recorded_at`). The plain `assistant tasks` line does not print the
-  report; it points at that `--json` read, because the report is evidence
-  to open rather than text to relay.
+  `report` (`summary`, `findings`, `evidence`, `uncertainties`,
+  `follow_ups`, `evidence_file`, `recorded_at`). The plain
+  `assistant tasks` line does not print the report; it points at that
+  `--json` read, because the report is evidence to open rather than text
+  to relay.
 - Filing a report releases a task the coordinator queued behind the
   investigation as soon as it reads `reported`, without waiting for a run
   to finish or a restart. One whose report raised decisions reads `held`

@@ -143,6 +143,92 @@ func TestAnInvestigationsReportIsVisibleAndSurvivesRestart(t *testing.T) {
 	vocabtest.Assert(t, plainReported.stdout)
 }
 
+// AGE-359: an investigation's uncertainties and follow-ups, filed through
+// the real `assistant worker report` route, reach the structured answer and
+// register no hold, so a report whose only finding is a note reads Reported
+// rather than Held. The plain line counts each list through the phrase
+// table and relays none of the worker's text (P13).
+func TestAnInvestigationsUncertaintiesAndFollowUpsAreCarriedAndHoldNothing(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P13)
+	requiresIdentifiedPeer(t)
+	const (
+		unsettled = "Whether the cache is ever cold on start."
+		ordering  = "Which callers rely on the old order."
+		further   = "Measure the retry budget under load."
+		note      = "The retry path is bounded."
+	)
+	report := `{"summary": "Looked at the retry path.", "findings": [` +
+		`{"severity": "info", "action": "note", "description": "` + note + `"}], ` +
+		`"uncertainties": [{"text": "` + unsettled + `", "location": "pkg/cache.go:12"}, "` + ordering + `"], ` +
+		`"follow_ups": ["` + further + `"]}`
+
+	h := newHome(t)
+	subject := newSubject(t)
+	if err := h.Create(); err != nil {
+		t.Fatal(err)
+	}
+	agent, route, _ := serveRoutedStop(t, h)
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	repository := repositoryOf(t, h, subject)
+	created := routedInvestigation(t, h, subject, repository, "importer", "")
+	id := created.Record.ID
+	waitSessions(t, h, id, 1)
+	commands := routeCommands(t, workerCallIn(t, h, agent, id).Lines[0], route)
+	fileReport(t, h, subject, id, commands["report"], report)
+
+	task := taskOf(t, h, subject, id)
+	if task.State.State != taskstate.Reported || task.State.Source != taskstate.SourceReport {
+		t.Fatalf("after filing the task reads %+v, want Reported: no remark holds", task.State)
+	}
+	if holds := openHoldsOf(t, h, id); len(holds) != 0 {
+		t.Fatalf("the report's remarks registered holds %+v", holds)
+	}
+	if task.Report == nil || len(task.Report.Uncertainties) != 2 || len(task.Report.FollowUps) != 1 ||
+		task.Report.Uncertainties[0].Text != unsettled || task.Report.Uncertainties[0].Location.String() != "pkg/cache.go:12" ||
+		task.Report.Uncertainties[1].Text != ordering || task.Report.FollowUps[0].Text != further {
+		t.Fatalf("assistant --json tasks %s carries the report %+v, want both uncertainties and the follow-up", id, task.Report)
+	}
+
+	// The listing carries them too, beside every other task.
+	listed := run(t, h, subject, "--json", "tasks")
+	if listed.code != machine.ExitOK {
+		t.Fatalf("assistant --json tasks exited %s:\n%s%s", listed.code, listed.stdout, listed.stderr)
+	}
+	var tasks machine.Tasks
+	if err := json.Unmarshal([]byte(listed.stdout), &tasks); err != nil {
+		t.Fatalf("decoding the listing: %v\n%s", err, listed.stdout)
+	}
+	found := false
+	for _, listedTask := range tasks.Tasks {
+		if listedTask.Record.ID == id {
+			found = listedTask.Report != nil && reflect.DeepEqual(listedTask.Report.Uncertainties, task.Report.Uncertainties) &&
+				reflect.DeepEqual(listedTask.Report.FollowUps, task.Report.FollowUps)
+		}
+	}
+	if !found {
+		t.Fatalf("the listing does not carry the task's remarks:\n%s", listed.stdout)
+	}
+
+	plain := run(t, h, subject, "tasks", id)
+	if plain.code != machine.ExitOK {
+		t.Fatalf("assistant tasks %s exited %s:\n%s%s", id, plain.code, plain.stdout, plain.stderr)
+	}
+	for _, row := range []machine.Phrase{machine.UncertaintiesPhrase(2), machine.FollowUpsPhrase(1)} {
+		if !strings.Contains(plain.stdout, row.String()) {
+			t.Fatalf("the person-facing lines do not count the remarks with %q:\n%s", row, plain.stdout)
+		}
+	}
+	for _, leaked := range []string{unsettled, ordering, further, note, "pkg/cache.go"} {
+		if strings.Contains(plain.stdout, leaked) {
+			t.Fatalf("the person-facing lines relay %q:\n%s", leaked, plain.stdout)
+		}
+	}
+	vocabtest.Assert(t, plain.stdout)
+}
+
 // GAP-04: a worker cannot promote through the coordinator client. The
 // investigation files nothing; the refusal is decided from the caller's
 // credentials before Promote runs, so no promoted entry is written.

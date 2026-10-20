@@ -37,6 +37,12 @@ import (
 // to relay: the row holds the evidence, and the surface that shows a person
 // the hold translates it (#110) rather than printing it.
 //
+// The report's uncertainties and follow-ups are stored with it in the parsed
+// report and become no hold: the registration below reads Report.Held, which
+// reads findings alone, and internal/findings refuses a remark carrying an
+// action, so an uncertainty that needs a decision reaches a hold only by
+// being written as an ask finding.
+//
 // The worker's words are kept with the credentials in them removed, and
 // StoreReport is where that happens, because it is the one point every
 // filing passes before anything of the report is stored: internal/service's

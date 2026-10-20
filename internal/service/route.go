@@ -129,7 +129,12 @@ func (s *Service) routeSection(shape store.TaskShape) string {
 			"and a list of \"findings\", each with a \"description\" and an \"action\": \"ask\" for a decision a person has to "+
 			"make, \"note\" for something to know, \"fix\" for a change you would make, which no one makes on the strength "+
 			"of the report. For example: {\"summary\": \"...\", \"findings\": [{\"action\": \"ask\", \"description\": "+
-			"\"...\"}]}. A finding with no action, or one that is not of those three, is held for a person as an ask. Then "+
+			"\"...\"}]}. A finding with no action, or one that is not of those three, is held for a person as an ask. "+
+			"Beside the findings, the report may carry \"uncertainties\", what you could not settle, and \"follow_ups\", "+
+			"further work you recommend, each a list of objects with a \"text\" and an optional \"location\", such as "+
+			"\"uncertainties\": [{\"text\": \"...\", \"location\": \"path/file.go:12\"}]. These hold nothing and start "+
+			"nothing, so a question a person has to decide is an ask finding and not an uncertainty; an uncertainty or a "+
+			"follow-up written with an \"action\" is refused. Then "+
 			"run the command below from the top of this working copy. Once the report is filed the command removes that "+
 			"file: a file left in this copy keeps the copy from being cleaned up and must never be committed. If the "+
 			"answer says the file could not be removed, remove it with git clean -f -- %s. A report that cannot be read is "+

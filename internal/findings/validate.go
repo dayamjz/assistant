@@ -42,6 +42,12 @@ const (
 	// DefectMissingEvidencePath is an evidence artifact with no path, which
 	// points at nothing.
 	DefectMissingEvidencePath Defect = "missing-evidence-path"
+	// DefectActionOutsideFinding is an uncertainty or a follow-up written
+	// with an action. Only a finding carries an action, and a remark holds
+	// nothing, so reading one with its action dropped would turn what the
+	// writer may have meant as an ask into text that holds nothing; the
+	// report is refused instead, naming the remark.
+	DefectActionOutsideFinding Defect = "action-outside-finding"
 )
 
 // Flaw is one defect found in one part of a report.
@@ -142,6 +148,20 @@ func (r Report) Validate() error {
 	for i, e := range r.Evidence {
 		if strings.TrimSpace(e.Path) == "" {
 			add(DefectMissingEvidencePath, "evidence["+strconv.Itoa(i)+"].path", "")
+		}
+	}
+	for _, list := range []struct {
+		name    string
+		remarks RemarkList
+	}{{"uncertainties", r.Uncertainties}, {"follow_ups", r.FollowUps}} {
+		for i, remark := range list.remarks {
+			field := list.name + "[" + strconv.Itoa(i) + "]"
+			if remark.action {
+				add(DefectActionOutsideFinding, field+".action", "an action belongs on a finding")
+			}
+			if remark.Location.Line < 0 {
+				add(DefectNegativeLine, field+".location.line", strconv.Itoa(remark.Location.Line))
+			}
 		}
 	}
 	if len(flaws) == 0 {

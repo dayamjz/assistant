@@ -236,10 +236,12 @@ func (s *Service) investigationReport(ctx context.Context, taskID string) *machi
 		return nil
 	}
 	out := &machine.InvestigationReport{
-		Summary:    report.Summary,
-		Findings:   report.Findings,
-		Evidence:   report.Evidence,
-		RecordedAt: stored.RecordedAt,
+		Summary:       report.Summary,
+		Findings:      report.Findings,
+		Evidence:      report.Evidence,
+		Uncertainties: report.Uncertainties,
+		FollowUps:     report.FollowUps,
+		RecordedAt:    stored.RecordedAt,
 	}
 	if path, err := s.home.TaskReport(taskID); err == nil {
 		out.EvidenceFile = path
