@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -154,6 +155,13 @@ func TestAConfigurationRefusalReleasesTheTaskQueuedBehindIt(t *testing.T) {
 		if got := taskState(t, running.client, successor); got.State != taskstate.Queued {
 			t.Fatalf("before any run the successor resolves %s", got.State)
 		}
+		var arrived sync.WaitGroup
+		arrived.Add(2)
+		running.service.SetBeforeConfigRefusalEndForTest(func() {
+			arrived.Done()
+			arrived.Wait()
+		})
+		defer running.service.SetBeforeConfigRefusalEndForTest(nil)
 		events, err := running.client.Subscribe(t.Context(), machine.SubscribeRequest{})
 		if err != nil {
 			t.Fatalf("subscribing to the service's events: %v", err)
@@ -198,6 +206,7 @@ func TestAConfigurationRefusalReleasesTheTaskQueuedBehindIt(t *testing.T) {
 		if got := taskState(t, running.client, successor); got.State != taskstate.Queued {
 			t.Fatalf("with the blocker's run live the successor resolves %s, want queued", got.State)
 		}
+		arrived.Done()
 		if err := <-errCh; err == nil {
 			t.Fatal("a run under an unparseable trusted configuration was started rather than refused")
 		} else if !strings.Contains(err.Error(), "trusted configuration") {
@@ -207,6 +216,7 @@ func TestAConfigurationRefusalReleasesTheTaskQueuedBehindIt(t *testing.T) {
 		if record.Status != store.RunTerminated {
 			t.Fatalf("the refused run is recorded as %s, want it ended", record.Status)
 		}
+		awaitRunStatus(t, running.client, events, runID, store.RunTerminated)
 		if got := taskState(t, running.client, blocker); got.State != taskstate.Failed {
 			t.Fatalf("with its run ended the blocker resolves %s, want failed", got.State)
 		}
@@ -245,7 +255,12 @@ func TestAnUnreadableTrustedConfigurationStopsTheRunBeforeLaunch(t *testing.T) {
 		return nine
 	}
 	withServiceOptions(t, opts, func(running serviceUnderTest) {
-		_, err := startRunErr(t, running.client, subject)
+		events, err := running.client.Subscribe(t.Context(), machine.SubscribeRequest{})
+		if err != nil {
+			t.Fatalf("subscribing to the service's events: %v", err)
+		}
+		defer events.Close()
+		_, err = startRunErr(t, running.client, subject)
 		if err == nil {
 			t.Fatal("a run under an unparseable trusted configuration was started rather than refused")
 		}
@@ -261,6 +276,7 @@ func TestAnUnreadableTrustedConfigurationStopsTheRunBeforeLaunch(t *testing.T) {
 		if record.Status != store.RunTerminated {
 			t.Fatalf("the refused run is recorded as %s, want it ended", record.Status)
 		}
+		awaitRunStatus(t, running.client, events, record.ID, store.RunTerminated)
 	})
 }
 

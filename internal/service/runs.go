@@ -683,13 +683,18 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 		// and left pending it is an unfinished run a later start on the
 		// branch would attach to and report as executing, rather than one a
 		// fresh start replaces once the document is fixed.
-		if _, ended := built.runs.Terminate(context.WithoutCancel(ctx), record.ID); ended != nil {
+		if s.beforeConfigRefusalEnd != nil {
+			s.beforeConfigRefusalEnd()
+		}
+		endCtx := context.WithoutCancel(ctx)
+		if _, ended := built.runs.Terminate(endCtx, record.ID); ended != nil {
 			s.log.Printf("run %s could not be ended after its configuration was refused: %v", record.ID, ended)
 		} else {
 			// The run finished, so a task queued behind the one it was
 			// attributed to may have cleared; tasks.go names this among the
 			// sites that release.
-			s.releaseQueued(context.WithoutCancel(ctx))
+			s.releaseQueued(endCtx)
+			s.publishRunState(endCtx, record.ID)
 		}
 		return machine.Run{}, err
 	}
