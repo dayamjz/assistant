@@ -548,7 +548,8 @@ func readOutFindings(w io.Writer, d machine.Decision) {
 }
 
 // parkLine is the details line for a park: the bound in the record's own
-// word, the stage it names, and its limit where it has one.
+// word, the stage it names, its limit where it has one, and for the usage
+// budget the budget and the reading the run parked on.
 func parkLine(p store.RunPark) string {
 	line := string(p.Bound)
 	if p.Stage != "" {
@@ -556,6 +557,13 @@ func parkLine(p store.RunPark) string {
 	}
 	if p.Limit > 0 {
 		line += fmt.Sprintf(" (limit %d)", p.Limit)
+	}
+	if p.UsageBudget > 0 {
+		line += fmt.Sprintf(" (%d output tokens spent of %d", p.Spent, p.UsageBudget)
+		if p.Unreported > 0 {
+			line += fmt.Sprintf(", %d calls unreported", p.Unreported)
+		}
+		line += ")"
 	}
 	return printable(line)
 }

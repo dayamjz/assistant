@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"strconv"
 	"testing"
 
@@ -83,6 +84,39 @@ func TestTheRunBudgetStopsARunTheOtherTwoBoundsWouldNot(t *testing.T) {
 	}
 	if n := c.fixCount(StageRebase); n >= 50 {
 		t.Errorf("the rebase fixer ran %d times, so its own limit of 50 could have stopped the run", n)
+	}
+}
+
+// TestTheUsageBudgetIsCarriedToTheExecutor is the pipeline's half of the usage
+// budget: Options carries it and its meter to the executor the pipeline
+// builds, so a run whose meter reads the budget spent parks on it, beside a
+// generous step budget and round limits that park nothing; a pipeline given a
+// budget with no meter builds no executor; and the control, the same pipeline
+// with a meter reading room, does not park on it.
+func TestTheUsageBudgetIsCarriedToTheExecutor(t *testing.T) {
+	spent := func(n int64) graph.UsageMeter {
+		return func(context.Context, string) (graph.Usage, error) { return graph.Usage{Spent: n}, nil }
+	}
+	opts := func(meter graph.UsageMeter) Options {
+		c := newCalls()
+		return Options{Stages: recordingStages(c), Budget: 500, UsageBudget: 100, Usage: meter}
+	}
+
+	_, parked := start(t, build(t, opts(spent(100))), complete())
+	park, ok := parked.Park()
+	if !ok || park.Status != graph.StatusUsageExhausted || park.UsageBudget != 100 || park.Usage == nil || park.Usage.Spent != 100 {
+		t.Fatalf("the run stopped %s with park %+v (%v), want a usage park under the budget of 100", parked.Status, park, ok)
+	}
+	if got, ok := ParkedStage(park); !ok || got != StageIntent {
+		t.Fatalf("the usage park belongs to %s (%v), want the intent stage the run stands in front of", got, ok)
+	}
+
+	if _, control := start(t, build(t, opts(spent(99))), complete()); control.Status == graph.StatusUsageExhausted {
+		t.Fatalf("a run with room under its usage budget parked on it: %s", control.Reason)
+	}
+
+	if _, err := build(t, opts(nil)).Executor(graph.NewMemoryStore()); err == nil {
+		t.Fatal("a pipeline with a usage budget and no meter built an executor")
 	}
 }
 

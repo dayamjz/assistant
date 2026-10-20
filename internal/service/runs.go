@@ -416,6 +416,20 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 	if err == nil {
 		s.recordAnswered(record.ID, stage, req.Answer, paths, mark)
 	}
+	// An answer the graph refused because the run is past its usage budget
+	// was not applied, and the run is parked on the budget rather than left
+	// held behind the refusal; parkHeldPastUsage owns the decision. The
+	// answer to this call is then the run as it stands, parked, whose record
+	// names the budget and the spend.
+	if errors.Is(err, graph.ErrUsageSpent) {
+		current, rerr := s.reconcile(ctx, record.ID)
+		if rerr != nil {
+			return machine.Run{}, errors.Join(err, rerr)
+		}
+		if view, parked, perr := s.parkHeldPastUsage(ctx, current); parked {
+			return view, perr
+		}
+	}
 	return answered, err
 }
 
@@ -552,6 +566,14 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 	settled, err := s.reconcile(ctx, runID)
 	if err != nil {
 		return machine.Run{}, err
+	}
+	// A held run past its usage budget is parked rather than reported held or
+	// answered under consent, whose answer the graph would refuse;
+	// parkHeldPastUsage owns the decision and says why.
+	if settled.Status == store.RunHeld {
+		if view, parked, err := s.parkHeldPastUsage(ctx, settled); parked {
+			return view, err
+		}
 	}
 	if settled.Status == store.RunHeld && settled.StandingConsent.IsKnown() {
 		return s.answerHeldUnderConsent(ctx, settled)
@@ -1273,6 +1295,13 @@ func parkRecord(result graph.Result) (store.RunPark, error) {
 	case graph.StatusBudgetExhausted:
 		record.Bound = store.ParkStepBudget
 		record.Limit = park.Budget
+	case graph.StatusUsageExhausted:
+		record.Bound = store.ParkUsageBudget
+		record.UsageBudget = park.UsageBudget
+		if park.Usage != nil {
+			record.Spent = park.Usage.Spent
+			record.Unreported = park.Usage.Unreported
+		}
 	}
 	if err := record.Validate(); err != nil {
 		return store.RunPark{}, err
@@ -1286,6 +1315,9 @@ func describePark(p store.RunPark, reason string) string {
 	line := fmt.Sprintf("%s at stage %q, node %q", p.Bound, p.Stage, p.Node)
 	if p.Limit > 0 {
 		line += fmt.Sprintf(", limit %d", p.Limit)
+	}
+	if p.UsageBudget > 0 {
+		line += fmt.Sprintf(", %d spent and %d unreported against a usage budget of %d", p.Spent, p.Unreported, p.UsageBudget)
 	}
 	if reason != "" {
 		line += ": " + reason

@@ -59,6 +59,33 @@ func TestAParkIsRecordedWithTheMoveThatEndsTheRun(t *testing.T) {
 	}
 }
 
+// A usage budget park carries its budget and the reading it parked on, and
+// reads back with both, including the unestablished reading that parks under
+// any budget. These are the control for the usage shapes the refusal test
+// below refuses.
+func TestAUsageBudgetParkReadsBackWithItsReading(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for _, park := range []RunPark{
+		{Bound: ParkUsageBudget, Stage: "review", Node: "review", UsageBudget: 10, Spent: 12, Checkpoint: 3},
+		{Bound: ParkUsageBudget, Node: "review", UsageBudget: 10, Spent: 2, Unreported: 1, Checkpoint: 3},
+	} {
+		s := openStore(t)
+		run := seedRun(t, s)
+		moved, err := s.TransitionRunOnPark(ctx, run.ID, []RunStatus{RunPending}, park)
+		if err != nil {
+			t.Fatalf("TransitionRunOnPark(%+v): %v", park, err)
+		}
+		read, err := s.Run(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if moved.Park != Known(park) || read.Park != Known(park) {
+			t.Fatalf("the park moved as %v and reads back %v, want %+v", moved.Park, read.Park, park)
+		}
+	}
+}
+
 // A run a person ended before a bound's park was recorded is not given one:
 // the move finds it already terminated and writes nothing, so the record goes
 // on reading as the cancellation it was.
@@ -94,6 +121,12 @@ func TestAParkOfNoKnownShapeIsRefused(t *testing.T) {
 		"a round limit on no stage": {Bound: ParkRoundLimit, Node: "fix:review", Limit: 1, Checkpoint: 1},
 		"a convergence limit":       {Bound: ParkConvergence, Stage: "review", Node: "review", Limit: 2, Checkpoint: 1},
 		"a budget of nothing":       {Bound: ParkStepBudget, Node: "review", Checkpoint: 1},
+		"a usage budget of nothing": {Bound: ParkUsageBudget, Node: "review", Spent: 5, Checkpoint: 1},
+		"a usage reading with room": {Bound: ParkUsageBudget, Node: "review", UsageBudget: 10, Spent: 9, Checkpoint: 1},
+		"a usage park with a limit": {Bound: ParkUsageBudget, Node: "review", Limit: 4, UsageBudget: 10, Spent: 10, Checkpoint: 1},
+		"a negative usage reading":  {Bound: ParkUsageBudget, Node: "review", UsageBudget: 10, Spent: 10, Unreported: -1, Checkpoint: 1},
+		"a usage reading on a step budget park": {Bound: ParkStepBudget, Node: "review", Limit: 3,
+			UsageBudget: 10, Spent: 10, Checkpoint: 1},
 	} {
 		if _, err := s.TransitionRunOnPark(ctx, run.ID, []RunStatus{RunPending}, park); err == nil {
 			t.Errorf("%s was recorded", name)

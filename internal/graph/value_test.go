@@ -299,10 +299,10 @@ func TestARunTakesTheFallbackEdgeWhenNoGuardMatches(t *testing.T) {
 	}
 }
 
-func TestStatusStoppedCoversTheHoldAndTheThreeParks(t *testing.T) {
+func TestStatusStoppedCoversTheHoldAndTheFourParks(t *testing.T) {
 	stopped := []graph.Status{
 		graph.StatusHalted, graph.StatusRoundsExhausted,
-		graph.StatusBudgetExhausted, graph.StatusConverged,
+		graph.StatusBudgetExhausted, graph.StatusConverged, graph.StatusUsageExhausted,
 	}
 	for _, s := range stopped {
 		if !s.Stopped() {

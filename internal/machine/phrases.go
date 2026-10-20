@@ -509,10 +509,10 @@ var (
 // bound that parked it, one row per bound in store.ParkBounds, which the
 // vocabulary test derives and checks. They sharpen OutcomeFailed's row the way
 // the executing rows sharpen that outcome's: the failed row has to cover a run
-// that could not proceed as well as all three parks, and a person deciding
+// that could not proceed as well as all four parks, and a person deciding
 // what to do about a park needs to know which bound it was, because what
 // changes the outcome differs by bound. ParkAction is the driving agent's
-// reading of the same three, with the stage and the key a row may not name.
+// reading of the same four, with the stage and the key a row may not name.
 var phraseByPark = map[store.ParkBound]Phrase{
 	store.ParkRoundLimit: {
 		Outcome:     "Automatic fixing of this change reached its round limit with findings still to fix.",
@@ -528,6 +528,11 @@ var phraseByPark = map[store.ParkBound]Phrase{
 		Outcome:     "This run used its whole step budget before the gate reached a verdict.",
 		Consequence: "Nothing more is done with it, and nothing was undone.",
 		Decision:    "Allow a larger step budget and send the change again.",
+	},
+	store.ParkUsageBudget: {
+		Outcome:     "This run reached its usage budget, the agent use one run is allowed, before the gate reached a verdict.",
+		Consequence: "Nothing more is done with it and nothing was undone; the run's answer gives its budget and what its agents spent, and the usage view lists its calls under the run.",
+		Decision:    "Allow a larger usage budget per run and send the change again, or find what spends so much.",
 	},
 }
 
@@ -626,8 +631,22 @@ func parkPhrase(outcome Outcome, park store.Optional[store.RunPark]) (Phrase, bo
 	if !ok || outcome != OutcomeFailed {
 		return Phrase{}, false
 	}
+	if p.Bound == store.ParkUsageBudget && p.Unreported > 0 {
+		return phraseUsageUnweighed, true
+	}
 	row, ok := phraseByPark[p.Bound]
 	return row, ok
+}
+
+// phraseUsageUnweighed is what a person reads about a run the usage budget
+// parked because some of its agent calls reported no count, so what it spent
+// is not known. It is chosen from the park's own unreported figure rather than
+// the bound alone, because the budget was not reached and a larger one would
+// park the run again: any budget parks a run whose spend is unknown.
+var phraseUsageUnweighed = Phrase{
+	Outcome:     "This run was stopped by its usage budget because some of its agent calls did not report what they spent.",
+	Consequence: "Nothing more is done with it and nothing was undone; a larger budget would stop it the same way, since what it spent is not known.",
+	Decision:    "Turn the usage budget per run off, or use an agent that reports what it spends, and send the change again.",
 }
 
 // Hold rows, with the decision's subject filled in: the subject is the
@@ -1928,6 +1947,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
+	out = append(out, phraseUsageUnweighed)
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
 	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseRetryUndispatchable, phraseNotRetried, phraseLandedLocallyNow)

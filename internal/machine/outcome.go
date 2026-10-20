@@ -3,6 +3,7 @@ package machine
 import (
 	"fmt"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
@@ -206,7 +207,7 @@ func (e Execution) outcome() Outcome {
 			return OutcomePushed
 		}
 		return OutcomeChecksPassed
-	case graph.StatusRoundsExhausted, graph.StatusBudgetExhausted, graph.StatusConverged:
+	case graph.StatusRoundsExhausted, graph.StatusBudgetExhausted, graph.StatusConverged, graph.StatusUsageExhausted:
 		return OutcomeFailed
 	case graph.StatusRunning:
 		// internal/graph writes this after every node that neither halts nor
@@ -353,7 +354,7 @@ func OutcomeOf(s Standing) Outcome {
 //
 // A failed run whose record names the bound that parked it is answered with
 // that bound's action, ParkAction's, rather than the failed row's, which has to
-// cover a run that could not proceed as well as all three parks.
+// cover a run that could not proceed as well as all four parks.
 func NextActionOf(s Standing) string {
 	outcome := OutcomeOf(s)
 	if outcome == OutcomeExecuting && !s.Advancing && !s.Execution.Recorded() {
@@ -376,6 +377,9 @@ func NextActionOf(s Standing) string {
 //     run's record has ended, so the action says so and names run_budget.
 //   - Convergence has no knob: the last round changed nothing, so another
 //     would change nothing either.
+//   - The per-run usage budget is AdoptBudget's too, on the step budget's
+//     terms, and names the operator's run_usage_budget.output_tokens and the
+//     reading the run parked on.
 //
 // Every action says where the findings are, which is the parked stage's
 // report on the run's answer. A park this build cannot name is answered with
@@ -408,8 +412,35 @@ func ParkAction(p store.RunPark) string {
 			"Raise run_budget in the default branch's or the operator's configuration, which a pushed branch cannot "+
 			"set, and start a fresh run, or find what keeps the run looping.",
 			p.Limit, p.Node)
+	case store.ParkUsageBudget:
+		return usageParkAction(p)
 	}
 	return OutcomeFailed.NextAction()
+}
+
+// usageParkAction is ParkAction for the per-run usage budget. It names the
+// budget and the reading the run parked on, which the park record carries as
+// the checkpoint recorded it, and splits on whether that reading was
+// established, because a reading some call left unreported is fixed by a
+// budget on a count the agents report rather than by a larger number.
+func usageParkAction(p store.RunPark) string {
+	spent := fmt.Sprintf("its agent calls reported %d output tokens", p.Spent)
+	remedy := "Raise " + string(config.KeyRunUsageBudgetOutputTokens) + " in the operator's configuration, which no " +
+		"repository copy can set, run assistant service restart so the service reads it, and start a fresh run, or " +
+		"find what makes the run spend so much."
+	if p.Unreported > 0 {
+		spent = fmt.Sprintf("%d of its agent calls reported no output token count, so the %d the others reported is "+
+			"not what it spent and the budget could not be weighed", p.Unreported, p.Spent)
+		remedy = "A budget on a count the agent does not report parks every run it holds. Find which calls reported " +
+			"none in the usage view, then set " + string(config.KeyRunUsageBudgetOutputTokens) + " to zero in the " +
+			"operator's configuration or move to an agent that reports the count, run assistant service restart so the " +
+			"service reads the change, and start a fresh run."
+	}
+	return fmt.Sprintf("The per-run usage budget of %d output tokens parked this run before node %s could run: %s. "+
+		"internal/graph's AdoptBudget moves a run its budget parked onto a larger budget where it stands, without "+
+		"re-running anything, but no command in this build calls it and this run's record has ended, so nothing "+
+		"resumes it. %s assistant runs --usage reports what each of the run's stages spent.",
+		p.UsageBudget, p.Node, spent, remedy)
 }
 
 // nextActions is what a caller does about each outcome. PRD section 9 requires

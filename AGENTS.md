@@ -20,7 +20,7 @@ documentation gap to close. Do not edit the PRD to match the code.
 Section 5 reserves two words that used to be interchangeable. A **hold** waits
 on a person; a **park** is a bound stopping the run. `internal/findings` owns
 the hold predicate (`Holds`, `Held`, `HasHeld`) and counts no bounds, so
-nothing there parks. `internal/graph` owns the three parks, and
+nothing there parks. `internal/graph` owns the four parks, and
 `graph.Status.Stopped` is named after neither because it is the union of both.
 Prose and identifiers both say this now, so a reader may take either literally.
 Keep it that way: a wait on a person is a hold everywhere, and only a bound is a
@@ -134,9 +134,14 @@ Each has cost this repository more than one round of review.
   the run's step budget and a digest of the edge vector its per-edge counts are
   indexed against, and a graph whose edges differ is refused rather than
   resumed. Add a bound by adding it there, never beside the counter that reads
-  it. The budget is the one bound a caller may change on a live run, and only
-  through `Executor.AdoptBudget`, which writes the change into the run's
-  history; a difference nobody asked for is `ErrBudgetChanged`. Read its
+  it. `Counters` also carries the run's usage budget, a run-level bound beside
+  the loop bounds and not a fourth loop bound: before every node it is read
+  against the run's own invocation rows through the `UsageMeter`, and no spend
+  is kept in the checkpoint. The two budgets are the only bounds a caller may
+  change on a live run, and only through `Executor.AdoptBudget`, which adopts
+  both and writes the change into the run's history; a difference nobody asked
+  for is `ErrBudgetChanged`, or for the usage budget `ErrUsageBudgetChanged`,
+  which matches `ErrBudgetChanged`. Read its
   `doc.go` before changing any of that, and `identity.go` for what the digest
   covers and what it deliberately leaves out. A checkpoint's state must hold
   exactly the declared keys, so a key added to `internal/pipeline`'s table

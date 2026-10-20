@@ -234,6 +234,23 @@ func UsageOf(window UsageWindow, readAt time.Time, rows []store.AgentInvocation)
 	return usage
 }
 
+// RunSpendOf is what a run has spent as its usage budget weighs it: the output
+// tokens of the rows naming run, totalled the way UsageOf totals a count, so
+// a call that reported none is counted as unreported rather than as zero.
+// Rows naming another run, or none, are not counted, whatever the caller
+// handed over. It reads every row it is handed and keeps nothing, so the
+// figure is the record's as it stands at the read (P8).
+func RunSpendOf(run string, rows []store.AgentInvocation) UsageCount {
+	var spent UsageCount
+	for _, inv := range rows {
+		if served, ok := inv.Run.Get(); !ok || served != run {
+			continue
+		}
+		spent.add(inv.OutputTokens)
+	}
+	return spent
+}
+
 // UsageViewOf is the usage view as usage.read answers it: UsageOf over
 // window, with the operator's ceiling compared against the same rows by
 // CeilingOf. rows must reach back to the earlier of the two windows' starts,

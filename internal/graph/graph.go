@@ -196,6 +196,9 @@ func (g *Graph) Validate(c Checkpoint) error {
 	if err := g.validateCounters(c.Counters); err != nil {
 		return err
 	}
+	if err := g.validateParkedUsage(c); err != nil {
+		return err
+	}
 	return g.validateParkedAt(c)
 }
 
@@ -315,6 +318,10 @@ func (g *Graph) validateCounters(c Counters) error {
 	if c.Budget < 1 {
 		return &CheckpointError{Field: "counters.budget", Detail: fmt.Sprintf(
 			"is %d, and a run-wide step budget of at least 1 is required", c.Budget)}
+	}
+	if c.UsageBudget < 0 {
+		return &CheckpointError{Field: "counters.usage_budget", Detail: fmt.Sprintf(
+			"is negative: %d, and a usage budget is zero for none or a positive bound", c.UsageBudget)}
 	}
 	if len(c.Traversals) != len(g.edges) {
 		return &CheckpointError{Field: "counters.traversals", Detail: fmt.Sprintf(

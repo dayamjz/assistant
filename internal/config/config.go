@@ -113,6 +113,11 @@ type Config struct {
 	// service runs for each wake the loop appends. Empty is no channel.
 	// KeyNotifyCommand says who may set it and what it decides.
 	NotifyCommand string
+	// RunUsageBudget is the per-run usage budget in output tokens, zero for
+	// none, which every run a service starts records and is parked by.
+	// KeyRunUsageBudgetOutputTokens says which count, who may set it, and how
+	// it differs from UsageCeiling.
+	RunUsageBudget int64
 	// Roles says which agent, model, and effort each role runs. A Config from
 	// Resolve names the fixer as cursor unless the winning document named the
 	// fix role. A role that names no agent uses Agent. KeyRoles says which

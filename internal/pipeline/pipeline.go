@@ -57,6 +57,15 @@ type Options struct {
 	// checked by the graph when an executor is built, and recorded on a run
 	// when it starts, which is what holds the run to it across a resume.
 	Budget int
+	// UsageBudget is the run's usage budget, beside Budget and on its terms:
+	// carried to the executor, recorded on a run when it starts, and the
+	// bound a run parks on once its own work has reported spending it. Zero is
+	// none. What is counted is Usage's to say; this package counts nothing.
+	UsageBudget int64
+	// Usage reads what a run has spent against UsageBudget, and is required
+	// when UsageBudget is above zero, which the graph refuses to build an
+	// executor without.
+	Usage graph.UsageMeter
 	// Adapter is what the resolved agent adapter declared it supports, which
 	// is agents.Resolution.Capabilities. A path this pipeline would build that
 	// needs a capability absent from it refuses New, naming the path and the
@@ -81,8 +90,10 @@ type Options struct {
 // fix loops, and the bounds on those loops. It is immutable and safe for
 // concurrent use by any number of runs.
 type Pipeline struct {
-	graph  *graph.Graph
-	budget int
+	graph       *graph.Graph
+	budget      int
+	usageBudget int64
+	usage       graph.UsageMeter
 }
 
 // New builds the pipeline. This package's own refusals are the sentinels in
@@ -150,7 +161,7 @@ func New(o Options) (*Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Pipeline{graph: g, budget: o.Budget}, nil
+	return &Pipeline{graph: g, budget: o.Budget, usageBudget: o.UsageBudget, usage: o.Usage}, nil
 }
 
 // wire adds one stage's nodes and every edge leaving them. Every stage is
@@ -318,17 +329,21 @@ func guarded(from string, stage Stage, outcome Outcome, to string) graph.Edge {
 func (p *Pipeline) Graph() *graph.Graph { return p.graph }
 
 // Executor returns an executor for this pipeline against store, carrying the
-// run-wide step budget the pipeline was built with. The graph refuses a budget
+// run-wide step budget and the usage budget, with its meter, the pipeline was
+// built with. The graph refuses a budget
 // below one, because an executor with no run-wide bound is not the same as one
 // with a generous bound.
 //
 // A run records the budget it starts under, so a pipeline rebuilt with a
 // different one does not resume an existing run: the graph refuses it with
 // graph.ErrBudgetChanged, and graph.Executor.AdoptBudget is how a run is moved
-// onto the new budget on purpose. The same applies to the fix round limits,
+// onto the new budget on purpose; the usage budget is held the same way. The
+// same applies to the fix round limits,
 // which the graph refuses on the edge digest a checkpoint carries.
 func (p *Pipeline) Executor(store graph.CheckpointStore) (*graph.Executor, error) {
-	return graph.NewExecutor(p.graph, graph.Config{Store: store, Budget: p.budget})
+	return graph.NewExecutor(p.graph, graph.Config{
+		Store: store, Budget: p.budget, UsageBudget: p.usageBudget, Usage: p.usage,
+	})
 }
 
 // Start is what a run begins with. Skip is the only way a caller may choose

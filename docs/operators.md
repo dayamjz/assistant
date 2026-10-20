@@ -696,6 +696,51 @@ make for all of them at once; the flag is still needed per run. Each answer
 is recorded as the program's, and status, the run listing, and the pull
 request body say the run ran under standing consent.
 
+## Bounding what one run spends
+
+`run_usage_budget.output_tokens` in your own configuration file, `config.yaml`
+under the home, caps how many output tokens one run's agent calls may report
+generating:
+
+```yaml
+run_usage_budget:
+  output_tokens: 200000
+```
+
+Zero, the default, is no budget. Only your own file may set it: a repository's
+`assistant.json` naming the key, on the default branch or on the pushed
+branch, refuses the run before anything launches. It counts output tokens and
+not the prompt counts, because the agents report a prompt across input and
+cache counts on their own terms, and output tokens are the one count that
+names what each call generated.
+
+Every run records the budget it starts under. Before each step the run is
+compared against what its own calls have reported so far, read from the agent
+invocation record that `assistant runs --usage` also reads. A run at or past
+its budget stops there: it is not held for you, it is parked, its record ends,
+and its answer says the budget and what the run's calls reported
+(`record.park` in `--json`, with `bound` `usage_budget`, `usage_budget`,
+`spent`, and `unreported`). A run whose calls include one that reported no
+output token count is parked the same way, because what it spent is not
+known; set a budget only on a count your agents report. To go on, raise the
+budget, run `assistant service restart` so the service reads it, and start a
+fresh run: the service reads your file when it opens, so a run started before
+the restart is held to the old budget.
+
+What it does not do:
+
+- It bounds starts, not spend. A step that starts with room runs to its end,
+  so a run can pass its budget by everything its last step spent.
+- It counts only the calls the service makes for a run's stages and fix
+  rounds. A task's worker and the decision-model checks are not in it.
+- It is read when the service opens. A run started under another value is
+  refused when it is next resumed rather than quietly held to either number.
+
+It is not `usage_ceiling`. The ceiling counts every run's calls together over
+a window, refuses the next call once it is reached, and holds that run's stage
+for you. The budget is one run's, counts that run alone from its first call,
+and parks the run.
+
 ## Watch a worker in a terminal
 
 By default a worker runs on pipes the service holds, which nothing can attach

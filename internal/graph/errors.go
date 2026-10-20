@@ -187,6 +187,55 @@ var (
 	// with Executor.AdoptBudget, which records the change in the run's
 	// history.
 	ErrBudgetChanged = errors.New("graph: the run recorded a different run-wide step budget")
+	// ErrUsageBudgetChanged is ErrBudgetChanged for the usage budget: the
+	// run recorded a usage budget other than the one this executor is
+	// configured with. errors.Is matches ErrBudgetChanged on it as well,
+	// because the remedy is the same one: resume under the budget the run
+	// recorded, or move it onto this executor's with Executor.AdoptBudget,
+	// which records the change in the run's history. Its text names the usage
+	// budget, so a refusal does not say the step budget changed when it did
+	// not.
+	ErrUsageBudgetChanged error = &familyError{text: "graph: the run recorded a different usage budget", family: ErrBudgetChanged}
+	// ErrUsageSpent is ErrBudgetSpent for the usage budget: a run standing at
+	// a halt point is asked to go on and its usage budget leaves no room for
+	// that halt point's node, or what the run spent cannot be established.
+	// errors.Is matches ErrBudgetSpent on it as well, and it is refused on the
+	// same terms: nothing is written and the run is left as it stands. Only
+	// Answer returns it: Resume parks such a run instead, so a run past its
+	// usage budget at an open decision is not left refused forever.
+	ErrUsageSpent error = &familyError{text: "graph: the usage budget leaves no room for the halted node", family: ErrBudgetSpent}
+	// ErrUsageUnread is returned when a run held to a usage budget is about
+	// to be compared against it and the UsageMeter could not say what the
+	// run has spent. No node runs on the reading and the run does not park on
+	// it: a spend nobody could read is never taken for room, and an error
+	// from the record is not a fact about the run that a park could record.
+	//
+	// A call reads the budget at more than one point, so what a refused call
+	// may already have written depends on which reading failed, and so does
+	// how its caller continues. No completed node is lost either way.
+	//
+	//   - Run: a failure at the reading before the run's first checkpoint
+	//     leaves nothing written, and the same Run may be made again. A
+	//     failure at a later reading leaves the run at its latest checkpoint,
+	//     a later Run answers ErrRunExists, and Resume continues it.
+	//   - Resume: a failure at the reading before the claim leaves nothing
+	//     written. A failure at a later reading leaves the run at its latest
+	//     checkpoint. Either way another Resume continues it.
+	//   - Answer: a failure at the reading before the answer is claimed leaves
+	//     nothing written and the decision open, and the Answer may be given
+	//     again. A failure at a later reading comes after the claim: the
+	//     decision is closed, the answer is recorded with the run standing
+	//     running at the halt point, a later Answer answers
+	//     ErrNoOpenDecision, and Resume continues it.
+	//   - AdoptBudget reads before it writes, so it leaves nothing written.
+	//
+	// A run's latest checkpoint after a failure inside a segment is the one
+	// written after its last completed node. When the node the run reached
+	// next is a halt point, that checkpoint is the run halted there with its
+	// decision open, so the completed node is kept; Resume weighs the usage
+	// budget again before it puts the decision again, and parks the run when
+	// the reading leaves no room.
+	ErrUsageUnread = errors.New("graph: what the run spent against its usage budget could not be read")
 	// ErrRunCompleted is returned when an operation that only means something
 	// for a run with work left is asked for on one that finished.
 	ErrRunCompleted = errors.New("graph: run has completed")
@@ -199,3 +248,18 @@ var (
 	// were discarded and no checkpoint was written for it.
 	ErrNodeFailed = errors.New("graph: node failed")
 )
+
+// familyError is a sentinel that is its own error and also matches the older
+// sentinel whose remedy it shares, so a caller handling the family handles it
+// and a caller that needs the difference can still tell, while its text names
+// what actually differed rather than the family's.
+type familyError struct {
+	text   string
+	family error
+}
+
+// Error returns the sentinel's own text.
+func (e *familyError) Error() string { return e.text }
+
+// Is reports whether target is the family this sentinel belongs to.
+func (e *familyError) Is(target error) bool { return target == e.family }

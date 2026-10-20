@@ -186,6 +186,32 @@ func TestAgentInvocationsSinceReadsTheWindowByWhenACallStarted(t *testing.T) {
 	}
 }
 
+// A run's rows are the rows naming it and nothing else: a row naming another
+// run and a row naming none are left out, so a per-run total cannot take in a
+// call the run did not make.
+func TestAgentInvocationsForRunReadsOnlyTheRowsNamingTheRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	started := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	for i, run := range []Optional[string]{Known("run-1"), Known("run-2"), Unknown[string](), Known("run-1")} {
+		if _, err := s.AppendAgentInvocation(ctx, AgentInvocation{Purpose: "review", Agent: "claude",
+			SessionUse: "none", Started: started, Model: string(rune('a' + i)), Run: run}); err != nil {
+			t.Fatalf("AppendAgentInvocation: %v", err)
+		}
+	}
+	got, err := s.AgentInvocationsForRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("AgentInvocationsForRun: %v", err)
+	}
+	if len(got) != 2 || got[0].Model != "a" || got[1].Model != "d" {
+		t.Fatalf("run-1 reads %+v, want the two rows naming it", got)
+	}
+	if none, err := s.AgentInvocationsForRun(ctx, "run-3"); err != nil || len(none) != 0 {
+		t.Fatalf("a run with no calls reads %+v, %v; want nothing", none, err)
+	}
+}
+
 // The run-and-stage migration is additive: that one migration is undone by
 // hand, a row is written without its columns, and the shipped list is
 // applied again, which runs only the undone migration since every other is
@@ -248,6 +274,18 @@ func TestTheInvocationRunAndStageMigrationKeepsEarlierRowsUnknown(t *testing.T) 
 	}
 	if !rows[1].Run.IsKnown() || !rows[1].Stage.IsKnown() {
 		t.Errorf("the later row lost its run or stage: %+v", rows[1])
+	}
+	// The mixed case the per-run read meets across the migration: the row
+	// written before it names no run and is in no run's rows, while a call
+	// recorded with the run's id after it is that run's, so a run that began
+	// before the column still has the spend of every call attributed to it
+	// afterwards.
+	own, err := s.AgentInvocationsForRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("AgentInvocationsForRun: %v", err)
+	}
+	if len(own) != 1 || own[0].Purpose != "fix" {
+		t.Errorf("run-1 reads %+v, want only the call recorded with its id after the migration", own)
 	}
 }
 

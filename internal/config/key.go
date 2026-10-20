@@ -285,6 +285,35 @@ const (
 	// reads it once per service, at open, and its notify.go owns what is
 	// sent, the record, and what is not covered.
 	KeyNotifyCommand Key = "notify.command"
+
+	// KeyRunUsageBudgetOutputTokens is "run_usage_budget.output_tokens": the
+	// per-run usage budget, a whole number of output tokens one run's own
+	// agent calls may report generating before the run parks, where zero, the
+	// default, is no budget. A negative one is refused.
+	//
+	// It is one count and not four, and the count is output tokens. A prompt
+	// is reported across three counts, input and the two cache counts, which
+	// each adapter reads from fields of its own agent's report, and this
+	// build establishes nothing about how those fields divide a prompt
+	// between them, so a budget on input tokens alone could bound different
+	// work under different agents and a budget on a sum could count one token
+	// twice. Output tokens are the one count that names what a call
+	// generated, and that is what grows with every round a run spends.
+	//
+	// It is global-only, a P7 decision on the usage ceiling's grounds: the
+	// budget decides how much of the operator's account one run may spend,
+	// so a repository has no standing to raise or lift it in either copy. A
+	// repository file naming it is refused at parse time.
+	//
+	// It is not the usage ceiling. It is a run-level bound internal/graph
+	// owns beside the run-wide step budget: a run records it when it starts,
+	// carries it in its checkpoint's counters, is compared against it before
+	// every node, and parks when it is reached, where the ceiling refuses the
+	// next call across the home and holds for a person. The comparison is
+	// against the run's own rows of the agent invocation record, read at each
+	// comparison; internal/service's runbudget.go owns that reading and what
+	// it leaves open. PRD section 10's schema does not yet have the row.
+	KeyRunUsageBudgetOutputTokens Key = "run_usage_budget.output_tokens"
 )
 
 // cloneSlice copies a slice-valued configuration value. A default and a parsed
@@ -415,6 +444,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.UsageCeiling.CacheCreationTokens = v.(int64) }},
 	{KeyNotifyCommand, TrustGlobal, "", decodeCommand,
 		func(c *Config, v any) { c.NotifyCommand = v.(string) }},
+	{KeyRunUsageBudgetOutputTokens, TrustGlobal, int64(0), decodeRunUsageBudget,
+		func(c *Config, v any) { c.RunUsageBudget = v.(int64) }},
 }
 
 // specByKey indexes the schema, and sections holds every dotted prefix a key

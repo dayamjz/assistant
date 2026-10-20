@@ -105,7 +105,8 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"allow_standing_consent": true,
 		"session_provider": "tmux",
 		"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4},
-		"notify": {"command": "notify-me --channel private"}
+		"notify": {"command": "notify-me --channel private"},
+		"run_usage_budget": {"output_tokens": 5}
 	}`
 	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
@@ -252,6 +253,8 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"usage ceiling fractional", `{"usage_ceiling": {"output_tokens": 1.5}}`, KeyUsageCeilingOutputTokens, "1.5"},
 		{"usage ceiling not a number", `{"usage_ceiling": {"cache_read_tokens": "100"}}`, KeyUsageCeilingCacheReadTokens, `"100"`},
 		{"usage ceiling as a flag", `{"usage_ceiling": {"cache_creation_tokens": true}}`, KeyUsageCeilingCacheCreationTokens, "true"},
+		{"run usage budget negative", `{"run_usage_budget": {"output_tokens": -1}}`, KeyRunUsageBudgetOutputTokens, "-1"},
+		{"run usage budget fractional", `{"run_usage_budget": {"output_tokens": 0.5}}`, KeyRunUsageBudgetOutputTokens, "0.5"},
 		{"decision model misspelled", `{"decision_model": "Evaluate"}`, KeyDecisionModel, `"Evaluate"`},
 		{"decision model not a string", `{"decision_model": false}`, KeyDecisionModel, "false"},
 		{"decision model as a cutoff", `{"decision_model": "0.5"}`, KeyDecisionModel, `"0.5"`},

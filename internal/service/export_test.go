@@ -101,3 +101,8 @@ func (r *LateRecorder) RecordInvocation(rec agents.Record) {
 	}
 	invocationRecorder{s: s}.RecordInvocation(rec)
 }
+
+// FailUsageReadsForTest makes the next n usage budget readings fail as a
+// store read can, so a test can put a failed reading at the point it needs
+// one. It exists only in the tests.
+func (s *Service) FailUsageReadsForTest(n int32) { s.usageReadFaults.Store(n) }
