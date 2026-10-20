@@ -22,9 +22,9 @@ import (
 // custody of the same copy. An uncommitted file survives the handoff, and the
 // second attempt records Cursor rather than attributing its work to Claude.
 func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
+	principles.Cite(t, principles.P6)
 	const unestablished = "that a quota handoff relaunches the backup in the same copy"
 	requireSweepClearsHere(t, unestablished)
-	principles.Cite(t, principles.P6)
 	primary := standin.New(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{{Contains: "work", Recorded: []string{`{"type":"result","is_error":true,"result":"quota exceeded"}`}}}}})
 	backup := standin.NewCursor(t, standin.Script{})
 	sub := newLaunchSubject(t, primary)
