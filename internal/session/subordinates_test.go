@@ -114,8 +114,10 @@ func TestDelegatingJoinsTheSubordinateSetAndNotTheWorkerSet(t *testing.T) {
 }
 
 // The subordinate's reference format is as closed as the worker's: a
-// domain the home refuses in its place, and the two prefixes with each
-// other's third field, are refused rather than read as a nearby one.
+// domain the home refuses in its place, and the two prefixes with a third
+// field only the other's rule accepts, are refused rather than read as a
+// nearby one; and where the two rules overlap the prefix alone decides the
+// owner, which is all the package comment claims.
 func TestASubordinateReferenceIsItsOwnClosedFormat(t *testing.T) {
 	h, err := home.Open(filepath.Join(t.TempDir(), home.DirName))
 	if err != nil {
@@ -138,6 +140,22 @@ func TestASubordinateReferenceIsItsOwnClosedFormat(t *testing.T) {
 		if _, err := session.ParseReference(text); !errors.Is(err, session.ErrReference) {
 			t.Errorf("%s (%q) answered %v, want ErrReference", name, text, err)
 		}
+	}
+
+	// The prefix decides the owner where the grammars overlap: a name both
+	// home.ValidDomain and home.ValidTaskID accept is a domain under the
+	// subordinate prefix and a task under the worker's, never the other.
+	const both = "abcdefghij23"
+	if home.ValidDomain(both) != nil || home.ValidTaskID(both) != nil {
+		t.Fatalf("%q is not accepted by both grammars, so it shows no overlap", both)
+	}
+	sub, err := session.ParseReference(strings.Join([]string{"subordinate1", fields[1], both, "4242", "77"}, ":"))
+	if err != nil || sub.Domain != both || sub.Task != "" || !sub.Subordinate() {
+		t.Fatalf("the overlapping name under the subordinate prefix = %+v, %v; want domain %s and no task", sub, err, both)
+	}
+	worker, err := session.ParseReference(strings.Join([]string{"terminal1", fields[1], both, "4242", "77"}, ":"))
+	if err != nil || worker.Task != both || worker.Domain != "" || worker.Subordinate() {
+		t.Fatalf("the overlapping name under the worker prefix = %+v, %v; want task %s and no domain", worker, err, both)
 	}
 }
 

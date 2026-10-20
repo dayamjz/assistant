@@ -159,8 +159,17 @@
 // answering "which task's worker" and "which domain's subordinate" would be
 // two facts under one key (P14); internal/service asks both and errs toward
 // the side that claims less. A subordinate's reference names its domain in
-// the task's place under a prefix of its own, so ParseReference refuses a
-// task identifier where a domain belongs and the reverse. Delegate starts
+// the task's place under a prefix of its own, and the prefix alone decides
+// the owner: ParseReference holds the third field to home.ValidDomain under
+// the subordinate prefix and to home.ValidTaskID under the worker's, and
+// refuses a field the prefix's own rule refuses. The two grammars overlap,
+// so a name both accept, such as a twelve-character domain from the task
+// identifier's alphabet, reads as a domain under the subordinate prefix and
+// as a task under the worker's; it is never refused for looking like the
+// other owner, and nothing here relies on the two being disjoint, since a
+// domain and a task are kept apart by every key that names them
+// (home.Domain and home.Task, the hold keys, the two wake tables), never by
+// their spelling. Delegate starts
 // the session the way Create does, through the same adapter under the same
 // environment, in a directory of the home's rather than a proven copy,
 // because a subordinate edits nothing and no isolation is asserted of it.
@@ -171,10 +180,12 @@
 // may still reach the socket. Survivors.Adopt derives a placement from that
 // record, which only a provider here wrote, and the kernel's presence read
 // of the process by identifier and start time, and Member reads the presence
-// again at every ask, so the placement ends with the process. It records no
-// host and, where no start time is read, cannot tell a reused identifier
-// from the survivor; both err toward the subordinate, the side that claims
-// less, and its own doc states both.
+// again at every ask, so the placement ends with the process. It is given
+// the identity of the survivor's terminal server as the attempt recorded it
+// and places the server's other windows the same way; where no start time
+// is read it cannot tell a reused identifier from the survivor or its
+// server, which errs toward the subordinate, the side that claims less, and
+// its own doc states it.
 //
 // # The tmux provider
 //
