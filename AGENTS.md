@@ -20,7 +20,7 @@ documentation gap to close. Do not edit the PRD to match the code.
 Section 5 reserves two words that used to be interchangeable. A **hold** waits
 on a person; a **park** is a bound stopping the run. `internal/findings` owns
 the hold predicate (`Holds`, `Held`, `HasHeld`) and counts no bounds, so
-nothing there parks. `internal/graph` owns the three parks, and
+nothing there parks. `internal/graph` owns the four parks, and
 `graph.Status.Stopped` is named after neither because it is the union of both.
 Prose and identifiers both say this now, so a reader may take either literally.
 Keep it that way: a wait on a person is a hold everywhere, and only a bound is a

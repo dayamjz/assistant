@@ -437,7 +437,7 @@ func usageParkAction(p store.RunPark) string {
 	return fmt.Sprintf("The per-run usage budget of %d output tokens parked this run before node %s could run: %s. "+
 		"internal/graph's AdoptBudget moves a run its budget parked onto a larger budget where it stands, without "+
 		"re-running anything, but no command in this build calls it and this run's record has ended, so nothing "+
-		"resumes it. %s runs --usage reports what each of the run's stages spent.",
+		"resumes it. %s assistant runs --usage reports what each of the run's stages spent.",
 		p.UsageBudget, p.Node, spent, remedy)
 }
 

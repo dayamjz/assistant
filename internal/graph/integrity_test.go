@@ -266,9 +266,10 @@ func budgets(history []graph.Checkpoint) []int {
 	return out
 }
 
-// TestAdoptBudgetDoesNotReleaseTheOtherTwoBounds keeps the three bounds three.
-// The run-wide budget is the only one AdoptBudget decides, so a run either of
-// the others parked stays parked whatever budget it is given.
+// TestAdoptBudgetDoesNotReleaseTheOtherTwoBounds keeps the three loop bounds
+// three. AdoptBudget decides the two run-level budgets, the run-wide step
+// budget and the usage budget, and neither is a loop bound, so a run a round
+// limit or convergence parked stays parked whatever budgets it is given.
 func TestAdoptBudgetDoesNotReleaseTheOtherTwoBounds(t *testing.T) {
 	ctx := context.Background()
 	cases := map[string]struct {
