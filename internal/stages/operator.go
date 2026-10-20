@@ -3,6 +3,7 @@ package stages
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/redact"
 )
@@ -12,7 +13,12 @@ import (
 // through, runCommand, so it is a line of shell handed to the platform's
 // interpreter whole, it inherits the service's environment, its output is
 // redacted on the way in, and every residual gap commandGrace states about
-// that runner holds for it too, the descendant it does not end among them.
+// that runner holds for it too, with one narrowing: on unix the command is
+// the leader of a process group of its own, and ending it by its context
+// ends that group (endGroupOnCancel), so a descendant still in the group
+// does not outlive a cancellation holding the output. A descendant that left
+// the group, and one left behind by a command that exited on its own, are
+// not ended.
 //
 // It is exported for one consumer, internal/service's notify.go, which runs
 // the global-only notify.command once per wake. That is the reason this
@@ -30,6 +36,11 @@ type OperatorCommand struct {
 	// redaction, the result keeps. Zero keeps none. Nothing else of the
 	// output is kept: there is no record beside it.
 	Tail int
+	// Grace is how long the command's output is given to arrive once the
+	// command has ended, on runCommand's terms: commandGrace says what it
+	// bounds and on which platforms. Zero or less means commandGrace, so no
+	// value leaves the wait unbounded.
+	Grace time.Duration
 }
 
 // OperatorResult is what running an OperatorCommand produced. It reports
@@ -51,17 +62,27 @@ type OperatorResult struct {
 }
 
 // RunOperatorCommand runs c to completion on runCommand's terms. Ending ctx
-// ends the command, which the result then reports as not having exited on
-// its own; a caller that bounds a command with a deadline reads why from
-// the context rather than from the result.
+// ends the command and, on unix, its process group, which the result then
+// reports as not having exited on its own; a caller that bounds a command
+// with a deadline reads why from the context rather than from the result.
+//
+// On unix the call returns at most c.Grace after the command exited or ctx
+// ended, whichever is first: the group is ended with SIGKILL, which the
+// interpreter cannot outlast, and the read of the output is then given up
+// after the grace. Elsewhere commandGrace says what is not bounded.
 func RunOperatorCommand(ctx context.Context, c OperatorCommand) OperatorResult {
+	grace := c.Grace
+	if grace <= 0 {
+		grace = commandGrace
+	}
 	res := runCommand(ctx, commandSpec{
 		command:    c.Line,
 		dir:        c.Dir,
 		stdin:      c.Stdin,
 		record:     io.Discard,
 		projection: c.Tail,
-		grace:      commandGrace,
+		grace:      grace,
+		group:      true,
 		redact:     redact.New(),
 	})
 	out := OperatorResult{Exited: res.exited, Code: res.code, Tail: res.tail, Err: res.err}

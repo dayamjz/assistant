@@ -8,7 +8,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -386,5 +388,143 @@ func TestNoNotifyCommandRunsNothing(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("the command was never sent wake %d", w.ID)
+	}
+}
+
+// A notify command whose child holds its output is ended with its whole
+// process group at the bound, and the delivery returns within the bound
+// the sender states, notifyBound plus notifyGrace, rather than waiting on
+// the child. The line runs sleep as a child of the shell rather than in its
+// place, so the child holds standard output after the shell is ended; the
+// shell records its own identifier, which is its process group's. While the
+// command hangs that group exists, which is the control that the command
+// was given a group of its own and that the later absence is not vacuous;
+// once the record settles the group is gone, so the child was ended rather
+// than abandoned, and the record reads failed at the bound with no exit
+// status. The delivery is measured by the record itself, from its claim to
+// its settlement.
+func TestANotifyCommandsChildHoldingItsOutputDoesNotExtendTheBound(t *testing.T) {
+	t.Parallel()
+	h, records := loopHome(t)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	configureNotify(t, h.ConfigFile(), `read -r row; case "$row" in *"/hold"*) echo $$ > '`+pidFile+`'; sleep 60; : ;; esac`)
+	const task = "notifyholdaa"
+	const bound = time.Second
+	plantRunning(t, records, task, "")
+	holdFor(t, records, task, "task/"+task+"/hold")
+	l := openLoopHooked(t, h, records, nil, nil, nil, func(hooks *supervisionHooks) { hooks.notifyTimeout = bound })
+	defer func() { _ = l.service.Close() }()
+	l.pass(t)
+	w := holdWake(t, l.records(t), task, "task/"+task+"/hold")
+
+	var group int
+	deadline := time.Now().Add(loopWait)
+	for {
+		raw, err := os.ReadFile(pidFile)
+		if err == nil && strings.HasSuffix(string(raw), "\n") {
+			if group, err = strconv.Atoi(strings.TrimSpace(string(raw))); err != nil {
+				t.Fatalf("the command recorded %q, not a process identifier", raw)
+			}
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("the hanging command never started")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := syscall.Kill(-group, 0); err != nil {
+		t.Fatalf("while the command hangs its process group %d answers %v; want it to exist, or the check below shows nothing", group, err)
+	}
+
+	n := settledNotification(t, l.records(t), w.ID)
+	detail, _ := n.Detail.Get()
+	if n.Outcome != store.Known(store.NotificationFailed) || n.ExitCode.IsKnown() || !strings.Contains(detail, "did not exit within") {
+		t.Fatalf("the notification is %+v, want failed at its bound with no exit status", n)
+	}
+	settled, _ := n.SettledAt.Get()
+	if took := settled.Sub(n.ClaimedAt); took >= bound+notifyGrace {
+		t.Fatalf("the delivery took %s from claim to settlement, want under the stated %s plus %s", took, bound, notifyGrace)
+	}
+	deadline = time.Now().Add(loopWait)
+	for {
+		err := syscall.Kill(-group, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("process group %d still answers %v after the delivery settled; the child holding the output was left running", group, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A store that refuses every claim is tried once per recheck interval and
+// not once per wake or per ring of the bell. The fault is a real SQLite
+// abort of the notification insert, planted through the store. While it
+// stands the loop is kicked with a new hold every few tens of milliseconds,
+// so the bell rings far more often than the interval elapses, and the
+// service log, where each failed pass writes its one line, is counted over
+// the window: at least two attempts, so the sender kept trying, and no more
+// than the window holds intervals, with one of slack for the attempt the
+// window opened on. Once the fault is lifted the wakes are sent, which is
+// the control that the refusal was the store's.
+func TestARefusedClaimWaitsTheRecheckInterval(t *testing.T) {
+	t.Parallel()
+	h, records := loopHome(t)
+	out := filepath.Join(t.TempDir(), "sent")
+	configureNotify(t, h.ConfigFile(), "cat >> '"+out+"'")
+	const task = "notifyclaimf"
+	const recheck = 300 * time.Millisecond
+	const window = 1500 * time.Millisecond
+	plantRunning(t, records, task, "")
+	l := openLoopHooked(t, h, records, nil, nil, nil, func(hooks *supervisionHooks) { hooks.notifyRecheck = recheck })
+	defer func() { _ = l.service.Close() }()
+	lift, err := l.records(t).RefuseNotificationClaimsForTest(t.Context(), t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifted := false
+	defer func() {
+		if !lifted {
+			_ = lift()
+		}
+	}()
+
+	refusals := func() int {
+		raw, err := os.ReadFile(h.ServiceLog())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Count(string(raw), "could not claim the notification of wake")
+	}
+	holdFor(t, l.records(t), task, "task/"+task+"/first")
+	l.pass(t)
+	deadline := time.Now().Add(loopWait)
+	for refusals() == 0 {
+		if !time.Now().Before(deadline) {
+			t.Fatal("the sender never logged a refused claim")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	before := refusals()
+	end := time.Now().Add(window)
+	for i := 0; time.Now().Before(end); i++ {
+		holdFor(t, l.records(t), task, "task/"+task+"/ring"+strconv.Itoa(i))
+		l.pass(t)
+		time.Sleep(30 * time.Millisecond)
+	}
+	attempts := refusals() - before
+	if most := int(window/recheck) + 1; attempts < 2 || attempts > most {
+		t.Fatalf("the sender tried %d times in %s with a %s recheck, want between 2 and %d", attempts, window, recheck, most)
+	}
+
+	if err := lift(); err != nil {
+		t.Fatal(err)
+	}
+	lifted = true
+	ring := holdWake(t, l.records(t), task, "task/"+task+"/ring0")
+	if n := settledNotification(t, l.records(t), ring.ID); n.Outcome != store.Known(store.NotificationSent) {
+		t.Fatalf("after the fault was lifted the notification is %+v, want sent", n)
 	}
 }

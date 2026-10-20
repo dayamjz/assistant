@@ -180,3 +180,36 @@ func TestMatchingOutcomeAndExitStatusSettle(t *testing.T) {
 		t.Fatalf("failed with exit status 2 = %+v, %v", n, err)
 	}
 }
+
+// The claim fault a service test plants makes a real claim fail inside
+// SQLite, with an error that is neither of the claim's two refusals, and
+// leaves the wake pending; lifting it lets the same wake be claimed. The
+// claim after lifting is the control that the fault, and not the wake, was
+// what refused.
+func TestTheNotificationClaimFaultRefusesClaimsUntilLifted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	task := seedTask(t, s, "notifyfaulta").ID
+	w := appendWake(t, s, task, "hold:fault")
+	if _, err := s.RefuseNotificationClaimsForTest(ctx, nil); err == nil {
+		t.Fatal("the fault was planted without a test")
+	}
+	lift, err := s.RefuseNotificationClaimsForTest(ctx, t)
+	if err != nil {
+		t.Fatalf("planting the fault: %v", err)
+	}
+	_, err = s.ClaimNotification(ctx, w.ID)
+	if err == nil || errors.Is(err, ErrNotificationClaimed) || errors.Is(err, ErrNotificationNotOffered) || !strings.Contains(err.Error(), "planted fault") {
+		t.Fatalf("a claim under the fault answered %v, want the planted fault", err)
+	}
+	if got := pendingIDs(t, s); len(got) != 1 || got[0] != w.ID {
+		t.Fatalf("pending under the fault = %v, want wake %d still pending", got, w.ID)
+	}
+	if err := lift(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimNotification(ctx, w.ID); err != nil {
+		t.Fatalf("a claim after lifting the fault: %v", err)
+	}
+}

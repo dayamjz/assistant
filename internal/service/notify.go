@@ -36,9 +36,11 @@ import (
 // the JSON and is not safe. The command is run
 // through internal/stages' RunOperatorCommand, the runner every commands.*
 // key runs through, in the home's root with this service's environment, so
-// it carries the operator's credentials and that runner's gaps, the
-// descendant it does not end among them; no second process starter is
-// written here. Its output is not shown to anyone: the redacted end of it
+// it carries the operator's credentials and that runner's gaps; no second
+// process starter is written here. That runner ends the command's whole
+// process group on unix when the bound or Close ends it, and leaves a
+// descendant that left the group, or that a command exiting on its own left
+// behind, running. Its output is not shown to anyone: the redacted end of it
 // is kept on the record as evidence.
 //
 // Nothing the command does reaches the program. Its exit status and output
@@ -74,8 +76,20 @@ import (
 // secret. A failed wake is not retried, because a retry is a second send of
 // a wake the command may already have delivered.
 //
-// Commands run one at a time, each bounded by notifyBound, so a channel that
-// hangs delays the wakes behind it by that bound each and never the loop.
+// Commands run one at a time, so a channel that hangs delays the wakes
+// behind it and never the loop. On unix running the command for one wake
+// takes at most notifyBound plus notifyGrace, the claim and settlement
+// writes aside: the command is ended with its process group at notifyBound,
+// and what it printed is read for at most notifyGrace after it ended, so a
+// descendant still holding its output cannot extend that. Elsewhere only
+// notifyBound on the command is stated: whether the read ends at
+// notifyGrace there is what internal/stages' commandGrace says that package
+// does not establish.
+//
+// A failure to claim a wake, or to read the pending ones, ends the pass and
+// is logged once; the sender then waits the recheck interval, not the bell,
+// before it reads again, so a store refusing every write is tried once per
+// interval rather than once per wake or per ring.
 //
 // # Residual gaps
 //
@@ -92,12 +106,21 @@ import (
 //   - The record is read by no surface in this build: a failure is visible
 //     in the service log and the notification table, not in a command's
 //     answer.
-//   - The bound and the batch are chosen, not measured, and are not
-//     settings.
+//   - The bound, the grace and the batch are chosen, not measured, and are
+//     not settings.
+//   - A pass ended by a claim failure leaves the wakes behind it unoffered
+//     until the store accepts a claim again; with the failure lasting, they
+//     are offered late or, if acknowledged meanwhile, never.
 
 // notifyBound is how long the notify command may run for one wake before
 // it is ended and the wake recorded failed. It is chosen, not measured.
 const notifyBound = 30 * time.Second
+
+// notifyGrace is how long the notify command's output is given to arrive
+// once the command has ended, on its own or at notifyBound, so a delivery
+// takes at most notifyBound plus notifyGrace on unix. It is chosen, not
+// measured.
+const notifyGrace = 2 * time.Second
 
 // notifyBatch is how many pending wakes one read offers.
 const notifyBatch = 16
@@ -122,68 +145,87 @@ func (s *Service) startNotifier(hooks supervisionHooks) {
 	if hooks.notifyTimeout > 0 {
 		bound = hooks.notifyTimeout
 	}
+	recheck := wakeWaitRecheck
+	if hooks.notifyRecheck > 0 {
+		recheck = hooks.notifyRecheck
+	}
 	if !s.startWork() {
 		return
 	}
 	go func() {
 		defer s.work.Done()
-		recheck := time.NewTicker(wakeWaitRecheck)
-		defer recheck.Stop()
 		for {
 			rung := s.wakeBell.armed()
-			s.notifyPending(s.stopCtx, line, bound)
+			if !s.notifyPending(s.stopCtx, line, bound) {
+				// The store refused; the bell is not listened to, because
+				// every append rings it and the refusal is not the
+				// append's to end.
+				rung = nil
+			}
+			wait := time.NewTimer(recheck)
 			select {
 			case <-s.stopCtx.Done():
+				wait.Stop()
 				return
 			case <-rung:
-			case <-recheck.C:
+			case <-wait.C:
 			}
+			wait.Stop()
 		}
 	}()
 }
 
 // notifyPending offers every pending wake to the command, oldest first,
-// until a read finds none or ctx ends.
-func (s *Service) notifyPending(ctx context.Context, line string, bound time.Duration) {
+// until a read finds none or ctx ends, and reports true. It reports false,
+// having logged why once, when the store refused the read or a claim, which
+// ends the pass at that wake.
+func (s *Service) notifyPending(ctx context.Context, line string, bound time.Duration) bool {
 	for ctx.Err() == nil {
 		pending, err := s.store.PendingNotifications(ctx, notifyBatch)
 		if err != nil {
 			if ctx.Err() == nil {
 				s.log.Printf("could not read the wakes to notify: %v", err)
 			}
-			return
+			return false
 		}
 		if len(pending) == 0 {
-			return
+			return true
 		}
 		for _, w := range pending {
 			if ctx.Err() != nil {
-				return
+				return true
 			}
-			s.notifyOne(ctx, line, bound, w)
+			if !s.notifyOne(ctx, line, bound, w) {
+				return false
+			}
 		}
 	}
+	return true
 }
 
 // notifyOne claims one wake, runs the command for it, and settles the claim.
-// A wake already claimed or acknowledged since the read is passed over.
-func (s *Service) notifyOne(ctx context.Context, line string, bound time.Duration, w store.Wake) {
+// A wake already claimed or acknowledged since the read is passed over. It
+// reports false, having logged why, only when the store refused the claim
+// for another reason, so nothing was run.
+func (s *Service) notifyOne(ctx context.Context, line string, bound time.Duration, w store.Wake) bool {
 	if _, err := s.store.ClaimNotification(ctx, w.ID); err != nil {
-		if !errors.Is(err, store.ErrNotificationClaimed) && !errors.Is(err, store.ErrNotificationNotOffered) && ctx.Err() == nil {
-			s.log.Printf("could not claim the notification of wake %d: %v", w.ID, err)
+		if errors.Is(err, store.ErrNotificationClaimed) || errors.Is(err, store.ErrNotificationNotOffered) || ctx.Err() != nil {
+			return true
 		}
-		return
+		s.log.Printf("could not claim the notification of wake %d, and the pass ends there: %v", w.ID, err)
+		return false
 	}
 	settlement := s.runNotify(ctx, line, bound, w)
 	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notifySettleBound)
 	defer cancel()
 	if _, err := s.store.SettleNotification(settleCtx, w.ID, settlement); err != nil {
 		s.log.Printf("could not record how the notification of wake %d ended: %v", w.ID, err)
-		return
+		return true
 	}
 	if settlement.Outcome == store.NotificationFailed {
 		s.log.Printf("the notify command failed for wake %d of task %s: %s", w.ID, w.TaskID, redact.New().Redact(settlement.Detail))
 	}
+	return true
 }
 
 // runNotify runs the command once with the wake's row on standard input and
@@ -197,7 +239,7 @@ func (s *Service) runNotify(ctx context.Context, line string, bound time.Duratio
 	runCtx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
 	res := stages.RunOperatorCommand(runCtx, stages.OperatorCommand{
-		Line: line, Dir: s.home.Root(), Stdin: string(row) + "\n", Tail: notifyTail,
+		Line: line, Dir: s.home.Root(), Stdin: string(row) + "\n", Tail: notifyTail, Grace: notifyGrace,
 	})
 	switch {
 	case res.Exited && res.Code == 0:

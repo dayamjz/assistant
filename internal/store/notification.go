@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"testing"
 	"time"
 )
 
@@ -222,4 +223,36 @@ func (s *Store) Notification(ctx context.Context, wakeID int64) (Notification, e
 		}
 	}
 	return n, nil
+}
+
+// RefuseNotificationClaimsForTest plants a fault that makes SQLite abort
+// every insert into the notification table, so ClaimNotification fails the
+// way it does on a store that cannot write, such as one whose disk is full,
+// and returns the function that lifts it. It is a fault injector and
+// nothing else: no production path plants one, and a caller outside this
+// package has no other way to make a real claim fail, because this is the
+// only package that writes SQL.
+//
+// The fault is a trigger in the database itself, so it holds for every
+// connection to the file until it is lifted; a test lifts it before the
+// store is closed. It takes a testing.TB so it cannot be called from
+// anything but a test, and it refuses a nil one.
+func (s *Store) RefuseNotificationClaimsForTest(ctx context.Context, tb testing.TB) (func() error, error) {
+	if tb == nil {
+		return nil, fmt.Errorf("store: RefuseNotificationClaimsForTest is a test's fault injector and takes the test")
+	}
+	tb.Helper()
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	if _, err := s.write.ExecContext(ctx, `CREATE TRIGGER notification_claim_fault BEFORE INSERT ON notification
+		BEGIN SELECT RAISE(ABORT, 'planted fault'); END`); err != nil {
+		return nil, fmt.Errorf("store: planting the notification claim fault: %w", err)
+	}
+	return func() error {
+		if _, err := s.write.ExecContext(context.WithoutCancel(ctx), `DROP TRIGGER notification_claim_fault`); err != nil {
+			return fmt.Errorf("store: lifting the notification claim fault: %w", err)
+		}
+		return nil
+	}, nil
 }

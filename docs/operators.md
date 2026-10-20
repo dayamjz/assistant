@@ -567,7 +567,8 @@ command decides where it goes: a script that posts to your own private chat
 channel, writes a desktop notification, or appends to a file. The line is a
 line of shell, run the way `commands.test` is, in the assistant home (by
 default `~/.assistant`) with the service's environment, so it has your credentials; it is given 30
-seconds per wake and is ended after that.
+seconds per wake and is ended after that, together with whatever it started
+that is still in its process group (on Linux and macOS).
 
 What is sent, and what is not:
 
@@ -596,7 +597,12 @@ What is sent, and what is not:
 - The service reads the command when it starts. A change reaches the next
   service, after `assistant service restart`.
 - Commands run one at a time, so a channel that hangs delays the wakes
-  behind it by up to 30 seconds each. It never delays supervision itself.
+  behind it by up to 32 seconds each on Linux and macOS: its 30 seconds,
+  and at most 2 more for what it printed to arrive. It never delays
+  supervision itself.
+- If the service cannot record that it is about to run the command, for
+  example because the disk is full, it writes that to the service log once,
+  stops offering wakes, and tries again about every 5 seconds.
 - With no command named, nothing runs and nothing is recorded.
 
 ## Unattended operating posture
