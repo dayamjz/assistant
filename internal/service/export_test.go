@@ -59,6 +59,13 @@ func RequireSweepClearsHere(t *testing.T, unestablished string) {
 	requireSweepClearsHere(t, unestablished)
 }
 
+// FatalUnlessSweepsStoppedClearing is fatalUnlessSweepsStoppedClearing for
+// this package's external tests.
+func FatalUnlessSweepsStoppedClearing(t *testing.T, unestablished, format string, args ...any) {
+	t.Helper()
+	fatalUnlessSweepsStoppedClearing(t, unestablished, format, args...)
+}
+
 // SeedDatabase is seedDatabase for this package's external tests.
 func SeedDatabase(tb testing.TB, path string) {
 	tb.Helper()

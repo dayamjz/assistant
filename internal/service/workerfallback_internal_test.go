@@ -22,7 +22,8 @@ import (
 // custody of the same copy. An uncommitted file survives the handoff, and the
 // second attempt records Cursor rather than attributing its work to Claude.
 func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
-	requireSweepClearsHere(t, "that a quota handoff relaunches the backup in the same copy")
+	const unestablished = "that a quota handoff relaunches the backup in the same copy"
+	requireSweepClearsHere(t, unestablished)
 	principles.Cite(t, principles.P6)
 	primary := standin.New(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{{Contains: "work", Recorded: []string{`{"type":"result","is_error":true,"result":"quota exceeded"}`}}}}})
 	backup := standin.NewCursor(t, standin.Script{})
@@ -64,7 +65,7 @@ func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			f, has, _ := s.store.TaskFallback(t.Context(), sub.task)
-			t.Fatalf("no backup attempt: attempts=%+v fallback=%+v has=%v", attempts, f, has)
+			fatalUnlessSweepsStoppedClearing(t, unestablished, "no backup attempt: attempts=%+v fallback=%+v has=%v", attempts, f, has)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -213,7 +214,8 @@ func TestASealedSelectionDoesNotPermitASecondLiveWorker(t *testing.T) {
 }
 
 func TestFailedBackupRaisesAHoldAndRetryPreservesTheCopy(t *testing.T) {
-	requireSweepClearsHere(t, "that a backup retry reclaims the standing copy")
+	const unestablished = "that a backup retry reclaims the standing copy"
+	requireSweepClearsHere(t, unestablished)
 	primary := standin.New(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{{Contains: "work", Recorded: []string{`{"type":"result","is_error":true,"result":"quota exceeded"}`}}}}})
 	backup := standin.NewCursor(t, standin.Script{})
 	sub := newLaunchSubject(t, primary)
@@ -249,7 +251,7 @@ func TestFailedBackupRaisesAHoldAndRetryPreservesTheCopy(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("backup failure raised no open hold")
+			fatalUnlessSweepsStoppedClearing(t, unestablished, "backup failure raised no open hold")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -258,7 +260,7 @@ func TestFailedBackupRaisesAHoldAndRetryPreservesTheCopy(t *testing.T) {
 	s.cfg.RelaunchAttempts = 5
 	firstRetry, retryErr := s.respondTask(t.Context(), ipc.Request{}, machine.TaskRespondRequest{Task: sub.task, Hold: key, Answer: machine.AnswerRetry})
 	if retryErr != nil || firstRetry.Effect != machine.AnswerRedispatched {
-		t.Fatalf("unavailable retry: %+v %v", firstRetry, retryErr)
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "unavailable retry: %+v %v", firstRetry, retryErr)
 	}
 	key = workerFallbackHoldKey(sub.task, 3)
 	deadline = time.Now().Add(15 * time.Second)
@@ -268,14 +270,14 @@ func TestFailedBackupRaisesAHoldAndRetryPreservesTheCopy(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("repeated backup failure raised no new hold")
+			fatalUnlessSweepsStoppedClearing(t, unestablished, "repeated backup failure raised no new hold")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	s.catalog = agents.NewCatalog(fixedRunner{runner: primary.Runner()}, fixedRunner{runner: backup.Runner()})
 	answered, err := s.respondTask(t.Context(), ipc.Request{}, machine.TaskRespondRequest{Task: sub.task, Hold: key, Answer: machine.AnswerRetry})
 	if err != nil || answered.Effect != machine.AnswerRedispatched {
-		t.Fatalf("retry: %+v %v", answered, err)
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "retry: %+v %v", answered, err)
 	}
 	deadline = time.Now().Add(15 * time.Second)
 	for {
@@ -287,7 +289,7 @@ func TestFailedBackupRaisesAHoldAndRetryPreservesTheCopy(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("retry did not start backup: %+v", attempts)
+			fatalUnlessSweepsStoppedClearing(t, unestablished, "retry did not start backup: %+v", attempts)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

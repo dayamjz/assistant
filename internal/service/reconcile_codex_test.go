@@ -44,7 +44,8 @@ func codexWorkerOptions(t *testing.T, h *home.Home) (service.Options, *standin.A
 // reads Running from the process tier through that session.
 func TestARestartRelaunchesADeadCodexWorkerInPlace(t *testing.T) {
 	t.Parallel()
-	service.RequireSweepClearsHere(t, "a restart relaunching a dead Codex worker in place")
+	const unestablished = "a restart relaunching a dead Codex worker in place"
+	service.RequireSweepClearsHere(t, unestablished)
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)
@@ -68,7 +69,7 @@ func TestARestartRelaunchesADeadCodexWorkerInPlace(t *testing.T) {
 	var second session.Reference
 	var call standin.Call
 	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := waitSession(t, running.service, id)
+		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
 		second = launched.Reference()
 		waitCapture(t, provider, launched, "the relaunch note was read")
 		if got := taskState(t, running.client, id); !readsRunning(got) {

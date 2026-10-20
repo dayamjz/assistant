@@ -172,7 +172,8 @@ func TestUnderTmuxTheServicePlacesTheWorkerAndEveryWindowOfItsServer(t *testing.
 // its own, with a new reference, through which the task then reads Running.
 func TestARestartUnderTmuxRelaunchesADeadTerminalInPlace(t *testing.T) {
 	t.Parallel()
-	service.RequireSweepClearsHere(t, "a restart under tmux relaunching a dead terminal in place")
+	const unestablished = "a restart under tmux relaunching a dead terminal in place"
+	service.RequireSweepClearsHere(t, unestablished)
 	standin.Tmux(t)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -188,7 +189,7 @@ func TestARestartUnderTmuxRelaunchesADeadTerminalInPlace(t *testing.T) {
 	o, _ := workerOptions(t, h)
 	var second session.Reference
 	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := waitSession(t, running.service, id)
+		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
 		if _, ok := provider.(*session.Tmux); !ok {
 			t.Fatalf("the restarted service relaunched through %T, want the tmux provider", provider)
 		}

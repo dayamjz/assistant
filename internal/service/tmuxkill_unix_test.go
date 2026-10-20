@@ -125,7 +125,8 @@ func tmuxHome(t *testing.T, branch string) (*home.Home, string) {
 func TestUnderTmuxAServerKilledOutrightReadsDeadAndARestartRelaunches(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P9)
-	service.RequireSweepClearsHere(t, "a restart under tmux relaunching after its server was killed")
+	const unestablished = "a restart under tmux relaunching after its server was killed"
+	service.RequireSweepClearsHere(t, unestablished)
 	h, id := tmuxHome(t, "task/tmux-killed")
 
 	o, agent := workerOptions(t, h)
@@ -186,7 +187,7 @@ func TestUnderTmuxAServerKilledOutrightReadsDeadAndARestartRelaunches(t *testing
 	o, _ = workerOptions(t, h)
 	var second session.Reference
 	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := waitSession(t, running.service, id)
+		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
 		if _, ok := provider.(*session.Tmux); !ok {
 			t.Fatalf("the restarted service relaunched through %T, want the tmux provider", provider)
 		}
@@ -224,7 +225,8 @@ func TestUnderTmuxAServerKilledOutrightReadsDeadAndARestartRelaunches(t *testing
 func TestUnderTmuxASurvivorOfTheServiceReadsUnobservedAndIsSurfacedNotRelaunched(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P9)
-	service.RequireSweepClearsHere(t, "a restart under tmux relaunching once a survivor has gone")
+	const unestablished = "a restart under tmux relaunching once a survivor has gone"
+	service.RequireSweepClearsHere(t, unestablished)
 	h, id := tmuxHome(t, "task/tmux-survivor")
 
 	o, agent := workerOptions(t, h)
@@ -284,7 +286,7 @@ func TestUnderTmuxASurvivorOfTheServiceReadsUnobservedAndIsSurfacedNotRelaunched
 
 	o, _ = workerOptions(t, h)
 	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := waitSession(t, running.service, id)
+		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
 		waitCapture(t, provider, launched, "worker ready")
 		if launched.Reference() == first {
 			t.Fatalf("the relaunch reused the first attempt's reference %s", first)

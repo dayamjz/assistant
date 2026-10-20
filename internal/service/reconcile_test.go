@@ -34,13 +34,34 @@ func (blockingTerminals) Capture(context.Context, string) (session.Capture, erro
 // waitSession polls the service until it holds a session for the task.
 func waitSession(t *testing.T, running *service.Service, id string) (session.Provider, *session.Session) {
 	t.Helper()
+	return waitSessionOr(t, running, id, t.Fatalf)
+}
+
+// waitRelaunchedSession is waitSession for a session a relaunch launches,
+// which waits on a sweep of the standing copy clearing first: the wait that
+// runs out is reported through service.FatalUnlessSweepsStoppedClearing,
+// so a host that started refusing every sweep after the test's
+// service.RequireSweepClearsHere skips on that helper's terms rather than
+// failing here, unestablished naming what the test would have established.
+func waitRelaunchedSession(t *testing.T, running *service.Service, id, unestablished string) (session.Provider, *session.Session) {
+	t.Helper()
+	return waitSessionOr(t, running, id, func(format string, args ...any) {
+		t.Helper()
+		service.FatalUnlessSweepsStoppedClearing(t, unestablished, format, args...)
+	})
+}
+
+// waitSessionOr is the wait both share, reporting a wait that runs out
+// through fatalf, which must not return.
+func waitSessionOr(t *testing.T, running *service.Service, id string, fatalf func(format string, args ...any)) (session.Provider, *session.Session) {
+	t.Helper()
 	deadline := time.Now().Add(launchWait)
 	for {
 		if provider, launched, ok := running.SessionOf(id); ok {
 			return provider, launched
 		}
 		if !time.Now().Before(deadline) {
-			t.Fatalf("the service never held a session for task %s", id)
+			fatalf("the service never held a session for task %s", id)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -76,7 +97,8 @@ func launchedAndEnded(t *testing.T, h *home.Home, id string) session.Reference {
 // for the coordinator.
 func TestARestartRelaunchesADeadTerminalInPlace(t *testing.T) {
 	t.Parallel()
-	service.RequireSweepClearsHere(t, "a restart relaunching a dead terminal in place")
+	const unestablished = "a restart relaunching a dead terminal in place"
+	service.RequireSweepClearsHere(t, unestablished)
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)
@@ -112,7 +134,7 @@ func TestARestartRelaunchesADeadTerminalInPlace(t *testing.T) {
 	var second session.Reference
 	var read string
 	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := waitSession(t, running.service, id)
+		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
 		second = launched.Reference()
 		waitCapture(t, provider, launched, "worker ready")
 		if got := taskState(t, running.client, id); !readsRunning(got) {
