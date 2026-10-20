@@ -786,7 +786,9 @@ never lets the program merge on GitLab:
 A merge the code host refuses (on GitLab, for example, the 405, 409 or 422 its
 API documents for a merge request it will not merge, whose source branch moved
 past the head the run observed, or that it did not merge) is written to the
-service log with the host's own status and message and is not asked again; the run stays
+service log and is not asked again. The log line carries the host's own status
+and message, except that on GitLab an answer larger than the output bound is
+reported as oversize with neither, and a redirect with its status alone. The run stays
 `checks-passed` for you to merge. Its outcome vocabulary has `passed` for a merged pull request,
 and otherwise what produces it is a pull request someone merged while the
 checks stage waited on it, or while the hold that wait left was standing, or

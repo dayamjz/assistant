@@ -849,6 +849,30 @@ func TestGitLabDiscardsAnOversizeAnswer(t *testing.T) {
 	}
 }
 
+// A refusal whose body is over the output bound is discarded whole as well:
+// it is ReasonOversizeAnswer and not ReasonRejected, and its detail carries
+// neither GitLab's status nor its message, because the body is bounded
+// before the status is read. This is the exception doc.go names to a merge
+// refusal arriving rejected with both.
+func TestGitLabDiscardsAnOversizeRefusal(t *testing.T) {
+	message := "Branch cannot be merged " + strings.Repeat("x", forge.DefaultMaxOutput)
+	p, adapter := openGitLab(t, labtest.Script{
+		labtest.OpProject: {labtest.Project(3, "group/name")},
+		labtest.OpMerge:   {labtest.Error(http.StatusUnprocessableEntity, message)},
+	})
+	_, err := adapter.Merge(context.Background(), 12, conformanceHead)
+	got := refusalOf(t, err)
+	if got.Reason != forge.ReasonOversizeAnswer || got.Op != "merge" {
+		t.Fatalf("an oversize 422 refused as %+v, want oversize", got)
+	}
+	if strings.Contains(got.Detail, "422") || strings.Contains(got.Detail, "Branch cannot be merged") {
+		t.Fatalf("an oversize refusal's detail %q carries the status or message it discarded", got.Detail)
+	}
+	if merges := p.CallsFor(labtest.OpMerge); len(merges) != 1 {
+		t.Fatalf("the merge was asked %d times, want once", len(merges))
+	}
+}
+
 // The confirmation is remembered only once it held, so a write after a failed
 // confirmation asks again rather than refusing for ever or writing blind.
 func TestGitLabConfirmationIsRememberedOnlyOnceItHeld(t *testing.T) {
