@@ -19,11 +19,19 @@ const RequireTmuxVar = "ASSISTANT_REQUIRE_TMUX"
 // returns an empty path, so no terminal test passes without tmux behind it.
 // Windows has no tmux, and is skipped by name rather than by a failed
 // lookup.
+//
+// A tmux server leaves the process group and the session of the test that
+// starts it, so a kill of the test binary misses it and whatever runs in its
+// panes, and both would keep running with nobody to end them. Tmux therefore
+// fails the test unless OwnProcesses was called in this process, which
+// starts the owner sweep that ends them once this binary is gone and has
+// LeftAfterTests report one still running after the tests.
 func Tmux(tb testing.TB) string {
 	tb.Helper()
 	if runtime.GOOS == "windows" {
 		tb.Skip("terminal workers are hosted in tmux, which this platform does not run, so this terminal test was not run")
 	}
+	requireOwned(tb)
 	path, err := exec.LookPath("tmux")
 	if err == nil {
 		if abs, aerr := filepath.Abs(path); aerr == nil {

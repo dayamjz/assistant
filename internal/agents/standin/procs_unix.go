@@ -5,6 +5,7 @@ package standin
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -26,14 +27,43 @@ func (p Process) String() string {
 }
 
 // ProcessesOf lists every process whose executable is binary, other than
-// this process and its ancestors, which include the test binary AtTerminal
-// ran this one from. The executable and the arguments are read per process
-// from the kernel (commandLine), never split out of a listing, so a path or
-// an argument with a space in it is read whole. A list that cannot be read is
-// an error and never an empty list; a single process whose command line
-// cannot be read, one that has exited or one of another user's, is passed
-// over.
+// this process, its ancestors, which include the test binary AtTerminal ran
+// this one from, and the owner sweep OwnProcesses started. The executable
+// and the arguments are read per process from the kernel (commandLine),
+// never split out of a listing, so a path or an argument with a space in it
+// is read whole. A list that cannot be read is an error and never an empty
+// list; a single process whose command line cannot be read, one that has
+// exited or one of another user's, is passed over.
 func ProcessesOf(binary string) ([]Process, error) {
+	return processesWhere(func(pid int) bool {
+		executable, _, err := commandLine(pid)
+		return err == nil && executable == binary
+	})
+}
+
+// carrying lists every process started with OwnerVar set to value in its
+// environment (startEnvironment), whatever its executable, leaving out the
+// same processes ProcessesOf does. It is how the owner sweep and
+// LeftAfterTests find a terminal server a test started, and the processes in
+// its panes, which run another program and are in no group or session of the
+// test's. A process whose environment cannot be read, one that has exited
+// or one of another user's, is passed over, as ProcessesOf passes one over,
+// and so is one whose environment reads as empty: on macOS the read finds
+// none for some programs, an Apple-signed /bin/sleep among them, whatever
+// they were started with.
+func carrying(value string) ([]Process, error) {
+	want := OwnerVar + "=" + value
+	return processesWhere(func(pid int) bool {
+		env, err := startEnvironment(pid)
+		return err == nil && slices.Contains(env, want)
+	})
+}
+
+// processesWhere lists every process match accepts, other than this
+// process, its ancestors and the owner sweep, each with its identity and its
+// arguments read from the kernel. A list that cannot be read is an error and
+// never an empty list.
+func processesWhere(match func(pid int) bool) ([]Process, error) {
 	exclude := map[int]bool{}
 	for pid := os.Getpid(); pid > 1 && !exclude[pid]; {
 		exclude[pid] = true
@@ -43,21 +73,22 @@ func ProcessesOf(binary string) ([]Process, error) {
 		}
 		pid = lineage.Parent
 	}
+	_, sweeper := owned()
 	pids, err := processIDs()
 	if err != nil {
 		return nil, fmt.Errorf("listing processes: %w", err)
 	}
 	var found []Process
 	for _, pid := range pids {
-		if exclude[pid] {
+		if exclude[pid] || !match(pid) {
 			continue
 		}
-		executable, args, err := commandLine(pid)
-		if err != nil || executable != binary {
+		_, args, err := commandLine(pid)
+		if err != nil {
 			continue
 		}
 		id, present, err := agents.Identify(pid)
-		if err != nil || !present {
+		if err != nil || !present || id == sweeper {
 			continue
 		}
 		found = append(found, Process{Identity: id, Args: args})
@@ -114,13 +145,20 @@ func Stayed(binary string, match func(Process) bool, grace time.Duration) ([]Pro
 	if err != nil {
 		return nil, err
 	}
+	return stayed(slices.DeleteFunc(listed, func(p Process) bool { return !match(p) }), grace), nil
+}
+
+// stayed is every process in ps still running grace after the call, each
+// given the same grace at once rather than one after another.
+func stayed(ps []Process, grace time.Duration) []Process {
+	deadline := time.Now().Add(grace)
 	var left []Process
-	for _, p := range listed {
-		if match(p) && !p.GoneWithin(grace) {
+	for _, p := range ps {
+		if !p.GoneWithin(time.Until(deadline)) {
 			left = append(left, p)
 		}
 	}
-	return left, nil
+	return left
 }
 
 // LeftAfterTests is the check a package's TestMain runs once m.Run has
@@ -135,34 +173,51 @@ func Stayed(binary string, match func(Process) bool, grace time.Duration) ([]Pro
 // Every process still running this binary is then one the tests started and
 // did not end: a service, a stand-in agent or hook, or a test binary
 // AtTerminal ran again on behalf of a test that started this binary as an
-// outer one. It gives each EndGrace to finish exiting, then names every one
-// still running on standard error, ends it, and reports false, so the
-// package fails and leaves nothing behind. A process list that cannot be
-// read fails the package too, since a check that read nothing would pass.
+// outer one. So is every process started with this process's owner identity
+// in its environment once OwnProcesses has been called, whatever it runs,
+// a terminal server and what runs in its panes among them. It gives each
+// EndGrace to finish exiting, then names every one still running on
+// standard error, ends it, and reports false, so the package fails and
+// leaves nothing behind. A process list that cannot be read fails the
+// package too, since a check that read nothing would pass.
 //
-// What it does not see: a process running another executable, such as a git
-// or a terminal server, and anything at all once this binary is gone, so the
-// binary AtTerminal ran again outliving a killed outer one is watchOuter's to
-// end and no check in that run reports it.
+// What it does not see: a process running another executable that was
+// started with an environment without OwnerVar, or before OwnProcesses was
+// called, or whose environment the read cannot find (carrying); and
+// anything at all once this binary is gone, so the binary
+// AtTerminal ran again outliving a killed outer one is watchOuter's to end,
+// and a terminal server outliving a killed owner the owner sweep's, and no
+// check in that run reports either.
 func LeftAfterTests() bool {
 	self, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: could not resolve this binary to check for processes the tests left running: %v\n", err)
 		return false
 	}
-	left, err := Stayed(self, func(Process) bool { return true }, EndGrace)
+	listed, err := ProcessesOf(self)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FAIL: could not check for processes the tests left running: %v\n", err)
 		return false
 	}
+	if value, _ := owned(); value != "" {
+		marked, err := carrying(value)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "FAIL: could not check for processes the tests left running: %v\n", err)
+			return false
+		}
+		for _, p := range marked {
+			if !slices.ContainsFunc(listed, func(q Process) bool { return q.Identity == p.Identity }) {
+				listed = append(listed, p)
+			}
+		}
+	}
+	left := stayed(listed, EndGrace)
 	if len(left) == 0 {
 		return true
 	}
 	for _, p := range left {
 		fmt.Fprintf(os.Stderr, "FAIL: %s was started by this package's tests and was still running %v after they finished\n", p, EndGrace)
 	}
-	for _, p := range left {
-		p.End()
-	}
+	endAll(left)
 	return false
 }

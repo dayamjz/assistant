@@ -3,6 +3,7 @@ package standin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,10 +19,18 @@ import (
 // binary into a test binary calling AtTerminal when a test started it as one
 // (atTerminalMain), and once the tests have returned the package fails if any
 // process of this binary is still running, which is how a binary AtTerminal
-// ran again that outlived its killed outer one fails this package.
+// ran again that outlived its killed outer one fails this package. It
+// becomes a test binary that owns a tmux server when a test started it as
+// one (tmuxOwnerMain), and otherwise owns what its own tests start, since
+// some start tmux servers.
 func TestMain(m *testing.M) {
 	Main()
 	atTerminalMain()
+	tmuxOwnerMain()
+	if err := OwnProcesses(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	code := m.Run()
 	if !LeftAfterTests() && code == 0 {
 		code = 1
