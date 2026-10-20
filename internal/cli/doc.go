@@ -441,7 +441,9 @@
 // cleared the gate and a run waiting on a decision as in validation. A run a
 // bound parked reads as that bound only when its record names the park; a
 // run parked before the record held one reads as ended before a verdict. The
-// run's own rendering has the merge record and the checkpoint and reads them. The structured listing carries, beside each
+// run's own rendering has the merge record and the checkpoint and reads them.
+// The structured listing carries each standing with the next action the
+// run's own answer carries for it (machine.ListedStandingOf), and, beside each
 // record naming a park, the report the parked stage last recorded, and status
 // carries the branch's latest run whole when a bound parked it, so the
 // findings a park stopped on are readable after the run has ended.

@@ -78,6 +78,26 @@ func TestARunWaitingOnADecisionListsAsWaitingOnOne(t *testing.T) {
 			t.Errorf("a run inside a stage body lists as %q:\n%s", unwanted, moving.stdout)
 		}
 	}
+	// The structured listing of the advancing run carries the action the
+	// run's own answer carries while the body still holds it, which is the
+	// control for the stalled run's action that
+	// TestARunNothingIsAdvancingIsNotReportedAsOneInFlight checks: the two
+	// differ, so a listing carrying one action for every executing run fails
+	// one of them.
+	status := mustOK(t, run(t, h, subject, "--json", "status"))
+	var reported machine.Status
+	if err := json.Unmarshal([]byte(status.stdout), &reported); err != nil || reported.ActiveRun == nil {
+		t.Fatalf("status names no active run while a stage body holds one (%v):\n%s", err, status.stdout)
+	}
+	movingListed := decodeRuns(t, mustOK(t, run(t, h, subject, "--json", "runs")).stdout)
+	if len(movingListed.Standings) != 1 {
+		t.Fatalf("the listing carries %d standing(s) while a run advances, want one", len(movingListed.Standings))
+	}
+	if got, want := movingListed.Standings[0], *reported.ActiveRun; !got.Advancing || !want.Advancing ||
+		got.NextAction() == "" || got.NextAction() != want.NextAction() {
+		t.Fatalf("the advancing run lists as %+v with next action %q, want advancing with the run's own answer's %q",
+			got, got.NextAction(), want.NextAction())
+	}
 
 	let()
 	select {

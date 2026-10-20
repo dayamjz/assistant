@@ -423,12 +423,12 @@ type Runs struct {
 	Standings []ListedStanding `json:"standings,omitempty"`
 }
 
-// ListedStanding is what one listed run's standing decided: the outcome, and
-// the two facts the person's phrase for an executing run is chosen on. It
-// carries no next action, which a listing does not relay; a run's own answer
-// does, through Decide. Build one with ListedStandingOf, which reads the
-// outcome through OutcomeOf, so the listing and a run's own answer cannot
-// read one standing two ways.
+// ListedStanding is what one listed run's standing decided: the outcome, the
+// two facts the person's phrase for an executing run is chosen on, and what
+// to do next, which PRD section 9 requires of every outcome wherever an
+// outcome is reported, a listing included. Build one with ListedStandingOf,
+// which reads all of it through Run.Decide over the standing, so the listing
+// and a run's own answer cannot read one standing two ways.
 type ListedStanding struct {
 	// Run is the run's identifier, the record's own ID.
 	Run string `json:"run"`
@@ -440,11 +440,63 @@ type ListedStanding struct {
 	// the standing was read, which is what Run.Progress being present says
 	// on a run's own answer.
 	Recorded bool `json:"recorded"`
+	// nextAction is what to do about the listed run, read through
+	// NextAction. It is unexported on Run.nextAction's terms: ListedStandingOf
+	// writes it from Run.Decide, and UnmarshalJSON relays what the answering
+	// service decided, for the reason Run.nextAction gives for not
+	// re-deriving it on decode. No code outside this package can assign it.
+	nextAction string
 }
 
-// ListedStandingOf is what the listing carries for run in standing s.
+// NextAction is what to do about the listed run, the action the run's own
+// answer for the same standing carries.
+func (l ListedStanding) NextAction() string { return l.nextAction }
+
+// ListedStandingOf is what the listing carries for run in standing s, decided
+// by Run.Decide so the outcome, the advancing fact and the action are the
+// ones a run's own answer for s carries.
 func ListedStandingOf(run string, s Standing) ListedStanding {
-	return ListedStanding{Run: run, Outcome: OutcomeOf(s), Advancing: s.Advancing, Recorded: s.Execution.Recorded()}
+	decided := Run{}.Decide(s)
+	return ListedStanding{
+		Run:        run,
+		Outcome:    decided.Outcome,
+		Advancing:  decided.Advancing,
+		Recorded:   s.Execution.Recorded(),
+		nextAction: decided.nextAction,
+	}
+}
+
+// MarshalJSON writes the listed standing with its next action, which is
+// unexported and so would not travel on its own, with HTML escaping off for
+// the reason Run.MarshalJSON gives.
+func (l ListedStanding) MarshalJSON() ([]byte, error) {
+	type fields ListedStanding
+	var document bytes.Buffer
+	enc := json.NewEncoder(&document)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(struct {
+		fields
+		NextAction string `json:"next_action"`
+	}{fields(l), l.nextAction}); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(document.Bytes(), []byte("\n")), nil
+}
+
+// UnmarshalJSON reads a listed standing back, including the next action the
+// answering service decided, on Run.UnmarshalJSON's terms.
+func (l *ListedStanding) UnmarshalJSON(data []byte) error {
+	type fields ListedStanding
+	var read struct {
+		fields
+		NextAction string `json:"next_action"`
+	}
+	if err := json.Unmarshal(data, &read); err != nil {
+		return err
+	}
+	*l = ListedStanding(read.fields)
+	l.nextAction = read.NextAction
+	return nil
 }
 
 // ParkedReport is the report the stage a run's park names last recorded,

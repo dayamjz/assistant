@@ -96,6 +96,32 @@ func TestARunNothingIsAdvancingIsNotReportedAsOneInFlight(t *testing.T) {
 		t.Fatalf("the rendering does not say %q:\n%s", stalledRendering, human.stdout)
 	}
 
+	// The structured listing reports the same standing with the action the
+	// run's own answer names, since PRD section 9 requires one beside every
+	// outcome, and the person's listing reads it as the stalled row, whose
+	// decision is that action in a person's terms.
+	listed := mustOK(t, run(t, h, subject, "--json", "runs"))
+	t.Logf("assistant --json runs, on a run nothing is advancing:\n%s", listed.stdout)
+	answer := decodeRuns(t, listed.stdout)
+	if len(answer.Runs) != 1 || len(answer.Standings) != 1 {
+		t.Fatalf("the listing carries %d run(s) and %d standing(s), want one of each:\n%s",
+			len(answer.Runs), len(answer.Standings), listed.stdout)
+	}
+	got := answer.Standings[0]
+	if got.Run != view.Record.ID || got.Outcome != view.Outcome || got.Advancing || !got.Recorded {
+		t.Fatalf("the listed standing is %+v, want run %s at %s, recorded and not advancing",
+			got, view.Record.ID, view.Outcome)
+	}
+	if got.NextAction() == "" || got.NextAction() != view.NextAction() {
+		t.Fatalf("the listing names next action %q for the stalled run, want the run's own answer's %q",
+			got.NextAction(), view.NextAction())
+	}
+	listedHuman := mustOK(t, run(t, h, subject, "runs"))
+	t.Logf("assistant runs, the same run listed for a person:\n%s", listedHuman.stdout)
+	if !strings.Contains(listedHuman.stdout, stalledRendering) || strings.Contains(listedHuman.stdout, advancingRendering) {
+		t.Fatalf("the listing does not read the run as %q:\n%s", stalledRendering, listedHuman.stdout)
+	}
+
 	// And the action it named moves the run. The stage body fails once, so
 	// this is the resume the answer told the reader to make, reaching the
 	// first stage this build holds at.

@@ -1,6 +1,7 @@
 package machine_test
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/graph"
@@ -75,5 +76,60 @@ func TestAListedRunReadsAsItsStanding(t *testing.T) {
 	}
 	if got := elsewhere.PhraseOf(held); got != weaker {
 		t.Errorf("a run read through another run's standing reads %q, want its record's %q", got, weaker)
+	}
+}
+
+// A listed run carries the next action its own answer carries for the same
+// standing, for every standing a run's answer distinguishes, and the action
+// survives the wire. PRD section 9 requires an action with every outcome, so
+// a listing that reported an outcome without one would leave a driving agent
+// reading "executing" with no instruction to attach and carry the run on.
+// The stalled and advancing standings carry different actions, so the check
+// cannot pass by every standing collapsing onto one sentence.
+func TestAListedRunCarriesTheNextActionItsOwnAnswerCarries(t *testing.T) {
+	t.Parallel()
+	park := store.Known(store.RunPark{Bound: store.ParkConvergence, Stage: "review", Checkpoint: 4})
+	standings := map[string]machine.Standing{
+		"held":       {Record: store.RunHeld, Execution: machine.ExecutionAt(graph.StatusHalted, graph.State{})},
+		"advancing":  {Record: store.RunRunning, Execution: machine.ExecutionAt(graph.StatusRunning, graph.State{}), Advancing: true},
+		"stalled":    {Record: store.RunRunning, Execution: machine.ExecutionAt(graph.StatusRunning, graph.State{})},
+		"unrecorded": {Record: store.RunPending, Execution: machine.ExecutionUnrecorded()},
+		"parked":     {Record: store.RunTerminated, Park: park},
+		"merged":     {Record: store.RunPassed, PullRequestEnd: store.PullRequestMerged},
+	}
+	for name, standing := range standings {
+		want := machine.Run{}.Decide(standing).NextAction()
+		if want == "" {
+			t.Fatalf("%s: the run's own answer carries no next action, so this case checks nothing", name)
+		}
+		listed := machine.ListedStandingOf("r", standing)
+		if got := listed.NextAction(); got != want {
+			t.Errorf("%s: the listing carries %q and the run's own answer %q", name, got, want)
+		}
+		encoded, err := json.Marshal(machine.Runs{Runs: []store.Run{{ID: "r"}}, Standings: []machine.ListedStanding{listed}})
+		if err != nil {
+			t.Fatalf("%s: encoding the listing: %v", name, err)
+		}
+		var raw struct {
+			Standings []map[string]any `json:"standings"`
+		}
+		if err := json.Unmarshal(encoded, &raw); err != nil || len(raw.Standings) != 1 {
+			t.Fatalf("%s: the listing does not decode to one standing (%v):\n%s", name, err, encoded)
+		}
+		if got := raw.Standings[0]["next_action"]; got != want {
+			t.Errorf("%s: the wire carries next_action %v, want %q:\n%s", name, got, want, encoded)
+		}
+		var decoded machine.Runs
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatalf("%s: decoding the listing: %v", name, err)
+		}
+		if got := decoded.Standings[0]; got.NextAction() != want || got.Outcome != listed.Outcome {
+			t.Errorf("%s: the listing decodes to %+v (action %q), want %+v (action %q)",
+				name, got, got.NextAction(), listed, want)
+		}
+	}
+	if machine.ListedStandingOf("r", standings["stalled"]).NextAction() ==
+		machine.ListedStandingOf("r", standings["advancing"]).NextAction() {
+		t.Fatal("a stalled run and an advancing one carry the same next action, so this test cannot tell them apart")
 	}
 }

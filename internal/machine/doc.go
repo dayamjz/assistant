@@ -96,8 +96,10 @@
 //
 // What a row does not promise: it is what a person reads and not the
 // mechanism, so the next decision a row names is the person's and the next
-// action a driving agent reads stays on Run.NextAction, in that agent's
-// terms; the two are written for different readers and are not held equal.
+// action a driving agent reads stays on Run.NextAction, and on
+// ListedStanding.NextAction for a listed run, both written by Run.Decide, in
+// that agent's terms; the two are written for different readers and are not
+// held equal.
 // RecordPhrase reads a record alone and says which two readings it cannot
 // make, which is why a run listing carries each run's standing beside its
 // record (Runs.Standings) and reads it through Runs.PhraseOf, leaving
