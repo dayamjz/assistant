@@ -111,18 +111,19 @@ func Coverage() []Established {
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
 				"the runs that launch a reviewer answer it from a script rather than from the planted " +
-				"bytes: four take the review stage with a scripted clean report - the three walks that " +
-				"reach the push stage's decision and the run a task's worker starts by pushing - and one " +
-				"of the three has " +
+				"bytes: five take the review stage with a scripted clean report - the three walks that " +
+				"reach the push stage's decision, the run a task's worker starts by pushing, and the " +
+				"usage ceiling walk's control run - and one of the three has " +
 				"the push stage's review of later commits answered with a scripted ask that holds the " +
-				"push, both reaching findings.ParseReviewReport; every other walk skips the review " +
-				"stage, so no report an agent wrote reaches those runs. " +
+				"push, both reaching findings.ParseReviewReport; the ceiling walk's held run holds at " +
+				"the review stage on the ceiling's ask without launching a reviewer, and every other " +
+				"walk skips the review stage, so no report an agent wrote reaches those runs. " +
 				"The run half starts a run through a method internal/ipc restricts, so on a platform where " +
 				"that package reads no local socket peer credentials it is skipped rather than passing, and " +
 				"the package-reach half over the planted agent output is the whole of what is established " +
 				"there."},
 		{principles.P4, ReachPackage,
-			"The binary launches a reviewer in four runs, through the production adapter, a fixer " +
+			"The binary launches a reviewer in five runs, through the production adapter, a fixer " +
 				"in two, and a task's worker in one, through the same adapter's stream mode. One of " +
 				"them observes that the push stage's review of later commits " +
 				"carried no session, which is one invocation off the wire rather than the P4 split: " +
@@ -221,7 +222,13 @@ func Coverage() []Established {
 				"its resolved agent now, and the in-process read predates that rather than " +
 				"establishing anything about it. A run over a trusted document that " +
 				"will not parse is refused through the binary before anything launches, and the " +
-				"in-process reads hold that refusal's exact shape to the planted conditions. What " +
+				"in-process reads hold that refusal's exact shape to the planted conditions. The " +
+				"usage ceiling walk drives the operator's global-only usage_ceiling keys: a branch " +
+				"whose own document names usage_ceiling.input_tokens is refused through the binary " +
+				"naming the pushed copy and the key, before any agent launches, with its run's " +
+				"record ended, while the ceiling the operator's file set goes on holding the next " +
+				"run at review; the trusted copy's refusal of the same key is held at package reach " +
+				"by internal/service and internal/config. What " +
 				"stays unestablished and no clause claims: whether a template's hooks arrived or " +
 				"ran, since those are receive-side and the four subtests that plant one make no " +
 				"push, and which agent a run resolved, which the run's record now reports and no " +
@@ -348,7 +355,12 @@ func Coverage() []Established {
 				"a wait and one whose newest entry is a relaunch note, both written through " +
 				"internal/store since no verb creates a task and those histories are not ones task.create writes, and every line each verb printed is held " +
 				"to the forbidden set internal/machine/vocabtest derives from the owners, with the wait " +
-				"relayed and the state word absent. P13 is cited at package reach: internal/machine's " +
+				"relayed and the state word absent. A second walk drives assistant runs RUN without " +
+				"--json over a run the operator's usage ceiling held at review, and holds the detail " +
+				"to pointing at the findings and relaying the ceiling's reached row with the exact " +
+				"figures runs --usage reports; it reads that one detail, not every line against the " +
+				"forbidden set, since the findings it relays are evidence that keeps identifiers. " +
+				"P13 is cited at package reach: internal/machine's " +
 				"vocabulary test for the rows in its table, and internal/cli's renderer test for every " +
 				"renderer internal/cli enumerates as phrased, which are " + strings.Join(p13Covered, ", ") +
 				", enumerating that list rather than keeping one, with the fallback a typed refusal " +
@@ -366,10 +378,12 @@ func Coverage() []Established {
 				"next-action line after it, are held by no test and are outside the citation. All three " +
 				"lists are checked against " +
 				"internal/cli's enumeration, so the note cannot name a renderer that package does not " +
-				"have or miss one it does. The walk needs a service, so on a platform with no local " +
+				"have or miss one it does. The fleet walk needs a service, so on a platform with no local " +
 				"socket transport to serve this protocol over it is skipped rather than passing; it " +
 				"reaches no method internal/ipc restricts, so no platform refuses it for want of peer " +
-				"credentials, and nothing here drives a run for it."},
+				"credentials. The ceiling walk drives runs through methods internal/ipc restricts, so " +
+				"on a platform where that package reads no local socket peer credentials it is skipped " +
+				"rather than passing."},
 		{principles.P14, ReachNone,
 			"One owner per fact is a property of the source rather than of a run, so driving a journey " +
 				"establishes nothing about it. internal/principles and internal/pipeline's schema test " +

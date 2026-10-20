@@ -619,6 +619,15 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 // fetches into the gate repository, and a trusted copy that cannot be read
 // stops the run here, before anything is recorded as running and before any
 // stage body or agent launches.
+//
+// Both refusals begin makes after the run is claimed, the code host's and the
+// configuration's, end through endRefused, which ends the run's record as
+// terminated so the branch's next start is a fresh run, and releases the
+// tasks queued behind it. When the record cannot be ended the caller gets a
+// *RunNotEndedError rather than the refusal alone, so a run left unfinished
+// is never reported as a clean refusal. Other failures here (recording the
+// code host, building the copy, recording the resolution) return as they
+// stand and leave the pending row.
 func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.Start) (machine.Run, error) {
 	built, err := s.driverFor(ctx)
 	if err != nil {
@@ -642,10 +651,7 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 		// Ending it here is what keeps an unsupported-host refusal from leaving
 		// an unfinished run that a later start would attach to as executing.
 		// create does the same when the submitted commit cannot be recorded.
-		if _, ended := built.runs.Terminate(ctx, record.ID); ended != nil {
-			s.log.Printf("run %s could not be ended after its code-host repository was refused: %v", record.ID, ended)
-		}
-		return machine.Run{}, err
+		return machine.Run{}, s.endRefused(ctx, built, record.ID, err)
 	}
 	// Persist the trichotomy on the run row so listings that have only the
 	// record still phrase a completed no-code-host run as pushed.
@@ -677,7 +683,12 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	start.SubmittedSubject = s.submittedSubject(ctx, record)
 	resolved, err := s.resolveRunConfig(ctx, record)
 	if err != nil {
-		return machine.Run{}, err
+		// A refused resolution ends the run on the code-host refusal's terms
+		// above: the run has no checkpoint, so nothing could ever resume it,
+		// and left pending it is an unfinished run a later start on the
+		// branch would attach to and report as executing, rather than one a
+		// fresh start replaces once the document is fixed.
+		return machine.Run{}, s.endRefused(ctx, built, record.ID, err)
 	}
 	// The record catches up to the run's own resolution, so a surprising
 	// verdict traces to the three documents the run was actually given rather
@@ -708,6 +719,51 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 		return topo.executor.Run(ctx, record.ID, initial)
 	})
 }
+
+// endRefused is the one ending of a run begin refused after the run was
+// claimed. It ends the record as terminated, and only once that move is
+// made does it release the tasks queued behind the run and publish the
+// run's state, so a successor queued behind the task the run was attributed
+// to is released without a restart; tasks.go names this among the sites
+// that release. The ending is made under a context that outlives the
+// caller's cancellation, because a refusal returned to a caller that went
+// away still leaves the row to end.
+//
+// It answers refusal when the run was ended, and a *RunNotEndedError
+// carrying both when the move was refused or failed, in which case nothing
+// is released and the row stays in whatever status the store read.
+func (s *Service) endRefused(ctx context.Context, built *driver, runID string, refusal error) error {
+	if s.beforeRefusalEnd != nil {
+		s.beforeRefusalEnd()
+	}
+	endCtx := context.WithoutCancel(ctx)
+	if _, err := built.runs.Terminate(endCtx, runID); err != nil {
+		return &RunNotEndedError{Run: runID, Refusal: refusal, End: err}
+	}
+	s.releaseQueued(endCtx)
+	s.publishRunState(endCtx, runID)
+	return refusal
+}
+
+// RunNotEndedError is begin's answer when it refused a run and then could
+// not end the run's record: Refusal is why the run was refused, and End is
+// why the move to terminated did not happen. The run is left unfinished, so
+// a later start on its branch may attach to it rather than replace it, and
+// no task queued behind it was released by this refusal. It matches both
+// errors through errors.Is and errors.As.
+type RunNotEndedError struct {
+	Run     string
+	Refusal error
+	End     error
+}
+
+func (e *RunNotEndedError) Error() string {
+	return fmt.Sprintf("service: run %s was refused and could not be ended, so it is left unfinished: %v; ending it: %v",
+		e.Run, e.Refusal, e.End)
+}
+
+// Unwrap returns the refusal and the ending's failure, in that order.
+func (e *RunNotEndedError) Unwrap() []error { return []error{e.Refusal, e.End} }
 
 // forgeRepositoryFor returns the specifier the code host addresses this
 // repository by, the fork's specifier, whether the run has no code host, and
@@ -752,8 +808,8 @@ type codeHost struct {
 // adapter it belongs to. The second yields an empty specifier and none true,
 // so the pull request and checks stages skip after push and the run ends
 // pushed. The third is refused with ErrUnsupportedHost; begin ends the
-// pending record before that refusal returns, so the branch is not left with
-// an unfinished run.
+// pending record through endRefused before that refusal returns, or answers
+// *RunNotEndedError when the record cannot be ended.
 //
 // A fork is the strict case: a run that names one pushes there and proposes
 // from there, so a record naming a fork that does not resolve, or one on

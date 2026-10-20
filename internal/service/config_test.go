@@ -6,17 +6,21 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // plantTrustedDocument puts a repository configuration document on the
@@ -135,6 +139,95 @@ func TestARunRecordsWhatItsAgentResolutionPassedOver(t *testing.T) {
 	})
 }
 
+// A run refused on configuration releases the task queued behind the delivery
+// task the run was attributed to on the same branch, without a service
+// restart. While the run is still live the successor stays Queued.
+func TestAConfigurationRefusalReleasesTheTaskQueuedBehindIt(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	blocker, successor := queuedBehindABlocker(t, h, repository)
+	plantTrustedDocument(t, subject, `{"commands": {"test": "go test ./...",}}`)
+
+	withService(t, h, func(running serviceUnderTest) {
+		if got := taskState(t, running.client, successor); got.State != taskstate.Queued {
+			t.Fatalf("before any run the successor resolves %s", got.State)
+		}
+		var arrived sync.WaitGroup
+		arrived.Add(2)
+		running.service.SetBeforeRefusalEndForTest(func() {
+			arrived.Done()
+			arrived.Wait()
+		})
+		defer running.service.SetBeforeRefusalEndForTest(nil)
+		events, err := running.client.Subscribe(t.Context(), machine.SubscribeRequest{})
+		if err != nil {
+			t.Fatalf("subscribing to the service's events: %v", err)
+		}
+		defer events.Close()
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := startRunErr(t, running.client, subject)
+			errCh <- err
+		}()
+		deadline := time.Now().Add(30 * time.Second)
+		var runID string
+		for runID == "" {
+			if time.Now().After(deadline) {
+				t.Fatal("timed out waiting for the run to be recorded")
+			}
+			records := openRecords(t, h)
+			repositories, err := records.Repositories(t.Context())
+			if err != nil {
+				_ = records.Close()
+				t.Fatalf("listing repositories: %v", err)
+			}
+			for _, repository := range repositories {
+				found, err := records.RunsForRepository(t.Context(), repository.ID)
+				if err != nil {
+					_ = records.Close()
+					t.Fatalf("listing runs: %v", err)
+				}
+				if len(found) == 1 {
+					runID = found[0].ID
+				}
+			}
+			_ = records.Close()
+			if runID == "" {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		awaitRunStatus(t, running.client, events, runID, store.RunPending)
+		if got := taskState(t, running.client, blocker); got.State != taskstate.Validating || got.Source != taskstate.SourceRun {
+			t.Fatalf("with its run live the blocker resolves %s from %s, want validating from its run", got.State, got.Source)
+		}
+		if got := taskState(t, running.client, successor); got.State != taskstate.Queued {
+			t.Fatalf("with the blocker's run live the successor resolves %s, want queued", got.State)
+		}
+		arrived.Done()
+		if err := <-errCh; err == nil {
+			t.Fatal("a run under an unparseable trusted configuration was started rather than refused")
+		} else if !strings.Contains(err.Error(), "trusted configuration") {
+			t.Fatalf("the refusal does not name the trusted configuration: %v", err)
+		}
+		record := onlyRun(t, h)
+		if record.Status != store.RunTerminated {
+			t.Fatalf("the refused run is recorded as %s, want it ended", record.Status)
+		}
+		awaitRunStatus(t, running.client, events, runID, store.RunTerminated)
+		if got := taskState(t, running.client, blocker); got.State != taskstate.Failed {
+			t.Fatalf("with its run ended the blocker resolves %s, want failed", got.State)
+		}
+		got := taskState(t, running.client, successor)
+		if got.State != taskstate.Dispatched || got.Source != taskstate.SourceEvent {
+			t.Fatalf("after the blocker cleared the successor resolves %s from %s, want dispatched from its release",
+				got.State, got.Source)
+		}
+	})
+}
+
 // TestAnUnreadableTrustedConfigurationStopsTheRunBeforeLaunch is PRD section
 // 10's abort: a trusted document that cannot be parsed stops the run before
 // any stage body runs, rather than the run guessing at defaults, and the
@@ -162,7 +255,12 @@ func TestAnUnreadableTrustedConfigurationStopsTheRunBeforeLaunch(t *testing.T) {
 		return nine
 	}
 	withServiceOptions(t, opts, func(running serviceUnderTest) {
-		_, err := startRunErr(t, running.client, subject)
+		events, err := running.client.Subscribe(t.Context(), machine.SubscribeRequest{})
+		if err != nil {
+			t.Fatalf("subscribing to the service's events: %v", err)
+		}
+		defer events.Close()
+		_, err = startRunErr(t, running.client, subject)
 		if err == nil {
 			t.Fatal("a run under an unparseable trusted configuration was started rather than refused")
 		}
@@ -172,16 +270,22 @@ func TestAnUnreadableTrustedConfigurationStopsTheRunBeforeLaunch(t *testing.T) {
 		if got := bodies.Load(); got != 0 {
 			t.Fatalf("%d stage bodies ran under a trusted configuration nobody could read", got)
 		}
+		// Ended rather than left pending: a pending run with no checkpoint
+		// can never be resumed, and a later start would attach to it.
 		record := onlyRun(t, h)
-		if record.Status == store.RunRunning {
-			t.Fatalf("the refused run is recorded as %s", record.Status)
+		if record.Status != store.RunTerminated {
+			t.Fatalf("the refused run is recorded as %s, want it ended", record.Status)
 		}
+		awaitRunStatus(t, running.client, events, record.ID, store.RunTerminated)
 	})
 }
 
 // TestAPushedConfigurationDocumentThatDoesNotParseIsRefused is section 10's
 // parse-time rule on the untrusted copy: a broken document surfaces before it
-// merges, even though its keys would mostly have been dropped.
+// merges, even though its keys would mostly have been dropped. The refused run
+// is ended rather than left pending, so once the branch carries a document
+// that parses, the next start on the branch is a fresh run rather than an
+// attach to one nothing can resume.
 func TestAPushedConfigurationDocumentThatDoesNotParseIsRefused(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P7)
@@ -198,6 +302,19 @@ func TestAPushedConfigurationDocumentThatDoesNotParseIsRefused(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "pushed configuration") {
 			t.Fatalf("the refusal does not name the pushed copy: %v", err)
+		}
+		refused := onlyRun(t, h)
+		if refused.Status != store.RunTerminated {
+			t.Fatalf("the refused run is recorded as %s, want it ended", refused.Status)
+		}
+
+		plantPushedDocument(t, subject, `{"ignore_patterns": ["vendor/**"]}`)
+		fresh := startRun(t, running.client, subject)
+		if fresh.Record.ID == refused.ID {
+			t.Fatalf("the start after the document was fixed attached to the refused run %s", refused.ID)
+		}
+		if fresh.Record.Status == store.RunPending || fresh.Record.Status == store.RunTerminated {
+			t.Fatalf("the fresh run is recorded as %s, want it walked", fresh.Record.Status)
 		}
 	})
 }

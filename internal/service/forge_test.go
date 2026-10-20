@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // TestTheRepositoryAPullRequestWouldLandInComesFromTheRunsOwnRecord is what
@@ -112,6 +114,132 @@ func TestARunWhoseUpstreamNamesAnUnsupportedHostIsRefusedAtStart(t *testing.T) {
 			t.Fatalf("unsupported-host refusal left unfinished run %s in status %s", run.ID, run.Status)
 		}
 	}
+}
+
+// unsupportedHostSubject records the subject's repository with an upstream on
+// a host this build does not address, so every run started on it is refused
+// by begin's code-host decision after the run is claimed, and queues a
+// delivery task behind a blocker on the subject's branch.
+func unsupportedHostSubject(t *testing.T) (h *home.Home, subject, blocker, successor string) {
+	t.Helper()
+	const elsewhere = "https://gitlab.example.invalid/dayamjz/assistant.git"
+	h = newHome(t)
+	subject = newSubject(t)
+	local := git(t, subject, "remote", "get-url", "origin")
+	recordRepositoryWithUpstream(t, h, subject, elsewhere)
+	git(t, gateRepositoryOf(t, h, subject), "config", "url."+local+".insteadOf", elsewhere)
+	blocker, successor = queuedBehindABlocker(t, h, store.Repository{ID: "subject"})
+	return h, subject, blocker, successor
+}
+
+// A run refused on its code host releases the task queued behind the delivery
+// task the run was attributed to, without a restart, on the configuration
+// refusal's terms in TestAConfigurationRefusalReleasesTheTaskQueuedBehindIt:
+// both refusals end through one helper, and this is the one that used to end
+// the record and release nothing. The hook holds the run pending so the test
+// sees the successor Queued behind a live run first, which is what makes the
+// later Dispatched this refusal's release rather than the one at open.
+func TestACodeHostRefusalReleasesTheTaskQueuedBehindIt(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	h, subject, blocker, successor := unsupportedHostSubject(t)
+
+	withService(t, h, func(running serviceUnderTest) {
+		reached, proceed := make(chan struct{}), make(chan struct{})
+		running.service.SetBeforeRefusalEndForTest(func() {
+			close(reached)
+			<-proceed
+		})
+		defer running.service.SetBeforeRefusalEndForTest(nil)
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := startRunErr(t, running.client, subject)
+			errCh <- err
+		}()
+		<-reached
+		if record := onlyRun(t, h); record.Status != store.RunPending {
+			close(proceed)
+			t.Fatalf("before the refusal's ending the run is recorded as %s, want pending", record.Status)
+		}
+		blockerLive := taskState(t, running.client, blocker)
+		successorLive := taskState(t, running.client, successor)
+		close(proceed)
+		if blockerLive.State != taskstate.Validating || blockerLive.Source != taskstate.SourceRun {
+			t.Fatalf("with its run live the blocker resolves %s from %s, want validating from its run", blockerLive.State, blockerLive.Source)
+		}
+		if successorLive.State != taskstate.Queued {
+			t.Fatalf("with the blocker's run live the successor resolves %s, want queued", successorLive.State)
+		}
+		if err := <-errCh; err == nil || !strings.Contains(err.Error(), service.ErrUnsupportedHost.Error()) {
+			t.Fatalf("starting a run on an unsupported host answered %v, want ErrUnsupportedHost", err)
+		} else if strings.Contains(err.Error(), "could not be ended") {
+			t.Fatalf("a refusal whose run was ended reports it unended: %v", err)
+		}
+		if record := onlyRun(t, h); record.Status != store.RunTerminated {
+			t.Fatalf("the refused run is recorded as %s, want it ended", record.Status)
+		}
+		if got := taskState(t, running.client, blocker); got.State != taskstate.Failed {
+			t.Fatalf("with its run ended the blocker resolves %s, want failed", got.State)
+		}
+		if got := taskState(t, running.client, successor); got.State != taskstate.Dispatched || got.Source != taskstate.SourceEvent {
+			t.Fatalf("after the blocker cleared the successor resolves %s from %s, want dispatched from its release",
+				got.State, got.Source)
+		}
+	})
+}
+
+// A refused run whose record cannot then be ended is reported as unended, not
+// as a clean refusal. The failure is one the store really produces: before
+// the ending, the hook moves the run out of every status Terminate may leave
+// (to failed, through the store's own anchored transition), so the move to
+// terminated is refused with a *store.RunStatusError. The answer names both
+// the refusal and the ending's failure, the row keeps the status the store
+// read, and the successor stays Queued, because nothing is released on an
+// ending that did not happen.
+func TestARefusedRunThatCannotBeEndedIsReportedUnended(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	h, subject, _, successor := unsupportedHostSubject(t)
+
+	withService(t, h, func(running serviceUnderTest) {
+		moved := make(chan error, 1)
+		running.service.SetBeforeRefusalEndForTest(func() {
+			ctx := context.Background()
+			records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
+			if err != nil {
+				moved <- err
+				return
+			}
+			defer func() { _ = records.Close() }()
+			runs, err := records.RunsForRepository(ctx, "subject")
+			if err == nil && len(runs) != 1 {
+				err = errors.New("want exactly one run to move")
+			}
+			if err == nil {
+				_, err = records.TransitionRun(ctx, runs[0].ID, []store.RunStatus{store.RunPending}, store.RunFailed)
+			}
+			moved <- err
+		})
+		defer running.service.SetBeforeRefusalEndForTest(nil)
+		_, err := startRunErr(t, running.client, subject)
+		if m := <-moved; m != nil {
+			t.Fatalf("moving the run before its ending: %v", m)
+		}
+		if err == nil {
+			t.Fatal("a run on an unsupported host was started rather than refused")
+		}
+		for _, want := range []string{"could not be ended", service.ErrUnsupportedHost.Error(), string(store.RunFailed)} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the answer for a refused run left unended does not carry %q: %v", want, err)
+			}
+		}
+		if record := onlyRun(t, h); record.Status != store.RunFailed {
+			t.Fatalf("the run is recorded as %s, want the status the store read left as it stood", record.Status)
+		}
+		if got := taskState(t, running.client, successor); got.State != taskstate.Queued {
+			t.Fatalf("after an ending that did not happen the successor resolves %s, want queued", got.State)
+		}
+	})
 }
 
 // TestARunWhoseUpstreamIsALocalPathCarriesNoCodeHost is the local half of

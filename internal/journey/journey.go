@@ -486,9 +486,10 @@ func (j *Journey) CommandBounded(dir string, within time.Duration, args ...strin
 // CommandPlainBounded is CommandBounded without --json: the verb is driven
 // as a person drives it, so what comes back on standard output is the human
 // rendering rather than a document, and the answer is read as lines. It
-// exists for the one check whose subject is that rendering, the P13 walk
-// over assistant watch and assistant tasks, and for nothing else here, since
-// every other check reads a document. The bound is taken for the same reason
+// exists for the checks whose subject is that rendering, the P13 walk over
+// assistant watch and assistant tasks and the usage ceiling walk's detail of
+// its held run, and for nothing else here, since every other check reads a
+// document. The bound is taken for the same reason
 // CommandBounded takes one, and a zero bound runs the verb to its end.
 func (j *Journey) CommandPlainBounded(dir string, within time.Duration, args ...string) Answer {
 	return j.exec(dir, nil, within, append([]string{"--home", j.root}, args...), args)

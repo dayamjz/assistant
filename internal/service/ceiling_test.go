@@ -143,6 +143,22 @@ func TestATrustedCopyNamingTheUsageCeilingStopsTheRunBeforeLaunch(t *testing.T) 
 		if got := bodies.Load(); got != 0 {
 			t.Fatalf("%d stage bodies ran under a trusted copy naming a global-only key", got)
 		}
+		// Ended rather than left pending, on the terms of the other
+		// configuration refusals: a pending run with no checkpoint can never
+		// be resumed, and a later start would attach to it.
+		refused := onlyRun(t, h)
+		if refused.Status != store.RunTerminated {
+			t.Fatalf("the refused run is recorded as %s, want it ended", refused.Status)
+		}
+
+		plantTrustedDocument(t, subject, `{"ignore_patterns": ["vendor/**"]}`)
+		fresh := startRun(t, running.client, subject)
+		if fresh.Record.ID == refused.ID {
+			t.Fatalf("the start after the trusted copy was fixed attached to the refused run %s", refused.ID)
+		}
+		if fresh.Record.Status == store.RunPending || fresh.Record.Status == store.RunTerminated {
+			t.Fatalf("the fresh run is recorded as %s, want it walked", fresh.Record.Status)
+		}
 	})
 }
 

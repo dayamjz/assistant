@@ -19,6 +19,13 @@ func (s *Service) SessionOf(id string) (session.Provider, *session.Session, bool
 	return s.sessionOf(id)
 }
 
+// SetBeforeRefusalEndForTest installs beforeRefusalEnd for this
+// package's external tests. It exists only in the tests, on that field's
+// terms in service.go.
+func (s *Service) SetBeforeRefusalEndForTest(f func()) {
+	s.beforeRefusalEnd = f
+}
+
 // AbandonSessionsForTest forgets every session this service launched
 // without ending it, so Close ends none of them. It is the shape a service
 // killed with SIGKILL leaves, which a test cannot produce of its own
