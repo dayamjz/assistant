@@ -25,12 +25,13 @@ func parkedRun(t *testing.T, g *graph.Graph, budget int) (graph.Result, graph.Ch
 	return got, latest
 }
 
-// Each of the three bounds parks a run and the park says which, from the
+// Each of the three loop bounds parks a run and the park says which, from the
 // checkpoint that recorded it: the status, the node the run stands in front
 // of, the edge whose bound it was for the two that live on an edge, and none
 // for the budget, which is no edge's. The result a segment returns and the
 // checkpoint a later reader loads say the same, so a caller that read the
-// store rather than holding the segment's answer is told the same park.
+// store rather than holding the segment's answer is told the same park. The
+// usage budget's park, the fourth, is covered in usage_test.go.
 func TestAParkNamesTheBoundAndTheEdgeItWasCountedOn(t *testing.T) {
 	rec := &recorder{}
 	rounds := mustBuild(t, fixLoopBuilder(rec, 2, func(_ context.Context, _ graph.Reader, w graph.Writer) error {
