@@ -206,11 +206,15 @@
 // checkpoint records the reading it parked on in Checkpoint.ParkedUsage, and
 // Validate refuses a usage park whose reading would not have parked under the
 // budget it records. A reading the meter could not make is ErrUsageUnread,
-// with no node run and nothing parked. Every refusal leaves the run where a
-// later call continues it without running a node twice: Run and Resume read
-// before they write, and a failure inside a segment leaves the checkpoint of
-// the last completed node, which at a halt point is the run halted there;
-// ErrUsageUnread's comment says which call leaves what.
+// with no node run and nothing parked. A call reads at more than one point,
+// so what a refused call has already written depends on which reading failed,
+// and ErrUsageUnread's comment says, per entry point, what each leaves and
+// how its caller continues. No completed node is lost: a failure inside a
+// segment leaves the checkpoint of the last completed node, which, when the
+// next node is a halt point, is the run halted there with its decision open.
+// Resume reads the budget again before it puts that decision, and parks the
+// run when the reading leaves no room, so such a run is never left refused
+// with its park unrecorded.
 //
 // What it bounds is starts. A node that starts with room runs to its end, so
 // a run can pass its budget by everything its last node spent, and it parks

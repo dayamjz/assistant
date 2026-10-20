@@ -6,9 +6,12 @@ import (
 	"fmt"
 )
 
-// Config configures an Executor. Every field is required: an executor with no
-// store cannot make a run durable, and an executor with no budget has no
-// run-wide bound, which is not the same as having a generous one.
+// Config configures an Executor. Store and Budget are required: an executor
+// with no store cannot make a run durable, and an executor with no budget has
+// no run-wide bound, which is not the same as having a generous one.
+// UsageBudget and Usage are optional, and only as a pair: a zero UsageBudget is
+// no usage budget and needs no meter, a positive one requires Usage, and a
+// negative one is refused, all by NewExecutor.
 type Config struct {
 	// Store is where checkpoints are written and read.
 	Store CheckpointStore
@@ -228,6 +231,13 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 // and a run that could only be parked is not claimed at the cost of the
 // answer its checkpoint carries.
 //
+// A run standing there whose usage budget leaves no room is parked instead,
+// StatusUsageExhausted in front of that halt point with its decision
+// withdrawn, by one checkpoint. The usage budget differs from the step budget
+// here because a decision can be open on a run already past it: a reading
+// that failed before the halt point records the run halted there so the node
+// before it is kept, and the resume is where that comparison is finished.
+//
 // A run it is going to advance is claimed first, by writing the checkpoint it
 // read back under a new sequence number before any node runs. It returns an
 // error wrapping ErrStaleAnchor when that claim finds the run already moved,
@@ -237,6 +247,26 @@ func (e *Executor) Resume(ctx context.Context, run string) (Result, error) {
 	cp, err := e.load(ctx, run)
 	if err != nil {
 		return Result{}, err
+	}
+	// A run standing at a halt point it still has steps for is read against
+	// its usage budget first, and parked there when the reading leaves no
+	// room, open decision or not. A decision can be open on a run past its
+	// usage budget, because a reading that failed before the halt point
+	// records the run halted there so the node before it is kept; refusing
+	// such a run with ErrUsageSpent on every resume would strand it with its
+	// park never recorded, so the resume is where the deferred comparison is
+	// finished. The step budget keeps its refusal: a run is halted past it
+	// only by a budget deliberately lowered, which AdoptBudget answers.
+	if node, _ := e.graph.Node(cp.Position); awaitsItsNode(cp.Status) && node.Halt != nil && !spent(cp.Counters) {
+		u, over, err := e.usageExhausted(ctx, cp)
+		if err != nil {
+			return Result{}, err
+		}
+		if over {
+			cp.Decision = nil
+			parkOnUsage(&cp, node.Name, u)
+			return e.finish(ctx, cp)
+		}
 	}
 	if err := e.checkBudgetForHalt(ctx, cp); err != nil {
 		return Result{}, err
@@ -627,10 +657,13 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 			if err := e.haltBefore(ctx, &cp, next); err != nil {
 				// The node that just ran is kept rather than lost with the
 				// reading: the run is recorded halted at the halt point
-				// with its decision open, which the run-level bounds are
-				// weighed again against before the halt node runs, by
-				// checkBudgetForHalt on Answer and on Resume. Recording it
-				// any other way would leave a resume to run that node again.
+				// with its decision open, which is the one status a run
+				// standing there unanswered can be recorded with. Recording
+				// it in front of that node instead would leave a resume to
+				// run the node again. Nothing is decided on the open
+				// decision before the budget is weighed again: Resume
+				// reads it first and parks the run when it leaves no room,
+				// and Answer is refused with ErrUsageSpent then.
 				cp.Status = StatusHalted
 				cp.Decision = decisionFor(next)
 				if perr := e.persist(ctx, &cp); perr != nil {
@@ -715,10 +748,11 @@ func parkOnBudget(cp *Checkpoint, node string) {
 // refused here rather than anywhere earlier.
 //
 // The usage budget is judged on the same terms, read afresh, and refused with
-// an error wrapping ErrUsageSpent and ErrBudgetSpent: haltBefore parks rather
-// than halts a run its usage budget leaves no room, so a run arrives here
-// over budget only after AdoptBudget lowered the budget or with a checkpoint
-// the store supplied. A reading the meter could not make is ErrUsageUnread,
+// an error wrapping ErrUsageSpent and ErrBudgetSpent. Only Answer meets that
+// refusal: Resume parks a run its usage budget leaves no room at a halt point
+// before it calls this. A run is halted there past its usage budget after a
+// reading failed on the way in, after AdoptBudget lowered the budget, or with
+// a checkpoint the store supplied. A reading the meter could not make is ErrUsageUnread,
 // with nothing written either way.
 func (e *Executor) checkBudgetForHalt(ctx context.Context, cp Checkpoint) error {
 	if !awaitsItsNode(cp.Status) {

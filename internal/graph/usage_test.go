@@ -21,6 +21,10 @@ type ledger struct {
 	unreported map[string]int
 	reads      int
 	fail       error
+	// failAt, when positive, is the reading from which every reading fails
+	// with failAtErr.
+	failAt    int
+	failAtErr error
 }
 
 func newLedger() *ledger {
@@ -48,6 +52,9 @@ func (l *ledger) meter(_ context.Context, run string) (graph.Usage, error) {
 	if l.fail != nil {
 		return graph.Usage{}, l.fail
 	}
+	if l.failAt > 0 && l.reads >= l.failAt {
+		return graph.Usage{}, l.failAtErr
+	}
 	return graph.Usage{Spent: l.spent[run], Unreported: l.unreported[run]}, nil
 }
 
@@ -57,6 +64,18 @@ func (l *ledger) setFailure(err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.fail = err
+}
+
+// failFromRead makes the nth reading from now, and every one after it, fail
+// with err; n of zero clears it.
+func (l *ledger) failFromRead(n int, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if n == 0 {
+		l.failAt, l.failAtErr = 0, nil
+		return
+	}
+	l.failAt, l.failAtErr = l.reads+n, err
 }
 
 func (l *ledger) readCount() int {

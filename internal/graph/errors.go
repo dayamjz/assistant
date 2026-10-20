@@ -200,7 +200,9 @@ var (
 	// a halt point is asked to go on and its usage budget leaves no room for
 	// that halt point's node, or what the run spent cannot be established.
 	// errors.Is matches ErrBudgetSpent on it as well, and it is refused on the
-	// same terms: nothing is written and the run is left as it stands.
+	// same terms: nothing is written and the run is left as it stands. Only
+	// Answer returns it: Resume parks such a run instead, so a run past its
+	// usage budget at an open decision is not left refused forever.
 	ErrUsageSpent error = &familyError{text: "graph: the usage budget leaves no room for the halted node", family: ErrBudgetSpent}
 	// ErrUsageUnread is returned when a run held to a usage budget is about
 	// to be compared against it and the UsageMeter could not say what the
@@ -208,19 +210,31 @@ var (
 	// it: a spend nobody could read is never taken for room, and an error
 	// from the record is not a fact about the run that a park could record.
 	//
-	// What is written depends on where the reading failed, and in every case
-	// the run stands where a later call can continue it without running any
-	// node twice. Run reads before it writes the run's first checkpoint, so a
-	// Run refused here has written nothing and the same Run may be made
-	// again. Resume reads before it claims the run, and Answer, AdoptBudget
-	// and a Resume at a halt point read before they write, so each refused
-	// here writes nothing and the run stands at its latest checkpoint. Within
-	// a segment the run stands at the checkpoint written after its last
-	// completed node, and Resume continues it from there; when the node the
-	// run reached next is a halt point, that checkpoint is the run halted
-	// there with its decision open, written before this is returned so the
-	// completed node is kept, and the budget is weighed again before the halt
-	// node runs.
+	// A call reads the budget at more than one point, so what a refused call
+	// may already have written depends on which reading failed, and so does
+	// how its caller continues. No completed node is lost either way.
+	//
+	//   - Run: a failure at the reading before the run's first checkpoint
+	//     leaves nothing written, and the same Run may be made again. A
+	//     failure at a later reading leaves the run at its latest checkpoint,
+	//     a later Run answers ErrRunExists, and Resume continues it.
+	//   - Resume: a failure at the reading before the claim leaves nothing
+	//     written. A failure at a later reading leaves the run at its latest
+	//     checkpoint. Either way another Resume continues it.
+	//   - Answer: a failure at the reading before the answer is claimed leaves
+	//     nothing written and the decision open, and the Answer may be given
+	//     again. A failure at a later reading comes after the claim: the
+	//     decision is closed, the answer is recorded with the run standing
+	//     running at the halt point, a later Answer answers
+	//     ErrNoOpenDecision, and Resume continues it.
+	//   - AdoptBudget reads before it writes, so it leaves nothing written.
+	//
+	// A run's latest checkpoint after a failure inside a segment is the one
+	// written after its last completed node. When the node the run reached
+	// next is a halt point, that checkpoint is the run halted there with its
+	// decision open, so the completed node is kept; Resume weighs the usage
+	// budget again before it puts the decision again, and parks the run when
+	// the reading leaves no room.
 	ErrUsageUnread = errors.New("graph: what the run spent against its usage budget could not be read")
 	// ErrRunCompleted is returned when an operation that only means something
 	// for a run with work left is asked for on one that finished.

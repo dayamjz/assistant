@@ -275,6 +275,18 @@ func TestTheInvocationRunAndStageMigrationKeepsEarlierRowsUnknown(t *testing.T) 
 	if !rows[1].Run.IsKnown() || !rows[1].Stage.IsKnown() {
 		t.Errorf("the later row lost its run or stage: %+v", rows[1])
 	}
+	// The mixed case the per-run read meets across the migration: the row
+	// written before it names no run and is in no run's rows, while a call
+	// recorded with the run's id after it is that run's, so a run that began
+	// before the column still has the spend of every call attributed to it
+	// afterwards.
+	own, err := s.AgentInvocationsForRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("AgentInvocationsForRun: %v", err)
+	}
+	if len(own) != 1 || own[0].Purpose != "fix" {
+		t.Errorf("run-1 reads %+v, want only the call recorded with its id after the migration", own)
+	}
 }
 
 // A launch that names no provider stores that as not named, which reads back

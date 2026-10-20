@@ -155,9 +155,12 @@ func (s *Store) AgentInvocationsSince(ctx context.Context, since time.Time) ([]A
 
 // AgentInvocationsForRun returns every row of the history whose call named
 // run as the run it served, in the order it was appended. It is the read a
-// per-run usage budget is weighed from: a row naming no run, which every row
-// written before the column existed is, is in no run's rows, so a run started
-// before the column has no recorded spend rather than a guessed one.
+// per-run usage budget is weighed from. Only calls recorded without a run are
+// left out: a row naming no run, which every row written before the column
+// existed is, is in no run's rows rather than guessed into one. A call
+// recorded with the run's id is the run's whatever the run's age, so a run
+// created before the column has the spend of every call attributed to it
+// after the column was added.
 func (s *Store) AgentInvocationsForRun(ctx context.Context, run string) ([]AgentInvocation, error) {
 	return s.agentInvocations(ctx, "WHERE run = ?", []any{run})
 }
