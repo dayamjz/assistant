@@ -412,6 +412,39 @@ type Runs struct {
 	// names, so it is what the stage reported as the run parked and not a
 	// copy kept anywhere else. It is absent when no listed run was parked.
 	Parked []ParkedReport `json:"parked,omitempty"`
+	// Standings is, for each listed run whose standing the answering service
+	// could read, what it decided from that standing, in the order Runs
+	// lists them. A record alone cannot tell a run waiting on a decision
+	// from one in validation, because OutcomeOf reads an unfinished run from
+	// where its execution stands and the record does not hold that; this is
+	// where a listing gets the fact that can. A run with no entry is one
+	// whose standing could not be read, and it reads from its record alone,
+	// on RecordPhrase's weaker terms. Runs.PhraseOf is the one reading.
+	Standings []ListedStanding `json:"standings,omitempty"`
+}
+
+// ListedStanding is what one listed run's standing decided: the outcome, and
+// the two facts the person's phrase for an executing run is chosen on. It
+// carries no next action, which a listing does not relay; a run's own answer
+// does, through Decide. Build one with ListedStandingOf, which reads the
+// outcome through OutcomeOf, so the listing and a run's own answer cannot
+// read one standing two ways.
+type ListedStanding struct {
+	// Run is the run's identifier, the record's own ID.
+	Run string `json:"run"`
+	// Outcome is OutcomeOf the run's standing.
+	Outcome Outcome `json:"outcome"`
+	// Advancing is the standing's advancing fact, on Run.Advancing's terms.
+	Advancing bool `json:"advancing"`
+	// Recorded is whether the run's execution had a recorded position when
+	// the standing was read, which is what Run.Progress being present says
+	// on a run's own answer.
+	Recorded bool `json:"recorded"`
+}
+
+// ListedStandingOf is what the listing carries for run in standing s.
+func ListedStandingOf(run string, s Standing) ListedStanding {
+	return ListedStanding{Run: run, Outcome: OutcomeOf(s), Advancing: s.Advancing, Recorded: s.Execution.Recorded()}
 }
 
 // ParkedReport is the report the stage a run's park names last recorded,

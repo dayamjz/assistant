@@ -99,10 +99,13 @@
 // action a driving agent reads stays on Run.NextAction, in that agent's
 // terms; the two are written for different readers and are not held equal.
 // RecordPhrase reads a record alone and says which two readings it cannot
-// make. A park is not one of them once the record names it: the record is
-// where the bound that ended a run is written, so a listing reads a parked
-// run as its bound the way a run's whole answer does, and ParkAction is the
-// driving agent's reading of the same record.
+// make, which is why a run listing carries each run's standing beside its
+// record (Runs.Standings) and reads it through Runs.PhraseOf, leaving
+// RecordPhrase for a run whose standing could not be read. A park is not one
+// of them once the record names it: the record is where the bound that ended
+// a run is written, so a listing reads a parked run as its bound the way a
+// run's whole answer does, and ParkAction is the driving agent's reading of
+// the same record.
 //
 // Blocking calls and relaying verbatim are not shapes, so they are not here.
 // A call blocks because the service advances the run before it answers, and a

@@ -616,7 +616,8 @@ func printable(text string) string {
 }
 
 // readOutRuns prints the run listing: when each run was recorded, its branch,
-// and its phrase from the record alone, on machine.RecordPhrase's terms, with
+// and its phrase from the standing the service read for it, on
+// machine.Runs.PhraseOf's terms, which fall back to the record alone, with
 // the standing consent row beneath a run whose record carries it. The
 // record's identifier is the structured rendering's, which is where a verb
 // that takes one is driven from.
@@ -627,7 +628,7 @@ func readOutRuns(w io.Writer, runs machine.Runs) {
 	}
 	for _, record := range runs.Runs {
 		writef(w, "%s  %s: %s\n", record.CreatedAt.Format("2006-01-02 15:04:05"),
-			printable(record.Branch), machine.RecordPhrase(record))
+			printable(record.Branch), runs.PhraseOf(record))
 		// A run under standing consent says so on its own line beneath,
 		// off the same record, as status says it.
 		if record.StandingConsent.IsKnown() {
