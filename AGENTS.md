@@ -179,7 +179,7 @@ Each has cost this repository more than one round of review.
   `EndDelegation` the delegation's one revision; the task row's `domain` is
   written at `CreateTask` and never moved, and a wake's recipient is decided
   at `DrainWakes` by its task's domain and a `WakeRoute` of kinds the caller
-  passes as words, stored on no row (P14). Migration 47's `domain_wake` is
+  passes as words, stored on no row (P14). Migration 48's `domain_wake` is
   the queue's second shape, a wake about a domain owned by the delegation
   row, with its own identifiers, the wake table's seals and accessors
   (`AppendDomainWakeWithMarkers` beside `delegation_marker`,

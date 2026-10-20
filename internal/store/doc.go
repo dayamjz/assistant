@@ -269,7 +269,7 @@
 // the hold the relaunch bound raised for it.
 //
 // A wake about a domain rather than a task is the queue's second shape,
-// migration 47's domain_wake, because the wake table's row names a task
+// migration 48's domain_wake, because the wake table's row names a task
 // and a subordinate coordinator is not one: the same columns with the task
 // replaced by the delegation, which owns the row (P14), the domain read off
 // the delegation's row at every read, the same seals, and identifiers of
