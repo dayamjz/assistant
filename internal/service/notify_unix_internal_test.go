@@ -280,6 +280,38 @@ func acknowledgeOthers(t *testing.T, records *store.Store) {
 	}
 }
 
+// A wake whose marker still carries bearer-shaped text after the loop's
+// redaction reaches the command as one line of valid JSON. Redacting an
+// encoded line can break the JSON; the sender encodes the stored row as it
+// is.
+func TestAWakeWithBearerShapedTextReachesTheCommandAsValidJSON(t *testing.T) {
+	t.Parallel()
+	h, records := loopHome(t)
+	out := filepath.Join(t.TempDir(), "sent")
+	configureNotify(t, h.ConfigFile(), "cat >> '"+out+"'")
+	const task = "notifyjsonaa"
+	plantRunning(t, records, task, "")
+	key := "task/" + task + "/Authorization: Bearer abcdefghijklmnop"
+	redactedKey := redact.New().Redact(key)
+	holdFor(t, records, task, key)
+	l := openLoop(t, h, records, nil, nil)
+	defer func() { _ = l.service.Close() }()
+	l.pass(t)
+
+	w := holdWake(t, l.records(t), task, redactedKey)
+	settledNotification(t, l.records(t), w.ID)
+	var sent *store.Wake
+	for _, row := range sentLines(t, out) {
+		if row.ID == w.ID {
+			sent = &row
+			break
+		}
+	}
+	if sent == nil || sent.Marker != w.Marker {
+		t.Fatalf("the command was never sent wake %d as valid JSON, or the marker differs: got %+v, want marker %q", w.ID, sent, w.Marker)
+	}
+}
+
 // A credential in what a wake is about never reaches the command. The
 // hold's key carries a URL with a password, and the hold record keeps the
 // key as it was registered, which is the control: the credential was in
@@ -289,10 +321,7 @@ func acknowledgeOthers(t *testing.T, records *store.Store) {
 //
 // What removes it in this build is the loop, which passes every marker
 // through internal/redact before it is written, so the row the sender reads
-// already carries none; the sender's own pass over the line is the same
-// rule at the boundary the text leaves the home, and no row the loop can
-// write reaches it with a shape the first pass left, so nothing here shows
-// that second pass removing anything on its own.
+// already carries none.
 func TestACredentialInAWakeNeverReachesTheCommand(t *testing.T) {
 	t.Parallel()
 	h, records := loopHome(t)

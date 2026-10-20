@@ -95,6 +95,9 @@ func (n NotificationSettlement) valid() error {
 	if code, ok := n.ExitCode.Get(); n.Outcome == NotificationSent && (!ok || code != 0) {
 		return fmt.Errorf("%w: a sent notification with exit status %v", ErrUnknownNotification, n.ExitCode)
 	}
+	if code, ok := n.ExitCode.Get(); n.Outcome == NotificationFailed && ok && code == 0 {
+		return fmt.Errorf("%w: a failed notification with exit status 0", ErrUnknownNotification)
+	}
 	return nil
 }
 

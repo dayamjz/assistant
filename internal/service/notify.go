@@ -31,11 +31,9 @@ import (
 // offered, and then end of file. Every field of that row is a closed word,
 // a validated identifier, a time, or a marker the loop passed through
 // internal/redact before writing it, so the row carries no credential the
-// redactor recognizes; the line passes internal/redact once more before the
-// command is started, the same owner's rule at the point the text leaves
-// the home, so a field added to the row later is covered too. No row the
-// loop writes gives that second pass anything to remove, and no test shows
-// it removing anything on its own. The command is run
+// redactor recognizes. The sender encodes that stored row as JSON and does
+// not redact the encoded line: redaction on an encoded payload can corrupt
+// the JSON and is not safe. The command is run
 // through internal/stages' RunOperatorCommand, the runner every commands.*
 // key runs through, in the home's root with this service's environment, so
 // it carries the operator's credentials and that runner's gaps, the
@@ -199,7 +197,7 @@ func (s *Service) runNotify(ctx context.Context, line string, bound time.Duratio
 	runCtx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
 	res := stages.RunOperatorCommand(runCtx, stages.OperatorCommand{
-		Line: line, Dir: s.home.Root(), Stdin: redact.New().Redact(string(row)) + "\n", Tail: notifyTail,
+		Line: line, Dir: s.home.Root(), Stdin: string(row) + "\n", Tail: notifyTail,
 	})
 	switch {
 	case res.Exited && res.Code == 0:

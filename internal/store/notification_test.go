@@ -121,6 +121,7 @@ func TestASettlementOutsideTheSetIsRefused(t *testing.T) {
 		{Outcome: "delivered", ExitCode: Known(0)},
 		{Outcome: NotificationSent, ExitCode: Known(1)},
 		{Outcome: NotificationSent},
+		{Outcome: NotificationFailed, ExitCode: Known(0)},
 	} {
 		if _, err := s.SettleNotification(ctx, w.ID, bad); !errors.Is(err, ErrUnknownNotification) {
 			t.Errorf("settling %+v = %v, want ErrUnknownNotification", bad, err)
@@ -131,5 +132,51 @@ func TestASettlementOutsideTheSetIsRefused(t *testing.T) {
 	}
 	if _, err := s.SettleNotification(ctx, w.ID, NotificationSettlement{Outcome: NotificationFailed}); err != nil {
 		t.Fatalf("a failure with no exit status of its own is a settlement: %v", err)
+	}
+}
+
+// A settled record whose outcome contradicts its exit status is unreadable:
+// failed with exit status zero, like sent with a non-zero exit, is outside
+// the closed set the package defines.
+func TestAContradictorySettledNotificationIsUnreadable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	task := seedTask(t, s, "notifytaskac").ID
+	w := appendWake(t, s, task, "hold:one")
+	if _, err := s.ClaimNotification(ctx, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	now := encodeTime(nowUTC())
+	if _, err := s.write.ExecContext(ctx,
+		`UPDATE notification SET outcome = 'failed', exit_code = 0, detail = 'detail', settled_at = ? WHERE wake_id = ?`,
+		now, w.ID); err != nil {
+		t.Fatalf("planting a contradictory settlement: %v", err)
+	}
+	if _, err := s.Notification(ctx, w.ID); !errors.Is(err, ErrUnknownNotification) {
+		t.Fatalf("reading a failed record with exit status 0 = %v, want ErrUnknownNotification", err)
+	}
+}
+
+// Sent with exit status zero and failed with a non-zero exit are settlements
+// the closed set accepts.
+func TestMatchingOutcomeAndExitStatusSettle(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	task := seedTask(t, s, "notifytaskad").ID
+	sentWake := appendWake(t, s, task, "hold:sent")
+	failedWake := appendWake(t, s, task, "hold:failed")
+	if _, err := s.ClaimNotification(ctx, sentWake.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimNotification(ctx, failedWake.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := s.SettleNotification(ctx, sentWake.ID, NotificationSettlement{Outcome: NotificationSent, ExitCode: Known(0)}); err != nil || n.Outcome != Known(NotificationSent) {
+		t.Fatalf("sent with exit status 0 = %+v, %v", n, err)
+	}
+	if n, err := s.SettleNotification(ctx, failedWake.ID, NotificationSettlement{Outcome: NotificationFailed, ExitCode: Known(2)}); err != nil || n.Outcome != Known(NotificationFailed) || n.ExitCode != Known(2) {
+		t.Fatalf("failed with exit status 2 = %+v, %v", n, err)
 	}
 }
