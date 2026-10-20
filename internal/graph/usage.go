@@ -18,10 +18,12 @@ type Usage struct {
 	Unreported int `json:"unreported,omitempty"`
 }
 
-// exhausts reports whether this reading leaves a run held to budget no room:
+// Exhausts reports whether this reading leaves a run held to budget no room:
 // spent at or past it, or not established at all. A budget of zero is no
-// budget and nothing exhausts it.
-func (u Usage) exhausts(budget int64) bool {
+// budget and nothing exhausts it. It is the one statement of when the usage
+// budget leaves no room: the executor parks on it, and a caller deciding
+// whether a run is past its budget asks it rather than restating it.
+func (u Usage) Exhausts(budget int64) bool {
 	return budget > 0 && (u.Unreported > 0 || u.Spent >= budget)
 }
 
@@ -70,7 +72,7 @@ func (e *Executor) usageExhausted(ctx context.Context, cp Checkpoint) (Usage, bo
 		return Usage{}, false, fmt.Errorf("%w: run %q: the meter answered %d spent and %d unreported, which no record holds",
 			ErrUsageUnread, cp.Run, u.Spent, u.Unreported)
 	}
-	return u, u.exhausts(budget), nil
+	return u, u.Exhausts(budget), nil
 }
 
 // parkOnUsage records that the run stopped in front of node because its
@@ -132,7 +134,7 @@ func (g *Graph) validateParkedUsage(c Checkpoint) error {
 		return &CheckpointError{Field: "parked_usage", Detail: fmt.Sprintf(
 			"records %d spent and %d unreported, which no reading produces", u.Spent, u.Unreported)}
 	}
-	if !u.exhausts(c.Counters.UsageBudget) {
+	if !u.Exhausts(c.Counters.UsageBudget) {
 		return &CheckpointError{Field: "parked_usage", Detail: fmt.Sprintf(
 			"records %d spent and %d unreported, which leaves room under a usage budget of %d, so it parked nothing",
 			u.Spent, u.Unreported, c.Counters.UsageBudget)}

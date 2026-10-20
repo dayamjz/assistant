@@ -193,6 +193,12 @@ type Options struct {
 // in one place at a time, and everything else is either read-only or
 // serialized by the packages it composes.
 type Service struct {
+	// usageReadFaults is how many of the next usage budget readings fail,
+	// which only this package's tests set (export_test.go), so a test can
+	// give a reading the failure a store read can return. It is zero in
+	// every service the product opens.
+	usageReadFaults atomic.Int32
+
 	home   *home.Home
 	store  *store.Store
 	lock   *home.Lock
