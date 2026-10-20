@@ -141,6 +141,17 @@ func TestADelegationAttemptIsAnchoredAndRecordsItsSessionOnce(t *testing.T) {
 	if _, err := s.BeginDelegationAttempt(ctx, d.ID, 2); !errors.Is(err, ErrDelegationEnded) {
 		t.Fatalf("an attempt of an ended delegation = %v, want ErrDelegationEnded", err)
 	}
+	// A session started for the delegation while it was being ended lands
+	// after the end: it is refused in the recording transaction, so the
+	// attempt reads as one that never recorded a session. The second
+	// attempt recorded none before the end, which is the positive control
+	// for the refusal being the end's and not the attempt's.
+	if err := s.SetDelegationAttemptSession(ctx, d.ID, 2, "ref-late"); !errors.Is(err, ErrDelegationEnded) {
+		t.Fatalf("a session recorded on an ended delegation = %v, want ErrDelegationEnded", err)
+	}
+	if attempts, err := s.DelegationAttempts(ctx, d.ID); err != nil || len(attempts) != 2 || attempts[1].SessionRef.IsKnown() {
+		t.Fatalf("after the refused record the attempts are %+v (%v), want the second still naming no session", attempts, err)
+	}
 	if _, err := s.BeginDelegationAttempt(ctx, 99, 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an attempt of no delegation = %v, want ErrNotFound", err)
 	}
@@ -286,6 +297,27 @@ func TestAWakeIsOfferedToExactlyOneCoordinatorByItsTasksDomainAndKind(t *testing
 	}
 	if listed, err := s.QueuedWakesFor(ctx, 10, route("")); err != nil || !slices.Equal(ids(listed), []int64{decision, plain}) {
 		t.Fatalf("QueuedWakesFor(coordinator) = %v, %v", ids(listed), err)
+	}
+	// WakeRouted is the same partition read for one row, which the push to
+	// the coordinator's stream asks before pushing: the subordinate's
+	// actable row is routed to its domain and not to the coordinator, the
+	// other two the reverse; the zero route, which names no actable kind,
+	// routes every row to the coordinator and is what the push would read
+	// with the routing forced off.
+	for _, c := range []struct {
+		id     int64
+		domain string
+		want   bool
+	}{{actable, "alpha", true}, {actable, "", false}, {decision, "alpha", false}, {decision, "", true}, {plain, "alpha", false}, {plain, "", true}} {
+		if got, err := s.WakeRouted(ctx, c.id, route(c.domain)); err != nil || got != c.want {
+			t.Fatalf("WakeRouted(%d, %q) = %v, %v; want %v", c.id, c.domain, got, err, c.want)
+		}
+	}
+	if got, err := s.WakeRouted(ctx, actable, WakeRoute{}); err != nil || !got {
+		t.Fatalf("WakeRouted(%d, the zero route) = %v, %v; want the row carried, since the zero route names nothing actable", actable, got, err)
+	}
+	if _, err := s.WakeRouted(ctx, 999, route("")); !errors.Is(err, ErrWakeUnknown) {
+		t.Fatalf("WakeRouted of no wake = %v, want ErrWakeUnknown", err)
 	}
 	scopes, err := s.WakeScopes(ctx, []int64{actable, plain})
 	if err != nil || scopes[actable] != (WakeScope{Domain: "alpha", Kind: "terminal-gone"}) || scopes[plain] != (WakeScope{Kind: "terminal-gone"}) {

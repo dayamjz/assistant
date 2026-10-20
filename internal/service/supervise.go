@@ -668,7 +668,9 @@ func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 		out.Detections[i].Disposition = appended.Disposition
 		if appended.Disposition == store.WakeAppended {
 			s.wakeBell.ring()
-			s.publishWake(appended.Wake)
+			ctx, cancel := s.sup.bound(c.ctx)
+			s.publishWake(ctx, appended.Wake)
+			cancel()
 		}
 	}
 	if surfaced == 0 && d.write {

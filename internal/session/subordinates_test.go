@@ -66,9 +66,9 @@ func TestDelegatingJoinsTheSubordinateSetAndNotTheWorkerSet(t *testing.T) {
 	if !ref.Subordinate() || ref.Domain != "alpha" || ref.Task != "" {
 		t.Fatalf("the reference is %+v, want one naming domain alpha and no task", ref)
 	}
-	text := ref.String()
-	if !strings.HasPrefix(text, "subordinate1:") {
-		t.Fatalf("the reference encodes as %q, want the subordinate format", text)
+	text, err := ref.Encode()
+	if err != nil || !strings.HasPrefix(text, "subordinate1:") {
+		t.Fatalf("the reference encodes as %q (%v), want the subordinate format", text, err)
 	}
 	if parsed, err := session.ParseReference(text); err != nil || parsed != ref {
 		t.Fatalf("ParseReference(%q) = %+v, %v; want %+v", text, parsed, err, ref)
@@ -122,9 +122,13 @@ func TestASubordinateReferenceIsItsOwnClosedFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := session.Reference{Home: session.HomeMarker(h), Domain: "web-api", PID: 4242, Start: 77}
-	fields := strings.Split(ref.String(), ":")
+	text, err := ref.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Split(text, ":")
 	if len(fields) != 5 || fields[0] != "subordinate1" || fields[2] != "web-api" {
-		t.Fatalf("encoded as %q", ref.String())
+		t.Fatalf("encoded as %q", text)
 	}
 	for name, text := range map[string]string{
 		"a domain the home refuses":  strings.Join([]string{fields[0], fields[1], "Web", fields[3], fields[4]}, ":"),

@@ -161,7 +161,7 @@ func TestADelegationPastTheBoundHoldsForAPersonAndIsToldOnce(t *testing.T) {
 			t.Fatalf("the first pass's %s detections are %+v, want one surfaced and appended", kind, got)
 		}
 	}
-	hold, err := l.records(t).Hold(t.Context(), domainBoundKey("alpha", 1))
+	hold, err := l.records(t).Hold(t.Context(), domainBoundKey(d, 1))
 	if err != nil || !hold.Open() || hold.TaskID.IsKnown() || !strings.Contains(hold.Detail, "--domain") {
 		t.Fatalf("the bound's hold reads %+v (%v), want it open, naming no task and saying how it is answered", hold, err)
 	}
@@ -211,5 +211,147 @@ func TestTheGoneDecisionCanBeForcedOffAndTheChecksSeeIt(t *testing.T) {
 	live.liveness = taskstate.Live
 	if got := decideDelegation(live, cfg, now); len(got.detections) != 0 || got.write {
 		t.Fatalf("a live subordinate with no markers to clear decided %+v, want nothing", got)
+	}
+}
+
+// The bound's hold is keyed by the delegation as well as the attempt: a
+// second delegation of the same domain whose first attempt is found dead
+// past the bound holds again, on a key of its own, and is not begun again
+// on the answer the first delegation's hold was given. The counterfeit is
+// the key the first slice used, the domain and the attempt alone, resolved
+// retry the way the first delegation's answer left it: with that key the
+// reconciliation would read the answer as the second delegation's and
+// relaunch past the bound, so the check reads the second delegation's
+// attempts and its own hold rather than the first's.
+func TestASecondDelegationOfADomainHoldsAtTheBoundOnItsOwnKey(t *testing.T) {
+	t.Parallel()
+	h, records := loopHomeConfigured(t, `{"supervision_beacon_interval": "1s", "escalation_window": "1m", "relaunch_attempts": 0}`)
+	first := plantDelegation(t, records, "alpha", "sub-one")
+	terminals := newScriptedTerminals()
+	terminals.dead("sub-one")
+	terminals.dead("sub-two")
+	clock := &fakeClock{now: time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)}
+	l := openLoop(t, h, records, terminals, clock)
+	defer func() { _ = l.service.Close() }()
+	ctx := t.Context()
+
+	if err := l.nextPass(t).Delegations["alpha"].Err; err != nil {
+		t.Fatalf("the first pass: %v", err)
+	}
+	firstKey := domainBoundKey(first, 1)
+	if hold, err := l.records(t).Hold(ctx, firstKey); err != nil || !hold.Open() {
+		t.Fatalf("the first delegation's hold reads %+v (%v), want it open", hold, err)
+	}
+	// A person answers retry, as respondDomain records it, and the
+	// delegation is then ended by the coordinator; the counterfeit key is
+	// answered the same way.
+	if _, err := l.records(t).ResolveHold(ctx, firstKey, "retry", store.ResolvedByPerson()); err != nil {
+		t.Fatal(err)
+	}
+	counterfeit := "domain/alpha" + domainBoundPrefix + "1"
+	if _, err := l.records(t).RegisterHold(ctx, store.Hold{Key: counterfeit, Subject: "the key the first slice used"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.records(t).ResolveHold(ctx, counterfeit, "retry", store.ResolvedByPerson()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.records(t).EndDelegation(ctx, first.ID, store.EndedByCoordinator()); err != nil {
+		t.Fatal(err)
+	}
+	second, err := l.records(t).Delegate(ctx, store.DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated, Expected: first.ID})
+	if err != nil || second.ID == first.ID {
+		t.Fatalf("delegating alpha again: %+v, %v", second, err)
+	}
+	if _, err := l.records(t).BeginDelegationAttempt(ctx, second.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.records(t).SetDelegationAttemptSession(ctx, second.ID, 1, "sub-two"); err != nil {
+		t.Fatal(err)
+	}
+	secondKey := domainBoundKey(second, 1)
+	if secondKey == firstKey || secondKey == counterfeit {
+		t.Fatalf("the second delegation's key %q is not its own", secondKey)
+	}
+	if answer, err := l.service.relaunchAnswerOf(ctx, counterfeit); err != nil || answer != boundRetry {
+		t.Fatalf("the counterfeit key reads %v, %v; want retry, which is what the first slice would have relaunched on", answer, err)
+	}
+
+	l.service.reconcileSubordinates(ctx)
+	if attempts, err := l.records(t).DelegationAttempts(ctx, second.ID); err != nil || len(attempts) != 1 {
+		t.Fatalf("after reconciliation the second delegation's attempts are %+v (%v), want still one: no answer of its own was given", attempts, err)
+	}
+	if hold, err := l.records(t).Hold(ctx, secondKey); err != nil || !hold.Open() {
+		t.Fatalf("the second delegation's hold reads %+v (%v), want it open on its own key", hold, err)
+	}
+	if err := l.pass(t).Delegations["alpha"].Err; err != nil {
+		t.Fatalf("the pass over the second delegation: %v", err)
+	}
+	if rows := domainWakesOfKind(t, l.records(t), second.ID, supervisor.KindHoldOpened); len(rows) != 1 || rows[0].Marker != "hold:"+secondKey {
+		t.Fatalf("the second delegation's hold-opened wakes are %+v, want one naming its own hold", rows)
+	}
+	if latest, _, err := l.records(t).Delegation(ctx, "alpha"); err != nil || latest.ID != second.ID || !latest.Standing() {
+		t.Fatalf("the domain's latest delegation reads %+v (%v), want the second, standing", latest, err)
+	}
+}
+
+// An attempt that has recorded no session is starting, not gone: the claim
+// is written before the process and the session after, so a pass landing
+// between the two reads a delegation whose subordinate is coming up. Inside
+// escalation_window from the attempt's StartedAt the pass surfaces nothing
+// and writes no marker; past it, with still no session, the subordinate is
+// read as unobservable and surfaced as gone, which is what a start that
+// failed looks like. The window is read off the attempt row (P8). The
+// counterfeit is the same observation with the attempt claimed longer ago
+// than the window, which surfaces, so the check can tell a loop that
+// stopped reading the window from one that reads it.
+func TestAnAttemptWithNoSessionIsStartingInsideTheWindowAndGonePastIt(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P8)
+	h, records := loopHomeConfigured(t, `{"supervision_beacon_interval": "1s", "escalation_window": "1m", "relaunch_attempts": 0}`)
+	ctx := t.Context()
+	d, err := records.Delegate(ctx, store.DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.BeginDelegationAttempt(ctx, d.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	clock := &fakeClock{now: time.Now()}
+	l := openLoop(t, h, records, newScriptedTerminals(), clock)
+	defer func() { _ = l.service.Close() }()
+
+	first := l.nextPass(t)
+	if r := first.Delegations["alpha"]; r.Err != nil || len(r.Detections) != 0 {
+		t.Fatalf("the pass over a starting subordinate reported %+v, want nothing detected", r)
+	}
+	if _, has, err := l.records(t).DelegationMarkers(ctx, d.ID); err != nil || has {
+		t.Fatalf("the pass over a starting subordinate wrote markers (%v, %v)", has, err)
+	}
+	if rows, err := l.records(t).DelegationWakes(ctx, d.ID); err != nil || len(rows) != 0 {
+		t.Fatalf("the pass over a starting subordinate queued %+v (%v)", rows, err)
+	}
+
+	clock.Advance(2 * time.Minute)
+	past := l.pass(t)
+	got := domainDetections(past, "alpha", supervisor.KindSubordinateGone)
+	if len(got) != 1 || !got[0].Verdict.Surfaces() || !strings.HasPrefix(got[0].Marker, "subordinate-gone:unobservable:1:") {
+		t.Fatalf("past the window the detections are %+v, want one surfaced unobservable subordinate-gone", got)
+	}
+	if rows := domainWakesOfKind(t, l.records(t), d.ID, supervisor.KindSubordinateGone); len(rows) != 1 || rows[0].Domain != "alpha" {
+		t.Fatalf("past the window the subordinate-gone wakes are %+v, want one", rows)
+	}
+
+	// The decision alone, both ways.
+	now := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	cfg := config.Config{EscalationWindow: time.Minute}
+	starting := delegationObservation{delegation: store.Delegation{ID: 1, Domain: "alpha"}, attempt: 1, started: now.Add(-10 * time.Second),
+		liveness: taskstate.Unobserved, surfaced: map[string]bool{}}
+	if decided := decideDelegation(starting, cfg, now); len(decided.detections) != 0 || decided.write {
+		t.Fatalf("a starting attempt decided %+v, want nothing", decided)
+	}
+	stale := starting
+	stale.started = now.Add(-2 * time.Minute)
+	if decided := decideDelegation(stale, cfg, now); len(decided.detections) != 1 || !decided.detections[0].Verdict.Surfaces() {
+		t.Fatalf("an attempt claimed before the window with no session decided %+v, want subordinate-gone surfaced", decided)
 	}
 }

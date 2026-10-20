@@ -36,7 +36,7 @@ func TestTheCoordinatorVerbServesItsTableAndNothingElse(t *testing.T) {
 	}
 	// The operands each subcommand's usage line names, which its flag set
 	// cannot say for itself.
-	operands := map[string]string{"message": "<task> ", "stop": "<task> ", "relaunch": "<task> ", "promote": "<task> ", "acknowledge": "<wake>... ", "delegate": "<domain> ", "end-delegation": "<domain> "}
+	operands := map[string]string{"message": "<task> ", "stop": "<task> ", "relaunch": "<task> ", "promote": "<task> ", "acknowledge": "<wake>... ", "delegate": "<domain> ", "end-delegation": "<domain> ", "tasks": "[<task>] ", "answer": "<task> "}
 	for _, row := range rows {
 		for _, flag := range []string{"--help", "-h", "-help"} {
 			got := run(t, h, subject, "coordinator", row[0], flag)
@@ -71,6 +71,11 @@ func TestTheCoordinatorVerbServesItsTableAndNothingElse(t *testing.T) {
 		{"coordinator", "stop"},
 		{"coordinator", "relaunch", "abcdefghij23", "again"},
 		{"coordinator", "promote"},
+		{"coordinator", "tasks", "abcdefghij23", "abcdefghij24"},
+		{"coordinator", "answer"},
+		{"coordinator", "answer", "abcdefghij23"},
+		{"coordinator", "answer", "abcdefghij23", "--answer", ""},
+		{"coordinator", "answer", "abcdefghij23", "abcdefghij24", "--answer", "retry"},
 		{"coordinator", "create", "--instructions", "Do it.", "--instructions-file", both},
 		{"coordinator", "create", "--instructions-file", filepath.Join(t.TempDir(), "missing.md")},
 		{"coordinator", "message", "abcdefghij23", "--text", "x", "--text-file", both},

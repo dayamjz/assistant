@@ -141,6 +141,9 @@ type Spec struct {
 // the route walk in the tests holds it to.
 type Session struct {
 	ref Reference
+	// key is ref as Encode wrote it, the one text every lookup in the held
+	// set uses, computed once at adoption.
+	key string
 	// owner is the provider that created the session, compared by identity.
 	owner  any
 	worker agents.Worker

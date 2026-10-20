@@ -439,15 +439,19 @@
 // every method section 9 lists, with a promotion or a hold's answer it asks
 // for recorded as section 8's escalation. Wake routing is the kind table's
 // Subordinate column passed to internal/store as a route, so a wake is on
-// offer to exactly one coordinator. A subordinate's own terminal is the
+// offer to exactly one coordinator, and the coordinator's wake stream is
+// pushed that same partition. A subordinate's own terminal is the
 // loop's to watch, in delegations.go: a dead or unobservable one surfaces
 // as subordinate gone on the queue's second shape, internal/store's domain
 // wake, once per escalation window, to the first coordinator alone; a dead
 // one is relaunched at restart by reconcileSubordinates, bounded by
-// relaunch_attempts; and past the bound the delegation holds for a person,
-// from the loop and from reconciliation alike, on a hold answered through
-// task.respond given the domain, whose retry begins the subordinate once
-// more and whose stop ends the delegation by the answer.
+// relaunch_attempts, and one still running is placed from its record as
+// internal/session's survivor, never as the coordinator; and past the
+// bound the delegation holds for a person, from the loop and from
+// reconciliation alike, on a hold keyed by the delegation and the attempt
+// and answered through task.respond given the domain, whose retry begins
+// the subordinate once more and whose stop ends the delegation by the
+// answer.
 //
 // # A task is dispatched here, and launched here
 //

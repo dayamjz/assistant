@@ -629,16 +629,20 @@ session provider and adapter it starts a worker through, in
 `domains/DOMAIN` under the home, with the `assistant coordinator` route as
 the one command its grant allows. It is placed by the process it runs in,
 exactly as a worker is, so every task it creates is written into its domain
-and it reaches only that domain's tasks: it holds `create`, `message`,
-`stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`, `acknowledge` and
-`supervision` over them, its `tasks` listing shows the domain alone, and it
-is refused `promote`, `listen`, `delegate`, `end-delegation`, answering a
-hold, marking the catch-up read, starting, rerunning or cancelling a run,
-`sync`, and stopping or restarting the service, with code `subordinate`; a
-task outside its domain is refused with code `outside-domain`. A promotion
-or a hold's answer it asks for is refused and recorded as a decision it
-handed up, which reaches you as a `subordinate-escalated` wake and sits on
-the task's `--json` answer as `escalations`.
+and it reaches only that domain's tasks: it holds `create`, `tasks`,
+`message`, `stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`,
+`acknowledge` and `supervision` over them, its `tasks` listing shows the
+domain alone, and it is refused `promote`, `answer`, `listen`, `delegate`,
+`end-delegation`, marking the catch-up read, starting, rerunning or
+cancelling a run, `sync`, and stopping or restarting the service, with code
+`subordinate`; a task outside its domain is refused with code
+`outside-domain`. `tasks` and `answer` are coordinator subcommands as well
+as the `assistant tasks` and `assistant --task --answer` a first
+coordinator runs, because the subordinate's grant allows the
+`assistant coordinator` prefix alone. A promotion or a hold's answer it
+asks for is refused and recorded as a decision it handed up, which reaches
+you as a `subordinate-escalated` wake and sits on the task's `--json`
+answer as `escalations`.
 
 Wakes are routed by kind: while the delegation stands, a wake about a task
 in the domain that the subordinate can act on (its worker gone, idle, or
@@ -648,8 +652,9 @@ to both. `end-delegation` ends the delegation, its one revision, ends the
 subordinate's session this service holds, and the next drain of yours is
 offered the domain's rows; the tasks stay in their domain. Nothing else
 ends a delegation: not a restart, which re-probes the subordinate's
-session and relaunches a dead one up to `relaunch_attempts` times, and not
-a dropped connection. A subordinate whose session is gone reaches you as a
+session, relaunches a dead one up to `relaunch_attempts` times and places
+one still running from its record and its process, so it stays its domain's
+subordinate and `end-delegation` ends it; and not a dropped connection. A subordinate whose session is gone reaches you as a
 `subordinate-gone` wake, once and then once per `escalation_window` while
 it stays gone, and once it has been relaunched `relaunch_attempts` times
 the delegation holds for you, which reaches you as a `hold-opened` wake on

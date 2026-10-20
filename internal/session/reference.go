@@ -37,8 +37,9 @@ const homeMarkerLength = 32
 // start time. It is what the caller records as the attempt's session
 // reference, and the one thing Probe reads. Exactly one of Task and Domain
 // is set: a worker's reference names its task and a subordinate
-// coordinator's names its domain, and String refuses to encode one naming
-// both or neither by encoding the worker's format only when Domain is empty.
+// coordinator's names its domain, and Encode refuses one naming both or
+// neither rather than choosing, so no owner is dropped on the way to a
+// record.
 type Reference struct {
 	// Home is HomeMarker of the home root the session was created under.
 	Home string
@@ -66,19 +67,40 @@ func HomeMarker(h *home.Home) string {
 	return hex.EncodeToString(sum[:])[:homeMarkerLength]
 }
 
-// String encodes the reference in the closed format ParseReference reads:
+// Encode encodes the reference in the closed format ParseReference reads:
 // the format name, the home marker, the task identifier or the domain, the
 // process identifier and the start time, joined by colons. A reference with
-// a Domain encodes under subordinatePrefix and every other under
-// referencePrefix.
-func (r Reference) String() string {
+// a Domain and no Task encodes under subordinatePrefix and one with a Task
+// and no Domain under referencePrefix. One naming both, or neither, is
+// refused with an error wrapping ErrReference: it is the identity of no
+// session this package creates, and encoding either half would record an
+// owner the reference does not have.
+func (r Reference) Encode() (string, error) {
 	prefix, owner := referencePrefix, r.Task
-	if r.Subordinate() {
+	switch {
+	case r.Task != "" && r.Domain != "":
+		return "", fmt.Errorf("%w: a reference names task %q and domain %q, and a session has exactly one owner", ErrReference, r.Task, r.Domain)
+	case r.Task == "" && r.Domain == "":
+		return "", fmt.Errorf("%w: a reference names neither a task nor a domain", ErrReference)
+	case r.Subordinate():
 		prefix, owner = subordinatePrefix, r.Domain
 	}
 	return strings.Join([]string{
 		prefix, r.Home, owner, strconv.Itoa(r.PID), strconv.FormatUint(r.Start, 10),
-	}, ":")
+	}, ":"), nil
+}
+
+// String renders the reference for a log line: Encode's text, or, for a
+// reference Encode refuses, the refusal itself, which ParseReference
+// refuses too, so a rendering of a reference with no one owner can never be
+// read back as a reference. A record is written from Encode, never from
+// this.
+func (r Reference) String() string {
+	text, err := r.Encode()
+	if err != nil {
+		return err.Error()
+	}
+	return text
 }
 
 // ParseReference decodes what String wrote and refuses everything else with

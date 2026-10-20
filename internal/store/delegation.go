@@ -367,8 +367,19 @@ func (s *Store) SetDelegationAttemptSession(ctx context.Context, id, sequence in
 		return fmt.Errorf("store: delegation %d attempt %d: the session reference is empty", id, sequence)
 	}
 	return s.inTx(ctx, func(tx *sql.Tx) error {
+		// The delegation is read in the transaction that records the
+		// session, so a session started for a delegation that was ended
+		// while it started is refused here and never recorded as one
+		// standing: the caller then ends the session it holds.
+		d, err := delegationByID(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if !d.Standing() {
+			return fmt.Errorf("%w: delegation %d of domain %s, so attempt %d's session is not recorded", ErrDelegationEnded, id, d.Domain, sequence)
+		}
 		var recorded Optional[string]
-		err := tx.QueryRowContext(ctx,
+		err = tx.QueryRowContext(ctx,
 			`SELECT session_ref FROM delegation_attempt WHERE delegation = ? AND sequence = ?`, id, sequence).Scan(&recorded)
 		if err != nil {
 			return fmt.Errorf("store: delegation %d attempt %d: %w", id, sequence, errNoRows(err))

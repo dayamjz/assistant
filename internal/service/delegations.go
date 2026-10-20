@@ -31,8 +31,14 @@ import (
 // case and then once more per escalation_window measured from the
 // delegation's GoneSurfacedAt marker, which the pass that surfaces writes in
 // the wake's own transaction (P8: the spacing is read off the marker row and
-// never off the newest wake). An attempt that never recorded a session is
-// read as unobservable, since nothing can be probed for it.
+// never off the newest wake). An attempt that has recorded no session is
+// starting while escalation_window has not elapsed since the attempt was
+// claimed, read off the attempt row's StartedAt: the claim is written
+// before the process starts and the session recorded after, as a task's
+// is, so a pass landing between the two would otherwise read a subordinate
+// that is coming up as gone. Past that window with no session it is read
+// as unobservable, since nothing can be probed for it, and a start that
+// failed is then told to the coordinator the way a gone one is.
 //
 // # The bound's hold
 //
@@ -59,6 +65,9 @@ type delegationObservation struct {
 	// attempt is the latest attempt's sequence, zero for a delegation with
 	// none.
 	attempt int64
+	// started is when the latest attempt was claimed, which precedes its
+	// process, and zero for a delegation with no attempt.
+	started time.Time
 	// ref is the latest attempt's session reference, empty when it has
 	// none.
 	ref string
@@ -116,6 +125,12 @@ func decideDelegationWith(o delegationObservation, cfg config.Config, now time.T
 		d.advance.UnobservedSince = store.Optional[time.Time]{}
 		d.advance.GoneSurfacedAt = store.Optional[time.Time]{}
 		d.write = o.has && (o.markers.UnobservedSince.IsKnown() || o.markers.GoneSurfacedAt.IsKnown())
+		return d
+	}
+	if o.ref == "" && o.attempt > 0 && elapsed(o.started, cfg.EscalationWindow, now) == supervisor.WindowOpen {
+		// Starting, on the file comment's terms: nothing surfaces and the
+		// markers are left as they are, so a start that comes up clears
+		// them as Live and one that does not is read past the window.
 		return d
 	}
 	g := goneDead
@@ -213,6 +228,7 @@ func (s *Service) superviseDelegation(c *incarnation, d store.Delegation, now ti
 	}
 	if n := len(attempts); n > 0 {
 		o.attempt = attempts[n-1].Sequence
+		o.started = attempts[n-1].StartedAt
 		o.ref, _ = attempts[n-1].SessionRef.Get()
 		o.relaunches = n - 1
 	}

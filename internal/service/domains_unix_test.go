@@ -3,8 +3,10 @@
 package service_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -79,9 +81,21 @@ func delegateDomain(t *testing.T, w launched, domain, posture string) delegated 
 	if !ref.Subordinate() || ref.Domain != domain {
 		t.Fatalf("the subordinate's reference is %+v, want one naming domain %s", ref, domain)
 	}
-	attempts, err := recordsOf(t, w.home).DelegationAttempts(t.Context(), answer.Record.ID)
-	if err != nil || len(attempts) != 1 || attempts[0].SessionRef.Or("") != ref.String() {
-		t.Fatalf("the delegation's attempts are %+v (%v), want the one attempt naming session %s", attempts, err, ref)
+	// The session is held before it is recorded, so the record is waited
+	// on rather than read once.
+	deadline = time.Now().Add(launchWait)
+	for {
+		attempts, err := recordsOf(t, w.home).DelegationAttempts(t.Context(), answer.Record.ID)
+		if err != nil || len(attempts) != 1 {
+			t.Fatalf("the delegation's attempts are %+v (%v), want one", attempts, err)
+		}
+		if attempts[0].SessionRef.Or("") == ref.String() {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the delegation's attempt never recorded session %s: %+v", ref, attempts[0])
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	return delegated{domain: domain, as: launched{
 		running: w.running, home: w.home, repository: w.repository, gateRepo: w.gateRepo,
@@ -595,7 +609,7 @@ func TestADeadSubordinateIsRelaunchedOnRestartUnderTheBound(t *testing.T) {
 		// begins the subordinate once more as attempt 3, which spends the
 		// answer.
 		principles.Cite(t, principles.P8)
-		key := "domain/alpha/relaunch-bound/2"
+		key := fmt.Sprintf("domain/alpha/relaunch-bound/%d/2", delegation.ID)
 		deadline := time.Now().Add(launchWait)
 		for {
 			if hold, err := recordsOf(t, h).Hold(t.Context(), key); err == nil && hold.Open() {
@@ -671,7 +685,7 @@ func TestAGoneSubordinateReachesTheCoordinatorOnTheSecondShapeAndAStopEndsTheDel
 			if err := alpha.as.provider.Close(alpha.as.session); err != nil {
 				t.Fatalf("ending alpha's subordinate: %v", err)
 			}
-			key := "domain/alpha/relaunch-bound/1"
+			key := fmt.Sprintf("domain/alpha/relaunch-bound/%d/1", delegation.ID)
 			var gone, hold int64
 			deadline := time.Now().Add(60 * time.Second)
 			for gone == 0 || hold == 0 {
@@ -734,4 +748,218 @@ func TestAGoneSubordinateReachesTheCoordinatorOnTheSecondShapeAndAStopEndsTheDel
 				t.Fatal("the service still holds a session for the ended domain")
 			}
 		})
+}
+
+// A subordinate that outlived the service that started it is placed from
+// the delegation attempt's recorded reference and the kernel's presence
+// read, never as the first coordinator by the held set being empty (P14):
+// the subordinate here is started outside the service, through the same
+// provider and stand-in the service starts one through, and its reference
+// planted on a delegation the way domain.delegate and the launch record
+// one; the service then opened holds no session for it, probes it
+// Unobserved, relaunches nothing, and places every request from its process
+// as the subordinate of its domain, so the coordinator's commands are
+// refused with the subordinate code and its own are admitted; and the
+// coordinator's domain.end ends the survivor by its identity, which the
+// provider holding the handle then reads as exited.
+func TestASurvivingSubordinateIsPlacedFromItsRecordAfterARestartAndEndedByTheDomainsEnd(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P14)
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	quietMaintenance(t, subject)
+	repository := recordRepository(t, h, subject)
+	quietMaintenance(t, gateRepositoryOf(t, h, subject))
+	if err := os.WriteFile(h.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s", "relaunch_attempts": 1}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	_, agent := workerAgent(t)
+	pipe := session.NewPipe(h, agent.Runner())
+	dir, err := h.Domain("alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	survivor, err := pipe.Delegate(ctx, session.SubordinateSpec{Domain: "alpha", Dir: dir, Instructions: "Coordinate alpha.\n"})
+	if err != nil {
+		t.Fatalf("starting the survivor: %v", err)
+	}
+	t.Cleanup(func() { _ = pipe.Close(survivor) })
+	waitCapture(t, pipe, survivor, "worker ready")
+	ref, err := survivor.Reference().Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := openRecords(t, h)
+	delegation, err := records.Delegate(ctx, store.DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.BeginDelegationAttempt(ctx, delegation.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.SetDelegationAttemptSession(ctx, delegation.ID, 1, ref); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(running serviceUnderTest) {
+		w := launched{running: running, home: h, repository: repository, group: survivor.Reference().PID, provider: pipe, session: survivor}
+		if _, _, held := running.service.SubordinateSessionOf("alpha"); held {
+			t.Fatal("the service holds a session for a subordinate it did not start")
+		}
+		if attempts, err := recordsOf(t, h).DelegationAttempts(ctx, delegation.ID); err != nil || len(attempts) != 1 {
+			t.Fatalf("after the restart the attempts are %+v (%v), want the one the survivor stands on", attempts, err)
+		}
+		for _, r := range []struct {
+			method ipc.Method
+			params any
+		}{
+			{ipc.MethodDomainEnd, machine.DomainEndRequest{Domain: "alpha"}},
+			{ipc.MethodDomainDelegate, machine.DomainDelegateRequest{Domain: "beta", Delivery: "gated", Instructions: "x"}},
+			{ipc.MethodTaskRespond, machine.TaskRespondRequest{Domain: "alpha", Answer: machine.AnswerRetry}},
+			{ipc.MethodCatchUpMark, machine.MarkSeenRequest{Records: []store.SeenRecord{{Kind: store.SeenMerge, Key: "x"}}}},
+			{ipc.MethodServiceStop, machine.LifecycleRequest{}},
+		} {
+			if _, code := callAs(t, w, r.method, r.params); code != ipc.CodeSubordinate {
+				t.Fatalf("%s from the survivor answered %q, want %q: a survivor is not the coordinator", r.method, code, ipc.CodeSubordinate)
+			}
+		}
+		if latest, _, err := recordsOf(t, h).Delegation(ctx, "alpha"); err != nil || latest.ID != delegation.ID || !latest.Standing() {
+			t.Fatalf("after the refused domain.end the delegation reads %+v (%v), want it standing", latest, err)
+		}
+		if _, code := callAs(t, w, ipc.MethodTasksList, struct{}{}); code != "" {
+			t.Fatalf("tasks.list from the survivor was refused with %q", code)
+		}
+		var ended machine.DelegationEnded
+		if err := running.client.Call(ctx, ipc.MethodDomainEnd, machine.DomainEndRequest{Domain: "alpha"}, &ended); err != nil {
+			t.Fatalf("domain.end from the coordinator: %v", err)
+		}
+		if ended.Record.Standing() || !ended.SessionEnded {
+			t.Fatalf("domain.end answered %+v, want the delegation ended and the survivor ended", ended)
+		}
+		if got := waitProbe(t, pipe, ref, taskstate.Dead); got.Reason != session.ReasonExited {
+			t.Fatalf("after the end the survivor probes %+v through the handle, want exited", got)
+		}
+	})
+}
+
+// The coordinator's wake stream carries exactly the rows the coordinator's
+// drain would offer (P14): with a domain delegated, the terminal-gone of a
+// task in the domain is routed to the subordinate and never pushed, while
+// the terminal-gone of a task in no domain is, both read back from the
+// records. The counterfeit is the routing read with the zero route, which
+// names nothing actable and is what a push made with the routing forced
+// off would read: it carries the subordinate's row.
+func TestTheWakeStreamCarriesOnlyTheRowsTheCoordinatorsDrainOffers(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P14)
+	launchedWorker(t, "task/stream-routed", func(w launched) {
+		ctx := t.Context()
+		d := delegateDomain(t, w, "alpha", "gated")
+		pushes, err := w.running.client.SubscribeTo(ctx, ipc.MethodWakesSubscribe, nil)
+		if err != nil {
+			t.Fatalf("opening the wake stream: %v", err)
+		}
+		defer pushes.Close()
+		if first := recvWithin(t, pushes, 10*time.Second); first.Type != ipc.TypeGap {
+			t.Fatalf("the wake stream opened with %+v, want the opening gap", first)
+		}
+		own := createdBy(t, d, machine.TaskCreateRequest{
+			Shape: "investigation", Project: "alpha look", Instructions: "Look into it.\n", Repository: w.repository.ID,
+		}).Record.ID
+		waitRunning(t, w, own)
+		finishWorker(t, w, own)
+		finishWorker(t, w, w.task)
+
+		goneOf := func(task string) int64 {
+			t.Helper()
+			rows, err := recordsOf(t, w.home).TaskWakes(ctx, task)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range rows {
+				if row.Kind == string(supervisor.KindTerminalGone) {
+					return row.ID
+				}
+			}
+			return 0
+		}
+		var ownGone, baseGone int64
+		deadline := time.Now().Add(60 * time.Second)
+		for ownGone == 0 || baseGone == 0 {
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the loop recorded own=%d base=%d within the bound, want both terminal-gone rows", ownGone, baseGone)
+			}
+			ownGone, baseGone = goneOf(own), goneOf(w.task)
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		pushed := map[int64]store.Wake{}
+		for _, seen := pushed[baseGone]; !seen; _, seen = pushed[baseGone] {
+			event := recvWithin(t, pushes, 60*time.Second)
+			if event.Type != ipc.TypeWakeQueued {
+				continue
+			}
+			var row store.Wake
+			if err := json.Unmarshal(event.Payload, &row); err != nil {
+				t.Fatalf("a pushed wake does not read as a wake row: %v", err)
+			}
+			pushed[row.ID] = row
+		}
+		// Both rows exist and the undelegated one has been pushed; a push
+		// of the delegated one, had the routing not held it back, follows
+		// its append within the pass, so a quiet window of two passes
+		// after both rows exist is where it would arrive.
+		for {
+			quiet, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
+			event, err := pushes.Recv(quiet)
+			cancel()
+			if err != nil {
+				break
+			}
+			if event.Type != ipc.TypeWakeQueued {
+				continue
+			}
+			var row store.Wake
+			if err := json.Unmarshal(event.Payload, &row); err != nil {
+				t.Fatalf("a pushed wake does not read as a wake row: %v", err)
+			}
+			pushed[row.ID] = row
+		}
+		if row, ok := pushed[ownGone]; ok {
+			t.Fatalf("the coordinator's stream carried the subordinate's row %+v", row)
+		}
+		if _, ok := pushed[baseGone]; !ok {
+			t.Fatalf("the coordinator's stream did not carry the undelegated task's row %d", baseGone)
+		}
+
+		// The records agree, and the zero route is the push with the
+		// routing forced off.
+		actable := supervisor.SubordinateActable()
+		words := make([]string, len(actable))
+		for i, kind := range actable {
+			words[i] = string(kind)
+		}
+		r := recordsOf(t, w.home)
+		if routed, err := r.WakeRouted(ctx, ownGone, store.WakeRoute{Actable: words}); err != nil || routed {
+			t.Fatalf("WakeRouted(own, the coordinator's route) = %v, %v; want false", routed, err)
+		}
+		if routed, err := r.WakeRouted(ctx, ownGone, store.WakeRoute{Subordinate: "alpha", Actable: words}); err != nil || !routed {
+			t.Fatalf("WakeRouted(own, alpha's route) = %v, %v; want true", routed, err)
+		}
+		if routed, err := r.WakeRouted(ctx, baseGone, store.WakeRoute{Actable: words}); err != nil || !routed {
+			t.Fatalf("WakeRouted(base, the coordinator's route) = %v, %v; want true", routed, err)
+		}
+		if routed, err := r.WakeRouted(ctx, ownGone, store.WakeRoute{}); err != nil || !routed {
+			t.Fatalf("WakeRouted(own, the zero route) = %v, %v; want true, which is the row the stream would have carried with the routing forced off", routed, err)
+		}
+	})
 }

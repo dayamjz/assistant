@@ -99,11 +99,19 @@ import (
 // standing delegation's latest attempt through the service's Terminals on
 // reconcile.go's terms: Dead is relaunched as a new delegation attempt
 // anchored to the attempt history read, bounded by relaunch_attempts
-// counted from the attempts, Unobserved is left alone, and past the bound
-// the delegation holds for a person on holdDomainBound's hold, keyed by the
-// attempt that reached the bound, which the supervisor loop raises the same
-// way while the service runs (delegations.go), so a delegation never stands
-// silently past the bound. The hold is answered through task.respond given
+// counted from the attempts, Unobserved and Live are left alone, and past
+// the bound the delegation holds for a person on holdDomainBound's hold,
+// keyed by the delegation and the attempt that reached the bound, which
+// the supervisor loop raises the same way while the service runs
+// (delegations.go), so a delegation never stands silently past the bound.
+// A subordinate left alone is one that may have outlived the service: its
+// attempt's reference is adopted into session.Survivors, the placer that
+// answers from the record and the kernel's presence read, so a request from
+// its process is placed as its domain's subordinate and never as the first
+// coordinator by the held set being empty, and domain.end ends it by that
+// identity through agents.EndGroup. placeRequest reads no chain only while
+// no worker, no subordinate and no survivor is held, which is when there is
+// nobody a peer could be mistaken for. The hold is answered through task.respond given
 // the domain, respondDomain: a retry begins the subordinate once more as a
 // new attempt anchored to the one the hold names, which spends the answer
 // (P6), and a stop ends the delegation with store.EndedByAnswer. Ownership
@@ -115,16 +123,22 @@ import (
 //
 // # Residual gaps
 //
-//   - wakes.subscribe is one publisher per method in internal/ipc, and a
-//     subscriber is pushed every row the loop appends and counts toward the
-//     one attachment the coordinator's handouts are held under, so a
-//     subordinate holding it would be pushed the coordinator's rows and
-//     pin them. This slice refuses a subordinate the stream with
-//     ipc.ErrSubordinate and the subordinate waits with wakes.wait, which
-//     is routed; a per-domain publisher is the follow-up.
+//   - wakes.subscribe is one publisher per method in internal/ipc, pushed
+//     the first coordinator's partition of the queue alone, and a
+//     subscriber counts toward the one attachment the coordinator's
+//     handouts are held under, so a subordinate holding it would be pushed
+//     the coordinator's rows and pin them. This slice refuses a subordinate
+//     the stream with ipc.ErrSubordinate, and the subordinate's one route
+//     to its rows is wakes.wait, which is routed, until a per-domain
+//     publisher lands; that is the follow-up.
 //   - The placement's gaps are workers.go's: a chain the kernel rewrote
 //     when a process between a subordinate and its tool command exited
 //     places that command as a person's, which the PRD's decision 20 names.
+//     A survivor's placement adds session.Survivors' own: it records no
+//     host, so a window a tmux-hosted survivor opens on its server is
+//     placed as nobody's until the delegation is next started here, and on
+//     a platform reading no start time it cannot tell a reused identifier
+//     from the survivor; both err toward the subordinate.
 //   - The subordinate's posture is held to intake's rule at each task it
 //     creates, against that task's project, since a delegation names no
 //     repository; a delegation whose posture is lighter than a project's
@@ -162,7 +176,9 @@ func (p placedPeer) domain() string {
 // process first and the subordinate sets second, so a peer in both, which
 // no launch here produces, is the worker, the side that claims less, and a
 // shell at a terminal and nobody are both neither here, as workerOf reads
-// them. No chain is read while no set holds anybody, on workerOf's terms.
+// them. No chain is read while no set holds anybody and no survivor is
+// adopted, on workerOf's terms: the coordinator is then the only peer
+// there is, and a chain read against empty sets could place nothing else.
 // An unidentified peer is ipc.ErrUnidentifiedPeer and an ancestry that
 // could not be read is ipc.ErrUnavailable, both wrapped, so neither reads
 // as the coordinator.
@@ -189,7 +205,10 @@ func (s *Service) placeRequest(req ipc.Request) (placedPeer, error) {
 }
 
 // subordinateSets gathers every subordinate set this service holds: the
-// driver's provider's and each delegated host's, on workerSets' terms.
+// driver's provider's, each delegated host's, and the survivors adopted at
+// recovery, on workerSets' terms. The held sets come first, so a group a
+// held session leads is answered from its handle and a survivor only from
+// the record and the presence read.
 func (s *Service) subordinateSets() subordinateSets {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -201,6 +220,9 @@ func (s *Service) subordinateSets() subordinateSets {
 		if launched.host != nil {
 			sets = append(sets, launched.host.Subordinates())
 		}
+	}
+	if s.survivors != nil {
+		sets = append(sets, s.survivors)
 	}
 	return sets
 }
@@ -215,9 +237,17 @@ func (sets subordinateSets) empty() bool {
 	return true
 }
 
+// subordinatePlacerSet is one set the service asks: placement.go's
+// subordinatePlacer that can also say whether it holds anybody, which
+// *session.Subordinates and *session.Survivors both are.
+type subordinatePlacerSet interface {
+	subordinatePlacer
+	Empty() bool
+}
+
 // subordinateSets is the placer over every subordinate set this service
 // holds, on workerSets' terms.
-type subordinateSets []*session.Subordinates
+type subordinateSets []subordinatePlacerSet
 
 // Member is session.Subordinates.Member over every set.
 func (sets subordinateSets) Member(group int) (session.Placement, bool) {
@@ -441,8 +471,14 @@ func (s *Service) endDelegation(ctx context.Context, req ipc.Request, r machine.
 }
 
 // endSubordinate ends and forgets the subordinate session this service
-// holds for a domain, reporting whether it held one. A Close that fails is
-// logged; the session is forgotten either way.
+// holds for a domain, and the survivor it adopted for the domain at
+// recovery, reporting whether it ended either. A held session is ended
+// through its host; a survivor is ended by the identity it was held to,
+// through agents.EndGroup, which signals nothing until the identity is
+// verified present, and is left running when the identity records no
+// start time, since nothing could then verify it. A Close or an end that
+// fails is logged; the session and the survivor are forgotten either way,
+// so a domain ended twice ends nothing twice.
 func (s *Service) endSubordinate(domain string) bool {
 	s.mu.Lock()
 	held, ok := s.delegated[domain]
@@ -450,13 +486,32 @@ func (s *Service) endSubordinate(domain string) bool {
 		delete(s.delegated, domain)
 	}
 	s.mu.Unlock()
-	if !ok || held.host == nil || held.session == nil {
-		return false
+	ended := false
+	if ok && held.host != nil && held.session != nil {
+		switch err := held.host.Close(held.session); {
+		case errors.Is(err, session.ErrNotHeld):
+			// Ended already through the handle the service observes it
+			// by, which session.Provider.Close says a second Close is.
+			s.log.Printf("the subordinate coordinator of domain %s had already ended", domain)
+		case err != nil:
+			s.log.Printf("the subordinate coordinator of domain %s was not ended cleanly: %v", domain, err)
+		}
+		ended = true
 	}
-	if err := held.host.Close(held.session); err != nil {
-		s.log.Printf("the subordinate coordinator of domain %s was not ended cleanly: %v", domain, err)
+	if identity, found := s.survivors.Forget(domain); found {
+		if identity.Start == 0 {
+			s.log.Printf("the surviving subordinate coordinator of domain %s (%s) records no start time and is left running, unverified", domain, identity)
+			return ended
+		}
+		end, err := agents.EndGroup(identity, stopGrace)
+		if err != nil {
+			s.log.Printf("the surviving subordinate coordinator of domain %s (%s) was not ended: %v", domain, identity, err)
+			return ended
+		}
+		s.log.Printf("the surviving subordinate coordinator of domain %s (%s) was ended: %s", domain, identity, end)
+		ended = true
 	}
-	return true
+	return ended
 }
 
 // launchSubordinateInBackground starts a domain's subordinate on a goroutine
@@ -478,12 +533,26 @@ func (s *Service) launchSubordinateInBackground(d store.Delegation, attempt int6
 }
 
 // launchSubordinate starts a domain's subordinate for a claimed attempt, on
-// the file comment's terms: it reads the instructions file, builds the
-// driver for the provider, starts the session through session.Host.Delegate,
-// records the reference on the attempt, and holds the session. A reference
-// that cannot be recorded ends the session before the failure is reported,
-// as launch.go does for a worker.
+// the file comment's terms: it reads the delegation again and refuses one
+// that has ended since the attempt was claimed, reads the instructions
+// file, builds the driver for the provider, starts the session through
+// session.Host.Delegate, holds the session, and records the reference on
+// the attempt. A reference that cannot be recorded ends the session before
+// the failure is reported, as launch.go does for a worker, and one refused
+// because the delegation ended while the session started is that case:
+// store.SetDelegationAttemptSession reads the delegation in the recording
+// transaction. The session is held before it is recorded so that a
+// domain.end landing between the two finds it to end: either the end's
+// record precedes the session's, and the record is refused and the launch
+// ends the session, or it follows, and the end's endSubordinate finds the
+// session held; there is no order in which a session lands that nothing
+// ends.
 func (s *Service) launchSubordinate(ctx context.Context, d store.Delegation, attempt int64) error {
+	if current, err := s.store.DelegationByID(ctx, d.ID); err != nil {
+		return fmt.Errorf("service: reading delegation %d before starting its subordinate coordinator: %w", d.ID, err)
+	} else if !current.Standing() {
+		return fmt.Errorf("%w: delegation %d of domain %s ended before its subordinate coordinator started", store.ErrDelegationEnded, d.ID, d.Domain)
+	}
 	path, err := s.home.DomainInstructions(d.Domain)
 	if err != nil {
 		return err
@@ -506,13 +575,13 @@ func (s *Service) launchSubordinate(ctx context.Context, d store.Delegation, att
 	if err != nil {
 		return err
 	}
-	reference := launched.Reference().String()
-	if err := s.store.SetDelegationAttemptSession(ctx, d.ID, attempt, reference); err != nil {
+	reference, err := launched.Reference().Encode()
+	if err != nil {
 		if closeErr := built.sessions.Close(launched); closeErr != nil {
-			s.log.Printf("the subordinate coordinator of domain %s, whose session could not be recorded, was not ended either: %v",
+			s.log.Printf("the subordinate coordinator of domain %s, whose reference could not be encoded, was not ended either: %v",
 				d.Domain, closeErr)
 		}
-		return fmt.Errorf("service: recording the session of delegation %d attempt %d: %w", d.ID, attempt, err)
+		return fmt.Errorf("service: the session of delegation %d attempt %d: %w", d.ID, attempt, err)
 	}
 	s.mu.Lock()
 	if s.delegated == nil {
@@ -520,6 +589,13 @@ func (s *Service) launchSubordinate(ctx context.Context, d store.Delegation, att
 	}
 	s.delegated[d.Domain] = launchedWorker{host: built.sessions, session: launched}
 	s.mu.Unlock()
+	s.survivors.Forget(d.Domain)
+	if err := s.store.SetDelegationAttemptSession(ctx, d.ID, attempt, reference); err != nil {
+		if !s.endSubordinate(d.Domain) {
+			s.log.Printf("the subordinate coordinator of domain %s, whose session could not be recorded, was already ended", d.Domain)
+		}
+		return fmt.Errorf("service: recording the session of delegation %d attempt %d: %w", d.ID, attempt, err)
+	}
 	s.log.Printf("the subordinate coordinator of domain %s was started as delegation %d attempt %d in terminal session %s",
 		d.Domain, d.ID, attempt, reference)
 	return nil
@@ -548,11 +624,11 @@ func (s *Service) subordinateSection(d store.Delegation) string {
 	}
 	fmt.Fprintf(&b, "\nYou drive your domain's work with one command, which your permissions allow when it begins exactly "+
 		"with the text below:\n\n    %s SUBCOMMAND ...\n\n", s.coordinatorRoute)
-	b.WriteString("Within your domain you hold: create, message, stop, peek, relaunch, relayed, wakes, await, " +
-		"acknowledge and supervision, and the tasks listing shows your domain's tasks alone. You are refused: " +
-		"promote, delegate and end-delegation, answering a hold, marking the catch-up read, starting, rerunning or " +
-		"cancelling a run, synchronizing a branch, stopping or restarting the service, and listen. A promotion or a " +
-		"hold's answer you ask for is refused and recorded as a decision handed up to the coordinator, with your " +
+	b.WriteString("Within your domain you hold: create, tasks, message, stop, peek, relaunch, relayed, wakes, await, " +
+		"acknowledge and supervision, and tasks lists your domain's tasks alone. You are refused: promote, answer, " +
+		"delegate and end-delegation, marking the catch-up read, starting, rerunning or cancelling a run, " +
+		"synchronizing a branch, stopping or restarting the service, and listen. A promotion (promote) or a hold's " +
+		"answer (answer) you ask for is refused and recorded as a decision handed up to the coordinator, with your " +
 		"words, so ask for one when that is what you want.\n")
 	return b.String()
 }
@@ -614,7 +690,9 @@ func (s *Service) subordinateSessionOf(domain string) (session.Host, *session.Se
 }
 
 // closeSubordinates ends every subordinate session this service holds, on
-// closeSessions' terms.
+// closeSessions' terms, except that a session the provider no longer holds
+// is one already ended through its handle, which session.Provider.Close
+// answers ErrNotHeld for a second Close of, and is not a failure to end.
 func (s *Service) closeSubordinates() []error {
 	s.mu.Lock()
 	held := s.delegated
@@ -626,7 +704,7 @@ func (s *Service) closeSubordinates() []error {
 			errs = append(errs, fmt.Errorf("service: domain %s holds a session and no provider", domain))
 			continue
 		}
-		if err := launched.host.Close(launched.session); err != nil {
+		if err := launched.host.Close(launched.session); err != nil && !errors.Is(err, session.ErrNotHeld) {
 			errs = append(errs, fmt.Errorf("service: ending the subordinate coordinator of domain %s: %w", domain, err))
 		}
 	}
@@ -670,8 +748,7 @@ func (s *Service) reconcileSubordinates(ctx context.Context) {
 				}
 				liveness := probe(ctx, ref)
 				if liveness != taskstate.Dead {
-					s.log.Printf("reconciliation: the subordinate coordinator of domain %s (session %s) reads %s and is left alone",
-						d.Domain, ref, liveness)
+					s.adoptSurvivor(d, ref, liveness)
 					continue
 				}
 				reason = fmt.Sprintf("its subordinate coordinator's terminal %s is gone", ref)
@@ -686,7 +763,7 @@ func (s *Service) reconcileSubordinates(ctx context.Context) {
 			// spent by the attempt the retry begins. A retry already
 			// answered relaunches once more here; a stop answered ended
 			// the delegation at the answer, so it is not standing.
-			answer, err := s.relaunchAnswerOf(ctx, domainBoundKey(d.Domain, latest))
+			answer, err := s.relaunchAnswerOf(ctx, domainBoundKey(d, latest))
 			if err != nil {
 				s.log.Printf("reconciliation: the hold of domain %s could not be read: %v", d.Domain, err)
 				continue
@@ -716,16 +793,43 @@ func (s *Service) reconcileSubordinates(ctx context.Context) {
 	}
 }
 
+// adoptSurvivor is the restart's answer for a standing delegation whose
+// session did not probe Dead: the attempt's reference is adopted into the
+// survivors placer, on session.Survivors.Adopt's terms, so a process that
+// outlived the service is placed as its domain's subordinate. A reference
+// whose process is proven gone is not adopted, which the next pass of the
+// loop surfaces; one adopted unverified is logged with why.
+func (s *Service) adoptSurvivor(d store.Delegation, ref string, liveness taskstate.Liveness) {
+	placed, adopted, err := s.survivors.Adopt(session.HomeMarker(s.home), ref)
+	switch {
+	case !adopted && err != nil:
+		s.log.Printf("reconciliation: the subordinate coordinator of domain %s (session %s) reads %s and could not be placed as a survivor: %v",
+			d.Domain, ref, liveness, err)
+	case !adopted:
+		s.log.Printf("reconciliation: the subordinate coordinator of domain %s (session %s) reads %s and its process is gone; it is left for the loop",
+			d.Domain, ref, liveness)
+	case err != nil:
+		s.log.Printf("reconciliation: the subordinate coordinator of domain %s (session %s) reads %s and is placed as the survivor leading group %d, unverified: %v",
+			d.Domain, ref, liveness, placed.Group, err)
+	default:
+		s.log.Printf("reconciliation: the subordinate coordinator of domain %s (session %s) reads %s and is placed as the survivor leading group %d",
+			d.Domain, ref, liveness, placed.Group)
+	}
+}
+
 // domainBoundPrefix is the key space of the holds the relaunch bound raises
 // for a delegation, beside the task holds' key spaces.
 const domainBoundPrefix = "/relaunch-bound/"
 
 // domainBoundKey is the key of the hold the relaunch bound raises for a
 // domain's delegation attempt, on relaunchBoundKey's terms: keyed by the
-// attempt that reached the bound, so the same attempt found past the bound
-// at every later pass is the same hold and a later attempt is a new key.
-func domainBoundKey(domain string, attempt int64) string {
-	return "domain/" + domain + domainBoundPrefix + strconv.FormatInt(attempt, 10)
+// delegation and the attempt that reached the bound, so the same attempt
+// found past the bound at every later pass is the same hold, a later
+// attempt is a new key, and a later delegation of the same domain reaching
+// the same attempt number is a new key too, so an answer given to one
+// delegation's hold is never read as an answer to another's.
+func domainBoundKey(d store.Delegation, attempt int64) string {
+	return "domain/" + d.Domain + domainBoundPrefix + strconv.FormatInt(d.ID, 10) + "/" + strconv.FormatInt(attempt, 10)
 }
 
 // holdDomainBound registers the bound's hold for a delegation whose latest
@@ -734,7 +838,7 @@ func domainBoundKey(domain string, attempt int64) string {
 // unchanged, open or answered.
 func (s *Service) holdDomainBound(ctx context.Context, d store.Delegation, attempt int64, past string) (store.Hold, error) {
 	h, err := s.store.RegisterHold(ctx, store.Hold{
-		Key:     domainBoundKey(d.Domain, attempt),
+		Key:     domainBoundKey(d, attempt),
 		Subject: "whether to begin this domain's coordinator again after it ended as many times as the program begins it on its own",
 		Detail: fmt.Sprintf("domain %s (delegation %d): %s. Answer %q with --domain to begin its coordinator once more, "+
 			"or %q to end the delegation and take the domain's work back.",
@@ -816,7 +920,7 @@ func (s *Service) respondDomain(ctx context.Context, req ipc.Request, r machine.
 	if n := len(attempts); n > 0 {
 		latest = attempts[n-1].Sequence
 	}
-	key := domainBoundKey(r.Domain, latest)
+	key := domainBoundKey(d, latest)
 	hold, err := s.store.Hold(ctx, key)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && !hold.Open()) {
 		return machine.TaskAnswered{}, fmt.Errorf("%w: domain %s holds on nothing: its delegation's latest attempt %d has no open hold",

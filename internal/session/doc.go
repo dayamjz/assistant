@@ -165,6 +165,17 @@
 // environment, in a directory of the home's rather than a proven copy,
 // because a subordinate edits nothing and no isolation is asserted of it.
 //
+// Survivors is the placer for the subordinate a restart finds still
+// running: a service that restarts holds no session, so Subordinates is
+// empty while the process the delegation attempt's recorded reference names
+// may still reach the socket. Survivors.Adopt derives a placement from that
+// record, which only a provider here wrote, and the kernel's presence read
+// of the process by identifier and start time, and Member reads the presence
+// again at every ask, so the placement ends with the process. It records no
+// host and, where no start time is read, cannot tell a reused identifier
+// from the survivor; both err toward the subordinate, the side that claims
+// less, and its own doc states both.
+//
 // # The tmux provider
 //
 // Tmux hosts each worker as the one process of a tmux server of its own,

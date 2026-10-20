@@ -325,6 +325,12 @@ type Service struct {
 	// launched's terms: this service's memory, with the delegation attempt
 	// carrying the reference, ended by Close and by domain.end.
 	delegated map[string]launchedWorker
+	// survivors is the placer for the subordinate coordinators that
+	// outlived the service that started them, adopted by recovery from the
+	// delegation attempts' recorded references on session.Survivors' terms
+	// and asked after every held set; subordinates.go owns the adoption and
+	// the end.
+	survivors *session.Survivors
 	// wakeBell is rung when the supervisor loop appends a wake, so an armed
 	// wakes.wait reads the queue again; wakewait.go owns it and says why it
 	// is a hint and never a record.
@@ -542,6 +548,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		claiming:   make(map[string]bool),
 		launched:   make(map[string]launchedWorker),
 		delegated:  make(map[string]launchedWorker),
+		survivors:  session.NewSurvivors(),
 		starting:   make(map[branchKey]*branchGate),
 		stopping:   make(chan struct{}),
 

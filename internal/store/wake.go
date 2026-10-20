@@ -579,6 +579,35 @@ func (s *Store) QueuedWakesFor(ctx context.Context, limit int, route WakeRoute) 
 	return out, nil
 }
 
+// WakeRouted reports whether a drain made now on route would ever offer
+// the named wake: the same routing a drain, OfferedWakes and QueuedWakesFor
+// apply, read for one row, whether the row is queued or closed. It is the
+// read a push to a coordinator's stream makes before pushing, so the stream
+// carries exactly the rows the coordinator's drain would offer (P14). An
+// identifier no wake has is a *WakeIDError with ErrWakeUnknown.
+func (s *Store) WakeRouted(ctx context.Context, id int64, route WakeRoute) (bool, error) {
+	if err := s.live(); err != nil {
+		return false, err
+	}
+	routed, args := routeClause(route)
+	var n int
+	if err := s.read.QueryRowContext(ctx,
+		`SELECT count(*) FROM wake JOIN task ON task.id = wake.task_id WHERE wake.id = ? AND `+routed,
+		append([]any{id}, args...)...).Scan(&n); err != nil {
+		return false, fmt.Errorf("store: reading whether wake %d is routed: %w", id, err)
+	}
+	if n == 0 {
+		var exists int
+		if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM wake WHERE id = ?`, id).Scan(&exists); err != nil {
+			return false, fmt.Errorf("store: reading wake %d: %w", id, err)
+		}
+		if exists == 0 {
+			return false, &WakeIDError{ID: id, Reason: ErrWakeUnknown}
+		}
+	}
+	return n > 0, nil
+}
+
 // WakeScope is what decides which coordinator a wake is for: the domain of
 // its task, read from the task row and stored on no wake row (P14), and its
 // kind.

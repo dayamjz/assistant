@@ -63,12 +63,14 @@ var coordinatorActions = []struct {
 	run      func(context.Context, *invocation) (any, error)
 }{
 	{"create", "", "Record a new task through intake; a task nothing blocks has its worker begun after the answer.", coordinatorCreate},
+	{"tasks", "[<task>]", "List fleet work with its resolved current state, or one task when it is named, as assistant tasks does.", coordinatorTasks},
 	{"message", "<task>", "Send the worker of a running task a message, recorded before it is written.", coordinatorMessage},
 	{"stop", "<task>", "End a task's worker, prove it ended, and hold the task for an answer.", coordinatorStop},
 	{"peek", "<task>", "Read a task's worker's recent output, redacted and bounded, and how to attach to its terminal.", coordinatorPeek},
 	{"relaunch", "<task>", "Begin a new attempt of a task whose worker is gone, in its own copy.", coordinatorRelaunch},
 	{"promote", "<task>", "Turn an investigation task into a delivery on a branch, in its own copy.", coordinatorPromote},
 	{"relayed", "<task>", "Record that a reported investigation's findings were relayed, which finishes it.", coordinatorRelayed},
+	{"answer", "<task>", "Answer the hold a task is waiting on, as assistant --task --answer does; a subordinate's ask is handed up.", coordinatorAnswer},
 	{"wakes", "", "With --json, drain the queued wakes, oldest first: hand them out, closing none; without it, list them and take none.", coordinatorWakes},
 	{"await", "", "Block until a wake is on offer or the bound elapses, then drain the queued wakes.", coordinatorAwait},
 	{"listen", "", "Hold the wake stream: print each wake as it is queued, until interrupted, handing out none.", coordinatorListen},
@@ -275,6 +277,49 @@ func coordinatorPromote(ctx context.Context, in *invocation) (any, error) {
 	var promoted machine.TaskPromoted
 	err = in.callService(ctx, ipc.MethodTaskPromote, request, &promoted)
 	return promoted, err
+}
+
+// coordinatorTasks is tasks.list, or task.get when a task is named: the
+// listing assistant tasks answers, under the coordinator verb so that a
+// subordinate coordinator, whose grant allows this verb's prefix alone,
+// reads its domain's tasks; the service scopes the listing to the caller's
+// domain from its placement and the request names none.
+func coordinatorTasks(ctx context.Context, in *invocation) (any, error) {
+	if err := in.parseArgs(coordinatorCommand("tasks"), 1, func(*flag.FlagSet) {}); err != nil {
+		return nil, err
+	}
+	if len(in.args) == 1 {
+		var task machine.Task
+		err := in.callService(ctx, ipc.MethodTaskGet, machine.TaskRequest{Task: in.args[0]}, &task)
+		return task, err
+	}
+	var tasks machine.Tasks
+	err := in.callService(ctx, ipc.MethodTasksList, nil, &tasks)
+	return tasks, err
+}
+
+// coordinatorAnswer is task.respond for the task named, the answer
+// assistant --task --answer gives, under the coordinator verb for
+// coordinatorTasks' reason: a subordinate coordinator asking it is refused
+// by the service and its ask recorded as a decision handed up, which is
+// the one way it asks for a hold's answer. --answer is required, --hold
+// names one hold where more than one is open, and --note rides on the
+// resolution; what an answer means is the service's, as it is for the
+// flag.
+func coordinatorAnswer(ctx context.Context, in *invocation) (any, error) {
+	var answer, hold, note string
+	task, err := in.taskOperand(coordinatorCommand("answer"), func(set *flag.FlagSet) {
+		set.StringVar(&answer, "answer", "", "the answer to the hold the task is waiting on")
+		set.StringVar(&hold, "hold", "", "which open hold is answered, by key or finding id, where more than one is open")
+		set.StringVar(&note, "note", "", "a note recorded with the resolution")
+	})
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(answer) == "" {
+		return nil, usagef("assistant %s names the answer with --answer", coordinatorCommand("answer"))
+	}
+	return in.answerTask(ctx, task, answer, hold, note)
 }
 
 // coordinatorRelayed is task.relay: the coordinator's record that it relayed

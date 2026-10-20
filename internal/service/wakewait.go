@@ -19,9 +19,11 @@ import (
 // # The push
 //
 // wakes.subscribe is the coordinator's wake stream. Every row the supervisor
-// loop appends is pushed on it by publishWake, from the loop's record, after
-// the write that appended it committed, so a coordinator holding the stream
-// is woken without asking again. The stream's publisher is this service's
+// loop appends that the coordinator's drain would offer is pushed on it by
+// publishWake, from the loop's record, after the write that appended it
+// committed and on the same route the drain is made on, so a coordinator
+// holding the stream is woken without asking again and never by a row that
+// is a domain's subordinate's (P14). The stream's publisher is this service's
 // wakes and never events, which is open to every caller; internal/ipc opens
 // the stream only after admitWakeStream, wakes.list's worker refusal, has
 // admitted the caller, so a task's worker is never sent a wake. The event is
@@ -283,7 +285,7 @@ func (s *Service) wakeHandout(req ipc.Request, p placedPeer) store.WakeHandout {
 // has already refused a contained caller, and this refuses a task's worker
 // on wakes.list's terms and a subordinate coordinator with
 // ipc.ErrSubordinate, on subordinates.go's terms: the stream is one
-// publisher that pushes every row and counts as the coordinator's
+// publisher that pushes every row of the coordinator's partition and counts as the coordinator's
 // attachment, so it is the coordinator's alone in this build. It returns
 // nil to admit, and the stream itself is internal/ipc's to open and pump.
 func (s *Service) admitWakeStream(req ipc.Request) error {
@@ -292,13 +294,28 @@ func (s *Service) admitWakeStream(req ipc.Request) error {
 }
 
 // publishWake pushes a row the loop appended to the coordinator's wake
-// stream, as ipc.TypeWakeQueued with the row's identifier as its revision.
-// A publication is not a record: a payload that cannot be encoded or
-// published is logged, and the row is still queued for a drain to take. A
-// service with no wake publisher, which Open never builds and this
-// package's internal tests build by hand, publishes nothing.
-func (s *Service) publishWake(w store.Wake) {
+// stream, as ipc.TypeWakeQueued with the row's identifier as its revision,
+// when the row is one the coordinator's drain would offer: the stream is
+// the first coordinator's alone, so the push is made on the same route its
+// drain is made on, read through store.WakeRouted in the row's own task
+// and delegation rows, and a row routed to a domain's subordinate is not
+// pushed (P14). A publication is not a record: a payload that cannot be
+// encoded or published is logged, and the row is still queued for a drain
+// to take; a route that cannot be read is logged and nothing is pushed,
+// since a push that might be another coordinator's is the one error the
+// stream cannot take back. A service with no wake publisher, which Open
+// never builds and this package's internal tests build by hand, publishes
+// nothing.
+func (s *Service) publishWake(ctx context.Context, w store.Wake) {
 	if s.wakes == nil {
+		return
+	}
+	routed, err := s.store.WakeRouted(ctx, w.ID, wakeRouteOf(placedPeer{}))
+	switch {
+	case err != nil:
+		s.log.Printf("could not read whether wake %d of task %s is the coordinator's, so it is not pushed: %v", w.ID, w.TaskID, err)
+		return
+	case !routed:
 		return
 	}
 	payload, err := json.Marshal(w)
