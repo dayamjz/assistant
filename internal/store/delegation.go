@@ -600,3 +600,123 @@ func scanEscalation(sc scanner) (Escalation, error) {
 	}
 	return e, nil
 }
+
+// RegisterDelegationHold registers a hold about a delegation only while the
+// delegation stands, reading it in the transaction that inserts the hold,
+// on RegisterHold's terms otherwise: a key already registered is returned
+// unchanged, resolved or not. A delegation that has ended is refused with
+// ErrDelegationEnded and nothing is written, so a pass that read the
+// delegation standing and registers after its end cannot leave a hold that
+// waits on a delegation nothing can act on; an unknown delegation is
+// ErrNotFound, wrapped.
+func (s *Store) RegisterDelegationHold(ctx context.Context, id int64, h Hold) (Hold, error) {
+	if err := validateHold(h); err != nil {
+		return Hold{}, err
+	}
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		d, err := delegationByID(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if !d.Standing() {
+			return fmt.Errorf("%w: delegation %d of domain %s", ErrDelegationEnded, id, d.Domain)
+		}
+		return insertHold(ctx, tx, h)
+	})
+	if err != nil {
+		if errors.Is(err, ErrDelegationEnded) {
+			return Hold{}, err
+		}
+		return Hold{}, fmt.Errorf("store: registering hold %s on delegation %d: %w", h.Key, id, err)
+	}
+	return s.Hold(ctx, h.Key)
+}
+
+// DelegationHoldAnswer is an answer to a hold about a delegation, and the
+// end it carries out, if any, as AnswerDelegationHold records them.
+type DelegationHoldAnswer struct {
+	// Key is the hold answered.
+	Key string
+	// Resolution is the answer, refused empty with ErrNoResolution.
+	Resolution string
+	// Note is free text recorded with the resolution, redacted, and empty
+	// leaves ResolutionNote unknown.
+	Note string
+	// By is who answered, refused as the zero Resolver.
+	By Resolver
+	// End is why the delegation ends with the answer, and the zero value
+	// for an answer that leaves it standing.
+	End DelegationEnd
+}
+
+// AnswerDelegationHold records the answer to a hold about a standing
+// delegation and, when the answer carries an end, the delegation's end, in
+// one transaction, so an answer that ends the delegation is never recorded
+// without the end nor the end without the answer: a crash leaves both or
+// neither. A delegation that has ended is refused with ErrDelegationEnded,
+// an open hold the key does not name with ErrNotFound and a resolved one
+// with ErrHoldResolved, all wrapped, and every refusal writes nothing. It
+// returns the hold and the delegation as stored.
+func (s *Store) AnswerDelegationHold(ctx context.Context, id int64, a DelegationHoldAnswer) (Hold, Delegation, error) {
+	if strings.TrimSpace(a.Resolution) == "" {
+		return Hold{}, Delegation{}, fmt.Errorf("%w: hold %s", ErrNoResolution, a.Key)
+	}
+	resolver, err := resolverText(a.By)
+	if err != nil {
+		return Hold{}, Delegation{}, fmt.Errorf("store: answering hold %s: %w", a.Key, err)
+	}
+	var why string
+	if a.End != (DelegationEnd{}) {
+		if why, err = delegationEndText(a.End); err != nil {
+			return Hold{}, Delegation{}, fmt.Errorf("store: answering hold %s: %w", a.Key, err)
+		}
+	}
+	var noteCol any
+	if strings.TrimSpace(a.Note) != "" {
+		noteCol = s.redact.Redact(a.Note)
+	}
+	var out Delegation
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		d, err := delegationByID(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if !d.Standing() {
+			return fmt.Errorf("%w: delegation %d of domain %s", ErrDelegationEnded, id, d.Domain)
+		}
+		now := encodeTime(nowUTC())
+		result, err := tx.ExecContext(ctx,
+			`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE key = ? AND resolution IS NULL`,
+			a.Resolution, now, resolver, noteCol, a.Key)
+		if err != nil {
+			return err
+		}
+		if n, err := result.RowsAffected(); err != nil {
+			return err
+		} else if n != 1 {
+			var existing Optional[string]
+			switch err := tx.QueryRowContext(ctx, `SELECT resolution FROM hold WHERE key = ?`, a.Key).Scan(&existing); {
+			case isNoRows(err):
+				return fmt.Errorf("%w: hold %s", ErrNotFound, a.Key)
+			case err != nil:
+				return err
+			}
+			return fmt.Errorf("%w with %s", ErrHoldResolved, existing.Or(""))
+		}
+		if why != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE delegation SET ended_at = ?, end_reason = ? WHERE id = ?`, now, why, id); err != nil {
+				return err
+			}
+		}
+		out, err = delegationByID(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return Hold{}, Delegation{}, fmt.Errorf("store: answering hold %s on delegation %d: %w", a.Key, id, err)
+	}
+	h, err := s.Hold(ctx, a.Key)
+	if err != nil {
+		return Hold{}, Delegation{}, err
+	}
+	return h, out, nil
+}

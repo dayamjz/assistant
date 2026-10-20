@@ -477,3 +477,48 @@ func TestADelegationsEndAnswersTheHoldsItNamesInItsTransaction(t *testing.T) {
 		t.Fatalf("answered-one reads %+v (%v), want its own answer kept", h, err)
 	}
 }
+
+// AnswerDelegationHold's answer and end are one transaction: with the
+// delegation's end made to fail inside the transaction, by a trigger this
+// test installs on the table, the answer is rolled back with it and the
+// hold reads open, so no failure between the two leaves a hold answered
+// stop beside a delegation still standing. With the trigger dropped, the
+// same call records both, the positive control. Two transactions in
+// sequence would leave the hold answered here.
+func TestAnAnswerThatEndsADelegationIsWrittenWithTheEndOrNotAtAll(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s := openStore(t)
+	d, err := s.Delegate(ctx, DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RegisterDelegationHold(ctx, d.ID, Hold{Key: "bound", Subject: "whether"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.write.ExecContext(ctx, `CREATE TEMP TRIGGER fail_the_end BEFORE UPDATE OF ended_at ON delegation
+		BEGIN SELECT RAISE(ABORT, 'the end fails'); END`); err != nil {
+		t.Fatal(err)
+	}
+	answer := DelegationHoldAnswer{Key: "bound", Resolution: "stop", By: ResolvedByMachineInterface(), End: EndedByAnswer()}
+	if _, _, err := s.AnswerDelegationHold(ctx, d.ID, answer); err == nil {
+		t.Fatal("the answer succeeded with its end failing")
+	}
+	if h, err := s.Hold(ctx, "bound"); err != nil || !h.Open() {
+		t.Fatalf("after the failed end the hold reads %+v (%v), want it still open", h, err)
+	}
+	if _, err := s.write.ExecContext(ctx, `DROP TRIGGER fail_the_end`); err != nil {
+		t.Fatal(err)
+	}
+	h, ended, err := s.AnswerDelegationHold(ctx, d.ID, answer)
+	if err != nil || h.Open() || ended.Standing() || ended.EndedBy.Or(DelegationEnd{}) != EndedByAnswer() {
+		t.Fatalf("AnswerDelegationHold = %+v, %+v, %v; want the hold answered and the delegation ended by it", h, ended, err)
+	}
+	if _, err := s.RegisterDelegationHold(ctx, d.ID, Hold{Key: "late", Subject: "whether"}); !errors.Is(err, ErrDelegationEnded) {
+		t.Fatalf("registering on the ended delegation = %v, want ErrDelegationEnded", err)
+	}
+	if _, err := s.Hold(ctx, "late"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the refused registration wrote a hold: %v", err)
+	}
+}

@@ -945,9 +945,13 @@ func domainOfBoundKey(key string) (string, bool) {
 // holdDomainBound registers the bound's hold for a delegation whose latest
 // attempt is past relaunch_attempts, on holdAtBound's terms, and publishes
 // it as it stands. Registering a key already there returns that hold
-// unchanged, open or answered.
+// unchanged, open or answered. The hold is registered through
+// store.RegisterDelegationHold, which reads the delegation in the
+// registering transaction and refuses ErrDelegationEnded for one that has
+// ended, so a pass or a reconciliation that read the delegation standing
+// and lost the race to domain.end registers nothing nobody could answer.
 func (s *Service) holdDomainBound(ctx context.Context, d store.Delegation, attempt int64, past string) (store.Hold, error) {
-	h, err := s.store.RegisterHold(ctx, store.Hold{
+	h, err := s.store.RegisterDelegationHold(ctx, d.ID, store.Hold{
 		Key:     domainBoundKey(d, attempt),
 		Subject: "whether to begin this domain's coordinator again after it ended as many times as the program begins it on its own",
 		Detail: fmt.Sprintf("domain %s (delegation %d): %s. Answer %q with --domain to begin its coordinator once more, "+
@@ -999,8 +1003,10 @@ func (s *Service) acknowledgeSupersededDomain(ctx context.Context, d store.Deleg
 // retry begins the subordinate once more as a new attempt anchored to the
 // one the hold names, which spends the answer (P6), and acknowledges the
 // subordinate-gone rows about the attempt it replaced as the program; a
-// stop ends the delegation with store.EndedByAnswer, its one revision,
-// and ends the session this service holds for it.
+// stop ends the delegation with store.EndedByAnswer, its one revision, in
+// the same store transaction as the answer (store.AnswerDelegationHold),
+// so a crash never leaves the hold answered stop beside a delegation still
+// standing, and ends the session this service holds for it.
 func (s *Service) respondDomain(ctx context.Context, req ipc.Request, r machine.TaskRespondRequest) (machine.TaskAnswered, error) {
 	if _, err := s.refuseSubordinate(req); err != nil {
 		return machine.TaskAnswered{}, err
@@ -1039,21 +1045,20 @@ func (s *Service) respondDomain(ctx context.Context, req ipc.Request, r machine.
 	if err != nil {
 		return machine.TaskAnswered{}, err
 	}
-	resolved, err := s.store.ResolveHoldNoted(ctx, key, r.Answer, r.Note, req.HoldResolver())
-	if errors.Is(err, store.ErrHoldResolved) {
-		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+	answer := store.DelegationHoldAnswer{Key: key, Resolution: r.Answer, Note: r.Note, By: req.HoldResolver()}
+	if r.Answer == machine.AnswerStop {
+		answer.End = store.EndedByAnswer()
 	}
-	if err != nil {
+	resolved, ended, err := s.store.AnswerDelegationHold(ctx, d.ID, answer)
+	switch {
+	case errors.Is(err, store.ErrHoldResolved), errors.Is(err, store.ErrDelegationEnded):
+		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+	case err != nil:
 		return machine.TaskAnswered{}, err
 	}
 	s.publishHoldState(resolved)
 	out := machine.TaskAnswered{Hold: resolved, Effect: machine.AnswerRecorded, Domain: r.Domain}
 	if r.Answer == machine.AnswerStop {
-		ended, _, err := s.store.EndDelegation(ctx, d.ID, store.EndedByAnswer(), store.DelegationEndClosure{})
-		if err != nil {
-			return machine.TaskAnswered{}, fmt.Errorf("service: domain %s's hold was answered %q and the delegation could not be ended: %w",
-				r.Domain, r.Answer, err)
-		}
 		s.endSubordinate(r.Domain, ended.ID)
 		s.log.Printf("the delegation of domain %s (delegation %d) was ended by the answer %q to hold %s", r.Domain, ended.ID, r.Answer, key)
 		out.Effect = machine.AnswerStopped

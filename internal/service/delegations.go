@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -264,6 +265,12 @@ func (s *Service) superviseDelegation(c *incarnation, d store.Delegation, now ti
 		ctx, cancel = s.sup.bound(c.ctx)
 		h, err := s.holdDomainBound(ctx, d, o.attempt, past)
 		cancel()
+		if errors.Is(err, store.ErrDelegationEnded) {
+			// domain.end landed after this pass read the delegation
+			// standing: nothing is registered, and the ended delegation is
+			// no longer this loop's to surface.
+			return taskReport{Watched: true}
+		}
 		if err != nil {
 			return taskReport{Watched: true, Err: err}
 		}

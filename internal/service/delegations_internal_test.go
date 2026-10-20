@@ -1,8 +1,11 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -421,5 +425,128 @@ func TestADomainsBoundHoldIsAnsweredGivenTheDomainAndClosedByItsEnd(t *testing.T
 	}
 	if w := waitingOn(); w != nil {
 		t.Fatalf("after the end catch-up still lists the hold: %+v", w)
+	}
+}
+
+// probeGated is scriptedTerminals whose probe of one reference blocks once,
+// after the test arms it, until the test releases it, so a pass can be
+// held between its probe and the writes it decides from that probe.
+type probeGated struct {
+	*scriptedTerminals
+	ref              string
+	armed            atomic.Bool
+	entered, release chan struct{}
+}
+
+func (g *probeGated) Probe(ctx context.Context, ref string) session.Observation {
+	if ref == g.ref && g.armed.CompareAndSwap(true, false) {
+		close(g.entered)
+		<-g.release
+	}
+	return g.scriptedTerminals.Probe(ctx, ref)
+}
+
+// A pass that read a delegation standing and probed its session dead does
+// not register the relaunch bound's hold once domain.end has ended the
+// delegation meanwhile: with relaunch_attempts at zero the pass is held in
+// its probe, the delegation is ended, and the released pass registers
+// nothing and reports no failure, because the hold is registered in a
+// transaction that reads the delegation again (P6). A registration that
+// trusted the pass's own read would leave an open hold that respondDomain,
+// answering only a standing delegation's, could never close.
+func TestAPassThatLostTheRaceToTheEndRegistersNoBoundHold(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	h, records := loopHomeConfigured(t, `{"supervision_beacon_interval": "1s", "escalation_window": "1m", "relaunch_attempts": 0}`)
+	terminals := &probeGated{scriptedTerminals: newScriptedTerminals(), ref: "sub-raced",
+		entered: make(chan struct{}), release: make(chan struct{})}
+	terminals.dead("sub-raced")
+	clock := &fakeClock{now: time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)}
+	l := openLoop(t, h, records, terminals, clock)
+	defer func() { _ = l.service.Close() }()
+	ctx := t.Context()
+	l.nextPass(t)
+	d := plantDelegation(t, l.records(t), "alpha", "sub-raced")
+	terminals.armed.Store(true)
+	reports := make(chan passReport, 1)
+	go func() { reports <- l.pass(t) }()
+	select {
+	case <-terminals.entered:
+	case <-time.After(loopWait):
+		t.Fatal("the pass never probed the delegation's session")
+	}
+	if _, _, err := l.records(t).EndDelegation(ctx, d.ID, store.EndedByCoordinator(), store.DelegationEndClosure{}); err != nil {
+		t.Fatal(err)
+	}
+	close(terminals.release)
+	report := <-reports
+	if err := report.Delegations["alpha"].Err; err != nil {
+		t.Fatalf("the pass over the ended delegation failed: %v", err)
+	}
+	if _, err := l.records(t).Hold(ctx, domainBoundKey(d, 1)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the bound's hold after the end = %v, want none registered", err)
+	}
+	if _, err := l.records(t).RegisterDelegationHold(ctx, d.ID, store.Hold{Key: "control", Subject: "x"}); !errors.Is(err, store.ErrDelegationEnded) {
+		t.Fatalf("registering on the ended delegation = %v, want ErrDelegationEnded", err)
+	}
+}
+
+// A stop answered on a domain's bound hold and the delegation's end are
+// one store transaction: store.AnswerDelegationHold records both or
+// neither, so no crash between them can leave the hold answered beside a
+// standing delegation. The answer reads back resolved and the delegation
+// ended by the answer; a second answer is refused with ErrDelegationEnded
+// and writes nothing; and a refused answer, a resolved hold on a standing
+// delegation, leaves the delegation standing, the positive control for the
+// end riding on the answer.
+func TestAStopAnswerAndTheDelegationsEndAreOneWrite(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	h, records := loopHomeConfigured(t, `{"supervision_beacon_interval": "1s", "escalation_window": "1m", "relaunch_attempts": 0}`)
+	d := plantDelegation(t, records, "alpha", "sub-crashed")
+	terminals := newScriptedTerminals()
+	terminals.dead("sub-crashed")
+	clock := &fakeClock{now: time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)}
+	l := openLoop(t, h, records, terminals, clock)
+	defer func() { _ = l.service.Close() }()
+	ctx := t.Context()
+	l.nextPass(t)
+	key := domainBoundKey(d, 1)
+	if hold, err := l.records(t).Hold(ctx, key); err != nil || !hold.Open() {
+		t.Fatalf("the bound's hold reads %+v (%v), want it open", hold, err)
+	}
+	// The positive control: a stop on a hold already answered is refused,
+	// and the delegation is left standing with it.
+	if _, err := l.records(t).RegisterHold(ctx, store.Hold{Key: "answered", Subject: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.records(t).ResolveHold(ctx, "answered", "retry", store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := l.records(t).AnswerDelegationHold(ctx, d.ID, store.DelegationHoldAnswer{
+		Key: "answered", Resolution: machine.AnswerStop, By: store.ResolvedByMachineInterface(), End: store.EndedByAnswer(),
+	}); !errors.Is(err, store.ErrHoldResolved) {
+		t.Fatalf("a stop on an answered hold = %v, want ErrHoldResolved", err)
+	}
+	if latest, _, err := l.records(t).Delegation(ctx, "alpha"); err != nil || !latest.Standing() {
+		t.Fatalf("after the refused answer the delegation reads %+v (%v), want it standing", latest, err)
+	}
+
+	answered, err := l.service.respondDomain(ctx, ipc.Request{}, machine.TaskRespondRequest{Domain: "alpha", Answer: machine.AnswerStop})
+	if err != nil || answered.Effect != machine.AnswerStopped {
+		t.Fatalf("the stop = %+v, %v; want the delegation stopped", answered, err)
+	}
+	hold, err := l.records(t).Hold(ctx, key)
+	if err != nil || hold.Resolution.Or("") != machine.AnswerStop {
+		t.Fatalf("the hold reads %+v (%v), want it answered stop", hold, err)
+	}
+	ended, err := l.records(t).DelegationByID(ctx, d.ID)
+	if err != nil || ended.Standing() || ended.EndedBy.Or(store.DelegationEnd{}) != store.EndedByAnswer() {
+		t.Fatalf("the delegation reads %+v (%v), want it ended by the answer", ended, err)
+	}
+	if _, _, err := l.records(t).AnswerDelegationHold(ctx, d.ID, store.DelegationHoldAnswer{
+		Key: key, Resolution: machine.AnswerStop, By: store.ResolvedByMachineInterface(), End: store.EndedByAnswer(),
+	}); !errors.Is(err, store.ErrDelegationEnded) {
+		t.Fatalf("a second stop = %v, want ErrDelegationEnded", err)
 	}
 }
