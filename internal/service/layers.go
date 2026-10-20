@@ -62,7 +62,9 @@ import (
 // A document that was read and decided against is a refusal the caller must
 // handle, and refusedConfig is the one place that says so: a trusted or a
 // pushed copy internal/config refused (config.ErrMalformed, ErrInvalid or
-// ErrLoosened beneath ErrTrustedConfig or ErrPushedConfig), and an agent
+// ErrLoosened beneath ErrTrustedConfig or ErrPushedConfig), a knowledge
+// document internal/knowledge refused at the trusted copy (ErrTooLarge or
+// ErrNotText beneath ErrTrustedConfig, knowledge.go), and an agent
 // list or a roles table this build cannot honour, cross as ipc.ErrRefused
 // with their own text. A copy that could not be read at all - a default
 // branch the record does not name, a fetch or a read of the gate repository
@@ -360,13 +362,16 @@ func (c configRefused) Unwrap() []error { return []error{ipc.ErrRefused, c.err} 
 // refusedConfig classifies a failure to establish a run's configuration for
 // the wire, on the terms the file's opening comment states: a document that
 // was read and refused becomes configRefused, and every other failure is
-// returned as it is. A refusal is recognized by internal/config's own refusal
-// classes beneath this file's two copy classes, so a failed fetch or read,
-// which wraps ErrTrustedConfig with no config refusal beneath it, is not one.
+// returned as it is. A refusal is recognized by internal/config's and
+// internal/knowledge's own refusal classes beneath this file's two copy
+// classes, so a failed fetch or read, which wraps ErrTrustedConfig with no
+// document refusal beneath it, is not one.
 func refusedConfig(err error) error {
 	documentRefused := errors.Is(err, config.ErrMalformed) ||
 		errors.Is(err, config.ErrInvalid) ||
-		errors.Is(err, config.ErrLoosened)
+		errors.Is(err, config.ErrLoosened) ||
+		errors.Is(err, knowledge.ErrTooLarge) ||
+		errors.Is(err, knowledge.ErrNotText)
 	switch {
 	case errors.Is(err, ErrRepositoryAgent), errors.Is(err, ErrRepositoryRoles):
 		return configRefused{err}
