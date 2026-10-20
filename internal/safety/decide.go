@@ -22,11 +22,13 @@ type Update struct {
 	Anchor Observation
 	// Basis names the commits the run worked from: the commit submitted to
 	// it, and the commit an earlier update by the same run left on Target,
-	// where there was one. An update that is not a fast-forward is allowed
-	// only where every commit it drops is reachable from one of them, so
-	// what it drops is history the run held and rewrote rather than history
-	// somebody else put on the target. Empty means the run worked from
-	// nothing it can name, and then every such update is refused.
+	// where there was one. Guard.Decide allows an update that is not a
+	// fast-forward only where every commit it drops is reachable from one of
+	// them, so what it drops is history the run held and rewrote rather than
+	// history somebody else put on the target. Empty means the run worked
+	// from nothing it can name, and then Decide refuses every such update.
+	// Guard.DecideFastForward and Adoption.Decide do not read it: the first
+	// allows no drop, and the second allows one on its equivalence proof.
 	//
 	// Each entry is resolved in the local repository, so it has to exist
 	// there; one that does not is ReasonUnverifiable. Which commits a run
@@ -49,13 +51,15 @@ const (
 	KindFastForward Kind = "fast-forward"
 	// KindAnchoredForce is the target still names the commit the run
 	// observed, and the proposed commit does not contain it, so the update
-	// drops commits the branch holds, every one of which a commit in
-	// Update.Basis contains. Decision.Rewritten names every one of them.
+	// drops commits the branch holds. Decision.Rewritten names every one of
+	// them, and what licenses dropping them depends on which decision
+	// allowed it: Decision.Rewritten states both.
 	KindAnchoredForce Kind = "anchored-force"
 )
 
 // Decision is permission to perform one update, and it is only ever produced
-// by Decide. Its fields are unexported and it carries no setter, so a caller
+// by this package's three decisions: Guard.Decide, Guard.DecideFastForward
+// and Adoption.Decide. Its fields are unexported and it carries no setter, so a caller
 // cannot assemble one, and cannot widen one it was given into permission for a
 // different target or a different commit.
 //
@@ -100,13 +104,26 @@ func (d Decision) Anchor() Observation { return d.anchor }
 // not contain, and that this update therefore drops from the branch. It is
 // empty for KindCreate and KindFastForward.
 //
-// What is enforced is that the target still names the commit the run observed,
-// so the drop is anchored to a state the run saw, that every commit the update
-// drops is reachable from a commit in Update.Basis, and that every commit the
-// update drops is named here. Who wrote them is not established: a commit the
-// run's basis contains may have reached the target from anyone before the run
-// received it, and it is dropped because the run's own work rewrote it. A
-// caller reports this list; it does not have to act on it.
+// What is enforced for every producer is that the target still names the
+// commit the run observed, so the drop is anchored to a state the run saw, and
+// that every commit the update drops is named here. What licenses the drop is
+// the producer's, and the two that allow one guarantee different things:
+//
+//   - Through Guard.Decide, every commit dropped is reachable from a commit in
+//     Update.Basis, so it is history the run worked from and its own work
+//     rewrote. Its content is not checked: a rewrite that did not carry a
+//     commit's change forward drops that change.
+//   - Through Adoption.Decide, Update.Basis is not read, and a dropped commit
+//     need not be reachable from anything the run held. What it guarantees
+//     instead is the equivalence proof: merging the observed commit into the
+//     proposed one over their one merge base reproduces the proposed tree, so
+//     the net change the dropped commits brought, measured from that merge
+//     base, is already in the proposed tree. Their messages, authorship and
+//     commit boundaries are not kept.
+//
+// Guard.DecideFastForward allows no drop, so it never returns one. Who wrote
+// the dropped commits is not established by either. A caller reports this
+// list; it does not have to act on it.
 //
 // Each call returns a fresh slice, so a holder cannot edit the record of what
 // this decision drops.

@@ -103,9 +103,12 @@
 // target held when it was observed. A branch somebody else pushed to before
 // the run observed it is the case that leaves: the anchor names their commit,
 // the lease on it succeeds, and an update whose commit does not contain it
-// replaces it (#396). So the anchor answers only whether the target moved, and
-// the basis answers what the update may drop. A commit the target holds that
-// neither the proposed commit nor any basis commit contains is
+// replaces it (#396). So in Guard.Decide the anchor answers only whether the
+// target moved, and the basis answers what the update may drop.
+// Adoption.Decide answers that second question by its equivalence proof
+// instead and reads no basis, as the section on adopting a diverged head
+// says. A commit the target holds that neither the proposed commit nor any
+// basis commit contains is
 // ReasonWouldDiscard, named in Refusal.Discarded, on a target that did not
 // move. An empty basis refuses every anchored force, and a basis commit that
 // does not resolve is ReasonUnverifiable.
@@ -159,7 +162,9 @@
 // fast-forward: PRD section 11's diverged-but-equivalent row. It is allowed
 // only on Adoption.Prove's proof - a three-way merge over the one merge base
 // that reproduces the proposed tree - and adopt.go states what that proof
-// buys over patch identity and what it leaves.
+// buys over patch identity and what it leaves. It reads no Update.Basis, so a
+// commit it drops need not be one the run held: the proof is what licenses
+// the drop, and Decision.Rewritten states what each producer guarantees.
 //
 // # A refusal is a typed result
 //

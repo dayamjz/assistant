@@ -512,3 +512,50 @@ func kindsOf(steps []custody.Step) []custody.StepKind {
 	}
 	return out
 }
+
+// Adoption.Decide licenses a drop by content and not by the run's basis,
+// which is the exception internal/safety's Decision.Rewritten documents. The
+// branch stands at the person's commit A, and the proposed commit B is a
+// sibling of it on the same base with an identical tree, so A is not
+// reachable from B and the update drops A. With an empty Update.Basis the
+// adoption is allowed as an anchored force naming A as rewritten, because the
+// equivalence proof holds: merging A into B over their merge base changes
+// nothing.
+//
+// The control is Guard.Decide over the same update, which reads the basis
+// and refuses it as would-discard naming A, so the allowance above is the
+// adoption's proof and not a basis rule that let everything through.
+func TestAnAdoptionDropsBySiblingContentWithNoBasis(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newScenario(t)
+	tree := git(t, s.working, "rev-parse", s.submitted+"^{tree}")
+	sibling := git(t, s.working, "commit-tree", tree, "-p", s.base, "-m", "the same change, committed again")
+	if git(t, s.working, "rev-parse", sibling+"^{tree}") != tree {
+		t.Fatal("the sibling does not carry the person's tree")
+	}
+	w, _ := s.open(t)
+	anchor, err := safety.RestoreObservedFromCheckpoint(safety.ObservationRecord{
+		Remote: s.working, Ref: "refs/heads/feature", Exists: true, Commit: s.submitted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := safety.Update{Target: custody.TargetOf(s.working, "feature"), Proposed: sibling, Anchor: anchor}
+
+	decision, err := safety.NewAdoption(w).Decide(context.Background(), u, safety.Checkout{Here: true})
+	if err != nil {
+		t.Fatalf("adopting an identical sibling with no basis = %v, want allowed on the proof", err)
+	}
+	if decision.Kind() != safety.KindAnchoredForce || !slices.Equal(decision.Rewritten(), []string{s.submitted}) {
+		t.Fatalf("the adoption is %v dropping %v, want an anchored force dropping %s",
+			decision.Kind(), decision.Rewritten(), s.submitted)
+	}
+	if got := decision.Anchor().State().Commit; got != s.submitted {
+		t.Fatalf("the adoption is leased on %q, want the observed %s", got, s.submitted)
+	}
+
+	_, err = safety.New(w).Decide(context.Background(), u)
+	var r *safety.Refusal
+	if !errors.As(err, &r) || r.Reason != safety.ReasonWouldDiscard || !slices.Equal(r.Discarded, []string{s.submitted}) {
+		t.Fatalf("Guard.Decide over the same update = %v, want would-discard naming %s", err, s.submitted)
+	}
+}
