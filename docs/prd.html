@@ -134,7 +134,9 @@
     dispatches <b>workers</b> into isolated copies of your repositories, supervises them, and brings
     you only the decisions that genuinely need you. Every change a worker produces reaches a shared
     branch through the same <b>gate</b>, so "this was validated" means the same thing for every
-    change, in every repository, whether an agent or you wrote it.
+    change, in every repository, whether an agent or you wrote it. The coordinator may delegate a
+    named domain of tasks to a <b>subordinate coordinator</b> it starts in this home, which reports
+    to it and never to you.
   </p>
 
   <div class="grid gap-4 md:grid-cols-2 mb-8">
@@ -196,7 +198,8 @@
         <tr><td><b>worker</b></td><td>An autonomous agent working one task in one isolated copy of a repository. It never talks to you directly.</td></tr>
         <tr><td><b>delivery task</b></td><td>A task whose deliverable is a change to a project.</td></tr>
         <tr><td><b>investigation task</b></td><td>A task whose deliverable is a written report. It creates no branch and opens no pull request.</td></tr>
-        <tr><td><b>delegate coordinator</b></td><td>A persistent worker that is itself a coordinator, running in its own isolated home with its own state and its own scope. Optional.</td></tr>
+        <tr><td><b>subordinate coordinator</b></td><td>A host session the coordinator starts in this home, placed by the same credentials and lineage as a worker, holding the coordinator's commands over one domain's tasks and nothing else. It reports to the coordinator and never to you.</td></tr>
+        <tr><td><b>domain</b></td><td>A named set of tasks the coordinator has delegated to one subordinate coordinator. A task's domain is written once at intake; a task with none is the coordinator's own.</td></tr>
         <tr><td><b>the gate</b></td><td>A local bare repository that sits between your working copy and your real remote. You push to it by name.</td></tr>
         <tr><td><b>run</b></td><td>One pass of the validation pipeline over one branch.</td></tr>
         <tr><td><b>stage</b></td><td>One of the nine steps of a run. The order is fixed.</td></tr>
@@ -1211,6 +1214,8 @@ flowchart TD
   kind -->|"terminal gone"| esc
   kind -->|"a run moved to held"| esc
   kind -->|"message unacknowledged"| esc
+  kind -->|"subordinate gone"| esc
+  kind -->|"subordinate escalated"| esc
   kind -->|"no change"| abs["Absorb: advance markers, no model turn"]
   kind -->|"the program's own entry: queued, dispatched"| abs
   ev -->|yes| abs
@@ -1229,7 +1234,7 @@ flowchart TD
     <div class="card card-border bg-base-200">
       <div class="card-body">
         <h4 class="card-title text-sm">Absence of evidence surfaces</h4>
-        <p class="text-xs opacity-90">A wake is absorbed only when something positively proves work is proceeding. A worker that finished, crashed, or silently stopped produces no such proof, so it surfaces, unless its task resolves Reported, Landed, or Complete, as the end of this card says. Never absorb on elapsed time alone. The program's own intake and dispatch entries, <code>queued</code> and <code>dispatched</code>, are not a worker's wake at all: they record the program's own act, so they are absorbed and never wake the coordinator. Two kinds surface always and are never read as no change: terminal gone, which is a capture that failed, a probe that could not observe the terminal, or a terminal that died; and a run moved to held, which carries no worker event at all, because the supervisor that notices a stall is the one that notices a hold. A task that resolves Reported from its stored report is not watched for terminal gone: its worker has delivered, so a terminal that ends after the report is the work finishing, not a crash, and the report's own decisions reach you as holds. A task that resolves Landed or Complete is not watched for terminal gone either: its work is delivered, so a terminal that ends after that is the work finishing too.</p>
+        <p class="text-xs opacity-90">A wake is absorbed only when something positively proves work is proceeding. A worker that finished, crashed, or silently stopped produces no such proof, so it surfaces, unless its task resolves Reported, Landed, or Complete, as the end of this card says. Never absorb on elapsed time alone. The program's own intake and dispatch entries, <code>queued</code> and <code>dispatched</code>, are not a worker's wake at all: they record the program's own act, so they are absorbed and never wake the coordinator. Two kinds surface always and are never read as no change: terminal gone, which is a capture that failed, a probe that could not observe the terminal, or a terminal that died; and a run moved to held, which carries no worker event at all, because the supervisor that notices a stall is the one that notices a hold. A task that resolves Reported from its stored report is not watched for terminal gone: its worker has delivered, so a terminal that ends after the report is the work finishing, not a crash, and the report's own decisions reach you as holds. A task that resolves Landed or Complete is not watched for terminal gone either: its work is delivered, so a terminal that ends after that is the work finishing too. Two kinds are a subordinate coordinator's, and both surface always: subordinate gone, its terminal observed dead or not observable; and subordinate escalated, a decision it hands up because answering it is one of the commands it does not hold. Both reach the first coordinator and never the subordinate.</p>
       </div>
     </div>
     <div class="card card-border bg-base-200">
@@ -1247,7 +1252,7 @@ flowchart TD
     <div class="card card-border bg-base-200">
       <div class="card-body">
         <h4 class="card-title text-sm">A terminal-ish wait surfaces once</h4>
-        <p class="text-xs opacity-90">A worker that finished and is waiting on a merge, or that stopped on a blocker, surfaces once, then is absorbed even as its idle screen redraws, then surfaces again when something actually changes. Otherwise it storms every poll. A worker that crashed and is still silent is not absorbed for good: it surfaces again once per <code>escalation_window</code>, so a crash is never seen only once and still never storms. Acknowledging a resurfaced terminal-gone wake does not restart that spacing.</p>
+        <p class="text-xs opacity-90">A worker that finished and is waiting on a merge, or that stopped on a blocker, surfaces once, then is absorbed even as its idle screen redraws, then surfaces again when something actually changes. Otherwise it storms every poll. A worker that crashed and is still silent is not absorbed for good: it surfaces again once per <code>escalation_window</code>, so a crash is never seen only once and still never storms. Acknowledging a resurfaced terminal-gone wake does not restart that spacing. A subordinate coordinator whose terminal is gone is spaced the same way: subordinate gone surfaces once per <code>escalation_window</code> while it stays gone.</p>
       </div>
     </div>
   </div>
@@ -1266,7 +1271,7 @@ flowchart TD
     <table class="table table-sm table-zebra">
       <thead><tr><th class="w-48">Layer</th><th class="w-24">Direction</th><th>What it does</th></tr></thead>
       <tbody>
-        <tr><td><b>The live cycle</b></td><td>Active</td><td>The coordinator holds exactly one supervision wait whenever work is in flight, resumed as the last action of every turn.</td></tr>
+        <tr><td><b>The live cycle</b></td><td>Active</td><td>The coordinator holds exactly one supervision wait whenever work is in flight, resumed as the last action of every turn. With a domain delegated, that is one wait per domain: the subordinate coordinator's for its domain while the delegation stands and it is attached, and the coordinator's for everything else. P10's one live supervision cycle per home is unchanged by that, because the supervisor is the service's one loop and a wait is what each coordinator holds against it.</td></tr>
         <tr><td><b>Arm verification</b></td><td>Active</td><td>Starting the service confirms its supervisor is genuinely alive: the service writes its instance identity to a fresh beacon file, the probe checks that the same instance holds the home's lock, and the result is an honest started, attached, or failed. An unexplained exit of the loop is a typed failure, not silence.</td></tr>
         <tr><td><b>Pull guard</b></td><td>Passive</td><td>Ordinary commands warn when work is in flight and the supervisor has stopped, which the beacon and the lock probe decide, or when queued wakes are waiting to be drained.</td></tr>
         <tr><td><b>Stop guard</b></td><td>Push</td><td>The guard acts through a hook the coordinator's host invokes at turn end, which runs the command section 9 names beside <code>assistant gate</code>. When the coordinator tries to end a turn while work is in flight and no live supervisor holds this home's lock, the turn is blocked until the host supplies a re-entry signal; the host defines that signal, not this program. The guard reads the host's <code>stop_hook_active</code> field on its standard input as re-entry, and the environment variable <code>ASSISTANT_HOST_REENTRY</code> carries the signal for a host that supplies no such field. It is never forced into a counted follow-up turn: a turn count is a bound nothing here owns, so without a host-supplied re-entry signal the only safe reading is blocked. Installing that hook is a change to the host's configuration, which a push never consented to (P1): the installer prints the exact line the host's configuration needs and writes it only when given an explicit flag, so without that flag nothing in the host's configuration changes. The line is installed at the host's user scope.</td></tr>
@@ -1297,6 +1302,14 @@ flowchart TD
     registered worker group is refused, so no worker steers itself or a sibling, and who sent or
     stopped is derived from the surface the way who resolved a hold is, with no value meaning a
     person.
+  </p>
+  <p class="mb-4 opacity-90">
+    A caller is placed as the worker of a task, the subordinate coordinator of a domain, or
+    neither, from the credentials the socket reports and the caller's parent chain, never from
+    anything the caller says about itself; where placement cannot tell, each rule errs toward the
+    side that claims less. A subordinate coordinator may message, stop, and read the output of a
+    worker in its own domain, on the terms below, and is refused for a task outside it. Section 9
+    owns the whole of what a subordinate may ask and what it is refused.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
     <table class="table table-sm table-zebra">
@@ -1464,7 +1477,9 @@ flowchart TD
       posture.</li>
     <li><b>Tighten, never loosen.</b> At intake or promotion the coordinator may record a stricter posture than the
       project's, for work it judges risky. It may never record a lighter one, so no agent judgment
-      weakens the path a project declared.</li>
+      weakens the path a project declared. A subordinate coordinator records no posture: a task it
+      creates takes its delegation's, which was held to this same rule when the delegation was
+      written.</li>
     <li><b>Approving a <code>local</code> change.</b> The task holds for your approval. Answering
       approve fast-forwards your local default branch to the commit the worker pushed, anchored to
       the tip the program read and refused on anything that is not a fast-forward from it or that
@@ -1943,15 +1958,18 @@ flowchart TB
         <tr><td><b>stage result</b></td><td>Authoritative</td><td>Per stage: status, findings, duration, log path, last activity, and the effective fix limit.</td></tr>
         <tr><td><b>round</b></td><td>History</td><td>One row per stage execution. Findings, which findings were selected and by whom, the exact payload sent to the fixer, and the one-line summary. This is what the pull request narrative is generated from.</td></tr>
         <tr><td><b>checkpoint history</b></td><td>Authoritative, appended</td><td>One entry per position a run has stood in: state, the node it has not yet run, the status it stood in, the decision it is halted on when it is halted, the bound accounting, and, on an entry a fork produced, the entry it was copied from. Appended after every node and never revised. The entry with the highest sequence is where the run stands, and it is the only record that answers that.</td></tr>
-        <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, launch notation (how the worker was started), the role it runs under (the name only, recorded at intake and kept by promotion and relaunch), delivery posture (recorded at intake or promotion, in a field of its own), isolated copy path, session reference, linked run, linked pull request. Each attempt also records, once at launch, the knowledge revision its worker was told: the default-branch commit and the digest of section 10's project knowledge document there, a known commit with no digest meaning the branch held none, and never the text.</td></tr>
+        <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, launch notation (how the worker was started), the role it runs under (the name only, recorded at intake and kept by promotion and relaunch), delivery posture (recorded at intake or promotion, in a field of its own), domain (written once at intake from the creator's placement, kept by promotion and relaunch; empty means the first coordinator's own, which is what every row written before the field reads as), isolated copy path, session reference, linked run, linked pull request. Each attempt also records, once at launch, the knowledge revision its worker was told: the default-branch commit and the digest of section 10's project knowledge document there, a known commit with no digest meaning the branch held none, and never the text.</td></tr>
         <tr><td><b>task state</b></td><td>Resolved on read</td><td>Not a stored row. A resolution with its source attached, computed on each read from the records that own its facts, as of one consistent read of them; section 6 says what it rests on. Distinct from the event log, per P8.</td></tr>
         <tr><td><b>task event</b></td><td>History</td><td>Append-only. Every append is a wake.</td></tr>
-        <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write. Draining hands a row out; acknowledging closes it. The coordinator acknowledges a row after it has acted on it, and a row handed out and never acknowledged is handed out again: after a restart, and once the coordinator it was handed to is no longer attached. No row is deleted: closed rows are kept, and a row is actionable until acknowledged.</td></tr>
+        <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator, or by the subordinate coordinator of the task's domain for the kinds it can act on. A table here and not a directory, so a wake and its markers are one write. Draining hands a row out; acknowledging closes it. The coordinator that drained a row acknowledges it after it has acted on it, and a row handed out and never acknowledged is handed out again: after a restart, and once the coordinator it was handed to is no longer attached. No row is deleted: closed rows are kept, and a row is actionable until acknowledged. Which coordinator a wake reaches is decided by its kind, and every wake has exactly one recipient. While a delegation stands, a progress-class kind of a delegated task, one the subordinate can act on with the commands it holds, reaches the subordinate; a decision-class kind, one whose action the subordinate is refused, a hold among them, reaches the first coordinator. A wake's domain is derived from its task when it is drained and stored on no row.</td></tr>
         <tr><td><b>merge record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the code-host read that ends a run on a merge: the pull request, the head read, and when. The code host owns the merge; this is the program's record that it saw it. The run's <code>passed</code> on a merge and the task's Landed are both derived from this one record, and neither stores the fact again.</td></tr>
         <tr><td><b>local landing record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the approved fast-forward that delivers a <code>local</code> task: the task, the commit, the local default branch's tip before and after, and when. The task's Landed for a <code>local</code> task is derived from it, read in the same tier as the merge record.</td></tr>
         <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. A delivery task's Complete is derived from it; an investigation's Complete is derived from the record that its findings were relayed, never from this one. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>
         <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. One resolution the service makes itself is for the hold the checks stage raises when <code>checks_timeout</code> elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. The other is each answer section 9's standing consent gives, recorded under the resolver that consent has of its own. Every other hold keeps the rule.</td></tr>
         <tr><td><b>message</b></td><td>Authoritative, appended</td><td>One row per message sent to a worker: the task, the attempt, the text with credentials removed, and who sent it, derived from the surface. Each of written, refused, and acknowledged is recorded on it once and never revised, and it is the one place whether a message was delivered is read from. Section 6's steering says what writes each.</td></tr>
+        <tr><td><b>delegation</b></td><td>Authoritative, appended</td><td>One row per domain the coordinator delegated: the domain, the delivery posture its tasks take, held to intake's rule when the row was written, and the anchor the write was decided against. Written once; <code>ended_at</code> with a closed <code>end_reason</code> is its one revision, and a delegation stands until that revision is written. Nothing else ends one: not a restart, not a dropped connection, not a subordinate whose terminal is gone.</td></tr>
+        <tr><td><b>delegation attempt</b></td><td>Authoritative, appended</td><td>One row per start of a domain's subordinate coordinator, with its session reference, sealed. A relaunch is a new row anchored to the attempt history it read, bounded by <code>relaunch_attempts</code> on section 11's terms.</td></tr>
+        <tr><td><b>escalation</b></td><td>Authoritative, appended</td><td>One row per decision a subordinate coordinator hands up to the first coordinator, sealed. It is raised as a wake of its own kind, subordinate escalated, which section 6's flowchart surfaces always.</td></tr>
         <tr><td><b>seen mark</b></td><td>Authoritative, appended</td><td>One row per merge or cleanup record you were shown and marked seen, keyed the way that record is keyed. One per home. It is what section 9's catch-up reads to decide what landed since you last looked, and nothing else reads it.</td></tr>
         <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, the model provider, model type, and model version the launch was asked for, the model identifier the adapter started, the role and the effort of the launch, timing, failure category, token usage, and the run and stage it served where it served one. Never prompts, outputs, diffs, or credentials. The run, the stage, the role, the provider, the type, the version, and the effort were added later, so a row written before one of them reads that one as unknown, never as a guess. A provider, a type, a version, or an effort that was not named is recorded as not named, and is never stored as one of the named values.</td></tr>
       </tbody>
@@ -2005,7 +2023,9 @@ flowchart TB
         decided by the program on consent you gave in advance. The value meaning a person decided cannot be produced
         by any path an agent reaches, on any surface. An agent driving the machine interface resolves
         holds with the same options and the same authority as you, per section 9; what it cannot do
-        is produce a record saying a person decided.
+        is produce a record saying a person decided. A subordinate coordinator is no member of the
+        set and never resolves a hold: a hold waits on a person, its answer is refused before
+        anything is written, and the set gains no value for it.
       </p>
       <p class="text-sm opacity-90 mt-2">
         This records, it does not gate. Nothing reads the value to decide whether a resolution is
@@ -2242,6 +2262,29 @@ flowchart TB
     coordinator-only for the same reason. Section 6's steering owns what each does and what proves
     it happened. The relaunch after a stop is no new method: it is the answer to the stop's hold.
   </p>
+  <p class="mb-4 opacity-90">
+    Delegating a domain and ending a delegation are two more service methods on the same terms,
+    <code>domain.delegate</code> and <code>domain.end</code>, and coordinator-only: the first
+    writes section 8's delegation record and starts the domain's subordinate coordinator, and the
+    second writes that record's one revision. A subordinate coordinator is placed the way a worker
+    is. From the credentials the socket reports and the caller's parent chain, the service places a
+    caller as the worker of a task, the subordinate of a domain, or neither, never from anything the
+    caller says about itself, and where it cannot tell it errs toward the side that claims less.
+    That placement is a relation the service decides over the same credentials, not a third access
+    class.
+  </p>
+  <p class="mb-4 opacity-90">
+    Within its domain a subordinate coordinator is admitted to: creating a task, whose domain is
+    written from the placement and which no request field names; messaging, stopping, and reading
+    the recent output of a worker; relaunching a task; recording that a reported investigation's
+    findings were relayed; listing, awaiting, subscribing to, and acknowledging the wake queue, for
+    its domain's rows alone; and arm verification. It is refused, with a typed refusal naming it as
+    a subordinate: promoting a task; answering a hold, because a hold waits on a person; marking
+    the catch-up read seen; starting, rerunning, or cancelling a run; synchronizing a branch;
+    stopping or restarting the service; and the two delegation methods. A task outside its domain
+    is refused with a typed refusal of its own. It records no delivery posture: a task it creates
+    takes its delegation's, as section 6 says.
+  </p>
   <p class="mb-8 opacity-90">
     These methods, with listing, awaiting, and acknowledging the wake queue, reading a worker's
     recent output, recording that a reported investigation's findings were relayed, and arm
@@ -2256,7 +2299,10 @@ flowchart TB
     What is reached beside the table rather than as a verb is two clients. The coordinator client's
     subcommands are <code>create</code>, <code>message</code>, <code>stop</code>, <code>peek</code>,
     <code>relaunch</code>, <code>promote</code>, <code>relayed</code>, <code>wakes</code>,
-    <code>await</code>, <code>acknowledge</code>, and <code>supervision</code>. <code>await</code> blocks until the wake
+    <code>await</code>, <code>acknowledge</code>, <code>supervision</code>, <code>delegate</code>,
+    and <code>end-delegation</code>. <code>delegate</code> is <code>domain.delegate</code> and
+    <code>end-delegation</code> is <code>domain.end</code>, each one service method, coordinator-only,
+    and refused for a subordinate coordinator as for a worker. No verb is added. <code>await</code> blocks until the wake
     queue holds a wake on offer to the caller, or until a bound the caller gives elapses, and then
     hands those wakes out, acknowledging nothing: only <code>acknowledge</code> closes one, and when
     a wake handed out is handed out again is section 8's <code>wake</code> row. <code>wakes</code>
@@ -2744,6 +2790,7 @@ flowchart TB
       <thead><tr><th class="w-52">Situation</th><th>Response</th></tr></thead>
       <tbody>
         <tr><td>Terminal gone, work not landed</td><td>Preserve the isolated copy. Prove no live process owns it, then relaunch in that same copy with the same instructions plus a note about what already happened. Never a fresh generic launch while the copy is unaccounted for. Where the platform has no sweep, that proof cannot be made, so the relaunch is refused and goes ahead only on your answer to retry it, given to the hold the refusal raises on the task with <code>--task</code> and <code>--answer</code>, as at the relaunch bound (P6). A task that resolves Reported is not relaunched: its stored report is what it delivered (section 6), so a reported investigation whose terminal is gone is left as it is.</td></tr>
+        <tr><td>A subordinate coordinator's terminal gone</td><td>Its session is re-probed on the same terms as a task's. It is relaunched only on the reading that relaunches a task, Unknown from the process tier with a dead terminal, as a new delegation attempt anchored to the attempt history read and bounded by <code>relaunch_attempts</code>; past the bound it holds for you. A probe that reads Unobserved, a dropped connection among them, is left alone, as the ambiguous row says. Ownership never transfers: the delegation stands until its own record ends it, its tasks stay its subordinate's, and the wake is subordinate gone, to the first coordinator. The sentence above still holds: the session is this home's, and nothing here claims another home's work.</td></tr>
         <tr><td>Terminal alive, screen unchanged</td><td>Only a stall if nothing positively proves progress. A worker thinking for a long time is not stuck.</td></tr>
         <tr><td>Repeated stall on the same unchanged screen</td><td>Escalates. Once the same unchanged screen has surfaced <code>stall_inspection_count</code> times, section 10's key, the next surface demands a deeper inspection rather than another surface look. The count raises the level of what surfaces and stops nothing.</td></tr>
         <tr><td>Ambiguous liveness</td><td>Leave it alone. Relaunching on an ambiguous reading risks two supervisors for one task, which is worse than one late check.</td></tr>
@@ -2841,7 +2888,7 @@ flowchart TB
           <li><b>Agent adapters beyond Claude Code.</b> Each one is a week of quirks, and agents without a native output schema need a whole parsing path. Build the interface now, the adapters when you need them.</li>
           <li><b>Extra forge adapters.</b> Same reasoning. Do not promise breadth ahead of demand. GitLab landed on that demand, addressed by a specifier that names its host, <code>gitlab.com/group/project</code>, where a GitHub one stays <code>owner/name</code>; the program does not merge on GitLab yet. The other code hosts stay deferred.</li>
           <li><b>Extra session providers.</b> One reference provider proves the abstraction, and tmux is now a provider beside it, chosen with <code>session_provider</code>. Claude Code workers run under tmux in the adapter's terminal mode, which section 1's Promise 1 and section 6's steering row describe. Further providers prove nothing new.</li>
-          <li><b>Delegate coordinators.</b> The most complex feature in either source project. It only earns its cost at a fleet size you have not reached.</li>
+          <li><b>Delegate coordinators in a home of their own.</b> The most complex feature in either source project, and it only earned its cost at a fleet size you had not reached, which is why it was deferred. It is no longer deferred in that form: section 2's subordinate coordinator, a named domain of tasks inside this one home, replaces it, on the terms section 14's decision 20 records.</li>
           <li><b>The direct delivery mode.</b> The gate is the thesis, and this is the one mode that shares unvalidated work. When it is promoted, the program forwards the worker's pushed commit from the gate with an anchored update and the worker gains no second remote, and the merge record is its landed record. The local mode is not deferred: it shares nothing, and section 6 specifies it.</li>
           <li><b>Ranking agents by remaining quota.</b> Section 10's roles are how you name which agent, model provider, model type, model version, and effort each role runs. The program does not rank them by remaining quota or by price. Explicit failover after a recognized availability failure is section 10's separate rule. Ranking stays deferred, and section 9's usage view is the measurement it would start from.</li>
           <li><b>Interrupting a worker's turn.</b> It needs proof the turn ended, which nothing reads yet. Stop and relaunch cover the need; an adapter offers interrupt once it declares it with a conformance probe for that proof.</li>
@@ -3054,6 +3101,11 @@ flowchart TB
           <td class="prd-num">19</td>
           <td>Curated project knowledge is <b>one document read from the trusted copy</b>, <code>assistant-knowledge.md</code>, told to workers and reviews as context that grants nothing.</td>
           <td>Decided 2026-10-19 (#311, #384). Section 10 gains the document, section 6 says where it sits in a worker's first turn, and section 8's task record gains the knowledge revision each attempt was told. It is not a knowledge store, not a verb, and not a second instruction channel: the only way to change what an agent is told is a change that lands on the default branch, and notes for one task stay on the coordinator's message channel, section 6's steering. A fix round's fixer is not told the document. Each copy is a checkout holding its own revision of the file, which an agent can open; what this controls is what the program tells an agent. Nothing checks an agent's work against it.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">20</td>
+          <td>A coordinator delegates <b>a named domain of tasks to a subordinate coordinator inside this one home</b>, never to a coordinator in a home of its own.</td>
+          <td>Decided 2026-10-19 (#309). Two shapes were read from the document: a delegate coordinator in its own home, section 2's old entry, and a subordinate domain inside one home. The second was chosen because it keeps one store, one service, one supervisor loop, and one gate, so a task has one row and one owner and no delivery action can be made twice; that is P14 held structurally, where the first shape would have put a task in two stores and kept P14 only by declaring one row a pointer and rewriting section 11's "never claims another home's work". Section 1 names it, section 2's entry replaces the delegate coordinator, section 12's deferral is reworded in the past tense, section 6's steering and section 9's coordinator-only methods carry the subordinate relation and its grant, section 9's client gains <code>delegate</code> and <code>end-delegation</code> with no verb added, section 6's posture rule says a subordinate records none, its live cycle is one wait per domain, section 8's wake row routes by kind, its data model gains the task's domain and the delegation, delegation attempt, and escalation records, section 6's flowchart gains subordinate gone and subordinate escalated, and section 11's reconciliation gains the subordinate's row. P10 and the stop guard are unchanged. Residual gaps: a parent chain the kernel rewrote when a process between a subordinate and its tool command exited places that command as a person's, the gap a worker's push already has; a wake of a kind the subordinate cannot act on reaches the first coordinator without the subordinate's context; and nothing bounds the number of domains.</td>
         </tr>
       </tbody>
     </table>
