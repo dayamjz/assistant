@@ -14,10 +14,19 @@ import (
 
 // TestMain turns this binary into the stand-in agent when it was started as
 // one. It is the wiring every package using this one needs, and having it here
-// means these tests exercise the same path a caller does.
+// means these tests exercise the same path a caller does. It also turns this
+// binary into a test binary calling AtTerminal when a test started it as one
+// (atTerminalMain), and once the tests have returned the package fails if any
+// process of this binary is still running, which is how a binary AtTerminal
+// ran again that outlived its killed outer one fails this package.
 func TestMain(m *testing.M) {
 	Main()
-	os.Exit(m.Run())
+	atTerminalMain()
+	code := m.Run()
+	if !LeftAfterTests() && code == 0 {
+		code = 1
+	}
+	os.Exit(code)
 }
 
 // invocation is a valid Invocation in a directory the test owns.

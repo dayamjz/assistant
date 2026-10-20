@@ -1,6 +1,6 @@
 //go:build linux
 
-package cli_test
+package standin
 
 import (
 	"os"

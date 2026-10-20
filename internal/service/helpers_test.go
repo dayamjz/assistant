@@ -33,10 +33,15 @@ import (
 // TestMain lets this binary act as the stand-in agent. The service resolves an
 // agent before it can start a run, and a test that reached the operator's real
 // agent would be running whatever happens to be installed.
+//
+// Every process of this binary the tests start ends with the test binary
+// that started it (standin.WatchOwner), and once the tests have returned the
+// package fails if any is still running (standin.LeftAfterTests).
 func TestMain(m *testing.M) {
 	// The decision-model key is the operator's consent to send changed lines
 	// to a third party, so a test must never inherit one from whoever runs it.
 	_ = os.Unsetenv(judge.KeyVariable)
+	standin.WatchOwner()
 	standin.Main()
 	forgetest.Main()
 	hookMain()
@@ -48,7 +53,15 @@ func TestMain(m *testing.M) {
 	// take no terminal of their own; a test's push is a person's, and the
 	// gate places one by a terminal's foreground on the pushing chain.
 	standin.AtTerminal()
-	os.Exit(runQuietly(m))
+	if err := standin.OwnProcesses(); err != nil {
+		fmt.Fprintln(os.Stderr, "recording this test binary as the owner of what its tests start:", err)
+		os.Exit(1)
+	}
+	code := runQuietly(m)
+	if !standin.LeftAfterTests() && code == 0 {
+		code = 1
+	}
+	os.Exit(code)
 }
 
 // runQuietly runs the tests with git's automatic maintenance off for every

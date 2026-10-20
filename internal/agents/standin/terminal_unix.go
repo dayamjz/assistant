@@ -16,7 +16,9 @@ import (
 
 // atTerminalVar marks a test binary AtTerminal has already run again on a
 // terminal of its own, so a binary that still reads no foreground there
-// fails rather than running itself a third time.
+// fails rather than running itself a third time, and carries the identity of
+// the outer binary that ran it, in encodeOwner's spelling, which is the
+// owner the binary run again watches.
 const atTerminalVar = "ASSISTANT_TEST_AT_TERMINAL"
 
 // exitNotAtTerminal is a test binary that could not be given a terminal it is
@@ -62,18 +64,46 @@ const exitNotAtTerminal = 12
 // The binary run again verifies the terminal it was given before it runs a
 // test and exits exitNotAtTerminal when it still reads no foreground, naming
 // what it read, rather than running the suite on a terminal that places
-// nothing. On a platform internal/ipc identifies no peer on the gate
+// nothing.
+//
+// The binary run again ends with the outer one by whatever path the outer
+// ends. A normal exit and a forwarded signal follow from the outer waiting on
+// it. A killed outer does not: the binary run again leads a session of its
+// own, so a kill of the outer's group misses it. The terminal's master side
+// closing with the outer ended it in #414's reproduction only where the
+// hangup signal was not ignored: a test binary started under nohup, or under
+// a tool that starts its commands that way, has it ignored, so does the
+// binary run again, and that one went on running the suite with parent 1.
+// So the outer hands the binary run again its own identity, and the binary
+// run again watches it with WatchOwner's watch, polling every OwnerPoll, and
+// once the outer is gone kills its own process group at once, the tests'
+// stand-ins, hooks and gits with it. The residual window is OwnerPoll after the outer is gone, plus a
+// read of the outer's identity that fails, which counts as the outer running
+// and so ends nothing. What the tests started outside that group is not
+// reached by the kill: a service the product launched in a session of its
+// own ends through its own owner watch where the package calls
+// OwnProcesses and WatchOwner, and anything else the package's tests start
+// that way is theirs to end. A binary run again that is stopped by a signal
+// runs no watch. On a platform internal/ipc identifies no peer on the gate
 // refuses every push before any placement, and AtTerminal returns at once.
 //
 // What this does not establish: a test that pushes from a process it put in
 // a session of its own, with no terminal, is placed as nobody's whatever
 // this did, which is how a test of the gate's refusal makes its pusher.
 func AtTerminal() {
+	outer := os.Getenv(atTerminalVar)
+	if outer != "" {
+		if err := watchOuter(outer); err != nil {
+			fmt.Fprintf(os.Stderr, "standin: this test binary was run again on a terminal of its own, but its outer binary's "+
+				"identity %s: %v, so nothing would end it with the outer\n", atTerminalVar, err)
+			os.Exit(exitNotAtTerminal)
+		}
+	}
 	self, found, err := agents.ReadLineage(os.Getpid())
 	if err == nil && found && self.Foreground() {
 		return
 	}
-	if os.Getenv(atTerminalVar) != "" {
+	if outer != "" {
 		fmt.Fprintf(os.Stderr, "standin: this test binary was run again on a terminal of its own and reads group %d, "+
 			"terminal foreground group %d (found %v, error %v), so it is not in the foreground of a terminal and "+
 			"cannot push a change the way a shell at a terminal does\n",
@@ -93,7 +123,12 @@ func AtTerminal() {
 	defer func() { _ = master.Close() }()
 	cmd := exec.Command(executable, os.Args[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.Env = append(os.Environ(), atTerminalVar+"=1")
+	owner, err := selfOwner()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "standin: this test binary cannot hand the tests at a terminal an owner to end with:", err)
+		os.Exit(exitNotAtTerminal)
+	}
+	cmd.Env = append(os.Environ(), atTerminalVar+"="+owner)
 	// The slave is the child's descriptor 3, which Setctty names: the child
 	// starts a session of its own and takes that terminal as its controlling
 	// terminal, and the kernel gives the terminal's foreground to the
