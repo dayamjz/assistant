@@ -81,24 +81,39 @@ func TestAPushFromAShellAtATerminalIsAdmittedThroughTheChain(t *testing.T) {
 
 		// A script the shell runs, with job control on so that the push it
 		// backgrounds is in a group of its own, as an interactive shell's
-		// background job is; the script records the job's group, its own,
-		// and the terminal's foreground group as the kernel reports them for
-		// the job, and waits for the push.
+		// background job is. The job waits to be released, and while it
+		// waits its shape is read off the kernel by the real reader: the job
+		// in a group the terminal was not handed to, and the shell, blocked
+		// in its wait builtin and forking nothing that could take the
+		// terminal, holding the foreground. Only then is the push released.
 		next := commitFile(t, subject, "work.txt", "a change from a script's background job\n")
 		dir := t.TempDir()
-		jobGroup, shellGroup, foreground := filepath.Join(dir, "job"), filepath.Join(dir, "shell"), filepath.Join(dir, "fg")
-		script := "set -m; git -C " + shellQuote(subject) + " push " + shellQuote(gate.RemoteName) + " work & job=$!; " +
-			"ps -o pgid= -p $job > " + shellQuote(jobGroup) + "; ps -o pgid= -p $$ > " + shellQuote(shellGroup) + "; " +
-			"ps -o tpgid= -p $job > " + shellQuote(foreground) + "; wait $job"
-		got := runAtTerminal(t, "/bin/sh", "-c", script)
-		job, shell, fg := readNumber(t, jobGroup), readNumber(t, shellGroup), readNumber(t, foreground)
-		if job == shell {
-			t.Fatalf("the script's background job ran in the shell's own group %d, so this is not the shape the test is about", shell)
+		jobPID, shellPID, release := filepath.Join(dir, "job"), filepath.Join(dir, "shell"), filepath.Join(dir, "release")
+		pusher := "while [ ! -e " + shellQuote(release) + " ]; do sleep 0.02; done; exec git -C " + shellQuote(subject) +
+			" push " + shellQuote(gate.RemoteName) + " work"
+		script := "set -m; echo $$ > " + shellQuote(shellPID) + "; /bin/sh -c " + shellQuote(pusher) + " & " +
+			"echo $! > " + shellQuote(jobPID) + "; wait $!"
+		wait := startAtTerminal(t, "/bin/sh", "-c", script)
+		job, shell := readNumber(t, jobPID), readNumber(t, shellPID)
+		jobRead, found, err := agents.ReadLineage(job)
+		if err != nil || !found {
+			t.Fatalf("reading the script's background job %d: %v, %v", job, found, err)
 		}
-		if fg != shell {
-			t.Fatalf("the terminal's foreground group was %d while the job ran in %d and the shell in %d; want the shell's, "+
-				"so that the chain and not the job's own process is what places it", fg, job, shell)
+		shellRead, found, err := agents.ReadLineage(shell)
+		if err != nil || !found {
+			t.Fatalf("reading the script's shell %d: %v, %v", shell, found, err)
 		}
+		if jobRead.Group == shellRead.Group {
+			t.Fatalf("the script's background job runs in the shell's own group %d, so this is not the shape the test is about", shellRead.Group)
+		}
+		if jobRead.Foreground() || !shellRead.Foreground() || jobRead.TerminalGroup != shellRead.Group {
+			t.Fatalf("the job reads %+v and its shell %+v; want the shell holding the terminal's foreground and the job "+
+				"outside it, so that the chain and not the job's own process is what places the push", jobRead, shellRead)
+		}
+		if err := os.WriteFile(release, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got := wait()
 		if got.status != 0 {
 			t.Fatalf("the push a script backgrounded was refused:\n%s%s", got.stdout, got.stderr)
 		}

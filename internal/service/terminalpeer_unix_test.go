@@ -46,6 +46,15 @@ type ran struct {
 // to files, because the pane's screen is not a stream.
 func runAtTerminal(t *testing.T, argv ...string) ran {
 	t.Helper()
+	return startAtTerminal(t, argv...)()
+}
+
+// startAtTerminal is runAtTerminal in two halves: it starts argv from a
+// shell in the foreground of a terminal and returns what waits for it, so
+// a test can read the command's processes off the kernel, or release
+// something they wait on, while they run.
+func startAtTerminal(t *testing.T, argv ...string) func() ran {
+	t.Helper()
 	tmux := standin.Tmux(t)
 	dir, err := os.MkdirTemp("", "t")
 	if err != nil {
@@ -61,19 +70,22 @@ func runAtTerminal(t *testing.T, argv ...string) ran {
 		t.Fatalf("starting a terminal for the command: %v: %s", err, raw)
 	}
 	t.Cleanup(func() { _ = exec.Command(tmux, "-S", socket, "kill-server").Run() })
-	deadline := time.Now().Add(90 * time.Second)
-	for {
-		raw, err := os.ReadFile(code)
-		if err == nil {
-			status, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
-			stdout, _ := os.ReadFile(out)
-			stderr, _ := os.ReadFile(errOut)
-			return ran{stdout: string(stdout), stderr: string(stderr), status: status}
+	return func() ran {
+		t.Helper()
+		deadline := time.Now().Add(90 * time.Second)
+		for {
+			raw, err := os.ReadFile(code)
+			if err == nil {
+				status, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+				stdout, _ := os.ReadFile(out)
+				stderr, _ := os.ReadFile(errOut)
+				return ran{stdout: string(stdout), stderr: string(stderr), status: status}
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the command at the terminal never finished: %q", argv)
+			}
+			time.Sleep(20 * time.Millisecond)
 		}
-		if !time.Now().Before(deadline) {
-			t.Fatalf("the command at the terminal never finished: %q", argv)
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }
 
