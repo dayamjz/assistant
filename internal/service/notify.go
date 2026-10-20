@@ -27,8 +27,10 @@ import (
 //
 // For each wake the supervisor loop appends, the command is run once with
 // the wake's row on standard input: one line of the JSON store.Wake encodes
-// to, the same row wakes.subscribe pushes, as the record holds it when it is
-// offered, and then end of file. Every field of that row is a closed word,
+// to, as the record holds it when it is offered, and then end of file. That
+// is the row bare, not the ipc.Event wakes.subscribe pushes: the stream
+// carries the same encoding as an event's payload, beside its type and
+// revision, and the command is given no such envelope. Every field of that row is a closed word,
 // a validated identifier, a time, or a marker the loop passed through
 // internal/redact before writing it, so the row carries no credential the
 // redactor recognizes. The sender encodes that stored row as JSON and does

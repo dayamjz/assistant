@@ -4,6 +4,7 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
@@ -79,7 +81,11 @@ func settledNotification(t *testing.T, records *store.Store, wake int64) store.N
 }
 
 // sentLines is every line the command appended to out, each read back as
-// the wake row it was sent, in the order it was sent.
+// the wake row it was sent, in the order it was sent. Each line must decode
+// as a store.Wake with no field that type does not declare, and must not
+// read as an ipc.Event, so a line wrapped in the envelope wakes.subscribe
+// pushes, with its type, revision and payload, fails every test that reads
+// what the command was sent rather than decoding to an empty row.
 func sentLines(t *testing.T, out string) []store.Wake {
 	t.Helper()
 	f, err := os.Open(out)
@@ -94,8 +100,14 @@ func sentLines(t *testing.T, out string) []store.Wake {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		var w store.Wake
-		if err := json.Unmarshal(scanner.Bytes(), &w); err != nil {
-			t.Fatalf("the command was sent %q, which does not read as a wake row: %v", scanner.Text(), err)
+		strict := json.NewDecoder(bytes.NewReader(scanner.Bytes()))
+		strict.DisallowUnknownFields()
+		if err := strict.Decode(&w); err != nil || w.ID == 0 {
+			t.Fatalf("the command was sent %q, which does not read as a bare wake row: %v", scanner.Text(), err)
+		}
+		var envelope ipc.Event
+		if err := json.Unmarshal(scanner.Bytes(), &envelope); err != nil || envelope.Type != "" || envelope.Payload != nil {
+			t.Fatalf("the command was sent %q, which reads as an ipc.Event (%+v, %v), want the wake row bare", scanner.Text(), envelope, err)
 		}
 		rows = append(rows, w)
 	}

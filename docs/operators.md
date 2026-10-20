@@ -561,8 +561,11 @@ notify:
 ```
 
 The service runs that command once for each wake its supervision pass
-queues, with the wake on standard input as one line of JSON, the same row
-`assistant --json coordinator listen` prints, followed by end of file. The
+queues, with the wake on standard input as one line of JSON, followed by
+end of file. The line is the wake object itself (`id`, `task_id`, `kind`,
+`marker` and the rest), not the event `assistant --json coordinator listen`
+prints: a `listen` line wraps the same object as its `payload`, beside
+`type` and `revision`, and the command's line has no such wrapper. The
 command decides where it goes: a script that posts to your own private chat
 channel, writes a desktop notification, or appends to a file. The line is a
 line of shell, run the way `commands.test` is, in the assistant home (by
