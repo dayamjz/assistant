@@ -109,21 +109,15 @@ func EndGroup(id Identity, grace time.Duration) (GroupEnd, error) {
 // when nothing of it this platform can see is left within wait, or
 // ErrGroupSurvived when something is.
 //
-// It differs from EndGroup in one more case, and the difference rests on who
-// may call it. A leader that is gone while its group still holds a process
-// is GroupOutlivedLeader to EndGroup, which answers for a record an earlier
-// service left and so cannot say the survivor is the invocation's. ForceGroup
-// is for a group its caller registered in this process's lifetime, from an
-// identity verified when the group was registered, and it ends that group
-// anyway: on unix a process group's identifier is not given to another
-// process while any member of the group remains, so a group signal zero
-// still reaches is the group the verified leader led. That is the case a
-// polite step leaves behind when the leader ends on it and a child that
-// ignores it does not. The argument does not cover the moment between that
-// read and the signal: a group that empties in between and whose identifier
-// is given to a new group leader is signalled in its place, the same window
-// terminateTree names. On Windows there is no group to ask, so a gone leader
-// is GroupLeaderGone and nothing is signalled.
+// A leader that is gone is answered exactly as EndGroup answers it, and
+// nothing is signalled, even when the group still holds a process. A gone
+// leader is the one reading from which a group identifier cannot be tied
+// back to the registration: once the original group has emptied, its
+// identifier may be given to an unrelated leader, and that leader may exit
+// and leave its own child in a group that reads, from here, exactly like a
+// registered leader's survivor. Nothing here can tell the two apart, so the
+// survivor of an invocation's own leader is left to the termination that
+// invocation is still running, which WithHurry is how a caller cuts short.
 //
 // Everything else is EndGroup's: a reused identifier and an unreadable
 // identity signal nothing, and a descendant that moved to a group of its own
@@ -140,7 +134,7 @@ func ForceGroup(id Identity, wait time.Duration) (GroupEnd, error) {
 	case PresenceReplaced:
 		return GroupReplaced, nil
 	case PresenceAbsent:
-		return forceAbsentGroup(id.PID, wait)
+		return endAbsentGroup(id.PID), nil
 	}
 	return forcePresentGroup(id, wait)
 }

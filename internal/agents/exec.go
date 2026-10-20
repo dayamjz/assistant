@@ -121,13 +121,14 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 	// terminateTree when the reap lands; what terminateTree does about that
 	// window, and what it leaves open, is stated there.
 	done := make(chan struct{})
+	hurry := hurryOf(ctx)
 	var watcher sync.WaitGroup
 	watcher.Add(1)
 	go func() {
 		defer watcher.Done()
 		select {
 		case <-ctx.Done():
-			terminateTree(cmd.Process, spec.grace, true, done)
+			terminateTree(cmd.Process, spec.grace, true, done, hurry)
 		case <-done:
 		}
 	}()
@@ -137,7 +138,7 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 	watcher.Wait()
 	// The leader has been reaped. Anything still in its group is a child it
 	// left behind, and the invocation owns it too.
-	terminateTree(cmd.Process, spec.grace, false, nil)
+	terminateTree(cmd.Process, spec.grace, false, nil, hurry)
 	if ended != nil {
 		ended()
 	}

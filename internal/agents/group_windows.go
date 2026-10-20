@@ -52,11 +52,6 @@ func forcePresentGroup(id Identity, wait time.Duration) (GroupEnd, error) {
 	return "", ErrGroupSurvived
 }
 
-// forceAbsentGroup is ForceGroup's answer for a gone leader on a platform
-// that cannot ask what is left in the group: GroupLeaderGone, with nothing
-// signalled.
-func forceAbsentGroup(int, time.Duration) (GroupEnd, error) { return GroupLeaderGone, nil }
-
 // waitAbsent polls until no running process has the identity, or the
 // identifier has been given to another process, or the deadline passes, and
 // reports whether the identity's process was gone.

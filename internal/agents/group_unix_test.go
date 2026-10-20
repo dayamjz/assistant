@@ -311,15 +311,17 @@ func TestForceGroupEndsAGroupThatIgnoresThePoliteSignalAtOnce(t *testing.T) {
 	}
 }
 
-// TestForceGroupEndsADescendantThatOutlivedItsLeader is the forced stop's
-// reproduction of a leader that ended on SIGTERM and a child in its group
-// that ignored it: the group's leader is gone and the group still holds the
-// child. ForceGroup is asked about a group its caller registered while the
-// leader was verified, so it ends the group anyway, and the child is gone
-// afterwards. EndGroup, which answers for a record an earlier service left,
-// still leaves such a survivor alone; TestEndGroupAnswersForALeaderThatIsGone
-// holds that.
-func TestForceGroupEndsADescendantThatOutlivedItsLeader(t *testing.T) {
+// TestForceGroupLeavesAGroupItCannotTieToTheRegistration is the pid reuse
+// review found in the forced stop: a registration whose group emptied, and
+// whose identifier was then given to an unrelated leader that exited and left
+// its own child behind. Nothing can make the kernel reuse a given identifier
+// on demand, so the unrelated group is real and the registration is the
+// counterfeit: an identity naming that identifier with another start time,
+// which is what a registration made of an earlier process holds. The reading
+// ForceGroup gets is the kernel's own: no process with the identifier, and a
+// group still holding one. It must signal nothing, and the unrelated child
+// must survive.
+func TestForceGroupLeavesAGroupItCannotTieToTheRegistration(t *testing.T) {
 	requiresIdentityRead(t)
 	pidFile := filepath.Join(t.TempDir(), "pids")
 	leader := exec.Command(helperBinary(t))
@@ -327,7 +329,7 @@ func TestForceGroupEndsADescendantThatOutlivedItsLeader(t *testing.T) {
 	leader.Dir = os.TempDir()
 	leader.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := leader.Start(); err != nil {
-		t.Fatalf("starting the spawning stand-in: %v", err)
+		t.Fatalf("starting the unrelated leader: %v", err)
 	}
 	reaped := make(chan struct{})
 	go func() { _ = leader.Wait(); close(reaped) }()
@@ -335,9 +337,9 @@ func TestForceGroupEndsADescendantThatOutlivedItsLeader(t *testing.T) {
 		_ = syscall.Kill(-leader.Process.Pid, syscall.SIGKILL)
 		<-reaped
 	})
-	leaderID, found, err := agents.Identify(leader.Process.Pid)
+	unrelated, found, err := agents.Identify(leader.Process.Pid)
 	if err != nil || !found {
-		t.Fatalf("identifying the leader: %+v, %v, %v", leaderID, found, err)
+		t.Fatalf("identifying the unrelated leader: %+v, %v, %v", unrelated, found, err)
 	}
 	var child int
 	deadline := time.Now().Add(10 * time.Second)
@@ -348,33 +350,31 @@ func TestForceGroupEndsADescendantThatOutlivedItsLeader(t *testing.T) {
 			}
 		}
 		if child == 0 && !time.Now().Before(deadline) {
-			t.Fatal("the stand-in never named its child")
+			t.Fatal("the unrelated leader never named its child")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	// The child sets its disposition as it starts; give it the moment, then
-	// end the leader the way a cancelled invocation's polite step does.
+	// end the leader alone and leave the child in its group.
 	time.Sleep(500 * time.Millisecond)
-	if err := syscall.Kill(-leaderID.PID, syscall.SIGTERM); err != nil {
-		t.Fatalf("sending the group SIGTERM: %v", err)
+	if err := syscall.Kill(-unrelated.PID, syscall.SIGTERM); err != nil {
+		t.Fatalf("sending the unrelated group SIGTERM: %v", err)
 	}
 	select {
 	case <-reaped:
 	case <-time.After(10 * time.Second):
-		t.Fatalf("the leader %d did not end on SIGTERM", leaderID.PID)
+		t.Fatalf("the unrelated leader %d did not end on SIGTERM", unrelated.PID)
 	}
-	childID, found, err := agents.Identify(child)
-	if err != nil || !found || !groupAlive(leaderID.PID) {
-		t.Fatalf("the child %d did not outlive its leader in group %d (found %v, %v), so the case cannot be driven", child, leaderID.PID, found, err)
+	if err := syscall.Kill(child, 0); err != nil || !groupAlive(unrelated.PID) {
+		t.Fatalf("the child %d did not outlive its leader in group %d (%v), so the case cannot be driven", child, unrelated.PID, err)
 	}
 
-	end, err := agents.ForceGroup(leaderID, 5*time.Second)
-	if err != nil || end != agents.GroupEnded {
-		t.Fatalf("ForceGroup(gone leader, surviving child) = %s, %v, want %s", end, err, agents.GroupEnded)
+	registered := agents.Identity{PID: unrelated.PID, Start: unrelated.Start + 1}
+	end, err := agents.ForceGroup(registered, time.Second)
+	if err != nil || end != agents.GroupOutlivedLeader {
+		t.Fatalf("ForceGroup(registration whose identifier now leads an unrelated group) = %s, %v, want %s", end, err, agents.GroupOutlivedLeader)
 	}
-	// The child was orphaned when its leader ended, so whatever adopted it
-	// reaps it; until then it may stand in the group as an exited process,
-	// which the identity read counts as gone where the platform shows it,
-	// and which is why the group is not asked by signal zero here.
-	waitAbsent(t, childID)
+	if err := syscall.Kill(child, 0); err != nil {
+		t.Fatalf("the unrelated child %d was signalled on the strength of a registration nothing tied it to: %v", child, err)
+	}
 }

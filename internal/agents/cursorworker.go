@@ -68,7 +68,11 @@ func (r *cursorRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	go func() { defer close(w.done); _ = cmd.Wait(); terminateTree(cmd.Process, r.settings.grace, false, nil) }()
+	go func() {
+		defer close(w.done)
+		_ = cmd.Wait()
+		terminateTree(cmd.Process, r.settings.grace, false, nil, nil)
+	}()
 	start, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	success := false

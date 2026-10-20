@@ -44,13 +44,13 @@ func setProcessGroup(cmd *exec.Cmd) {
 // descendant that outlives a leader which exited on its own is not ended here,
 // and Sweeper, which is what would find it by its working directory, answers
 // ErrSweepUnsupported on this platform.
-func terminateTree(proc *os.Process, grace time.Duration, leaderRunning bool, stopped <-chan struct{}) {
+func terminateTree(proc *os.Process, grace time.Duration, leaderRunning bool, stopped, hurry <-chan struct{}) {
 	if proc == nil || !leaderRunning {
 		return
 	}
 	pid := proc.Pid
 	_ = sendCtrlBreak(pid)
-	if waitStopped(stopped, grace) {
+	if waitStopped(stopped, hurry, grace) {
 		return
 	}
 	// taskkill /T ends the tree rather than the one process, which is what
@@ -70,14 +70,17 @@ func sendCtrlBreak(pid int) error {
 	return nil
 }
 
-// waitStopped reports whether the process finished within grace. A nil channel
-// means the caller has no signal to offer, so the full grace period elapses.
-func waitStopped(stopped <-chan struct{}, grace time.Duration) bool {
+// waitStopped reports whether the process finished within grace, giving up
+// early once hurry is closed. A nil stopped means the caller has no signal to
+// offer, so the full grace period elapses unless hurry ends it.
+func waitStopped(stopped, hurry <-chan struct{}, grace time.Duration) bool {
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
 	select {
 	case <-stopped:
 		return true
+	case <-hurry:
+		return false
 	case <-timer.C:
 		return false
 	}

@@ -3,6 +3,7 @@
 package agents_test
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"path/filepath"
@@ -194,4 +195,37 @@ func mustAwaitFile(t *testing.T, path string) []byte {
 		t.Fatalf("%v", err)
 	}
 	return content
+}
+
+// TestAHurriedInvocationEndsTheChildItsLeaderLeftAtOnce is the forced stop's
+// half that ForceGroup leaves to the invocation: the agent ends on the polite
+// signal and its child, in the same group, ignores it. With a termination
+// grace of a minute, the invocation would wait that out before the forceful
+// signal reached the child; with its hurry closed, the invocation returns
+// promptly and the child is gone, ended by the termination the invocation
+// itself runs over the group whose leader it holds.
+func TestAHurriedInvocationEndsTheChildItsLeaderLeftAtOnce(t *testing.T) {
+	runner := newRunner(t, agents.WithTerminationGrace(time.Minute))
+	inv, pidFile := spawningInvocation(t, "spawn-stubborn-child")
+	hurry := make(chan struct{})
+	ctx, cancel := context.WithCancel(agents.WithHurry(t.Context(), hurry))
+	defer cancel()
+	go func() {
+		if _, err := awaitFile(pidFile); err == nil {
+			// The child sets its disposition as it starts.
+			time.Sleep(500 * time.Millisecond)
+		}
+		cancel()
+		close(hurry)
+	}()
+
+	started := time.Now()
+	if _, err := runner.Run(ctx, agents.PurposeReview, inv); err == nil {
+		t.Fatal("the cancelled invocation reported success")
+	}
+	if elapsed := time.Since(started); elapsed > promptly {
+		t.Errorf("the hurried invocation took %v to return, want under %v", elapsed, promptly)
+	}
+	_, child := readPids(t, mustAwaitFile(t, pidFile))
+	assertGone(t, "the child its leader left", child)
 }

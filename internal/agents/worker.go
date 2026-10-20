@@ -380,7 +380,7 @@ func startWorker(ctx context.Context, agent string, spec procSpec, instructions 
 		_ = cmd.Wait()
 		// The leader has been reaped. Anything still in its group is a child
 		// it left behind, and the worker owns it too.
-		terminateTree(cmd.Process, spec.grace, false, nil)
+		terminateTree(cmd.Process, spec.grace, false, nil, nil)
 	}()
 
 	if err := w.write(ctx, instructions); err != nil {
@@ -501,7 +501,7 @@ func (w *procWorker) Close() {
 			return
 		default:
 		}
-		terminateTree(w.cmd.Process, w.grace, true, w.done)
+		terminateTree(w.cmd.Process, w.grace, true, w.done, nil)
 	})
 	<-w.done
 }

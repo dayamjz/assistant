@@ -21,7 +21,7 @@ func endAbsentGroup(pgid int) GroupEnd {
 // endPresentGroup ends the group on terminateGroup's terms, asking groupGone
 // between steps, and reports whether anything was left.
 func endPresentGroup(id Identity, grace time.Duration) (GroupEnd, error) {
-	if !terminateGroup(id.PID, grace, groupGone) {
+	if !terminateGroup(id.PID, grace, groupGone, nil) {
 		return "", ErrGroupSurvived
 	}
 	return GroupEnded, nil
@@ -31,21 +31,7 @@ func endPresentGroup(id Identity, grace time.Duration) (GroupEnd, error) {
 // to answer yes, on ForceGroup's terms.
 func forcePresentGroup(id Identity, wait time.Duration) (GroupEnd, error) {
 	_ = syscall.Kill(-id.PID, syscall.SIGKILL)
-	if !waitForEmpty(id.PID, wait, groupGone) {
-		return "", ErrGroupSurvived
-	}
-	return GroupEnded, nil
-}
-
-// forceAbsentGroup is ForceGroup's answer for a gone leader: GroupGone when
-// nothing of the group is left, and otherwise the group is sent SIGKILL on
-// the terms ForceGroup states, and waited for like a present one.
-func forceAbsentGroup(pgid int, wait time.Duration) (GroupEnd, error) {
-	if groupGone(pgid) {
-		return GroupGone, nil
-	}
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
-	if !waitForEmpty(pgid, wait, groupGone) {
+	if !waitForEmpty(id.PID, wait, groupGone, nil) {
 		return "", ErrGroupSurvived
 	}
 	return GroupEnded, nil

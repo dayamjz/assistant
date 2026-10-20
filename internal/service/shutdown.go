@@ -22,7 +22,8 @@ import (
 // subordinate coordinators. Shutdown is Close under a bound. When the bound
 // is reached first, or the caller forces the stop, it logs which step of
 // Close was still waiting, sends every group it knows of the forceful signal
-// through agents.ForceGroup, gives Close forceSettle to finish now that
+// through agents.ForceGroup, hurries every agent invocation's own termination
+// through agents.WithHurry, gives Close forceSettle to finish now that
 // nothing it waits on should be running, and returns *StopForcedError so the
 // caller exits rather than waiting any longer.
 //
@@ -40,9 +41,13 @@ import (
 //     they serve is cancelled, on internal/stages' terms.
 //   - A group whose leader's identity could not be read when it registered is
 //     passed over rather than signalled by a bare number.
-//   - A group whose leader already ended and whose members remain is ended
-//     too, which agents.ForceGroup argues is still the registered group; the
-//     window between its read and its signal is the one it names.
+//   - A group whose leader already ended and whose members remain is not
+//     signalled here, because nothing can tie its identifier back to the
+//     registration (agents.ForceGroup says why). An agent invocation's such
+//     group is ended by the invocation's own termination, which the forced
+//     stop hurries through agents.WithHurry; a worker's or a subordinate
+//     coordinator's is not hurried, and a survivor there outlives the
+//     service.
 //   - A tmux-hosted worker is forced by its session's reference and by its
 //     server's identity; anything else the server started is not reached.
 //   - The exit is within stop_grace plus forceSettle, not within stop_grace:
@@ -117,6 +122,7 @@ func (s *Service) Shutdown(force <-chan struct{}) error {
 	}
 	settled := time.NewTimer(forceSettle)
 	defer settled.Stop()
+	s.registry.hurryTerminations()
 	forced := s.forceGroups(append(known, s.registry.leaders()...))
 	stop := &StopForcedError{Grace: grace, Early: early, Waiting: waiting, Forced: forced}
 	s.log.Printf("%s", stop.account())
@@ -124,6 +130,9 @@ func (s *Service) Shutdown(force <-chan struct{}) error {
 	case err := <-done:
 		return errors.Join(stop, err)
 	case <-settled.C:
+		if held := s.registry.held(); held > 0 {
+			s.log.Printf("%d agent invocation(s) had not finished ending their process trees when the service gave up on them", held)
+		}
 		return stop
 	}
 }
@@ -159,12 +168,11 @@ func sessionLeaders(held *session.Session) []agents.Identity {
 	return out
 }
 
-// forceGroups sends every distinct group that still holds a process the
-// forceful signal at once, a group whose leader already ended included, waits
-// up to forceSettle for them together, logs each one that did not end or
-// could not be reached, and reports how many were signalled. A group already
-// empty, or whose leader's identifier was reused, is not signalled and not
-// counted, on ForceGroup's terms.
+// forceGroups sends every distinct group whose verified leader still runs the
+// forceful signal at once, waits up to forceSettle for them together, logs
+// each one that did not end or could not be reached, and reports how many
+// were signalled. A group whose leader is gone, or whose leader's identifier
+// was reused, is not signalled here and not counted, on ForceGroup's terms.
 func (s *Service) forceGroups(groups []agents.Identity) int {
 	seen := map[agents.Identity]bool{}
 	var wg sync.WaitGroup
@@ -192,10 +200,11 @@ func (s *Service) forceGroups(groups []agents.Identity) int {
 				signalled++
 			case end == agents.GroupGone || end == agents.GroupReplaced:
 			default:
-				// A leader gone with its group not reached, which is
-				// Windows' GroupLeaderGone: a process of the group may still
-				// run, so it is said rather than counted as ended.
-				failed = append(failed, fmt.Sprintf("%s: %s, nothing signalled", id, end))
+				// A leader gone with something of its group maybe left:
+				// ForceGroup cannot tie the group back to the registration,
+				// so an invocation's survivor is its own hurried
+				// termination's, and anything else is said.
+				failed = append(failed, fmt.Sprintf("%s: %s, nothing signalled here", id, end))
 			}
 		}()
 	}

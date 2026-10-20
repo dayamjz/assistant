@@ -33,13 +33,14 @@ func setProcessGroup(cmd *exec.Cmd) {
 // the two, and nothing here closes that window.
 //
 // leaderRunning and stopped are unused here: emptiness of the group is a
-// better answer than either, and it is available on this platform.
-func terminateTree(proc *os.Process, grace time.Duration, leaderRunning bool, stopped <-chan struct{}) {
+// better answer than either, and it is available on this platform. hurry,
+// once closed, cuts the polite wait short, on WithHurry's terms.
+func terminateTree(proc *os.Process, grace time.Duration, leaderRunning bool, stopped, hurry <-chan struct{}) {
 	_, _ = leaderRunning, stopped
 	if proc == nil {
 		return
 	}
-	terminateGroup(proc.Pid, grace, groupEmpty)
+	terminateGroup(proc.Pid, grace, groupEmpty, hurry)
 }
 
 // terminateGroup is terminateTree over a group identifier rather than a
@@ -51,12 +52,12 @@ func terminateTree(proc *os.Process, grace time.Duration, leaderRunning bool, st
 // whether gone answered yes when it finished: false is a process still there
 // after SIGKILL, which is one this process may not signal, or one already
 // gone that gone could not tell apart from a running one.
-func terminateGroup(pgid int, grace time.Duration, gone func(int) bool) bool {
+func terminateGroup(pgid int, grace time.Duration, gone func(int) bool, hurry <-chan struct{}) bool {
 	if gone(pgid) {
 		return true
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGTERM)
-	if waitForEmpty(pgid, grace, gone) {
+	if waitForEmpty(pgid, grace, gone, hurry) {
 		return true
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
@@ -64,12 +65,13 @@ func terminateGroup(pgid int, grace time.Duration, gone func(int) bool) bool {
 	// gone that has not been reaped yet, or one this process may not signal.
 	// Waiting a little keeps the ordinary case honest without pretending the
 	// second is fixable here.
-	return waitForEmpty(pgid, grace, gone)
+	return waitForEmpty(pgid, grace, gone, nil)
 }
 
-// waitForEmpty polls until gone answers yes for the group or the deadline
-// passes, and reports whether it did.
-func waitForEmpty(pgid int, grace time.Duration, gone func(int) bool) bool {
+// waitForEmpty polls until gone answers yes for the group, the deadline
+// passes, or cut is closed, and reports whether gone answered yes. A nil cut
+// never ends the wait early.
+func waitForEmpty(pgid int, grace time.Duration, gone func(int) bool, cut <-chan struct{}) bool {
 	deadline := time.Now().Add(grace)
 	for {
 		if gone(pgid) {
@@ -78,7 +80,11 @@ func waitForEmpty(pgid int, grace time.Duration, gone func(int) bool) bool {
 		if !time.Now().Before(deadline) {
 			return false
 		}
-		time.Sleep(pollInterval)
+		select {
+		case <-cut:
+			return gone(pgid)
+		case <-time.After(pollInterval):
+		}
 	}
 }
 
