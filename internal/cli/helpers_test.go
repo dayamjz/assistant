@@ -208,7 +208,14 @@ func runArgsIn(ctx context.Context, executable, workingDir string, args ...strin
 // newHome returns a home root short enough to hold a local socket path.
 func newHome(t *testing.T) *home.Home {
 	t.Helper()
-	root, err := os.MkdirTemp("", "h")
+	return newHomeNamed(t, "h")
+}
+
+// newHomeNamed is newHome with the root named by os.MkdirTemp's pattern,
+// for a test whose subject is what the root's name holds.
+func newHomeNamed(t *testing.T, pattern string) *home.Home {
+	t.Helper()
+	root, err := os.MkdirTemp("", pattern)
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}

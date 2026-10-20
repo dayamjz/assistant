@@ -1,4 +1,4 @@
-//go:build unix
+//go:build linux || darwin
 
 package cli_test
 
@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -102,7 +103,9 @@ func watchOwner() {
 	}()
 }
 
-// binaryProcess is a process running this test binary, as ps lists it.
+// binaryProcess is a process running this test binary: its identity and
+// its arguments, argv[0] first, as the kernel holds them, one string per
+// argument whatever the arguments contain.
 type binaryProcess struct {
 	agents.Identity
 	args []string
@@ -120,18 +123,24 @@ func (p binaryProcess) serves(h *home.Home) bool {
 	return len(p.args) > 2 && p.args[1] == "--home" && p.args[2] == h.Root()
 }
 
-// binaryProcesses lists every process running this test binary other than
-// this process and its ancestors, which are the test binary run again at a
-// terminal by standin.AtTerminal. A process is recognized by the first word
-// of its command line being this binary's path, which is how every copy the
-// tests start names it: the product launches a service with the executable
-// it was given, and the tests give it os.Executable. A list that cannot be
-// read is an error and never an empty list.
+// binaryProcesses is binaryProcessesOf this test binary.
 func binaryProcesses() ([]binaryProcess, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("resolving this binary: %w", err)
 	}
+	return binaryProcessesOf(self)
+}
+
+// binaryProcessesOf lists every process whose executable is binary, other
+// than this process and its ancestors, which are the test binary run again
+// at a terminal by standin.AtTerminal. The executable and the arguments are
+// read per process from the kernel (commandLine), never split out of a
+// listing, so a path or an argument with a space in it is read whole. A
+// list that cannot be read is an error and never an empty list; a single
+// process whose command line cannot be read, one that has exited or one of
+// another user's, is passed over.
+func binaryProcessesOf(binary string) ([]binaryProcess, error) {
 	exclude := map[int]bool{}
 	for pid := os.Getpid(); pid > 1 && !exclude[pid]; {
 		exclude[pid] = true
@@ -141,40 +150,34 @@ func binaryProcesses() ([]binaryProcess, error) {
 		}
 		pid = lineage.Parent
 	}
-	// ps is named by path, because a test may narrow PATH to what it wants
-	// its subject to find.
-	ps := "/bin/ps"
-	if _, err := os.Stat(ps); err != nil {
-		ps = "/usr/bin/ps"
-	}
-	out, err := exec.Command(ps, "-A", "-ww", "-o", "pid=,command=").Output()
+	pids, err := processIDs()
 	if err != nil {
-		return nil, fmt.Errorf("listing processes with ps: %w", err)
+		return nil, fmt.Errorf("listing processes: %w", err)
 	}
 	var found []binaryProcess
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 || fields[1] != self {
+	for _, pid := range pids {
+		if exclude[pid] {
 			continue
 		}
-		pid, err := strconv.Atoi(fields[0])
-		if err != nil || exclude[pid] {
+		executable, args, err := commandLine(pid)
+		if err != nil || executable != binary {
 			continue
 		}
 		id, present, err := agents.Identify(pid)
 		if err != nil || !present {
 			continue
 		}
-		found = append(found, binaryProcess{Identity: id, args: fields[1:]})
+		found = append(found, binaryProcess{Identity: id, args: args})
 	}
 	return found, nil
 }
 
 // end sends p SIGTERM and waits up to endGrace for it to go, then sends
-// SIGKILL to its group when it leads one and to it otherwise. Nothing is
-// signalled unless the identity still names the running process, so a
-// number given to a later process is never signalled. It reports whether p
-// had to be killed.
+// SIGKILL to its group when it leads one and to it otherwise. Before each
+// signal the identity is checked to still name the running process, which
+// narrows the chance of signalling a later process given the same number to
+// the moment between that check and the signal; it does not close it. It
+// reports whether p had to be killed.
 func (p binaryProcess) end() bool {
 	if presence, err := p.Presence(); err != nil || presence != agents.PresencePresent {
 		return false
@@ -277,7 +280,17 @@ func leftAfterTests() bool {
 // subset, so a test can ask it of the processes of one home while other
 // tests' processes run.
 func stayed(match func(binaryProcess) bool, grace time.Duration) ([]binaryProcess, error) {
-	listed, err := binaryProcesses()
+	self, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolving this binary: %w", err)
+	}
+	return stayedOf(self, match, grace)
+}
+
+// stayedOf is stayed asked of the processes of binary, so a test can ask
+// the question leftAfterTests asks of a copy of this binary it placed.
+func stayedOf(binary string, match func(binaryProcess) bool, grace time.Duration) ([]binaryProcess, error) {
+	listed, err := binaryProcessesOf(binary)
 	if err != nil {
 		return nil, err
 	}
@@ -295,24 +308,100 @@ func stayed(match func(binaryProcess) bool, grace time.Duration) ([]binaryProces
 // binary serving the home and still running past a grace, which is the
 // check firing on the leak #405 found, and once endServicesOf has run
 // nothing of this binary serves the home. The question is asked of this
-// home's processes only, so the tests running beside it are not touched.
+// home's processes only, so the tests running beside it are not touched. It
+// is asked of a home whose root has a space in it too, which a command line
+// split on white space would not have matched.
 func TestAServiceATestLeavesUpIsReportedAndItsHomesCleanupEndsIt(t *testing.T) {
 	requiresIdentifiedPeer(t)
-	h := newHome(t)
-	if got := run(t, h, "", "service", "start"); got.code != machine.ExitOK {
-		t.Fatalf("starting the service exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	for _, c := range []struct{ name, pattern string }{
+		{"a plain root", "h"},
+		{"a root with a space", "h s"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHomeNamed(t, c.pattern)
+			if got := run(t, h, "", "service", "start"); got.code != machine.ExitOK {
+				t.Fatalf("starting the service exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+			}
+			ofHome := func(p binaryProcess) bool { return p.serves(h) }
+			left, err := stayed(ofHome, time.Second)
+			if err != nil {
+				t.Fatalf("listing what this binary runs: %v", err)
+			}
+			if len(left) != 1 {
+				t.Fatalf("a service left up for %q is reported as %v, want the one service", h.Root(), left)
+			}
+			endServicesOf(t, h)
+			if left, err := stayed(ofHome, endGrace); err != nil || len(left) != 0 {
+				t.Fatalf("after the home's cleanup %v still serve %q (%v)", left, h.Root(), err)
+			}
+		})
 	}
-	ofHome := func(p binaryProcess) bool { return p.serves(h) }
-	left, err := stayed(ofHome, time.Second)
+}
+
+// The package's check reports a live process of a binary whose path has a
+// space in it, which is what a test binary built under a GOTMPDIR with one
+// is: a copy of this binary placed at such a path, serving a home whose root
+// has a space too, is listed with its executable and its arguments whole,
+// is reported as still running past a grace, and is gone once ended. A
+// listing split on white space would not have seen it, and the check would
+// have passed with it running.
+func TestTheCheckReportsALiveProcessOfABinaryWhosePathHasASpace(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	self, err := os.Executable()
 	if err != nil {
-		t.Fatalf("listing what this binary runs: %v", err)
+		t.Fatal(err)
 	}
-	if len(left) != 1 {
-		t.Fatalf("a service left up for %s is reported as %v, want the one service", h.Root(), left)
+	dir, err := os.MkdirTemp("", "b s")
+	if err != nil {
+		t.Fatal(err)
 	}
-	endServicesOf(t, h)
-	if left, err := stayed(ofHome, endGrace); err != nil || len(left) != 0 {
-		t.Fatalf("after the home's cleanup %v still serve %s (%v)", left, h.Root(), err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	copied := filepath.Join(dir, "cli test")
+	content, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(copied, content, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := newHomeNamed(t, "h s")
+
+	served := exec.Command(copied, "--home", h.Root(), "service", "start", "--foreground")
+	served.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := served.Start(); err != nil {
+		t.Fatalf("starting the copy: %v", err)
+	}
+	exited := make(chan struct{})
+	go func() { _ = served.Wait(); close(exited) }()
+	t.Cleanup(func() {
+		select {
+		case <-exited:
+		default:
+			_ = syscall.Kill(-served.Process.Pid, syscall.SIGKILL)
+			<-exited
+		}
+	})
+	deadline := time.Now().Add(30 * time.Second)
+	for instanceOf(t, h) == "" {
+		if !time.Now().Before(deadline) {
+			t.Fatal("the copy never answered")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	left, err := stayedOf(copied, func(binaryProcess) bool { return true }, time.Second)
+	if err != nil {
+		t.Fatalf("listing what the copy runs: %v", err)
+	}
+	if len(left) != 1 || left[0].PID != served.Process.Pid || !left[0].serves(h) {
+		t.Fatalf("the copy at %q serving %q is reported as %v, want process %d with its arguments whole",
+			copied, h.Root(), left, served.Process.Pid)
+	}
+	left[0].end()
+	select {
+	case <-exited:
+	case <-time.After(endGrace + 5*time.Second):
+		t.Fatal("the copy was still running after it was ended")
 	}
 }
 
