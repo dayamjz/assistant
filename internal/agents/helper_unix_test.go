@@ -48,3 +48,14 @@ func helperDetach() {
 	}
 	fmt.Print(strconv.Itoa(child.Process.Pid))
 }
+
+// ownGroup starts cmd in a process group of its own and has its Cancel kill
+// that whole group, so a context ending reaches what cmd started in the
+// group and not only cmd. Cancel runs before cmd is reaped, while the
+// group's identifier is still cmd's.
+func ownGroup(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+}

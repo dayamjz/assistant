@@ -67,17 +67,6 @@ func awaitFile(path string) ([]byte, error) {
 	return nil, fmt.Errorf("the stand-in agent never recorded its process identifiers at %s", path)
 }
 
-// mustAwaitFile is awaitFile on the test's own goroutine, where failing is
-// allowed.
-func mustAwaitFile(t *testing.T, path string) []byte {
-	t.Helper()
-	content, err := awaitFile(path)
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
-	return content
-}
-
 // cancelOnceSpawned cancels ctx as soon as the stand-in agent has recorded its
 // process identifiers, and cancels it anyway if it never does, so a broken
 // stand-in ends the invocation rather than leaving the test waiting on it. The

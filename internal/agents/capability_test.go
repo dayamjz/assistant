@@ -1,6 +1,7 @@
 package agents_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -94,9 +95,11 @@ var probes = []probe{{
 			t.Fatalf("making a directory for the worker: %v", err)
 		}
 		defer os.RemoveAll(dir)
-		worker, err := agents.OpenWorker(t.Context(), r, agents.WorkerSpec{
+		start, cancel := bounded(t.Context())
+		worker, err := agents.OpenWorker(start, r, agents.WorkerSpec{
 			Dir: dir, Instructions: "conformance: a worker is being started",
 		})
+		cancel()
 		if err != nil {
 			t.Errorf("%s declares %s and OpenWorker could not start one: %v",
 				r.Name(), agents.CapabilityWorkerSessions, err)
@@ -121,7 +124,10 @@ var probes = []probe{{
 			"conformance: a second message, with \"quotes\" and a\nsecond line",
 		} {
 			mark := written(worker)
-			if err := worker.Send(t.Context(), text); err != nil {
+			send, cancel := bounded(t.Context())
+			err = worker.Send(send, text)
+			cancel()
+			if err != nil {
 				t.Errorf("%s's worker refused a send while running: %v", r.Name(), err)
 				return
 			}
@@ -190,9 +196,11 @@ var probes = []probe{{
 		// it waits on the worker's own writing.
 		typed := strings.Split(instructions, "\n")
 		own := func(w agents.Worker) int64 { return ownLines(w, typed) }
-		worker, err := agents.OpenTerminalWorker(t.Context(), r, term, agents.WorkerSpec{
+		start, cancel := bounded(t.Context())
+		worker, err := agents.OpenTerminalWorker(start, r, term, agents.WorkerSpec{
 			Dir: dir, Instructions: instructions,
 		})
+		cancel()
 		if err != nil {
 			t.Errorf("%s declares %s and OpenTerminalWorker could not start one: %v",
 				r.Name(), agents.CapabilityTerminalWorkers, err)
@@ -208,7 +216,10 @@ var probes = []probe{{
 		} {
 			typed = append(typed, strings.Split(text, "\n")...)
 			mark := own(worker)
-			if err := worker.Send(t.Context(), text); err != nil {
+			send, cancel := bounded(t.Context())
+			err = worker.Send(send, text)
+			cancel()
+			if err != nil {
 				t.Errorf("%s's terminal worker refused a send while running: %v", r.Name(), err)
 				return
 			}
@@ -280,11 +291,17 @@ func ownLines(w agents.Worker, typed []string) int64 {
 // it read. measure has to count only what the worker itself wrote, which is
 // written for a pipe and ownLines for a terminal. A worker that is still
 // exiting when it is looked at reads as having reacted, which is why the
-// probe sends twice. The wait is bounded by the test's own context.
+// probe sends twice. The wait is bounded by probeWait and fails naming what
+// it waited for: the test's own context ends only once the test has
+// returned, and a package timeout kills the binary without ending it, so a
+// worker that never writes would otherwise hold the package to its timeout
+// and leave the worker running.
 func reacted(t testing.TB, w agents.Worker, mark int64, measure func(agents.Worker) int64) bool {
 	t.Helper()
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
+	bound := time.NewTimer(probeWait)
+	defer bound.Stop()
 	for {
 		if measure(w) > mark {
 			select {
@@ -301,9 +318,26 @@ func reacted(t testing.TB, w agents.Worker, mark int64, measure func(agents.Work
 		case <-t.Context().Done():
 			t.Fatalf("waiting for a worker to react: %v", t.Context().Err())
 			return false
+		case <-bound.C:
+			t.Fatalf("waited %v for the worker to write something after what it was sent, and it wrote nothing:\n%s",
+				probeWait, w.Capture().Text)
+			return false
 		case <-tick.C:
 		}
 	}
+}
+
+// probeWait bounds each wait a probe makes on a worker: its start, each
+// send, and each wait for it to react. It is generous, many times what the
+// stand-in or the installed CLI was seen to take, so a loaded machine does
+// not fail it, and well short of the package timeout, so a worker that
+// never answers fails the probe naming what it waited for rather than
+// holding the package until the binary is killed with the worker running.
+const probeWait = 2 * time.Minute
+
+// bounded is ctx bounded by probeWait, for one wait a probe makes.
+func bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, probeWait)
 }
 
 // probeFor returns the pair for a capability, and false when it has none.

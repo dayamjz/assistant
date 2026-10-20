@@ -2,7 +2,10 @@
 
 package agents_test
 
-import "os"
+import (
+	"os"
+	"os/exec"
+)
 
 // helperPoliteSignals are the signals the stand-in agent ignores in its
 // stubborn modes, so that only the forceful step of the escalation ends it.
@@ -24,3 +27,7 @@ func helperSelfKill() {
 func helperDetach() {
 	os.Exit(9)
 }
+
+// ownGroup leaves cmd as exec.CommandContext made it: a context ending kills
+// cmd and reaches nothing it started, which no test on Windows exercises.
+func ownGroup(cmd *exec.Cmd) {}
