@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/knowledge"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -55,6 +56,22 @@ import (
 // ErrPushedConfig by the copy it names: the run stops before anything
 // launches, whatever push started it, because no posture is assumed in the
 // refused one's place.
+//
+// # Which of them cross the wire as refused
+//
+// A document that was read and decided against is a refusal the caller must
+// handle, and refusedConfig is the one place that says so: a trusted or a
+// pushed copy internal/config refused (config.ErrMalformed, ErrInvalid or
+// ErrLoosened beneath ErrTrustedConfig or ErrPushedConfig), and an agent
+// list or a roles table this build cannot honour, cross as ipc.ErrRefused
+// with their own text. A copy that could not be read at all - a default
+// branch the record does not name, a fetch or a read of the gate repository
+// that failed, a store that could not answer - is not a decision about any
+// document and crosses as it did before, which for a failed read is
+// internal. The classification is applied where a run's resolution and
+// standing consent's read answer a request, and not inside trustedLayerAt,
+// because intake and promotion read the same copy and answer for it through
+// internal/tasks' ErrPostureUnreadable, which crosses as unavailable.
 
 // ErrTrustedConfig reports that the trusted configuration copy could not be
 // established: the default branch could not be fetched, the document there
@@ -141,6 +158,16 @@ type runResolution struct {
 // so a repository whose trusted copy is broken refuses on that rather than on
 // whatever the branch carries.
 func (s *Service) resolveRunConfig(ctx context.Context, record store.Run) (runResolution, error) {
+	resolved, err := s.resolveRunDocuments(ctx, record)
+	if err != nil {
+		return runResolution{}, refusedConfig(err)
+	}
+	return resolved, nil
+}
+
+// resolveRunDocuments is resolveRunConfig before its refusals are classified
+// for the wire.
+func (s *Service) resolveRunDocuments(ctx context.Context, record store.Run) (runResolution, error) {
 	repository, err := s.store.Repository(ctx, record.RepositoryID)
 	if err != nil {
 		return runResolution{}, fmt.Errorf("service: reading the repository run %s resolves configuration for: %w",
@@ -314,6 +341,39 @@ func resolutionRefusal(err error) error {
 		return ErrPushedConfig
 	default:
 		return errResolution
+	}
+}
+
+// configRefused is a refusal of a configuration document as this service
+// answers with it: on the wire it is ipc.ErrRefused, because the request was
+// readable and a document it was resolved from decided against it, and its
+// message is the refusal's own text with no prefix. errors.Is still reaches
+// ErrTrustedConfig or ErrPushedConfig and the config refusal beneath.
+type configRefused struct{ err error }
+
+// Error is the refusal's own text.
+func (c configRefused) Error() string { return c.err.Error() }
+
+// Unwrap resolves to the wire category and to the refusal.
+func (c configRefused) Unwrap() []error { return []error{ipc.ErrRefused, c.err} }
+
+// refusedConfig classifies a failure to establish a run's configuration for
+// the wire, on the terms the file's opening comment states: a document that
+// was read and refused becomes configRefused, and every other failure is
+// returned as it is. A refusal is recognized by internal/config's own refusal
+// classes beneath this file's two copy classes, so a failed fetch or read,
+// which wraps ErrTrustedConfig with no config refusal beneath it, is not one.
+func refusedConfig(err error) error {
+	documentRefused := errors.Is(err, config.ErrMalformed) ||
+		errors.Is(err, config.ErrInvalid) ||
+		errors.Is(err, config.ErrLoosened)
+	switch {
+	case errors.Is(err, ErrRepositoryAgent), errors.Is(err, ErrRepositoryRoles):
+		return configRefused{err}
+	case (errors.Is(err, ErrTrustedConfig) || errors.Is(err, ErrPushedConfig)) && documentRefused:
+		return configRefused{err}
+	default:
+		return err
 	}
 }
 

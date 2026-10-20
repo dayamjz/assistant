@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -51,6 +53,17 @@ func plantPushedDocument(t *testing.T, subject, document string) {
 	}
 	git(t, subject, "add", "-A")
 	git(t, subject, "commit", "--quiet", "-m", "carry a configuration document on the branch")
+}
+
+// wireCode is the code a failure crossed the socket under, failing the test
+// when it did not cross as an *ipc.Error at all.
+func wireCode(t *testing.T, err error) ipc.Code {
+	t.Helper()
+	var wire *ipc.Error
+	if !errors.As(err, &wire) {
+		t.Fatalf("the failure did not cross the wire as an answer: %v", err)
+	}
+	return wire.Code
 }
 
 // hermeticCommand is a command a test may let a run execute: it is on every
@@ -267,6 +280,11 @@ func TestAnUnreadableTrustedConfigurationStopsTheRunBeforeLaunch(t *testing.T) {
 		if !strings.Contains(err.Error(), "trusted configuration") {
 			t.Fatalf("the refusal does not name the trusted configuration: %v", err)
 		}
+		// A document that was read and refused is a refusal the caller
+		// handles, not a fault, so it crosses as refused.
+		if code := wireCode(t, err); code != ipc.CodeRefused {
+			t.Fatalf("the refusal crossed the wire as %q, want %q: %v", code, ipc.CodeRefused, err)
+		}
 		if got := bodies.Load(); got != 0 {
 			t.Fatalf("%d stage bodies ran under a trusted configuration nobody could read", got)
 		}
@@ -303,6 +321,12 @@ func TestAPushedConfigurationDocumentThatDoesNotParseIsRefused(t *testing.T) {
 		if !strings.Contains(err.Error(), "pushed configuration") {
 			t.Fatalf("the refusal does not name the pushed copy: %v", err)
 		}
+		if code := wireCode(t, err); code != ipc.CodeRefused {
+			t.Fatalf("the refusal crossed the wire as %q, want %q: %v", code, ipc.CodeRefused, err)
+		}
+		if !errors.Is(err, ipc.ErrRefused) {
+			t.Fatalf("the refusal does not match ipc.ErrRefused on the client: %v", err)
+		}
 		refused := onlyRun(t, h)
 		if refused.Status != store.RunTerminated {
 			t.Fatalf("the refused run is recorded as %s, want it ended", refused.Status)
@@ -315,6 +339,62 @@ func TestAPushedConfigurationDocumentThatDoesNotParseIsRefused(t *testing.T) {
 		}
 		if fresh.Record.Status == store.RunPending || fresh.Record.Status == store.RunTerminated {
 			t.Fatalf("the fresh run is recorded as %s, want it walked", fresh.Record.Status)
+		}
+	})
+}
+
+// TestAPushedGlobalOnlyKeyIsRefusedOnTheWire is the other pushed refusal: a
+// branch whose own document names a key only the operator's file may set is
+// refused at parse time, and that refusal crosses the socket as refused with
+// its reason, naming the pushed copy and the key, rather than as a fault.
+func TestAPushedGlobalOnlyKeyIsRefusedOnTheWire(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P7)
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	plantPushedDocument(t, subject, `{"`+string(config.KeySessionReuse)+`": false}`)
+
+	withService(t, h, func(running serviceUnderTest) {
+		_, err := startRunErr(t, running.client, subject)
+		if err == nil {
+			t.Fatal("a run whose pushed document names a global-only key was started rather than refused")
+		}
+		if code := wireCode(t, err); code != ipc.CodeRefused {
+			t.Fatalf("the refusal crossed the wire as %q, want %q: %v", code, ipc.CodeRefused, err)
+		}
+		for _, want := range []string{"pushed configuration", string(config.KeySessionReuse)} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal does not say %q: %v", want, err)
+			}
+		}
+	})
+}
+
+// TestATrustedCopyThatCannotBeFetchedIsNotARefusal is the control for the
+// two above: the run is stopped before launch all the same, but a default
+// branch that could not be fetched is a fact that was never read rather than
+// a document that was decided against, so it does not cross as refused. It
+// crosses as what it was before the refusals were classified, internal.
+func TestATrustedCopyThatCannotBeFetchedIsNotARefusal(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P7)
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepositoryWithUpstream(t, h, subject, filepath.Join(t.TempDir(), "no-upstream-here"))
+
+	withService(t, h, func(running serviceUnderTest) {
+		_, err := startRunErr(t, running.client, subject)
+		if err == nil {
+			t.Fatal("a run whose trusted copy cannot be fetched was started rather than stopped")
+		}
+		if !strings.Contains(err.Error(), "trusted configuration") || !strings.Contains(err.Error(), "fetching") {
+			t.Fatalf("the failure does not say the trusted copy could not be fetched: %v", err)
+		}
+		if code := wireCode(t, err); code != ipc.CodeInternal {
+			t.Fatalf("a failed fetch crossed the wire as %q, want %q: %v", code, ipc.CodeInternal, err)
 		}
 	})
 }
@@ -392,6 +472,9 @@ func TestARepositoryAgentThisBuildCannotHonourIsRefused(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "one agent per service") {
 			t.Fatalf("the refusal does not state the limitation: %v", err)
+		}
+		if code := wireCode(t, err); code != ipc.CodeRefused {
+			t.Fatalf("the refusal crossed the wire as %q, want %q: %v", code, ipc.CodeRefused, err)
 		}
 	})
 }

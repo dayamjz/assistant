@@ -170,7 +170,8 @@ func consentTrustedRef(check string) string { return "refs/assistant/trusted/con
 // its trusted copy at a fresh fetch of the default branch, resolved with the
 // operator's layer and no pushed layer, on projectPosture's terms. A trusted
 // copy that cannot be read is an error wrapping ErrTrustedConfig, never an
-// answer either way.
+// answer either way, classified for the wire by refusedConfig as a run's
+// resolution is.
 func (s *Service) standingConsentAllowed(ctx context.Context, repository store.Repository) (bool, error) {
 	check, err := newRunID()
 	if err != nil {
@@ -185,11 +186,12 @@ func (s *Service) standingConsentAllowed(ctx context.Context, repository store.R
 	defer func() { _ = bare.DeleteRef(context.WithoutCancel(ctx), ref) }()
 	trusted, _, _, err := s.trustedLayerAt(ctx, bare, repository, ref, forWhat)
 	if err != nil {
-		return false, err
+		return false, refusedConfig(err)
 	}
 	resolution, err := config.ResolveRun(s.global, trusted, config.Absent(config.OriginPushed))
 	if err != nil {
-		return false, fmt.Errorf("service: resolving whether %s allows standing consent: %w", repository.ID, err)
+		return false, refusedConfig(fmt.Errorf("%w: resolving whether %s allows standing consent: %w",
+			resolutionRefusal(err), repository.ID, err))
 	}
 	return resolution.Config.AllowStandingConsent, nil
 }
