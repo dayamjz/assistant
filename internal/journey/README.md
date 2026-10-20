@@ -233,6 +233,19 @@ checked in. That build costs a few seconds once per test binary. A test that
 mutates a scenario takes it with `Claim`; a test that only needs a repository
 to point a run at clones one, so scenarios are never shared by accident.
 
+A push this harness makes is a person's push, and the gate admits a person's
+push only from a chain with a terminal's foreground on it (`internal/service`'s
+`placement.go`), refusing one it can place as neither that nor a task's worker.
+From a developer's shell the test binary stands in that foreground already; on
+a CI runner nothing on the chain has a terminal, and every push here would be
+refused for the chain's shape. So `TestMain` calls `standin.AtTerminal`, which
+runs the binary again as the session leader of a pseudo-terminal of its own
+when it reads no foreground, and the pushes then reach the gate the way a
+shell's do, through the real reader over a real terminal. That provision
+establishes nothing about the refusal: a check of it starts its pusher in a
+session of its own, which `internal/service` and `internal/cli` do, and none
+here does yet.
+
 ## Known limits of the binary this harness drives
 
 These are filed and not yet fixed. They are not harness bugs, and nothing here

@@ -40,6 +40,11 @@ func TestMain(m *testing.M) {
 	standInManagerMain()
 	hookMain()
 	holdLockMain()
+	// After every verb this binary answers as another process, because a
+	// hook or a worker's route is the process it is and takes no terminal
+	// of its own; a test's push is a person's, and the gate places one by
+	// a terminal's foreground on the pushing chain.
+	standin.AtTerminal()
 	os.Exit(runQuietly(m))
 }
 

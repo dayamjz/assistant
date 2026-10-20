@@ -24,6 +24,11 @@ func TestMain(m *testing.M) {
 	_ = os.Unsetenv(judge.KeyVariable)
 	standin.Main()
 	journey.ActAsShim()
+	// After both, because a shim is the process it is and takes no terminal
+	// of its own; a push this harness makes is a person's, and the gate
+	// places one by a terminal's foreground on the pushing chain, which
+	// README.md's running section states.
+	standin.AtTerminal()
 	code := m.Run()
 	// The fixture, the shims and the product binary belong to the process
 	// rather than to any test, so no test can take them away and a run that

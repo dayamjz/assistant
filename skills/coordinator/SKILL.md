@@ -235,7 +235,7 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
 - Act keyed by `(task_id, kind, session-ref)`, never by `handouts`. Delivery
   is at least once, so the same wake id can reach you twice after a lost
   ack; `handouts` only counts deliveries. Read the task before every act.
-- Act on each wake, then acknowledge it by its `id` — every id you acted on,
+- Act on each wake, then acknowledge it by its `id` - every id you acted on,
   including one you decided needs nothing further after reading the task.
   Acknowledging is the only thing that records a wake as handled, and a wake
   keeps its task counted as in flight until you do.
@@ -362,8 +362,13 @@ assistant --json coordinator await --timeout 5m   # blocks, then drains
   process group of its own is still refused. A chain the service cannot
   read is refused too. What it cannot place is a command whose parent
   exited, so the kernel moved it under another process: that call is placed
-  as the coordinator's and served. A worker's grant allows git and its own
-  `assistant worker` route without asking, and denies nothing else.
+  as the coordinator's and served. A push to the gate is the one request
+  held to more: it is admitted only from a worker or from a chain with a
+  terminal's foreground on it, which your host's tool command has when your
+  host runs in a person's terminal, and refused with code `unplaceable` from
+  a host with no terminal or from a command the kernel moved. A worker's
+  grant allows git and its own `assistant worker` route without asking, and
+  denies nothing else.
 - **A local landing is approved at a terminal, and the service checks the
   terminal, not the person.** The one hold you cannot answer, a local task's
   approval, is refused to any command outside the foreground of a terminal,

@@ -1774,6 +1774,18 @@ var (
 		Consequence: "Nothing was received, and your branch is as you left it.",
 		Decision:    "Send it again in a moment.",
 	}
+	// PhraseSenderUnplaced is the row for a change refused because the gate
+	// could place the process that sent it as neither a task's worker nor a
+	// shell at a terminal: the sending process and everything above it in
+	// the process tree is a daemon, a job with no terminal, or a process
+	// whose starter exited. Nothing moved, and the cure is to send from a
+	// shell at a terminal; the process chain the service read follows the
+	// row, because the person can act on which process it was.
+	PhraseSenderUnplaced = Phrase{
+		Outcome:     "The gate could not tell who sent this change, because the process that sent it is neither a task's worker nor a shell at a terminal, so it was not let in.",
+		Consequence: "Nothing was received, and your branch is as you left it.",
+		Decision:    "Send it again from your own shell at a terminal, in the foreground; a process with no terminal above it, such as a daemon, a cron job or an ssh session without one, cannot send through the gate.",
+	}
 	// PhraseNothingSent is the row for a change that moved no reference at
 	// all.
 	PhraseNothingSent = Phrase{
@@ -1878,7 +1890,7 @@ func TablePhrases() []Phrase {
 		phraseCancelUnknown, phraseCancelEnded)
 	out = append(out, InitPhrase(Init{Created: true}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
-	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
+	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy, PhraseSenderUnplaced)
 	for _, standing := range CeilingStandings() {
 		out = append(out, CeilingPhrase(standing))
 		if standing.Refuses() {

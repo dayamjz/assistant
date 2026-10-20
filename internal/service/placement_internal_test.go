@@ -4,6 +4,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,10 +91,12 @@ func waitFile(t *testing.T, path string) string {
 // not lead, is placed as the worker's while its chain to the worker stands,
 // and the group read alone would not have placed it. Then the shell exits,
 // the process is reparented by the kernel, and the same walk places it as
-// nobody's without an error: that is the residual gap placement.go names,
-// shown in the direction it states rather than assumed. The test process,
-// which is the worker's parent and no descendant of it, is placed as
-// nobody's throughout, which is the person's control.
+// not the worker's without an error: that is the residual gap placement.go
+// names, shown in the direction it states rather than assumed, and the
+// three-way walk reads it as nobody's, since the orphan has no terminal's
+// foreground above it, which is what the gate refuses on. The test process,
+// which is the worker's parent and no descendant of it, is placed as not
+// the worker's throughout, which is the person's control.
 func TestPlacementFollowsTheChainAndLosesItWhenTheKernelRewritesIt(t *testing.T) {
 	t.Parallel()
 	worker, dir := startedWorker(t)
@@ -158,7 +161,17 @@ func TestPlacementFollowsTheChainAndLosesItWhenTheKernelRewritesIt(t *testing.T)
 		time.Sleep(5 * time.Millisecond)
 	}
 	if _, ok, err := placeByAncestry(child, readLineage, member); err != nil || ok {
-		t.Fatalf("the orphaned sleep was placed %v, %v; placement.go says it is placed as nobody's", ok, err)
+		t.Fatalf("the orphaned sleep was placed %v, %v; placement.go says it is placed as not the worker's", ok, err)
+	}
+	orphan, err := readLineage(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orphan.Foreground() {
+		t.Fatalf("the orphaned sleep reads %+v, in the foreground of a terminal, so the three-way answer below is not about the rewritten chain", orphan)
+	}
+	if p, err := placeAlongChain(child, readLineage, member); err != nil || p.kind != placedNobody {
+		t.Fatalf("the orphaned sleep was placed %v, %v by the three-way walk; placement.go says nobody's", p.kind, err)
 	}
 	select {
 	case <-worker.Done():
@@ -255,5 +268,106 @@ func TestPlacementRefusesAProcessItCannotRead(t *testing.T) {
 	}
 	if _, ok, err := placeByAncestry(self, orphaned, oneWorker(-1)); !errors.Is(err, errAncestry) || ok {
 		t.Fatalf("a parent that cannot be read was placed %v, %v; want errAncestry", ok, err)
+	}
+}
+
+// scriptedChain is a read over lineages stated by the test, keyed by
+// identifier, for the three-way walk's own rule: which answer a chain of a
+// given shape gets. The shapes are the ones the kernel produces and the
+// real-process tests above read, with the terminal's foreground group
+// stated per process the way agents.Lineage carries it. A process the
+// chain does not name is the error a gone process is.
+func scriptedChain(chain ...agents.Lineage) func(int) (agents.Lineage, error) {
+	byPID := make(map[int]agents.Lineage, len(chain))
+	for _, l := range chain {
+		byPID[l.PID] = l
+	}
+	return func(pid int) (agents.Lineage, error) {
+		l, ok := byPID[pid]
+		if !ok {
+			return agents.Lineage{}, fmt.Errorf("no running process has identifier %d", pid)
+		}
+		return l, nil
+	}
+}
+
+// process is one stated lineage: pid in group, whose parent is parent,
+// with terminal as its controlling terminal's foreground group, zero for
+// none. Start times rise with the identifier, so a parent stated with a
+// smaller identifier reads older than its child, as a real parent does.
+func process(pid, group, parent, terminal int) agents.Lineage {
+	return agents.Lineage{Identity: agents.Identity{PID: pid, Start: uint64(pid)}, Parent: parent, Group: group, TerminalGroup: terminal}
+}
+
+// The three-way walk's rule over stated chains. A push in the foreground of
+// its terminal is a shell's; so is one in a group of its own under a shell
+// that holds the terminal's foreground, which is what places a background
+// job and a host agent's tool command by the chain rather than by the
+// pusher's own process; a chain with no terminal on it and no worker is
+// nobody's, and the answer names every process read; and a worker above a
+// terminal's foreground wins, so a worker that puts a push in a terminal of
+// its own making is still the worker's. The worker view agrees with the
+// three-way view on every chain, so the two cannot drift.
+func TestPlacementReadsATerminalAlongTheChainAndAWorkerAboveItWins(t *testing.T) {
+	t.Parallel()
+	const init = 1
+	worker := oneWorker(300)
+	for _, c := range []struct {
+		name  string
+		chain []agents.Lineage
+		want  placed
+		read  int
+	}{
+		{"a push in the foreground of its terminal", []agents.Lineage{
+			process(500, 500, 400, 500), process(400, 400, init, 500), process(init, init, 0, 0),
+		}, placedPerson, 3},
+		{"a background job under a shell holding the foreground", []agents.Lineage{
+			process(500, 500, 400, 400), process(400, 400, init, 400), process(init, init, 0, 0),
+		}, placedPerson, 3},
+		{"a host agent's tool command under a host at a terminal", []agents.Lineage{
+			process(600, 600, 500, 400), process(500, 500, 400, 400), process(400, 400, init, 400), process(init, init, 0, 0),
+		}, placedPerson, 4},
+		{"a daemon's chain with no terminal", []agents.Lineage{
+			process(500, 500, 400, 0), process(400, 400, init, 0), process(init, init, 0, 0),
+		}, placedNobody, 3},
+		{"a reparented command with a terminal it is not the foreground of", []agents.Lineage{
+			process(500, 500, init, 200), process(init, init, 0, 0),
+		}, placedNobody, 2},
+		{"a worker's command in the foreground of a terminal the worker made", []agents.Lineage{
+			process(500, 500, 400, 500), process(400, 400, 300, 0), process(300, 300, 200, 0), process(200, 200, init, 0), process(init, init, 0, 0),
+		}, placedWorker, 3},
+		{"a worker's command in a group of its own", []agents.Lineage{
+			process(500, 500, 300, 0), process(300, 300, 200, 0), process(200, 200, init, 0), process(init, init, 0, 0),
+		}, placedWorker, 2},
+	} {
+		read := scriptedChain(c.chain...)
+		p, err := placeAlongChain(c.chain[0].PID, read, worker)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if p.kind != c.want {
+			t.Errorf("%s: placed %v, want %v; read %s", c.name, p.kind, c.want, p.read())
+		}
+		if len(p.chain) != c.read {
+			t.Errorf("%s: the walk read %d processes, want %d: %s", c.name, len(p.chain), c.read, p.read())
+		}
+		for _, l := range p.chain {
+			if !strings.Contains(p.read(), fmt.Sprintf("process %d (group %d, ", l.PID, l.Group)) {
+				t.Errorf("%s: the reading does not name process %d: %s", c.name, l.PID, p.read())
+			}
+		}
+		if p.kind == placedWorker && p.worker.Group != 300 {
+			t.Errorf("%s: placed as the worker of group %d, want 300", c.name, p.worker.Group)
+		}
+		_, ok, err := placeByAncestry(c.chain[0].PID, read, worker)
+		if err != nil || ok != (c.want == placedWorker) {
+			t.Errorf("%s: the worker view answers %v, %v and the three-way view %v", c.name, ok, err, c.want)
+		}
+	}
+	// The reading says which processes had a terminal, so a refusal names
+	// what was read rather than only that something was.
+	p, err := placeAlongChain(500, scriptedChain(process(500, 500, init, 0), process(init, init, 0, 0)), worker)
+	if err != nil || p.read() != "process 500 (group 500, no controlling terminal) <- process 1 (group 1, no controlling terminal)" {
+		t.Fatalf("the reading of a daemon's chain is %q, %v", p.read(), err)
 	}
 }

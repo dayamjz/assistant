@@ -423,7 +423,13 @@ Each has cost this repository more than one round of review.
   drives a worker's push or call that way rather than placing it in the
   worker's group itself. `standin.Tmux` resolves tmux or skips naming why,
   and fails instead where CI sets `ASSISTANT_REQUIRE_TMUX`. A consuming package's `TestMain` must call `standin.Main()`, and the
-  first `New` in a process refuses loudly when it did not. Read its
+  first `New` in a process refuses loudly when it did not. `standin.AtTerminal`
+  is the other `TestMain` call, for a package whose tests push to a gate from
+  the test's own process: where the binary reads no terminal's foreground, as
+  on CI, it runs itself again as the session leader of a pseudo-terminal of
+  its own, so a test's push is placed as a shell's by the real reader over a
+  real terminal, and a run again that still reads none fails rather than
+  running the suite. Read its
   `doc.go` for what a recorded `Call` does and does not prove about P4, and for
   the two residual gaps.
 - `internal/ipc` owns the local protocol: the method table, the event
@@ -870,9 +876,16 @@ Each has cost this repository more than one round of review.
   that turn on it. It walks the chain rather than reading the peer's own
   group as containment does, because #225 observed the Claude Code CLI's Bash
   tool run a command in a group of its own. A chain it cannot read is a
-  refusal; a chain the kernel rewrote when an intermediate process exited
-  places a worker's push as a person's, which admission then does not
-  confine, and `workers.go` states which way each rule goes. The methods: `task.event`
+  refusal. The walk reads each process's terminal foreground group too, and
+  `gate.admit` alone asks the three-way answer: a worker, a shell at a
+  terminal (no worker on the chain and a terminal's foreground on it), or
+  neither, refused `ipc.ErrUnplaceable` naming the chain; so a chain the
+  kernel rewrote when an intermediate process exited, a daemon's and
+  `git-receive-pack`'s under `sshd` are refused rather than admitted as a
+  person's, while the coordinator's methods still ask only worker or not,
+  and `workers.go` states which way each rule goes. A test's push is a
+  person's, so a package whose tests push to a gate calls
+  `standin.AtTerminal` in `TestMain`. The methods: `task.event`
   admits only a worker and holds the kind to `taskstate`'s writer column, and
   hands the two kinds with a record beside the history to that record's
   writer (`acknowledgeMessage`, and `route.go`'s `fileReport`, whose request

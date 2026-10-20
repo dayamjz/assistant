@@ -44,7 +44,8 @@ import (
 // coordinator's and refuse a worker, task.respond so that no worker answers a
 // hold, its own task's included, and catchup.mark so that no worker moves
 // what a person was shown;
-// gate.admit holds a worker's push to admit_workers.go's rule; and
+// gate.admit holds a worker's push to admit_workers.go's rule, admits a
+// shell's, and refuses a push placed as neither, on the terms below; and
 // gate.notify records the run a worker's push of its own task's branch
 // starts with the task's intent, which pushIntent below decides. The set is
 // internal/session's, produced by the provider's Create, session.Pipe's or
@@ -85,33 +86,63 @@ import (
 //
 // # Which way each rule goes when placement cannot tell
 //
-// Placement has three answers: a worker of a named task, not a worker, and
-// an error, which is a chain it could not read and never stands for "not a
-// worker". Each rule takes the error toward the side that claims less:
-// gate.admit refuses the push with ipc.ErrUnavailable, so admission does
-// not open on a fact it could not establish; the coordinator's methods
-// refuse; task.event refuses; and gate.notify records the run with no
-// intent.
+// Placement has three answers and an error. The answers are a worker of a
+// named task; a shell at a terminal, which is a chain with no worker on it
+// and a process in the foreground of its controlling terminal on it; and
+// nobody, a chain read to its end with neither. The error is a chain it
+// could not read and never stands for any answer. Each rule takes the
+// error toward the side that claims less: gate.admit refuses the push with
+// ipc.ErrUnavailable, so admission does not open on a fact it could not
+// establish; the coordinator's methods refuse; task.event refuses; and
+// gate.notify records the run with no intent.
 //
-// "Not a worker" is the answer that can be wrong toward a person, and
-// placement.go names the one shape that produces it for a real worker: a
-// chain the kernel rewrote when a process between the peer and the worker
-// exited. Such a push is admitted as a person's, unconfined by
-// admit_workers.go's rule, and starts a run with no intent; such a process
-// may call the coordinator's methods; and task.event refuses it. Admission
-// and the coordinator's refusals are the rules this leaves open, and only
-// for a process the worker's own commands took out of its tree.
+// The two rules read the answers differently, on purpose. The coordinator's
+// methods and task.event ask one question, worker or not, through workerOf:
+// a shell at a terminal and nobody are both "not a worker" there, so the
+// coordinator is served from a host's tool command with no terminal, from a
+// script, and from a process the kernel reparented alike, and no coordinator
+// method is refused for the shape of its chain. gate.admit asks the whole
+// three-way question through placePusher, because a push is the one request
+// that cannot be taken back once served: a worker's push is held to
+// admit_workers.go's rule, a shell's push is admitted on the terms every
+// push met before the worker rule existed, and a push placed as nobody's is
+// refused with ipc.ErrUnplaceable before any reference moves, naming the
+// chain that was read. That is PRD section 9's "authority comes from
+// authenticated process ancestry" applied to the one surface where "not a
+// worker" used to be read as "a person": the chain of a daemon, of a cron
+// job, of an ssh session with no pseudo-terminal, and of git-receive-pack
+// under sshd all end at init with no terminal on them, and each used to be
+// admitted as a person's.
+//
+// Nobody is also what placement.go's named shape now produces for a real
+// worker: a chain the kernel rewrote when a process between the peer and
+// the worker exited. Such a push used to be admitted as a person's,
+// unconfined by admit_workers.go's rule, and started a run with no intent;
+// it is refused now, which is the safe side and not a regression. A refused
+// push loses nothing (P6): the commit stands in the worker's copy, the
+// refusal says what was read, and a push whose chain stands, one the worker
+// runs and waits for rather than backgrounds, is admitted under the worker
+// rule. An admitted stranger's push cannot be undone, and a worker's push
+// admitted as a person's was unconfined. Such a process may still call the
+// coordinator's methods, and task.event still refuses it; the coordinator's
+// refusal is the one rule this leaves open, and only for a process the
+// worker's own commands took out of its tree.
 //
 // # Residual gaps
 //
 //   - The chain placement.go cannot follow, above, and the rest of what that
-//     file says it does not cover.
+//     file says it does not cover, a rewritten chain that still carries a
+//     terminal's foreground among them.
 //   - The set is this service's memory. A worker an earlier service of this
-//     home launched is in no set here, so its push is a person's push and its
-//     events are refused; launch.go says such a worker is an orphan.
-//   - With no worker launched the set is empty and no chain is read, so a
-//     peer whose chain cannot be read is refused only while a worker is
-//     live; that is the same shape contain.go gives the registry.
+//     home launched is in no set here, so its push is placed by its chain
+//     alone, as a shell's if a terminal's foreground is above it and as
+//     nobody's otherwise, and its events are refused; launch.go says such a
+//     worker is an orphan.
+//   - With no worker launched the set is empty and workerOf reads no chain,
+//     so a peer whose chain cannot be read is refused by the coordinator's
+//     methods only while a worker is live; that is the same shape contain.go
+//     gives the registry. placePusher reads the chain for every push,
+//     worker or none, so the gate refuses an unreadable chain always.
 //   - The containment registry is a separate relation and still reads the
 //     peer's own process group, so a command a stage's agent runs in a group
 //     of its own is not inside that stage; contain_unix.go's processGroup
@@ -120,19 +151,10 @@ import (
 // workerOf derives the task a peer is the worker of, on the terms above. The
 // second result is whether the peer is placed as any task's worker; an error is a
 // fact that could not be established, which the caller refuses on rather
-// than treating as "not a worker".
+// than treating as "not a worker". With no worker in any set no chain is
+// read, which the residual gaps above state.
 func (s *Service) workerOf(c ipc.Credentials) (session.Membership, bool, error) {
-	s.mu.Lock()
-	var sets []*session.Workers
-	if s.built != nil && s.built.workers != nil {
-		sets = append(sets, s.built.workers)
-	}
-	for _, launched := range s.launched {
-		if launched.host != nil {
-			sets = append(sets, launched.host.Workers())
-		}
-	}
-	s.mu.Unlock()
+	sets := s.workerSets()
 	empty := true
 	for _, set := range sets {
 		if set != nil && !set.Empty() {
@@ -143,11 +165,41 @@ func (s *Service) workerOf(c ipc.Credentials) (session.Membership, bool, error) 
 	if empty {
 		return session.Membership{}, false, nil
 	}
-	m, ok, err := placeByAncestry(c.PID, readLineage, workerSets(sets))
+	m, ok, err := placeByAncestry(c.PID, readLineage, sets)
 	if err != nil {
 		return session.Membership{}, false, fmt.Errorf("placing %s: %w", c, err)
 	}
 	return m, ok, nil
+}
+
+// placeOf is placement.go's three-way answer for a peer, over every worker
+// set this service holds. The chain is read whether or not any set holds a
+// worker, because the answer a push turns on, a terminal's foreground on
+// the chain, is there to read with no worker launched at all. An error is a
+// chain that could not be read, which the caller refuses on.
+func (s *Service) placeOf(c ipc.Credentials) (placement, error) {
+	p, err := placeAlongChain(c.PID, readLineage, s.workerSets())
+	if err != nil {
+		return placement{}, fmt.Errorf("placing %s: %w", c, err)
+	}
+	return p, nil
+}
+
+// workerSets gathers every worker set this service holds: the driver's and
+// each launched host's.
+func (s *Service) workerSets() workerSets {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var sets workerSets
+	if s.built != nil && s.built.workers != nil {
+		sets = append(sets, s.built.workers)
+	}
+	for _, launched := range s.launched {
+		if launched.host != nil {
+			sets = append(sets, launched.host.Workers())
+		}
+	}
+	return sets
 }
 
 // workerSets is the placer over every worker set this service holds: the
@@ -194,6 +246,23 @@ func (s *Service) workerPeer(req ipc.Request) (session.Membership, bool, error) 
 			ipc.ErrUnavailable, creds, err)
 	}
 	return m, ok, nil
+}
+
+// placePusher is placeOf over a push's peer, for gate.admit. An
+// unidentified peer is ipc.ErrUnidentifiedPeer, and an ancestry that could
+// not be read is ipc.ErrUnavailable, both wrapped, so neither reads as any
+// of the three answers.
+func (s *Service) placePusher(req ipc.Request) (placement, error) {
+	creds, err := req.Peer.Credentials()
+	if err != nil {
+		return placement{}, err
+	}
+	p, err := s.placeOf(creds)
+	if err != nil {
+		return placement{}, fmt.Errorf("%w: whether %s is a task's worker or a shell at a terminal could not be determined: %w",
+			ipc.ErrUnavailable, creds, err)
+	}
+	return p, nil
 }
 
 // refuseWorker refuses a request from a peer placed as a task's worker, for the
@@ -431,12 +500,12 @@ var noPushedIntent = pushedIntent{source: intentSourceAbsent}
 // same branch carries none of it.
 //
 // Everything else carries no intent, as every push did before: a person's
-// push, a push whose pusher could not be placed (followed as a person's,
-// which is the path that claims less), a worker's push placement.go cannot
-// follow back to the worker, and a worker's update to
-// anything but its own task's branch, which admission refuses before this
-// runs. A task record that cannot be read is logged and the run carries no
-// intent, and a push already admitted cannot be refused from here.
+// push, and a worker's update to anything but its own task's branch, which
+// admission refuses before this runs. A push whose pusher could not be
+// placed, and a worker's push placement.go cannot follow back to the
+// worker, never reach this: admission refused them. A task record that
+// cannot be read is logged and the run carries no intent, and a push
+// already admitted cannot be refused from here.
 //
 // The text passes through internal/redact before it is recorded, because it
 // reaches the run record and, through the pull request stage, a code host.
