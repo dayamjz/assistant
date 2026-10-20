@@ -167,14 +167,18 @@ func helperMain(mode string) {
 		// the completion path: nothing was cancelled and the agent did nothing
 		// wrong, so only the invocation's ownership of the tree ends the
 		// child.
-		helperSpawn(false, false)
+		helperSpawn(false, false, false)
 		fmt.Print(helperEnvelope("finished, and left something running", helperSession()))
 	case "spawn":
-		helperSpawn(false, true)
+		helperSpawn(false, false, true)
 	case "spawn-stubborn":
 		// Both the agent and its child ignore the polite signal, so only the
 		// forceful one ends them.
-		helperSpawn(true, true)
+		helperSpawn(true, true, true)
+	case "spawn-stubborn-child":
+		// Only the child ignores the polite signal, so the leader ends on it
+		// and leaves the child running in its group.
+		helperSpawn(true, false, true)
 	case "envelope-then-hold":
 		// Print a complete result envelope, say so where the test can see it,
 		// and then outlive the invocation. It is an agent that reported what
@@ -214,14 +218,14 @@ func helperExitCode() int {
 // group, records both process identifiers where the test can read them, and
 // then waits. It is what makes "a cancelled invocation leaves no surviving
 // child process" a claim about a tree rather than about one process.
-func helperSpawn(stubborn, wait bool) {
+func helperSpawn(stubbornChild, stubbornLeader, wait bool) {
 	self, err := os.Executable()
 	if err != nil {
 		os.Exit(3)
 	}
 	child := exec.Command(self)
 	child.Env = []string{helperModeVar + "=hold"}
-	if stubborn {
+	if stubbornChild {
 		child.Env = append(child.Env, helperStderrVar+"=stubborn")
 	}
 	// The child runs outside the invocation's working directory, which the
@@ -244,7 +248,7 @@ func helperSpawn(stubborn, wait bool) {
 	if !wait {
 		return
 	}
-	if stubborn {
+	if stubbornLeader {
 		signal.Ignore(helperPoliteSignals()...)
 	}
 	time.Sleep(helperHold)

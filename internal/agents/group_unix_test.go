@@ -310,3 +310,71 @@ func TestForceGroupEndsAGroupThatIgnoresThePoliteSignalAtOnce(t *testing.T) {
 		t.Fatalf("the group %d still holds a process after ForceGroup reported it ended", id.PID)
 	}
 }
+
+// TestForceGroupEndsADescendantThatOutlivedItsLeader is the forced stop's
+// reproduction of a leader that ended on SIGTERM and a child in its group
+// that ignored it: the group's leader is gone and the group still holds the
+// child. ForceGroup is asked about a group its caller registered while the
+// leader was verified, so it ends the group anyway, and the child is gone
+// afterwards. EndGroup, which answers for a record an earlier service left,
+// still leaves such a survivor alone; TestEndGroupAnswersForALeaderThatIsGone
+// holds that.
+func TestForceGroupEndsADescendantThatOutlivedItsLeader(t *testing.T) {
+	requiresIdentityRead(t)
+	pidFile := filepath.Join(t.TempDir(), "pids")
+	leader := exec.Command(helperBinary(t))
+	leader.Env = []string{helperModeVar + "=spawn-stubborn-child", helperPidVar + "=" + pidFile}
+	leader.Dir = os.TempDir()
+	leader.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := leader.Start(); err != nil {
+		t.Fatalf("starting the spawning stand-in: %v", err)
+	}
+	reaped := make(chan struct{})
+	go func() { _ = leader.Wait(); close(reaped) }()
+	t.Cleanup(func() {
+		_ = syscall.Kill(-leader.Process.Pid, syscall.SIGKILL)
+		<-reaped
+	})
+	leaderID, found, err := agents.Identify(leader.Process.Pid)
+	if err != nil || !found {
+		t.Fatalf("identifying the leader: %+v, %v, %v", leaderID, found, err)
+	}
+	var child int
+	deadline := time.Now().Add(10 * time.Second)
+	for child == 0 {
+		if pids, err := os.ReadFile(pidFile); err == nil {
+			if lines := strings.Split(strings.TrimSpace(string(pids)), "\n"); len(lines) == 2 {
+				child, _ = strconv.Atoi(lines[1])
+			}
+		}
+		if child == 0 && !time.Now().Before(deadline) {
+			t.Fatal("the stand-in never named its child")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The child sets its disposition as it starts; give it the moment, then
+	// end the leader the way a cancelled invocation's polite step does.
+	time.Sleep(500 * time.Millisecond)
+	if err := syscall.Kill(-leaderID.PID, syscall.SIGTERM); err != nil {
+		t.Fatalf("sending the group SIGTERM: %v", err)
+	}
+	select {
+	case <-reaped:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the leader %d did not end on SIGTERM", leaderID.PID)
+	}
+	childID, found, err := agents.Identify(child)
+	if err != nil || !found || !groupAlive(leaderID.PID) {
+		t.Fatalf("the child %d did not outlive its leader in group %d (found %v, %v), so the case cannot be driven", child, leaderID.PID, found, err)
+	}
+
+	end, err := agents.ForceGroup(leaderID, 5*time.Second)
+	if err != nil || end != agents.GroupEnded {
+		t.Fatalf("ForceGroup(gone leader, surviving child) = %s, %v, want %s", end, err, agents.GroupEnded)
+	}
+	// The child was orphaned when its leader ended, so whatever adopted it
+	// reaps it; until then it may stand in the group as an exited process,
+	// which the identity read counts as gone where the platform shows it,
+	// and which is why the group is not asked by signal zero here.
+	waitAbsent(t, childID)
+}

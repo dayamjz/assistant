@@ -101,18 +101,33 @@ func EndGroup(id Identity, grace time.Duration) (GroupEnd, error) {
 	return endPresentGroup(id, grace)
 }
 
-// ForceGroup is EndGroup without the polite step: after the same
-// verification, the group the verified leader leads is sent the forceful
-// signal at once, and the result is GroupEnded when nothing of it this
-// platform can see is left within wait, or ErrGroupSurvived when something
-// is. It is for a caller whose grace has already been spent, which is a
-// service whose stop_grace ran out: the group was asked to end politely when
-// the stop began, and asking again would only spend time the caller no
-// longer has.
+// ForceGroup is EndGroup without the polite step, for a caller whose grace
+// has already been spent, which is a service whose stop_grace ran out: the
+// group was asked to end politely when the stop began, and asking again would
+// only spend time the caller no longer has. After the same verification, the
+// group is sent the forceful signal at once, and the result is GroupEnded
+// when nothing of it this platform can see is left within wait, or
+// ErrGroupSurvived when something is.
 //
-// Everything else is EndGroup's, the three residual gaps included: a reused
-// identifier, an absent leader and an unreadable identity signal nothing, and
-// a descendant that moved to a group of its own is not reached.
+// It differs from EndGroup in one more case, and the difference rests on who
+// may call it. A leader that is gone while its group still holds a process
+// is GroupOutlivedLeader to EndGroup, which answers for a record an earlier
+// service left and so cannot say the survivor is the invocation's. ForceGroup
+// is for a group its caller registered in this process's lifetime, from an
+// identity verified when the group was registered, and it ends that group
+// anyway: on unix a process group's identifier is not given to another
+// process while any member of the group remains, so a group signal zero
+// still reaches is the group the verified leader led. That is the case a
+// polite step leaves behind when the leader ends on it and a child that
+// ignores it does not. The argument does not cover the moment between that
+// read and the signal: a group that empties in between and whose identifier
+// is given to a new group leader is signalled in its place, the same window
+// terminateTree names. On Windows there is no group to ask, so a gone leader
+// is GroupLeaderGone and nothing is signalled.
+//
+// Everything else is EndGroup's: a reused identifier and an unreadable
+// identity signal nothing, and a descendant that moved to a group of its own
+// is not reached.
 func ForceGroup(id Identity, wait time.Duration) (GroupEnd, error) {
 	if id.PID <= 0 {
 		return "", fmt.Errorf("agents: process group %d is not one this package started", id.PID)
@@ -125,7 +140,7 @@ func ForceGroup(id Identity, wait time.Duration) (GroupEnd, error) {
 	case PresenceReplaced:
 		return GroupReplaced, nil
 	case PresenceAbsent:
-		return endAbsentGroup(id.PID), nil
+		return forceAbsentGroup(id.PID, wait)
 	}
 	return forcePresentGroup(id, wait)
 }

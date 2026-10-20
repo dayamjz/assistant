@@ -37,6 +37,20 @@ func forcePresentGroup(id Identity, wait time.Duration) (GroupEnd, error) {
 	return GroupEnded, nil
 }
 
+// forceAbsentGroup is ForceGroup's answer for a gone leader: GroupGone when
+// nothing of the group is left, and otherwise the group is sent SIGKILL on
+// the terms ForceGroup states, and waited for like a present one.
+func forceAbsentGroup(pgid int, wait time.Duration) (GroupEnd, error) {
+	if groupGone(pgid) {
+		return GroupGone, nil
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	if !waitForEmpty(pgid, wait, groupGone) {
+		return "", ErrGroupSurvived
+	}
+	return GroupEnded, nil
+}
+
 // groupGone reports whether nothing of the group is still running. It is
 // groupEmpty with one widening, and the widening is what a group an earlier
 // service started needs: that group's members were orphaned when the service
