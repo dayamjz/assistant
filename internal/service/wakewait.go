@@ -213,16 +213,20 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 		if err != nil {
 			return machine.Wakes{}, err
 		}
-		if offered > 0 {
+		offeredDomain, err := s.store.OfferedDomainWakes(ctx, handout.Held, handout.Route)
+		if err != nil {
+			return machine.Wakes{}, err
+		}
+		if offered+offeredDomain > 0 {
 			if ctx.Err() != nil {
 				return machine.Wakes{}, ended()
 			}
-			wakes, err := s.store.DrainWakes(ctx, limit, handout)
+			wakes, err := s.drainBoth(ctx, limit, handout)
 			if err != nil {
 				return machine.Wakes{}, err
 			}
-			if len(wakes) > 0 {
-				return machine.Wakes{Wakes: wakes}, nil
+			if len(wakes.Wakes)+len(wakes.DomainWakes) > 0 {
+				return wakes, nil
 			}
 		}
 		select {
@@ -232,15 +236,26 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 			if ctx.Err() != nil {
 				return machine.Wakes{}, ended()
 			}
-			wakes, err := s.store.DrainWakes(ctx, limit, s.wakeHandout(req, p))
-			if err != nil {
-				return machine.Wakes{}, err
-			}
-			return machine.Wakes{Wakes: wakes}, nil
+			return s.drainBoth(ctx, limit, s.wakeHandout(req, p))
 		case <-ctx.Done():
 			return machine.Wakes{}, ended()
 		}
 	}
+}
+
+// drainBoth is one drain of both shapes under one handout, on listWakes'
+// terms: the task rows, then the domain rows, each bounded by limit, and the
+// second none on a subordinate's route.
+func (s *Service) drainBoth(ctx context.Context, limit int, handout store.WakeHandout) (machine.Wakes, error) {
+	wakes, err := s.store.DrainWakes(ctx, limit, handout)
+	if err != nil {
+		return machine.Wakes{}, err
+	}
+	domainWakes, err := s.store.DrainDomainWakes(ctx, limit, handout)
+	if err != nil {
+		return machine.Wakes{}, err
+	}
+	return machine.Wakes{Wakes: wakes, DomainWakes: domainWakes}, nil
 }
 
 // wakeHandout is what a coordinator's drain made now hands rows out as, on

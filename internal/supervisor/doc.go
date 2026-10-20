@@ -115,7 +115,11 @@
 // passes it to internal/store as words. Two kinds are the subordinate's own,
 // KindSubordinateGone, resurfacing once per window on KindTerminalGone's
 // terms, and KindSubordinateEscalated, always actionable; both reach the
-// first coordinator and never the subordinate.
+// first coordinator and never the subordinate, and the first is carried on
+// the queue's second shape, internal/store's domain wake, since a
+// subordinate is no task. InFlightOf counts those rows beside the per-task
+// ones, so a subordinate gone nobody has acknowledged keeps the home in
+// flight.
 //
 // # What the matrix establishes and what it does not
 //
@@ -141,10 +145,7 @@
 // # Residual gaps
 //
 //   - KindCheckResult has no producer in this build. Its row says so, and
-//     the matrix rows over it test a path nothing walks. KindSubordinateGone
-//     has none either: the queue's row names a task and a subordinate is
-//     not one, so how a wake about a domain is carried is a decision
-//     internal/service's subordinates.go names as the follow-up.
+//     the matrix rows over it test a path nothing walks.
 //   - A kind that closes a decision is read as an event with no decision
 //     verb, on taskstate's terms that a close claims no state. Whether a
 //     close should surface on its own is not decided here.

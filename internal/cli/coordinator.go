@@ -382,9 +382,18 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	}
 	request := machine.AcknowledgeRequest{Wakes: make([]int64, 0, len(in.args))}
 	for _, arg := range in.args {
-		id, err := strconv.ParseInt(arg, 10, 64)
+		// A wake about a domain is numbered apart from a task's and is
+		// named with the prefix the --json listing shows it under, so the
+		// two cannot be confused by number.
+		text, domain := strings.CutPrefix(arg, domainWakePrefix)
+		id, err := strconv.ParseInt(text, 10, 64)
 		if err != nil {
-			return nil, usagef("assistant %s takes wake identifiers, and %q is not one", name, printable(arg))
+			return nil, usagef("assistant %s takes wake identifiers, as a number or %sNUMBER for a notice about a domain, and %q is not one",
+				name, domainWakePrefix, printable(arg))
+		}
+		if domain {
+			request.DomainWakes = append(request.DomainWakes, id)
+			continue
 		}
 		request.Wakes = append(request.Wakes, id)
 	}
@@ -392,6 +401,12 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	err := in.callService(ctx, ipc.MethodWakesAcknowledge, request, &acknowledged)
 	return acknowledged, err
 }
+
+// domainWakePrefix is what a wake about a domain is named with on the
+// acknowledge command line, before its number: the queue's second shape
+// numbers its rows apart from the task wakes, so a bare number is always a
+// task wake and a prefixed one always a domain wake.
+const domainWakePrefix = "d"
 
 // coordinatorListen is wakes.subscribe, the coordinator's wake stream: the
 // service pushes each wake as the supervisor queues it, PRD section 5's

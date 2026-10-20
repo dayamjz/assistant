@@ -608,8 +608,12 @@ type TaskAnswered struct {
 	// and only AnswerRetryDeferred leaves it to a later start to read. For
 	// AnswerRetryUndispatchable it names what in the record was refused.
 	NotRelaunched string `json:"not_relaunched,omitempty"`
-	// Task is the task as it stands after the answer.
+	// Task is the task as it stands after the answer, and the zero Task for
+	// an answer to a domain's hold, which names no task.
 	Task Task `json:"task"`
+	// Domain is the domain whose hold was answered, for an answer given
+	// with TaskRespondRequest.Domain, and empty for a task's.
+	Domain string `json:"domain,omitempty"`
 }
 
 // AnswerEffect is what answering a task's hold did. The set is closed and
@@ -1114,6 +1118,11 @@ type Wakes struct {
 	// Wakes are the rows handed out, oldest first, at most the requested
 	// limit.
 	Wakes []store.Wake `json:"wakes"`
+	// DomainWakes are the rows of the queue's second shape handed out, the
+	// wakes about a domain rather than a task, oldest first under the same
+	// limit and numbered apart from Wakes. They reach the first coordinator
+	// alone; a subordinate's drain carries none.
+	DomainWakes []store.DomainWake `json:"domain_wakes,omitempty"`
 }
 
 // QueuedWakes is the answer to a person's reading of the wake queue: every
@@ -1123,6 +1132,9 @@ type Wakes struct {
 type QueuedWakes struct {
 	// Wakes are the queued rows, oldest first, at most the requested limit.
 	Wakes []QueuedWake `json:"wakes"`
+	// DomainWakes are the queued rows about a domain rather than a task,
+	// oldest first under the same limit, on Wakes.DomainWakes' terms.
+	DomainWakes []store.DomainWake `json:"domain_wakes,omitempty"`
 }
 
 // QueuedWake is one queued row and the project of the task it is about,
@@ -1143,6 +1155,9 @@ type QueuedWake struct {
 type Acknowledged struct {
 	// Wakes are the identifiers the batch closed, as the request named them.
 	Wakes []int64 `json:"wakes"`
+	// DomainWakes are the domain wake identifiers the batch closed, as the
+	// request named them.
+	DomainWakes []int64 `json:"domain_wakes,omitempty"`
 	// By is who the rows record as having acknowledged them, rendered the
 	// way internal/store renders the closed set.
 	By string `json:"by"`

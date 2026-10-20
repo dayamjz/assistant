@@ -61,11 +61,10 @@ const (
 	// dead or not observable, PRD section 6's "subordinate gone": it reaches
 	// the first coordinator and never the subordinate, and it is of
 	// ClassResurface on KindTerminalGone's terms, once per escalation
-	// window while it stays gone. It has no producer in this build, and its
-	// row says so: the queue's row names a task and a subordinate is not
-	// one, so what carries a wake about a domain is a decision
-	// internal/service's doc names as the follow-up; the kind is kept so
-	// the table and the flowchart stay one list, as KindCheckResult is.
+	// window while it stays gone. It is carried by internal/store's domain
+	// wake, the queue's second shape, because the wake table's row names a
+	// task and a subordinate is not one, and internal/service's supervisor
+	// loop produces it from the delegation's probe.
 	KindSubordinateGone Kind = "subordinate-gone"
 	// KindSubordinateEscalated is a decision a subordinate coordinator
 	// handed up to the first coordinator, PRD section 6's "subordinate
@@ -143,7 +142,7 @@ var kinds = []Row{
 	{Kind: KindTerminalGone, Class: ClassResurface, Produced: true, Subordinate: true},
 	{Kind: KindHoldOpened, Class: ClassActionable, Produced: true, Subordinate: false},
 	{Kind: KindMessageUnacknowledged, Class: ClassActionable, Produced: true, Subordinate: true},
-	{Kind: KindSubordinateGone, Class: ClassResurface, Produced: false, Subordinate: false},
+	{Kind: KindSubordinateGone, Class: ClassResurface, Produced: true, Subordinate: false},
 	{Kind: KindSubordinateEscalated, Class: ClassActionable, Produced: true, Subordinate: false},
 }
 

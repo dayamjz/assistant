@@ -588,7 +588,24 @@ func TestADeadSubordinateIsRelaunchedOnRestartUnderTheBound(t *testing.T) {
 	})
 	o, _ = workerOptions(t, h)
 	withServiceOptions(t, o, func(running serviceUnderTest) {
-		time.Sleep(2 * time.Second)
+		// Past the bound the third service relaunches nothing and holds
+		// the delegation for a person instead: the hold is read from its
+		// row, keyed by the attempt that reached the bound (P8), and a
+		// retry answered on it through task.respond given the domain
+		// begins the subordinate once more as attempt 3, which spends the
+		// answer.
+		principles.Cite(t, principles.P8)
+		key := "domain/alpha/relaunch-bound/2"
+		deadline := time.Now().Add(launchWait)
+		for {
+			if hold, err := recordsOf(t, h).Hold(t.Context(), key); err == nil && hold.Open() {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the third service never registered the bound's hold %s", key)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 		if _, _, held := running.service.SubordinateSessionOf("alpha"); held {
 			t.Fatal("the third service relaunched the subordinate past the bound")
 		}
@@ -599,5 +616,122 @@ func TestADeadSubordinateIsRelaunchedOnRestartUnderTheBound(t *testing.T) {
 		if latest, _, err := recordsOf(t, h).Delegation(t.Context(), "alpha"); err != nil || !latest.Standing() {
 			t.Fatalf("past the bound the delegation reads %+v (%v), want it still standing", latest, err)
 		}
+		var answered machine.TaskAnswered
+		if err := running.client.Call(t.Context(), ipc.MethodTaskRespond, machine.TaskRespondRequest{Domain: "alpha", Answer: machine.AnswerRetry}, &answered); err != nil {
+			t.Fatalf("answering the domain's hold: %v", err)
+		}
+		if answered.Domain != "alpha" || answered.Effect != machine.AnswerRelaunched || answered.Relaunch == nil || answered.Relaunch.Attempt != 3 ||
+			answered.Hold.Key != key || answered.Hold.Open() {
+			t.Fatalf("the retry answered %+v, want attempt 3 begun on the closed hold %s", answered, key)
+		}
+		host, sub, held := running.service.SubordinateSessionOf("alpha")
+		deadline = time.Now().Add(launchWait)
+		for !held {
+			if !time.Now().Before(deadline) {
+				t.Fatal("the retry never started the subordinate again")
+			}
+			time.Sleep(20 * time.Millisecond)
+			host, sub, held = running.service.SubordinateSessionOf("alpha")
+		}
+		waitCapture(t, host, sub, "worker ready")
+		attempts, err = recordsOf(t, h).DelegationAttempts(t.Context(), delegation.ID)
+		if err != nil || len(attempts) != 3 || attempts[2].SessionRef.Or("") != sub.Reference().String() {
+			t.Fatalf("after the retry the attempts are %+v (%v), want a third naming the new session", attempts, err)
+		}
+		var again machine.TaskAnswered
+		if err := running.client.Call(t.Context(), ipc.MethodTaskRespond, machine.TaskRespondRequest{Domain: "alpha", Answer: machine.AnswerRetry}, &again); !errors.Is(err, ipc.ErrRefused) {
+			t.Fatalf("a second retry on a domain holding on nothing = %v, want ErrRefused", err)
+		}
 	})
+}
+
+// A standing delegation whose subordinate's terminal is gone is told to the
+// first coordinator on the queue's second shape, and never to a
+// subordinate: with relaunch_attempts at zero, alpha's subordinate is ended
+// through the handle the service observes it by, and the loop surfaces
+// subordinate-gone and, the delegation being past the bound at once, the
+// bound's hold as a hold-opened domain wake, both read back from the
+// records (P8). The coordinator's drain hands both out under their own
+// numbering, beta's live subordinate drains none, a subordinate is refused
+// closing one, and the coordinator closes both. Then the hold is answered
+// stop through task.respond given the domain, which ends the delegation by
+// the answer, read off the delegation's row, and the subordinate it would
+// have begun again is not.
+func TestAGoneSubordinateReachesTheCoordinatorOnTheSecondShapeAndAStopEndsTheDelegation(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P8)
+	launchedWorkerConfigured(t, store.TaskDelivery, "task/domain-gone", store.Unknown[config.Delivery](),
+		`{"supervision_beacon_interval": "1s", "relaunch_attempts": 0}`, func(w launched) {
+			alpha := delegateDomain(t, w, "alpha", "gated")
+			beta := delegateDomain(t, w, "beta", "gated")
+			delegation, _, err := recordsOf(t, w.home).Delegation(t.Context(), "alpha")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := alpha.as.provider.Close(alpha.as.session); err != nil {
+				t.Fatalf("ending alpha's subordinate: %v", err)
+			}
+			key := "domain/alpha/relaunch-bound/1"
+			var gone, hold int64
+			deadline := time.Now().Add(60 * time.Second)
+			for gone == 0 || hold == 0 {
+				if !time.Now().Before(deadline) {
+					t.Fatalf("the loop surfaced gone=%d hold=%d within the bound, want both", gone, hold)
+				}
+				for _, dw := range mustList(t, w.running.client).DomainWakes {
+					if dw.Domain != "alpha" {
+						t.Fatalf("the coordinator's drain handed out a domain wake about %s: %+v", dw.Domain, dw)
+					}
+					switch dw.Kind {
+					case string(supervisor.KindSubordinateGone):
+						gone = dw.ID
+					case string(supervisor.KindHoldOpened):
+						hold = dw.ID
+					}
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if h, err := recordsOf(t, w.home).Hold(t.Context(), key); err != nil || !h.Open() {
+				t.Fatalf("the bound's hold reads %+v (%v), want it open", h, err)
+			}
+			rows, err := recordsOf(t, w.home).DelegationWakes(t.Context(), delegation.ID)
+			if err != nil || len(rows) < 2 {
+				t.Fatalf("the delegation's wakes are %+v (%v), want the two", rows, err)
+			}
+			for _, row := range rows {
+				if row.HandedOutTo != store.Known(store.AcknowledgedByCoordinator()) || !row.Queued() {
+					t.Fatalf("domain wake %+v was handed to %v, want the coordinator and still queued", row, row.HandedOutTo)
+				}
+			}
+			if drained := drainedBy(t, beta); len(drained.DomainWakes) != 0 {
+				t.Fatalf("beta's subordinate was handed a wake about a domain: %+v", drained.DomainWakes)
+			}
+			if _, code := callAs(t, beta.as, ipc.MethodWakesAcknowledge, machine.AcknowledgeRequest{DomainWakes: []int64{gone}}); code != ipc.CodeSubordinate {
+				t.Fatalf("a subordinate acknowledging a domain wake answered %q, want %q", code, ipc.CodeSubordinate)
+			}
+			var closed machine.Acknowledged
+			if err := w.running.client.Call(t.Context(), ipc.MethodWakesAcknowledge, machine.AcknowledgeRequest{DomainWakes: []int64{gone, hold}}, &closed); err != nil {
+				t.Fatalf("the coordinator's acknowledgement: %v", err)
+			}
+			if listed := mustList(t, w.running.client); len(listed.DomainWakes) != 0 {
+				t.Fatalf("after the acknowledgement the drain handed out %+v", listed.DomainWakes)
+			}
+			if _, code := callAs(t, beta.as, ipc.MethodTaskRespond, machine.TaskRespondRequest{Domain: "alpha", Answer: machine.AnswerStop}); code != ipc.CodeSubordinate {
+				t.Fatalf("a subordinate answering a domain's hold answered %q, want %q", code, ipc.CodeSubordinate)
+			}
+			var answered machine.TaskAnswered
+			if err := w.running.client.Call(t.Context(), ipc.MethodTaskRespond, machine.TaskRespondRequest{Domain: "alpha", Answer: machine.AnswerStop, Note: "take it back"}, &answered); err != nil {
+				t.Fatalf("answering the domain's hold: %v", err)
+			}
+			if answered.Domain != "alpha" || answered.Effect != machine.AnswerStopped || answered.Hold.Key != key || answered.Hold.ResolutionNote.Or("") != "take it back" {
+				t.Fatalf("the stop answered %+v, want the delegation stopped on hold %s with the note", answered, key)
+			}
+			ended, _, err := recordsOf(t, w.home).Delegation(t.Context(), "alpha")
+			if err != nil || ended.Standing() || ended.EndedBy != store.Known(store.EndedByAnswer()) {
+				t.Fatalf("after the stop the delegation reads %+v (%v), want it ended by the answer", ended, err)
+			}
+			if _, _, held := w.running.service.SubordinateSessionOf("alpha"); held {
+				t.Fatal("the service still holds a session for the ended domain")
+			}
+		})
 }

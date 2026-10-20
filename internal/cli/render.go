@@ -736,6 +736,11 @@ func readOutQueuedWakes(w io.Writer, q machine.QueuedWakes) {
 	for _, row := range q.Wakes {
 		writef(w, "%s: %s %s\n", printable(row.Project), machine.QueuedWakePhrase(row), machine.QueuedWakeStanding(row))
 	}
+	// A notice about a domain is listed by the domain's name, which is the
+	// coordinator's own word and escaped, on the same terms.
+	for _, row := range q.DomainWakes {
+		writef(w, "%s: %s %s\n", printable(row.Domain), machine.QueuedDomainWakePhrase(row), machine.QueuedDomainWakeStanding(row))
+	}
 }
 
 // waitingLine is one decision waiting on the person: a run's branch and the

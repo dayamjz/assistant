@@ -461,6 +461,15 @@ func (s *Service) holdAtBound(ctx context.Context, id string, attempts []store.T
 // hold, AnswerRetryAtBound for a stopped task past its relaunch bound, or
 // retryNotBegun's effect, with the reason.
 func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.TaskRespondRequest) (machine.TaskAnswered, error) {
+	if r.Domain != "" {
+		// A domain's hold, subordinates.go's: it names no task, and an
+		// answer naming both selects its hold one way.
+		if strings.TrimSpace(r.Task) != "" || strings.TrimSpace(r.Hold) != "" {
+			return machine.TaskAnswered{}, fmt.Errorf("%w: an answer names domain %s and a task or a hold, and selects its hold one way",
+				ipc.ErrInvalidRequest, r.Domain)
+		}
+		return s.respondDomain(ctx, req, r)
+	}
 	if _, err := s.refuseDecision(ctx, req, r.Task, fmt.Sprintf("asked to answer task %s's hold %q with %q: %s",
 		r.Task, r.Hold, r.Answer, r.Note)); err != nil {
 		return machine.TaskAnswered{}, err

@@ -265,7 +265,23 @@
 // shape for a subordinate's starts; escalation is written once by
 // RecordEscalation, redacted, naming the task and nothing of the domain,
 // which the task's row owns. Why a delegation ended is DelegationEnd, closed
-// on Acknowledger's terms, with one member in this build.
+// on Acknowledger's terms: the coordinator's domain.end, or the answer to
+// the hold the relaunch bound raised for it.
+//
+// A wake about a domain rather than a task is the queue's second shape,
+// migration 47's domain_wake, because the wake table's row names a task
+// and a subordinate coordinator is not one: the same columns with the task
+// replaced by the delegation, which owns the row (P14), the domain read off
+// the delegation's row at every read, the same seals, and identifiers of
+// its own, so a drain carries the two shapes apart and an acknowledgement
+// names them apart. AppendDomainWakeWithMarkers is the one append and
+// advances the delegation's markers, delegation_marker, in the same
+// transaction under the same incarnation fence; DrainDomainWakes,
+// OfferedDomainWakes and QueuedDomainWakes are the wake accessors' terms
+// over it, with one difference the route decides: a subordinate's route is
+// offered none, since every kind here is about a subordinate.
+// UnacknowledgedDomainWakes is the count internal/supervisor's InFlightOf
+// adds to the per-task one.
 //
 // A wake's recipient is decided at the drain and stored on no row (P14):
 // DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain

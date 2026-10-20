@@ -90,7 +90,31 @@ var (
 		Consequence: "Its work stays where it is, and every notice about it comes to you from now on.",
 		Decision:    "Nothing to decide.",
 	}
+	phraseDomainRetried = Phrase{
+		Outcome:     "Your answer was taken, and the domain's coordinator was begun again.",
+		Consequence: "The domain's work stays where it is, and its coordinator picks it up from there.",
+		Decision:    "Nothing to decide unless it ends again as many times as the program begins it, which asks you again.",
+	}
+	phraseDelegationEndedByAnswer = Phrase{
+		Outcome:     "Your answer was recorded, and the domain's delegation is ended rather than begun again.",
+		Consequence: "Its work stays where it is, and every notice about it comes to you from now on.",
+		Decision:    "Nothing to decide.",
+	}
 )
+
+// DomainAnsweredPhrase is what a person reads about an answer to a domain's
+// hold, which TaskAnsweredPhrase dispatches to: a retry that began the
+// domain's coordinator again, or a stop that ended the delegation. Any
+// other effect reads as the hold's own row.
+func DomainAnsweredPhrase(a TaskAnswered) Phrase {
+	switch a.Effect {
+	case AnswerRelaunched:
+		return phraseDomainRetried
+	case AnswerStopped:
+		return phraseDelegationEndedByAnswer
+	}
+	return HoldPhrase(a.Hold)
+}
 
 // TaskCreatedPhrase is what a person reads about a task.create answer: the
 // row for work recorded behind other work when the record names a blocker,
@@ -152,11 +176,11 @@ func DelegationEndedPhrase(DelegationEnded) Phrase { return phraseDelegationEnde
 // row is about and what kind of notice it is are the structured rendering's,
 // because a kind is a word the derived forbidden set keeps from a person.
 func WakesPhrase(w Wakes) Phrase {
-	if len(w.Wakes) == 0 {
+	if len(w.Wakes)+len(w.DomainWakes) == 0 {
 		return phraseNoNotices
 	}
 	return Phrase{
-		Outcome:     fmt.Sprintf("%d notice(s) about the fleet were handed to the coordinator, oldest first, and none is recorded as handled yet.", len(w.Wakes)),
+		Outcome:     fmt.Sprintf("%d notice(s) about the fleet were handed to the coordinator, oldest first, and none is recorded as handled yet.", len(w.Wakes)+len(w.DomainWakes)),
 		Consequence: "Each stays waiting until it is acknowledged, and one not acknowledged is handed out again if the coordinator goes away first.",
 		Decision:    "Act on each, then run assistant coordinator acknowledge with the numbers the --json form lists.",
 	}
@@ -167,11 +191,11 @@ func WakesPhrase(w Wakes) Phrase {
 // the phrase says so, because the drain it replaced for a person took what
 // it showed.
 func QueuedWakesPhrase(q QueuedWakes) Phrase {
-	if len(q.Wakes) == 0 {
+	if len(q.Wakes)+len(q.DomainWakes) == 0 {
 		return phraseNoNotices
 	}
 	return Phrase{
-		Outcome:     fmt.Sprintf("%d notice(s) about the fleet are waiting, oldest first.", len(q.Wakes)),
+		Outcome:     fmt.Sprintf("%d notice(s) about the fleet are waiting, oldest first.", len(q.Wakes)+len(q.DomainWakes)),
 		Consequence: "Listing them here took none of them: each stays waiting until the coordinator acts on it and acknowledges it.",
 		Decision:    "Nothing to decide here; run assistant tasks to see how the work stands.",
 	}
@@ -268,7 +292,25 @@ func QueuedWakePhrase(w QueuedWake) Phrase {
 // drain has handed it to the coordinator. Either way it is still waiting,
 // because the listing shows only rows nobody has acknowledged.
 func QueuedWakeStanding(w QueuedWake) string {
-	if w.Wake.HandedOut() {
+	return standingOf(w.Wake.HandedOut())
+}
+
+// QueuedDomainWakePhrase is the row one listed notice about a domain reads
+// as, chosen by its kind on QueuedWakePhrase's terms.
+func QueuedDomainWakePhrase(w store.DomainWake) Phrase {
+	if row, ok := noticeRows[supervisor.Kind(w.Kind)]; ok {
+		return row
+	}
+	return phraseNoticeUnfamiliar
+}
+
+// QueuedDomainWakeStanding is QueuedWakeStanding for a notice about a
+// domain.
+func QueuedDomainWakeStanding(w store.DomainWake) string { return standingOf(w.HandedOut()) }
+
+// standingOf is the sentence after a listed notice, for either shape.
+func standingOf(handedOut bool) string {
+	if handedOut {
 		return "The coordinator has been handed it and has not yet said it acted on it."
 	}
 	return "The coordinator has not been handed it yet."
@@ -279,7 +321,7 @@ func QueuedWakeStanding(w QueuedWake) string {
 // answered, so every answer names at least one.
 func AcknowledgedPhrase(a Acknowledged) Phrase {
 	return Phrase{
-		Outcome:     fmt.Sprintf("%d notice(s) about the fleet are recorded as handled.", len(a.Wakes)),
+		Outcome:     fmt.Sprintf("%d notice(s) about the fleet are recorded as handled.", len(a.Wakes)+len(a.DomainWakes)),
 		Consequence: "They are not handed out again.",
 		Decision:    "Nothing to decide.",
 	}
@@ -314,6 +356,7 @@ func coordinatorRows() []Phrase {
 		phraseNoticeDomainCoordinatorGone, phraseNoticeHandedUp,
 		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched, phraseWorkerRecorded,
 		phrasePeekAttachable, phrasePeekUnattached, phraseDomainDelegated, phraseDelegationEnded,
+		phraseDomainRetried, phraseDelegationEndedByAnswer,
 	}
 }
 

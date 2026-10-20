@@ -90,6 +90,12 @@ const (
 	// pushed wake is a notice and not the record: whether it is still
 	// actionable is the queue's to say.
 	TypeWakeQueued Type = "wake.queued"
+	// TypeDomainWakeQueued is a wake about a domain rather than a task, the
+	// queue's second shape, pushed on TypeWakeQueued's terms with the
+	// domain wake row as its payload and that row's own identifier as its
+	// revision, since the two shapes number their rows apart. It is state,
+	// as TypeWakeQueued is.
+	TypeDomainWakeQueued Type = "domain-wake.queued"
 
 	// TypeGap says the stream discarded something. It is produced by this
 	// package rather than published, and a consumer that receives one must
@@ -103,18 +109,19 @@ const (
 
 // classes is the one place a type's class is written down.
 var classes = map[Type]Class{
-	TypeLogLine:         ClassActivity,
-	TypeAgentOutput:     ClassActivity,
-	TypeHeartbeat:       ClassActivity,
-	TypeRunState:        ClassState,
-	TypeStageState:      ClassState,
-	TypeFindings:        ClassState,
-	TypeHoldState:       ClassState,
-	TypeTaskState:       ClassState,
-	TypeTaskEvent:       ClassState,
-	TypeWakeQueued:      ClassState,
-	TypeGap:             ClassControl,
-	TypeServiceStopping: ClassControl,
+	TypeLogLine:          ClassActivity,
+	TypeAgentOutput:      ClassActivity,
+	TypeHeartbeat:        ClassActivity,
+	TypeRunState:         ClassState,
+	TypeStageState:       ClassState,
+	TypeFindings:         ClassState,
+	TypeHoldState:        ClassState,
+	TypeTaskState:        ClassState,
+	TypeTaskEvent:        ClassState,
+	TypeWakeQueued:       ClassState,
+	TypeDomainWakeQueued: ClassState,
+	TypeGap:              ClassControl,
+	TypeServiceStopping:  ClassControl,
 }
 
 // Classify reports the class of a type. A type this build does not recognize

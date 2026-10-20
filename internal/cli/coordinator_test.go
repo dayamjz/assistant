@@ -76,6 +76,8 @@ func TestTheCoordinatorVerbServesItsTableAndNothingElse(t *testing.T) {
 		{"coordinator", "message", "abcdefghij23", "--text", "x", "--text-file", both},
 		{"coordinator", "acknowledge"},
 		{"coordinator", "acknowledge", "seven"},
+		{"coordinator", "acknowledge", "dseven"},
+		{"coordinator", "acknowledge", "x7"},
 		{"coordinator", "wakes", "--limit", "-1"},
 		{"coordinator", "await", "--timeout", "500ms"},
 		{"coordinator", "await", "--timeout", "1500ms"},

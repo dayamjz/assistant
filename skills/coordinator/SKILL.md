@@ -372,14 +372,23 @@ subordinate's session is ended, and from the next drain on its rows are
 yours. If you are a subordinate yourself, the program told you so when it
 started you; keep to your domain and ask for a promotion when you want one.
 
+A subordinate whose session ends reaches you as a `subordinate-gone` wake
+about the domain, once per `escalation_window` while it stays gone; the
+service relaunches it at a restart up to `relaunch_attempts` times, and past
+that the delegation holds for you as a `hold-opened` wake about the domain.
+Wakes about a domain are listed under `domain_wakes` with numbers of their
+own and acknowledged as `dNUMBER`:
+
+```sh
+assistant coordinator acknowledge 12 d3
+assistant --domain DOMAIN --answer retry     # begin its coordinator once more
+assistant --domain DOMAIN --answer stop      # end the delegation
+```
+
 ## Known gaps in this build
 
-- **A subordinate's own ending raises no wake yet.** The service re-probes
-  a delegated domain's subordinate at restart and relaunches a dead one up
-  to `relaunch_attempts` times, but while the service runs nothing tells
-  you its session ended, and past the bound the delegation stands until you
-  end it. Read `assistant --json tasks` for the domain and the service log.
-  A subordinate cannot hold `listen`; it waits with `await`.
+- **A subordinate cannot hold `listen`.** It waits with `await`, which is
+  routed to its domain; the stream is the first coordinator's alone.
 
 - **Waking depends on the watch.** A push and a wait both follow the
   service's supervision recording a wake, so how soon either reaches you

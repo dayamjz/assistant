@@ -253,8 +253,16 @@ type RespondRequest struct {
 // resolved a hold is derived from the surface by internal/ipc's
 // Request.HoldResolver and never read from a request.
 type TaskRespondRequest struct {
-	// Task is the task whose hold is answered.
-	Task string `json:"task"`
+	// Task is the task whose hold is answered. It is empty when Domain is
+	// set, and one of the two is required.
+	Task string `json:"task,omitempty"`
+	// Domain is the domain whose hold is answered instead of a task's: the
+	// one the relaunch bound raises for a delegation whose subordinate
+	// coordinator's terminal is gone, PRD section 11's "past the bound it
+	// holds for you". It offers AnswerRetry, which begins the subordinate
+	// once more, and AnswerStop, which ends the delegation; Hold is not
+	// read with it, since a delegation holds on one key at a time.
+	Domain string `json:"domain,omitempty"`
 	// Hold names which open hold to close: the hold's full key, or a
 	// finding id that resolves to task/<Task>/finding/<id>. Empty answers
 	// the only open hold naming the task and no run, and is refused when
@@ -612,6 +620,10 @@ type AcknowledgeRequest struct {
 	// handed out or not. A subset leaves the rest queued; an identifier no
 	// wake has, or one already acknowledged, refuses the whole batch.
 	Wakes []int64 `json:"wakes"`
+	// DomainWakes are the identifiers of the queued rows about a domain the
+	// caller acted on, numbered apart from Wakes, on the same terms. A
+	// subordinate coordinator may name none, since no such row is its.
+	DomainWakes []int64 `json:"domain_wakes,omitempty"`
 }
 
 // DomainDelegateRequest delegates a named domain of tasks to a subordinate

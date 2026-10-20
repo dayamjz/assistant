@@ -740,6 +740,9 @@ var (
 // hold: the row for what the answer did, and HoldPhrase's answered row for
 // an answer that only closed the hold.
 func TaskAnsweredPhrase(a TaskAnswered) Phrase {
+	if a.Domain != "" {
+		return DomainAnsweredPhrase(a)
+	}
 	switch a.Effect {
 	case AnswerRelaunched:
 		return phraseRetried

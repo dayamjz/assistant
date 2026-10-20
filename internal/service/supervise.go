@@ -341,6 +341,9 @@ type passReport struct {
 	// Err is a failure that ended the pass before any task was read.
 	Err   error
 	Tasks map[string]taskReport
+	// Delegations is the pass over every standing delegation, keyed by
+	// domain, on delegations.go's terms; nil when none stands.
+	Delegations map[string]taskReport
 }
 
 // taskReport is one task's part of a pass.
@@ -500,6 +503,14 @@ func (s *Service) passAndReport(c *incarnation, reply chan<- passReport) (replac
 			}
 		}
 	}
+	for domain, dr := range report.Delegations {
+		if dr.Err != nil {
+			s.log.Printf("supervisor incarnation %d could not record its pass over domain %s: %v", c.inc.Epoch(), domain, dr.Err)
+			if errors.Is(dr.Err, store.ErrStaleIncarnation) {
+				replaced = true
+			}
+		}
+	}
 	switch {
 	case reply != nil:
 		reply <- report
@@ -553,6 +564,10 @@ func (s *Service) pass(c *incarnation) passReport {
 		id := o.Snapshot.Task.ID
 		report.Tasks[id] = s.superviseTask(c, o, probes, unacknowledged[id] > 0, unread[id], now, &providerWideSurfaced)
 	}
+	// The delegations after the tasks, on delegations.go's terms: each
+	// standing one's subordinate probed, its gone surfaced on the queue's
+	// second shape, and the bound's hold registered for one past it.
+	report.Delegations = s.superviseDelegations(c, now)
 	return report
 }
 

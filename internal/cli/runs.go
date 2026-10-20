@@ -83,6 +83,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		task         string
 		hold         string
 		targetRun    bool
+		domain       string
 		consent      bool
 	)
 	if err := in.parseArgs("", 1, func(set *flag.FlagSet) {
@@ -91,6 +92,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&answer, "answer", "", "answer the decision the run is holding on, or with --task the task's")
 		set.StringVar(&task, "task", "", "with --answer: the task whose hold is answered, or with none of its own open, the hold on the task's current run; "+
 			"with --standing-consent: the task whose current run is put under standing consent")
+		set.StringVar(&domain, "domain", "", "with --answer: the delegated domain whose hold is answered, the one raised once its "+
+			"coordinator was begun again as many times as the program begins it on its own; retry begins it once more and stop ends the delegation")
 		set.StringVar(&hold, "hold", "", "with --task --answer: which of the task's own holds to close "+
 			"(the hold's key, or a finding id under that task); without it the only open one is answered, and more than one open is refused")
 		set.BoolVar(&targetRun, "run", false, "with --task --answer: answer the task's current run even while "+
@@ -132,6 +135,17 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	tasked := flagWasSet(in.flags, "task")
 	holding := flagWasSet(in.flags, "hold")
 	running := flagWasSet(in.flags, "run")
+	domained := flagWasSet(in.flags, "domain")
+	switch {
+	case domained && strings.TrimSpace(domain) == "":
+		return nil, usagef("--domain was given no domain; it takes the name of the delegated domain whose hold is answered")
+	case domained && !answered:
+		return nil, usagef("--domain names the domain whose hold --answer closes, and it is read only with --answer")
+	case domained && (tasked || holding || running || consent):
+		return nil, usagef("--domain answers a domain's hold on its own; pass it without --task, --hold, --run or --standing-consent")
+	case domained && cancel.on:
+		return nil, usagef("--domain and --cancel are two different things to do; pass one")
+	}
 	if running && !targetRun {
 		// Writing --run=false is "do not target the run"; honour that rather
 		// than treating the flag's presence as the instruction.
@@ -158,10 +172,11 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		return nil, usagef("--hold and --run name what --answer closes, and they are read only with --answer")
 	}
 	if flagWasSet(in.flags, "note") && !fixing {
-		// A resolution note rides on a task hold. A run's answer has no
-		// field for one, and --run makes the answer the run's even while
-		// the task still holds, so a note beside it would be ignored.
-		if !tasked || running {
+		// A resolution note rides on a task's or a domain's hold. A run's
+		// answer has no field for one, and --run makes the answer the
+		// run's even while the task still holds, so a note beside it would
+		// be ignored.
+		if (!tasked && !domained) || running {
 			return nil, usagef("--note records what was decided on a task's hold, or with --answer %s a note for the fixer",
 				pipeline.OutcomeFixRequested)
 		}
@@ -213,6 +228,12 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 			}
 		}
 		return in.consentGivenTask(ctx, task)
+	}
+	if domained {
+		if fixing {
+			return nil, usagef("--domain answers a domain's hold, which offers retry or stop and never a fix round")
+		}
+		return in.answerDomain(ctx, domain, answer, note)
 	}
 	if tasked {
 		return in.answerGivenTask(ctx, task, answer, hold, note, targetRun, request)
@@ -375,6 +396,20 @@ func (in *invocation) answerTask(ctx context.Context, task, answer, hold, note s
 	var answered machine.TaskAnswered
 	err := in.callService(ctx, ipc.MethodTaskRespond, machine.TaskRespondRequest{
 		Task: task, Hold: hold, Answer: answer, Note: note,
+	}, &answered)
+	return answered, err
+}
+
+// answerDomain answers the hold a delegated domain raised once its
+// coordinator was begun again as many times as the program begins one on its
+// own, through task.respond given the domain: retry begins the coordinator
+// once more and stop ends the delegation, which the service decides and
+// records; a domain holding on nothing is its refusal.
+func (in *invocation) answerDomain(ctx context.Context, domain, answer, note string) (any, error) {
+	in.progressf("answering the hold domain %s is waiting on with %q", domain, answer)
+	var answered machine.TaskAnswered
+	err := in.callService(ctx, ipc.MethodTaskRespond, machine.TaskRespondRequest{
+		Domain: domain, Answer: answer, Note: note,
 	}, &answered)
 	return answered, err
 }

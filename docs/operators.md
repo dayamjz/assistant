@@ -649,11 +649,23 @@ subordinate's session this service holds, and the next drain of yours is
 offered the domain's rows; the tasks stay in their domain. Nothing else
 ends a delegation: not a restart, which re-probes the subordinate's
 session and relaunches a dead one up to `relaunch_attempts` times, and not
-a dropped connection. What this build does not do: a subordinate whose
-session is gone raises no wake of its own yet, so read the service log and
-`assistant --json tasks` for the domain after a restart; past the relaunch
-bound the delegation stands until you end it; and a subordinate cannot hold
-`listen`, so it waits with `await`.
+a dropped connection. A subordinate whose session is gone reaches you as a
+`subordinate-gone` wake, once and then once per `escalation_window` while
+it stays gone, and once it has been relaunched `relaunch_attempts` times
+the delegation holds for you, which reaches you as a `hold-opened` wake on
+the domain; both are wakes about a domain rather than a task, listed under
+`domain_wakes` in the structured answers with numbers of their own, and
+acknowledged as `dNUMBER`:
+
+```sh
+assistant coordinator acknowledge 12 d3        # wake 12, and domain wake 3
+assistant --domain DOMAIN --answer retry        # begin its coordinator once more
+assistant --domain DOMAIN --answer stop         # end the delegation instead
+```
+
+A subordinate is never handed a wake about a domain, its own included. What
+this build does not do: a subordinate cannot hold `listen`, so it waits
+with `await`.
 
 ## Unattended operating posture
 

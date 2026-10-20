@@ -646,8 +646,8 @@ func TestTheTableIsClosedAndTheProducerlessKindIsNamed(t *testing.T) {
 			t.Errorf("%s is in Kinds and Lookup does not find it", row.Kind)
 		}
 	}
-	if !slices.Equal(unproduced, []supervisor.Kind{supervisor.KindCheckResult, supervisor.KindSubordinateGone}) {
-		t.Errorf("the kinds marked as having no producer are %v, want exactly the check result and subordinate gone", unproduced)
+	if !slices.Equal(unproduced, []supervisor.Kind{supervisor.KindCheckResult}) {
+		t.Errorf("the kinds marked as having no producer are %v, want exactly the check result", unproduced)
 	}
 }
 

@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -98,21 +100,21 @@ import (
 // reconcile.go's terms: Dead is relaunched as a new delegation attempt
 // anchored to the attempt history read, bounded by relaunch_attempts
 // counted from the attempts, Unobserved is left alone, and past the bound
-// the delegation is left standing and the log says so. Ownership never
-// transfers: the delegation stands until domain.end writes its one
-// revision, and its tasks stay in its domain whatever became of its
-// session.
+// the delegation holds for a person on holdDomainBound's hold, keyed by the
+// attempt that reached the bound, which the supervisor loop raises the same
+// way while the service runs (delegations.go), so a delegation never stands
+// silently past the bound. The hold is answered through task.respond given
+// the domain, respondDomain: a retry begins the subordinate once more as a
+// new attempt anchored to the one the hold names, which spends the answer
+// (P6), and a stop ends the delegation with store.EndedByAnswer. Ownership
+// never transfers: the delegation stands until domain.end or that answer
+// writes its one revision, and its tasks stay in its domain whatever became
+// of its session. A subordinate's own terminal gone is the loop's wake,
+// supervisor.KindSubordinateGone on the queue's second shape, which
+// delegations.go owns.
 //
 // # Residual gaps
 //
-//   - The queue's row names a task, and a subordinate is not one, so a
-//     subordinate's terminal gone has no wake row to be raised on: the kind
-//     is in the table with no producer, and a dead subordinate reaches the
-//     coordinator only through the delegation's attempts and this service's
-//     log until the follow-up this gap names decides how a wake about a
-//     domain is carried. For the same reason the relaunch bound holds no
-//     hold for a person yet: past it the delegation stands and nothing
-//     tells the coordinator but the log.
 //   - wakes.subscribe is one publisher per method in internal/ipc, and a
 //     subscriber is pushed every row the loop appends and counts toward the
 //     one attachment the coordinator's handouts are held under, so a
@@ -678,10 +680,29 @@ func (s *Service) reconcileSubordinates(ctx context.Context) {
 			}
 		}
 		if relaunches := max(len(attempts)-1, 0); relaunches >= s.cfg.RelaunchAttempts {
-			s.log.Printf("reconciliation: the subordinate coordinator of domain %s is not started again: %s, it has been "+
-				"relaunched %d times and relaunch_attempts is %d; the delegation stands until the coordinator ends it",
-				d.Domain, reason, relaunches, s.cfg.RelaunchAttempts)
-			continue
+			// Past the bound the delegation holds for a person, on
+			// taskholds.go's terms for a task: the hold is keyed by the
+			// attempt that reached the bound, so a retry answered on it is
+			// spent by the attempt the retry begins. A retry already
+			// answered relaunches once more here; a stop answered ended
+			// the delegation at the answer, so it is not standing.
+			answer, err := s.relaunchAnswerOf(ctx, domainBoundKey(d.Domain, latest))
+			if err != nil {
+				s.log.Printf("reconciliation: the hold of domain %s could not be read: %v", d.Domain, err)
+				continue
+			}
+			if answer != boundRetry {
+				past := fmt.Sprintf("%s, it has been relaunched %d times and relaunch_attempts is %d", reason, relaunches, s.cfg.RelaunchAttempts)
+				if h, err := s.holdDomainBound(ctx, d, latest, past); err != nil {
+					s.log.Printf("reconciliation: the subordinate coordinator of domain %s is not started again (%s), and its hold could not be registered: %v",
+						d.Domain, past, err)
+				} else {
+					s.log.Printf("reconciliation: the subordinate coordinator of domain %s is not started again (%s); it holds for a person on %s",
+						d.Domain, past, h.Key)
+				}
+				continue
+			}
+			reason += ", and its hold at the bound was answered " + machine.AnswerRetry
 		}
 		attempt, err := s.store.BeginDelegationAttempt(ctx, d.ID, latest)
 		if err != nil {
@@ -690,6 +711,169 @@ func (s *Service) reconcileSubordinates(ctx context.Context) {
 		}
 		s.log.Printf("reconciliation: the subordinate coordinator of domain %s is relaunched as attempt %d: %s",
 			d.Domain, attempt.Sequence, reason)
+		s.acknowledgeSupersededDomain(ctx, d, latest)
 		s.launchSubordinateInBackground(d, attempt.Sequence)
+	}
+}
+
+// domainBoundPrefix is the key space of the holds the relaunch bound raises
+// for a delegation, beside the task holds' key spaces.
+const domainBoundPrefix = "/relaunch-bound/"
+
+// domainBoundKey is the key of the hold the relaunch bound raises for a
+// domain's delegation attempt, on relaunchBoundKey's terms: keyed by the
+// attempt that reached the bound, so the same attempt found past the bound
+// at every later pass is the same hold and a later attempt is a new key.
+func domainBoundKey(domain string, attempt int64) string {
+	return "domain/" + domain + domainBoundPrefix + strconv.FormatInt(attempt, 10)
+}
+
+// holdDomainBound registers the bound's hold for a delegation whose latest
+// attempt is past relaunch_attempts, on holdAtBound's terms, and publishes
+// it as it stands. Registering a key already there returns that hold
+// unchanged, open or answered.
+func (s *Service) holdDomainBound(ctx context.Context, d store.Delegation, attempt int64, past string) (store.Hold, error) {
+	h, err := s.store.RegisterHold(ctx, store.Hold{
+		Key:     domainBoundKey(d.Domain, attempt),
+		Subject: "whether to begin this domain's coordinator again after it ended as many times as the program begins it on its own",
+		Detail: fmt.Sprintf("domain %s (delegation %d): %s. Answer %q with --domain to begin its coordinator once more, "+
+			"or %q to end the delegation and take the domain's work back.",
+			d.Domain, d.ID, past, machine.AnswerRetry, machine.AnswerStop),
+	})
+	if err != nil {
+		return store.Hold{}, err
+	}
+	s.publishHoldState(h)
+	return h, nil
+}
+
+// acknowledgeSupersededDomain acknowledges, as the program, every queued
+// subordinate-gone domain wake about the delegation's attempt a relaunch
+// replaced, on acknowledgeSuperseded's terms, and leaves every other row.
+func (s *Service) acknowledgeSupersededDomain(ctx context.Context, d store.Delegation, attempt int64) {
+	queued, err := s.store.DelegationWakes(ctx, d.ID)
+	if err != nil {
+		s.log.Printf("the wakes superseded by relaunching the subordinate coordinator of domain %s could not be read: %v", d.Domain, err)
+		return
+	}
+	var ids []int64
+	for _, w := range queued {
+		if w.Queued() && w.Kind == string(supervisor.KindSubordinateGone) && subordinateGoneAbout(w.Marker, attempt) {
+			ids = append(ids, w.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	if err := s.store.AcknowledgeDomainWakes(ctx, ids, store.AcknowledgedByProgram()); err != nil {
+		s.log.Printf("the %d domain wake(s) superseded by relaunching the subordinate coordinator of domain %s could not be acknowledged: %v",
+			len(ids), d.Domain, err)
+		return
+	}
+	s.log.Printf("relaunching the subordinate coordinator of domain %s superseded %d queued domain wake(s) about attempt %d, acknowledged by the program",
+		d.Domain, len(ids), attempt)
+}
+
+// respondDomain answers the hold the relaunch bound raised for a domain's
+// delegation, task.respond given TaskRespondRequest.Domain: the
+// coordinator's, refused for a worker and for a subordinate, since a hold
+// waits on a person and a subordinate answers none. The hold is the one
+// keyed by the delegation's latest attempt; a domain with no standing
+// delegation, or one holding on nothing, is ipc.ErrRefused, and an answer
+// outside retry and stop is ipc.ErrInvalidRequest. The resolution is
+// recorded first, with the resolver internal/ipc derives, then acted on: a
+// retry begins the subordinate once more as a new attempt anchored to the
+// one the hold names, which spends the answer (P6), and acknowledges the
+// subordinate-gone rows about the attempt it replaced as the program; a
+// stop ends the delegation with store.EndedByAnswer, its one revision,
+// and ends the session this service holds for it.
+func (s *Service) respondDomain(ctx context.Context, req ipc.Request, r machine.TaskRespondRequest) (machine.TaskAnswered, error) {
+	if _, err := s.refuseSubordinate(req); err != nil {
+		return machine.TaskAnswered{}, err
+	}
+	switch {
+	case strings.TrimSpace(r.Answer) == "":
+		return machine.TaskAnswered{}, fmt.Errorf("%w: an answer to domain %s's hold is empty", ipc.ErrInvalidRequest, r.Domain)
+	case r.Answer != machine.AnswerRetry && r.Answer != machine.AnswerStop:
+		return machine.TaskAnswered{}, fmt.Errorf("%w: domain %s's hold is answered %q or %q, not %q",
+			ipc.ErrInvalidRequest, r.Domain, machine.AnswerRetry, machine.AnswerStop, r.Answer)
+	case len(r.Note) > machine.MaxMessageBytes:
+		return machine.TaskAnswered{}, fmt.Errorf("%w: the note is %d bytes, over the limit of %d, and is refused rather than cut",
+			ipc.ErrInvalidRequest, len(r.Note), machine.MaxMessageBytes)
+	}
+	d, found, err := s.store.Delegation(ctx, r.Domain)
+	if err != nil {
+		return machine.TaskAnswered{}, err
+	}
+	if !found || !d.Standing() {
+		return machine.TaskAnswered{}, fmt.Errorf("%w: %w: domain %q", ipc.ErrRefused, errNotDelegated, r.Domain)
+	}
+	attempts, err := s.store.DelegationAttempts(ctx, d.ID)
+	if err != nil {
+		return machine.TaskAnswered{}, err
+	}
+	var latest int64
+	if n := len(attempts); n > 0 {
+		latest = attempts[n-1].Sequence
+	}
+	key := domainBoundKey(r.Domain, latest)
+	hold, err := s.store.Hold(ctx, key)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && !hold.Open()) {
+		return machine.TaskAnswered{}, fmt.Errorf("%w: domain %s holds on nothing: its delegation's latest attempt %d has no open hold",
+			ipc.ErrRefused, r.Domain, latest)
+	}
+	if err != nil {
+		return machine.TaskAnswered{}, err
+	}
+	resolved, err := s.store.ResolveHoldNoted(ctx, key, r.Answer, r.Note, req.HoldResolver())
+	if errors.Is(err, store.ErrHoldResolved) {
+		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+	}
+	if err != nil {
+		return machine.TaskAnswered{}, err
+	}
+	s.publishHoldState(resolved)
+	out := machine.TaskAnswered{Hold: resolved, Effect: machine.AnswerRecorded, Domain: r.Domain}
+	if r.Answer == machine.AnswerStop {
+		ended, err := s.store.EndDelegation(ctx, d.ID, store.EndedByAnswer())
+		if err != nil {
+			return machine.TaskAnswered{}, fmt.Errorf("service: domain %s's hold was answered %q and the delegation could not be ended: %w",
+				r.Domain, r.Answer, err)
+		}
+		s.endSubordinate(r.Domain)
+		s.log.Printf("the delegation of domain %s (delegation %d) was ended by the answer %q to hold %s", r.Domain, ended.ID, r.Answer, key)
+		out.Effect = machine.AnswerStopped
+		return out, nil
+	}
+	attempt, err := s.store.BeginDelegationAttempt(ctx, d.ID, latest)
+	if err != nil {
+		out.NotRelaunched = err.Error()
+		out.Effect = machine.AnswerRetryDeferred
+		s.log.Printf("domain %s was answered %q on hold %s and its coordinator was not begun again: %v", r.Domain, r.Answer, key, err)
+		return out, nil
+	}
+	s.acknowledgeSupersededDomain(ctx, d, latest)
+	s.launchSubordinateInBackground(d, attempt.Sequence)
+	s.log.Printf("the subordinate coordinator of domain %s is begun again as attempt %d on the answer %q to hold %s",
+		r.Domain, attempt.Sequence, r.Answer, key)
+	out.Effect = machine.AnswerRelaunched
+	out.Relaunch = &machine.RelaunchBegun{Attempt: attempt.Sequence}
+	return out, nil
+}
+
+// publishDomainWake pushes a domain wake the loop appended to the
+// coordinator's wake stream, on publishWake's terms, as
+// ipc.TypeDomainWakeQueued with the row's own identifier as its revision.
+func (s *Service) publishDomainWake(w store.DomainWake) {
+	if s.wakes == nil {
+		return
+	}
+	payload, err := json.Marshal(w)
+	if err != nil {
+		s.log.Printf("could not encode domain wake %d of domain %s: %v", w.ID, w.Domain, err)
+		return
+	}
+	if err := s.wakes.Publish(ipc.Event{Type: ipc.TypeDomainWakeQueued, Revision: uint64(w.ID), Payload: payload}); err != nil {
+		s.log.Printf("could not push domain wake %d of domain %s: %v", w.ID, w.Domain, err)
 	}
 }
