@@ -506,6 +506,7 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 		done:     make(chan struct{}),
 	}
 	go w.poll()
+	go w.closeOnHurry()
 	if typing.read != nil {
 		bound, cancel := context.WithTimeout(ctx, terminalReadyTimeout)
 		err := w.await(bound, func(s screenState) bool { return s != screenNotDrawn })
@@ -805,6 +806,21 @@ func (w *tmuxWorker) Done() <-chan struct{} { return w.done }
 // Attach is the command a person runs to attach to the worker's terminal.
 func (w *tmuxWorker) Attach() []string {
 	return []string{w.terminal.Tmux, "-S", w.terminal.Socket, "attach-session", "-t", terminalTarget}
+}
+
+// closeOnHurry is procWorker.closeOnHurry for a terminal-hosted worker: the
+// worker is closed the moment its hurry is closed. The group it ends is
+// named by the identity read when the worker started and verified again by
+// endGroup before anything is signalled.
+func (w *tmuxWorker) closeOnHurry() {
+	if w.hurry == nil {
+		return
+	}
+	select {
+	case <-w.hurry:
+		w.Close()
+	case <-w.done:
+	}
 }
 
 // Close ends the worker on the terms the mechanism states. It is

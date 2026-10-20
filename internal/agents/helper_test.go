@@ -1,6 +1,7 @@
 package agents_test
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -175,6 +176,13 @@ func helperMain(mode string) {
 		// Both the agent and its child ignore the polite signal, so only the
 		// forceful one ends them.
 		helperSpawn(true, true, true)
+	case "spawn-holding-child-and-exit":
+		// Start a child that ignores the polite signal and holds this
+		// process's standard output open, read one line of standard input,
+		// and exit. The leader is gone and the child keeps the pipe the
+		// adapter reads, which holds the process's Wait.
+		helperSpawnHolding()
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 	case "worker-spawn-stubborn-child":
 		// A worker that starts a child ignoring the polite signal, then reads
 		// its standard input until it is closed and exits, leaving the child
@@ -258,6 +266,26 @@ func helperSpawn(stubbornChild, stubbornLeader, wait bool) {
 		signal.Ignore(helperPoliteSignals()...)
 	}
 	time.Sleep(helperHold)
+}
+
+// helperSpawnHolding is helperSpawn with a stubborn child that inherits this
+// process's standard output, and no wait.
+func helperSpawnHolding() {
+	self, err := os.Executable()
+	if err != nil {
+		os.Exit(3)
+	}
+	child := exec.Command(self)
+	child.Env = []string{helperModeVar + "=hold", helperStderrVar + "=stubborn"}
+	child.Dir = os.TempDir()
+	child.Stdout = os.Stdout
+	if err := child.Start(); err != nil {
+		os.Exit(4)
+	}
+	line := strconv.Itoa(os.Getpid()) + "\n" + strconv.Itoa(child.Process.Pid) + "\n"
+	if err := os.WriteFile(os.Getenv(helperPidVar), []byte(line), 0o600); err != nil {
+		os.Exit(5)
+	}
 }
 
 // helperSession reports the session identifier the stand-in agent claims. It

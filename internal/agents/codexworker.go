@@ -105,6 +105,7 @@ func (r *codexRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error
 		w.exited(cmd.Wait())
 		terminateTree(cmd.Process, r.settings.grace, false, nil, w.hurry)
 	}()
+	go w.closeOnHurry()
 	start, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	success := false

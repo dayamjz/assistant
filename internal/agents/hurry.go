@@ -18,10 +18,15 @@ type hurryKey struct{}
 // group checked non-empty that empties and is reused before the signal. A
 // nil hurry, and a context carrying none, never hurries anything.
 //
+// The hurry acts as well as shortens: closing it starts the termination of
+// an invocation's tree even when nobody cancelled its context, and of a
+// worker's even when nobody closed it, so a descendant holding an output
+// pipe open, which holds the process's Wait, cannot keep the tree alive.
+//
 // A worker or subordinate coordinator started on the returned context, by
 // OpenWorker, OpenSubordinate or OpenTerminalWorker, keeps the channel for
-// its lifetime, and its own termination, on its leader's exit or on Close,
-// is hurried the same way.
+// its lifetime: it is closed the moment the channel is, and its own
+// termination, on its leader's exit or on Close, is hurried the same way.
 func WithHurry(ctx context.Context, hurry <-chan struct{}) context.Context {
 	return context.WithValue(ctx, hurryKey{}, hurry)
 }
