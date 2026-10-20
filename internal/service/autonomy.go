@@ -70,9 +70,10 @@ import (
 //     adapter chooses among those the repository permits, and the GitLab
 //     adapter sends none, so the project's own settings decide. Neither is
 //     this file's choice.
-//   - A refusal is reported in the service log only, with the code host's
-//     status and message as internal/forge carries them; nothing on the run's
-//     record says the program tried.
+//   - A refusal is reported in the service log only, with whatever detail
+//     internal/forge's Refusal carries, which is that package's doc.go to
+//     state and not always the code host's status and message; nothing on
+//     the run's record says the program tried.
 
 // errMergeNotReady is the class of every refusal the live read makes.
 var errMergeNotReady = errors.New("service: the pull request is not ready for the program to merge")
