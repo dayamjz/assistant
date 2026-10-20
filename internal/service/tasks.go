@@ -90,8 +90,8 @@ func (s *Service) branchInGate(ctx context.Context, repository store.Repository,
 // run finishes at four sites in this package and three call it: settle, for
 // a segment that ended the run; cancel, for an ending through the protocol;
 // and the checks-hold closure, for a run its pull request's state ended.
-// begin also calls it when configuration resolution is refused after the
-// copy is built, on the same terms as cancel.
+// begin's endRefused also calls it, once it has ended a run begin refused
+// on its code host or its configuration, on the same terms as cancel.
 // The merge record is written by internal/runs' PassOnMerge, which only
 // settle and that closure reach, so every record is followed by a call here
 // and a blocker Landed is observed by it. The

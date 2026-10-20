@@ -19,11 +19,11 @@ func (s *Service) SessionOf(id string) (session.Provider, *session.Session, bool
 	return s.sessionOf(id)
 }
 
-// SetBeforeConfigRefusalEndForTest installs beforeConfigRefusalEnd for this
+// SetBeforeRefusalEndForTest installs beforeRefusalEnd for this
 // package's external tests. It exists only in the tests, on that field's
 // terms in service.go.
-func (s *Service) SetBeforeConfigRefusalEndForTest(f func()) {
-	s.beforeConfigRefusalEnd = f
+func (s *Service) SetBeforeRefusalEndForTest(f func()) {
+	s.beforeRefusalEnd = f
 }
 
 // AbandonSessionsForTest forgets every session this service launched

@@ -157,11 +157,11 @@ func TestAConfigurationRefusalReleasesTheTaskQueuedBehindIt(t *testing.T) {
 		}
 		var arrived sync.WaitGroup
 		arrived.Add(2)
-		running.service.SetBeforeConfigRefusalEndForTest(func() {
+		running.service.SetBeforeRefusalEndForTest(func() {
 			arrived.Done()
 			arrived.Wait()
 		})
-		defer running.service.SetBeforeConfigRefusalEndForTest(nil)
+		defer running.service.SetBeforeRefusalEndForTest(nil)
 		events, err := running.client.Subscribe(t.Context(), machine.SubscribeRequest{})
 		if err != nil {
 			t.Fatalf("subscribing to the service's events: %v", err)

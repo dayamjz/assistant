@@ -314,11 +314,11 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
-	// beforeConfigRefusalEnd runs in begin after configuration resolution is
-	// refused and before the run is ended. It is nil in production and set
-	// only by this package's tests, which use it to hold the run pending
-	// while they assert queue state.
-	beforeConfigRefusalEnd func()
+	// beforeRefusalEnd runs in endRefused, after begin refused a run and
+	// before the run is ended. It is nil in production and set only by this
+	// package's tests, which use it to hold the run pending while they
+	// assert queue state, or to move the run first so the ending fails.
+	beforeRefusalEnd func()
 	// sweepCopy stands in for the sweep this service asks of a copy: the
 	// one relaunch.go and dispatch.go ask of a task's standing copy, and the
 	// one runsweep.go asks of a finished run's. It is nil in production,

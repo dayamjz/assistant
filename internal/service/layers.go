@@ -96,8 +96,9 @@ var ErrForkUnresolved = errors.New("service: the repository record names a fork 
 // this build does not address (a self-managed GitLab, GitHub Enterprise, an
 // scp-style host that is neither github.com nor gitlab.com, or a scheme-less
 // host/path form). The run is refused rather than walked to the pull request
-// stage and stalled; begin ends any pending record for that refusal before
-// returning, so the branch is not left with an unfinished run. A local path
+// stage and stalled; begin ends the pending record for that refusal before
+// returning, or answers *RunNotEndedError wrapping this error when it cannot,
+// so an unfinished run is never reported as this refusal alone. A local path
 // or file:// remote is not this error: those have no code host and the run
 // skips the pull request and checks stages after push.
 var ErrUnsupportedHost = errors.New("service: the repository's upstream names a host this build does not address")
