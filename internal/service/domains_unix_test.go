@@ -1016,3 +1016,25 @@ func TestASubordinateHoldsItsOwnDomainsWakeStream(t *testing.T) {
 		}
 	})
 }
+
+// The coordinator client's tasks subcommand reads the open tasks.list and
+// task.get, which a launched worker is answered as any caller is, which is
+// what internal/cli's coordinator.go says of that one subcommand; the
+// positive control is the restricted wakes.list, which refuses the same
+// worker with the worker code, so the open answer is the method's access
+// class and not a placement that stopped recognizing the worker.
+func TestAWorkerIsAnsweredTheOpenTaskReadsTheCoordinatorClientMakes(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P14)
+	launchedWorker(t, "task/open-reads", func(w launched) {
+		if _, code := callAs(t, w, ipc.MethodTasksList, struct{}{}); code != "" {
+			t.Fatalf("tasks.list from the worker answered %q, want it served", code)
+		}
+		if _, code := callAs(t, w, ipc.MethodTaskGet, machine.TaskRequest{Task: w.task}); code != "" {
+			t.Fatalf("task.get from the worker answered %q, want it served", code)
+		}
+		if _, code := callAs(t, w, ipc.MethodWakesList, machine.WakesRequest{}); code != ipc.CodeWorker {
+			t.Fatalf("wakes.list from the worker answered %q, want %q", code, ipc.CodeWorker)
+		}
+	})
+}

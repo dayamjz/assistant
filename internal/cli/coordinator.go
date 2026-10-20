@@ -25,13 +25,17 @@ import (
 //
 // It is the interface the coordinator agent requires, and the one command
 // a subordinate coordinator's grant allows. The methods it calls are
-// internal/ipc's and internal/service decides every one of them: each is
-// restricted, and each is decided for the caller the service places from
-// the credentials the socket reports and the caller's process ancestry,
-// never from anything this command sends. A caller placed inside a task's
-// worker group is refused every one of them; one placed as a domain's
-// subordinate coordinator is admitted the ones it holds over its domain
-// and refused the rest; one placed as neither is the coordinator. So this
+// internal/ipc's and internal/service decides every one of them, for the
+// caller the service places from the credentials the socket reports and
+// the caller's process ancestry, never from anything this command sends.
+// Every subcommand but tasks calls a restricted method: a caller placed
+// inside a task's worker group is refused every one of those; one placed as
+// a domain's subordinate coordinator is admitted the ones it holds over its
+// domain and refused the rest; one placed as neither is the coordinator.
+// tasks calls tasks.list and task.get, which internal/ipc's method table
+// makes open, the same reads assistant tasks makes for anyone: a worker is
+// answered them as any caller is, and a subordinate is answered its own
+// domain's tasks alone, which the service scopes. So this
 // command decides nothing about who may call it and holds no second copy
 // of that rule; a refusal arrives typed, ipc.ErrWorker, ipc.ErrSubordinate
 // or ipc.ErrOutsideDomain, and exits as an operational failure through
