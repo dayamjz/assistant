@@ -253,15 +253,14 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	}
 }
 
-// drainBoth is one drain of both shapes under one handout, on listWakes'
-// terms: the task rows, then the domain rows, each bounded by limit, and the
-// second none on a subordinate's route.
+// drainBoth is one drain of both shapes under one handout, the one both
+// wakes.list and wakes.wait answer with: the task rows, then the domain
+// rows, each bounded by limit, and the second none on a subordinate's
+// route, handed out in one store transaction (store.DrainBoth), so a drain
+// that fails or is cancelled between the two hands out nothing it does not
+// return.
 func (s *Service) drainBoth(ctx context.Context, limit int, handout store.WakeHandout) (machine.Wakes, error) {
-	wakes, err := s.store.DrainWakes(ctx, limit, handout)
-	if err != nil {
-		return machine.Wakes{}, err
-	}
-	domainWakes, err := s.store.DrainDomainWakes(ctx, limit, handout)
+	wakes, domainWakes, err := s.store.DrainBoth(ctx, limit, handout)
 	if err != nil {
 		return machine.Wakes{}, err
 	}

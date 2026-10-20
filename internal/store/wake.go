@@ -671,52 +671,91 @@ func (s *Store) DrainWakes(ctx context.Context, limit int, h WakeHandout) ([]Wak
 	if err := h.validate(); err != nil {
 		return nil, fmt.Errorf("store: draining wakes: %w", err)
 	}
-	to, _ := acknowledgerText(h.To)
-	clause, args := offeredClause(h.Held, h.Route)
 	var out []Wake
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT wake.id FROM wake JOIN task ON task.id = wake.task_id WHERE `+clause+
-			` ORDER BY wake.id LIMIT ?`, append(args, limit)...)
-		if err != nil {
-			return err
-		}
-		var ids []int64
-		for rows.Next() {
-			var id int64
-			if err := rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			ids = append(ids, id)
-		}
-		if err := rows.Close(); err != nil {
-			return err
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		now := encodeTime(nowUTC())
-		out = make([]Wake, 0, len(ids))
-		for _, id := range ids {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE wake SET handed_out_at = ?, handed_out_to = ?, handed_out_under = ?,
-					handouts = coalesce(handouts, 0) + 1
-				WHERE id = ? AND handled_at IS NULL`,
-				now, to, h.Under, id); err != nil {
-				return err
-			}
-			drained, err := scanWake(tx.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE id = ?`, id))
-			if err != nil {
-				return err
-			}
-			out = append(out, drained)
-		}
-		return nil
+		var err error
+		out, err = drainWakesTx(ctx, tx, limit, h)
+		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: draining wakes: %w", err)
 	}
 	return out, nil
+}
+
+// drainWakesTx is DrainWakes inside a transaction the caller holds.
+func drainWakesTx(ctx context.Context, tx *sql.Tx, limit int, h WakeHandout) ([]Wake, error) {
+	to, _ := acknowledgerText(h.To)
+	clause, args := offeredClause(h.Held, h.Route)
+	rows, err := tx.QueryContext(ctx, `SELECT wake.id FROM wake JOIN task ON task.id = wake.task_id WHERE `+clause+
+		` ORDER BY wake.id LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	now := encodeTime(nowUTC())
+	out := make([]Wake, 0, len(ids))
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE wake SET handed_out_at = ?, handed_out_to = ?, handed_out_under = ?,
+				handouts = coalesce(handouts, 0) + 1
+			WHERE id = ? AND handled_at IS NULL`,
+			now, to, h.Under, id); err != nil {
+			return nil, err
+		}
+		drained, err := scanWake(tx.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE id = ?`, id))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, drained)
+	}
+	return out, nil
+}
+
+// DrainBoth is DrainWakes and DrainDomainWakes under one handout in one
+// transaction: the task rows, then the domain rows, each bounded by limit,
+// and the second none on a subordinate's route. Either both shapes are
+// handed out or neither is, so a drain whose second half fails, or whose
+// context ends between the two, leaves no row handed out that its caller
+// was not given.
+func (s *Store) DrainBoth(ctx context.Context, limit int, h WakeHandout) ([]Wake, []DomainWake, error) {
+	if limit < 1 {
+		return nil, nil, fmt.Errorf("store: a drain limit of %d is not a batch size", limit)
+	}
+	if err := h.validate(); err != nil {
+		return nil, nil, fmt.Errorf("store: draining wakes: %w", err)
+	}
+	var wakes []Wake
+	var domainWakes []DomainWake
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		if wakes, err = drainWakesTx(ctx, tx, limit, h); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		domainWakes, err = drainDomainWakesTx(ctx, tx, limit, h)
+		return err
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("store: draining wakes: %w", err)
+	}
+	return wakes, domainWakes, nil
 }
 
 // TaskWakes returns every wake of a task, acknowledged or not, oldest first.

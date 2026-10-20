@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"testing"
 	"time"
 )
 
@@ -327,52 +328,60 @@ func (s *Store) DrainDomainWakes(ctx context.Context, limit int, h WakeHandout) 
 	if err := h.validate(); err != nil {
 		return nil, fmt.Errorf("store: draining domain wakes: %w", err)
 	}
+	var out []DomainWake
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		out, err = drainDomainWakesTx(ctx, tx, limit, h)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: draining domain wakes: %w", err)
+	}
+	return out, nil
+}
+
+// drainDomainWakesTx is DrainDomainWakes inside a transaction the caller
+// holds.
+func drainDomainWakesTx(ctx context.Context, tx *sql.Tx, limit int, h WakeHandout) ([]DomainWake, error) {
 	clause, args, offered := offeredDomainClause(h.Held, h.Route)
 	if !offered {
 		return nil, nil
 	}
 	to, _ := acknowledgerText(h.To)
-	var out []DomainWake
-	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT id FROM domain_wake WHERE `+clause+` ORDER BY id LIMIT ?`, append(args, limit)...)
-		if err != nil {
-			return err
-		}
-		var ids []int64
-		for rows.Next() {
-			var id int64
-			if err := rows.Scan(&id); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			ids = append(ids, id)
-		}
-		if err := rows.Close(); err != nil {
-			return err
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		now := encodeTime(nowUTC())
-		out = make([]DomainWake, 0, len(ids))
-		for _, id := range ids {
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE domain_wake SET handed_out_at = ?, handed_out_to = ?, handed_out_under = ?,
-					handouts = coalesce(handouts, 0) + 1
-				WHERE id = ? AND handled_at IS NULL`,
-				now, to, h.Under, id); err != nil {
-				return err
-			}
-			drained, err := domainWakeByID(ctx, tx, id)
-			if err != nil {
-				return err
-			}
-			out = append(out, drained)
-		}
-		return nil
-	})
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM domain_wake WHERE `+clause+` ORDER BY id LIMIT ?`, append(args, limit)...)
 	if err != nil {
-		return nil, fmt.Errorf("store: draining domain wakes: %w", err)
+		return nil, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	now := encodeTime(nowUTC())
+	out := make([]DomainWake, 0, len(ids))
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE domain_wake SET handed_out_at = ?, handed_out_to = ?, handed_out_under = ?,
+				handouts = coalesce(handouts, 0) + 1
+			WHERE id = ? AND handled_at IS NULL`,
+			now, to, h.Under, id); err != nil {
+			return nil, err
+		}
+		drained, err := domainWakeByID(ctx, tx, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, drained)
 	}
 	return out, nil
 }
@@ -489,4 +498,30 @@ func scanDomainWake(sc scanner) (DomainWake, error) {
 		return DomainWake{}, err
 	}
 	return w, nil
+}
+
+// RefuseDomainDrainsForTest plants a fault that makes SQLite abort every
+// update of a domain wake, so a drain's second half fails the way it does
+// on a store that cannot write, and returns the function that lifts it. It
+// is a fault injector on RefuseNotificationClaimsForTest's terms and
+// nothing else: no production path plants one, it takes a testing.TB so it
+// cannot be called from anything but a test, and it refuses a nil one.
+func (s *Store) RefuseDomainDrainsForTest(ctx context.Context, tb testing.TB) (func() error, error) {
+	if tb == nil {
+		return nil, fmt.Errorf("store: RefuseDomainDrainsForTest is a test's fault injector and takes the test")
+	}
+	tb.Helper()
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	if _, err := s.write.ExecContext(ctx, `CREATE TRIGGER domain_drain_fault BEFORE UPDATE ON domain_wake
+		BEGIN SELECT RAISE(ABORT, 'planted fault'); END`); err != nil {
+		return nil, fmt.Errorf("store: planting the domain drain fault: %w", err)
+	}
+	return func() error {
+		if _, err := s.write.ExecContext(context.WithoutCancel(ctx), `DROP TRIGGER domain_drain_fault`); err != nil {
+			return fmt.Errorf("store: lifting the domain drain fault: %w", err)
+		}
+		return nil
+	}, nil
 }

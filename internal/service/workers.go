@@ -403,18 +403,7 @@ func (s *Service) listWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	if err != nil {
 		return machine.Wakes{}, err
 	}
-	handout := s.wakeHandout(req, p)
-	wakes, err := s.store.DrainWakes(ctx, limit, handout)
-	if err != nil {
-		return machine.Wakes{}, err
-	}
-	// The second shape, under the same handout: the store offers a
-	// subordinate's route none of it.
-	domainWakes, err := s.store.DrainDomainWakes(ctx, limit, handout)
-	if err != nil {
-		return machine.Wakes{}, err
-	}
-	return machine.Wakes{Wakes: wakes, DomainWakes: domainWakes}, nil
+	return s.drainBoth(ctx, limit, s.wakeHandout(req, p))
 }
 
 // peekWakes is a person's reading of the queue: every queued row, handed
