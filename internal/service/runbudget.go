@@ -34,9 +34,10 @@ import (
 // resume or a restart reads the same record the run's earlier segments
 // wrote and counts on from what they spent. A read
 // that fails is graph.ErrUsageUnread, which ends the segment as an error
-// rather than parking or advancing on it, so the run is left standing where
-// it was and the caller is told, as a failed step leaves it (carryOn's
-// dispositionReported).
+// rather than parking or advancing on it, so the run is left standing at the
+// checkpoint of its last completed node, or halted at the halt point that
+// node led to, and the caller is told, as a failed step leaves it (carryOn's
+// dispositionReported); graph.ErrUsageUnread says which.
 //
 // # What it does not cover
 //

@@ -6,6 +6,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -50,5 +51,48 @@ func TestAnUnestablishedUsageParkNamesTheUnreportedCalls(t *testing.T) {
 	}
 	if strings.Contains(a, "to zero") {
 		t.Errorf("the reached action tells the operator to lift the budget:\n%s", a)
+	}
+}
+
+// A usage park whose spend was not established reads as its own row, chosen
+// from the park's unreported figure: with a budget of 100, 3 spent and one
+// call unreported, the budget was not reached and a larger one would park
+// the run again, so the row says so and does not recommend a larger budget.
+// It reads the same from the record, the standing and a decided answer, is
+// held to the vocabulary rule, and the reached park reads as the other row.
+func TestAnUnestablishedUsageParkReadsAsItsOwnRow(t *testing.T) {
+	t.Parallel()
+	vocabtest.Control(t)
+	listed := map[string]bool{}
+	for _, phrase := range machine.Phrases() {
+		listed[phrase] = true
+	}
+	read := func(park store.RunPark) machine.Phrase {
+		t.Helper()
+		record := store.Run{Status: store.RunTerminated, Park: store.Known(park)}
+		fromRecord := machine.RecordPhrase(record)
+		standing := machine.Standing{Record: record.Status, Park: record.Park}
+		if fromStanding, fromAnswer := machine.RunPhrase(standing), (machine.Run{Record: record}).Decide(standing).Phrase(); fromRecord != fromStanding || fromRecord != fromAnswer {
+			t.Errorf("the park %+v reads three ways:\n%q\n%q\n%q", park, fromRecord, fromStanding, fromAnswer)
+		}
+		if !listed[fromRecord.String()] {
+			t.Errorf("the row for %+v is not in Phrases", park)
+		}
+		vocabtest.Assert(t, fromRecord.String())
+		return fromRecord
+	}
+	unknown := read(store.RunPark{Bound: store.ParkUsageBudget, Node: "review", UsageBudget: 100, Spent: 3, Unreported: 1, Checkpoint: 2})
+	reached := read(store.RunPark{Bound: store.ParkUsageBudget, Node: "review", UsageBudget: 100, Spent: 120, Checkpoint: 2})
+	if unknown == reached {
+		t.Fatalf("the unestablished and the reached usage parks read alike: %q", unknown)
+	}
+	if !strings.Contains(unknown.Outcome, "did not report") || !strings.Contains(unknown.Consequence, "larger budget would stop it") {
+		t.Errorf("the unestablished row %q does not say the spend is unknown and a larger budget would not help", unknown)
+	}
+	if strings.Contains(unknown.Decision, "larger") {
+		t.Errorf("the unestablished row recommends a larger budget: %q", unknown.Decision)
+	}
+	if !strings.Contains(reached.Outcome, "reached its usage budget") {
+		t.Errorf("the reached row %q does not say the budget was reached", reached.Outcome)
 	}
 }

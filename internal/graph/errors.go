@@ -204,9 +204,23 @@ var (
 	ErrUsageSpent error = &familyError{text: "graph: the usage budget leaves no room for the halted node", family: ErrBudgetSpent}
 	// ErrUsageUnread is returned when a run held to a usage budget is about
 	// to be compared against it and the UsageMeter could not say what the
-	// run has spent. Nothing runs and nothing is written: a spend nobody
-	// could read is never taken for room, and an error from the record is not
-	// a fact about the run that a park could record.
+	// run has spent. No node runs on the reading and the run does not park on
+	// it: a spend nobody could read is never taken for room, and an error
+	// from the record is not a fact about the run that a park could record.
+	//
+	// What is written depends on where the reading failed, and in every case
+	// the run stands where a later call can continue it without running any
+	// node twice. Run reads before it writes the run's first checkpoint, so a
+	// Run refused here has written nothing and the same Run may be made
+	// again. Resume reads before it claims the run, and Answer, AdoptBudget
+	// and a Resume at a halt point read before they write, so each refused
+	// here writes nothing and the run stands at its latest checkpoint. Within
+	// a segment the run stands at the checkpoint written after its last
+	// completed node, and Resume continues it from there; when the node the
+	// run reached next is a halt point, that checkpoint is the run halted
+	// there with its decision open, written before this is returned so the
+	// completed node is kept, and the budget is weighed again before the halt
+	// node runs.
 	ErrUsageUnread = errors.New("graph: what the run spent against its usage budget could not be read")
 	// ErrRunCompleted is returned when an operation that only means something
 	// for a run with work left is asked for on one that finished.

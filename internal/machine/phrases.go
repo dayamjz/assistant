@@ -631,8 +631,22 @@ func parkPhrase(outcome Outcome, park store.Optional[store.RunPark]) (Phrase, bo
 	if !ok || outcome != OutcomeFailed {
 		return Phrase{}, false
 	}
+	if p.Bound == store.ParkUsageBudget && p.Unreported > 0 {
+		return phraseUsageUnweighed, true
+	}
 	row, ok := phraseByPark[p.Bound]
 	return row, ok
+}
+
+// phraseUsageUnweighed is what a person reads about a run the usage budget
+// parked because some of its agent calls reported no count, so what it spent
+// is not known. It is chosen from the park's own unreported figure rather than
+// the bound alone, because the budget was not reached and a larger one would
+// park the run again: any budget parks a run whose spend is unknown.
+var phraseUsageUnweighed = Phrase{
+	Outcome:     "This run was stopped by its usage budget because some of its agent calls did not report what they spent.",
+	Consequence: "Nothing more is done with it and nothing was undone; a larger budget would stop it the same way, since what it spent is not known.",
+	Decision:    "Turn the usage budget per run off, or use an agent that reports what it spends, and send the change again.",
 }
 
 // Hold rows, with the decision's subject filled in: the subject is the
@@ -1933,6 +1947,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
+	out = append(out, phraseUsageUnweighed)
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
 	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseRetryUndispatchable, phraseNotRetried, phraseLandedLocallyNow)

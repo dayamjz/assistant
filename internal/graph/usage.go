@@ -43,7 +43,7 @@ func (u *Usage) clone() *Usage {
 // It is called with the run's name and must answer from the record that owns
 // what the run spent, read at the call. An error is a reading nobody could
 // make: the executor refuses with ErrUsageUnread rather than advancing or
-// parking on it.
+// parking on it, and ErrUsageUnread says where each refusal leaves the run.
 type UsageMeter func(ctx context.Context, run string) (Usage, error)
 
 // usageExhausted reads the run's spend when its checkpoint holds it to a

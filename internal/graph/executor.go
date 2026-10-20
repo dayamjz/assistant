@@ -177,10 +177,16 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 		State:    e.graph.fillLate(initial.Clone()),
 		Counters: e.graph.newCounters(e.budget, e.usageBudget),
 	}
-	if start, _ := e.graph.Node(e.graph.start); start.Halt != nil {
+	// The run-level bounds are weighed before the first checkpoint is written,
+	// so a usage reading that cannot be made refuses the run with nothing
+	// written and the same Run may be made again.
+	start, _ := e.graph.Node(e.graph.start)
+	if start.Halt != nil {
 		if err := e.haltBefore(ctx, &cp, start); err != nil {
 			return Result{}, err
 		}
+	} else if _, err := e.parkOnRunBounds(ctx, &cp, start.Name); err != nil {
+		return Result{}, err
 	}
 	if err := e.persist(ctx, &cp); err != nil {
 		return Result{}, err
@@ -238,8 +244,21 @@ func (e *Executor) Resume(ctx context.Context, run string) (Result, error) {
 	if cp.Status != StatusRunning {
 		return e.result(cp), nil
 	}
+	// A run standing in front of an ordinary node is weighed against its
+	// run-level bounds before it is claimed, so a usage reading that cannot
+	// be made refuses the resume with no claim written; a run standing at a
+	// halt point was weighed by checkBudgetForHalt above. A run the bounds
+	// park is parked by the write that would have claimed it.
+	if node, _ := e.graph.Node(cp.Position); node.Halt == nil {
+		if _, err := e.parkOnRunBounds(ctx, &cp, node.Name); err != nil {
+			return Result{}, err
+		}
+	}
 	if err := e.persist(ctx, &cp); err != nil {
 		return Result{}, err
+	}
+	if cp.Status != StatusRunning {
+		return e.result(cp), nil
 	}
 	return e.advance(ctx, cp)
 }
@@ -606,6 +625,17 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 		}
 		if next := e.graph.nodes[e.graph.index[to]]; next.Halt != nil {
 			if err := e.haltBefore(ctx, &cp, next); err != nil {
+				// The node that just ran is kept rather than lost with the
+				// reading: the run is recorded halted at the halt point
+				// with its decision open, which the run-level bounds are
+				// weighed again against before the halt node runs, by
+				// checkBudgetForHalt on Answer and on Resume. Recording it
+				// any other way would leave a resume to run that node again.
+				cp.Status = StatusHalted
+				cp.Decision = decisionFor(next)
+				if perr := e.persist(ctx, &cp); perr != nil {
+					return Result{}, errors.Join(err, perr)
+				}
 				return Result{}, err
 			}
 			return e.finish(ctx, cp)

@@ -51,6 +51,14 @@ func (l *ledger) meter(_ context.Context, run string) (graph.Usage, error) {
 	return graph.Usage{Spent: l.spent[run], Unreported: l.unreported[run]}, nil
 }
 
+// setFailure makes every later reading fail with err, or succeed again when
+// err is nil.
+func (l *ledger) setFailure(err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.fail = err
+}
+
 func (l *ledger) readCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -114,8 +122,10 @@ func TestARunUnderItsUsageBudgetCompletes(t *testing.T) {
 	if got.UsageBudget != 41 {
 		t.Errorf("the run reports a usage budget of %d, want the 41 it started under", got.UsageBudget)
 	}
-	if n := l.readCount(); n != 4 {
-		t.Errorf("the meter was read %d times, want once before each of the four nodes", n)
+	// Once before the first checkpoint is written and once before each of
+	// the four nodes.
+	if n := l.readCount(); n != 5 {
+		t.Errorf("the meter was read %d times, want once before the run is claimed and once before each node", n)
 	}
 }
 
@@ -208,13 +218,18 @@ func TestAUsageTotalTheRecordDoesNotEstablishParks(t *testing.T) {
 
 // TestAUsageReadingNobodyCouldMakeIsRefusedNotParked keeps an error from the
 // record from becoming a fact about the run: nothing runs, nothing parks, and
-// the refusal says what could not be read.
+// the refusal says what could not be read. It also establishes where each
+// refused call leaves the run. A Run refused at its first reading has written
+// nothing, so the same Run succeeds once the record reads again rather than
+// answering ErrRunExists. A Resume refused before its claim writes nothing,
+// so the run still stands at the checkpoint after its last completed node,
+// and the next Resume continues from there with no node run twice.
 func TestAUsageReadingNobodyCouldMakeIsRefusedNotParked(t *testing.T) {
 	ctx := context.Background()
 	rec, l := &recorder{}, newLedger()
-	g := mustBuild(t, spendingBuilder(rec, l, 10, false))
+	g := mustBuild(t, spendingBuilder(rec, l, 10, true))
 	store := graph.NewMemoryStore()
-	l.fail = errors.New("the record is closed")
+	l.setFailure(errors.New("the record is closed"))
 
 	_, err := usageExecutor(t, g, store, l, 100).Run(ctx, "run", mustState(t, g, nil))
 	if !errors.Is(err, graph.ErrUsageUnread) || !strings.Contains(err.Error(), "the record is closed") {
@@ -223,12 +238,109 @@ func TestAUsageReadingNobodyCouldMakeIsRefusedNotParked(t *testing.T) {
 	if len(rec.order()) != 0 {
 		t.Errorf("%v ran on a spend nobody read", rec.order())
 	}
+	if _, err := store.Latest(ctx, "run"); !errors.Is(err, graph.ErrNoSuchRun) {
+		t.Fatalf("Latest after the refused Run = %v, want no checkpoint written", err)
+	}
+
+	// The same Run again, with the record readable: c fails on its first
+	// execution, which leaves the run standing in front of c with a, b done.
+	l.setFailure(nil)
+	if _, err := usageExecutor(t, g, store, l, 100).Run(ctx, "run", mustState(t, g, nil)); !errors.Is(err, graph.ErrNodeFailed) {
+		t.Fatalf("the retried Run = %v, want it to start and reach c's planted failure", err)
+	}
+	before, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+
+	l.setFailure(errors.New("the record is closed"))
+	if _, err := usageExecutor(t, g, store, l, 100).Resume(ctx, "run"); !errors.Is(err, graph.ErrUsageUnread) {
+		t.Fatalf("Resume with an unreadable record = %v, want ErrUsageUnread", err)
+	}
+	after, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("the refused Resume wrote %d checkpoints, want none", len(after)-len(before))
+	}
+	if latest := after[len(after)-1]; latest.Status != graph.StatusRunning || latest.Position != "c" {
+		t.Fatalf("the refused run stands %s at %q, want running in front of c", latest.Status, latest.Position)
+	}
+
+	l.setFailure(nil)
+	done, err := usageExecutor(t, g, store, l, 100).Resume(ctx, "run")
+	if err != nil {
+		t.Fatalf("Resume with the record readable: %v", err)
+	}
+	if done.Status != graph.StatusCompleted || rec.count("a") != 1 || rec.count("b") != 1 || rec.count("d") != 1 {
+		t.Fatalf("the run ended %s having run %v, want completed with a, b and d run once", done.Status, rec.order())
+	}
+}
+
+// TestAnUnreadableUsageAtAHaltPointKeepsTheNodeBeforeIt is the reproduction
+// of a lost node: work runs, the reading before the halt point that follows
+// it fails, and the run must not be left standing in front of work, or a
+// resume would run work a second time. The run is recorded halted at the
+// gate with work's step and state kept, the refusal is still returned, and
+// the budget is weighed again when the decision is answered: refused while
+// the record stays unreadable, with the decision still open, and then the
+// gate runs and the run completes with work run exactly once.
+func TestAnUnreadableUsageAtAHaltPointKeepsTheNodeBeforeIt(t *testing.T) {
+	ctx := context.Background()
+	rec, l := &recorder{}, newLedger()
+	g := mustBuild(t, graph.NewBuilder().
+		Start("work").
+		Key(graph.Key{Name: "answer", Kind: graph.KindText}).
+		Key(graph.Key{Name: "done", Kind: graph.KindInt}).
+		Node(graph.Node{Name: "work", Writes: []string{"done"}, NewBody: body(func(_ context.Context, _ graph.Reader, w graph.Writer) error {
+			rec.note("work")
+			l.spend("run", 10)
+			// The reading after work is the one that fails.
+			l.setFailure(errors.New("the record is closed"))
+			return w.Set("done", graph.IntValue(1))
+		})}).
+		Node(graph.Node{
+			Name:    "gate",
+			Reads:   []string{"answer"},
+			Halt:    &graph.Halt{Question: "ship it?", Options: []string{"approve"}, Into: "answer"},
+			NewBody: noteOnly(rec, "gate"),
+		}).
+		Edge(graph.Edge{From: "work", To: "gate"}))
+	store := graph.NewMemoryStore()
+	exec := usageExecutor(t, g, store, l, 100)
+
+	if _, err := exec.Run(ctx, "run", mustState(t, g, nil)); !errors.Is(err, graph.ErrUsageUnread) {
+		t.Fatalf("Run = %v, want ErrUsageUnread from the reading before the gate", err)
+	}
 	latest, err := store.Latest(ctx, "run")
 	if err != nil {
 		t.Fatalf("Latest: %v", err)
 	}
-	if latest.Status != graph.StatusRunning || latest.ParkedUsage != nil {
-		t.Fatalf("the run stands %s with %+v, want it left running where it was claimed", latest.Status, latest.ParkedUsage)
+	if latest.Status != graph.StatusHalted || latest.Position != "gate" || latest.Decision == nil ||
+		latest.Counters.Steps != 1 || number(t, latest.State, "done") != 1 {
+		t.Fatalf("the run stands %s at %q after %d steps (decision %v), want halted at the gate with work kept",
+			latest.Status, latest.Position, latest.Counters.Steps, latest.Decision)
+	}
+
+	if _, err := exec.Answer(ctx, "run", "approve"); !errors.Is(err, graph.ErrUsageUnread) {
+		t.Fatalf("Answer with the record still unreadable = %v, want ErrUsageUnread", err)
+	}
+	if still, _ := store.Latest(ctx, "run"); still.Status != graph.StatusHalted || still.Decision == nil {
+		t.Fatalf("the refused answer left the run %s, want its decision still open", still.Status)
+	}
+
+	l.setFailure(nil)
+	resumed, err := exec.Resume(ctx, "run")
+	if err != nil || resumed.Status != graph.StatusHalted {
+		t.Fatalf("Resume = %s, %v; want the gate's decision re-emitted", resumed.Status, err)
+	}
+	done, err := exec.Answer(ctx, "run", "approve")
+	if err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+	if done.Status != graph.StatusCompleted || rec.count("work") != 1 || rec.count("gate") != 1 {
+		t.Fatalf("the run ended %s having run %v, want completed with work and gate run once each", done.Status, rec.order())
 	}
 }
 
