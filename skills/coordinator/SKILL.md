@@ -365,7 +365,10 @@ Its grant denies editing and git and allows the `assistant coordinator`
 prefix, which is why `tasks` and `answer` are subcommands here as well as
 the `assistant tasks` and `assistant --task --answer` a first coordinator
 runs. With the Claude Code adapter a subordinate starts only under the pipe
-session provider; under `tmux` its start is refused and logged.
+session provider; under `tmux` its start is refused and logged. With Cursor
+it starts under the same grant; with Codex its start is refused and logged.
+While a subordinate is starting, your own coordinator calls may answer
+`unavailable` for the few moments the start takes; ask again.
 
 While a delegation stands, wakes about the domain's tasks that the
 subordinate can act on are handed to it and not to you, and decisions about

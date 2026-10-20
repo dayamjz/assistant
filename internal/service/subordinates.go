@@ -138,7 +138,15 @@ import (
 //     internal/agents names for GrantSubordinate. The Claude Code adapter
 //     refuses a terminal-hosted subordinate (agents.ErrTerminalGrantUnobserved),
 //     so under session_provider tmux a delegation's start fails, logged,
-//     and the subordinate runs only under the pipe provider.
+//     and the subordinate runs only under the pipe provider. The Cursor
+//     adapter holds the grant in its permission handler; the Codex adapter
+//     cannot and refuses the start (agents.ErrGrantUnenforced), logged.
+//   - While a subordinate is starting, every peer placement reads as
+//     neither is refused unavailable, the first coordinator's own requests
+//     included, for as long as the start takes. gate.admit places a push
+//     through placePusher, which this does not cover, so a push the
+//     starting subordinate makes in that window is placed as a person's or
+//     nobody's; the grant denies git on the two adapters that start one.
 //   - The subordinate's posture is held to intake's rule at each task it
 //     creates, against that task's project, since a delegation names no
 //     repository; a delegation whose posture is lighter than a project's
@@ -176,18 +184,24 @@ func (p placedPeer) domain() string {
 // process first and the subordinate sets second, so a peer in both, which
 // no launch here produces, is the worker, the side that claims less, and a
 // shell at a terminal and nobody are both neither here, as workerOf reads
-// them. No chain is read while no set holds anybody and no survivor is
-// adopted, on workerOf's terms: the coordinator is then the only peer
-// there is, and a chain read against empty sets could place nothing else.
+// them. No chain is read while no set holds anybody, no survivor is
+// adopted and no subordinate is starting, on workerOf's terms: the
+// coordinator is then the only peer there is, and a chain read against
+// empty sets could place nothing else.
 // An unidentified peer is ipc.ErrUnidentifiedPeer and an ancestry that
 // could not be read is ipc.ErrUnavailable, both wrapped, so neither reads
-// as the coordinator.
+// as the coordinator. While a subordinate launch is in flight a peer
+// placed as neither is ipc.ErrUnavailable too: the subordinate is given its
+// instructions as its process starts and joins its set only when the start
+// returns, so in that window it is exactly such a peer, and the first
+// coordinator's own requests are refused with it until the start ends.
 func (s *Service) placeRequest(req ipc.Request) (placedPeer, error) {
 	creds, err := req.Peer.Credentials()
 	if err != nil {
 		return placedPeer{}, err
 	}
-	if s.workerSets().empty() && s.subordinateSets().empty() {
+	starting := s.subordinatesStarting.Load() > 0
+	if !starting && s.workerSets().empty() && s.subordinateSets().empty() {
 		return placedPeer{}, nil
 	}
 	p, err := s.placeOf(creds)
@@ -200,6 +214,12 @@ func (s *Service) placeRequest(req ipc.Request) (placedPeer, error) {
 		return placedPeer{worker: p.worker, isWorker: true}, nil
 	case placedSubordinate:
 		return placedPeer{subordinate: p.subordinate, isSubordinate: true}, nil
+	}
+	// Re-read after the walk, so a launch that began while the chain was
+	// read counts too.
+	if starting || s.subordinatesStarting.Load() > 0 {
+		return placedPeer{}, fmt.Errorf("%w: a subordinate coordinator is starting and has not yet joined its set, so %s cannot be told from it; ask again once it has started",
+			ipc.ErrUnavailable, creds)
 	}
 	return placedPeer{}, nil
 }
@@ -447,8 +467,11 @@ func (s *Service) writeDomainInstructions(dir, domain, text string) (string, err
 // revision, and the subordinate's session this service holds is ended with
 // it. A domain with no standing delegation is ipc.ErrRefused.
 //
-// A relaunch-bound hold still open on the delegation is answered by the
-// end, in the end's transaction: that hold asks whether to begin the
+// Every relaunch-bound hold still open on the delegation, whatever attempt
+// its key names (attempt zero for a delegation whose first attempt a crash
+// left unrecorded among them), is answered by the end, selected by the
+// delegation's key prefix in the end's own transaction: that hold asks
+// whether to begin the
 // domain's coordinator again or to end the delegation, and domain.end is
 // the second answer, given explicitly by the caller, so the hold is
 // resolved stop under the resolver internal/ipc derives for the request,
@@ -466,17 +489,11 @@ func (s *Service) endDelegation(ctx context.Context, req ipc.Request, r machine.
 	if !found || !latest.Standing() {
 		return machine.DelegationEnded{}, fmt.Errorf("%w: %w: domain %q", ipc.ErrRefused, errNotDelegated, r.Domain)
 	}
-	attempts, err := s.store.DelegationAttempts(ctx, latest.ID)
-	if err != nil {
-		return machine.DelegationEnded{}, err
-	}
 	closing := store.DelegationEndClosure{
+		KeyPrefix:  domainBoundKeyPrefix(latest),
 		Resolution: machine.AnswerStop,
 		Note:       "answered by domain.end, which ended the delegation",
 		By:         req.HoldResolver(),
-	}
-	for _, a := range attempts {
-		closing.Keys = append(closing.Keys, domainBoundKey(latest, a.Sequence))
 	}
 	ended, closed, err := s.store.EndDelegation(ctx, latest.ID, store.EndedByCoordinator(), closing)
 	if err != nil {
@@ -617,12 +634,18 @@ func (s *Service) launchSubordinate(ctx context.Context, d store.Delegation, att
 	if err != nil {
 		return err
 	}
+	// The process is told its instructions as it starts and joins its
+	// subordinate set only once it has, so while it is starting placement
+	// cannot tell it from the first coordinator; placeRequest refuses every
+	// unplaced peer until Delegate returns (subordinatesStarting).
+	s.subordinatesStarting.Add(1)
 	launched, err := built.sessions.Delegate(ctx, session.SubordinateSpec{
 		Domain:       d.Domain,
 		Dir:          dir,
 		Instructions: string(raw) + s.subordinateSection(d),
 		Route:        s.coordinatorRoute,
 	})
+	s.subordinatesStarting.Add(-1)
 	if err != nil {
 		return err
 	}
@@ -914,7 +937,15 @@ const domainBoundPrefix = "/relaunch-bound/"
 // the same attempt number is a new key too, so an answer given to one
 // delegation's hold is never read as an answer to another's.
 func domainBoundKey(d store.Delegation, attempt int64) string {
-	return "domain/" + d.Domain + domainBoundPrefix + strconv.FormatInt(d.ID, 10) + "/" + strconv.FormatInt(attempt, 10)
+	return domainBoundKeyPrefix(d) + strconv.FormatInt(attempt, 10)
+}
+
+// domainBoundKeyPrefix is what every bound hold key of the delegation
+// begins with, whichever attempt it names, attempt zero for a delegation
+// whose first attempt was never recorded included; domain.end closes the
+// holds by it, so no attempt list it read can leave one out.
+func domainBoundKeyPrefix(d store.Delegation) string {
+	return "domain/" + d.Domain + domainBoundPrefix + strconv.FormatInt(d.ID, 10) + "/"
 }
 
 // domainOfBoundKey is the domain a hold key domainBoundKey wrote names, and

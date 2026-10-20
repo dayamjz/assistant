@@ -550,3 +550,50 @@ func TestAStopAnswerAndTheDelegationsEndAreOneWrite(t *testing.T) {
 		t.Fatalf("a second stop = %v, want ErrDelegationEnded", err)
 	}
 }
+
+// A crash between a delegation's record and its first attempt leaves a
+// delegation with no attempts; with relaunch_attempts at zero the restart
+// holds it at the bound on attempt zero's key, and domain.end still answers
+// that hold, because the end closes every open bound hold by the
+// delegation's key prefix, read in its own transaction, rather than by the
+// attempts it read. Derived from an empty attempt list, the closure names
+// no key and the hold is left open with nothing able to answer it.
+func TestAnEndAnswersTheHoldOfADelegationWhoseFirstAttemptWasNeverRecorded(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	h, records := loopHomeConfigured(t, `{"supervision_beacon_interval": "1s", "escalation_window": "1m", "relaunch_attempts": 0}`)
+	ctx := t.Context()
+	d, err := records.Delegate(ctx, store.DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := &fakeClock{now: time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)}
+	l := openLoop(t, h, records, newScriptedTerminals(), clock)
+	defer func() { _ = l.service.Close() }()
+	key := domainBoundKey(d, 0)
+	if hold, err := l.records(t).Hold(ctx, key); err != nil || !hold.Open() {
+		t.Fatalf("after the restart attempt zero's hold reads %+v (%v), want it open", hold, err)
+	}
+	if attempts, err := l.records(t).DelegationAttempts(ctx, d.ID); err != nil || len(attempts) != 0 {
+		t.Fatalf("the delegation's attempts are %+v (%v), want none", attempts, err)
+	}
+	ended, err := l.service.endDelegation(ctx, ipc.Request{}, machine.DomainEndRequest{Domain: "alpha"})
+	if err != nil {
+		t.Fatalf("domain.end: %v", err)
+	}
+	if len(ended.Holds) != 1 || ended.Holds[0].Key != key {
+		t.Fatalf("domain.end answered %+v, want it answering %s", ended, key)
+	}
+	if hold, err := l.records(t).Hold(ctx, key); err != nil || hold.Open() || hold.Resolution.Or("") != machine.AnswerStop {
+		t.Fatalf("after the end the hold reads %+v (%v), want it answered stop", hold, err)
+	}
+	open, err := l.records(t).OpenHolds(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range open {
+		if strings.HasPrefix(h.Key, domainBoundKeyPrefix(d)) {
+			t.Fatalf("hold %s of the ended delegation is still open", h.Key)
+		}
+	}
+}

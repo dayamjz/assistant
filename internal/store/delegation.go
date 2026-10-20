@@ -178,15 +178,15 @@ func (s *Store) Delegate(ctx context.Context, req DelegationRequest) (Delegation
 // with ErrNoDelegationEnd, all with nothing written. It records who and
 // does not gate on it. The holds closing names are answered in the same
 // transaction on DelegationEndClosure's terms, and the keys it closed are
-// returned; a closure naming keys with no resolution is ErrNoResolution and
-// one naming nobody is ErrNoResolver, before anything is written.
+// returned; a closure naming a prefix with no resolution is ErrNoResolution
+// and one naming nobody is ErrNoResolver, before anything is written.
 func (s *Store) EndDelegation(ctx context.Context, id int64, by DelegationEnd, closing DelegationEndClosure) (Delegation, []string, error) {
 	why, err := delegationEndText(by)
 	if err != nil {
 		return Delegation{}, nil, fmt.Errorf("store: ending delegation %d: %w", id, err)
 	}
 	var resolver string
-	if len(closing.Keys) > 0 {
+	if closing.KeyPrefix != "" {
 		if strings.TrimSpace(closing.Resolution) == "" {
 			return Delegation{}, nil, fmt.Errorf("%w: ending delegation %d", ErrNoResolution, id)
 		}
@@ -212,16 +212,35 @@ func (s *Store) EndDelegation(ctx context.Context, id int64, by DelegationEnd, c
 		if _, err := tx.ExecContext(ctx, `UPDATE delegation SET ended_at = ?, end_reason = ? WHERE id = ?`, now, why, id); err != nil {
 			return err
 		}
-		for _, key := range closing.Keys {
-			result, err := tx.ExecContext(ctx,
-				`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE key = ? AND resolution IS NULL`,
-				closing.Resolution, now, resolver, noteCol, key)
+		if closing.KeyPrefix != "" {
+			// The keys are read here, in the transaction that ends the
+			// delegation, so a hold registered before the end is closed by
+			// it, and RegisterDelegationHold, which reads the delegation in
+			// its own transaction, refuses one after.
+			rows, err := tx.QueryContext(ctx,
+				`SELECT key FROM hold WHERE resolution IS NULL AND substr(key, 1, ?) = ? ORDER BY key`,
+				len(closing.KeyPrefix), closing.KeyPrefix)
 			if err != nil {
-				return fmt.Errorf("closing hold %s: %w", key, err)
-			}
-			if n, err := result.RowsAffected(); err != nil {
 				return err
-			} else if n == 1 {
+			}
+			var open []string
+			for rows.Next() {
+				var key string
+				if err := rows.Scan(&key); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				open = append(open, key)
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			for _, key := range open {
+				if _, err := tx.ExecContext(ctx,
+					`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE key = ? AND resolution IS NULL`,
+					closing.Resolution, now, resolver, noteCol, key); err != nil {
+					return fmt.Errorf("closing hold %s: %w", key, err)
+				}
 				closed = append(closed, key)
 			}
 		}
@@ -243,21 +262,23 @@ func (s *Store) EndDelegation(ctx context.Context, id int64, by DelegationEnd, c
 // itself answers, as internal/service's relaunch-bound hold asks whether to
 // end the delegation; the resolution is the caller's, recorded under the
 // Resolver it names, and nothing here decides that an end answers a hold.
-// Each key still open is resolved on ResolveHoldNoted's terms and reported
-// closed; a key already resolved, or registered nowhere, is left as it
-// stands and not reported, since the end is the fact the transaction exists
-// for. The zero value closes nothing.
+// The holds are every open one whose key begins with KeyPrefix, read in
+// the end's own transaction rather than derived by the caller from what it
+// read before, so none registered in between is missed. Each is resolved
+// on ResolveHoldNoted's terms and reported closed; a hold already resolved
+// is left as it stands and not reported. The zero value closes nothing.
 type DelegationEndClosure struct {
-	// Keys are the holds to close.
-	Keys []string
+	// KeyPrefix selects the holds to close, compared byte for byte, and
+	// empty closes none.
+	KeyPrefix string
 	// Resolution is what the end decided for them, refused empty with
-	// ErrNoResolution when Keys is not.
+	// ErrNoResolution when KeyPrefix is not.
 	Resolution string
 	// Note is free text recorded with the resolution, redacted, and empty
 	// leaves ResolutionNote unknown.
 	Note string
-	// By is who decided, refused as the zero Resolver when Keys is not
-	// empty.
+	// By is who decided, refused as the zero Resolver when KeyPrefix is
+	// not empty.
 	By Resolver
 }
 

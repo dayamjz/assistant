@@ -434,10 +434,11 @@ func TestAnAttemptRecordsItsSessionsHostWithItsReference(t *testing.T) {
 	}
 }
 
-// A delegation's end answers the holds it names in the same transaction:
-// an open one is resolved under the resolver given and reported, one
-// already resolved is left as it stood and not reported, and a closure
-// with keys and no resolution or nobody is refused with nothing written,
+// A delegation's end answers the holds its prefix selects, read in the
+// same transaction: an open one is resolved under the resolver given and
+// reported, one already resolved is left as it stood and not reported, a
+// key outside the prefix ("d/10/" beside "d/1/" included) is left open, and
+// a closure with no resolution or nobody is refused with nothing written,
 // the delegation still standing.
 func TestADelegationsEndAnswersTheHoldsItNamesInItsTransaction(t *testing.T) {
 	t.Parallel()
@@ -447,33 +448,38 @@ func TestADelegationsEndAnswersTheHoldsItNamesInItsTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"open-one", "answered-one"} {
+	for _, key := range []string{"d/1/open-one", "d/1/answered-one", "d/10/other", "e/1/open"} {
 		if _, err := s.RegisterHold(ctx, Hold{Key: key, Subject: "whether"}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.ResolveHold(ctx, "answered-one", "retry", ResolvedByMachineInterface()); err != nil {
+	if _, err := s.ResolveHold(ctx, "d/1/answered-one", "retry", ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
-	keys := []string{"open-one", "answered-one", "nowhere"}
-	if _, _, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator(), DelegationEndClosure{Keys: keys, By: ResolvedByMachineInterface()}); !errors.Is(err, ErrNoResolution) {
+	const prefix = "d/1/"
+	if _, _, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator(), DelegationEndClosure{KeyPrefix: prefix, By: ResolvedByMachineInterface()}); !errors.Is(err, ErrNoResolution) {
 		t.Fatalf("a closure with no resolution = %v, want ErrNoResolution", err)
 	}
-	if _, _, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator(), DelegationEndClosure{Keys: keys, Resolution: "stop"}); !errors.Is(err, ErrNoResolver) {
+	if _, _, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator(), DelegationEndClosure{KeyPrefix: prefix, Resolution: "stop"}); !errors.Is(err, ErrNoResolver) {
 		t.Fatalf("a closure naming nobody = %v, want ErrNoResolver", err)
 	}
 	if latest, _, err := s.Delegation(ctx, "alpha"); err != nil || !latest.Standing() {
 		t.Fatalf("after the refusals the delegation reads %+v (%v), want it standing", latest, err)
 	}
 	ended, closed, err := s.EndDelegation(ctx, d.ID, EndedByCoordinator(),
-		DelegationEndClosure{Keys: keys, Resolution: "stop", Note: "ended", By: ResolvedByMachineInterface()})
-	if err != nil || ended.Standing() || !slices.Equal(closed, []string{"open-one"}) {
-		t.Fatalf("EndDelegation = %+v, %v, %v; want it ended answering open-one alone", ended, closed, err)
+		DelegationEndClosure{KeyPrefix: prefix, Resolution: "stop", Note: "ended", By: ResolvedByMachineInterface()})
+	if err != nil || ended.Standing() || !slices.Equal(closed, []string{"d/1/open-one"}) {
+		t.Fatalf("EndDelegation = %+v, %v, %v; want it ended answering d/1/open-one alone", ended, closed, err)
 	}
-	if h, err := s.Hold(ctx, "open-one"); err != nil || h.Resolution.Or("") != "stop" || h.ResolvedBy.Or(Resolver{}) != ResolvedByMachineInterface() || h.ResolutionNote.Or("") != "ended" {
+	for _, key := range []string{"d/10/other", "e/1/open"} {
+		if h, err := s.Hold(ctx, key); err != nil || !h.Open() {
+			t.Fatalf("%s outside the prefix reads %+v (%v), want it still open", key, h, err)
+		}
+	}
+	if h, err := s.Hold(ctx, "d/1/open-one"); err != nil || h.Resolution.Or("") != "stop" || h.ResolvedBy.Or(Resolver{}) != ResolvedByMachineInterface() || h.ResolutionNote.Or("") != "ended" {
 		t.Fatalf("open-one reads %+v (%v), want it answered stop by the machine interface", h, err)
 	}
-	if h, err := s.Hold(ctx, "answered-one"); err != nil || h.Resolution.Or("") != "retry" {
+	if h, err := s.Hold(ctx, "d/1/answered-one"); err != nil || h.Resolution.Or("") != "retry" {
 		t.Fatalf("answered-one reads %+v (%v), want its own answer kept", h, err)
 	}
 }

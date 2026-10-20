@@ -225,6 +225,14 @@ type Service struct {
 	domainWakes       map[string]*ipc.Publisher
 	domainWakesClosed bool
 	domainWakesMu     sync.Mutex
+	// subordinatesStarting counts the subordinate coordinator launches in
+	// flight, from before a host session is asked for until it returns,
+	// which is after the process has joined its subordinate set: while it
+	// is above zero, a peer placement reads as neither a worker nor a
+	// subordinate is refused rather than taken for the first coordinator,
+	// because the starting subordinate is such a peer until it joins.
+	// subordinates.go's placeRequest reads it.
+	subordinatesStarting atomic.Int64
 
 	listener net.Listener
 	server   *ipc.Server
