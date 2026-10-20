@@ -470,6 +470,20 @@ flowchart TB
       </div>
     </div>
 
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-accent badge-sm mr-2 prd-num">P15</span>
+        Nothing the program starts outlives its owner, and kept work is never silent
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>Every process, terminal session, agent session, wait, isolated copy and lock the program creates has exactly one recorded owner: a run, a task, a delegation, or the service itself. When the owner ends, what it owns ends with it: a process by its whole group and within a stated bound, a wait by its deadline. An external program the service invokes (an agent, a check command, a notify command, a version probe) runs under a deadline, and when the deadline passes it is ended together with everything it started. On stop and on restart, the service ends or reclaims what a previous incarnation left under its home. Whatever it finds there that no record owns, it reports; it never ignores it.</p>
+        <p>Work is the one exception, and the exception is loud. An isolated copy holding work that has not landed is kept, on P6's and P12's terms, because a leaked copy costs disk while a deleted one costs work. A kept copy is not a leftover. It is a decision owed to you: it is surfaced the moment it is kept, and no new task starts in its project until you make it: you land it, you have it carried on, or you discard it yourself. The program never discards it on its own. Ending a process never discards work.</p>
+        <p>This binds the program, its tests, and the tooling that builds it. A test that starts a process ends it, and a development fleet's watchers, reviews and repairs end what they start.</p>
+        <p><b>Prevents:</b> agents and services that keep spending tokens and machine time nobody asked for, slowing every other run and hiding real failures under the load they create; and work that is safe on disk but that nobody knows about until days later.</p>
+      </div>
+    </div>
+
   </div>
 </section>
 
@@ -1143,6 +1157,33 @@ stateDiagram-v2
       </p>
     </div>
   </div>
+
+  <h3 class="text-xl font-semibold mb-3">Kept work</h3>
+  <p class="mb-4 opacity-90">
+    When a task's or a run's copy is kept because its work has not landed, the program records a
+    kept-work entry naming the project, the branch, what the copy holds that the default branch
+    lacks, and why it was kept. It surfaces at once: in the catch-up read, in <code>status</code>,
+    and through the private channel when one is configured.
+  </p>
+  <p class="mb-3 opacity-90">
+    Kept work is answered before new task work starts. While a project has an unanswered kept-work
+    entry, no new task in that project dispatches; it waits, naming the kept work and the three
+    answers, and dispatches as soon as the entry is answered. Your own push is never held by it: a
+    run your push starts proceeds as it always does, and its answer names the kept work. Work
+    already running is not interrupted, and kept work in one project never holds another. The three
+    answers are:
+  </p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>land</b>: the program carries the work to the gate as a delivery and asks nothing it would not ask of a push;</li>
+    <li><b>carry on</b>: a worker is relaunched in that same copy with a note saying what is already there;</li>
+    <li><b>discard</b>: you name the copy, the program shows exactly what will be lost, and it removes the copy only on that answer, recording who discarded what.</li>
+  </ul>
+  <p class="mb-8 opacity-90">
+    A reported investigation keeps its worker for <code>promotion_window</code> after the report is
+    stored, so that a promotion in the same sitting continues the worker that wrote the report.
+    When the window passes, the worker is ended and its copy is kept. A later promotion relaunches a
+    worker in that copy, with the stored report as its starting point.
+  </p>
 
   <h3 class="text-xl font-semibold mb-3">Events and current state</h3>
   <p class="mb-4 opacity-90">
@@ -1872,6 +1913,8 @@ flowchart TB
     <li>Admission runs before any reference in the gate changes, so a refusal happens before mutation rather than after.</li>
     <li>Pushes to the same branch serialize, and a new push supersedes the run in progress. Different branches run concurrently.</li>
     <li>Launch and readiness are different states. Publishing a process identifier is not proof of readiness; only a real health response is.</li>
+    <li>Stopping is bounded. On a stop request or SIGTERM, the service stops admitting work, ends the process groups it registered, and exits within <code>stop_grace</code>; past the grace it ends them by force. A service that does not exit on SIGTERM is a defect, not a slow shutdown.</li>
+    <li>Every invocation of an external program carries a deadline. The program runs in a process group that the invoker ends when the call returns or times out, so a child cannot keep a pipe or a terminal open after its parent is gone.</li>
     <li>macOS and Linux are the supported platforms. Windows is not supported: the build is vetted for it so it does not rot, and nothing is run or tested there. What this build cannot provide on Windows refuses rather than degrades: no socket peer is identified, so every request that drives a run is refused and no worker is placed, and the managed service's install is refused.</li>
   </ul>
 
@@ -1965,6 +2008,7 @@ flowchart TB
         <tr><td><b>merge record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the code-host read that ends a run on a merge: the pull request, the head read, and when. The code host owns the merge; this is the program's record that it saw it. The run's <code>passed</code> on a merge and the task's Landed are both derived from this one record, and neither stores the fact again.</td></tr>
         <tr><td><b>local landing record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the approved fast-forward that delivers a <code>local</code> task: the task, the commit, the local default branch's tip before and after, and when. The task's Landed for a <code>local</code> task is derived from it, read in the same tier as the merge record.</td></tr>
         <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. A delivery task's Complete is derived from it; an investigation's Complete is derived from the record that its findings were relayed, never from this one. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>
+        <tr><td><b>kept work</b></td><td>Authoritative</td><td>One row per copy kept because its work has not landed: the owner it outlived, what it holds, when it was kept, when it last surfaced, and its answer. It is written once when the copy is kept. Its one revision is the answer.</td></tr>
         <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. One resolution the service makes itself is for the hold the checks stage raises when <code>checks_timeout</code> elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. The other is each answer section 9's standing consent gives, recorded under the resolver that consent has of its own. Every other hold keeps the rule.</td></tr>
         <tr><td><b>message</b></td><td>Authoritative, appended</td><td>One row per message sent to a worker: the task, the attempt, the text with credentials removed, and who sent it, derived from the surface. Each of written, refused, and acknowledged is recorded on it once and never revised, and it is the one place whether a message was delivered is read from. Section 6's steering says what writes each.</td></tr>
         <tr><td><b>delegation</b></td><td>Authoritative, appended</td><td>One row per domain the coordinator delegated: the domain, the delivery posture its tasks take, held to intake's rule when the row was written, and the anchor the write was decided against. Written once; <code>ended_at</code> with a closed <code>end_reason</code> is its one revision, and a delegation stands until that revision is written. Nothing else ends one: not a restart, not a dropped connection, not a subordinate whose terminal is gone.</td></tr>
@@ -2605,6 +2649,8 @@ flowchart TB
         <tr><td><code>supervision_beacon_interval</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>10s</code></td><td>How often the supervisor loop rewrites its liveness beacon. A beacon is stale at three times this interval, and arm verification waits five times it for the first beacon; both are fixed multiples of this row, not rows of their own. It stops nothing and parks nothing. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>stall_inspection_count</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">3</code></td><td>How many times the same unchanged screen may surface before the next surface demands a deeper inspection, section 11's repeated stall. It raises the level of what surfaces and bounds nothing. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>relaunch_attempts</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">2</code></td><td>How many times reconciliation relaunches a task that resolves Failed with its terminal gone, in place, counted from the task's attempt history. Past it the task holds for you, and you decide whether it is retried: nothing retries a task automatically without bound. Zero relaunches nothing and holds every such task. It is a bound on a task, not one of the three loop bounds, and stops no run. The default is chosen, not measured; the limits table bounds it, and the ceiling is chosen, not measured.</td></tr>
+        <tr><td><code>stop_grace</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>30s</code></td><td>How long a stop or SIGTERM waits for the groups the service registered to end before ending them by force. The service has exited by then.</td></tr>
+        <tr><td><code>promotion_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>1h</code></td><td>How long a reported investigation's worker is kept for a promotion before it is ended. Its copy is kept either way.</td></tr>
         <tr><td><code>session_provider</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>pipe</code></td><td>Which terminal session provider the service starts every worker through: <code>pipe</code>, the reference provider, or <code>tmux</code>. It chooses which program starts every worker, and so which process starts with your credentials, and it is one choice for the whole service, so no repository copy, trusted or pushed, may set it (P7).</td></tr>
         <tr><td><code>session_reuse</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
         <tr><td><code>decision_model</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>evaluate</code></td><td>The mode of the checks in section 5, "Checks a decision model may add": <code>evaluate</code>, <code>enforce</code>, or <code>off</code>. They run against the one supported provider, and only where the provider's key is in the operator's environment, never in a configuration file; with the key present they send the changed lines of every reviewed file to that provider.</td></tr>
@@ -2617,6 +2663,13 @@ flowchart TB
       </tbody>
     </table>
   </div>
+  <p class="mb-8 opacity-90">
+    <b>Why <code>1h</code> for the promotion window.</b> Keeping the worker buys a promotion that
+    continues with the worker's context warm. A model provider's prompt cache lasts about an hour,
+    so past that, relaunching on the stored report costs about the same as waking the idle worker,
+    and the idle worker holds a process and memory the whole time. An hour covers reading a report
+    and deciding in the same sitting.
+  </p>
 
   <h3 class="text-xl font-semibold mb-3">Roles</h3>
   <p class="mb-4 opacity-90">
@@ -2775,7 +2828,7 @@ flowchart TB
     <li>Resume only fully recorded holds whose isolated copy and stage history both validate. An ambiguous or partially recorded active run fails closed rather than resuming on a guess.</li>
     <li>Before resuming the hold the checks stage raised when <code>checks_timeout</code> elapsed, and only that hold, re-read the pull request by its recorded identifier, never through a lookup that cannot return a merged or closed pull request. A pull request positively read as merged or closed closes that hold by an explicit resolution the service records, naming itself as the resolver and the state it read, and the run ends as section 5's "Waiting on checks" says for that state. Open, unrecognized, or not read stays held. A hold that waits on a person's decision about a finding is not re-read: the pull request's state must not answer a question a person was asked.</li>
     <li>Mark every other stale active run failed, with the reason recorded.</li>
-    <li>Reap orphaned agent processes, remove isolated copies no run owns, and never touch one whose run is still active.</li>
+    <li>Reap orphaned agent processes, remove isolated copies no run owns, and never touch one whose run is still active. A copy no run owns that holds unlanded work becomes a kept-work entry rather than staying on disk unrecorded. Anything else under this home that no record owns, and that cannot be ended or proven idle, is reported, naming what it is, rather than left running silently.</li>
     <li>Clear any waiting-on-a-person marker so a recovered failed run is not displayed as still waiting.</li>
   </ol>
 
@@ -2964,6 +3017,7 @@ flowchart TB
         <tr><td><b>P12</b></td><td>Cleanup with committed, unpushed work refuses. Cleanup after a squash merge and branch deletion succeeds through the content check. A provider lookup failure that leaves the question open refuses.</td></tr>
         <tr><td><b>P13</b></td><td>A static test over every user-facing string: assert the required wording is present and assert the internal vocabulary is absent. Both directions, or it drifts.</td></tr>
         <tr><td><b>P14</b></td><td>A static test asserting each contract appears in its owner and does not appear anywhere else. The negative half is the one that actually holds the line.</td></tr>
+        <tr><td><b>P15</b></td><td>Start a run, a worker, a delegation and a notify command. End each owner by its normal path, by a stop, and by killing the service outright. After each, no process this home started remains (checked by process group and by working directory), and a copy holding unlanded work does remain, with a kept-work entry that surfaces at once; a new task in that project does not dispatch until the entry is answered while a person's push still runs and names it, and a discard removes the copy only on the person's answer. A test that starts a service ends it with the test, and CI fails when any process a test started outlives its package.</td></tr>
         <tr><td><b>Judge paths</b></td><td>A fix round after review whose commit adds, changes, deletes, or renames a judge path holds with an <code>ask</code> naming it, including when the fixer's reply says it touched nothing; the same round with no judge path in its commit does not hold. A change that deletes a judge file, or moves one outside every pattern, holds at review; one that edits a judge file produces a <code>note</code>. A branch whose own configuration sets <code>judge_paths</code> has no effect on either.</td></tr>
         <tr><td><b>Graph</b></td><td>A topology with an unbounded back edge fails to build. Two nodes writing one key with no declared merge rule fails to build. A checkpoint restore re-emits the open decision.</td></tr>
         <tr><td><b>Decision model</b></td><td>Against a stand-in provider that answers over the wire, every answer from certain-yes to certain-no, plus an error, a timeout, and an unreadable answer, leaves the findings at least as strict as with the model off: nothing removed, nothing lowered, no stage passed that would have held. In <code>evaluate</code> no answer holds a run, and in every mode a failed call, an unreadable answer, or a missing key holds nothing and is reported. With the mode <code>off</code> or no key, no request leaves the machine. A repository layer that sets the key is rejected at parse time.</td></tr>
@@ -3106,6 +3160,11 @@ flowchart TB
           <td class="prd-num">20</td>
           <td>A coordinator delegates <b>a named domain of tasks to a subordinate coordinator inside this one home</b>, never to a coordinator in a home of its own.</td>
           <td>Decided 2026-10-19 (#309). Two shapes were read from the document: a delegate coordinator in its own home, section 2's old entry, and a subordinate domain inside one home. The second was chosen because it keeps one store, one service, one supervisor loop, and one gate, so a task has one row and one owner and no delivery action can be made twice; that is P14 held structurally, where the first shape would have put a task in two stores and kept P14 only by declaring one row a pointer and rewriting section 11's "never claims another home's work". Section 1 names it, section 2's entry replaces the delegate coordinator, section 12's deferral is reworded in the past tense, section 6's steering and section 9's coordinator-only methods carry the subordinate relation and its grant, section 9's client gains <code>delegate</code> and <code>end-delegation</code> with no verb added, section 6's posture rule says a subordinate records none, its live cycle is one wait per domain, section 8's wake row routes by kind, its data model gains the task's domain and the delegation, delegation attempt, and escalation records, section 6's flowchart gains subordinate gone and subordinate escalated, and section 11's reconciliation gains the subordinate's row. P10 and the stop guard are unchanged. Residual gaps: a parent chain the kernel rewrote when a process between a subordinate and its tool command exited places that command as a person's, the gap a worker's push already has; a wake of a kind the subordinate cannot act on reaches the first coordinator without the subordinate's context; and nothing bounds the number of domains.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">21</td>
+          <td><b>Nothing the program starts outlives its owner, and kept work is never silent</b>, a principle of its own.</td>
+          <td>Decided 2026-10-20 after the leaks above. Every started resource has one recorded owner and a bounded end. Unlanded work is the one exception: it is kept, surfaced at once, and no new task starts in its project until a person lands it, carries it on, or discards it. A reported investigation's worker is kept for <code>promotion_window</code> (default 1h, chosen for the prompt cache). The principle binds the program, its tests and the tooling that builds it. It is a principle rather than a section 8 rule because it binds every package that starts anything.</td>
         </tr>
       </tbody>
     </table>
