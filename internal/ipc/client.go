@@ -247,6 +247,13 @@ func (c *Client) SubscribeTo(ctx context.Context, method Method, params any) (*S
 // first, then state collapsed into a gap marker, and control never discarded.
 func (s *Stream) Recv(ctx context.Context) (Event, error) { return s.sub.Recv(ctx) }
 
+// Gapped reports whether this client's own queue for the stream has
+// discarded an event whose marker is not yet delivered, Subscription.Gapped
+// of that queue. It says nothing of a gap the service raised, which arrives
+// as an event like any other. It is for tests and diagnostics, as the
+// queue's own is; a consumer learns about a gap by receiving the marker.
+func (s *Stream) Gapped() bool { return s.sub.Gapped() }
+
 // Close detaches the stream and tells the service to stop sending it.
 //
 // It returns nothing because neither half can fail in a way a caller could act

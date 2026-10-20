@@ -1067,6 +1067,51 @@ func TestAStalledRelayQueueReleasesTheServiceStream(t *testing.T) {
 	}
 }
 
+// TestAStreamReportsItsOwnQueuesGap covers Stream.Gapped. Once the opening
+// marker is read the stream reads ungapped, because that marker was the
+// service's and arrived as an event. State published past the client's
+// two-deep queue, with nothing reading, makes the queue discard, and the
+// stream reads gapped; the marker it then delivers first counts what was
+// discarded, and once it is delivered the stream reads ungapped again.
+func TestAStreamReportsItsOwnQueuesGap(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	c := h.dial(t, ipc.ClientConfig{Backlog: 2})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if opening, err := stream.Recv(ctx); err != nil || opening.Type != ipc.TypeGap {
+		t.Fatalf("the first delivery is %q, %v; want the service's opening marker", opening.Type, err)
+	}
+	if stream.Gapped() {
+		t.Fatal("the stream reads gapped with nothing discarded by its own queue")
+	}
+
+	for i := uint64(1); i <= 5; i++ {
+		publish(t, h.events, state(fmt.Sprintf("s%d", i), i))
+	}
+	for !stream.Gapped() {
+		if ctx.Err() != nil {
+			t.Fatalf("five states to a two-deep queue nothing reads never gapped it: %v", ctx.Err())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	marker, err := stream.Recv(ctx)
+	if err != nil || marker.Type != ipc.TypeGap {
+		t.Fatalf("the gapped stream delivered %q, %v; want its marker first", marker.Type, err)
+	}
+	if gap, err := ipc.GapPayload(marker); err != nil || gap.Dropped == 0 {
+		t.Fatalf("the marker reads %+v (%v), want what the queue discarded counted", gap, err)
+	}
+	if stream.Gapped() {
+		t.Fatal("the stream still reads gapped after its marker was delivered")
+	}
+}
+
 // TestTheServiceReasonForEndingAConnectionReachesTheCaller covers a frame the
 // service cannot read. It answers with why before it drops the connection, and
 // that answer names no request because no identifier could be read out of the
