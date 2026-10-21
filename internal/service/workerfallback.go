@@ -176,7 +176,15 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 		return nil, err
 	}
 	var proof tasks.Isolation
-	defer func() { settle(proof) }()
+	// A handoff kept work refused is not a worker failure: the slot is
+	// given back rather than settled, so the task dispatches on its own
+	// once the entry is answered, and no fallback hold is raised.
+	kept := false
+	defer func() {
+		if !kept {
+			settle(proof)
+		}
+	}()
 	fail := func(err error) (*session.Session, error) { return nil, s.holdWorkerFallback(ctx, task.ID, err) }
 	attempts, err := s.store.TaskAttempts(ctx, task.ID)
 	if err != nil {
@@ -234,6 +242,17 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 	}
 	proof = launch.proof
 	if err != nil {
+		if errors.Is(err, store.ErrDispatchHeld) {
+			// Kept work recorded in the project since the first launch holds
+			// the backup's attempt as it holds any new task (dispatch.go);
+			// the sealed selection stays, the slot is given back, and the
+			// dispatch that follows the entry's answer reads the selection.
+			kept = true
+			s.releaseHeldSlot(ctx, task.ID)
+			s.log.Printf("task %s worker fallback from %s to %s was recorded and the backup was not started, because kept work holds the task: %v",
+				task.ID, role.Agent, role.Fallback.Agent, err)
+			return nil, err
+		}
 		// A sweep that did not clear, a terminal that did not read dead, and
 		// a task the relaunch table leaves alone have not asked the backup.
 		// Holding here would resolve the task as held, and the next start
@@ -254,6 +273,14 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 	s.log.Printf("task %s worker fallback from %s to %s: %s", task.ID, role.Agent, role.Fallback.Agent, failure)
 	launched, err := s.launchTask(ctx, launch)
 	if err != nil {
+		if errors.Is(err, store.ErrDispatchHeld) {
+			// The launch claim refused the backup for kept work and gave
+			// the slot back itself; the same stance as above.
+			kept = true
+			s.log.Printf("task %s worker fallback from %s to %s was recorded and the backup was not started, because kept work holds the task: %v",
+				task.ID, role.Agent, role.Fallback.Agent, err)
+			return nil, err
+		}
 		return fail(err)
 	}
 	return launched, nil
