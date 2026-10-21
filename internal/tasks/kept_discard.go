@@ -3,12 +3,14 @@ package tasks
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -36,13 +38,16 @@ import (
 // list that may overstate or understate; a later cleanup of the unchanged
 // copy establishes it. A copy that is gone is ErrCopyGone.
 //
-// The digest is over everything the discard would destroy, as shown: the
+// The digest is over everything the discard would destroy, as shown, each
+// piece a framed record (digest), so no name, target or content can stand
+// for a boundary: the
 // copy's path, the commit HEAD stands on, every reference tip of a task's
 // clone and the stash of either kind, every entry of the index at every
 // stage (git's own object identity for the staged content of every tracked
-// path, and of each side of a conflicted one), every path git reports
-// changed or untracked with the content it holds in the working tree (a
-// hash of its bytes, or that it is gone; for an untracked directory, which
+// path, and of each side of a conflicted one, with the mode git keeps),
+// every path git reports changed or untracked with what it holds in the
+// working tree (its type and permission bits and a hash of its bytes or
+// its link's target, or that it is gone; for an untracked directory, which
 // is how git reports a nested repository, every file under it by the
 // filesystem, its own .git included, since git will not look inside), the
 // commits lacking, and the three indicators. The same copy in the same state
@@ -113,14 +118,14 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 		return Loss{}, fmt.Errorf("tasks: reading the kept copy at %s: %w", entry.CopyPath, err)
 	}
 	loss := Loss{Head: inv.Head.Commit, Lacks: append([]string{}, entry.Lacks...), Dirty: inv.Dirty, Untracked: inv.Untracked, Stash: inv.Stash}
-	var b strings.Builder
-	b.WriteString(entry.CopyPath + "\n" + inv.Head.Commit + "\n")
+	d := newDigest()
+	d.record("copy", entry.CopyPath, inv.Head.Commit)
 	for _, ref := range inv.Refs {
 		// A task's clone has references of its own; a run's worktree reads
 		// the gate's, which are not the copy's state, so of those only the
 		// stash, which is the copy's, is read.
 		if entry.TaskID.IsKnown() || ref.Name == "refs/stash" {
-			b.WriteString(ref.Name + "=" + ref.Commit + "\n")
+			d.record("ref", ref.Name, ref.Commit)
 		}
 	}
 	entries, err := copied.IndexEntries(ctx)
@@ -128,7 +133,7 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 		return Loss{}, fmt.Errorf("tasks: reading the index of the kept copy at %s: %w", entry.CopyPath, err)
 	}
 	for _, e := range entries {
-		fmt.Fprintf(&b, "index %s %s %d %s\n", e.Mode, e.Object, e.Stage, e.Path)
+		d.record("index", e.Mode, e.Object, strconv.Itoa(e.Stage), e.Path)
 	}
 	changes, err := copied.Changes(ctx)
 	if err != nil {
@@ -139,21 +144,50 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 		if err != nil {
 			return Loss{}, fmt.Errorf("tasks: reading %s in the kept copy at %s: %w", p.Path, entry.CopyPath, err)
 		}
-		fmt.Fprintf(&b, "%s untracked=%v gone=%v %s\n", p.Path, p.Untracked, p.Gone, content)
+		d.record("path", p.Path, strconv.FormatBool(p.Untracked), strconv.FormatBool(p.Gone), content)
 	}
-	b.WriteString(strings.Join(loss.Lacks, ",") + "\n")
-	fmt.Fprintf(&b, "%v %v %v\n", inv.Dirty, inv.Untracked, inv.Stash)
-	sum := sha256.Sum256([]byte(b.String()))
-	loss.Digest = hex.EncodeToString(sum[:])[:12]
+	d.record(append([]string{"lacks"}, loss.Lacks...)...)
+	d.record("indicators", strconv.FormatBool(inv.Dirty), strconv.FormatBool(inv.Untracked), strconv.FormatBool(inv.Stash))
+	loss.Digest = d.sum()[:12]
 	return loss, nil
 }
 
-// contentOf is a hash of what the working tree holds at path: "gone" for a
-// path no longer there, "link" plus its target for a symbolic link, which
-// is what git would record of it, and for a directory a hash over every
-// entry under it, walked by the filesystem, each file by its bytes and each
-// link by its target, so an untracked directory git reports as one path, a
-// nested repository among them, is covered down to its contents.
+// digest is the framing every digest here is written in: each record is a
+// count of its fields and then each field as its length and its bytes, so
+// no byte string in a name, a link's target or a content's hash can be read
+// as a boundary between fields or records, and two different sequences of
+// records never write the same bytes.
+type digest struct{ h hash.Hash }
+
+func newDigest() *digest { return &digest{h: sha256.New()} }
+
+// record writes one record of fields.
+func (d *digest) record(fields ...string) {
+	var n [8]byte
+	binary.BigEndian.PutUint64(n[:], uint64(len(fields)))
+	_, _ = d.h.Write(n[:])
+	for _, f := range fields {
+		binary.BigEndian.PutUint64(n[:], uint64(len(f)))
+		_, _ = d.h.Write(n[:])
+		_, _ = d.h.Write([]byte(f))
+	}
+}
+
+// sum is the digest of every record written, in hexadecimal.
+func (d *digest) sum() string { return hex.EncodeToString(d.h.Sum(nil)) }
+
+// contentOf is what the working tree holds at path, as a string that is
+// itself a digest's field: "gone" for a path no longer there, and otherwise
+// the entry's type and permission bits (os.FileMode's type bits and its nine
+// permission bits, the executable bits among them, which git records of a
+// file and a checkout restores, and the rest of which a discard destroys
+// too) followed by, for a symbolic link, its target, which is what git
+// would record of it, for a file a hash of its bytes, and for a directory a
+// digest over every entry under it, walked by the filesystem, each one a
+// framed record of its path relative to the directory and its own
+// contentOf, so an untracked directory git reports as one path, a nested
+// repository among them with its own .git, is covered down to every file's
+// bytes, every link's target and every entry's mode.
 func contentOf(path string) (string, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -162,40 +196,50 @@ func contentOf(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
+	d := newDigest()
+	mode := strconv.FormatUint(uint64(info.Mode().Type()|info.Mode().Perm()), 8)
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
 		target, err := os.Readlink(path)
 		if err != nil {
 			return "", err
 		}
-		return "link " + target, nil
-	}
-	if !info.IsDir() {
-		return hashFile(path)
-	}
-	h := sha256.New()
-	err = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
+		d.record("link", mode, target)
+	case !info.IsDir():
+		sum, err := hashFile(path)
 		if err != nil {
-			return err
+			return "", err
 		}
-		rel, err := filepath.Rel(path, p)
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			_, _ = fmt.Fprintf(h, "dir %s\n", filepath.ToSlash(rel))
+		d.record("file", mode, sum)
+	default:
+		d.record("dir", mode)
+		err = filepath.WalkDir(path, func(p string, _ os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if p == path {
+				return nil
+			}
+			rel, err := filepath.Rel(path, p)
+			if err != nil {
+				return err
+			}
+			if fi, err := os.Lstat(p); err == nil && fi.IsDir() {
+				d.record("entry", filepath.ToSlash(rel), "dir", strconv.FormatUint(uint64(fi.Mode().Type()|fi.Mode().Perm()), 8))
+				return nil
+			}
+			content, err := contentOf(p)
+			if err != nil {
+				return err
+			}
+			d.record("entry", filepath.ToSlash(rel), content)
 			return nil
-		}
-		content, err := contentOf(p)
+		})
 		if err != nil {
-			return err
+			return "", err
 		}
-		_, _ = fmt.Fprintf(h, "%s %s\n", filepath.ToSlash(rel), content)
-		return nil
-	})
-	if err != nil {
-		return "", err
 	}
-	return "tree " + hex.EncodeToString(h.Sum(nil)), nil
+	return d.sum(), nil
 }
 
 // hashFile is a hash of the file's bytes.

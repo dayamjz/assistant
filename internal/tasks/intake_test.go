@@ -467,7 +467,21 @@ func TestIntakeWritesItsInstructionsWholeAndCompleteIntakeFillsAGap(t *testing.T
 			t.Fatalf("the whole write left %s beside the file", e.Name())
 		}
 	}
+	// A second write over the same path goes through the same one partial
+	// file and leaves nothing beside it either.
+	if err := writeWhole(path, []byte("whole again\n")); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := os.ReadDir(dir); err != nil || len(again) != 1 {
+		t.Fatalf("a second whole write left %d entries (%v)", len(again), err)
+	}
 	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	// A stop between the partial file's write and its rename: the partial
+	// file stands under its one fixed name and nothing under the
+	// instructions' name.
+	if err := os.WriteFile(partialOf(path), []byte("Do the wo"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.queue.InterruptAfterRecordForTest(t, nil); err != nil {
@@ -479,6 +493,19 @@ func TestIntakeWritesItsInstructionsWholeAndCompleteIntakeFillsAGap(t *testing.T
 	}
 	if text, err := os.ReadFile(path); err != nil || string(text) != "Do the work.\n" {
 		t.Fatalf("the completed file reads %q, %v", text, err)
+	}
+	if _, err := os.Stat(partialOf(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("CompleteIntake left the partial file beside the instructions: %v", err)
+	}
+	// A partial file a stop left beside a whole one is removed too.
+	if err := os.WriteFile(partialOf(path), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.queue.CompleteIntake(ctx, id, "Do the work.\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(partialOf(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("CompleteIntake left a stale partial file beside a whole one: %v", err)
 	}
 	if _, err := f.queue.CompleteIntake(ctx, id, "something else\n"); err != nil {
 		t.Fatal(err)

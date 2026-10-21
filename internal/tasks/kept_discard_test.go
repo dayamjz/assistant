@@ -280,3 +280,130 @@ func rawGitErr(dir string, args ...string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
+
+// The digest is framed, so no byte string can stand for a boundary, and it
+// carries every entry's type and permission bits. The reviewer's forgery,
+// inside an untracked nested repository, which is walked entry by entry: a
+// link a whose target is "x", a newline, and a line naming a file b with
+// the hash of some payload, digests differently from a link a to "x" beside
+// a file b holding that payload, and a discard on one refuses the other. A
+// name holding a newline is a field of its own. And a chmod +x inside an
+// untracked nested repository moves the digest. Without the framing the
+// forged pair digests the same; without the mode bits the chmod does not
+// move it.
+func TestADiscardDigestIsFramedAndCarriesModes(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/framed")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	entry := got.Entry
+	loss := func(when string) Loss {
+		t.Helper()
+		l, err := s.cleaner.Loss(ctx, entry)
+		if err != nil {
+			t.Fatalf("%s: Loss: %v", when, err)
+		}
+		return l
+	}
+	forge := filepath.Join(tk.copy, "forge")
+	if err := os.MkdirAll(forge, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, forge, "init", "--quiet", "-b", "main", ".")
+	link := filepath.Join(forge, "a")
+	file := filepath.Join(forge, "b")
+
+	// The forged state: one link whose target carries a second line.
+	payload := []byte("the payload\n")
+	sum, err := hashFile(writeTemp(t, payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("x\nb "+sum, link); err != nil {
+		t.Fatal(err)
+	}
+	forged := loss("the forged link")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	// The real state: the link to x beside a file b holding the payload.
+	if err := os.Symlink("x", link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	real := loss("the link beside the file")
+	if forged.Digest == real.Digest {
+		t.Fatalf("a link whose target forges a second entry digests %s, the same as the link beside the file", real.Digest)
+	}
+	if _, err := s.cleaner.Discard(ctx, entry, forged.Digest, ""); !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("a discard on the forged state's digest = %v; want ErrLossChanged", err)
+	}
+	if err := os.RemoveAll(forge); err != nil {
+		t.Fatal(err)
+	}
+
+	// A name holding a newline is one field.
+	split := loss("before the newline names")
+	if err := os.WriteFile(filepath.Join(tk.copy, "c\nd"), []byte("one file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newline := loss("a name holding a newline")
+	if err := os.Remove(filepath.Join(tk.copy, "c\nd")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tk.copy, "c"), []byte("one file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plain := loss("a plain name")
+	if newline.Digest == plain.Digest || newline.Digest == split.Digest {
+		t.Fatalf("a name holding a newline digests %s, which another state shares", newline.Digest)
+	}
+	if err := os.Remove(filepath.Join(tk.copy, "c")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The executable bit inside an untracked nested repository.
+	nested := filepath.Join(tk.copy, "nested")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, nested, "init", "--quiet", "-b", "main", ".")
+	script := filepath.Join(nested, "run.sh")
+	if err := os.WriteFile(script, []byte("echo hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := loss("the nested script as written")
+	if err := os.Chmod(script, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	after := loss("the nested script made executable")
+	if after.Digest == before.Digest {
+		t.Fatalf("chmod +x inside the nested repository left the digest at %s", before.Digest)
+	}
+	if _, err := s.cleaner.Discard(ctx, entry, before.Digest, ""); !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("a discard on the digest shown before the chmod = %v; want ErrLossChanged", err)
+	}
+}
+
+// writeTemp writes content to a file of its own outside any copy and
+// returns its path.
+func writeTemp(t *testing.T, content []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "payload")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
