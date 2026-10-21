@@ -170,6 +170,11 @@ const keptWorkMigration = "kept work record"
 // launch claim, for the reason sealCheckpointTableMigration is a constant.
 const attemptLaunchMigration = "task attempt launch claim"
 
+// keptWorkLandingMigration names the migration that adds the run a land
+// answer to kept work started, for the reason sealCheckpointTableMigration
+// is a constant.
+const keptWorkLandingMigration = "kept work landing run"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2164,6 +2169,28 @@ var schema = []migration{
 				WHEN OLD.launch_claimed_at IS NOT NULL
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a task attempt''s launch is claimed once and the claim is not rewritten');
+				END`,
+		},
+	},
+	{
+		version: 53,
+		name:    keptWorkLandingMigration,
+		statements: []string{
+			// The run a land answer to a kept work entry started, PRD section
+			// 6's "the program carries the work to the gate as a delivery":
+			// written once by RecordKeptWorkLanding, only on an entry
+			// answered land, after the run was recorded. NULL on an entry
+			// answered land is a landing not yet carried out, which the next
+			// call or the next start completes. It names a run by
+			// identifier and holds no foreign key, so forgetting a
+			// repository's runs is not refused by the entries that name
+			// them.
+			`ALTER TABLE kept_work ADD COLUMN landed_run TEXT`,
+			`CREATE TRIGGER kept_work_lands_once
+				BEFORE UPDATE OF landed_run ON kept_work
+				WHEN OLD.landed_run IS NOT NULL OR OLD.answer IS NOT 'land' OR NEW.landed_run IS NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry records the run its landing started once, and only once it is answered land');
 				END`,
 		},
 	},

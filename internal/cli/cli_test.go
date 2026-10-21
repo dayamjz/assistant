@@ -944,7 +944,7 @@ func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
 		t.Fatalf("eject --confirm exited %s over open kept work, want failure:\n%s%s", refused.code, refused.stdout, refused.stderr)
 	}
 	said := refused.stdout + refused.stderr
-	for _, want := range []string{entry.CopyPath, "run " + record.ID, record.SubmittedHead, "#411 part 2", "landing"} {
+	for _, want := range []string{entry.CopyPath, "run " + record.ID, record.SubmittedHead, "kept-work/", "--answer land"} {
 		if !strings.Contains(said, want) {
 			t.Fatalf("the refusal does not name %q:\n%s", want, said)
 		}

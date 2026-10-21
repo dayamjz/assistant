@@ -220,7 +220,7 @@ func TestARepositoryWithOpenKeptWorkIsNotForgotten(t *testing.T) {
 		if !errors.As(err, &open) || !errors.Is(err, ErrKeptWorkOpen) || len(open.Entries) != 1 || open.Entries[0].ID != entry.ID {
 			t.Fatalf("%s = %v, want a KeptWorkOpenError naming entry %d", name, err, entry.ID)
 		}
-		for _, want := range []string{entry.CopyPath, "run " + run.ID, "aaaa", "#411 part 2", "discard"} {
+		for _, want := range []string{entry.CopyPath, "run " + run.ID, "aaaa", "kept-work/", "--answer land"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("%s's refusal %q does not name %q", name, err, want)
 			}

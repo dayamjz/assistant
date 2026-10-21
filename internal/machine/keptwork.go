@@ -13,14 +13,14 @@ import "github.com/dayamjz/assistant/internal/store"
 // cleanup decision later removes it on a proof, which closes the entry, and
 // nothing else removes it; while an entry is open, no new task in its
 // project starts (internal/store's keptworkhold.go), and a push still runs.
-// Answering an entry is #411's remaining part and is not in this build, so
-// no row offers an answer this build would refuse: each names the three
-// answers and says this build does not yet take them.
+// This build takes one of the three answers, land (keptanswer.go), so a
+// row that offers an answer offers that one, names how it is given, and
+// says carrying on and discarding are not yet taken.
 var (
 	phraseKeptWork = Phrase{
 		Outcome:     "This work was kept in its local copy, because it is not yet on the shared branch or anywhere else safe.",
 		Consequence: "The copy stays unless its work later turns up somewhere safe, and no new task in the same project starts until it is decided; your own pushes still go ahead.",
-		Decision:    "Read what it holds with --json; landing it, carrying it on or discarding it is not yet something this build does for you.",
+		Decision:    "Read what it holds with --json; to have it validated, answer land with assistant, --task and the work's identifier or --run= and the validation's, --answer land and --hold with the entry's key, which assistant --json status shows; carrying it on and discarding it are not yet something this build does.",
 	}
 	phraseKeptWorkPart = Phrase{
 		Outcome:     "This work was kept in local copies because it is not yet anywhere safe, oldest first.",
@@ -35,12 +35,12 @@ var (
 	phraseRunKeptWork = Phrase{
 		Outcome:     "Work kept in a local copy of this project is waiting on your decision.",
 		Consequence: "This validation goes ahead regardless, but no new task in the project starts until that copy's work is decided.",
-		Decision:    "Read what is kept with assistant --json status; landing it, carrying it on or discarding it is not yet something this build does for you.",
+		Decision:    "Read what is kept, and how to decide it, with assistant status.",
 	}
 	phraseNoticeKeptWork = Phrase{
 		Outcome:     "This work's local copy was kept, because what it holds is not yet anywhere safe.",
 		Consequence: "It stays unless its work later turns up somewhere safe, and no new task in its project starts until it is decided; the person's own pushes still go ahead.",
-		Decision:    "Tell the person, and read what it holds with assistant --json status.",
+		Decision:    "Tell the person, and read what it holds with assistant --json status; it is answered land with --answer land and --hold naming the entry's key.",
 	}
 )
 

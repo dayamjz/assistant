@@ -412,7 +412,7 @@ func Coverage() []Established {
 				"internal/service's tests reach through the package: a refused cleanup writing an " +
 				"entry and raising one wake, and a restart recording a finished run's standing copy; " +
 				"the dispatch hold and a run's answer naming the project's kept work, which internal/service's and internal/cli's tests reach; " +
-				"its answers are not in this build. Both walks drive a run through methods internal/ipc restricts, " +
+				"and the land answer, which internal/service's and internal/cli's tests reach; carry on and discard are not in this build. Both walks drive a run through methods internal/ipc restricts, " +
 				"so on a platform where that package reads no local socket peer credentials they are " +
 				"skipped rather than passing, and they build only on unix."},
 	}
@@ -429,7 +429,7 @@ func Coverage() []Established {
 var (
 	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop", "host install",
 		"decision", "doctor", "lifecycle", "managed removal", "init", "plan", "eject", "health", "admission", "notification",
-		"task answer", "catch up", "marked seen", "task created", "task message", "task stop", "task peek", "task relaunch", "task relay",
+		"kept work answer", "task answer", "catch up", "marked seen", "task created", "task message", "task stop", "task peek", "task relaunch", "task relay",
 		"task promotion", "wakes", "queued wakes", "wakes acknowledged", "supervision", "domain delegated", "delegation ended",
 		"worker event", "fallback"}
 	p13Evidence  = []string{"details", "findings", "usage", "log"}

@@ -528,10 +528,22 @@ names the entries under `kept_work`, and it starts on its own once every
 entry is answered or closed. Kept work in one project never holds another,
 a task whose worker was already launched is not held (its relaunch goes
 ahead), and your own push always starts its run, whose answer names the
-project's open entries. In this build the only way an entry closes is its
-copy's work turning up somewhere safe, as above: answering an entry (land,
-carry on or discard) is #411's remaining part, so until it ships a project
-whose kept work never lands holds its new tasks until then.
+project's open entries.
+
+An entry is answered the way a hold is: `assistant --task ID --answer land
+--hold kept-work/N` for a task's copy, or `assistant --run=RUN --answer land
+--hold kept-work/N` for a run's, where `kept-work/N` is the entry's key and
+`assistant --json status` shows the entry's number and owner. This build
+takes land: the copy's commit is brought into the gate and a run of the
+entry's branch starts at it, as a push to the gate would start one, and the
+entry's tasks start. A landing is refused, recording nothing, when the copy
+holds a change no commit records, a file no commit records or a stash,
+because a landing carries commits only; and for an investigation's copy,
+whose delivery is a promotion. A land answer a stopped service recorded and
+did not carry out is carried out at the next start. Carry on and discard
+are refused in this build and record nothing; until they ship, an entry
+whose work cannot be landed closes only when its work turns up somewhere
+safe, as above.
 
 ## Waiting on a fleet
 

@@ -301,6 +301,10 @@ func fixtures(t *testing.T) map[string]any {
 				Run: sampleID, Superseded: sampleID}},
 			Ignored: []machine.Ignored{{Ref: "refs/tags/v1", Reason: "not a branch, and the gate validates branches"}},
 		},
+		"kept work answer": machine.KeptWorkAnswered{
+			Entry:  store.KeptWork{ID: 3, TaskID: store.Known(sampleID), CopyPath: "/home/tasks/" + sampleID + "/copy", Reason: "unproven"},
+			Effect: machine.KeptWorkLanded, Run: sampleID,
+		},
 		"task answer": machine.TaskAnswered{
 			Hold: store.Hold{Key: "task/" + sampleID + "/relaunch-bound/2", TaskID: store.Known(sampleID),
 				Subject: "whether to begin this work again", Resolution: store.Known(machine.AnswerRetry)},

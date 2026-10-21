@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -122,6 +123,31 @@ type KeptWork struct {
 	Closure     Optional[KeptClosure]  `json:"closure"`
 	ClosedProof Optional[CleanupProof] `json:"closed_proof"`
 	ClosedAt    Optional[time.Time]    `json:"closed_at"`
+	// LandedRun is the run a land answer started, unknown until
+	// RecordKeptWorkLanding records it. An entry answered land with no
+	// landed run is a landing not yet carried out.
+	LandedRun Optional[string] `json:"landed_run"`
+}
+
+// Key is the name a person gives --hold to answer this entry, PRD section
+// 9's hold answer: "kept-work/" and the entry's identifier. ParseKeptWorkKey
+// is its one reader.
+func (k KeptWork) Key() string { return KeptWorkKey(k.ID) }
+
+// KeptWorkKey is Key for an entry identifier.
+func KeptWorkKey(id int64) string { return keptWorkKeyPrefix + strconv.FormatInt(id, 10) }
+
+const keptWorkKeyPrefix = "kept-work/"
+
+// ParseKeptWorkKey reads an entry identifier out of a key Key wrote, and
+// reports false for anything else, a hold's key among them.
+func ParseKeptWorkKey(key string) (int64, bool) {
+	rest, ok := strings.CutPrefix(key, keptWorkKeyPrefix)
+	if !ok || rest == "" || strings.TrimLeft(rest, "0123456789") != "" {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rest, 10, 64)
+	return id, err == nil && id > 0
 }
 
 // Answered reports whether the entry carries a person's answer.
@@ -192,11 +218,11 @@ func (e *KeptWorkOpenError) Error() string {
 		if len(k.Holds) > 0 {
 			holds = strings.Join(k.Holds, ", ")
 		}
-		fmt.Fprintf(&b, " entry %d, the copy of %s at %s, holding %s (%s);", k.ID, owner, k.CopyPath, holds, k.Reason)
+		fmt.Fprintf(&b, " %s, the copy of %s at %s, holding %s (%s);", k.Key(), owner, k.CopyPath, holds, k.Reason)
 	}
-	b.WriteString(" until answering kept work ships (#411 part 2), the way past this is the work landing: once its commits are on " +
-		"the upstream branch or in the default branch, the next service start removes the copy on that proof and closes the entry; " +
-		"part 2's discard will be your other way")
+	b.WriteString(" answer each one (assistant --task or --run=RUN, --answer land and --hold with its kept-work/N key), " +
+		"or wait for its work to land: once its commits are on the upstream branch or in the default branch, the next service start " +
+		"removes the copy on that proof and closes the entry")
 	return b.String()
 }
 
@@ -404,14 +430,14 @@ func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 }
 
 const keptWorkColumns = `SELECT id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
-	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at`
+	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, landed_run`
 
 func scanKeptWork(sc scanner) (KeptWork, error) {
 	var k KeptWork
 	var holds, kept string
 	var surfaced, answer, by, answered, closure, proof, closed Optional[string]
 	if err := sc.Scan(&k.ID, &k.TaskID, &k.RunID, &k.RepositoryID, &k.Branch, &k.CopyPath, &holds, &k.Reason, &k.Detail,
-		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed); err != nil {
+		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &k.LandedRun); err != nil {
 		return KeptWork{}, err
 	}
 	if err := json.Unmarshal([]byte(holds), &k.Holds); err != nil {
@@ -449,6 +475,69 @@ func scanKeptWork(sc scanner) (KeptWork, error) {
 		return KeptWork{}, err
 	}
 	return k, nil
+}
+
+// ErrKeptWorkLanded is returned by RecordKeptWorkLanding for an entry whose
+// landing already names another run. The first run stands.
+var ErrKeptWorkLanded = errors.New("store: the kept work entry's landing already names a run")
+
+// ErrKeptWorkNotLand is returned by RecordKeptWorkLanding for an entry not
+// answered land.
+var ErrKeptWorkNotLand = errors.New("store: the kept work entry is not answered land")
+
+// RecordKeptWorkLanding records the run a land answer started, once: an
+// entry not answered land is ErrKeptWorkNotLand, one whose landing names
+// another run is ErrKeptWorkLanded, one that names this run already is
+// accepted again and writes nothing, and an unknown identifier is
+// ErrNotFound. It records and starts nothing.
+func (s *Store) RecordKeptWorkLanding(ctx context.Context, id int64, run string) (KeptWork, error) {
+	if strings.TrimSpace(run) == "" {
+		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a landing names no run", id)
+	}
+	var out KeptWork
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		if err != nil {
+			return errNoRows(err)
+		}
+		if k.Answer.Or("") != KeptLand {
+			return ErrKeptWorkNotLand
+		}
+		if landed, ok := k.LandedRun.Get(); ok {
+			if landed != run {
+				return fmt.Errorf("%w: run %s", ErrKeptWorkLanded, landed)
+			}
+			out = k
+			return nil
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET landed_run = ? WHERE id = ?`, run, id); err != nil {
+			return err
+		}
+		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		return err
+	})
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: recording the landing of kept work entry %d: %w", id, err)
+	}
+	return out, nil
+}
+
+// KeptWorkLandingsOwed returns every entry answered land whose landing names
+// no run yet, oldest first: a land answer a stopped service recorded and did
+// not carry out, which the next start completes.
+func (s *Store) KeptWorkLandingsOwed(ctx context.Context) ([]KeptWork, error) {
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	rows, err := s.read.QueryContext(ctx, keptWorkColumns+` FROM kept_work WHERE answer = 'land' AND landed_run IS NULL ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the kept work landings owed: %w", err)
+	}
+	out, err := scanKeptWorkRows(rows)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the kept work landings owed: %w", err)
+	}
+	return out, nil
 }
 
 // closeKeptWorkOnRemovalTx closes, as KeptRemovedOnProof, every open entry

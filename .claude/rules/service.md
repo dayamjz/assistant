@@ -60,7 +60,10 @@ paths: ["internal/service/**"]
   `releaseHeldSlot` gives the slot back and reads the hold again, and a
   removal asks again (`redispatchAfterRemoval`); `taskView` and `report`
   name the entries.
-  Answers are #411's remaining part.
+  `keptanswer.go` is the answer (`keptwork.answer`, reached by section 9's
+  hold answer with `--hold kept-work/N`): land only, recorded once on the
+  row and carried out through `startPushedBranch`, completed at open when a
+  stopped service left it; carry on and discard are refused.
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances
   in, and `report` reads it rather than inferring it.

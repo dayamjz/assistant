@@ -52,7 +52,10 @@ paths: ["internal/store/**"]
   whose project has an open entry; `BeginDispatchAttempt`
   and `ClaimAttemptLaunch` (the last write before a worker starts) refuse
   it with `*DispatchHeldError` in their own transactions, and
-  `BeginTaskAttempt`, the relaunch claim, is never held.
+  `BeginTaskAttempt`, the relaunch claim, is never held. Migration 53's `landed_run` is the run a
+  land answer started, written once by `RecordKeptWorkLanding` and only on
+  an entry answered land; `KeptWork.Key` and `ParseKeptWorkKey` are the one
+  spelling of `--hold kept-work/N`.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number
   what they append from the shipped list rather than spelling a version out.

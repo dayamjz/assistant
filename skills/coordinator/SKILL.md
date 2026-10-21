@@ -280,7 +280,10 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   or the copy of a run attributed to it, was kept because its work is not
   anywhere safe; the entry is in `assistant --json status` under
   `kept_work` and in the catch-up read under `kept`. Tell the person: it is
-  theirs to decide. Answering it is not in this build yet. While the
+  theirs to decide. This build takes one answer, land, given like a hold:
+  `assistant --task ID --answer land --hold kept-work/N`, or
+  `--run=RUN` in place of `--task` for a run's copy; carry on and discard
+  are refused and record nothing. While the
   project has an open entry, a task you create in it is recorded and not
   started: it reads `dispatched` and its answer (`task.get`) names the
   entries holding it under `kept_work`; it starts on its own once they are

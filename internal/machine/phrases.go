@@ -258,7 +258,7 @@ var phraseLandedLocallyNow = Phrase{
 var phraseTaskWaitsOnKeptWork = Phrase{
 	Outcome:     "This work has not begun, because work kept in a local copy of the same project is waiting on your decision first.",
 	Consequence: "It begins on its own once that copy's work is decided or turns up somewhere safe; your own pushes and work already under way go ahead regardless.",
-	Decision:    "Read which copy with assistant --json tasks and the work's identifier; its answers are land, carry on or discard, which this build does not yet take from you.",
+	Decision:    "Read which copy with assistant --json tasks and the work's identifier; its answers are land, carry on or discard, and this build takes land, given with --answer land and --hold naming the entry's key.",
 }
 
 // phraseTaskHeld is the row for a task internal/taskstate resolved Held from
@@ -1975,6 +1975,7 @@ func TablePhrases() []Phrase {
 		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept, phraseRepairAdded, phraseRepairNotYetAdded)
 	out = append(out, keptWorkRows()...)
+	out = append(out, keptAnswerRows()...)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseNoticeQueued, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
