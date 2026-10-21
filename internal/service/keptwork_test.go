@@ -1,6 +1,8 @@
 package service_test
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -9,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -227,4 +230,119 @@ func TestAKeptCopyWhoseWorkLandsIsRemovedAndItsEntryClosed(t *testing.T) {
 		closed.ClosedProof.Or("") != store.CleanupProofRemoteBranch || closed.Answered() {
 		t.Fatalf("entry %d reads %+v (%v), want it closed as removed on the remote-branch proof with no answer", entry.ID, closed, err)
 	}
+}
+
+// errStoppedBeforeMark stands in for a service that stopped between a
+// copy's removal and the mark on its cleanup record.
+var errStoppedBeforeMark = errors.New("the service stopped between the removal and the mark")
+
+// keptEntryOf records one kept run copy through a real run and returns its
+// entry, as the earlier tests do.
+func keptEntryOf(t *testing.T, h *home.Home, subject string) store.KeptWork {
+	t.Helper()
+	var entry store.KeptWork
+	withService(t, h, func(under serviceUnderTest) {
+		started := startRunSkipping(t, under.client, subject, afterIntent()...)
+		runByID(t, under.client, started.Record.ID)
+		status := statusOf(t, under.client, subject)
+		if len(status.KeptWork) != 1 {
+			t.Fatalf("status lists kept work %+v, want the run's one entry", status.KeptWork)
+		}
+		entry = status.KeptWork[0]
+	})
+	return entry
+}
+
+// A removal on a proof that a stopped service never marked is completed by
+// the next open from the recorded proof, and the entry closes with the mark:
+// the run's kept copy is recorded, its commit lands upstream, and the second
+// service's recovery removes the copy on the remote-branch proof and is
+// interrupted before the mark, leaving a proof, no copy and an open entry.
+// The third service's recovery finds the copy gone and the proof unmarked
+// on the run's cleanup record, completes the mark, and the entry reads
+// closed with that proof. Without recovery reading the record for a copy
+// that is gone, the entry stays open across every later restart.
+func TestARemovalStoppedBeforeItsMarkIsCompletedAtTheNextOpenAndClosesTheEntry(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	entry := keptEntryOf(t, h, subject)
+	git(t, subject, "push", "--quiet", "origin", "work")
+
+	interrupted := service.WithCleanupInterruptForTest(t, options(t, h), func() error { return errStoppedBeforeMark })
+	withServiceOptions(t, interrupted, func(under serviceUnderTest) {
+		deadline := time.Now().Add(30 * time.Second)
+		for !strings.Contains(readServiceLog(t, h), errStoppedBeforeMark.Error()) {
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the reclaim was never interrupted; the log reads:\n%s", readServiceLog(t, h))
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if _, err := os.Stat(entry.CopyPath); !os.IsNotExist(err) {
+			t.Fatalf("the interrupted removal left the copy at %s: %v", entry.CopyPath, err)
+		}
+		if listed := statusOf(t, under.client, subject).KeptWork; len(listed) != 1 {
+			t.Fatalf("after the interrupted removal status lists %+v, want the entry still open, which is the window under test", listed)
+		}
+	})
+
+	withService(t, h, func(under serviceUnderTest) {
+		deadline := time.Now().Add(30 * time.Second)
+		for len(statusOf(t, under.client, subject).KeptWork) != 0 {
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the next open left the entry open over a copy removed on a recorded proof; the log reads:\n%s", readServiceLog(t, h))
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = records.Close() }()
+	closed, err := records.KeptWorkEntry(t.Context(), entry.ID)
+	if err != nil || closed.Closure.Or("") != store.KeptRemovedOnProof ||
+		closed.ClosedProof.Or("") != store.CleanupProofRemoteBranch || closed.Answered() {
+		t.Fatalf("entry %d reads %+v (%v), want it closed as removed on the remote-branch proof", entry.ID, closed, err)
+	}
+	cleanup, err := records.RunCleanup(t.Context(), closed.RunID.Or(""))
+	if err != nil || !cleanup.RemovedAt.IsKnown() {
+		t.Fatalf("the run's cleanup record reads %+v (%v), want the removal marked", cleanup, err)
+	}
+}
+
+// A kept copy that disappears with no proof recorded for it is reported and
+// never closed: the program does not close kept work it cannot show was
+// removed on a proof. The copy is removed by hand, outside any cleanup, and
+// the next open names the entry in the log and still lists it.
+func TestAKeptCopyGoneWithNoProofIsReportedAndLeftOpen(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	entry := keptEntryOf(t, h, subject)
+	if err := os.RemoveAll(entry.CopyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		want := fmt.Sprintf("kept work entry %d names the copy at %s, which is gone with no recorded proof", entry.ID, entry.CopyPath)
+		deadline := time.Now().Add(30 * time.Second)
+		for !strings.Contains(readServiceLog(t, h), want) {
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the next open did not report the entry; the log reads:\n%s", readServiceLog(t, h))
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if listed := statusOf(t, under.client, subject).KeptWork; len(listed) != 1 || !listed[0].Open() {
+			t.Fatalf("status lists %+v, want the entry still open", listed)
+		}
+	})
 }

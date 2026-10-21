@@ -8,6 +8,7 @@ import (
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // Where the cleanup decision is called from, and with what.
@@ -115,24 +116,33 @@ func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
 
 // reclaimAtRecovery asks reclaimed of every run among records that the
 // record shows finished and whose isolated copy still stands, on
-// sweepFinishedAtRecovery's terms for which runs those are, on one goroutine
-// registered under work, because each ask reads the upstream for its proofs
-// and a home holding several kept copies should come back serving first. A
-// run among records that was unfinished is passed over: the move that
-// finished it during recovery reclaimed it then. A copy whose run has no
-// record at all is not looked for, which is a gap this names.
-func (s *Service) reclaimAtRecovery(records []store.Run) {
+// sweepFinishedAtRecovery's terms for which runs those are, and of every
+// such run whose copy is gone while its cleanup record holds a proof not yet
+// marked removed: a service that stopped between the removal and the mark,
+// which internal/tasks' resume completes from the recorded proof, closing
+// the run's kept work in the mark's transaction. It then asks
+// settleKeptAtRecovery of the kept work still open. All of it runs on one
+// goroutine registered under work, because each ask of a standing copy reads
+// the upstream for its proofs and a home holding several kept copies should
+// come back serving first. A run among records that was unfinished is passed
+// over: the move that finished it during recovery reclaimed it then. A copy
+// whose run has no record at all is not looked for, which is a gap this
+// names.
+func (s *Service) reclaimAtRecovery(ctx context.Context, records []store.Run) {
 	var finished []store.Run
 	for _, record := range records {
 		if !record.Status.Recognized() || !runs.Finished(record.Status) {
 			continue
 		}
 		if _, err := os.Lstat(s.home.Worktree(record.RepositoryID, record.ID)); errors.Is(err, os.ErrNotExist) {
-			continue
+			cleanup, err := s.store.RunCleanup(ctx, record.ID)
+			if err != nil || !cleanup.Proof.IsKnown() || cleanup.RemovedAt.IsKnown() {
+				continue
+			}
 		}
 		finished = append(finished, record)
 	}
-	if len(finished) == 0 || !s.startWork() {
+	if !s.startWork() {
 		return
 	}
 	go func() {
@@ -143,7 +153,44 @@ func (s *Service) reclaimAtRecovery(records []store.Run) {
 			}
 			s.reclaimed(s.stopCtx, record)
 		}
+		s.settleKeptAtRecovery(s.stopCtx)
 	}()
+}
+
+// settleKeptAtRecovery looks at every open kept work entry whose copy is
+// gone, after the runs' reclaim, and decides from the owner's cleanup record
+// and the copy's absence, never from the entry alone. A task's copy whose
+// cleanup record holds a proof not yet marked removed is a removal a stopped
+// service did not mark, and internal/tasks' CleanUp completes it from the
+// recorded proof, closing the entry in the mark's transaction; the
+// terminal is not consulted for a copy that is gone, which is that
+// package's resume. Any other entry whose copy is gone, with no proof
+// recorded for it, is reported in the log and left open: the program never
+// closes kept work it cannot show was removed on a proof (P6, P15).
+func (s *Service) settleKeptAtRecovery(ctx context.Context) {
+	open, err := s.store.OpenKeptWork(ctx)
+	if err != nil {
+		s.log.Printf("the open kept work could not be read at recovery: %v", err)
+		return
+	}
+	for _, k := range open {
+		if _, err := os.Lstat(k.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				s.log.Printf("kept work entry %d: the copy at %s could not be read: %v", k.ID, k.CopyPath, err)
+			}
+			continue
+		}
+		if task, ok := k.TaskID.Get(); ok {
+			cleanup, err := s.store.TaskCleanup(ctx, task)
+			if err == nil && !cleanup.RemovedAt.IsKnown() {
+				done, err := s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: task, Terminal: taskstate.Unobserved})
+				s.logCleanup(ctx, done, err)
+				continue
+			}
+		}
+		s.log.Printf("kept work entry %d names the copy at %s, which is gone with no recorded proof that its work landed; "+
+			"the entry is left open and nothing here closes it", k.ID, k.CopyPath)
+	}
 }
 
 // reclaimed calls reclaimCopy and logs what it could not do, on the terms

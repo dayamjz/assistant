@@ -19,6 +19,15 @@ func (s *Service) SessionOf(id string) (session.Provider, *session.Session, bool
 	return s.sessionOf(id)
 }
 
+// WithCleanupInterruptForTest returns o with the cleanup decision's seam
+// between a copy's removal and its mark set to f, for this package's
+// external tests: a removal whose f returns an error is left unmarked, as a
+// service that stopped there leaves it.
+func WithCleanupInterruptForTest(tb testing.TB, o Options, f func() error) Options {
+	o.cleanupTest, o.interruptCleanupMark = tb, f
+	return o
+}
+
 // SetBeforeRefusalEndForTest installs beforeRefusalEnd for this
 // package's external tests. It exists only in the tests, on that field's
 // terms in service.go.

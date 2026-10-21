@@ -127,3 +127,71 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 		t.Fatalf("the kept copy was touched: %v", err)
 	}
 }
+
+// The task-copy half of completing an unmarked removal at the next open: a
+// task's kept copy whose cleanup record holds a proof and no mark, with the
+// copy gone, which is what a service that stopped between the removal and
+// the mark leaves, has its mark completed by recovery from that proof, and
+// the entry closes with it. Without recovery's task half the entry stays
+// open.
+func TestAnUnmarkedTaskCopyRemovalIsCompletedAtTheNextOpen(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	h, records := loopHome(t)
+	ctx := t.Context()
+	const id = "keptunmarked"
+	copyPath, err := h.TaskCopy(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.CreateTask(ctx, store.Task{
+		ID: id, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: copyPath,
+	}, store.Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(copyPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	heldGit(t, copyPath, "init", "--quiet", "-b", "main", ".")
+	heldGit(t, copyPath, "commit", "--quiet", "--allow-empty", "-m", "the worker's own commit")
+	head := heldGit(t, copyPath, "rev-parse", "HEAD")
+	cleaner, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records,
+		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, err := cleaner.Keep(ctx, tasks.Kept{Task: id, Reason: string(tasks.ReasonUnproven), Detail: "not anywhere safe"})
+	if err != nil || !kept.Recorded {
+		t.Fatalf("Keep = %+v, %v", kept, err)
+	}
+	if _, err := records.RecordTaskCleanup(ctx, store.TaskCleanup{TaskID: id, Proof: store.CleanupProofDefaultBranch,
+		Examined: []string{head}}, store.TaskInvestigation); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(copyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	l := openLoop(t, h, records, newScriptedTerminals(), &fakeClock{now: time.Now()})
+	defer func() { _ = l.service.Close() }()
+	deadline := time.Now().Add(loopWait)
+	for {
+		got, err := l.records(t).KeptWorkEntry(ctx, kept.Entry.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.Open() {
+			if got.Closure.Or("") != store.KeptRemovedOnProof || got.ClosedProof.Or("") != store.CleanupProofDefaultBranch {
+				t.Fatalf("the entry closed as %+v, want removed on the default-branch proof", got)
+			}
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the next open left the entry open over a copy removed on a recorded proof; the log reads:\n%s", serviceLogOf(t, h))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if cleanup, err := l.records(t).TaskCleanup(ctx, id); err != nil || !cleanup.RemovedAt.IsKnown() {
+		t.Fatalf("the task's cleanup record reads %+v (%v), want the removal marked", cleanup, err)
+	}
+}

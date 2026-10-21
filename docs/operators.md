@@ -466,7 +466,12 @@ If the copy's work later turns up somewhere safe, for example once you push
 its commit to the upstream branch, the next cleanup of it (for a run's copy,
 the next service start) removes the copy on that proof and closes the entry
 as removed on a proof, recorded as the program's and never as a discard; a
-closed entry is no longer listed. Nothing else removes a kept copy.
+closed entry is no longer listed. Nothing else removes a kept copy. A
+service that stops between removing the copy and marking it removed leaves
+the entry open; the next start completes the mark from the recorded proof
+and closes it. An entry whose copy is gone with no proof recorded, a copy
+removed by hand among them, is named in the service log at each start and
+stays open.
 
 This build records and surfaces kept work and does not yet hold dispatch:
 a new task in a project with an open entry still dispatches. Answering an

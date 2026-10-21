@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -192,6 +193,12 @@ type Options struct {
 	// are here rather than on the Service because the loop starts inside
 	// Open; supervise.go says what each is, and the product sets none.
 	hooks supervisionHooks
+	// cleanupTest and interruptCleanupMark are the cleanup decision's seam
+	// between a copy's removal and its mark, which export_test.go's
+	// WithCleanupInterruptForTest sets and the product never does; Open
+	// hands them to internal/tasks' InterruptBeforeMarkForTest.
+	cleanupTest          testing.TB
+	interruptCleanupMark func() error
 }
 
 // Service is one home's background service.
@@ -670,7 +677,10 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	if s.queue, err = s.newQueue(); err != nil {
 		return err
 	}
-	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err != nil {
+	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err == nil && o.interruptCleanupMark != nil {
+		err = s.cleaner.InterruptBeforeMarkForTest(o.cleanupTest, o.interruptCleanupMark)
+	}
+	if err != nil {
 		return err
 	}
 
