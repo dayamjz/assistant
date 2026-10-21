@@ -46,9 +46,14 @@ var errLsofNoSelf = errors.New("agents: lsof did not report this process's own w
 // this process's own group, which the sweep never sends.
 //
 // dir is refused before anything is read when it holds a byte outside
-// printable ASCII, a space or a backslash: lsof's field output may render
-// such a byte in a name other than as itself, and a copy whose name could
-// not be compared would be a sweep that found nothing under it.
+// printable ASCII or a backslash: lsof's field output was observed to print
+// a tab or a newline in a name as a backslash escape, and may print a byte
+// above ASCII as one, so a name holding such a byte or a backslash could not
+// be compared byte for byte, and a copy whose name could not be compared
+// would be a sweep that found nothing under it. A space is printable ASCII
+// and is printed as itself, which a test sweeping a copy with one in its
+// path holds against the real lsof run, so it is compared like any other
+// byte: parseLsof takes a name as the whole of its line after the n (#415).
 func listUnder(ctx context.Context, dir string) (listing, error) {
 	return listUnderReading(ctx, dir, readCwds)
 }
@@ -106,7 +111,7 @@ func listUnderReading(ctx context.Context, dir string, readCwds func(context.Con
 // than byte for byte, on listUnder's terms.
 func lsofComparable(dir string) error {
 	for i := 0; i < len(dir); i++ {
-		if b := dir[i]; b <= ' ' || b >= 0x7f || b == '\\' {
+		if b := dir[i]; b < ' ' || b >= 0x7f || b == '\\' {
 			return fmt.Errorf("agents: %q holds byte %#x, which this listing does not compare against lsof's output", dir, b)
 		}
 	}
@@ -158,10 +163,13 @@ func runLsof(ctx context.Context) ([]byte, error) {
 
 // parseLsof reads lsof's field output for working directory descriptors: a
 // p line opening each process, an f line naming each descriptor, and an n
-// line carrying its name. A working directory is recorded only from an n
-// line that follows an f line reading cwd within a p line's process, and
-// only when it is an absolute path; a name that is not one is left out,
-// which the listing then reads as a working directory it could not read.
+// line carrying its name. A field is one line, told apart by its first
+// byte, and its value is the rest of the line, never a part of it split off
+// at a space, so a name with a space in it is read whole. A working
+// directory is recorded only from an n line that follows an f line reading
+// cwd within a p line's process, and only when it is an absolute path; a
+// name that is not one is left out, which the listing then reads as a
+// working directory it could not read.
 //
 // Anything else is refused with errLsofShape rather than skipped: a line of
 // another field, an empty line, a process identifier that is not a positive

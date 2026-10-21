@@ -102,14 +102,19 @@ func replaceOnce(s, old, replacement string) string {
 
 // TestASweepOfACopyWhoseNameLsofCouldRenderDifferentlyFails holds the one
 // refusal the listing makes before it reads anything: a copy whose path
-// holds a space is one whose name lsof's output might not carry byte for
-// byte, so the sweep fails rather than comparing, and its zero result is
-// not clear.
+// holds a backslash, lsof's escape byte, or a tab, which lsof prints as an
+// escape, is one whose name lsof's output might not carry byte for byte, so
+// the sweep fails rather than comparing, and its zero result is not clear.
+// A space is not among them, and
+// TestASweepOfACopyWithASpaceInItsPathEndsWhatRunsThereAndThenClears holds
+// that a copy with one is swept.
 func TestASweepOfACopyWhoseNameLsofCouldRenderDifferentlyFails(t *testing.T) {
-	h, _ := sweepHome(t, sweepBase(t), "with space")
-	dir := makeTaskCopy(t, h)
-	r, err := agents.NewSweeper(h, sweepGrace, nil).Sweep(t.Context(), dir)
-	if err == nil || errors.Is(err, agents.ErrSweepUnsupported) || errors.Is(err, home.ErrNotACopy) || r.Clear() {
-		t.Fatalf("sweeping %s answered %s, %v, want a failed listing and the zero result", dir, r, err)
+	for _, name := range []string{`with\backslash`, "with\ttab"} {
+		h, _ := sweepHome(t, sweepBase(t), name)
+		dir := makeTaskCopy(t, h)
+		r, err := agents.NewSweeper(h, sweepGrace, nil).Sweep(t.Context(), dir)
+		if err == nil || errors.Is(err, agents.ErrSweepUnsupported) || errors.Is(err, home.ErrNotACopy) || r.Clear() {
+			t.Fatalf("sweeping %q answered %s, %v, want a failed listing and the zero result", dir, r, err)
+		}
 	}
 }
