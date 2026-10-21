@@ -3,9 +3,11 @@
 // or its context ends. It is PRD section 8's "the program runs in a process
 // group that the invoker ends when the call returns or times out", as one
 // mechanism the packages that invoke short-lived programs share rather than
-// each writing their own: internal/vcs runs git through it and
-// internal/forge runs gh through it, and internal/agents waits on its lsof
-// run through AwaitExit.
+// each writing their own: internal/vcs runs git through it,
+// internal/forge runs gh, internal/stages a configured command line,
+// internal/agents its forceful tree kill, and internal/agents/standin a Run
+// exchange's command, and internal/agents waits on its lsof run through
+// AwaitExit.
 //
 // It decides nothing about what a program's exit means. Run returns what
 // os/exec's Wait reported, or a refusal of its own, and the caller reads its
@@ -53,6 +55,7 @@ package procgroup
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"time"
 )
 
@@ -82,4 +85,20 @@ func Bound(ctx context.Context, d time.Duration) (context.Context, context.Cance
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, d)
+}
+
+// RunStarted is Run that calls started with the program's process identifier
+// once it has started and before Run waits on it, so a caller can read what
+// the operating system says of the running program, such as the group it
+// leads, while the identifier still names it: nothing reaps the program
+// before started returns, since only Run's own cmd.Wait does, and Run calls
+// that after started. The program may already have exited when started is
+// called, and an exited program is then unreaped rather than gone.
+//
+// started is called on Run's goroutine, at most once, and only for a program
+// that started; Run neither bounds nor interrupts it, so a started that
+// blocks holds the call past ctx and the grace alike, and the program's
+// streams are copied meanwhile. Everything else is Run's.
+func RunStarted(ctx context.Context, cmd *exec.Cmd, grace time.Duration, started func(pid int)) error {
+	return run(ctx, cmd, grace, started)
 }

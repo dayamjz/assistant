@@ -17,6 +17,11 @@ import (
 // those platforms, except that ErrAbandoned is never returned: the wait for
 // a killed program is not bounded here.
 func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
+	return run(ctx, cmd, grace, nil)
+}
+
+// run is Run, calling started, when it is not nil, as RunStarted says.
+func run(ctx context.Context, cmd *exec.Cmd, grace time.Duration, started func(pid int)) error {
 	if err := check(cmd, grace); err != nil {
 		return err
 	}
@@ -32,6 +37,9 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 		return err
 	}
 	s.started()
+	if started != nil {
+		started(cmd.Process.Pid)
+	}
 	stop := context.AfterFunc(ctx, func() { _ = cmd.Process.Kill() })
 	defer stop()
 	waitErr := cmd.Wait()

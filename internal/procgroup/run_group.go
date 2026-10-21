@@ -51,6 +51,11 @@ import (
 // the reap. Run does not put ctx's error in place of any of these: the
 // caller reads ctx.Err() to tell an expiry from an answer.
 func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
+	return run(ctx, cmd, grace, nil)
+}
+
+// run is Run, calling started, when it is not nil, as RunStarted says.
+func run(ctx context.Context, cmd *exec.Cmd, grace time.Duration, started func(pid int)) error {
 	if err := check(cmd, grace); err != nil {
 		return err
 	}
@@ -67,6 +72,9 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 		return err
 	}
 	s.started()
+	if started != nil {
+		started(cmd.Process.Pid)
+	}
 	pgid := cmd.Process.Pid
 	exited := make(chan error, 1)
 	go func() { exited <- AwaitExit(pgid) }()
