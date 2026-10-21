@@ -107,7 +107,7 @@ func TestPlacementFollowsTheChainAndLosesItWhenTheKernelRewritesIt(t *testing.T)
 	// be released; the sleep is in the shell's group, which the worker does
 	// not lead.
 	command := `sleep 60 >/dev/null 2>&1 & echo "$! $$" > child.tmp && mv child.tmp child; exec ` +
-		HeldWait(t, "release")
+		standin.HeldWait(t, "release")
 	if err := worker.Send(t.Context(), "run: "+command); err != nil {
 		t.Fatalf("Send: %v", err)
 	}

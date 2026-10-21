@@ -23,7 +23,8 @@ import (
 // The flags are spelled distinctly enough that a test binary cannot be handed
 // one by accident, which matters because being handed one is what turns a test
 // binary into an agent, or, for sweepFlag and the sweepDirFlag beside it,
-// into the owner sweep RunOwned starts (owner_unix.go).
+// into the owner sweep RunOwned starts (owner_unix.go), or, for heldFlag,
+// into a held process (held_unix.go).
 const (
 	controlFlag   = "--standin-control="
 	handshakeFlag = "--standin-handshake="
@@ -72,8 +73,9 @@ const (
 //	}
 //
 // It never returns when this process is a stand-in, because the process is the
-// agent and has no tests to run, or when it is the owner sweep RunOwned
-// started. It always returns when it is not, so calling
+// agent and has no tests to run, when it is the owner sweep RunOwned
+// started, or when it is a held process HeldWait started (held_unix.go). It
+// always returns when it is not, so calling
 // it unconditionally costs a test binary one scan of its arguments.
 //
 // New verifies this wiring before it hands back a Runner, so a package that
@@ -89,6 +91,7 @@ func Main() {
 	if token, ok := flagValue(args, handshakeFlag); ok {
 		os.Exit(handshake(token))
 	}
+	heldMain(args)
 	control, ok := flagValue(args, controlFlag)
 	if !ok {
 		return

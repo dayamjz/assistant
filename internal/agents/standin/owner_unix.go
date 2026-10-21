@@ -208,10 +208,9 @@ const tmuxWrapperMark = "# standin: the tmux a test finds, which runs the real o
 // environment, whatever environment it was started with, and every
 // argument it was given.
 func tmuxWrapper(value, real string) string {
-	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 	return "#!/bin/sh\n" + tmuxWrapperMark + "\n" +
-		OwnerVar + "=" + quote(value) + "\nexport " + OwnerVar + "\n" +
-		"exec " + quote(real) + ` "$@"` + "\n"
+		OwnerVar + "=" + shellWord(value) + "\nexport " + OwnerVar + "\n" +
+		"exec " + shellWord(real) + ` "$@"` + "\n"
 }
 
 // realTmux is the first tmux on path that is not a wrapper tmuxWrapper wrote,

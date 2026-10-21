@@ -197,10 +197,16 @@ func TestTheCheckReportsALiveProcessOfABinaryWhosePathHasASpace(t *testing.T) {
 // process this test starts so it can be killed as a test binary is; the
 // service is started the way the product launches one, in a session of its
 // own.
+//
+// The stand-in owner is standin.HeldWait's held process, never released, so
+// it ends with this test binary in turn: a test binary killed before its
+// cleanup runs still takes the stand-in owner with it, and the service
+// with that, where a /bin/sleep owner left both running with parent 1 for
+// up to the hour it slept (#440).
 func TestAServiceWhoseOwnerIsGoneEndsItself(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
-	owner := exec.Command("/bin/sleep", "3600")
+	owner := exec.Command("/bin/sh", "-c", "exec "+standin.HeldWait(t, filepath.Join(t.TempDir(), "never")))
 	if err := owner.Start(); err != nil {
 		t.Fatalf("starting the stand-in owner: %v", err)
 	}
