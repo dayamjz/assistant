@@ -19,9 +19,10 @@ import (
 )
 
 // PRD principle P15's "kept work is never silent", at the task-copy site,
-// through the real service and its supervisor loop: a reported
-// investigation whose worker has ended is owed its copy's cleanup, which the
-// loop's pass asks, and a copy holding a commit no proof can place anywhere
+// through the real service and its supervisor loop: an investigation whose
+// findings are recorded relayed and whose worker has ended is owed its
+// copy's cleanup, which the loop's pass asks (a report alone keeps the copy
+// for a promotion, on landed.go's terms), and a copy holding a commit no proof can place anywhere
 // safe is refused as unproven and kept. That refusal becomes one kept work
 // entry naming the task, its reason and the commits the copy holds; the next
 // pass raises it as one kept-work wake, actionable and appended, records
@@ -66,8 +67,14 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reporter.StoreReport(ctx, id, `{"summary":"looked and committed what it found"}`); err != nil {
+	stored, err := reporter.StoreReport(ctx, id, `{"summary":"looked and committed what it found"}`)
+	if err != nil {
 		t.Fatalf("storing the report: %v", err)
+	}
+	// The coordinator relays the findings, which is what owes the copy its
+	// cleanup; the record is task.relay's, anchored on the report's entry.
+	if _, _, err := records.RecordTaskRelay(ctx, id, stored.Event.Sequence); err != nil {
+		t.Fatalf("recording the findings relayed: %v", err)
 	}
 
 	terminals := newScriptedTerminals()
