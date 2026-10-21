@@ -653,13 +653,15 @@
 // Subscribers learn that a run moved from runs.go's publishRunState, that a
 // worker appended to its history from workers.go's publishTaskEvent, that a
 // task's resolved state moved from the supervisor loop's pass, and that a
-// hold opened or closed from every site that writes one, and all four draw
+// hold opened or closed from the sites that write one, and all four draw
 // their revision from the one counter on this service, so a consumer orders
 // them against each other. publish.go owns the third and fourth, lists the
-// sites a hold is published from, and says why the pass is the one reader
-// that publishes a task: a task's state is resolved and never stored, so a
-// change is a comparison between two resolutions, and the pass resolves
-// every task anyway. The comparison is taskstate.Basis equality, kept per
+// sites a hold is published from and the one write that publishes nothing,
+// standing consent's registration, which reaches the stream only at its
+// resolution, and says why the pass is the one reader that publishes a
+// task: a task's state is resolved and never stored, so a change is a
+// comparison between two resolutions, and the pass resolves every task
+// anyway. The comparison is taskstate.Basis equality, kept per
 // task in this service's memory, so a change is published once and not on
 // every pass, within one beacon interval of being made, and a restart
 // publishes every task again to subscribers who all attached fresh. A hold

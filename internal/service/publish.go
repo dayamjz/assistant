@@ -46,17 +46,20 @@ import (
 // # hold.state is published where a hold is written
 //
 // Every site in this service that writes a hold publishes it as the store
-// returned it: storeTaskReport, where an investigation's report registers
-// one per ask finding; the checks-hold closure, where the one closure PRD
-// section 8 lets the program make resolves the hold in the same transaction
-// as the run's move; consent.go's standing-consent hold and its resolution;
-// local.go's approval hold, the landing that closes it and its other
+// returned it, with one exception: storeTaskReport, where an investigation's
+// report registers one per ask finding; the checks-hold closure, where the
+// one closure PRD section 8 lets the program make resolves the hold in the
+// same transaction as the run's move; consent.go's resolution of a
+// standing-consent hold; local.go's approval hold, the landing that closes it and its other
 // answers; steer.go's stop hold; taskholds.go's three registrations (the
 // relaunch bound, the relaunch with no sweep and the dispatch with no sweep)
 // and its answer to a task's hold; workerfallback.go's hold; and
 // subordinates.go's delegation hold, its answer, and the holds an ended
-// delegation closes. The payload is the store.Hold record, on machine's rule
-// that a record travels as its owner's type.
+// delegation closes. The exception is consent.go's writeConsentAnswer: it
+// registers the standing-consent hold and publishes nothing, so that hold
+// reaches the stream only when finishConsentAnswer resolves it. The payload
+// is the store.Hold record, on machine's rule that a record travels as its
+// owner's type.
 
 // published is what this service has published about each task: the basis of
 // the last task.state it sent, keyed by task. It is guarded by its own mutex

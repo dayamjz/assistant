@@ -80,11 +80,10 @@ func Coverage() []Established {
 		{principles.P2, ReachBinary,
 			"One run of the binary reaches every stage it does not ask to skip; a second run skips one " +
 				"more of them for that run only; and a home whose configuration document asks for a " +
-				"standing skip stops the service before it serves. Both runs skip review and the pull " +
-				"request stage, because the review body launches the agent this harness scripts to " +
-				"answer nothing and the pull request body fails because the run's record names no " +
-				"repository on the code host, so no run here both takes the pull request stage and reaches the end of " +
-				"the gate, and none reviews anything. Two narrow facts are what establish the third: " +
+				"standing skip stops the service before it serves. Both runs skip review, because the " +
+				"review body launches the agent this harness scripts to answer nothing, and name the " +
+				"pull request stage too, which the fixture's local upstream would skip after push through " +
+				"no_code_host anyway, so no run here takes the pull request stage and none reviews anything. Two narrow facts are what establish the third: " +
 				"internal/config's key table admits no key named skip, and a key it does not admit is " +
 				"refused where the document is walked, before the service binds. A second key of another " +
 				"name is driven beside it and held to the same answer, so the refusal is not read off one " +
@@ -183,9 +182,9 @@ func Coverage() []Established {
 				"a fast-forward, which no surface here drives a run through. All three walks need a " +
 				"service and a run, so they are skipped rather " +
 				"than passing where internal/ipc reads no peer credentials or no local socket " +
-				"transport exists. The pull request and checks stages are skipped on all three, because no " +
-				"record here names a repository on a code host and this fixture has none for " +
-				"internal/forge to address. The killed run, and the contention check beside it, are " +
+				"transport exists. The pull request and checks stages are skipped on all three, because the " +
+				"fixture's upstream is a local repository with no code host for internal/forge to " +
+				"address, so begin sets no_code_host. The killed run, and the contention check beside it, are " +
 				"driven through methods internal/ipc restricts, so on a platform where that package reads " +
 				"no local socket peer credentials both are skipped rather than passing, and the two " +
 				"package-reach observations are the whole of what is established there. The kill path " +
