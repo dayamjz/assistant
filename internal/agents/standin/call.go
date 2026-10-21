@@ -217,28 +217,16 @@ func claimedPlaces(dir string) (int, error) {
 	return claimed, nil
 }
 
-// record writes the call beside the place it claimed, whole and then renamed,
-// so nothing partial is ever visible under the name a reader looks for.
+// record writes the call beside the place it claimed through writeWhole, so
+// nothing partial is ever visible under the name a reader looks for, and a
+// file a failed write leaves behind ends in writeWhole's ".partial-" suffix
+// rather than recordSuffix, so it is never read as a call.
 func record(dir string, c Call) error {
 	encoded, err := json.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("encoding call %d: %w", c.Seq, err)
 	}
-	file, err := os.CreateTemp(dir, "recording-*")
-	if err != nil {
-		return fmt.Errorf("recording call %d: %w", c.Seq, err)
-	}
-	if _, err := file.Write(encoded); err != nil {
-		// The close is what would report a failure to flush, and this path
-		// already has a failure to report; the file it leaves behind is named
-		// as a recording in progress and is never read as a call.
-		_ = file.Close()
-		return fmt.Errorf("recording call %d: %w", c.Seq, err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("recording call %d: %w", c.Seq, err)
-	}
-	if err := os.Rename(file.Name(), placePath(dir, c.Seq, recordSuffix)); err != nil {
+	if err := writeWhole(placePath(dir, c.Seq, recordSuffix), encoded); err != nil {
 		return fmt.Errorf("recording call %d: %w", c.Seq, err)
 	}
 	return nil
