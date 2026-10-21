@@ -484,3 +484,55 @@ func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *t
 		})
 	}
 }
+
+// TestALsofRunExitingOneWhoseOutputWasCutIsNotReadAsWhole is review's case
+// against the accepted status: lsof's status of one is an answer, but only
+// when its output reached its end. A program standing where lsof is prints
+// this process's working directory, leaves a descendant in a group of its
+// own holding the output open with a second record still to print, and
+// exits with status one. The read refuses with agents.ErrSweepTimedOut and
+// returns no working directories, rather than the one record it had, since a
+// listing cut short would under-report a blocker (P6). The descendant waits
+// on a sleep of an hour, so its record comes past the grace by construction
+// rather than by a margin. The positive control is the same program with no
+// descendant, whose status of one is read with its record.
+func TestALsofRunExitingOneWhoseOutputWasCutIsNotReadAsWhole(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	requiresIdentityRead(t)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := filepath.EvalSymlinks(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const deadline = 2 * time.Second
+	self := "printf 'p%s\\nfcwd\\nn%s\\n' " + strconv.Itoa(os.Getpid()) + " '" + cwd + "'\n"
+	other := "printf 'p1\\nfcwd\\nn/\\n'"
+
+	// Under set -m the shell starts the descendant as a job in a process
+	// group of its own, which is the one holder ending lsof's group does not
+	// reach; the descendant's group is ended by the cleanup, its leader
+	// verified by identity first.
+	body := "set -m\n(/bin/sleep 3600; " + other + ") &\nset +m\necho $! >> PIDS\n" + self + "exit 1\n"
+	program, pidFile := standInLsof(t, t.TempDir(), body)
+	cwds, err := agents.ReadCwdsWithLsof(context.Background(), program, deadline)
+	pids := startedPIDs(t, pidFile, 2)
+	if id, present, idErr := agents.Identify(pids[1]); idErr == nil && present {
+		t.Cleanup(func() {
+			if presence, err := id.Presence(); err == nil && presence == agents.PresencePresent {
+				_ = syscall.Kill(-id.PID, syscall.SIGKILL)
+			}
+		})
+	}
+	if !errors.Is(err, agents.ErrSweepTimedOut) || cwds != nil {
+		t.Fatalf("the read of a stand-in lsof that exited 1 with its output held open answered %v, %v, want agents.ErrSweepTimedOut and no working directories", cwds, err)
+	}
+
+	control, _ := standInLsof(t, t.TempDir(), self+"exit 1\n")
+	cwds, err = agents.ReadCwdsWithLsof(context.Background(), control, deadline)
+	if err != nil || cwds[os.Getpid()] != cwd {
+		t.Fatalf("the read of a stand-in lsof that exited 1 with its output whole answered %v, %v, want this process's working directory %q", cwds, err, cwd)
+	}
+}

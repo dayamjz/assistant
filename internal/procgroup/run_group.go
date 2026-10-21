@@ -44,11 +44,13 @@ import (
 // cmd.Process is nil exactly when nothing was started, and the error is then
 // ErrMisconfigured when Run refused cmd, ctx's error when ctx had already
 // ended, or cmd.Start's or a pipe's. Once the program started, the error is
-// ErrAbandoned as above, or cmd.Wait's when it reports one, such as the
-// *exec.ExitError of a failing status, and otherwise what the copying
-// reported; the failure to observe the leader's exit is joined to it when
-// that observation failed, in which case the group was still ended before
-// the reap. Run does not put ctx's error in place of any of these: the
+// ErrAbandoned as above, or otherwise cmd.Wait's, such as the
+// *exec.ExitError of a failing status, joined to what the copying reported,
+// so a failing status never hides output that was cut: a caller that
+// accepts a status as an answer checks for exec.ErrWaitDelay before it reads
+// the output as whole. The failure to observe the leader's exit is joined to
+// it when that observation failed, in which case the group was still ended
+// before the reap. Run does not put ctx's error in place of any of these: the
 // caller reads ctx.Err() to tell an expiry from an answer.
 func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 	if err := check(cmd, grace); err != nil {
@@ -97,11 +99,10 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 	}
 	// Every stream the child holds is a file or nil, so os/exec starts no
 	// copying goroutine and this returns once the leader is reaped.
-	waitErr := cmd.Wait()
-	copyErr := s.finish(grace)
-	if waitErr == nil {
-		waitErr = copyErr
-	}
+	// Both are reported: a failing status says how the program ended and
+	// says nothing about whether its output reached its end, so a caller
+	// that accepts the status still has to be told when the copy was cut.
+	waitErr := errors.Join(cmd.Wait(), s.finish(grace))
 	if observeErr != nil {
 		return errors.Join(fmt.Errorf("procgroup: observing the exit of %d: %w", pgid, observeErr), waitErr)
 	}

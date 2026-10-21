@@ -9,8 +9,10 @@
 // through it.
 //
 // It decides nothing about what a program's exit means. Run returns what
-// os/exec's Wait reported, or a refusal of its own, and the caller reads its
-// context's error to tell an expiry from an answer.
+// os/exec's Wait reported joined to exec.ErrWaitDelay when the output did not
+// reach its end, or a refusal of its own, and the caller reads its context's
+// error to tell an expiry from an answer, and exec.ErrWaitDelay before it
+// reads output beside a status it accepts.
 //
 // # The one rule about signalling
 //
