@@ -48,6 +48,7 @@ func TestMain(m *testing.M) {
 	callMain()
 	listenMain()
 	service.EarlierServiceMain()
+	service.HeldMain()
 	// After every verb this binary answers as another process, because a
 	// hook, a call and an earlier service are the processes they are and
 	// take no terminal of their own; a test's push is a person's, and the
