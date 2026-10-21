@@ -83,7 +83,7 @@ func TestAPersonsPushRunsWhileKeptWorkWaitsAndItsAnswerNamesIt(t *testing.T) {
 // usage before anything is asked: no owner, two owners, --run=RUN with no
 // kept work key, bare --run beside a kept work key, a flag an answer to
 // kept work does not read, and no answer. Carry on is refused by the
-// service as not in this build, and leaves the entry open.
+// service as a run's copy, which this build does not carry on, and leaves the entry open.
 func TestKeptWorkIsAnsweredLandFromTheCommandLine(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -121,7 +121,7 @@ func TestKeptWorkIsAnsweredLandFromTheCommandLine(t *testing.T) {
 	}
 	if got := run(t, h, subject, owner, "--answer", "carry-on", "--hold", entry.Key()); got.code != machine.ExitFailure ||
 		!strings.Contains(got.stdout+got.stderr, "not in this build") {
-		t.Fatalf("carry on exited %s, want it refused as not in this build:\n%s%s", got.code, got.stdout, got.stderr)
+		t.Fatalf("carry on exited %s, want it refused as a run's copy:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 
 	landed := run(t, h, subject, "--json", owner, "--answer", "land", "--hold", entry.Key())

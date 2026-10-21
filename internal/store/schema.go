@@ -175,6 +175,11 @@ const attemptLaunchMigration = "task attempt launch claim"
 // is a constant.
 const keptWorkLandingMigration = "kept work landing run"
 
+// keptWorkCarryOnMigration names the migration that adds the task a carry
+// on answer to kept work created, for the reason sealCheckpointTableMigration
+// is a constant.
+const keptWorkCarryOnMigration = "kept work carry-on task"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2185,12 +2190,54 @@ var schema = []migration{
 			// identifier and holds no foreign key, so forgetting a
 			// repository's runs is not refused by the entries that name
 			// them.
+			// landing_claimed_at is the claim a landing takes before it starts
+			// the run, written once by ClaimKeptWorkLanding and only on an
+			// entry answered land, so two answers landing one entry start one
+			// run between them: the second finds the first's claim. The run
+			// is recorded only after a claim.
+			`ALTER TABLE kept_work ADD COLUMN landing_claimed_at TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN landed_run TEXT`,
+			`CREATE TRIGGER kept_work_landing_is_claimed_once
+				BEFORE UPDATE OF landing_claimed_at ON kept_work
+				WHEN OLD.landing_claimed_at IS NOT NULL OR OLD.answer IS NOT 'land' OR NEW.landing_claimed_at IS NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry''s landing is claimed once, and only once it is answered land');
+				END`,
 			`CREATE TRIGGER kept_work_lands_once
 				BEFORE UPDATE OF landed_run ON kept_work
-				WHEN OLD.landed_run IS NOT NULL OR OLD.answer IS NOT 'land' OR NEW.landed_run IS NULL
+				WHEN OLD.landed_run IS NOT NULL OR OLD.answer IS NOT 'land' OR OLD.landing_claimed_at IS NULL OR NEW.landed_run IS NULL
 				BEGIN
-					SELECT RAISE(ABORT, 'store: a kept work entry records the run its landing started once, and only once it is answered land');
+					SELECT RAISE(ABORT, 'store: a kept work entry records the run its landing started once, after its landing was claimed');
+				END`,
+		},
+	},
+	{
+		version: 54,
+		name:    keptWorkCarryOnMigration,
+		statements: []string{
+			// The task a carry on answer creates, PRD section 6's "a worker
+			// is relaunched in that same copy": a new task of the same
+			// project and branch whose copy is the kept copy. The task is
+			// named with the answer, by AnswerKeptWorkCarryOn, before its
+			// row is written, so a stop between the two leaves an entry that
+			// names the task the next start is to create. carried_on_at is
+			// written once the task owns the copy, by MarkKeptWorkCarriedOn,
+			// and an entry answered carry-on with none is a carry on not yet
+			// carried out. Neither holds a foreign key: the task row may not
+			// exist yet when the entry names it.
+			`ALTER TABLE kept_work ADD COLUMN carried_on_task TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carried_on_at TEXT`,
+			`CREATE TRIGGER kept_work_carries_on_once
+				BEFORE UPDATE OF carried_on_task ON kept_work
+				WHEN NEW.carried_on_task IS NOT OLD.carried_on_task AND (OLD.carried_on_task IS NOT NULL OR NEW.answer IS NOT 'carry-on')
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry names the task carrying it on once, with its carry-on answer');
+				END`,
+			`CREATE TRIGGER kept_work_carried_on_once
+				BEFORE UPDATE OF carried_on_at ON kept_work
+				WHEN OLD.carried_on_at IS NOT NULL OR OLD.carried_on_task IS NULL OR NEW.carried_on_at IS NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is carried on once, and only by the task it names');
 				END`,
 		},
 	},

@@ -18,6 +18,11 @@ import (
 // writing the instructions and claiming an overlap are its judgment (PRD
 // section 7); everything the program decides from them is Create's.
 type Request struct {
+	// ID is the identifier to record the task under, for a caller that
+	// reserved it with home.NewTaskID before intake because it holds the
+	// task's copy ready at home.TaskCopy; empty means intake mints one. An
+	// identifier home.ValidTaskID refuses is refused by the store.
+	ID string
 	// Shape is the task's shape as text, decoded against store.TaskShape's
 	// closed set at this edge and refused outside it.
 	Shape string
@@ -184,9 +189,11 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 			return Created{}, fmt.Errorf("tasks: the repository the task works in: %w", err)
 		}
 	}
-	id, err := home.NewTaskID()
-	if err != nil {
-		return Created{}, err
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		if id, err = home.NewTaskID(); err != nil {
+			return Created{}, err
+		}
 	}
 	copyPath, err := q.home.TaskCopy(id)
 	if err != nil {

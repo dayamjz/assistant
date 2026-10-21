@@ -22,11 +22,12 @@ func TestAKeptWorkKeyIsParsedOnlyAsKeyWritesIt(t *testing.T) {
 	}
 }
 
-// A land answer's run is recorded once and only on an entry answered land:
-// an open entry and one answered otherwise are refused, the first run stands
-// against a second, the same run again is accepted and writes nothing, the
-// owed listing drops the entry once its run is named, and the schema's seal
-// refuses a direct rewrite.
+// A land answer's run is recorded once, only on an entry answered land and
+// only after the landing was claimed, which is itself claimed once: an open
+// entry and one answered otherwise are refused, a run before the claim is
+// refused, the first run stands against a second, the same run again is
+// accepted and writes nothing, the owed listing drops the entry once its
+// run is named, and the schema's seals refuse a direct rewrite of either.
 func TestALandingRunIsRecordedOnceOnAnEntryAnsweredLand(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -55,6 +56,25 @@ func TestALandingRunIsRecordedOnceOnAnEntryAnsweredLand(t *testing.T) {
 	if owed, err := s.KeptWorkLandingsOwed(ctx); err != nil || len(owed) != 1 || owed[0].ID != land.ID {
 		t.Fatalf("KeptWorkLandingsOwed = %+v, %v; want the land entry", owed, err)
 	}
+	if _, err := s.RecordKeptWorkLanding(ctx, land.ID, "run-landing"); !errors.Is(err, ErrKeptWorkLandingUnclaimed) {
+		t.Fatalf("a landing recorded before its claim = %v; want ErrKeptWorkLandingUnclaimed", err)
+	}
+	if _, err := s.ClaimKeptWorkLanding(ctx, other.ID); !errors.Is(err, ErrKeptWorkNotLand) {
+		t.Fatalf("a claim on an entry answered discard = %v; want ErrKeptWorkNotLand", err)
+	}
+	claimed, err := s.ClaimKeptWorkLanding(ctx, land.ID)
+	if err != nil || !claimed.LandingClaimedAt.IsKnown() || claimed.LandedRun.IsKnown() {
+		t.Fatalf("claiming the landing = %+v, %v", claimed, err)
+	}
+	if _, err := s.ClaimKeptWorkLanding(ctx, land.ID); !errors.Is(err, ErrKeptWorkLandingClaimed) {
+		t.Fatalf("a second claim = %v; want ErrKeptWorkLandingClaimed", err)
+	}
+	if owed, err := s.KeptWorkLandingsOwed(ctx); err != nil || len(owed) != 1 {
+		t.Fatalf("KeptWorkLandingsOwed after the claim = %+v, %v; want the entry still owed", owed, err)
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET landing_claimed_at = '2020-01-01T00:00:00Z' WHERE id = ?`, land.ID); err == nil {
+		t.Fatal("the schema let the landing claim be rewritten")
+	}
 	got, err := s.RecordKeptWorkLanding(ctx, land.ID, "run-landing")
 	if err != nil || got.LandedRun.Or("") != "run-landing" {
 		t.Fatalf("recording the landing = %+v, %v", got, err)
@@ -73,5 +93,63 @@ func TestALandingRunIsRecordedOnceOnAnEntryAnsweredLand(t *testing.T) {
 	}
 	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET landed_run = 'run-other' WHERE id = ?`, other.ID); err == nil {
 		t.Fatal("the schema let a landing run be written on an entry answered discard")
+	}
+}
+
+// A carry-on answer names the task carrying the entry on in the same write,
+// refusing an identifier the home would refuse and the generic answer
+// without one; the task comes to own the copy once, only for that entry,
+// and the owed listing drops the entry when it does; and the schema seals
+// both against a direct rewrite.
+func TestACarryOnAnswerNamesItsTaskOnceAndIsCarriedOutOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/c", Holds: []string{"cccc"}, Reason: "unproven"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptCarryOn, ResolvedByMachineInterface()); err == nil {
+		t.Fatal("a carry-on answer naming no task was recorded")
+	}
+	if _, err := s.AnswerKeptWorkCarryOn(ctx, entry.ID, "not-a-task", ResolvedByMachineInterface()); err == nil {
+		t.Fatal("a carry-on answer naming an invalid task was recorded")
+	}
+	if _, err := s.MarkKeptWorkCarriedOn(ctx, entry.ID); !errors.Is(err, ErrKeptWorkNotCarryOn) {
+		t.Fatalf("marking an open entry carried on = %v; want ErrKeptWorkNotCarryOn", err)
+	}
+	answered, err := s.AnswerKeptWorkCarryOn(ctx, entry.ID, "taskcarrying", ResolvedByMachineInterface())
+	if err != nil || answered.Answer.Or("") != KeptCarryOn || answered.CarriedOnTask.Or("") != "taskcarrying" || answered.CarriedOnAt.IsKnown() {
+		t.Fatalf("the carry-on answer = %+v, %v; want carry-on naming taskcarrying, not yet carried on", answered, err)
+	}
+	if owed, err := s.KeptWorkCarryOnsOwed(ctx); err != nil || len(owed) != 1 || owed[0].ID != entry.ID {
+		t.Fatalf("KeptWorkCarryOnsOwed = %+v, %v; want the entry", owed, err)
+	}
+	done, err := s.MarkKeptWorkCarriedOn(ctx, entry.ID)
+	if err != nil || !done.CarriedOnAt.IsKnown() {
+		t.Fatalf("marking the entry carried on = %+v, %v", done, err)
+	}
+	if _, err := s.MarkKeptWorkCarriedOn(ctx, entry.ID); !errors.Is(err, ErrKeptWorkCarriedOn) {
+		t.Fatalf("marking it again = %v; want ErrKeptWorkCarriedOn", err)
+	}
+	if owed, err := s.KeptWorkCarryOnsOwed(ctx); err != nil || len(owed) != 0 {
+		t.Fatalf("KeptWorkCarryOnsOwed = %+v, %v; want none once carried on", owed, err)
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET carried_on_task = 'taskother000' WHERE id = ?`, entry.ID); err == nil {
+		t.Fatal("the schema let the carry-on task be rewritten")
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET carried_on_at = '2020-01-01T00:00:00Z' WHERE id = ?`, entry.ID); err == nil {
+		t.Fatal("the schema let the carried-on instant be rewritten")
+	}
+	land, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/d", Holds: []string{"dddd"}, Reason: "unproven"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AnswerKeptWork(ctx, land.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET carried_on_task = 'taskother000' WHERE id = ?`, land.ID); err == nil {
+		t.Fatal("the schema let a carry-on task be written on an entry answered land")
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/home"
 )
 
 // KeptAnswer is one of PRD section 6's three answers to kept work. The set
@@ -123,10 +125,20 @@ type KeptWork struct {
 	Closure     Optional[KeptClosure]  `json:"closure"`
 	ClosedProof Optional[CleanupProof] `json:"closed_proof"`
 	ClosedAt    Optional[time.Time]    `json:"closed_at"`
-	// LandedRun is the run a land answer started, unknown until
-	// RecordKeptWorkLanding records it. An entry answered land with no
-	// landed run is a landing not yet carried out.
-	LandedRun Optional[string] `json:"landed_run"`
+	// LandingClaimedAt is when a landing claimed the entry, before it
+	// started the run, through ClaimKeptWorkLanding; LandedRun is the run
+	// it started, recorded by RecordKeptWorkLanding. An entry answered land
+	// with no landed run is a landing not yet carried out: not yet claimed,
+	// or claimed by a landing that stopped before it recorded its run.
+	LandingClaimedAt Optional[time.Time] `json:"landing_claimed_at"`
+	LandedRun        Optional[string]    `json:"landed_run"`
+	// CarriedOnTask is the task a carry on answer creates, named with the
+	// answer by AnswerKeptWorkCarryOn before its row is written, and
+	// CarriedOnAt is when that task came to own the copy, written by
+	// MarkKeptWorkCarriedOn. An entry answered carry-on with a task and no
+	// instant is a carry on not yet carried out.
+	CarriedOnTask Optional[string]    `json:"carried_on_task"`
+	CarriedOnAt   Optional[time.Time] `json:"carried_on_at"`
 }
 
 // Key is the name a person gives --hold to answer this entry, PRD section
@@ -397,6 +409,28 @@ func (s *Store) MarkKeptWorkSurfaced(ctx context.Context, id int64, at time.Time
 // caller's, and who answered is recorded and never consulted, on
 // Resolver's terms.
 func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver) (KeptWork, error) {
+	if a == KeptCarryOn {
+		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a carry-on answer names the task carrying it on, through AnswerKeptWorkCarryOn", id)
+	}
+	return s.answerKeptWork(ctx, id, a, by, "")
+}
+
+// AnswerKeptWorkCarryOn is AnswerKeptWork for the carry-on answer, which
+// names the task that carries the entry on in the same write: the task's
+// identifier is reserved by the caller and its row may not exist yet, which
+// is what lets a stop between this write and the task's creation be
+// completed from the entry (P6). A task identifier home.ValidTaskID refuses
+// is refused.
+func (s *Store) AnswerKeptWorkCarryOn(ctx context.Context, id int64, task string, by Resolver) (KeptWork, error) {
+	if err := home.ValidTaskID(task); err != nil {
+		return KeptWork{}, fmt.Errorf("store: kept work entry %d: the task carrying it on: %w", id, err)
+	}
+	return s.answerKeptWork(ctx, id, KeptCarryOn, by, task)
+}
+
+// answerKeptWork is the one write of an answer, with the carry-on task
+// beside a carry-on answer and nothing beside any other.
+func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver, task string) (KeptWork, error) {
 	if !a.Recognized() {
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: %w: %q", id, ErrUnknownKeptAnswer, a)
 	}
@@ -416,8 +450,8 @@ func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 		if k.Closure.IsKnown() {
 			return ErrKeptWorkClosed
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ? WHERE id = ?`,
-			string(a), who, encodeTime(nowUTC()), id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ? WHERE id = ?`,
+			string(a), who, encodeTime(nowUTC()), optionalText(task), id); err != nil {
 			return err
 		}
 		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
@@ -430,14 +464,14 @@ func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 }
 
 const keptWorkColumns = `SELECT id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
-	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, landed_run`
+	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, landing_claimed_at, landed_run, carried_on_task, carried_on_at`
 
 func scanKeptWork(sc scanner) (KeptWork, error) {
 	var k KeptWork
 	var holds, kept string
-	var surfaced, answer, by, answered, closure, proof, closed Optional[string]
+	var surfaced, answer, by, answered, closure, proof, closed, landingClaimed, carriedOn Optional[string]
 	if err := sc.Scan(&k.ID, &k.TaskID, &k.RunID, &k.RepositoryID, &k.Branch, &k.CopyPath, &holds, &k.Reason, &k.Detail,
-		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &k.LandedRun); err != nil {
+		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &landingClaimed, &k.LandedRun, &k.CarriedOnTask, &carriedOn); err != nil {
 		return KeptWork{}, err
 	}
 	if err := json.Unmarshal([]byte(holds), &k.Holds); err != nil {
@@ -474,6 +508,12 @@ func scanKeptWork(sc scanner) (KeptWork, error) {
 	if k.ClosedAt, err = optionalTimeValue(closed, "closed_at"); err != nil {
 		return KeptWork{}, err
 	}
+	if k.LandingClaimedAt, err = optionalTimeValue(landingClaimed, "landing_claimed_at"); err != nil {
+		return KeptWork{}, err
+	}
+	if k.CarriedOnAt, err = optionalTimeValue(carriedOn, "carried_on_at"); err != nil {
+		return KeptWork{}, err
+	}
 	return k, nil
 }
 
@@ -485,11 +525,51 @@ var ErrKeptWorkLanded = errors.New("store: the kept work entry's landing already
 // answered land.
 var ErrKeptWorkNotLand = errors.New("store: the kept work entry is not answered land")
 
+// ErrKeptWorkLandingClaimed is returned by ClaimKeptWorkLanding for an entry
+// whose landing is already claimed. The first claim stands.
+var ErrKeptWorkLandingClaimed = errors.New("store: the kept work entry's landing is already claimed")
+
+// ErrKeptWorkLandingUnclaimed is returned by RecordKeptWorkLanding for an
+// entry whose landing was not claimed first.
+var ErrKeptWorkLandingUnclaimed = errors.New("store: the kept work entry's landing was not claimed")
+
+// ClaimKeptWorkLanding claims the entry's landing, once, before the run is
+// started: an entry not answered land is ErrKeptWorkNotLand, one already
+// claimed is ErrKeptWorkLandingClaimed, and an unknown identifier is
+// ErrNotFound; in each case nothing is written. The claim is decided in the
+// transaction that writes it, so two landings of one entry get one claim
+// between them.
+func (s *Store) ClaimKeptWorkLanding(ctx context.Context, id int64) (KeptWork, error) {
+	var out KeptWork
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		if err != nil {
+			return errNoRows(err)
+		}
+		if k.Answer.Or("") != KeptLand {
+			return ErrKeptWorkNotLand
+		}
+		if k.LandingClaimedAt.IsKnown() {
+			return ErrKeptWorkLandingClaimed
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET landing_claimed_at = ? WHERE id = ?`, encodeTime(nowUTC()), id); err != nil {
+			return err
+		}
+		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		return err
+	})
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: claiming the landing of kept work entry %d: %w", id, err)
+	}
+	return out, nil
+}
+
 // RecordKeptWorkLanding records the run a land answer started, once: an
-// entry not answered land is ErrKeptWorkNotLand, one whose landing names
-// another run is ErrKeptWorkLanded, one that names this run already is
-// accepted again and writes nothing, and an unknown identifier is
-// ErrNotFound. It records and starts nothing.
+// entry not answered land is ErrKeptWorkNotLand, one whose landing was not
+// claimed is ErrKeptWorkLandingUnclaimed, one whose landing names another
+// run is ErrKeptWorkLanded, one that names this run already is accepted
+// again and writes nothing, and an unknown identifier is ErrNotFound. It
+// records and starts nothing.
 func (s *Store) RecordKeptWorkLanding(ctx context.Context, id int64, run string) (KeptWork, error) {
 	if strings.TrimSpace(run) == "" {
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a landing names no run", id)
@@ -502,6 +582,9 @@ func (s *Store) RecordKeptWorkLanding(ctx context.Context, id int64, run string)
 		}
 		if k.Answer.Or("") != KeptLand {
 			return ErrKeptWorkNotLand
+		}
+		if !k.LandingClaimedAt.IsKnown() {
+			return ErrKeptWorkLandingUnclaimed
 		}
 		if landed, ok := k.LandedRun.Get(); ok {
 			if landed != run {
@@ -536,6 +619,61 @@ func (s *Store) KeptWorkLandingsOwed(ctx context.Context) ([]KeptWork, error) {
 	out, err := scanKeptWorkRows(rows)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading the kept work landings owed: %w", err)
+	}
+	return out, nil
+}
+
+// ErrKeptWorkNotCarryOn is returned by MarkKeptWorkCarriedOn for an entry
+// not answered carry-on.
+var ErrKeptWorkNotCarryOn = errors.New("store: the kept work entry is not answered carry-on")
+
+// ErrKeptWorkCarriedOn is returned by MarkKeptWorkCarriedOn for an entry
+// already carried on.
+var ErrKeptWorkCarriedOn = errors.New("store: the kept work entry is already carried on")
+
+// MarkKeptWorkCarriedOn records that the task a carry-on answer named owns
+// the copy, once: an entry not answered carry-on is ErrKeptWorkNotCarryOn,
+// one already marked is ErrKeptWorkCarriedOn, and an unknown identifier is
+// ErrNotFound. It records and moves nothing.
+func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64) (KeptWork, error) {
+	var out KeptWork
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		if err != nil {
+			return errNoRows(err)
+		}
+		if k.Answer.Or("") != KeptCarryOn || !k.CarriedOnTask.IsKnown() {
+			return ErrKeptWorkNotCarryOn
+		}
+		if k.CarriedOnAt.IsKnown() {
+			return ErrKeptWorkCarriedOn
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET carried_on_at = ? WHERE id = ?`, encodeTime(nowUTC()), id); err != nil {
+			return err
+		}
+		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		return err
+	})
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: marking kept work entry %d carried on: %w", id, err)
+	}
+	return out, nil
+}
+
+// KeptWorkCarryOnsOwed returns every entry answered carry-on whose task does
+// not yet own the copy, oldest first: a carry on a stopped service recorded
+// and did not carry out, which the next start completes.
+func (s *Store) KeptWorkCarryOnsOwed(ctx context.Context) ([]KeptWork, error) {
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	rows, err := s.read.QueryContext(ctx, keptWorkColumns+` FROM kept_work WHERE answer = 'carry-on' AND carried_on_at IS NULL ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the kept work carry-ons owed: %w", err)
+	}
+	out, err := scanKeptWorkRows(rows)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the kept work carry-ons owed: %w", err)
 	}
 	return out, nil
 }

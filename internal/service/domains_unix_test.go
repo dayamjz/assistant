@@ -295,6 +295,12 @@ func TestASubordinateHoldsTheCoordinatorsCommandsOverItsDomainAndNothingElse(t *
 		if stored, err := recordsOf(t, w.home).Task(t.Context(), own); err != nil || stored.Shape != store.TaskInvestigation {
 			t.Fatalf("the refused promotion changed the task: %+v (%v)", stored, err)
 		}
+		// An answer to kept work is handed up the same way whichever owner
+		// the entry names: one a run left, which names no task, is refused
+		// as a subordinate's before the entry is read.
+		if _, code := callAs(t, d.as, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{Run: "a-run", Hold: "kept-work/1", Answer: "land"}); code != ipc.CodeSubordinate {
+			t.Fatalf("keptwork.answer of a run's entry from the subordinate answered %q, want %q", code, ipc.CodeSubordinate)
+		}
 		if _, code := callAs(t, d.as, ipc.MethodTaskPromote, machine.TaskPromoteRequest{
 			Task: w.task, Repository: w.repository.ID, Branch: "task/base-p", Intent: "not mine",
 		}); code != ipc.CodeSubordinate {

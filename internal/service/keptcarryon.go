@@ -1,0 +1,374 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/vcs"
+)
+
+// Carrying kept work on: PRD section 6's "a worker is relaunched in that same
+// copy with a note saying what is already there", on the owner's decision for
+// #411. The worker is a new task's, of the same project, shape and branch as
+// the task the copy outlived, created through intake's own path
+// (tasks.Queue.Create: the record first, then the directory, under the branch
+// rule and the floor), with the kept copy adopted as its copy in place of a
+// fresh clone. The finished task stays finished, since section 6 says work
+// that continues on it is a new task, and the entry closes once the new task
+// owns the copy.
+//
+// # What is checked before anything is written
+//
+// The copy is asserted with tasks.AssertIsolated under the worker's
+// environment before anything is written into it, against the expectation
+// of the task it outlived, on promotion's terms: a refusal on the remote set
+// or HEAD is tolerated, because those two are what the reshape below writes,
+// and any other refusal, a copy that is not a clone of its own, one that is
+// the primary or inside it, among them, refuses the carry on with nothing
+// recorded. A copy that is gone refuses it too.
+//
+// A run's copy is refused before that: it is a linked worktree of the gate,
+// which a task's copy cannot be, and a person's branch, which intake's branch
+// rule refuses a task. Carrying a run's copy on is therefore not in this
+// build, and the refusal says so.
+//
+// # The order, and what a stop leaves
+//
+// The identifier is minted first and the task's dispatch slot taken for it,
+// so no dispatch pass cuts a fresh clone at the path the copy is about to
+// stand at. The answer is then recorded with the identifier,
+// store.AnswerKeptWorkCarryOn, which closes the entry, so the new task is
+// not held by it. Then, in the order intake keeps, the task is created with
+// that identifier, the copy is moved to the task's own path and reshaped as
+// dispatch shapes a fresh clone, the note is appended to the instructions
+// file, and the entry is marked carried on. Every step after the answer is
+// idempotent on what it finds (the row stands, the copy stands at the new
+// path, the note is in the file), so a service that stops anywhere in it is
+// completed by the next call or the next start from the entry alone, which
+// names the task: completeCarryOnsAtOpen reads every carry-on not marked.
+// A stop before the task's row is written leaves an entry naming a task
+// that does not exist yet, which the completion creates; a stop after the
+// move leaves the copy at the new path, which it finds. What is not
+// recovered: a copy gone from both paths, which is reported and left.
+//
+// Once the slot is given back a dispatch pass is asked for, and the task
+// dispatches over its standing copy on dispatch.go's terms: swept, asserted
+// again at its own path, and launched with the instructions file, note
+// included. Other open entries of the project still hold it, as they hold
+// any new task.
+
+// carryOnHeading is the heading the carry-on note is appended to the
+// instructions under, and the marker that keeps the append idempotent.
+const carryOnHeading = "## Carried on, written by the program"
+
+// carryOnKeptWork is the carry-on answer, on this file's terms.
+func (s *Service) carryOnKeptWork(ctx context.Context, req ipc.Request, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
+	if !entry.Open() && entry.Answer.Or("") != store.KeptCarryOn {
+		return machine.KeptWorkAnswered{}, refusedAnswered(entry)
+	}
+	if entry.Open() {
+		plan, err := s.carryOnOf(ctx, entry)
+		if err != nil {
+			return machine.KeptWorkAnswered{}, err
+		}
+		if err := s.assertKeptCopy(ctx, entry, plan); err != nil {
+			return machine.KeptWorkAnswered{}, err
+		}
+		id, err := home.NewTaskID()
+		if err != nil {
+			return machine.KeptWorkAnswered{}, err
+		}
+		answered, err := s.store.AnswerKeptWorkCarryOn(ctx, entry.ID, id, req.HoldResolver())
+		switch {
+		case errors.Is(err, store.ErrKeptWorkAnswered) || errors.Is(err, store.ErrKeptWorkClosed):
+			again, readErr := s.store.KeptWorkEntry(ctx, entry.ID)
+			if readErr != nil {
+				return machine.KeptWorkAnswered{}, readErr
+			}
+			if again.Answer.Or("") != store.KeptCarryOn {
+				return machine.KeptWorkAnswered{}, refusedAnswered(again)
+			}
+			entry = again
+		case err != nil:
+			return machine.KeptWorkAnswered{}, err
+		default:
+			entry = answered
+		}
+	}
+	return s.completeCarryOn(ctx, entry)
+}
+
+// carryOn is what a carry on of an entry creates, read from the task the
+// copy outlived.
+type carryOn struct {
+	old        store.Task
+	repository store.Repository
+	gatePath   string
+	branch     string
+}
+
+// carryOnOf reads what a carry on of the entry would create, refusing with
+// ipc.ErrRefused what this file's opening comment refuses.
+func (s *Service) carryOnOf(ctx context.Context, entry store.KeptWork) (carryOn, error) {
+	refuse := func(why string) (carryOn, error) {
+		return carryOn{}, fmt.Errorf("%w: kept work entry %d was not carried on: %s", ipc.ErrRefused, entry.ID, why)
+	}
+	oldID, ok := entry.TaskID.Get()
+	if !ok {
+		return refuse("it is the copy of a run, a linked worktree of the gate on a person's branch, and carrying a run's copy on " +
+			"is not in this build; land it, or push its commit yourself")
+	}
+	old, err := s.store.Task(ctx, oldID)
+	if err != nil {
+		return carryOn{}, err
+	}
+	repositoryID, ok := old.RepositoryID.Get()
+	if !ok {
+		return refuse("the task it outlived names no repository, so no copy can be asserted for a task carrying it on")
+	}
+	repository, err := s.store.Repository(ctx, repositoryID)
+	if err != nil {
+		return carryOn{}, err
+	}
+	gatePath, err := s.gatePathOf(ctx, repository)
+	if err != nil {
+		return carryOn{}, err
+	}
+	return carryOn{old: old, repository: repository, gatePath: gatePath, branch: old.Branch.Or("")}, nil
+}
+
+// assertKeptCopy asserts the kept copy where it stands against the
+// expectation of the task it outlived, on this file's terms, and refuses
+// with ipc.ErrRefused a copy that is gone or that fails any comparison but
+// the two the reshape writes.
+func (s *Service) assertKeptCopy(ctx context.Context, entry store.KeptWork, plan carryOn) error {
+	refuse := func(why string) error {
+		return fmt.Errorf("%w: kept work entry %d was not carried on: %s", ipc.ErrRefused, entry.ID, why)
+	}
+	want, _, err := tasks.Expect(s.home, plan.old.ID, plan.old.Shape, plan.gatePath, plan.repository.WorkingPath, plan.branch)
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(entry.CopyPath) != want.Copy {
+		return refuse(fmt.Sprintf("its copy at %s is not where this home keeps task %s's copy, %s", entry.CopyPath, plan.old.ID, want.Copy))
+	}
+	obs, err := vcs.Observe(ctx, entry.CopyPath, vcs.WithRedactor(redact.New()))
+	if err != nil {
+		if errors.Is(err, vcs.ErrNotARepository) {
+			if _, statErr := os.Lstat(entry.CopyPath); errors.Is(statErr, os.ErrNotExist) {
+				return refuse("its copy at " + entry.CopyPath + " is gone")
+			}
+			return refuse(fmt.Sprintf("its copy at %s is not a repository: %v", entry.CopyPath, err))
+		}
+		return fmt.Errorf("service: observing the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	if _, err := tasks.AssertIsolated(obs, agents.WorkerEnvironment(os.Environ(), nil), want); err != nil {
+		var refused *tasks.IsolationError
+		if !errors.As(err, &refused) {
+			return fmt.Errorf("service: asserting the kept copy at %s: %w", entry.CopyPath, err)
+		}
+		if refused.Comparison != tasks.ComparisonRemotes && refused.Comparison != tasks.ComparisonHead {
+			return refuse(fmt.Sprintf("its copy is not one a task's worker may be started in (%s): %s", refused.Comparison, refused.Detail))
+		}
+	}
+	return nil
+}
+
+// completeCarryOn carries out a carry-on answer already recorded on the
+// entry, on this file's terms, from whatever an earlier call left.
+func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
+	id, ok := entry.CarriedOnTask.Get()
+	if !ok {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("service: kept work entry %d is answered carry-on and names no task", entry.ID)
+	}
+	done := func(k store.KeptWork) machine.KeptWorkAnswered {
+		return machine.KeptWorkAnswered{Entry: k, Effect: machine.KeptWorkCarriedOn, Task: id}
+	}
+	if entry.CarriedOnAt.IsKnown() {
+		return done(entry), nil
+	}
+	settle, err := s.claimDispatch(id)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d is being carried on by task %s now", ipc.ErrRefused, entry.ID, id)
+	}
+	_ = settle
+	defer func() {
+		s.mu.Lock()
+		delete(s.isolated, id)
+		delete(s.claiming, id)
+		s.mu.Unlock()
+		s.dispatchInBackground()
+	}()
+	plan, err := s.carryOnOf(ctx, entry)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	// The record, through intake, unless an earlier call wrote it.
+	if _, err := s.store.Task(ctx, id); errors.Is(err, store.ErrNotFound) {
+		if _, err := s.queue.Create(ctx, tasks.Request{
+			ID: id, Shape: string(plan.old.Shape), Project: plan.old.Project, Mode: plan.old.Mode, Role: plan.old.Role,
+			Domain: plan.old.Domain, Repository: plan.repository.ID, Branch: plan.branch,
+			Instructions: s.carryOnInstructions(plan.old),
+		}); err != nil {
+			return machine.KeptWorkAnswered{}, refusalOf(err)
+		}
+		s.log.Printf("task %s was created to carry kept work entry %d on from task %s", id, entry.ID, plan.old.ID)
+	} else if err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	// The copy, moved to the task's own path unless an earlier call moved it,
+	// and asserted where it stands before the move.
+	newPath, err := s.home.TaskCopy(id)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	if _, err := os.Lstat(newPath); errors.Is(err, os.ErrNotExist) {
+		if err := s.assertKeptCopy(ctx, entry, plan); err != nil {
+			return machine.KeptWorkAnswered{}, err
+		}
+		if err := os.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
+			return machine.KeptWorkAnswered{}, fmt.Errorf("service: creating the directory of task %s: %w", id, err)
+		}
+		if err := os.Rename(entry.CopyPath, newPath); err != nil {
+			return machine.KeptWorkAnswered{}, fmt.Errorf("service: moving the kept copy to task %s: %w", id, err)
+		}
+	} else if err != nil {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("service: reading the copy of task %s at %s: %w", id, newPath, err)
+	}
+	if err := s.reshapeAdoptedCopy(ctx, newPath, plan); err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	instructions, err := s.home.TaskInstructions(id)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	if err := appendOnce(instructions, carryOnHeading, carryOnNote(entry, plan.old)); err != nil {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("service: writing the carry-on note into the instructions of task %s: %w", id, err)
+	}
+	marked, err := s.store.MarkKeptWorkCarriedOn(ctx, entry.ID)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	s.log.Printf("kept work entry %d was carried on: task %s owns the copy at %s", entry.ID, id, newPath)
+	return done(marked), nil
+}
+
+// reshapeAdoptedCopy gives the adopted copy what dispatch gives a fresh
+// clone and nothing else: for a delivery task the gate as its one remote
+// and the task's branch at HEAD, and for an investigation a detached HEAD.
+// A copy already shaped so is left as it is.
+func (s *Service) reshapeAdoptedCopy(ctx context.Context, path string, plan carryOn) error {
+	copied, err := vcs.OpenWorktree(ctx, path, vcs.WithRedactor(redact.New()))
+	if err != nil {
+		return fmt.Errorf("service: opening the adopted copy at %s: %w", path, err)
+	}
+	obs, err := vcs.Observe(ctx, path, vcs.WithRedactor(redact.New()))
+	if err != nil {
+		return fmt.Errorf("service: observing the adopted copy at %s: %w", path, err)
+	}
+	head, err := copied.ResolveCommit(ctx, "HEAD")
+	if err != nil {
+		return fmt.Errorf("service: reading HEAD of the adopted copy at %s: %w", path, err)
+	}
+	switch plan.old.Shape {
+	case store.TaskDelivery:
+		if err := copied.SetRemote(ctx, gate.RemoteName, plan.gatePath); err != nil {
+			return fmt.Errorf("service: pointing %s of the adopted copy at the gate: %w", gate.RemoteName, err)
+		}
+		if obs.Detached || obs.Branch != plan.branch {
+			if err := copied.SwitchToNewBranch(ctx, plan.branch, head); err != nil {
+				return fmt.Errorf("service: creating the branch %s at %s in the adopted copy: %w", plan.branch, head, err)
+			}
+		}
+	case store.TaskInvestigation:
+		if !obs.Detached {
+			if err := copied.Detach(ctx, head); err != nil {
+				return fmt.Errorf("service: detaching the adopted copy at %s: %w", head, err)
+			}
+		}
+	}
+	return nil
+}
+
+// carryOnInstructions is what the new task is created with: the text the
+// coordinator wrote at the outlived task's intake, as intakeInstructions
+// reads it, or a line saying what the task is for when that cannot be read.
+func (s *Service) carryOnInstructions(old store.Task) string {
+	path, err := s.home.TaskInstructions(old.ID)
+	if err == nil {
+		var raw []byte
+		if raw, err = os.ReadFile(path); err == nil {
+			if text := intakeInstructions(string(raw)); text != "" {
+				return text
+			}
+		}
+	}
+	if err != nil {
+		s.log.Printf("the instructions of task %s could not be read for the task carrying it on: %v", old.ID, err)
+	}
+	return "Carry on the work kept in this copy from task " + old.ID + "."
+}
+
+// carryOnNote is the note PRD section 6 has the worker told, saying what is
+// already in the copy: which task's work it is, why it was kept, and the
+// commits the entry recorded it holding.
+func carryOnNote(entry store.KeptWork, old store.Task) string {
+	holds := "no commit of its own"
+	if len(entry.Holds) > 0 {
+		holds = "the commits " + strings.Join(entry.Holds, ", ")
+	}
+	return carryOnHeading + "\n\n" +
+		"You were started in the working copy of an earlier task, " + old.ID + ", whose work had not landed when it " +
+		"ended (" + entry.Reason + "), so the copy was kept rather than discarded and you are to carry that work on. " +
+		"When it was kept it held " + holds + ". Read the copy's history and tree before you change anything, and continue " +
+		"from what is there rather than starting over.\n"
+}
+
+// appendOnce appends text to the file at path unless the file already
+// carries heading at the start of a line.
+func appendOnce(path, heading, text string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(string(raw), heading) || strings.Contains(string(raw), "\n"+heading) {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	if _, err := f.WriteString("\n\n" + text); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
+// completeCarryOnsAtOpen completes every carry-on answer a stopped service
+// recorded and did not carry out, on this file's terms, and logs what it
+// could not.
+func (s *Service) completeCarryOnsAtOpen(ctx context.Context) {
+	owed, err := s.store.KeptWorkCarryOnsOwed(ctx)
+	if err != nil {
+		s.log.Printf("the kept work carry-ons owed could not be read at open: %v", err)
+		return
+	}
+	for _, entry := range owed {
+		if _, err := s.completeCarryOn(ctx, entry); err != nil {
+			s.log.Printf("kept work entry %d was answered carry-on and its carry on could not be completed: %v", entry.ID, err)
+		}
+	}
+}

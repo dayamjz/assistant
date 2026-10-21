@@ -280,10 +280,13 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   or the copy of a run attributed to it, was kept because its work is not
   anywhere safe; the entry is in `assistant --json status` under
   `kept_work` and in the catch-up read under `kept`. Tell the person: it is
-  theirs to decide. This build takes one answer, land, given like a hold:
+  theirs to decide. An answer is given like a hold's:
   `assistant --task ID --answer land --hold kept-work/N`, or
-  `--run=RUN` in place of `--task` for a run's copy; carry on and discard
-  are refused and record nothing. While the
+  `--run=RUN` in place of `--task` for a run's copy. Land validates the
+  copy's HEAD as a push would; `--answer carry-on` creates a new task of
+  the same project and branch in the kept copy, with a note, and names it
+  in the answer (`task`), so the old task stays as it ended; a run's copy
+  cannot be carried on, and discard is refused in this build. While the
   project has an open entry, a task you create in it is recorded and not
   started: it reads `dispatched` and its answer (`task.get`) names the
   entries holding it under `kept_work`; it starts on its own once they are

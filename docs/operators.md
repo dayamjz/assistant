@@ -540,10 +540,19 @@ entry's tasks start. A landing is refused, recording nothing, when the copy
 holds a change no commit records, a file no commit records or a stash,
 because a landing carries commits only; and for an investigation's copy,
 whose delivery is a promotion. A land answer a stopped service recorded and
-did not carry out is carried out at the next start. Carry on and discard
-are refused in this build and record nothing; until they ship, an entry
-whose work cannot be landed closes only when its work turns up somewhere
-safe, as above.
+did not carry out is carried out at the next start. A landing carries the
+copy's HEAD, so an entry recorded holding a commit HEAD does not reach is
+refused naming it.
+
+Carry on, `--answer carry-on` with the same flags, creates a new task of
+the same project, shape and branch whose copy is the kept copy, moved to
+the new task's own place and asserted the way every task's copy is before
+anything is written into it; the task the copy outlived keeps its record,
+the new task's instructions are the old intake text with a note saying
+what is already there, and the task dispatches into the copy as any task
+does. A run's copy is not carried on in this build (it is a worktree of the
+gate on a branch of yours, which a task's copy cannot be): land it, or push
+its commit yourself. Discard is refused in this build and records nothing.
 
 ## Waiting on a fleet
 

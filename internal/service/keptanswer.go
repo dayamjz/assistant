@@ -21,11 +21,9 @@ import (
 // which is the owner's decision on #411: the hold answer is the surface,
 // and the kept work record is the record.
 //
-// This build takes land. Carry on and discard are refused with
-// ipc.ErrRefused and record nothing: carrying on waits on the owner's
-// answer to which worker a kept copy's owner can be relaunched as, and
-// discard on #466, the entry listing only what the default branch lacks,
-// which its preview is built from.
+// This build takes land and carry on. Discard is refused with ipc.ErrRefused
+// and records nothing: it waits on #466, the entry listing only what the
+// default branch lacks, which its preview is built from.
 //
 // # Land
 //
@@ -44,15 +42,28 @@ import (
 // holds where a push's would. Its intent is the owner's: a task's, as its
 // worker's push would carry, or the owner run's own.
 //
+// What is landed is HEAD, and the entry is answered as a whole, so HEAD
+// must reach every commit the entry recorded the copy holding: one it does
+// not reach, a commit on another reference of the copy, would be answered
+// and never carried, which is kept work gone silent (P15). Such an entry is
+// refused naming the commits HEAD leaves behind, and nothing is recorded.
+//
 // The checks run before the answer is recorded, so a refused land records
 // nothing. The answer is then recorded through store.AnswerKeptWork, which
-// lets exactly one answer stand, and the landing is carried out and named on
-// the row through store.RecordKeptWorkLanding. A service that stops between
-// the two leaves an entry answered land with no landing run, and the next
-// call or the next start completes it: completeLanding first looks for a
-// run of the branch at the copy's commit recorded since the answer, so a
-// landing whose run was started before the stop is named rather than
-// started twice. What that does not cover: a copy that changed after the
+// lets exactly one answer stand, and the landing is carried out under an
+// anchored claim: store.ClaimKeptWorkLanding is written once before the
+// run is started, so two answers landing one entry start one run between
+// them (the second finds the first's claim and is refused while the first
+// has not yet recorded its run), and store.RecordKeptWorkLanding names the
+// run on the row after. A service that stops between the answer and the
+// record leaves an entry answered land with no landing run, and the next
+// call or the next start completes it: an entry not yet claimed is landed
+// from the start, and one claimed but naming no run has completeLanding look
+// for the run the claim started, a run of the branch at the copy's commit
+// recorded since the claim that executed or still may, which it names
+// rather than starting twice. A run recorded and ended before it executed,
+// one whose reference the gate never took, is not that run, so the retry
+// starts another. What that does not cover: a copy that changed after the
 // answer lands what it holds when the landing is completed.
 //
 // Once the answer is recorded the entry no longer holds its project's
@@ -72,11 +83,13 @@ func (s *Service) answerKeptWork(ctx context.Context, req ipc.Request, r machine
 		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: an answer to kept work names exactly one owner, the task or the run whose copy it is",
 			ipc.ErrInvalidRequest)
 	}
-	if r.Task != "" {
-		if _, err := s.refuseDecision(ctx, req, r.Task, fmt.Sprintf("asked to answer kept work %s of task %s with %q",
-			r.Hold, r.Task, r.Answer)); err != nil {
-			return machine.KeptWorkAnswered{}, err
-		}
+	// A subordinate coordinator is refused whichever owner the entry names,
+	// on refuseDecision's terms, which records the ask as an escalation only
+	// for a task in its domain; an entry a run left has no task to escalate
+	// about and is refused the same.
+	if _, err := s.refuseDecision(ctx, req, r.Task, fmt.Sprintf("asked to answer kept work %s of task %q, run %q, with %q",
+		r.Hold, r.Task, r.Run, r.Answer)); err != nil {
+		return machine.KeptWorkAnswered{}, err
 	}
 	entry, err := s.store.KeptWorkEntry(ctx, id)
 	if errors.Is(err, store.ErrNotFound) {
@@ -91,8 +104,7 @@ func (s *Service) answerKeptWork(ctx context.Context, req ipc.Request, r machine
 	case store.KeptLand:
 		return s.landKeptWork(ctx, req, entry)
 	case store.KeptCarryOn:
-		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d was not answered: carrying kept work on is not in this build, "+
-			"so nothing was recorded", ipc.ErrRefused, id)
+		return s.carryOnKeptWork(ctx, req, entry)
 	case store.KeptDiscard:
 		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d was not answered: discarding kept work is not in this build, "+
 			"so nothing was recorded and nothing was removed", ipc.ErrRefused, id)
@@ -148,6 +160,8 @@ func (s *Service) landKeptWork(ctx context.Context, req ipc.Request, entry store
 	}
 	return s.completeLanding(ctx, entry)
 }
+
+// Carrying on is keptcarryon.go's.
 
 // refusedAnswered is the refusal of an answer to an entry already answered
 // some other way or closed.
@@ -219,6 +233,21 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 		return refuse("its copy's HEAD names no commit")
 	}
 	out.head = inv.Head.Commit
+	var behind []string
+	for _, held := range entry.Holds {
+		reaches, err := copyRepo.IsAncestor(ctx, held, out.head)
+		if err != nil {
+			return landing{}, fmt.Errorf("service: reading whether HEAD of the kept copy at %s reaches %s: %w", entry.CopyPath, held, err)
+		}
+		if !reaches {
+			behind = append(behind, held)
+		}
+	}
+	if len(behind) > 0 {
+		return refuse(fmt.Sprintf("a landing carries HEAD, %s, and the copy was kept holding %s, which HEAD does not reach, so landing "+
+			"it would leave that behind; put it on the branch in %s first, or land what HEAD holds by hand",
+			out.head, strings.Join(behind, ", "), entry.CopyPath))
+	}
 	return out, nil
 }
 
@@ -232,9 +261,28 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
-	run, err := s.landedRunSince(ctx, entry, plan)
-	if err != nil {
-		return machine.KeptWorkAnswered{}, err
+	run := ""
+	if entry.LandingClaimedAt.IsKnown() {
+		// A claim with no run is a landing that stopped between the two,
+		// whose run is looked for before another is started.
+		if run, err = s.landedRunSince(ctx, entry, plan); err != nil {
+			return machine.KeptWorkAnswered{}, err
+		}
+	} else {
+		claimed, err := s.store.ClaimKeptWorkLanding(ctx, entry.ID)
+		if errors.Is(err, store.ErrKeptWorkLandingClaimed) {
+			again, readErr := s.store.KeptWorkEntry(ctx, entry.ID)
+			if readErr != nil {
+				return machine.KeptWorkAnswered{}, readErr
+			}
+			if landed, ok := again.LandedRun.Get(); ok {
+				return machine.KeptWorkAnswered{Entry: again, Effect: machine.KeptWorkLanded, Run: landed}, nil
+			}
+			return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d is being landed by another answer now", ipc.ErrRefused, entry.ID)
+		} else if err != nil {
+			return machine.KeptWorkAnswered{}, err
+		}
+		entry = claimed
 	}
 	if run == "" {
 		gatePath, err := s.gatePathOf(ctx, plan.repository)
@@ -264,12 +312,16 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 	return machine.KeptWorkAnswered{Entry: landed, Effect: machine.KeptWorkLanded, Run: run}, nil
 }
 
-// landedRunSince finds the run a landing of the entry already started: a run
-// of the landing's branch at its commit recorded at or after the answer,
-// which is how a landing stopped between its run and its record is
-// completed without a second run.
+// landedRunSince finds the run a claimed landing of the entry already
+// started: a run of the landing's branch at its commit recorded at or after
+// the claim that executed or still may, which is how a landing stopped
+// between its run and its record is completed without a second run. A run
+// ended before it executed, which is a terminated run with no checkpoint (a
+// create whose reference the gate never took ends its run so), is not that
+// run: nothing of the work reached validation through it, so the retry
+// starts another.
 func (s *Service) landedRunSince(ctx context.Context, entry store.KeptWork, plan landing) (string, error) {
-	answered, ok := entry.AnsweredAt.Get()
+	claimed, ok := entry.LandingClaimedAt.Get()
 	if !ok {
 		return "", nil
 	}
@@ -278,9 +330,17 @@ func (s *Service) landedRunSince(ctx context.Context, entry store.KeptWork, plan
 		return "", err
 	}
 	for _, r := range records {
-		if r.Branch == plan.branch && r.SubmittedHead == plan.head && !r.CreatedAt.Before(answered) {
-			return r.ID, nil
+		if r.Branch != plan.branch || r.SubmittedHead != plan.head || r.CreatedAt.Before(claimed) {
+			continue
 		}
+		if r.Status == store.RunTerminated {
+			if _, err := s.store.LatestGraphCheckpoint(ctx, r.ID); errors.Is(err, store.ErrNotFound) {
+				continue
+			} else if err != nil {
+				return "", err
+			}
+		}
+		return r.ID, nil
 	}
 	return "", nil
 }
