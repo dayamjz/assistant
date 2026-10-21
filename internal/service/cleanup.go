@@ -115,6 +115,9 @@ func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
 			owner, got.Against)
 	case got.Recorded:
 		s.log.Printf("the isolated copy of %s is kept work entry %d (%s)", owner, got.Entry.ID, got.Entry.Reason)
+	case got.Established:
+		s.log.Printf("the isolated copy of %s is kept work entry %d, now established against the default branch at %s",
+			owner, got.Entry.ID, got.Entry.Against.Or(""))
 	default:
 		s.log.Printf("the isolated copy of %s is already kept work entry %d", owner, got.Entry.ID)
 	}

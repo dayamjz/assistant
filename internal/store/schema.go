@@ -2152,32 +2152,41 @@ var schema = []migration{
 		name:    keptWorkAgainstMigration,
 		statements: []string{
 			// PRD section 8's kept work row is "what it holds that the
-			// default branch lacks", and an entry says whether its holds
-			// is that set. against is the upstream default branch's tip,
-			// read fresh and fetched by identifier, that holds was
-			// computed against: holds is then exactly the commits the copy
-			// reaches that this tip does not. unestablished is why that
-			// set could not be computed, when it could not: holds is then
-			// the commits the copy's references and HEAD stand on, as the
-			// entry was written before this migration, and states nothing
-			// about the default branch. A row written from here on carries
-			// exactly one of the two, which the insert trigger holds; a
-			// row written before carries neither and reads as
-			// unestablished with no account, which is what it was. Both
-			// are written once, under the entry's own seal.
+			// default branch lacks". holds stays the entry's identity, the
+			// commits the copy's references and HEAD stood on, which is the
+			// copy's own state and the same whatever the default branch
+			// read as at the time. lacks is the row's set: the commits the
+			// copy reaches that the default branch's tip, against, does
+			// not, as a JSON list, computed when the entry was written or
+			// filled in once afterwards; unestablished is why it could not
+			// be computed at the write. A row written from here on carries
+			// exactly one of against and unestablished, with lacks beside
+			// against, which the insert trigger holds; a row written before
+			// carries neither and reads as unestablished with no account,
+			// which is what it was.
+			//
+			// The basis moves once and one way: an unestablished row may
+			// have lacks and against filled in, in one update that leaves
+			// unestablished as the account of the write, and an established
+			// one is sealed, which the update trigger holds. The entry's
+			// identity and the rest of it stay under migration 51's seals.
+			`ALTER TABLE kept_work ADD COLUMN lacks TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN against TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN unestablished TEXT`,
 			`CREATE TRIGGER kept_work_states_its_basis
 				BEFORE INSERT ON kept_work
 				WHEN (NEW.against IS NULL) = (NEW.unestablished IS NULL)
+					OR (NEW.against IS NULL) <> (NEW.lacks IS NULL)
 					OR NEW.against = '' OR NEW.unestablished = ''
 				BEGIN
-					SELECT RAISE(ABORT, 'store: a kept work entry names the default branch tip its commits were computed against, or why they could not be, and not both');
+					SELECT RAISE(ABORT, 'store: a kept work entry names the default branch tip its commits were computed against, with the commits, or why they could not be, and not both');
 				END`,
-			`CREATE TRIGGER kept_work_basis_is_written_once
-				BEFORE UPDATE OF against, unestablished ON kept_work
+			`CREATE TRIGGER kept_work_basis_is_established_once
+				BEFORE UPDATE OF lacks, against, unestablished ON kept_work
+				WHEN OLD.against IS NOT NULL OR NEW.against IS NULL OR NEW.against = '' OR NEW.lacks IS NULL
+					OR NEW.unestablished IS NOT OLD.unestablished
 				BEGIN
-					SELECT RAISE(ABORT, 'store: a kept work entry is written once when its copy is kept and is not rewritten');
+					SELECT RAISE(ABORT, 'store: a kept work entry is established once, from unestablished, and is not rewritten');
 				END`,
 		},
 	},

@@ -34,10 +34,12 @@ paths: ["internal/store/**"]
 - keptWorkMigration's `kept_work` is PRD section 8's kept work record: one
   row per kept copy and the commits it holds (`RecordKeptWork` finds the row
   already written for the same pair), naming one owner, a task or a run,
-  with project and branch read off that owner's row, and its basis
-  (keptWorkAgainstMigration): the default branch tip `holds` was computed
-  against, or why it could not be, exactly one; a row from before carries
-  neither and reads unestablished. It is written once;
+  with project and branch read off that owner's row. `holds` is the copy's
+  own state and the identity; the basis (keptWorkAgainstMigration) is no
+  part of it: `lacks` against `against`, or `unestablished`, exactly one on
+  a new row, and a row from before carries neither and reads unestablished.
+  `EstablishKeptWork` fills an unestablished basis in once, the only move
+  the basis makes. It is otherwise written once;
   its one revision closes it, once: a person's answer (`AnswerKeptWork`) or
   the program's `KeptRemovedOnProof`, written only by `MarkCleanupRemoved`
   and `MarkRunCleanupRemoved` in the removal's transaction, never a discard.

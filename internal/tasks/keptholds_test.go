@@ -16,8 +16,9 @@ import (
 // PRD principle P15 and section 8's kept work record, "what it holds that
 // the default branch lacks": a delivery copy cloned from an upstream whose
 // main already carries a feature branch's commits, holding one commit of the
-// task's own, is kept as unproven, and its entry lists that one commit and
-// none of the inherited ones, though the copy's references stand on them.
+// task's own, is kept as unproven, and its entry's Lacks is that one commit
+// and none of the inherited ones, though the copy's references stand on
+// them; Holds, the entry's identity, is what the references stand on.
 func TestAKeptEntryListsOnlyWhatTheDefaultBranchLacks(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	s := newCleanupSubject(t, forgetest.Script{})
@@ -51,12 +52,15 @@ func TestAKeptEntryListsOnlyWhatTheDefaultBranchLacks(t *testing.T) {
 	if err != nil || !got.Recorded {
 		t.Fatalf("Keep = %+v, %v; want a new entry", got, err)
 	}
-	if !slices.Equal(got.Entry.Holds, []string{own}) {
-		t.Fatalf("the entry holds %v, want only the task's own commit %s; the default branch already has %v",
-			got.Entry.Holds, own, inherited)
+	if !slices.Equal(got.Entry.Lacks, []string{own}) {
+		t.Fatalf("the entry lacks %v, want only the task's own commit %s; the default branch already has %v",
+			got.Entry.Lacks, own, inherited)
 	}
 	if !got.Entry.Established() || got.Entry.Against.Or("") != mainTip || got.Entry.Unestablished.IsKnown() {
 		t.Fatalf("the entry = %+v, want it computed against the upstream's main at %s", got.Entry, mainTip)
+	}
+	if !slices.Contains(got.Entry.Holds, inherited[1]) || !slices.Contains(got.Entry.Holds, own) {
+		t.Fatalf("the entry holds %v, want the copy's reference tips %s and %s", got.Entry.Holds, inherited[1], own)
 	}
 	if refs := rawGit(t, tk.copy, "for-each-ref", "refs/assistant/"); refs != "" {
 		t.Fatalf("the fetched default branch tip was left in the copy: %s", refs)
@@ -65,12 +69,18 @@ func TestAKeptEntryListsOnlyWhatTheDefaultBranchLacks(t *testing.T) {
 
 // PRD principles P15 and P6: a kept copy whose default branch cannot be
 // read is an entry that says its set is unestablished, with the read's
-// account, rather than one listing every commit as lost or none as safe.
-// The upstream is taken away after the copy is cut, so the proofs and the
-// entry's own read both fail on it. What the entry lists then is what the
-// copy's references and HEAD stand on, the task's own commit among them,
-// and nothing claims it was computed against a tip.
-func TestAKeptEntrySaysSoWhenTheDefaultBranchCannotBeRead(t *testing.T) {
+// account, listing nothing as lacking rather than every commit as lost or
+// none as safe. The upstream is taken away after the copy is cut, so the
+// proofs and the entry's own read both fail on it. The entry's identity is
+// still what the copy's references and HEAD stand on, and no tip is
+// claimed.
+//
+// And the identity is the copy's state, not the upstream's reachability:
+// once the upstream is back, Keep of the unchanged copy writes no second
+// entry but establishes the first, once, with the set and the tip; a third
+// Keep returns it unchanged. Without the identity on the copy's state the
+// second Keep wrote a second open entry for one copy.
+func TestAKeptEntrySaysSoWhenTheDefaultBranchCannotBeReadAndIsEstablishedLater(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P6)
 	s := newCleanupSubject(t, forgetest.Script{})
@@ -91,13 +101,31 @@ func TestAKeptEntrySaysSoWhenTheDefaultBranchCannotBeRead(t *testing.T) {
 	if err != nil || !got.Recorded || got.NothingKept {
 		t.Fatalf("Keep = %+v, %v; want a new entry", got, err)
 	}
-	if got.Entry.Established() || got.Entry.Against.IsKnown() ||
+	if got.Entry.Established() || got.Entry.Against.IsKnown() || got.Entry.Lacks != nil ||
 		!strings.Contains(got.Entry.Unestablished.Or(""), "the upstream could not be read") {
-		t.Fatalf("the entry = %+v, want it unestablished with the failed read's account", got.Entry)
+		t.Fatalf("the entry = %+v, want it unestablished with the failed read's account and nothing listed as lacking", got.Entry)
 	}
 	if !slices.Equal(got.Entry.Holds, []string{base, own}) {
 		t.Fatalf("the unestablished entry holds %v, want what the copy's references and HEAD stand on, %v",
 			got.Entry.Holds, []string{base, own})
+	}
+
+	if err := os.Rename(s.upstream+".gone", s.upstream); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || again.Recorded || !again.Established || again.Entry.ID != got.Entry.ID {
+		t.Fatalf("Keep with the upstream back = %+v, %v; want entry %d established and no second entry", again, err, got.Entry.ID)
+	}
+	if !again.Entry.Established() || again.Entry.Against.Or("") != base || !slices.Equal(again.Entry.Lacks, []string{own}) ||
+		!again.Entry.Unestablished.IsKnown() {
+		t.Fatalf("the established entry = %+v, want %s lacking against main at %s with the write's account kept", again.Entry, own, base)
+	}
+	if open, err := s.store.OpenKeptWork(ctx); err != nil || len(open) != 1 || open[0].ID != got.Entry.ID {
+		t.Fatalf("the open kept work is %+v, %v; want the one entry", open, err)
+	}
+	if third, err := s.cleaner.Keep(ctx, kept); err != nil || third.Recorded || third.Established || third.Entry.ID != got.Entry.ID {
+		t.Fatalf("a third Keep = %+v, %v; want the same entry, neither written nor established again", third, err)
 	}
 }
 
@@ -105,8 +133,8 @@ func TestAKeptEntrySaysSoWhenTheDefaultBranchCannotBeRead(t *testing.T) {
 // rather than a second rule: an investigation copy kept at the end of its
 // promotion window that holds nothing the default branch lacks records no
 // entry; the same copy holding a file no commit records is an entry that
-// lists no commit, computed against main; and holding a commit of its own,
-// an entry listing that commit alone.
+// lacks no commit, computed against main; and holding a commit of its own,
+// an entry lacking that commit alone.
 func TestACopyHoldingNothingTheDefaultBranchLacksKeepsNothing(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	s := newCleanupSubject(t, forgetest.Script{})
@@ -133,21 +161,112 @@ func TestACopyHoldingNothingTheDefaultBranchLacksKeepsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	untracked := keep()
-	if untracked.NothingKept || !untracked.Recorded || len(untracked.Entry.Holds) != 0 ||
+	if untracked.NothingKept || !untracked.Recorded || untracked.Entry.Lacks == nil || len(untracked.Entry.Lacks) != 0 ||
 		untracked.Entry.Against.Or("") != mainTip {
-		t.Fatalf("Keep over a copy holding an untracked file = %+v, want an entry listing no commit against %s", untracked, mainTip)
+		t.Fatalf("Keep over a copy holding an untracked file = %+v, want an entry lacking no commit against %s", untracked, mainTip)
 	}
 
 	own := commit(t, tk.copy, "notes.txt", "what was found\n", "the investigation's own commit")
 	committed := keep()
-	if !committed.Recorded || !slices.Equal(committed.Entry.Holds, []string{own}) || committed.Entry.Against.Or("") != mainTip {
-		t.Fatalf("Keep over a copy holding a commit of its own = %+v, want an entry listing %s alone", committed, own)
+	if !committed.Recorded || !slices.Equal(committed.Entry.Lacks, []string{own}) || committed.Entry.Against.Or("") != mainTip {
+		t.Fatalf("Keep over a copy holding a commit of its own = %+v, want an entry lacking %s alone", committed, own)
+	}
+}
+
+// NothingKept claims only what vcs.Inventory sees, and that inventory does
+// not see ignored files: a copy on main whose only unique content is a file
+// git is configured to ignore reads NothingKept and records no entry. This
+// pins the gap doc.go and KeptEntry.NothingKept state, so a change in what
+// the inventory sees is noticed here rather than widening the claim
+// silently.
+func TestNothingKeptDoesNotSeeAnIgnoredFile(t *testing.T) {
+	s := newCleanupSubject(t, forgetest.Script{})
+	tk := s.investigationTask(t)
+	if err := os.WriteFile(filepath.Join(tk.copy, ".git", "info", "exclude"), []byte("notes.txt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tk.copy, "notes.txt"), []byte("unique notes git ignores\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if status := rawGit(t, tk.copy, "status", "--porcelain"); status != "" {
+		t.Fatalf("the ignored file shows in git status, so this is not the case under test: %q", status)
+	}
+	got, err := s.cleaner.Keep(context.Background(), Kept{Task: tk.id, Reason: KeptPromotionWindow, Detail: "the window passed"})
+	if err != nil || !got.NothingKept {
+		t.Fatalf("Keep over a copy whose only unique content is ignored = %+v, %v; the inventory's gap is that it reads NothingKept", got, err)
+	}
+}
+
+// A stash is uncommitted state, kept for as such and never listed as a
+// commit the default branch lacks: a copy on main with one stashed edit is
+// kept for the stash, and its entry is established with nothing lacking,
+// while the stash commit is among what the copy holds, because it is part
+// of the copy's state. Without the stash left out of the comparison the
+// entry listed the stash's commits as work at risk.
+func TestAStashIsKeptAsUncommittedStateAndNotListedAsLacking(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/stash")
+	mainTip := rawGit(t, tk.copy, "rev-parse", "main")
+	if err := os.WriteFile(filepath.Join(tk.copy, "f.txt"), []byte("an edit\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "stash", "push", "-q")
+	stash := rawGit(t, tk.copy, "rev-parse", "refs/stash")
+
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonCopyStash))
+	if !ok {
+		t.Fatal("a stash refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Recorded || got.NothingKept {
+		t.Fatalf("Keep = %+v, %v; want a new entry for the stash", got, err)
+	}
+	if !got.Entry.Established() || got.Entry.Against.Or("") != mainTip || len(got.Entry.Lacks) != 0 {
+		t.Fatalf("the entry = %+v, want it established against %s with nothing lacking", got.Entry, mainTip)
+	}
+	if !slices.Contains(got.Entry.Holds, stash) {
+		t.Fatalf("the entry holds %v, want the stash %s among the copy's state", got.Entry.Holds, stash)
+	}
+}
+
+// For a task delivered under the local posture the tip the entry is
+// computed against is the one the repository's working copy holds for its
+// default branch, where that task's work lands, and not the upstream's: the
+// working copy's main is advanced past the upstream's, and the entry names
+// the working copy's tip and lacks only the task's own commit.
+func TestALocalTasksEntryIsComputedAgainstTheWorkingCopysDefaultBranch(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk, primary := s.localTask(t, "task/local")
+	upstreamTip := rawGit(t, tk.copy, "rev-parse", "main")
+	localTip := commit(t, primary, "local.txt", "landed locally\n", "a commit only the working copy's main has")
+	own := commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Recorded {
+		t.Fatalf("Keep = %+v, %v; want a new entry", got, err)
+	}
+	if got.Entry.Against.Or("") != localTip || got.Entry.Against.Or("") == upstreamTip {
+		t.Fatalf("the entry is against %v, want the working copy's main at %s and not the upstream's at %s",
+			got.Entry.Against, localTip, upstreamTip)
+	}
+	if !slices.Equal(got.Entry.Lacks, []string{own}) {
+		t.Fatalf("the entry lacks %v, want the task's own commit %s alone", got.Entry.Lacks, own)
 	}
 }
 
 // PRD principle P15 for a run's copy, a linked worktree of the gate's
 // repository detached at a commit the default branch already holds: kept
-// for a file no commit records, its entry lists no commit, because nothing
+// for a file no commit records, its entry lacks no commit, because nothing
 // it reaches is missing from main; with a commit on top, that commit alone.
 // The worktree's own references are the gate's and are not read as the
 // copy's.
@@ -185,13 +304,14 @@ func TestARunCopysEntryListsOnlyWhatTheDefaultBranchLacks(t *testing.T) {
 	}
 
 	untracked := keep(ReasonCopyUntracked)
-	if !untracked.Recorded || len(untracked.Entry.Holds) != 0 || untracked.Entry.Against.Or("") != mainTip {
-		t.Fatalf("Keep over a run copy on main holding an untracked file = %+v, want an entry listing no commit against %s",
+	if !untracked.Recorded || untracked.Entry.Lacks == nil || len(untracked.Entry.Lacks) != 0 ||
+		untracked.Entry.Against.Or("") != mainTip || !slices.Equal(untracked.Entry.Holds, []string{mainTip}) {
+		t.Fatalf("Keep over a run copy on main holding an untracked file = %+v, want an entry lacking no commit against %s",
 			untracked, mainTip)
 	}
 	own := commit(t, copyPath, "left.txt", "left by a body\n", "a body's commit")
 	committed := keep(ReasonUnproven)
-	if !committed.Recorded || !slices.Equal(committed.Entry.Holds, []string{own}) {
+	if !committed.Recorded || !slices.Equal(committed.Entry.Lacks, []string{own}) {
 		t.Fatalf("Keep over a run copy holding a commit of its own = %+v, want %s alone", committed, own)
 	}
 }

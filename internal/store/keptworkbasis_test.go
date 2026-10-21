@@ -2,17 +2,19 @@ package store
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
 
 // An entry states its basis, PRD section 8's "what it holds that the default
-// branch lacks": either the default branch tip its commits were computed
-// against or why they could not be, never both and never neither. The
+// branch lacks": either the default branch tip its set was computed against,
+// with the set, or why it could not be, never both and never neither. The
 // accessor refuses either mistake, the schema refuses it from a direct write
-// too, the basis is sealed with the rest of the entry, and the account of an
-// unestablished set passes the redactor. Each refusal is shown against the
-// real schema.
+// too, and the account of an unestablished set passes the redactor. The
+// basis is no part of the entry's identity: the same copy state recorded
+// again with another basis is the same entry with the basis it has.
 func TestAKeptEntryStatesWhatItsCommitsWereComputedAgainst(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -27,38 +29,113 @@ func TestAKeptEntryStatesWhatItsCommitsWereComputedAgainst(t *testing.T) {
 			t.Errorf("%s: RecordKeptWork wrote an entry stating %s as its basis", name, name)
 		}
 	}
-	for name, values := range map[string][2]any{"neither": {nil, nil}, "both": {"dddd", "unread"}, "an empty tip": {"", nil}} {
-		_, err := s.write.ExecContext(ctx, `INSERT INTO kept_work (run_id, copy_path, holds, reason, detail, kept_at, against, unestablished)
-			VALUES (?, ?, '[]', 'unproven', '', ?, ?, ?)`, run.ID, "/w/direct-"+name, encodeTime(nowUTC()), values[0], values[1])
+	for name, values := range map[string][3]any{
+		"neither":             {nil, nil, nil},
+		"both":                {"[]", "dddd", "unread"},
+		"an empty tip":        {"[]", "", nil},
+		"a tip with no set":   {nil, "dddd", nil},
+		"a set with no tip":   {"[]", nil, "unread"},
+		"an empty account":    {nil, nil, ""},
+		"a set beside an acc": {`["aaaa"]`, nil, "unread"},
+	} {
+		_, err := s.write.ExecContext(ctx, `INSERT INTO kept_work (run_id, copy_path, holds, reason, detail, kept_at, lacks, against, unestablished)
+			VALUES (?, ?, '[]', 'unproven', '', ?, ?, ?, ?)`, run.ID, "/w/direct-"+name, encodeTime(nowUTC()), values[0], values[1], values[2])
 		if err == nil || !strings.Contains(err.Error(), "kept work entry") {
 			t.Errorf("a direct write stating %s was not refused by the schema: %v", name, err)
 		}
 	}
 
 	established, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/established",
-		Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd"})
-	if err != nil || !established.Established() || established.Against.Or("") != "dddd" || established.Unestablished.IsKnown() {
+		Holds: []string{"aaaa", "bbbb"}, Lacks: []string{"bbbb"}, Reason: "unproven", Against: "dddd"})
+	if err != nil || !established.Established() || established.Against.Or("") != "dddd" || established.Unestablished.IsKnown() ||
+		!slices.Equal(established.Lacks, []string{"bbbb"}) {
 		t.Fatalf("an established entry reads %+v, %v", established, err)
+	}
+	nothing, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/nothing",
+		Holds: []string{"aaaa"}, Reason: "copy-dirty", Against: "dddd"})
+	if err != nil || nothing.Lacks == nil || len(nothing.Lacks) != 0 {
+		t.Fatalf("an established entry lacking nothing reads %+v, %v; want an empty list and not an unknown one", nothing, err)
 	}
 	unestablished, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/unestablished",
 		Holds: []string{"aaaa"}, Reason: "unproven", Unestablished: "https://user:secret@example.test/one.git could not be read"})
-	if err != nil || unestablished.Established() || unestablished.Against.IsKnown() || !unestablished.Unestablished.IsKnown() {
+	if err != nil || unestablished.Established() || unestablished.Against.IsKnown() || unestablished.Lacks != nil ||
+		!unestablished.Unestablished.IsKnown() {
 		t.Fatalf("an unestablished entry reads %+v, %v", unestablished, err)
 	}
 	if strings.Contains(unestablished.Unestablished.Or(""), "secret") {
 		t.Fatalf("the account %q kept a credential", unestablished.Unestablished.Or(""))
 	}
-	for name, write := range map[string]struct {
-		statement string
-		id        int64
-	}{
-		"a rewritten tip":     {`UPDATE kept_work SET against = 'eeee' WHERE id = ?`, established.ID},
-		"a basis swapped":     {`UPDATE kept_work SET against = NULL, unestablished = 'later' WHERE id = ?`, established.ID},
-		"an account replaced": {`UPDATE kept_work SET unestablished = 'other' WHERE id = ?`, unestablished.ID},
+	same, wrote, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/unestablished",
+		Holds: []string{"aaaa"}, Lacks: []string{"aaaa"}, Reason: "unproven", Against: "dddd"})
+	if err != nil || wrote || same.ID != unestablished.ID || same.Established() {
+		t.Fatalf("the same copy state with another basis = %+v, wrote %v, %v; want the entry as it stands", same, wrote, err)
+	}
+}
+
+// An entry's basis is established once, from unestablished, and one way:
+// EstablishKeptWork fills in the set and the tip of an entry written
+// unestablished and keeps the account, refuses an entry already established
+// (the first basis stands), an empty tip, and an unknown entry, and the seal
+// refuses every other move against the real schema: a tip rewritten, a set
+// rewritten, a basis taken back, and an account replaced. An answered entry
+// is established too, because the set is a fact about the copy as kept.
+func TestAKeptEntryIsEstablishedOnceFromUnestablished(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/later",
+		Holds: []string{"aaaa", "bbbb"}, Reason: "unproven", Unestablished: "the upstream could not be read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EstablishKeptWork(ctx, entry.ID, "", []string{"bbbb"}); err == nil {
+		t.Fatal("an empty tip established the entry")
+	}
+	if _, err := s.EstablishKeptWork(ctx, 999, "dddd", nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("establishing an unknown entry = %v; want ErrNotFound", err)
+	}
+	got, err := s.EstablishKeptWork(ctx, entry.ID, "dddd", []string{"bbbb"})
+	if err != nil || !got.Established() || got.Against.Or("") != "dddd" || !slices.Equal(got.Lacks, []string{"bbbb"}) ||
+		got.Unestablished.Or("") != "the upstream could not be read" {
+		t.Fatalf("EstablishKeptWork = %+v, %v; want the set and the tip with the account kept", got, err)
+	}
+	if _, err := s.EstablishKeptWork(ctx, entry.ID, "eeee", nil); !errors.Is(err, ErrKeptWorkEstablished) {
+		t.Fatalf("a second establishment = %v; want ErrKeptWorkEstablished", err)
+	}
+	if again, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || again.Against.Or("") != "dddd" {
+		t.Fatalf("after a refused second establishment the entry reads %+v, %v; want the first", again, err)
+	}
+	for name, statement := range map[string]string{
+		"a rewritten tip":      `UPDATE kept_work SET against = 'eeee' WHERE id = ?`,
+		"a rewritten set":      `UPDATE kept_work SET lacks = '[]' WHERE id = ?`,
+		"a basis taken back":   `UPDATE kept_work SET against = NULL, lacks = NULL WHERE id = ?`,
+		"an account replaced":  `UPDATE kept_work SET unestablished = 'other' WHERE id = ?`,
+		"an account taken off": `UPDATE kept_work SET unestablished = NULL WHERE id = ?`,
 	} {
-		if _, err := s.write.ExecContext(ctx, write.statement, write.id); err == nil || !strings.Contains(err.Error(), "kept work entry") {
+		if _, err := s.write.ExecContext(ctx, statement, entry.ID); err == nil || !strings.Contains(err.Error(), "kept work entry") {
 			t.Errorf("%s was not refused by the seal: %v", name, err)
 		}
+	}
+	open, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/open",
+		Holds: []string{"cccc"}, Reason: "unproven", Unestablished: "unread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, statement := range map[string]string{
+		"a tip without a set":    `UPDATE kept_work SET against = 'dddd' WHERE id = ?`,
+		"a set without a tip":    `UPDATE kept_work SET lacks = '[]' WHERE id = ?`,
+		"an account swapped too": `UPDATE kept_work SET against = 'dddd', lacks = '[]', unestablished = 'other' WHERE id = ?`,
+	} {
+		if _, err := s.write.ExecContext(ctx, statement, open.ID); err == nil || !strings.Contains(err.Error(), "kept work entry") {
+			t.Errorf("%s was not refused by the seal: %v", name, err)
+		}
+	}
+	if _, err := s.AnswerKeptWork(ctx, open.ID, KeptDiscard, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if answered, err := s.EstablishKeptWork(ctx, open.ID, "dddd", []string{"cccc"}); err != nil || !answered.Established() || !answered.Answered() {
+		t.Fatalf("establishing an answered entry = %+v, %v; want it established with its answer kept", answered, err)
 	}
 }
 
@@ -66,7 +143,8 @@ func TestAKeptEntryStatesWhatItsCommitsWereComputedAgainst(t *testing.T) {
 // neither, and so as unestablished, which is what it was: its holds were
 // the commits the copy's references stood on, computed against nothing. The
 // basis migration is rolled back by hand, an entry is written the way the
-// earlier build wrote it, and the shipped migration is applied over it.
+// earlier build wrote it, and the shipped migration is applied over it; such
+// an entry can then be established like one that says why.
 func TestAKeptEntryFromBeforeItsBasisReadsUnestablished(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -84,8 +162,9 @@ func TestAKeptEntryFromBeforeItsBasisReadsUnestablished(t *testing.T) {
 	// Back to the shape the kept work migration left. A migration may not
 	// do this, which is why it is done here by hand and not through one.
 	for _, stmt := range []string{
-		`DROP TRIGGER kept_work_states_its_basis`, `DROP TRIGGER kept_work_basis_is_written_once`,
-		`ALTER TABLE kept_work DROP COLUMN against`, `ALTER TABLE kept_work DROP COLUMN unestablished`,
+		`DROP TRIGGER kept_work_states_its_basis`, `DROP TRIGGER kept_work_basis_is_established_once`,
+		`ALTER TABLE kept_work DROP COLUMN lacks`, `ALTER TABLE kept_work DROP COLUMN against`,
+		`ALTER TABLE kept_work DROP COLUMN unestablished`,
 	} {
 		if _, err := s.write.ExecContext(ctx, stmt); err != nil {
 			t.Fatalf("rolling the schema back: %s: %v", stmt, err)
@@ -105,10 +184,13 @@ func TestAKeptEntryFromBeforeItsBasisReadsUnestablished(t *testing.T) {
 	if err != nil || len(open) != 1 {
 		t.Fatalf("OpenKeptWork = %+v, %v; want the old entry", open, err)
 	}
-	if old := open[0]; old.Established() || old.Against.IsKnown() || old.Unestablished.IsKnown() {
+	if old := open[0]; old.Established() || old.Against.IsKnown() || old.Unestablished.IsKnown() || old.Lacks != nil {
 		t.Fatalf("the old entry reads %+v, want neither basis and so unestablished", old)
 	}
 	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/new", Reason: "unproven"}); err == nil {
 		t.Fatal("after the migration an entry stating no basis was written")
+	}
+	if got, err := s.EstablishKeptWork(ctx, open[0].ID, "dddd", []string{"bbbb"}); err != nil || !got.Established() {
+		t.Fatalf("establishing the old entry = %+v, %v", got, err)
 	}
 }

@@ -350,7 +350,8 @@
 //     a terminal it never probed is indistinguishable from one that did.
 //   - Ignored files are invisible to vcs.Inventory and so to the dirty and
 //     untracked refusals; a file git is configured to ignore goes with the
-//     copy.
+//     copy. The same inventory decides Keep's NothingKept, so a copy whose
+//     only unique content is an ignored file records no kept work entry.
 //   - The record claims the shape, and the removal follows the record: a
 //     promotion that landed between the two would move a copy proven on an
 //     investigation's terms out from under a delivery task. The promotion's
