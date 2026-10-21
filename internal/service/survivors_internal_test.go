@@ -5,10 +5,7 @@ package service
 import (
 	"context"
 	"errors"
-	"os"
-	"path/filepath"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -42,19 +39,9 @@ func TestASurvivorIsPlacedAlongTheChainUntilItIsForgotten(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A process the survivor started, in a group it does not lead, as its
-	// commands run.
-	if err := worker.Send(t.Context(), "run: echo $$ > self.tmp && mv self.tmp self; while [ ! -e release ]; do sleep 0.02; done"); err != nil {
-		t.Fatalf("Send: %v", err)
-	}
-	child := atoiFile(t, filepath.Join(dir, "self"))
-	shell, found, err := agents.Identify(child)
-	if err != nil || !found {
-		t.Fatalf("the shell's identity: %+v, %v, %v", shell, found, err)
-	}
-	// The shell is in no group the worker's end reaches, so only the
-	// release ends it, and it must see the release before the test's
-	// directory, which holds it, is removed by a later cleanup.
-	t.Cleanup(func() { releaseAndAwait(t, dir, shell) })
+	// commands run. It is in no group the worker's end reaches, so it is a
+	// held process, which ends with this test on every path (heldShell).
+	child, _ := heldShell(t, worker, dir)
 
 	survivors := session.NewSurvivors()
 	if _, adopted, err := survivors.Adopt(marker, text, agents.Identity{}); err != nil || !adopted {
@@ -86,29 +73,6 @@ type noWorkers struct{}
 func (noWorkers) Member(int) (session.Membership, bool) { return session.Membership{}, false }
 func (noWorkers) Hosted(agents.Identity) (session.Membership, bool) {
 	return session.Membership{}, false
-}
-
-// releaseAndAwait writes the release file in dir and waits for the process
-// waiting on it to exit; one still running 10s later is killed and fails the
-// test, rather than outliving it once dir and its release are removed.
-func releaseAndAwait(t *testing.T, dir string, waiting agents.Identity) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, "release"), nil, 0o600); err != nil {
-		t.Errorf("releasing process %d: %v", waiting.PID, err)
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		presence, err := waiting.Presence()
-		if err == nil && presence != agents.PresencePresent {
-			return
-		}
-		if !time.Now().Before(deadline) {
-			_ = syscall.Kill(waiting.PID, syscall.SIGKILL)
-			t.Errorf("process %d was still running 10s after its release (presence %v, %v), so it was killed", waiting.PID, presence, err)
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 }
 
 // atoiFile is waitFile read as a process identifier.
