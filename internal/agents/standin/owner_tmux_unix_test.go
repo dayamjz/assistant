@@ -129,7 +129,9 @@ func tmuxOwnerTests(dir, mode string) int {
 	}
 	value, sweeper := owned()
 	record := fmt.Sprintf("%s %s %d %s", value, strings.TrimSpace(string(pids)), sweeper.PID, tmux)
-	if err := os.WriteFile(filepath.Join(dir, tmuxOwnerRecord), []byte(record), 0o600); err != nil {
+	// Whole or not at all, since startTmuxOwner polls this one path and
+	// parses the first content it reads there as the record (#459).
+	if err := writeWhole(filepath.Join(dir, tmuxOwnerRecord), []byte(record)); err != nil {
 		fail("recording the tmux server", err)
 	}
 	switch mode {
