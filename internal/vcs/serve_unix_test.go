@@ -3,10 +3,13 @@
 package vcs_test
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +51,24 @@ func TestAReceiveFromAnIdlePusherEndsAtItsDeadline(t *testing.T) {
 	err := serveWithin(t, pr, io.Discard)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("ServeReceivePack = %v; want the deadline that ended it", err)
+	}
+}
+
+// A receive whose output never reached the pushing side is not a success,
+// even though receive-pack itself exits 0: the pusher's writer failing, here
+// over a closed file, is reported as os/exec reports it, so undelivered
+// protocol output does not read as a completed receive.
+func TestAReceiveWhoseOutputCannotBeDeliveredIsReported(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "closed")
+	if err != nil {
+		t.Fatalf("creating the file: %v", err)
+	}
+	_ = f.Close()
+	// A flush packet is a push that sends no commands, which receive-pack
+	// answers after its advertisement and then exits 0.
+	err = serveWithin(t, strings.NewReader("0000"), bufio.NewWriterSize(f, 16))
+	if !errors.Is(err, os.ErrClosed) {
+		t.Errorf("ServeReceivePack = %v; want the pusher's writer's os.ErrClosed", err)
 	}
 }
 

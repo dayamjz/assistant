@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -29,10 +30,11 @@ type streams struct {
 
 	// in is the write end of the child's standard input when Run copies it
 	// from inFrom, the caller's reader; closeIn closes it once.
-	in     *os.File
-	inFrom io.Reader
-	inOnce sync.Once
-	inErr  chan error
+	in       *os.File
+	inFrom   io.Reader
+	inOnce   sync.Once
+	inClosed atomic.Bool
+	inErr    chan error
 
 	// outs are the read ends of the child's standard output and error that
 	// Run copies to the caller's writers; pending counts the copiers that
@@ -125,14 +127,19 @@ func (s *streams) started() {
 	}
 	if s.in != nil {
 		go func() {
-			_, err := io.Copy(s.in, s.inFrom)
+			pipe := &pipeEnd{f: s.in}
+			_, err := io.Copy(pipe, s.inFrom)
 			s.closeIn()
-			s.inErr <- err
+			s.inErr <- s.inputError(err, pipe)
 		}()
 	}
 	s.outDone = make(chan error, len(s.outs))
 	s.pending = len(s.outs)
 	for _, o := range s.outs {
+		// Every error an output copy stops on is reported, whichever side it
+		// came from, as os/exec reports its own: before cut, nothing in Run
+		// has closed the read end, so an error here is the caller's writer's
+		// or the pipe's own, and after cut no copier's report is read.
 		go func() {
 			_, err := io.Copy(o.w, o.r)
 			_ = o.r.Close()
@@ -141,10 +148,50 @@ func (s *streams) started() {
 	}
 }
 
-// closeIn closes the write end of the child's standard input, once.
+// pipeEnd is Run's own write end of the child's standard input, wrapped so
+// the input copier can tell an error on that end from one the caller's reader
+// returned: it records the last error its own write met, and io.Copy returns
+// that same error when it is what stopped the copy.
+type pipeEnd struct {
+	f   *os.File
+	err error
+}
+
+func (p *pipeEnd) Write(b []byte) (int, error) {
+	n, err := p.f.Write(b)
+	if err != nil {
+		p.err = err
+	}
+	return n, err
+}
+
+// onPipe reports whether err, what stopped a copy, came from pipe rather
+// than from the caller's side of that copy.
+func onPipe(err error, pipe *pipeEnd) bool {
+	return pipe.err != nil && errors.Is(err, pipe.err)
+}
+
+// inputError is what the input copy reports. The errors suppressed are a
+// write on Run's own pipe end failing with EPIPE, a child that exited
+// without reading all of its input, which os/exec suppresses too, or failing
+// because Run closed that end. An error from the caller's reader is
+// reported.
+func (s *streams) inputError(err error, pipe *pipeEnd) error {
+	if err == nil {
+		return nil
+	}
+	if onPipe(err, pipe) && (errors.Is(err, syscall.EPIPE) || (s.inClosed.Load() && errors.Is(err, os.ErrClosed))) {
+		return nil
+	}
+	return err
+}
+
+// closeIn closes the write end of the child's standard input, once, and
+// records that Run closed it before it does.
 func (s *streams) closeIn() {
 	s.inOnce.Do(func() {
 		if s.in != nil {
+			s.inClosed.Store(true)
 			_ = s.in.Close()
 		}
 	})
@@ -159,13 +206,14 @@ func (s *streams) closeIn() {
 // The input copier is never waited on: its write end is closed here, so
 // once the caller's reader returns, the copy fails and the goroutine ends,
 // but a reader that never returns keeps that one goroutine, and only that,
-// for as long as it does not.
+// for as long as it does not. So its error, the caller's reader's, is
+// reported only when the copy had already ended when this is called.
 func (s *streams) finish(grace time.Duration) error {
 	s.closeIn()
 	var errs []error
 	select {
 	case err := <-s.inErr:
-		if err != nil && !errors.Is(err, os.ErrClosed) && !errors.Is(err, syscall.EPIPE) {
+		if err != nil {
 			errs = append(errs, fmt.Errorf("procgroup: copying standard input: %w", err))
 		}
 	default:
@@ -176,7 +224,7 @@ func (s *streams) finish(grace time.Duration) error {
 		select {
 		case err := <-s.outDone:
 			s.pending--
-			if err != nil && !errors.Is(err, os.ErrClosed) {
+			if err != nil {
 				errs = append(errs, fmt.Errorf("procgroup: copying output: %w", err))
 			}
 		case <-timer.C:
@@ -191,7 +239,9 @@ func (s *streams) finish(grace time.Duration) error {
 // copier blocked in a caller's writer does only once that write returns. It
 // answers exec.ErrWaitDelay, saying when a copier was left behind; a copier
 // left behind makes no write past the one it is blocked in, since its next
-// read fails on the closed end.
+// read fails on the closed end. What the copiers report after the cut is not
+// read: the cut's expiry is the answer, and the closing it did would
+// otherwise read as their failure.
 func (s *streams) cut(grace time.Duration) error {
 	s.closeIn()
 	for _, o := range s.outs {

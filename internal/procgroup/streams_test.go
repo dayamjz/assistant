@@ -100,6 +100,60 @@ func TestRunCopiesOrdinaryStreamsWhole(t *testing.T) {
 	}
 }
 
+// A caller's writer that fails is reported even though the program exited 0,
+// as os/exec reports it: output that never reached the caller is not an
+// answer. The writer fails the way a closed file does, so the error is the
+// same os.ErrClosed that Run's own cut of a pipe produces, and only where it
+// came from tells the two apart.
+func TestRunReportsACallersWriterThatFails(t *testing.T) {
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), standInMode+"="+standInPrint)
+	cmd.Stdout = closedWriter(t)
+	err := runWithin(t, cmd, false)
+	if !errors.Is(err, os.ErrClosed) {
+		t.Errorf("Run with a writer over a closed file = %v; want the writer's os.ErrClosed", err)
+	}
+	if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 0 {
+		t.Errorf("the stand-in did not exit 0: %v", cmd.ProcessState)
+	}
+}
+
+// A caller's reader that fails is reported too, on the same terms: the
+// failure is os.ErrClosed, which Run's own closing of the input pipe also
+// produces, and it is reported because it came from the caller's reader. The
+// stand-in takes a moment to start and exit, so the failed read has ended
+// before Run reads the copy's result.
+func TestRunReportsACallersReaderThatFails(t *testing.T) {
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), standInMode+"="+standInPrint)
+	cmd.Stdin = failingReader{}
+	err := runWithin(t, cmd, false)
+	if !errors.Is(err, os.ErrClosed) {
+		t.Errorf("Run with a reader that fails = %v; want the reader's os.ErrClosed", err)
+	}
+}
+
+// failingReader is an io.Reader that is not an *os.File and fails every read
+// the way a closed file does.
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) {
+	return 0, &os.PathError{Op: "read", Path: "closed", Err: os.ErrClosed}
+}
+
+// closedWriter returns an io.Writer that is not an *os.File, so Run copies
+// to it, over a file that is already closed, so every write fails with
+// os.ErrClosed.
+func closedWriter(t *testing.T) io.Writer {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "closed")
+	if err != nil {
+		t.Fatalf("creating the file: %v", err)
+	}
+	_ = f.Close()
+	return struct{ io.Writer }{f}
+}
+
 // writerOnly is an io.Writer that is not an *os.File, so Run copies to it.
 type writerOnly struct{ b []byte }
 
