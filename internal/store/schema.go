@@ -2165,11 +2165,13 @@ var schema = []migration{
 			// carries neither and reads as unestablished with no account,
 			// which is what it was.
 			//
-			// The basis moves once and one way: an unestablished row may
-			// have lacks and against filled in, in one update that leaves
-			// unestablished as the account of the write, and an established
-			// one is sealed, which the update trigger holds. The entry's
-			// identity and the rest of it stay under migration 51's seals.
+			// The basis moves once and one way: an open unestablished row
+			// may have lacks and against filled in, in one update that
+			// leaves unestablished as the account of the write; an
+			// established row, and a row answered or closed, is sealed,
+			// which the update trigger holds, so the one revision PRD
+			// section 8 gives the row stays its last. The entry's identity
+			// and the rest of it stay under migration 51's seals.
 			`ALTER TABLE kept_work ADD COLUMN lacks TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN against TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN unestablished TEXT`,
@@ -2183,10 +2185,11 @@ var schema = []migration{
 				END`,
 			`CREATE TRIGGER kept_work_basis_is_established_once
 				BEFORE UPDATE OF lacks, against, unestablished ON kept_work
-				WHEN OLD.against IS NOT NULL OR NEW.against IS NULL OR NEW.against = '' OR NEW.lacks IS NULL
+				WHEN OLD.against IS NOT NULL OR OLD.answer IS NOT NULL OR OLD.closure IS NOT NULL
+					OR NEW.against IS NULL OR NEW.against = '' OR NEW.lacks IS NULL
 					OR NEW.unestablished IS NOT OLD.unestablished
 				BEGIN
-					SELECT RAISE(ABORT, 'store: a kept work entry is established once, from unestablished, and is not rewritten');
+					SELECT RAISE(ABORT, 'store: a kept work entry is established once, from unestablished and only while it is open, and is not rewritten');
 				END`,
 		},
 	},

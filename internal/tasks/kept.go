@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -100,7 +101,9 @@ type KeptEntry struct {
 	// git is configured to ignore is invisible to that inventory, as it
 	// is to the cleanup decision, so a copy whose only unique content is
 	// ignored reads NothingKept too; doc.go lists the gap. No entry is
-	// written for it.
+	// written for it, and none stands for it: a copy in this state that
+	// an entry already records is that entry, established with nothing
+	// lacking, and not NothingKept.
 	NothingKept bool
 	// Against is the default branch tip NothingKept was read against.
 	Against string
@@ -114,13 +117,20 @@ type KeptEntry struct {
 // branch lacks from the default branch, read now and fetched by identifier
 // (lacking): the entry lists exactly those commits as Lacks, with the tip
 // they were computed against, or, when that cannot be computed, states so
-// with the account and lists nothing as lacking. An entry already recorded
-// unestablished is established by this call when it can compute the set,
-// once, which Established reports. A copy for which the set is established
-// and empty and whose tree holds nothing the inventory sees as uncommitted
-// is NothingKept, and no entry is written: the same computation that lists
-// a copy's work says there is none, so the scratch case is not a second
-// rule.
+// with the account and lists nothing as lacking. An entry already standing
+// for the copy state is read first, before anything is decided, so what it
+// becomes is decided on it: an open one recorded unestablished is
+// established by this call when it can compute the set, once, which
+// Established reports, whatever the set holds; an answered or closed one is
+// returned as it stands. Only a copy no entry records, for which the set is
+// established and empty and whose tree holds nothing the inventory sees as
+// uncommitted, is NothingKept, and no entry is written: the same
+// computation that lists a copy's work says there is none, so the scratch
+// case is not a second rule. An entry established with nothing lacking
+// stays open until a person answers it or the cleanup decision removes
+// the copy on a proof, which closes it in the removal's transaction: those
+// are the record's two closings, this call removes nothing, and the next
+// cleanup of the copy is what the sites in internal/service ask.
 //
 // It refuses with ErrCleanupRecord a request naming no owner or both, a
 // task whose reserved copy is not where this home puts it, and a copy that
@@ -179,6 +189,13 @@ func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 		return KeptEntry{}, err
 	}
 	held := lacking(ctx, l, reaches)
+	recorded, err := c.store.KeptWorkOf(ctx, path, holds)
+	switch {
+	case err == nil:
+		return c.establish(ctx, recorded, held)
+	case !errors.Is(err, store.ErrNotFound):
+		return KeptEntry{}, err
+	}
 	if held.established() && len(held.lacks) == 0 && !inv.Dirty && !inv.Untracked && !inv.Stash {
 		return KeptEntry{NothingKept: true, Against: held.against}, nil
 	}
@@ -189,10 +206,22 @@ func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 	if err != nil {
 		return KeptEntry{}, err
 	}
-	if wrote || entry.Established() || !held.established() {
-		return KeptEntry{Entry: entry, Recorded: wrote}, nil
+	if wrote {
+		return KeptEntry{Entry: entry, Recorded: true}, nil
 	}
-	entry, err = c.store.EstablishKeptWork(ctx, entry.ID, held.against, held.lacks)
+	// Another writer recorded the copy state between the read and the
+	// write; what the entry becomes is decided on it the same way.
+	return c.establish(ctx, entry, held)
+}
+
+// establish is what Keep does with an entry already standing for the copy
+// state: fills in its basis when it is open, unestablished and the set is
+// now established, and otherwise returns it as it stands.
+func (c *Cleaner) establish(ctx context.Context, entry store.KeptWork, held held) (KeptEntry, error) {
+	if entry.Established() || !entry.Open() || !held.established() {
+		return KeptEntry{Entry: entry}, nil
+	}
+	entry, err := c.store.EstablishKeptWork(ctx, entry.ID, held.against, held.lacks)
 	if err != nil {
 		return KeptEntry{}, err
 	}

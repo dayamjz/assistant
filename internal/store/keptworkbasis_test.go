@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // An entry states its basis, PRD section 8's "what it holds that the default
@@ -72,13 +73,17 @@ func TestAKeptEntryStatesWhatItsCommitsWereComputedAgainst(t *testing.T) {
 	}
 }
 
-// An entry's basis is established once, from unestablished, and one way:
-// EstablishKeptWork fills in the set and the tip of an entry written
-// unestablished and keeps the account, refuses an entry already established
-// (the first basis stands), an empty tip, and an unknown entry, and the seal
-// refuses every other move against the real schema: a tip rewritten, a set
-// rewritten, a basis taken back, and an account replaced. An answered entry
-// is established too, because the set is a fact about the copy as kept.
+// An entry's basis is established once, from unestablished, only while the
+// entry is open, and one way: EstablishKeptWork fills in the set and the
+// tip of an entry written unestablished and keeps the account, refuses an
+// entry already established (the first basis stands), an empty tip, and an
+// unknown entry, and the seal refuses every other move against the real
+// schema: a tip rewritten, a set rewritten, a basis taken back, and an
+// account replaced. An entry a person answered or the program closed is
+// sealed whole, PRD section 8's "its one revision is the answer": the
+// accessor refuses it with the typed refusal, and the seal refuses the same
+// write made directly, so a basis cannot be written past an answer by any
+// path.
 func TestAKeptEntryIsEstablishedOnceFromUnestablished(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -131,11 +136,66 @@ func TestAKeptEntryIsEstablishedOnceFromUnestablished(t *testing.T) {
 			t.Errorf("%s was not refused by the seal: %v", name, err)
 		}
 	}
-	if _, err := s.AnswerKeptWork(ctx, open.ID, KeptDiscard, ResolvedByMachineInterface()); err != nil {
+	if _, err := s.AnswerKeptWork(ctx, open.ID, KeptCarryOn, ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
-	if answered, err := s.EstablishKeptWork(ctx, open.ID, "dddd", []string{"cccc"}); err != nil || !answered.Established() || !answered.Answered() {
-		t.Fatalf("establishing an answered entry = %+v, %v; want it established with its answer kept", answered, err)
+	if _, err := s.EstablishKeptWork(ctx, open.ID, "dddd", []string{"cccc"}); !errors.Is(err, ErrKeptWorkAnswered) {
+		t.Fatalf("establishing an answered entry = %v; want ErrKeptWorkAnswered", err)
+	}
+	closed, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/closed",
+		Holds: []string{"eeee"}, Reason: "unproven", Unestablished: "unread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run.ID, Proof: Known(CleanupProofRemoteBranch), Examined: []string{"eeee"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkRunCleanupRemoved(ctx, run.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EstablishKeptWork(ctx, closed.ID, "dddd", []string{"eeee"}); !errors.Is(err, ErrKeptWorkClosed) {
+		t.Fatalf("establishing a closed entry = %v; want ErrKeptWorkClosed", err)
+	}
+	for name, id := range map[string]int64{"an answered entry": open.ID, "a closed entry": closed.ID} {
+		if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET against = 'dddd', lacks = '[]' WHERE id = ?`, id); err == nil ||
+			!strings.Contains(err.Error(), "kept work entry") {
+			t.Errorf("establishing %s directly was not refused by the seal: %v", name, err)
+		}
+	}
+	for name, id := range map[string]int64{"the answered entry": open.ID, "the closed entry": closed.ID} {
+		if got, err := s.KeptWorkEntry(ctx, id); err != nil || got.Established() {
+			t.Errorf("%s reads %+v, %v; want it still unestablished", name, got, err)
+		}
+	}
+}
+
+// KeptWorkOf is the read of what RecordKeptWork would find: the entry
+// standing for a copy state, whatever its answer or closure, keyed as the
+// write keys it, and ErrNotFound for a state no entry records.
+func TestKeptWorkOfReadsTheEntryStandingForACopyState(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+	if _, err := s.KeptWorkOf(ctx, "/w/none", []string{"aaaa"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("KeptWorkOf with no entry = %v; want ErrNotFound", err)
+	}
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/of", Holds: []string{"aaaa", "bbbb"},
+		Reason: "unproven", Unestablished: "unread"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.KeptWorkOf(ctx, "/w/of", []string{"aaaa", "bbbb"}); err != nil || got.ID != entry.ID {
+		t.Fatalf("KeptWorkOf = %+v, %v; want entry %d", got, err, entry.ID)
+	}
+	if _, err := s.KeptWorkOf(ctx, "/w/of", []string{"bbbb", "aaaa"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("KeptWorkOf with the commits in another order = %v; want ErrNotFound, as the write keys them", err)
+	}
+	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.KeptWorkOf(ctx, "/w/of", []string{"aaaa", "bbbb"}); err != nil || got.ID != entry.ID || !got.Answered() {
+		t.Fatalf("KeptWorkOf of an answered entry = %+v, %v; want it as it stands", got, err)
 	}
 }
 

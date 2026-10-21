@@ -172,9 +172,10 @@
 // the account of why that could not be computed, exactly one on every row
 // written since, which the insert trigger holds; a row written before
 // carries neither and reads as unestablished, which KeptWork.Established
-// reports. The basis is the one thing an unestablished entry may later have
-// filled in, once, through EstablishKeptWork, answered or not, and the
-// update trigger holds it to that one direction. Its one revision otherwise closes it, made once and only while
+// reports. The basis is the one thing an open unestablished entry may later
+// have filled in, once, through EstablishKeptWork, and the update trigger
+// holds it to that one direction and to an open row, so an answered or
+// closed row is sealed whole. Its one revision otherwise closes it, made once and only while
 // it is open: AnswerKeptWork with a person's answer and its Resolver, or the
 // program's KeptRemovedOnProof, which only MarkCleanupRemoved and
 // MarkRunCleanupRemoved write, in the transaction that marks the owner's

@@ -129,6 +129,91 @@ func TestAKeptEntrySaysSoWhenTheDefaultBranchCannotBeReadAndIsEstablishedLater(t
 	}
 }
 
+// An answered entry is sealed whole, PRD section 8's "its one revision is
+// the answer": a copy kept during an outage whose entry a person answered
+// before the upstream came back is, at the next Keep, that entry as it
+// stands, unestablished still, with nothing written and no error. Without
+// the refusal the answered row gained a basis.
+func TestAnAnsweredEntryIsNotEstablishedLater(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/answered")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	if err := os.Rename(s.upstream, s.upstream+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Recorded || got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v; want a new unestablished entry", got, err)
+	}
+	if _, err := s.store.AnswerKeptWork(ctx, got.Entry.ID, store.KeptCarryOn, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(s.upstream+".gone", s.upstream); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || again.Recorded || again.Established || again.NothingKept || again.Entry.ID != got.Entry.ID {
+		t.Fatalf("Keep after the answer = %+v, %v; want the answered entry as it stands", again, err)
+	}
+	if again.Entry.Established() || again.Entry.Answer.Or("") != store.KeptCarryOn {
+		t.Fatalf("the answered entry reads %+v, want it unestablished with its answer", again.Entry)
+	}
+	if open, err := s.store.OpenKeptWork(ctx); err != nil || len(open) != 0 {
+		t.Fatalf("the open kept work is %+v, %v; want none", open, err)
+	}
+}
+
+// An entry already standing for the copy state is read before NothingKept
+// is decided: a clean investigation copy on main, kept while the upstream
+// was unavailable, has an unestablished entry; once the upstream is back the
+// same copy is not NothingKept but that entry, established with nothing
+// lacking. It stays open until the cleanup decision removes the copy on the
+// scratch proof, which closes it as removed on that proof in the removal's
+// transaction, the one program closing the record allows. Without the read
+// before the decision the entry stayed open and unestablished behind a
+// NothingKept answer.
+func TestAnEntryForACopyHoldingNothingIsEstablishedAndClosedByTheCleanup(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.investigationTask(t)
+	mainTip := rawGit(t, tk.copy, "rev-parse", "main")
+	if err := os.Rename(s.upstream, s.upstream+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	kept := Kept{Task: tk.id, Reason: KeptPromotionWindow, Detail: "the window passed"}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Recorded || got.NothingKept || got.Entry.Established() {
+		t.Fatalf("Keep with the upstream away = %+v, %v; want an unestablished entry, which is the case under test", got, err)
+	}
+	if err := os.Rename(s.upstream+".gone", s.upstream); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || again.NothingKept || again.Recorded || !again.Established || again.Entry.ID != got.Entry.ID {
+		t.Fatalf("Keep with the upstream back = %+v, %v; want entry %d established and not NothingKept", again, err, got.Entry.ID)
+	}
+	if !again.Entry.Established() || again.Entry.Against.Or("") != mainTip || again.Entry.Lacks == nil || len(again.Entry.Lacks) != 0 ||
+		!again.Entry.Open() {
+		t.Fatalf("the entry = %+v, want it open, established against %s with nothing lacking", again.Entry, mainTip)
+	}
+
+	s.storeReport(t, tk.id)
+	cleaned, err := s.cleanUp(t, tk.id)
+	s.removedOn(t, tk, cleaned, err, store.CleanupProofScratch)
+	closed, err := s.store.KeptWorkEntry(ctx, got.Entry.ID)
+	if err != nil || closed.Open() || closed.Closure.Or("") != store.KeptRemovedOnProof || closed.ClosedProof.Or("") != store.CleanupProofScratch {
+		t.Fatalf("after the removal the entry reads %+v, %v; want it closed as removed on the scratch proof", closed, err)
+	}
+}
+
 // PRD principle P15 and section 6's scratch copy, as the one computation
 // rather than a second rule: an investigation copy kept at the end of its
 // promotion window that holds nothing the default branch lacks records no

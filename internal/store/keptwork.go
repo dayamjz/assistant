@@ -68,9 +68,10 @@ const KeptRemovedOnProof KeptClosure = "removed-on-proof"
 // same entry however the default branch read at the time. What of that the
 // default branch lacks, Lacks against Against, is the entry's basis: it is
 // written with the entry when it could be computed, and when it could not
-// (Unestablished) it is the one thing an entry may later have filled in,
-// once, through EstablishKeptWork, so an outage at the write does not leave
-// the entry unestablished for good.
+// (Unestablished) it is the one thing an open entry may later have filled
+// in, once, through EstablishKeptWork, so an outage at the write does not
+// leave the entry unestablished for good; an answered or closed entry is
+// sealed whole, basis included.
 //
 // A repository with an open entry cannot be forgotten: ForgetRepository,
 // RepositoryRemovable and ReserveRepositoryRemoval refuse it with a
@@ -188,12 +189,14 @@ type KeptCopy struct {
 	Detail string
 }
 
-// ErrKeptWorkAnswered is returned by AnswerKeptWork for an entry already
-// answered. The first answer stands and nothing is written.
+// ErrKeptWorkAnswered is returned by AnswerKeptWork and EstablishKeptWork
+// for an entry already answered. The first answer stands and nothing is
+// written.
 var ErrKeptWorkAnswered = errors.New("store: the kept work entry is already answered")
 
-// ErrKeptWorkClosed is returned by AnswerKeptWork for an entry the program
-// closed because its copy was removed on a proof. Nothing is written.
+// ErrKeptWorkClosed is returned by AnswerKeptWork and EstablishKeptWork
+// for an entry the program closed because its copy was removed on a proof.
+// Nothing is written.
 var ErrKeptWorkClosed = errors.New("store: the kept work entry was closed when its copy was removed on a proof")
 
 // ErrRepositoryBeingRemoved is returned by CreateRun for a run of a
@@ -382,15 +385,16 @@ func encodeLacks(against string, lacks []string) (Optional[string], error) {
 // written.
 var ErrKeptWorkEstablished = errors.New("store: the kept work entry's basis is already established")
 
-// EstablishKeptWork fills in the basis of an entry written unestablished,
-// once: Lacks and Against as RecordKeptWork would have taken them, with
-// Unestablished kept as the account of the write. An entry already
-// established is ErrKeptWorkEstablished, an empty tip is refused, and an
-// unknown identifier is ErrNotFound; in each case nothing is written. It
-// is the one revision of an entry's basis, open or not: what the copy
-// holds that the default branch lacks is a fact about the copy as it was
-// kept, which an answer does not change, and the schema holds the write to
-// that one direction.
+// EstablishKeptWork fills in the basis of an open entry written
+// unestablished, once: Lacks and Against as RecordKeptWork would have taken
+// them, with Unestablished kept as the account of the write. An entry
+// already established is ErrKeptWorkEstablished, one a person answered is
+// ErrKeptWorkAnswered and one the program closed is ErrKeptWorkClosed (the
+// row is sealed whole from its one revision on, PRD section 8's "written
+// once" and "its one revision is the answer"), an empty tip is refused, and
+// an unknown identifier is ErrNotFound; in each case nothing is written.
+// The schema holds the write to the same conditions, so a basis cannot be
+// written past an answer by any path.
 func (s *Store) EstablishKeptWork(ctx context.Context, id int64, against string, lacks []string) (KeptWork, error) {
 	if strings.TrimSpace(against) == "" {
 		return KeptWork{}, fmt.Errorf("store: establishing kept work entry %d: no default branch tip was named", id)
@@ -405,8 +409,13 @@ func (s *Store) EstablishKeptWork(ctx context.Context, id int64, against string,
 		if err != nil {
 			return errNoRows(err)
 		}
-		if k.Established() {
+		switch {
+		case k.Established():
 			return ErrKeptWorkEstablished
+		case k.Answered():
+			return ErrKeptWorkAnswered
+		case k.Closure.IsKnown():
+			return ErrKeptWorkClosed
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET lacks = ?, against = ? WHERE id = ?`, encoded, against, id); err != nil {
 			return err
@@ -418,6 +427,27 @@ func (s *Store) EstablishKeptWork(ctx context.Context, id int64, against string,
 		return KeptWork{}, fmt.Errorf("store: establishing kept work entry %d: %w", id, err)
 	}
 	return out, nil
+}
+
+// KeptWorkOf returns the entry standing for a copy state, the path and the
+// commits its references and HEAD stand on as RecordKeptWork keys them,
+// answered or closed or not, or ErrNotFound. It is the read a caller makes
+// to find what it would otherwise write, so that what an entry becomes can
+// be decided before anything is written for the copy.
+func (s *Store) KeptWorkOf(ctx context.Context, copyPath string, holds []string) (KeptWork, error) {
+	if err := s.live(); err != nil {
+		return KeptWork{}, err
+	}
+	encoded, err := encodeExamined(holds)
+	if err != nil {
+		return KeptWork{}, err
+	}
+	k, err := scanKeptWork(s.read.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE copy_path = ? AND holds = ?`,
+		copyPath, encoded))
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: reading the kept work at %s: %w", copyPath, errNoRows(err))
+	}
+	return k, nil
 }
 
 // KeptWorkEntry returns one entry by identifier, or ErrNotFound.

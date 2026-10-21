@@ -27,8 +27,12 @@ paths: ["internal/tasks/**"]
   the default branch, fresh and fetched by identifier, lacks (`lacking` in
   `kept.go`; a stash is uncommitted state and not compared; an unreadable
   branch is recorded as unestablished, never guessed, and established by a
-  later `Keep` of the unchanged copy), records the entry or `NothingKept`,
-  which sees what `vcs.Inventory` sees and so not an ignored file, and
+  later `Keep` of the unchanged copy while the entry is open), reads the
+  entry already standing for the copy state before deciding anything, and
+  records the entry or `NothingKept`, which sees what `vcs.Inventory` sees
+  and so not an ignored file; an entry established with nothing lacking
+  stays open until answered or until a cleanup removes the copy on a
+  proof. And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
   refusals are a copy kept for its work; `kept_test.go` places every reason.
 
