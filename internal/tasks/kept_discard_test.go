@@ -12,7 +12,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/principles"
-	"github.com/dayamjz/assistant/internal/store"
 )
 
 // What a discard would lose is read from the entry's basis and the copy as
@@ -151,12 +150,53 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	if gone, err := s.cleaner.Discard(ctx, entry, first.Digest, ""); err != nil || gone.Digest != "" {
 		t.Fatalf("Discard of a gone copy = %+v, %v; want nothing to lose and no error", gone, err)
 	}
+}
 
-	unestablished := entry
-	unestablished.Against = store.Unknown[string]()
-	unestablished.Unestablished = store.Known("the upstream could not be read")
-	if _, err := s.cleaner.Loss(ctx, unestablished); !errors.Is(err, ErrLossUnestablished) {
-		t.Fatalf("Loss of an unestablished entry = %v; want ErrLossUnestablished", err)
+// A discard's preview is read from the copy as it stands, not from the
+// entry's record of it when it was kept: the copy is kept holding its own
+// commit, and then a commit is made on another branch and HEAD returned to
+// where it was, which the entry never recorded; the preview lists that
+// commit beside the first as what the default branch lacks. A default
+// branch that cannot be read now refuses the preview as unestablished,
+// whatever the entry recorded. Without the read the preview shows the
+// entry's record and the new commit is not among what would be lost.
+func TestADiscardPreviewIsReadFromTheCopyNow(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/now")
+	own := commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !slices.Equal(got.Entry.Lacks, []string{own}) {
+		t.Fatalf("Keep = %+v, %v; want the entry lacking the task's own commit alone", got, err)
+	}
+	entry := got.Entry
+
+	rawGit(t, tk.copy, "checkout", "--quiet", "-b", "aside")
+	aside := commit(t, tk.copy, "aside.txt", "work on another branch\n", "work on another branch")
+	rawGit(t, tk.copy, "checkout", "--quiet", "task/now")
+	if head := rawGit(t, tk.copy, "rev-parse", "HEAD"); head != own {
+		t.Fatalf("HEAD is %s, want it back at %s", head, own)
+	}
+	loss, err := s.cleaner.Loss(ctx, entry)
+	if err != nil || !slices.Contains(loss.Lacks, aside) || !slices.Contains(loss.Lacks, own) {
+		t.Fatalf("the preview = %+v, %v; want %s and %s among what would be lost", loss, err, aside, own)
+	}
+
+	if err := os.Rename(s.upstream, s.upstream+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.cleaner.Loss(ctx, entry); !errors.Is(err, ErrLossUnestablished) {
+		t.Fatalf("the preview with the upstream unreadable = %v; want ErrLossUnestablished", err)
+	}
+	if err := os.Rename(s.upstream+".gone", s.upstream); err != nil {
+		t.Fatal(err)
 	}
 }
 

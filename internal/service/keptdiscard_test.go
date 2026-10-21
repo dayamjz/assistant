@@ -97,11 +97,13 @@ func TestDiscardingKeptWorkShowsWhatIsLostAndRemovesOnlyOnTheDigest(t *testing.T
 	})
 }
 
-// A discard of an entry whose basis is not established is refused naming
-// why, shows no list and records nothing, and a task's clone is discarded
-// on the same terms as a run's worktree: shown, then removed on the digest.
-// Without the refusal an unestablished entry shows a list that may
-// overstate or understate what is lost.
+// A discard whose basis cannot be established now is refused naming why,
+// shows no list and records nothing, whatever the entry recorded when it
+// was kept: the upstream is made unreadable while the copy stands, and the
+// discard is refused as not established; with the upstream back, a task's
+// clone is discarded on the same terms as a run's worktree: shown, then
+// removed on the digest. Without the refusal a basis that cannot be read
+// shows a list that may overstate or understate what is lost.
 func TestADiscardRefusesAnUnestablishedEntryAndRemovesATasksClone(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -111,28 +113,27 @@ func TestADiscardRefusesAnUnestablishedEntryAndRemovesATasksClone(t *testing.T) 
 	subject := newSubject(t)
 	repository := recordRepository(t, h, subject)
 	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
-	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	unestablished, _, err := records.RecordKeptWork(t.Context(), store.KeptCopy{TaskID: old, CopyPath: entry.CopyPath,
-		Holds: []string{"unestablished"}, Unestablished: "the upstream could not be read", Reason: entry.Reason})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = records.Close()
+	upstream := repository.UpstreamURL
 
 	withService(t, h, func(under serviceUnderTest) {
 		ctx := t.Context()
 		var out machine.KeptWorkAnswered
-		err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
-			Task: old, Hold: unestablished.Key(), Answer: string(store.KeptDiscard)}, &out)
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "not established") {
-			t.Fatalf("a discard of an unestablished entry = %v; want it refused as not established", err)
-		}
 		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		if err := os.Rename(upstream, upstream+".gone"); err != nil {
+			t.Fatal(err)
+		}
+		err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &out)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "not established") {
+			t.Fatalf("a discard with the upstream unreadable = %v; want it refused as not established", err)
+		}
+		if err := os.Rename(upstream+".gone", upstream); err != nil {
+			t.Fatal(err)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
+			t.Fatalf("after the refused discard the entry reads %+v, %v; want it open", still, err)
+		}
 		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &out); err != nil || out.Effect != machine.KeptWorkDiscardShown || out.Loss == nil {
-			t.Fatalf("the established entry's discard shown = %+v, %v", out, err)
+			t.Fatalf("the discard shown with the upstream back = %+v, %v", out, err)
 		}
 		request.Confirm = out.Loss.Digest
 		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &out); err != nil || out.Effect != machine.KeptWorkDiscarded {

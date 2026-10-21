@@ -579,7 +579,9 @@ func (s *Store) AnswerKeptWorkDiscard(ctx context.Context, id int64, digest stri
 }
 
 // AnswerKeptWorkCarryOn is AnswerKeptWork for the carry-on answer, which
-// names the task that carries the entry on in the same write: the task's
+// names the task that carries the entry on in the same write, and answers
+// every other open entry of the same copy the same way in that write, since
+// carrying on moves the whole copy: the task's
 // identifier is reserved by the caller and its row may not exist yet, which
 // is what lets a stop between this write and the task's creation be
 // completed from the entry (P6). A task identifier home.ValidTaskID refuses
@@ -614,9 +616,21 @@ func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 		if k.Closure.IsKnown() {
 			return ErrKeptWorkClosed
 		}
+		at := encodeTime(nowUTC())
 		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?, discard_digest = ? WHERE id = ?`,
-			string(a), who, encodeTime(nowUTC()), optionalText(task), optionalText(digest), id); err != nil {
+			string(a), who, at, optionalText(task), optionalText(digest), id); err != nil {
 			return err
+		}
+		if a == KeptCarryOn {
+			// Carrying on moves the whole copy, so every other open entry
+			// of the same copy, the copy kept again at another state, is
+			// carried on by the same task in this same write; none is left
+			// holding the project's dispatch with its copy gone.
+			if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?
+				WHERE copy_path = ? AND id <> ? AND answer IS NULL AND closure IS NULL`,
+				string(a), who, at, task, k.CopyPath, id); err != nil {
+				return err
+			}
 		}
 		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
 		return err
@@ -809,7 +823,7 @@ var ErrKeptWorkNotCarryOn = errors.New("store: the kept work entry is not answer
 var ErrKeptWorkCarriedOn = errors.New("store: the kept work entry is already carried on")
 
 // MarkKeptWorkCarriedOn records that the task a carry-on answer named owns
-// the copy, once: an entry not answered carry-on is ErrKeptWorkNotCarryOn,
+// the copy, once, on the entry and every other entry that task carries on: an entry not answered carry-on is ErrKeptWorkNotCarryOn,
 // one already marked is ErrKeptWorkCarriedOn, and an unknown identifier is
 // ErrNotFound. It records and moves nothing.
 func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64) (KeptWork, error) {
@@ -825,7 +839,10 @@ func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64) (KeptWork, 
 		if k.CarriedOnAt.IsKnown() {
 			return ErrKeptWorkCarriedOn
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET carried_on_at = ? WHERE id = ?`, encodeTime(nowUTC()), id); err != nil {
+		// Every entry the same task carries on, the copy's other entries the
+		// answer took with it, is carried on with it.
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET carried_on_at = ? WHERE carried_on_task = ? AND carried_on_at IS NULL`,
+			encodeTime(nowUTC()), k.CarriedOnTask.Or("")); err != nil {
 			return err
 		}
 		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))

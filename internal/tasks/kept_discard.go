@@ -29,14 +29,15 @@ import (
 // # What would be lost
 //
 // Loss is what the copy holds that is nowhere safe as far as this program
-// can see: the commits the default branch lacks, which the entry's basis
-// states (store.KeptWork.Lacks) and which this does not recompute, and the
-// three indicators vcs.Inventory reads of the copy now, a tracked change, a
-// file no commit records, and a stash. An entry whose basis is not
-// established says what the copy stands on and nothing about what of it is
-// at risk, so it is refused with ErrLossUnestablished rather than shown a
-// list that may overstate or understate; a later cleanup of the unchanged
-// copy establishes it. A copy that is gone is ErrCopyGone.
+// can see, read from the copy as it stands when it is shown: the commits
+// its references and HEAD reach that the default branch, read fresh as Keep
+// reads it (lacking), lacks, and the three indicators vcs.Inventory reads,
+// a tracked change, a file no commit records, and a stash. The entry's
+// recorded basis is not what is shown, because the copy may hold more
+// since it was kept and a discard destroys the copy as it is. A default
+// branch that cannot be read now refuses the preview with
+// ErrLossUnestablished rather than showing a list that may overstate or
+// understate. A copy that is gone is ErrCopyGone.
 //
 // The digest is over everything the discard would destroy, as shown, each
 // piece a framed record (digest), so no name, target or content can stand
@@ -75,7 +76,10 @@ import (
 type Loss struct {
 	// Head is the commit the copy's HEAD stands on.
 	Head string
-	// Lacks is the commits the default branch lacks, from the entry's basis.
+	// Lacks is the commits the default branch lacks, read from the copy
+	// as it stands, the way Keep reads it (HEAD and every reference of a
+	// task's clone, HEAD of a run's worktree), never the entry's record of
+	// it when it was kept.
 	Lacks []string
 	// Dirty, Untracked and Stash are the inventory's indicators of the copy
 	// as it stands now: a tracked change, a file no commit records, and a
@@ -85,8 +89,9 @@ type Loss struct {
 	Digest string
 }
 
-// ErrLossUnestablished is returned by Loss and Discard for an entry whose
-// basis is not established: what would be lost cannot be shown exactly.
+// ErrLossUnestablished is returned by Loss and Discard when what the
+// default branch lacks cannot be read now: what would be lost cannot be
+// shown exactly.
 var ErrLossUnestablished = errors.New("tasks: what the copy holds that the default branch lacks is not established, so what a discard would lose cannot be shown")
 
 // ErrCopyGone is returned by Loss for an entry whose copy is not standing.
@@ -99,9 +104,6 @@ var ErrLossChanged = errors.New("tasks: the copy no longer holds exactly what wa
 // Loss reads what discarding the entry's copy would lose, on this file's
 // terms.
 func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) {
-	if !entry.Established() {
-		return Loss{}, fmt.Errorf("%w: %s", ErrLossUnestablished, entry.Unestablished.Or("the entry was recorded before the store kept its basis"))
-	}
 	standing, err := c.standing(entry.CopyPath)
 	if err != nil {
 		return Loss{}, err
@@ -117,9 +119,38 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	if err != nil {
 		return Loss{}, fmt.Errorf("tasks: reading the kept copy at %s: %w", entry.CopyPath, err)
 	}
-	loss := Loss{Head: inv.Head.Commit, Lacks: append([]string{}, entry.Lacks...), Dirty: inv.Dirty, Untracked: inv.Untracked, Stash: inv.Stash}
+	// What the default branch lacks is read from the copy now, the way Keep
+	// reads it, so what is shown is what the copy holds when it is shown
+	// and the digest seals exactly that, never the entry's record of the
+	// copy when it was kept.
+	var l landing
+	reaches := committedTips(inv)
+	if taskID, ok := entry.TaskID.Get(); ok {
+		task, err := c.store.Task(ctx, taskID)
+		if err != nil {
+			return Loss{}, err
+		}
+		if l, err = c.taskLanding(ctx, task, copied, nil); err != nil {
+			return Loss{}, err
+		}
+	} else {
+		run, err := c.store.Run(ctx, entry.RunID.Or(""))
+		if err != nil {
+			return Loss{}, err
+		}
+		reaches = []string{inv.Head.Commit}
+		if l, err = c.runLanding(ctx, run, copied, nil); err != nil {
+			return Loss{}, err
+		}
+	}
+	held := lacking(ctx, l, reaches)
+	if !held.established() {
+		return Loss{}, fmt.Errorf("%w: %s", ErrLossUnestablished, held.unestablished)
+	}
+	loss := Loss{Head: inv.Head.Commit, Lacks: held.lacks, Dirty: inv.Dirty, Untracked: inv.Untracked, Stash: inv.Stash}
 	d := newDigest()
 	d.record("copy", entry.CopyPath, inv.Head.Commit)
+	d.record("against", held.against)
 	for _, ref := range inv.Refs {
 		// A task's clone has references of its own; a run's worktree reads
 		// the gate's, which are not the copy's state, so of those only the

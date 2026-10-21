@@ -71,11 +71,14 @@ import (
 // completes it: an entry not yet claimed is landed from the start, and one
 // claimed but naming no run has completeLanding look for the run the claim
 // started, a run of the branch at the copy's commit recorded since the
-// claim that executed or still may, which it names rather than starting
-// twice. A run recorded and ended before it executed,
-// one whose reference the gate never took, is not that run, so the retry
-// starts another. What that does not cover: a copy that changed after the
-// answer lands what it holds when the landing is completed.
+// claim whose submitted reference stands in the gate at that commit and
+// which has started validation, a checkpoint recorded (landedRunSince),
+// which it names rather than starting twice. A run with no reference or no
+// checkpoint, a create stopped before its reference was written, pending or
+// ended, is not that run: nothing of the work reached validation through
+// it, so the retry starts another. What that does not cover: a copy that
+// changed after the answer lands what it holds when the landing is
+// completed.
 //
 // Once the answer is recorded the entry no longer holds its project's
 // dispatch, so a held task is asked for again through dispatchInBackground.
@@ -293,11 +296,19 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
+	gatePath, err := s.gatePathOf(ctx, plan.repository)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	bare, err := vcs.OpenBare(ctx, gatePath, vcs.WithRedactor(redact.New()))
+	if err != nil {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("service: opening the gate of %s: %w", plan.repository.ID, err)
+	}
 	run := ""
 	if entry.LandingClaimedAt.IsKnown() {
 		// A claim with no run is a landing that stopped between the two,
 		// whose run is looked for before another is started.
-		if run, err = s.landedRunSince(ctx, entry, plan); err != nil {
+		if run, err = s.landedRunSince(ctx, entry, plan, bare); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
 	} else {
@@ -320,14 +331,6 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 		if s.betweenLandingClaimAndStart != nil {
 			s.betweenLandingClaimAndStart()
 		}
-		gatePath, err := s.gatePathOf(ctx, plan.repository)
-		if err != nil {
-			return machine.KeptWorkAnswered{}, err
-		}
-		bare, err := vcs.OpenBare(ctx, gatePath, vcs.WithRedactor(redact.New()))
-		if err != nil {
-			return machine.KeptWorkAnswered{}, fmt.Errorf("service: opening the gate of %s: %w", plan.repository.ID, err)
-		}
 		ref := fmt.Sprintf("refs/assistant/kept/%d", entry.ID)
 		if err := bare.Fetch(ctx, vcs.FetchSpec{Remote: entry.CopyPath, Refspecs: []string{"+" + plan.head + ":" + ref}}); err != nil {
 			return machine.KeptWorkAnswered{}, fmt.Errorf("service: bringing kept work entry %d's commit into the gate: %w", entry.ID, err)
@@ -338,6 +341,11 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 			return machine.KeptWorkAnswered{}, err
 		}
 		run = started.Run
+		if s.betweenLandingStartAndRecord != nil {
+			if err := s.betweenLandingStartAndRecord(run); err != nil {
+				return machine.KeptWorkAnswered{}, err
+			}
+		}
 	}
 	landed, err := s.store.RecordKeptWorkLanding(ctx, entry.ID, run)
 	if err != nil {
@@ -371,13 +379,14 @@ func (s *Service) releaseLanding(id int64) {
 
 // landedRunSince finds the run a claimed landing of the entry already
 // started: a run of the landing's branch at its commit recorded at or after
-// the claim that executed or still may, which is how a landing stopped
-// between its run and its record is completed without a second run. A run
-// ended before it executed, which is a terminated run with no checkpoint (a
-// create whose reference the gate never took ends its run so), is not that
+// the claim that carries its submitted reference in the gate at that commit
+// and has started validation, a checkpoint recorded, which is how a landing
+// stopped between its run and its record is completed without a second
+// run. A run with no reference or no checkpoint, a create stopped before
+// its reference was written or a run ended before it executed, is not that
 // run: nothing of the work reached validation through it, so the retry
-// starts another.
-func (s *Service) landedRunSince(ctx context.Context, entry store.KeptWork, plan landing) (string, error) {
+// starts another, which supersedes it.
+func (s *Service) landedRunSince(ctx context.Context, entry store.KeptWork, plan landing, bare *vcs.Repository) (string, error) {
 	claimed, ok := entry.LandingClaimedAt.Get()
 	if !ok {
 		return "", nil
@@ -390,12 +399,13 @@ func (s *Service) landedRunSince(ctx context.Context, entry store.KeptWork, plan
 		if r.Branch != plan.branch || r.SubmittedHead != plan.head || r.CreatedAt.Before(claimed) {
 			continue
 		}
-		if r.Status == store.RunTerminated {
-			if _, err := s.store.LatestGraphCheckpoint(ctx, r.ID); errors.Is(err, store.ErrNotFound) {
-				continue
-			} else if err != nil {
-				return "", err
-			}
+		if at, err := bare.ResolveCommit(ctx, "refs/assistant/runs/"+r.ID); err != nil || at != plan.head {
+			continue
+		}
+		if _, err := s.store.LatestGraphCheckpoint(ctx, r.ID); errors.Is(err, store.ErrNotFound) {
+			continue
+		} else if err != nil {
+			return "", err
 		}
 		return r.ID, nil
 	}

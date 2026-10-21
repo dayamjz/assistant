@@ -3,6 +3,8 @@ package service_test
 import (
 	"errors"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,9 +21,10 @@ import (
 )
 
 // plantKeptInvestigation records a reported investigation task of the
-// repository whose worker is gone and whose copy, a repository of its own
-// detached at a commit of the worker's that no remote has, is kept as an
-// open entry. It returns the task and the entry.
+// repository whose worker is gone and whose copy, a clone of the upstream
+// with no remote detached at a commit of the worker's that no remote has,
+// is kept as an open entry by the real cleanup and Keep. It returns the
+// task and the entry.
 func plantKeptInvestigation(t *testing.T, h *home.Home, subject, repositoryID string) (string, store.KeptWork) {
 	t.Helper()
 	ctx := t.Context()
@@ -60,23 +63,27 @@ func plantKeptInvestigation(t *testing.T, h *home.Home, subject, repositoryID st
 	if err := writeFile(instructions, "Investigate the parser.\n"); err != nil {
 		t.Fatal(err)
 	}
-	git(t, copyPath, "init", "--quiet", "-b", "main", ".")
-	git(t, copyPath, "config", "gc.auto", "0")
-	git(t, copyPath, "config", "maintenance.auto", "false")
+	if err := os.RemoveAll(copyPath); err != nil {
+		t.Fatal(err)
+	}
+	// Cut as dispatch cuts an investigation's copy, a clone with no remote
+	// detached at the default branch, and the worker's commit made on it.
+	git(t, filepath.Dir(copyPath), "clone", "--quiet", git(t, subject, "remote", "get-url", "origin"), copyPath)
+	git(t, copyPath, "remote", "remove", "origin")
+	git(t, copyPath, "checkout", "--quiet", "--detach")
 	if err := writeFile(copyPath+"/finding.txt", "what the worker found\n"); err != nil {
 		t.Fatal(err)
 	}
 	git(t, copyPath, "add", "-A")
 	git(t, copyPath, "commit", "--quiet", "-m", "the worker's own commit")
 	head := git(t, copyPath, "rev-parse", "HEAD")
-	git(t, copyPath, "checkout", "--quiet", "--detach")
 	if _, _, err := records.StoreTaskReport(ctx, store.TaskReport{TaskID: id, Body: `{"summary":"looked"}`, Report: []byte(`{"summary":"looked"}`)}, nil); err != nil {
 		t.Fatal(err)
 	}
-	entry, _, err := records.RecordKeptWork(ctx, store.KeptCopy{TaskID: id, CopyPath: copyPath, Holds: []string{head}, Lacks: []string{head},
-		Against: git(t, subject, "rev-parse", "HEAD"), Reason: string(tasks.ReasonUnproven)})
-	if err != nil {
-		t.Fatal(err)
+	_ = records.Close()
+	entry := keepTaskCopy(t, h, id)
+	if !entry.Established() || !slices.Equal(entry.Lacks, []string{head}) || entry.Reason != string(tasks.ReasonUnproven) {
+		t.Fatalf("the real Keep recorded %+v; want an unproven entry lacking the worker's commit %s alone", entry, head)
 	}
 	return id, entry
 }
@@ -356,5 +363,154 @@ func TestACarryOnStoppedInsideIntakeIsCompletedAtTheNextStart(t *testing.T) {
 			t.Fatalf("the next start left task %s's instructions as %q (%v); want the intake text and the note", reserved, text, err)
 		}
 		waitLaunched(t, h, reserved)
+	})
+}
+
+// A carry on whose adoption fails leaves the answer owed and the new task
+// undispatched, and a copy standing at the new task's path is not taken as
+// the kept one by its path. The old task's directory is made to refuse the
+// rename, so the answer is recorded and the task created, the copy stays
+// where it was, and a dispatch pass dispatches nothing: the task is held on
+// the entry it carries on. A fresh clone of the upstream is then put at the
+// new task's path while the kept copy still stands, and the answer again is
+// refused and marks nothing, and so it is with the kept copy away from its
+// path, since the clone does not stand on the worker's commit. With the
+// clone gone and the directory writable, the next start carries the copy on
+// and the task's worker starts in it. Without the hold on the entry a dispatch pass cuts the task a
+// fresh clone without the kept work; without the identity check the clone
+// is taken as the kept copy.
+func TestAFailedAdoptionHoldsTheTaskAndAFreshCloneIsNotTakenForTheCopy(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	oldDir := filepath.Dir(entry.CopyPath)
+	if err := os.Chmod(oldDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(oldDir, 0o700) })
+
+	var reserved, newPath string
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err == nil {
+			t.Fatalf("the carry on completed past a rename the directory refuses: %+v", out)
+		}
+		answered, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || answered.Answer.Or("") != store.KeptCarryOn || answered.CarriedOnAt.IsKnown() {
+			t.Fatalf("after the failed adoption the entry reads %+v, %v; want it answered carry-on and owed", answered, err)
+		}
+		reserved = answered.CarriedOnTask.Or("")
+		if _, err := recordsOf(t, h).Task(ctx, reserved); err != nil {
+			t.Fatalf("after the failed adoption task %s has no row: %v", reserved, err)
+		}
+		if newPath, err = h.TaskCopy(reserved); err != nil {
+			t.Fatal(err)
+		}
+		under.service.DispatchDueForTest(ctx)
+		if attempts := attemptsOfTask(t, h, reserved); len(attempts) != 0 {
+			t.Fatalf("task %s was dispatched (%+v) while the copy it carries on had not been moved to it", reserved, attempts)
+		}
+		if _, err := os.Lstat(newPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("something was cut at task %s's path while it was held: %v", reserved, err)
+		}
+
+		git(t, filepath.Dir(newPath), "clone", "--quiet", repository.UpstreamURL, newPath)
+		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "still stands") {
+			t.Fatalf("the carry on over a fresh clone at the new path = %+v, %v; want it refused while the kept copy stands", out, err)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || still.CarriedOnAt.IsKnown() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it owed", still, err)
+		}
+		under.service.DispatchDueForTest(ctx)
+		if attempts := attemptsOfTask(t, h, reserved); len(attempts) != 0 {
+			t.Fatalf("task %s was dispatched (%+v) over a clone that is not the kept copy", reserved, attempts)
+		}
+
+		// With the kept copy away from its path, the clone at the new path
+		// is still not taken: it does not stand on the worker's commit.
+		if err := os.Chmod(oldDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		away := filepath.Join(t.TempDir(), "kept-copy-away")
+		if err := os.Rename(entry.CopyPath, away); err != nil {
+			t.Fatal(err)
+		}
+		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "does not stand on "+entry.Lacks[0]) {
+			t.Fatalf("the carry on over a fresh clone with the kept copy away = %+v, %v; want it refused naming %s", out, err, entry.Lacks[0])
+		}
+		if err := os.Rename(away, entry.CopyPath); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	if err := os.RemoveAll(newPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(oldDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	o, _ = workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		if done := waitCarriedOn(t, h, entry.ID); done.CarriedOnTask.Or("") != reserved {
+			t.Fatalf("the completed carry on names task %s, want %s", done.CarriedOnTask.Or(""), reserved)
+		}
+		if _, err := os.Stat(newPath + "/finding.txt"); err != nil {
+			t.Fatalf("the kept copy is not task %s's copy: %v", reserved, err)
+		}
+		waitLaunched(t, h, reserved)
+	})
+}
+
+// Carrying on moves the whole copy, so it answers every open entry of that
+// copy: the copy is kept at the worker's commit, then the worker commits
+// again and the copy is kept again, both through the real Keep, so two
+// entries name the one copy. Carrying the first on answers and marks both
+// with the one task, and that task dispatches and its worker starts.
+// Without the answer reaching the second entry it stays open over a copy
+// that has moved, and holds the project's new task from dispatching for
+// as long as it stands.
+func TestCarryingOnAnswersEveryEntryOfTheCopy(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, first := plantKeptInvestigation(t, h, subject, repository.ID)
+	if err := writeFile(first.CopyPath+"/more.txt", "what the worker found next\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, first.CopyPath, "add", "-A")
+	git(t, first.CopyPath, "commit", "--quiet", "-m", "the worker's second commit")
+	second := keepTaskCopy(t, h, old)
+	if second.ID == first.ID || second.CopyPath != first.CopyPath || !second.Open() || !first.Open() {
+		t.Fatalf("the copy kept again reads %+v beside %+v; want a second open entry of the same copy", second, first)
+	}
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, first), &out); err != nil {
+			t.Fatalf("carrying the first entry on: %v", err)
+		}
+		for _, id := range []int64{first.ID, second.ID} {
+			got, err := recordsOf(t, h).KeptWorkEntry(ctx, id)
+			if err != nil || got.Answer.Or("") != store.KeptCarryOn || got.CarriedOnTask.Or("") != out.Task || !got.CarriedOnAt.IsKnown() {
+				t.Fatalf("entry %d reads %+v, %v; want it carried on by task %s", id, got, err, out.Task)
+			}
+		}
+		waitLaunched(t, h, out.Task)
 	})
 }

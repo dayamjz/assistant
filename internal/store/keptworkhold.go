@@ -15,7 +15,9 @@ import (
 // BeginDispatchAttempt's claim, so the wait a surface shows and the refusal a
 // dispatch meets cannot disagree about what holds it.
 //
-// A task is held when all three are true in one read: it names a project
+// A task a carry-on answer named is held, first, by the entries it carries
+// on until it owns their copy. Otherwise a task is held when all three are
+// true in one read: it names a project
 // (its repository), no attempt of it has recorded a terminal session, and an
 // entry of that project is open (neither answered nor closed). The second is
 // what makes it a new task. A recorded session is the one fact here that a
@@ -180,6 +182,21 @@ func keptWorkHoldingTx(ctx context.Context, tx *sql.Tx, taskID string) ([]KeptWo
 		return nil, "", fmt.Errorf("task %s: %w", taskID, errNoRows(err))
 	}
 	project, ok := repository.Get()
+	// A task a carry-on answer named is held by the entries it carries on
+	// until it owns their copy (MarkKeptWorkCarriedOn): a carry on whose
+	// adoption failed leaves the task held on them, so no dispatch cuts it
+	// a fresh clone without the kept work.
+	carrying, err := tx.QueryContext(ctx, keptWorkColumns+` FROM kept_work WHERE carried_on_task = ? AND carried_on_at IS NULL ORDER BY id`, taskID)
+	if err != nil {
+		return nil, project, err
+	}
+	owed, err := scanKeptWorkRows(carrying)
+	if err != nil {
+		return nil, project, err
+	}
+	if len(owed) > 0 {
+		return owed, project, nil
+	}
 	if !ok {
 		return nil, "", nil
 	}

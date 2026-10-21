@@ -42,6 +42,15 @@ func WithIntakeInterruptForTest(tb testing.TB, o Options, f func() error) Option
 	return o
 }
 
+// WithLandingInterruptForTest returns o with a landing's seam between its
+// run and the entry's record of it set to f, for this package's external
+// tests: a landing whose f returns an error ends with the run started and
+// the entry naming none, as a service that stopped there leaves it.
+func WithLandingInterruptForTest(tb testing.TB, o Options, f func(run string) error) Options {
+	o.landingTest, o.interruptLanding = tb, f
+	return o
+}
+
 // WithBeforeStaleRemovalReleaseForTest returns o with recovery's seam between
 // reading a dead eject's removal reservation and releasing it set to f, for
 // this package's external tests.

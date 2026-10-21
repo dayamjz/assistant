@@ -44,6 +44,20 @@ import (
 // rule refuses a task. Carrying a run's copy on is therefore not in this
 // build, and the refusal says so.
 //
+// # A failed adoption, and every entry of the copy
+//
+// The answer names the new task, and until the task owns the copy it is
+// held on the entries it carries on, by internal/store's hold predicate: an
+// adoption that fails, a rename the old task's directory refuses among the
+// ways, leaves the answer owed and the task undispatched, so no dispatch
+// cuts it a fresh clone without the kept work. Completion takes a copy that
+// already stands at the new task's path only when it is the kept one by what
+// it holds (verifyAdopted): the old path gone and every commit the entry
+// recorded the kept copy standing on present. Carrying on moves the whole
+// copy, so the answer carries on every open entry of the same copy, the copy
+// kept again at another state, in the same write, and the mark marks them
+// all.
+//
 // # The order, and what a stop leaves
 //
 // The identifier is minted first and the answer recorded with it,
@@ -201,6 +215,13 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	done := func(k store.KeptWork) machine.KeptWorkAnswered {
 		return machine.KeptWorkAnswered{Entry: k, Effect: machine.KeptWorkCarriedOn, Task: id}
 	}
+	// Read again: another entry of the same copy completed may have marked
+	// this one with it.
+	if again, err := s.store.KeptWorkEntry(ctx, entry.ID); err == nil {
+		entry = again
+	} else {
+		return machine.KeptWorkAnswered{}, err
+	}
 	if entry.CarriedOnAt.IsKnown() {
 		return done(entry), nil
 	}
@@ -258,6 +279,8 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 		}
 	} else if err != nil {
 		return machine.KeptWorkAnswered{}, fmt.Errorf("service: reading the copy of task %s at %s: %w", id, newPath, err)
+	} else if err := s.verifyAdopted(ctx, entry, newPath); err != nil {
+		return machine.KeptWorkAnswered{}, err
 	}
 	if err := s.reshapeAdoptedCopy(ctx, newPath, plan); err != nil {
 		return machine.KeptWorkAnswered{}, err
@@ -275,6 +298,42 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	}
 	s.log.Printf("kept work entry %d was carried on: task %s owns the copy at %s", entry.ID, id, newPath)
 	return done(marked), nil
+}
+
+// verifyAdopted refuses to take a copy already standing at the new task's
+// path as the kept one unless it is: the kept copy's own path is gone, which
+// a rename of it leaves, and the copy at the new path holds every commit the
+// entry recorded the kept copy's references and HEAD standing on, which a
+// clone cut from elsewhere does not. Either failing is refused with
+// ipc.ErrRefused, the entry stays owed and the task stays held on it.
+func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPath string) error {
+	refuse := func(why string) error {
+		return fmt.Errorf("%w: kept work entry %d was not carried on: %s", ipc.ErrRefused, entry.ID, why)
+	}
+	if _, err := os.Lstat(entry.CopyPath); err == nil {
+		return refuse(fmt.Sprintf("the kept copy still stands at %s and something else stands at %s, so which is the kept work cannot be told by path",
+			entry.CopyPath, newPath))
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("service: reading the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	adopted, err := vcs.OpenWorktree(ctx, newPath, vcs.WithRedactor(redact.New()))
+	if err != nil {
+		return refuse(fmt.Sprintf("what stands at %s is not a copy: %v", newPath, err))
+	}
+	inv, err := adopted.Inventory(ctx)
+	if err != nil {
+		return fmt.Errorf("service: reading the copy at %s: %w", newPath, err)
+	}
+	have := map[string]bool{inv.Head.Commit: true}
+	for _, ref := range inv.Refs {
+		have[ref.Commit] = true
+	}
+	for _, h := range entry.Holds {
+		if !have[h] {
+			return refuse(fmt.Sprintf("the copy at %s does not stand on %s, which the kept copy did, so it is not the kept work", newPath, h))
+		}
+	}
+	return nil
 }
 
 // reshapeAdoptedCopy gives the adopted copy what dispatch gives a fresh

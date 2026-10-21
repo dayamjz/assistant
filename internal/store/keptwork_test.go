@@ -149,7 +149,7 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AnswerKeptWorkCarryOn(ctx, answered.ID, "taskcarrying", ResolvedByMachineInterface()); err != nil {
+	if _, err := s.AnswerKeptWork(ctx, answered.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run.ID, Proof: Known(CleanupProofRemoteBranch), Examined: []string{"aaaa"}}); err != nil {
@@ -166,7 +166,7 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 		!closed.ClosedAt.IsKnown() || closed.Answered() || closed.Open() {
 		t.Fatalf("after the removal the entry reads %+v, %v; want it closed as removed on the remote-branch proof", closed, err)
 	}
-	if kept, err := s.KeptWorkEntry(ctx, answered.ID); err != nil || kept.Answer.Or("") != KeptCarryOn || kept.Closure.IsKnown() {
+	if kept, err := s.KeptWorkEntry(ctx, answered.ID); err != nil || kept.Answer.Or("") != KeptLand || kept.Closure.IsKnown() {
 		t.Fatalf("the answered entry reads %+v, %v; want its answer kept and no closure", kept, err)
 	}
 	if listed, err := s.OpenKeptWork(ctx); err != nil || len(listed) != 0 {

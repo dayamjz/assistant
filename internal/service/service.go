@@ -205,6 +205,11 @@ type Options struct {
 	// them to internal/tasks' InterruptAfterRecordForTest.
 	intakeTest      testing.TB
 	interruptIntake func() error
+	// landingTest and interruptLanding are a landing's seam between its run
+	// and the entry's record of it, which export_test.go's
+	// WithLandingInterruptForTest sets and the product never does.
+	landingTest      testing.TB
+	interruptLanding func(run string) error
 	// beforeStaleRemovalRelease runs in recovery between reading a removal
 	// reservation whose owner is gone and releasing it; export_test.go's
 	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
@@ -409,6 +414,12 @@ type Service struct {
 	// run. It is nil in production and set only by this package's tests,
 	// which use it to make a second answer inside that window.
 	betweenLandingClaimAndStart func()
+	// betweenLandingStartAndRecord runs in a landing after its run was
+	// started and before the run is named on the entry, and an error it
+	// returns ends the landing there, as a service that stopped there
+	// leaves it. It is nil in production and set only through
+	// WithLandingInterruptForTest.
+	betweenLandingStartAndRecord func(run string) error
 	// landings is the kept work entries a landing is carrying out in this
 	// service now, keyed by entry: the in-process half of the landing's
 	// exactly-once, on keptanswer.go's terms. It is read and written under
@@ -744,6 +755,12 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	s.checkpoints = checkpoints.New(records)
 	if s.queue, err = s.newQueue(); err != nil {
 		return err
+	}
+	if o.interruptLanding != nil {
+		if o.landingTest == nil {
+			return errors.New("service: the landing interrupt is a test's seam and takes the test")
+		}
+		s.betweenLandingStartAndRecord = o.interruptLanding
 	}
 	if o.interruptIntake != nil {
 		if err := s.queue.InterruptAfterRecordForTest(o.intakeTest, o.interruptIntake); err != nil {

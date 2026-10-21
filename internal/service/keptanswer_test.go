@@ -2,16 +2,25 @@ package service_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/forge"
+	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // PRD section 6's land answer, through the real socket: a run's copy kept on
@@ -163,15 +172,15 @@ func TestALandAnswerAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *te
 }
 
 // A landing a stopped service started and did not record is named rather
-// than started twice: the entry is answered land, its landing claimed, and
-// a run of its branch at the copy's commit is recorded after the claim, the
-// state a service that stopped between the run and the record leaves, and
-// the next start names that run on the entry and starts none. A run
-// recorded after the claim and ended before it executed, a terminated run
-// with no checkpoint, is not that run: with only such a run standing the
-// next start starts another and names it. Without the look for the run the
-// next start records a second run beside the pending one; without the
-// executed rule it names the ended one.
+// than started twice: the land answer is made through the socket and the
+// service stops at the seam between the landing's run and the entry's
+// record of it, once that run has started validation, the state a stop
+// there leaves. A run created after the claim and never started, a pending
+// run with no submitted reference and no checkpoint, is then recorded
+// beside it, the state a create stopped before its reference leaves. The
+// next start names the run the landing started, not the unstarted one, and
+// starts none. Without the look for the run the next start records a
+// second run; without the started rule it may name the unstarted one.
 func TestALandingWhoseRunWasStartedBeforeAStopIsNamedAndNotStartedAgain(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -183,35 +192,54 @@ func TestALandingWhoseRunWasStartedBeforeAStopIsNamedAndNotStartedAgain(t *testi
 	submitted := git(t, subject, "rev-parse", "HEAD")
 	entry := keptEntryOf(t, h, subject)
 
+	stopped := errors.New("the service stopped between the landing's run and its record")
+	var mu sync.Mutex
+	var started string
+	seam := func(run string) error {
+		mu.Lock()
+		started = run
+		mu.Unlock()
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			if _, err := recordsOf(t, h).LatestGraphCheckpoint(t.Context(), run); err == nil {
+				return stopped
+			}
+			if !time.Now().Before(deadline) {
+				return fmt.Errorf("run %s recorded no checkpoint: %w", run, stopped)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	withServiceOptions(t, service.WithLandingInterruptForTest(t, options(t, h), seam), func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+			Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptLand)}, &out)
+		if err == nil || !strings.Contains(err.Error(), "stopped between") || strings.Contains(err.Error(), "no checkpoint") {
+			t.Fatalf("the landing past the stopped seam = %+v, %v; want the stop, with its run started", out, err)
+		}
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if started == "" {
+		t.Fatal("the landing reached no seam")
+	}
+	if got, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || got.LandedRun.IsKnown() || got.Answer.Or("") != store.KeptLand {
+		t.Fatalf("after the stop the entry reads %+v, %v; want it answered land with no run named", got, err)
+	}
+
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := records.AnswerKeptWork(t.Context(), entry.ID, store.KeptLand, store.ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := records.ClaimKeptWorkLanding(t.Context(), entry.ID); err != nil {
 		t.Fatal(err)
 	}
 	build, err := store.CurrentBuild()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A run the stopped landing recorded and ended before it executed.
+	const unstarted = "run-created-and-never-started"
 	if _, err := records.CreateRun(t.Context(), store.Run{
-		ID: "run-ended-before-it-executed", RepositoryID: repository.ID, Branch: "work", SubmittedHead: submitted,
+		ID: unstarted, RepositoryID: repository.ID, Branch: "work", SubmittedHead: submitted,
 		Base: submitted, Intent: "validate", IntentSource: "push", ConfigDigest: "cfg", Build: build,
 	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := records.TransitionRun(t.Context(), "run-ended-before-it-executed", []store.RunStatus{store.RunPending}, store.RunTerminated); err != nil {
-		t.Fatal(err)
-	}
-	started, err := records.CreateRun(t.Context(), store.Run{
-		ID: "run-the-stopped-landing-started", RepositoryID: repository.ID, Branch: "work", SubmittedHead: submitted,
-		Base: submitted, Intent: "validate", IntentSource: "push", ConfigDigest: "cfg", Build: build,
-	})
-	if err != nil {
 		t.Fatal(err)
 	}
 	before, err := records.RunsForRepository(t.Context(), repository.ID)
@@ -225,8 +253,8 @@ func TestALandingWhoseRunWasStartedBeforeAStopIsNamedAndNotStartedAgain(t *testi
 		for {
 			got, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
 			if run, ok := got.LandedRun.Get(); err == nil && ok {
-				if run != started.ID {
-					t.Fatalf("the completed landing names run %s; want %s, the one already started", run, started.ID)
+				if run != started {
+					t.Fatalf("the completed landing names run %s; want %s, the one the stopped landing started", run, started)
 				}
 				break
 			}
@@ -242,13 +270,14 @@ func TestALandingWhoseRunWasStartedBeforeAStopIsNamedAndNotStartedAgain(t *testi
 	})
 }
 
-// A landing whose claimed run ended before it executed is started again:
-// the entry is answered land and claimed, and the one run of its branch at
-// the copy's commit recorded since is terminated with no checkpoint, the
-// state a create whose reference the gate never took leaves. The next start
-// does not name that run: it starts another, which executes, and names it.
-// Without the executed rule the ended run is named and the work never
-// reaches validation.
+// A landing whose claimed runs never started validation is started again:
+// the entry is answered land and claimed, and two runs of its branch at the
+// copy's commit are recorded since, one terminated with no checkpoint and
+// one still pending with no submitted reference and no checkpoint, the
+// states a create stopped before its reference leaves. The next start names
+// neither: it starts another, which executes, and names it. Without the
+// started rule a run nothing of the work reached is named and the work
+// never reaches validation.
 func TestALandingWhoseRunEndedBeforeItExecutedIsStartedAgain(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -284,6 +313,13 @@ func TestALandingWhoseRunEndedBeforeItExecutedIsStartedAgain(t *testing.T) {
 	if _, err := records.TransitionRun(t.Context(), ended, []store.RunStatus{store.RunPending}, store.RunTerminated); err != nil {
 		t.Fatal(err)
 	}
+	const unstarted = "run-created-and-never-started"
+	if _, err := records.CreateRun(t.Context(), store.Run{
+		ID: unstarted, RepositoryID: repository.ID, Branch: "work", SubmittedHead: submitted,
+		Base: submitted, Intent: "validate", IntentSource: "push", ConfigDigest: "cfg", Build: build,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	_ = records.Close()
 
 	withService(t, h, func(under serviceUnderTest) {
@@ -291,8 +327,8 @@ func TestALandingWhoseRunEndedBeforeItExecutedIsStartedAgain(t *testing.T) {
 		for {
 			got, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
 			if run, ok := got.LandedRun.Get(); err == nil && ok {
-				if run == ended {
-					t.Fatalf("the completed landing names %s, the run that ended before it executed", ended)
+				if run == ended || run == unstarted {
+					t.Fatalf("the completed landing names %s, a run that never started validation", run)
 				}
 				landed, err := recordsOf(t, h).Run(t.Context(), run)
 				if err != nil || landed.Branch != "work" || landed.SubmittedHead != submitted || landed.Status == store.RunTerminated {
@@ -308,13 +344,49 @@ func TestALandingWhoseRunEndedBeforeItExecutedIsStartedAgain(t *testing.T) {
 	})
 }
 
+// keepTaskCopy asks the real cleanup decision of the task's copy, with its
+// terminal dead, and records what it refuses as kept work through the real
+// Keep, returning the entry Keep wrote or found for the copy as it stands.
+func keepTaskCopy(t *testing.T, h *home.Home, id string) store.KeptWork {
+	t.Helper()
+	ctx := t.Context()
+	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = records.Close() }()
+	cleaner, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records,
+		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cleaner.CleanUp(ctx, tasks.TaskCopy{Task: id, Terminal: taskstate.Dead})
+	var refused *tasks.CleanupRefusal
+	if !errors.As(err, &refused) {
+		t.Fatalf("the cleanup of task %s's copy = %v, want a refusal over work on no remote", id, err)
+	}
+	kept, ok := tasks.KeptOf(refused)
+	if !ok {
+		t.Fatalf("the refusal %v is not kept work", refused)
+	}
+	got, err := cleaner.Keep(ctx, kept)
+	if err != nil {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	return got.Entry
+}
+
 // A land answer carries HEAD, so an entry whose default branch lacks a
 // commit HEAD does not reach is refused naming that commit, and records
-// nothing: the copy holds a commit on another reference beside the one HEAD
-// stands on, and an entry recording both as lacking is not landed, nor is
-// one whose basis is not established, while the entry recording HEAD's
-// commit alone is. Without the check the entry is answered and the other
-// commit is never carried.
+// nothing. The entries are the real cleanup's, through Keep, over a
+// delivery task's clone of the upstream holding its own commit on its
+// branch and a second commit on another branch, HEAD on the first. Kept
+// with the upstream unreadable, the entry is not established and a land is
+// refused naming that; kept again with the upstream back, the same entry
+// is established lacking both commits and a land is refused naming the
+// one HEAD does not reach; with that branch deleted the copy is kept as a
+// new entry lacking HEAD's commit alone, and that entry lands. Without the
+// check the entry is answered and the other commit is never carried.
 func TestALandingIsRefusedWhenHEADLeavesAHeldCommitBehind(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -322,49 +394,97 @@ func TestALandingIsRefusedWhenHEADLeavesAHeldCommitBehind(t *testing.T) {
 
 	h := newHome(t)
 	subject := newSubject(t)
-	recordRepository(t, h, subject)
-	entry := keptEntryOf(t, h, subject)
-	aside := git(t, entry.CopyPath, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "a commit on another reference")
-	git(t, entry.CopyPath, "update-ref", "refs/heads/aside", aside)
-
+	repository := recordRepository(t, h, subject)
+	upstream := repository.UpstreamURL
+	const branch = "task/kept"
+	id, err := home.NewTaskID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath, err := h.TaskCopy(id)
+	if err != nil {
+		t.Fatal(err)
+	}
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !entry.Established() {
-		t.Fatalf("the entry the real cleanup recorded is not established: %+v", entry)
-	}
-	both, _, err := records.RecordKeptWork(t.Context(), store.KeptCopy{RunID: entry.RunID.Or(""), CopyPath: entry.CopyPath,
-		Holds: append(append([]string{}, entry.Holds...), aside), Lacks: append(append([]string{}, entry.Lacks...), aside),
-		Against: entry.Against.Or(""), Reason: entry.Reason})
-	if err != nil {
+	if _, err := records.CreateTask(t.Context(), store.Task{
+		ID: id, Shape: store.TaskDelivery, Project: "the parser", Mode: "headless", WorktreePath: copyPath,
+		RepositoryID: store.Known(repository.ID), Branch: store.Known(branch),
+	}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	unestablished, _, err := records.RecordKeptWork(t.Context(), store.KeptCopy{RunID: entry.RunID.Or(""), CopyPath: entry.CopyPath,
-		Holds: append(append([]string{}, entry.Holds...), "unestablished"), Unestablished: "the upstream could not be read", Reason: entry.Reason})
-	if err != nil {
+	if _, err := records.BeginTaskAttempt(t.Context(), id, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone"); err != nil {
 		t.Fatal(err)
 	}
 	_ = records.Close()
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	git(t, filepath.Dir(copyPath), "clone", "--quiet", upstream, copyPath)
+	git(t, copyPath, "checkout", "--quiet", "-b", branch)
+	if err := writeFile(filepath.Join(copyPath, "own.txt"), "the task's own work\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, copyPath, "add", "-A")
+	git(t, copyPath, "commit", "--quiet", "-m", "the task's own commit")
+	own := git(t, copyPath, "rev-parse", "HEAD")
+	git(t, copyPath, "checkout", "--quiet", "-b", "aside")
+	if err := writeFile(filepath.Join(copyPath, "aside.txt"), "work on another branch\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, copyPath, "add", "-A")
+	git(t, copyPath, "commit", "--quiet", "-m", "work on another branch")
+	aside := git(t, copyPath, "rev-parse", "HEAD")
+	git(t, copyPath, "checkout", "--quiet", branch)
 
-	withService(t, h, func(under serviceUnderTest) {
+	if err := os.Rename(upstream, upstream+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	unestablished := keepTaskCopy(t, h, id)
+	if err := os.Rename(upstream+".gone", upstream); err != nil {
+		t.Fatal(err)
+	}
+	if unestablished.Established() {
+		t.Fatalf("the copy kept with the upstream unreadable reads %+v; want it not established", unestablished)
+	}
+	land := func(under serviceUnderTest, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
 		var out machine.KeptWorkAnswered
 		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
-			Run: entry.RunID.Or(""), Hold: both.Key(), Answer: string(store.KeptLand)}, &out)
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), aside) {
-			t.Fatalf("landing an entry HEAD does not reach all of = %v; want it refused naming %s", err, aside)
+			Task: id, Hold: entry.Key(), Answer: string(store.KeptLand)}, &out)
+		return out, err
+	}
+	withService(t, h, func(under serviceUnderTest) {
+		if _, err := land(under, unestablished); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "not established") {
+			t.Fatalf("landing an unestablished entry = %v; want it refused as not established", err)
+		}
+	})
+
+	both := keepTaskCopy(t, h, id)
+	if both.ID != unestablished.ID || !both.Established() || !slices.Contains(both.Lacks, own) || !slices.Contains(both.Lacks, aside) {
+		t.Fatalf("the copy kept again reads %+v; want entry %d established lacking %s and %s", both, unestablished.ID, own, aside)
+	}
+	withService(t, h, func(under serviceUnderTest) {
+		if _, err := land(under, both); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "holding "+aside+", which") {
+			t.Fatalf("landing an entry HEAD does not reach all of = %v; want it refused naming %s alone", err, aside)
 		}
 		if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), both.ID); err != nil || !still.Open() {
 			t.Fatalf("after the refusal the entry reads %+v, %v; want it open", still, err)
 		}
-		err = under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
-			Run: entry.RunID.Or(""), Hold: unestablished.Key(), Answer: string(store.KeptLand)}, &out)
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "not established") {
-			t.Fatalf("landing an unestablished entry = %v; want it refused as not established", err)
-		}
-		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
-			Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptLand)}, &out); err != nil || out.Run == "" {
-			t.Fatalf("landing the entry HEAD reaches all of = %+v, %v", out, err)
+	})
+
+	git(t, copyPath, "branch", "--quiet", "-D", "aside")
+	reaches := keepTaskCopy(t, h, id)
+	if reaches.ID == both.ID || !slices.Equal(reaches.Lacks, []string{own}) {
+		t.Fatalf("the copy kept without the other branch reads %+v; want a new entry lacking %s alone", reaches, own)
+	}
+	withService(t, h, func(under serviceUnderTest) {
+		if out, err := land(under, reaches); err != nil || out.Run == "" {
+			t.Fatalf("landing the entry HEAD reaches all of = %+v, %v; want a run", out, err)
 		}
 	})
 }
