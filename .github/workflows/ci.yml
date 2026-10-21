@@ -176,15 +176,30 @@ jobs:
       # symbol read only from a linux || darwin file is unused on Windows and
       # only a run with that GOOS says so (#435). Both are cross-checks on
       # this runner: they type-check and lint, and run nothing there.
+      #
+      # Each one analyses into a fresh cache of its own. golangci-lint keys a
+      # package's cached result by its path and its compiled and ignored
+      # files in sequence, with no GOOS in the key, so a package whose
+      # constrained files sort last hashes the same for every GOOS, and a
+      # cache shared across targets hands Windows the Linux result (#462's
+      # review reproduced a Windows-only unused var passing that way).
+      # skip-cache is what makes the step's GOLANGCI_LINT_CACHE hold: with
+      # caching on, the action sets GOLANGCI_LINT_CACHE to the one directory
+      # it restores and saves, ~/.cache/golangci-lint, over the step's own.
+      # The cost is that these two steps analyse from nothing on every run.
       - name: golangci-lint (darwin)
         uses: golangci/golangci-lint-action@v9
         env:
           GOOS: darwin
+          GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint-darwin
         with:
           version: v2.12.2
+          skip-cache: true
       - name: golangci-lint (windows)
         uses: golangci/golangci-lint-action@v9
         env:
           GOOS: windows
+          GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint-windows
         with:
           version: v2.12.2
+          skip-cache: true
