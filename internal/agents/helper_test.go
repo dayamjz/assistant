@@ -70,6 +70,10 @@ func helperModeFromArgs() string {
 // the adapter's failure paths, which are shapes a script does not describe,
 // and they take their mode from the environment or from a differently spelled
 // flag, so the two cannot claim the same process.
+//
+// The tests start tmux servers, which leave this binary's process group, so
+// they run inside standin.RunOwned, which owns what they start and fails the
+// package once they have returned if anything they started is still running.
 func TestMain(m *testing.M) {
 	standin.Main()
 	mode := os.Getenv(helperModeVar)
@@ -80,7 +84,7 @@ func TestMain(m *testing.M) {
 		helperMain(mode)
 		return
 	}
-	os.Exit(m.Run())
+	os.Exit(standin.RunOwned(m.Run))
 }
 
 // helperMain is the stand-in agent. Each mode is one thing an agent can do to

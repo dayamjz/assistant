@@ -152,11 +152,11 @@ func atTerminalMain() {
 // read from the kernel as the outer's child, at the terminal, ignoring the
 // hangup signal, which is the control that the terminal's hangup is not what
 // ends it below; it stays running while the outer runs, and the package's
-// own check (LeftAfterTests, through Stayed) lists it then, which is the
+// own check (RunOwned's, through Stayed) lists it then, which is the
 // check shown to see it. Then the outer is sent SIGKILL, and the binary run
 // again and the child it started in its group are both read as gone within
 // OwnerPoll and a margin. Where the binary run again outlives that, the test
-// fails and leaves it running for LeftAfterTests, which then fails the
+// fails and leaves it running for RunOwned's check, which then fails the
 // package naming it.
 func TestTheBinaryRunAgainEndsWhenItsOuterIsKilled(t *testing.T) {
 	nohup, err := exec.LookPath("nohup")
@@ -192,13 +192,13 @@ func TestTheBinaryRunAgainTakesItsGroupWhenTheHangupEndsIt(t *testing.T) {
 // the binary run again is the outer's child at the terminal and that the
 // kernel records it ignoring the hangup signal exactly when ignoresHUP says,
 // that it stays running while the outer runs and the package's own check
-// (LeftAfterTests, through Stayed) lists it then, which is the check shown to
+// (RunOwned's, through Stayed) lists it then, which is the check shown to
 // see it, and then sends the outer SIGKILL and fails unless the binary run
 // again and the child it started in its group, through nohup when nohupChild
 // says so, are both read as gone within OwnerPoll and a margin. env is added
 // to the outer's environment. Where the
 // binary run again outlives that, the test fails and leaves it running for
-// LeftAfterTests, which then fails the package naming it.
+// RunOwned's check, which then fails the package naming it.
 func endsWithKilledOuter(t *testing.T, wrapper []string, ignoresHUP, nohupChild bool, env ...string) {
 	t.Helper()
 	self, err := os.Executable()

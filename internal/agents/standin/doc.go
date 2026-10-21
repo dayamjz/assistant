@@ -76,9 +76,15 @@
 // (P15), and owner_unix.go is the one owner watch that ties the two: the
 // binary AtTerminal runs again watches its outer, and a package whose tests
 // start lasting processes of its binary calls WatchOwner first in TestMain
-// and OwnProcesses after AtTerminal. LeftAfterTests is the check the same
-// TestMain runs once the tests have returned, failing the package naming
-// every process of its binary still running.
+// and runs its tests through RunOwned after AtTerminal. A process running
+// another program cannot watch, so RunOwned also starts an owner sweep that
+// ends what carries the owner's identity once the owner is gone; a tmux
+// server is the case that needs it, since it leaves the test's group and
+// session, so RunOwned puts a tmux first on PATH that puts the identity back
+// whatever environment a test starts it with, and Tmux refuses a test that
+// does not run inside RunOwned. The check RunOwned runs once the tests have
+// returned fails the package naming every process of its binary, and every
+// process carrying its identity, still running.
 //
 // That wiring serves a caller who can be handed a Runner. One in another
 // process cannot be: internal/agents resolves the configured agent by name off

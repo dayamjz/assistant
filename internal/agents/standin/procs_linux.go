@@ -38,3 +38,21 @@ func commandLine(pid int) (string, []string, error) {
 	}
 	return executable, strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00"), nil
 }
+
+// startEnvironment reads the environment the kernel holds for pid, one
+// NAME=value string per variable, from its NUL-separated environ. That is the
+// environment the process was started with, not one it set for itself
+// later. Whether a given program's processes carry a variable there is a
+// fact about that program, so what relies on it, the owner sweep, is tested
+// against a real terminal server rather than against this comment.
+func startEnvironment(pid int) ([]string, error) {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/environ")
+	if err != nil {
+		return nil, err
+	}
+	trimmed := strings.TrimSuffix(string(raw), "\x00")
+	if trimmed == "" {
+		return nil, nil
+	}
+	return strings.Split(trimmed, "\x00"), nil
+}

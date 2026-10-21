@@ -1,7 +1,6 @@
 package journey_test
 
 import (
-	"fmt"
 	"os"
 	"testing"
 
@@ -22,7 +21,7 @@ import (
 //
 // Every process of this binary the tests start ends with the test binary
 // that started it (standin.WatchOwner), and once the tests have returned the
-// package fails if any is still running (standin.LeftAfterTests).
+// package fails if any is still running (standin.RunOwned).
 func TestMain(m *testing.M) {
 	// The decision-model key is the operator's consent to send changed lines
 	// to a third party, so a test must never inherit one from whoever runs it.
@@ -35,18 +34,13 @@ func TestMain(m *testing.M) {
 	// places one by a terminal's foreground on the pushing chain, which
 	// README.md's running section states.
 	standin.AtTerminal()
-	if err := standin.OwnProcesses(); err != nil {
-		fmt.Fprintln(os.Stderr, "recording this test binary as the owner of what its tests start:", err)
-		os.Exit(1)
-	}
-	code := m.Run()
-	// The fixture, the shims and the product binary belong to the process
-	// rather than to any test, so no test can take them away and a run that
-	// left them would leave tens of megabytes behind on every machine that
-	// ever ran this.
-	journey.Cleanup()
-	if !standin.LeftAfterTests() && code == 0 {
-		code = 1
-	}
-	os.Exit(code)
+	os.Exit(standin.RunOwned(func() int {
+		code := m.Run()
+		// The fixture, the shims and the product binary belong to the process
+		// rather than to any test, so no test can take them away and a run
+		// that left them would leave tens of megabytes behind on every
+		// machine that ever ran this.
+		journey.Cleanup()
+		return code
+	}))
 }
