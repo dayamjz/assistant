@@ -98,7 +98,9 @@ import (
 // #438 adds. A write
 // that failed is logged and refuses nothing, because the copy is kept either
 // way and the next cleanup of it asks again; an entry already recorded for
-// the copy and its commits is logged as such and written again nowhere.
+// the copy and its commits is logged as such and written again nowhere; and
+// a copy internal/tasks reads as holding nothing the default branch lacks
+// is logged and records no entry, because nothing in it is at risk.
 func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
 	owner := "task " + kept.Task
 	if kept.Run != "" {
@@ -108,6 +110,9 @@ func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
 	switch {
 	case err != nil:
 		s.log.Printf("the isolated copy of %s is kept and its kept work entry could not be recorded: %v", owner, err)
+	case got.NothingKept:
+		s.log.Printf("the isolated copy of %s holds nothing the default branch at %s lacks, so no kept work entry is recorded",
+			owner, got.Against)
 	case got.Recorded:
 		s.log.Printf("the isolated copy of %s is kept work entry %d (%s)", owner, got.Entry.ID, got.Entry.Reason)
 	default:

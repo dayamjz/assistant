@@ -23,7 +23,10 @@ paths: ["internal/tasks/**"]
   inconclusive proof is a `ProofAttempt` on the `*CleanupRefusal`, never a
   proof, and no remedy names a flag.
 - It is also the one writer of the kept work record: `Keep` reads what a
-  kept copy holds from the copy and records the entry, and
+  kept copy holds from the copy, narrows it to what the default branch,
+  read fresh and fetched by identifier, lacks (`lacking` in `kept.go`, an
+  unreadable one recorded as unestablished, never guessed), records the
+  entry or `NothingKept`, and
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
   refusals are a copy kept for its work; `kept_test.go` places every reason.
 

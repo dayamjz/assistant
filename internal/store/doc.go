@@ -165,7 +165,11 @@
 // once by RecordKeptWork with its one owner, a task or a run, and the
 // project and branch read off that owner's row in the same transaction. A
 // copy holding the same commits at the same path is the same row, so the
-// write is idempotent. Its one revision closes it, made once and only while
+// write is idempotent. keptWorkAgainstMigration adds the entry's basis, the
+// default branch tip its commits were computed against or the account of
+// why they could not be, exactly one on every row written since, which the
+// insert trigger holds; a row written before carries neither and reads as
+// unestablished, which KeptWork.Established reports. Its one revision closes it, made once and only while
 // it is open: AnswerKeptWork with a person's answer and its Resolver, or the
 // program's KeptRemovedOnProof, which only MarkCleanupRemoved and
 // MarkRunCleanupRemoved write, in the transaction that marks the owner's

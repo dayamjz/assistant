@@ -90,12 +90,25 @@ type KeptWork struct {
 	Branch Optional[string] `json:"branch"`
 	// CopyPath is where the copy stands.
 	CopyPath string `json:"copy_path"`
-	// Holds is the commits the copy was read to hold, as the cleanup
-	// decision examined them. For a task's copy that is every commit its
-	// references and HEAD reach, the default branch's own commits among
-	// them, so it is what the copy holds and not only what the default
-	// branch lacks; Detail says what the proofs found of it.
+	// Holds is the commits the copy was read to hold. When Against is
+	// known it is exactly what the PRD row names, the commits the copy
+	// reaches that the default branch at Against lacks, and empty for a
+	// copy kept only for a change, a file or a stash no commit records.
+	// When Against is unknown that set was not established, and Holds is
+	// the commits the copy's references and HEAD stand on, each standing
+	// for everything it reaches, which says nothing about which of them
+	// the default branch has; Unestablished says why.
 	Holds []string `json:"holds"`
+	// Against is the upstream default branch's tip, read fresh and fetched
+	// by identifier when the entry was written, that Holds was computed
+	// against, and unknown when that could not be done.
+	Against Optional[string] `json:"against"`
+	// Unestablished is why Holds could not be computed against the
+	// default branch: the account of the read or the comparison that
+	// failed. It is known exactly when Against is not, except on an entry
+	// written before the store recorded either, which carries neither and
+	// is as unestablished as one that says so.
+	Unestablished Optional[string] `json:"unestablished"`
 	// Reason is the cleanup decision's word for why the copy was kept. The
 	// word is that decision's; nothing here reads it.
 	Reason string `json:"reason"`
@@ -121,6 +134,12 @@ type KeptWork struct {
 	ClosedAt    Optional[time.Time]    `json:"closed_at"`
 }
 
+// Established reports whether Holds is the set the PRD row names, what the
+// copy holds that the default branch lacks, computed against Against. An
+// entry that is not established lists what the copy's references stand on
+// and states nothing about what is safe elsewhere.
+func (k KeptWork) Established() bool { return k.Against.IsKnown() }
+
 // Answered reports whether the entry carries a person's answer.
 func (k KeptWork) Answered() bool { return k.Answer.IsKnown() }
 
@@ -138,10 +157,15 @@ type KeptCopy struct {
 	RunID  string
 	// CopyPath is where the copy stands.
 	CopyPath string
-	// Holds is the commits the copy was read to hold. An empty list is a
-	// known fact: a copy kept for an uncommitted change holds no commit of
-	// its own.
+	// Holds is the commits the copy was read to hold, on KeptWork.Holds'
+	// terms. An empty list is a known fact when Against is set: a copy
+	// kept for an uncommitted change holds no commit the default branch
+	// lacks.
 	Holds []string
+	// Against is the default branch tip Holds was computed against, and
+	// Unestablished why it could not be; exactly one is set.
+	Against       string
+	Unestablished string
 	// Reason and Detail are the decision's word and account.
 	Reason string
 	Detail string
@@ -241,6 +265,13 @@ var ErrUnknownKeptAnswer = errors.New("store: not an answer to kept work")
 // An entry already standing for the copy and its commits is returned as it
 // stands, answered or not: a cleanup asked again of a copy nothing changed
 // is the same kept work, and its answer, once given, is not asked again.
+//
+// The entry's basis is required too, exactly one of Against and
+// Unestablished, and it is not part of what makes two entries the same. An
+// established list and an unestablished one coincide only when every
+// commit the copy's references and HEAD stand on is one the default branch
+// lacks, so the entry returned then names the same commits either way, and
+// the basis it states is the one it was written with.
 func (s *Store) RecordKeptWork(ctx context.Context, k KeptCopy) (KeptWork, bool, error) {
 	switch {
 	case (k.TaskID == "") == (k.RunID == ""):
@@ -249,6 +280,8 @@ func (s *Store) RecordKeptWork(ctx context.Context, k KeptCopy) (KeptWork, bool,
 		return KeptWork{}, false, errors.New("store: a kept work entry names no copy")
 	case strings.TrimSpace(k.Reason) == "":
 		return KeptWork{}, false, errors.New("store: a kept work entry names no reason")
+	case (strings.TrimSpace(k.Against) == "") == (strings.TrimSpace(k.Unestablished) == ""):
+		return KeptWork{}, false, errors.New("store: a kept work entry names the default branch tip its commits were computed against, or why they could not be, and not both")
 	}
 	holds, err := encodeExamined(k.Holds)
 	if err != nil {
@@ -286,11 +319,13 @@ func (s *Store) RecordKeptWork(ctx context.Context, k KeptCopy) (KeptWork, bool,
 			return err
 		}
 		res, err := tx.ExecContext(ctx, `
-			INSERT INTO kept_work (task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO kept_work (task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
+				against, unestablished)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT (copy_path, holds) DO NOTHING`,
 			optionalText(k.TaskID), optionalText(k.RunID), repository, branch, k.CopyPath, holds, k.Reason,
-			s.redact.Redact(k.Detail), encodeTime(nowUTC()))
+			s.redact.Redact(k.Detail), encodeTime(nowUTC()), optionalText(k.Against),
+			optionalText(s.redact.Redact(k.Unestablished)))
 		if err != nil {
 			return err
 		}
@@ -410,14 +445,14 @@ func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 }
 
 const keptWorkColumns = `SELECT id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
-	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at`
+	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, against, unestablished`
 
 func scanKeptWork(sc scanner) (KeptWork, error) {
 	var k KeptWork
 	var holds, kept string
 	var surfaced, answer, by, answered, closure, proof, closed Optional[string]
 	if err := sc.Scan(&k.ID, &k.TaskID, &k.RunID, &k.RepositoryID, &k.Branch, &k.CopyPath, &holds, &k.Reason, &k.Detail,
-		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed); err != nil {
+		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &k.Against, &k.Unestablished); err != nil {
 		return KeptWork{}, err
 	}
 	if err := json.Unmarshal([]byte(holds), &k.Holds); err != nil {
