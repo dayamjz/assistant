@@ -16,10 +16,10 @@ import (
 // work, ends the process groups it registered, and exits within stop_grace,
 // ending them by force once the grace is spent.
 //
-// Close is the orderly half and is unchanged by it: it refuses new work,
-// cancels every run it is advancing, which asks each agent group to end
-// politely, waits for its background work, and ends its workers and
-// subordinate coordinators. Shutdown is Close under a bound. When the bound
+// Close is the orderly half: it refuses new work, cancels every run it is
+// advancing, which asks each agent group to end politely, waits for its
+// background work, waits for the supervisor loop until stopDeadline, and
+// ends its workers and subordinate coordinators. Shutdown is Close under a bound. When the bound
 // is reached first, or the caller forces the stop, it logs which step of
 // Close was still waiting, sends every group it knows of the forceful signal
 // through agents.ForceGroup, hurries the termination of every agent
@@ -106,10 +106,11 @@ func (e *StopForcedError) Is(target error) bool { return target == ErrStopForced
 // is closed, and a *StopForcedError otherwise. A nil force is never closed.
 func (s *Service) Shutdown(force <-chan struct{}) error {
 	grace := s.cfg.StopGrace
+	deadline := s.stopDeadline()
 	known := s.knownGroups()
 	done := make(chan error, 1)
 	go func() { done <- s.Close() }()
-	timer := time.NewTimer(grace)
+	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
 	early := false
 	select {
@@ -216,6 +217,16 @@ func (s *Service) forceGroups(groups []agents.Identity) int {
 		s.log.Printf("ending by force did not end every group: %s", strings.Join(failed, "; "))
 	}
 	return signalled
+}
+
+// stopDeadline is the instant stop_grace runs out for this stop, fixed the
+// first time Shutdown or Close asks: Shutdown forces the stop at it, and
+// Close abandons the supervisor loop at it, so the two are one instant with
+// one owner rather than two clocks started a moment apart. A later call
+// returns the same instant.
+func (s *Service) stopDeadline() time.Time {
+	s.stopBy.once.Do(func() { s.stopBy.at = time.Now().Add(s.cfg.StopGrace) })
+	return s.stopBy.at
 }
 
 // closingAt records the step Close is in, for Shutdown to name.

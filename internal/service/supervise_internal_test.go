@@ -56,9 +56,14 @@ type scriptedTerminals struct {
 	// blockFirst blocks the first capture call on block until it is closed,
 	// ignoring the context, when it is set.
 	blockFirst bool
-	block      chan struct{}
-	blocked    bool
-	calls      chan string
+	// lagFirst, when positive and blockFirst is not set, holds the first
+	// capture call until its context ends and then for lagFirst more
+	// before it returns the context's error: a capture that honours its
+	// cancellation, slowly, which is what a busy machine makes of one.
+	lagFirst time.Duration
+	block    chan struct{}
+	blocked  bool
+	calls    chan string
 }
 
 func newScriptedTerminals() *scriptedTerminals {
@@ -101,17 +106,22 @@ func (s *scriptedTerminals) Probe(_ context.Context, ref string) session.Observa
 	return obs
 }
 
-func (s *scriptedTerminals) Capture(_ context.Context, ref string) (session.Capture, error) {
+func (s *scriptedTerminals) Capture(ctx context.Context, ref string) (session.Capture, error) {
 	s.mu.Lock()
-	first := s.blockFirst && !s.blocked
+	first := (s.blockFirst || s.lagFirst > 0) && !s.blocked
 	if first {
 		s.blocked = true
 	}
 	text, err := s.text[ref], s.fail[ref]
 	s.mu.Unlock()
 	s.calls <- ref
-	if first {
+	if first && s.blockFirst {
 		<-s.block
+	}
+	if first && !s.blockFirst {
+		<-ctx.Done()
+		time.Sleep(s.lagFirst)
+		return session.Capture{}, ctx.Err()
 	}
 	if err != nil {
 		return session.Capture{}, err
@@ -576,24 +586,104 @@ func TestAWedgedIncarnationIsReplacedAndFencedOut(t *testing.T) {
 	}
 }
 
-// Close with a wedged incarnation returns within its grace with
+// closeGraceConfig is loopConfig with stop_grace stated, for a test of how
+// long Close waits for the supervision.
+func closeGraceConfig(grace time.Duration) string {
+	return strings.TrimSuffix(strings.TrimSpace(loopConfig), "}") + `, "stop_grace": "` + grace.String() + `"}` + "\n"
+}
+
+// serviceLogOf is the service log a closed service left in its home.
+func serviceLogOf(t *testing.T, h *home.Home) string {
+	t.Helper()
+	data, err := os.ReadFile(h.ServiceLog())
+	if err != nil {
+		t.Fatalf("reading the service log: %v", err)
+	}
+	return string(data)
+}
+
+// closeTimed runs Close and returns how long it took and its result,
+// failing the test when Close has not returned within limit, so a Close
+// that waits without bound fails here rather than hanging the test binary.
+func closeTimed(t *testing.T, s *Service, limit time.Duration) (time.Duration, error) {
+	t.Helper()
+	began := time.Now()
+	done := make(chan error, 1)
+	go func() { done <- s.Close() }()
+	select {
+	case err := <-done:
+		return time.Since(began), err
+	case <-time.After(limit):
+		t.Fatalf("Close had not returned after %v", limit)
+		return 0, nil
+	}
+}
+
+// Close waits for a supervisor loop that honours its cancellation however
+// slowly, up to stop_grace: the first pass is inside a capture that ends
+// only some seconds after its context does, longer than the two beacon
+// intervals Close used to give the loop, which is how a busy machine made
+// Close abandon a loop that was ending (#424). Close returns no error,
+// after the loop ended and within stop_grace, and the service log says the
+// incarnation ended after its cancellation rather than that it was
+// abandoned. The loop is untimed, so the capture runs under the
+// incarnation's context alone and nothing but the stop ends it.
+//
+// It does not run in parallel, for TestCloseAbandonsAWedgedLoopAtStopGrace's
+// reason.
+func TestCloseWaitsForASlowLoopThatHonoursCancellation(t *testing.T) {
+	const grace = 10 * time.Second
+	const lag = 3 * time.Second
+	h, records := loopHomeConfigured(t, closeGraceConfig(grace))
+	plantRunning(t, records, "slowcloseaaa", "pane-slow")
+	terminals := newScriptedTerminals()
+	terminals.live("pane-slow", "working\n")
+	terminals.lagFirst = lag
+	l := openLoop(t, h, records, terminals, nil)
+
+	select {
+	case <-terminals.calls:
+	case <-time.After(loopWait):
+		t.Fatal("the first pass never captured the terminal")
+	}
+	took, err := closeTimed(t, l.service, grace+loopWait)
+	if err != nil {
+		t.Fatalf("Close of a loop that ends %v after its cancellation = %v, want nil", lag, err)
+	}
+	if took < lag {
+		t.Fatalf("Close took %v, want it to have waited for the loop's %v", took, lag)
+	}
+	if took >= grace {
+		t.Fatalf("Close took %v, want within stop_grace %v", took, grace)
+	}
+	log := serviceLogOf(t, h)
+	if !strings.Contains(log, "supervisor incarnation 1 ended") || strings.Contains(log, "abandoned") {
+		t.Fatalf("the service log = %q, want the incarnation's end and no abandonment", log)
+	}
+}
+
+// Close with a wedged incarnation returns at stop_grace with
 // ErrSupervisionAbandoned, closes the store and releases the lock rather
 // than waiting for a goroutine nothing can end; the unwedged goroutine then
 // meets a closed store and a closed writer. The home is free afterwards,
-// which is what the bounded wait buys.
+// which is what the bounded wait buys, and the service log says the loop
+// was abandoned. The lower bound is what holds the abandonment to
+// stop_grace rather than to a grace of its own: the grace configured is
+// longer than the two beacon intervals Close used to give the loop.
 //
 // It does not run in parallel. It bounds how long Close takes from above,
 // at half a grace past the grace, and the package's other tests running
 // beside it would be measuring their load rather than Close. A serial test
 // runs before any parallel one resumes, so it measures an otherwise idle
 // process.
-func TestCloseReturnsWithinItsGraceWithAWedgedLoop(t *testing.T) {
-	h, records := loopHome(t)
+func TestCloseAbandonsAWedgedLoopAtStopGrace(t *testing.T) {
+	const grace = 3 * time.Second
+	h, records := loopHomeConfigured(t, closeGraceConfig(grace))
 	plantRunning(t, records, "wedgedclosea", "pane-close")
 	terminals := newScriptedTerminals()
 	terminals.live("pane-close", "working\n")
 	terminals.blockFirst = true
-	l := openTimedLoop(t, h, records, terminals)
+	l := openLoop(t, h, records, terminals, nil)
 	defer close(terminals.block)
 
 	select {
@@ -601,15 +691,18 @@ func TestCloseReturnsWithinItsGraceWithAWedgedLoop(t *testing.T) {
 	case <-time.After(loopWait):
 		t.Fatal("the first pass never captured the terminal")
 	}
-	grace := CloseGrace(l.service.sup.interval)
-	began := time.Now()
-	err := l.service.Close()
-	took := time.Since(began)
+	took, err := closeTimed(t, l.service, grace+loopWait)
 	if !errors.Is(err, ErrSupervisionAbandoned) {
 		t.Fatalf("Close = %v, want ErrSupervisionAbandoned", err)
 	}
+	if took < grace {
+		t.Fatalf("Close abandoned the loop after %v, want not before stop_grace %v", took, grace)
+	}
 	if took > grace+grace/2 {
-		t.Fatalf("Close took %v, want within the grace of %v", took, grace)
+		t.Fatalf("Close took %v, want within half a grace past stop_grace %v", took, grace)
+	}
+	if log := serviceLogOf(t, h); !strings.Contains(log, "abandoned") {
+		t.Fatalf("the service log = %q, want the abandonment recorded", log)
 	}
 	lock, err := h.Acquire(t.Context(), -1)
 	if err != nil {

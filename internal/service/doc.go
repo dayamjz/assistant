@@ -599,7 +599,9 @@
 //
 // # Stopping is bounded, and shutdown.go owns it
 //
-// Close waits for what the service started and bounds only the supervision.
+// Close waits for what the service started and bounds only the supervision,
+// which it waits for until stop_grace runs out for the stop and then
+// abandons.
 // Shutdown is Close under the global-only stop_grace, PRD section 8's
 // "stopping is bounded": past the grace, or when its caller forces the stop,
 // it logs the step Close was in, ends every group it registered by force

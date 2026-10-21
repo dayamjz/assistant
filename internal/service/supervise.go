@@ -7,7 +7,6 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/config"
@@ -173,11 +172,15 @@ import (
 // # What Close owes a wedged loop
 //
 // A goroutine wedged in a call that ignores its context cannot be ended,
-// only fenced out, so Close waits for the supervision a bounded grace and
-// then abandons it with ErrSupervisionAbandoned in its result, which is the
-// one exception to the rule that Close waits for every piece of work it
-// started. Close's doc states the exception; the fence is what makes it
-// safe, since an abandoned incarnation that unwedges meets
+// only fenced out, so Close waits for the supervision to end on its own
+// until the instant stop_grace runs out for the stop, and then abandons it
+// with ErrSupervisionAbandoned in its result, which is the one exception to
+// the rule that Close waits for every piece of work it started. The wait is
+// on the supervision's own exit signal and not on a wall-clock grace of its
+// own: a loop honouring its cancellation is waited for however long a busy
+// machine makes it take, up to the bound the stop as a whole is held to.
+// Close's doc states the exception and the window it leaves; the fence is
+// what makes it safe, since an abandoned incarnation that unwedges meets
 // ErrStaleIncarnation at the store and a closed writer at the beacon.
 
 // Terminals is what the supervisor loop observes a task's terminal through:
@@ -212,30 +215,13 @@ type Terminals interface {
 // built, which terminals.go states the reach of.
 var ErrTerminalsUnavailable = errors.New("service: the terminal provider is unavailable")
 
-// ErrSupervisionAbandoned reports that Close stopped waiting for the
-// supervisor loop or its watchdog after CloseGrace and gave up the home with
-// a goroutine of its own still running. The goroutine is fenced out of every
-// write and cannot be ended; Close's doc says why this is the one piece of
-// work it does not wait for.
-var ErrSupervisionAbandoned = errors.New("service: the supervisor loop did not end within Close's grace and was abandoned")
-
-// CloseGraceMultiple is how many beacon intervals Close waits for the
-// supervision to end before abandoning it. Two covers a pass that is inside
-// its one bounded call when the stop arrives and the beacon write after it,
-// each bounded by one interval, so a loop that honours cancellation ends
-// within the grace and only a wedged one is abandoned. It is a multiple of
-// the interval rather than a configuration row of its own, which PRD section
-// 10's "every count or duration is a row" would otherwise ask for: it bounds
-// a shutdown and nothing a run observes, and a row for it could only be set
-// inconsistently with the per-call bound it exists to cover. Chosen, not
-// measured.
-const CloseGraceMultiple = 2
-
-// CloseGrace is how long Close waits for the supervision at the configured
-// beacon interval: CloseGraceMultiple intervals.
-func CloseGrace(interval time.Duration) time.Duration {
-	return CloseGraceMultiple * interval
-}
+// ErrSupervisionAbandoned reports that the supervisor loop or its watchdog
+// had not ended when stop_grace ran out for the stop, so Close gave up the
+// home with a goroutine of its own still running. The goroutine is fenced
+// out of every write and cannot be ended; Close's doc says why this is the
+// one piece of work it does not wait for without bound, and that a loop
+// slower than the rest of stop_grace is abandoned as a wedged one is.
+var ErrSupervisionAbandoned = errors.New("service: the supervisor loop had not ended when stop_grace ran out and was abandoned")
 
 // gone is which of PRD section 5's three terminal-gone cases a wake carries.
 // It is the component of the wake's marker a coordinator reads the case
@@ -265,13 +251,14 @@ type supervision struct {
 	// current incarnation out of the store under it, so a write by an
 	// incarnation the watchdog is replacing is refused rather than raced.
 	mu sync.Mutex
-	// done is closed when the watchdog returns, which it does after the
-	// current incarnation ended or the grace for it ran out.
+	// done is closed when the watchdog returns, which on a stop it does
+	// once the current incarnation ended or giveUp was closed.
 	done chan struct{}
-	// abandoned is whether an incarnation was still running when the
-	// watchdog stopped waiting for it.
-	abandoned atomic.Bool
-	hooks     supervisionHooks
+	// giveUp is closed by stopSupervision when stop_grace ran out with the
+	// supervision still running, which ends the watchdog's wait for its
+	// incarnation.
+	giveUp chan struct{}
+	hooks  supervisionHooks
 }
 
 // supervisionHooks are the seams this package's tests drive the loop
@@ -394,6 +381,7 @@ func (s *Service) startSupervision(hooks supervisionHooks, terminals Terminals) 
 		now:       now,
 		redactor:  redact.New(),
 		done:      make(chan struct{}),
+		giveUp:    make(chan struct{}),
 		hooks:     hooks,
 	}
 	go s.watchdog()
@@ -998,13 +986,13 @@ func elapsed(start time.Time, window time.Duration, now time.Time) supervisor.Wi
 // watchdog runs incarnations: it begins the first, judges the current one by
 // the beacon at every interval, and replaces one whose beacon is stale or
 // whose goroutine returned, after one interval's delay. It never writes the
-// beacon. On stop it cancels the current incarnation, waits CloseGrace for
-// its goroutine, and records abandonment when that runs out.
+// beacon. On stop it cancels the current incarnation and waits for its
+// goroutine to end, logging how long that took, or for stopSupervision to
+// give up on it at the stop's deadline.
 func (s *Service) watchdog() {
 	defer close(s.sup.done)
 	fresh := supervisor.FreshnessFor(s.sup.interval)
 	firstWait := supervisor.FirstBeaconWait(s.sup.interval)
-	grace := CloseGrace(s.sup.interval)
 	var current *incarnation
 	begin := func() {
 		c, err := s.beginIncarnation()
@@ -1021,12 +1009,12 @@ func (s *Service) watchdog() {
 		if current == nil {
 			return
 		}
+		cancelled := time.Now()
 		current.cancel()
 		select {
 		case <-current.ended:
-		case <-time.After(grace):
-			s.sup.abandoned.Store(true)
-			s.log.Printf("supervisor incarnation %d did not end within %v and is abandoned", current.inc.Epoch(), grace)
+			s.log.Printf("supervisor incarnation %d ended %v after its cancellation", current.inc.Epoch(), time.Since(cancelled))
+		case <-s.sup.giveUp:
 		}
 	}
 	begin()
@@ -1083,21 +1071,33 @@ func (s *Service) beaconLive(c *incarnation, fresh supervisor.Freshness, firstWa
 	return b.Instance == s.instance && b.Epoch == c.inc.Epoch() && supervisor.IsFresh(b, fresh, now)
 }
 
-// stopSupervision is Close's wait: the grace for the watchdog, which itself
-// gives the current incarnation the grace, and then the writer closed
-// whatever is still running. It returns ErrSupervisionAbandoned when either
-// wait ran out.
+// stopSupervision is Close's wait: for the watchdog to return, which on a
+// stop it does once the current incarnation ended, until stopDeadline; then
+// the writer closed whatever is still running. A watchdog that has not
+// returned by the deadline is abandoned, which closes giveUp so a watchdog
+// waiting on a wedged incarnation returns too, is logged as abandoned, and
+// is ErrSupervisionAbandoned in the result. A deadline already past still
+// takes a supervision that has ended.
 func (s *Service) stopSupervision() error {
 	if s.sup == nil {
 		return nil
 	}
+	deadline := time.NewTimer(time.Until(s.stopDeadline()))
+	defer deadline.Stop()
+	abandoned := false
 	select {
 	case <-s.sup.done:
-	case <-time.After(CloseGrace(s.sup.interval)):
-		s.sup.abandoned.Store(true)
+	default:
+		select {
+		case <-s.sup.done:
+		case <-deadline.C:
+			abandoned = true
+			close(s.sup.giveUp)
+			s.log.Printf("the supervisor loop had not ended when stop_grace %v ran out and is abandoned", s.cfg.StopGrace)
+		}
 	}
 	err := s.sup.writer.Close()
-	if s.sup.abandoned.Load() {
+	if abandoned {
 		return errors.Join(ErrSupervisionAbandoned, err)
 	}
 	return err

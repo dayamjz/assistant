@@ -150,7 +150,9 @@ const (
 	// global-only for KeySupervisionBeaconInterval's reason: the stop is the
 	// service's act on the operator's machine. It is not a loop bound and
 	// stops no run on its own; it bounds how long giving up the home may
-	// take. internal/service's Shutdown is the one reader. The default is
+	// take. internal/service's stopDeadline is the one reader: Shutdown
+	// forces the stop at it and Close abandons the supervisor loop at it,
+	// and before it Close waits for the loop to end. The default is
 	// the PRD's; the floor and ceiling are chosen, not measured, and PRD
 	// section 10's limits table has no row for them yet.
 	KeyStopGrace Key = "stop_grace"
