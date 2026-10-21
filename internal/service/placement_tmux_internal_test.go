@@ -126,13 +126,13 @@ func TestUnderTmuxAWorkersCommandIsPlacedThroughTheServer(t *testing.T) {
 	// The shell stays until released, so the chain from the sleep to the
 	// worker stands while it is read; a shell that exited would leave the
 	// sleep reparented, which is placement.go's named gap and not this test.
-	command := `sleep 60 >/dev/null 2>&1 & echo "$!" > child.tmp && mv child.tmp child; exec ` +
-		standin.HeldWait(t, "release")
-	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(dir, "release"), nil, 0o600) })
+	held, release := heldReleased(t, dir)
+	command := `sleep 60 >/dev/null 2>&1 & echo "$!" > child.tmp && mv child.tmp child; exec ` + held
 	if err := worker.Send(t.Context(), "run: "+command); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	child := pidIn(t, filepath.Join(dir, "child"))
+	release.holding(t)
 	own, err := processGroup(child)
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestUnderTmuxAPersonsWindowIsTheWorkersAndAPersonOutsideIsNot(t *testing.T)
 	t.Parallel()
 	worker, term, dir := terminalWorker(t)
 	member := hostedWorker(worker)
-	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(dir, "release"), nil, 0o600) })
+	held, release := heldReleased(t, dir)
 
 	// A window a person opens in the worker's own server.
 	window := filepath.Join(dir, "window")
@@ -235,7 +235,7 @@ func TestUnderTmuxAPersonsWindowIsTheWorkersAndAPersonOutsideIsNot(t *testing.T)
 	outside := filepath.Join(dir, "outside")
 	script := `echo "$$" > ` + outside + `.tmp && mv ` + outside + `.tmp ` + outside + ` && ` +
 		`"$0" -S "$1" send-keys -t worker -l "run: sleep 60 >/dev/null 2>&1 & echo \$! > ` + typed + `.tmp && mv ` + typed + `.tmp ` + typed +
-		`; exec ` + standin.HeldWait(t, "release") + `" && ` +
+		`; exec ` + held + `" && ` +
 		`"$0" -S "$1" send-keys -t worker Enter && exec sleep 60`
 	person := exec.Command("/bin/sh", "-c", script, term.Tmux, term.Socket)
 	if err := person.Start(); err != nil {
@@ -248,6 +248,7 @@ func TestUnderTmuxAPersonsWindowIsTheWorkersAndAPersonOutsideIsNot(t *testing.T)
 	if m, ok, err := placeByAncestry(pidIn(t, typed), readLineage, member); err != nil || !ok || m.Group != worker.Group() {
 		t.Errorf("a command the person typed into the worker's window was placed %+v, %v, %v; want the worker's", m, ok, err)
 	}
+	release.holding(t)
 
 	// A person attached to the worker's server: the attach runs in a
 	// terminal of the person's own, a second server, so it has a real one.
