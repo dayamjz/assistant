@@ -135,6 +135,11 @@ func TestAnEntryClosedWhileAHeldDispatchHasTheSlotStillDispatchesTheTask(t *test
 func TestALaunchClaimedWhoseWorkerNeverStartedIsHeldAtTheNextDispatch(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
+	// Attempt 2 is dispatched over the copy attempt 1 left standing, which
+	// the process sweep has to clear first, on sweep_internal_test.go's
+	// terms for a host whose sweeps do not.
+	const unestablished = "that a launch claimed with no worker started leaves its task held until the entry is answered"
+	requireSweepClearsHere(t, unestablished)
 	ctx := t.Context()
 	subject := newLaunchSubject(t, workerStandIn(t))
 	subject.service.cfg.Agent = []string{subject.agent.Runner().Name()}
@@ -164,7 +169,8 @@ func TestALaunchClaimedWhoseWorkerNeverStartedIsHeldAtTheNextDispatch(t *testing
 	subject.service.dispatchDue(ctx)
 	attempts, err = subject.records.TaskAttempts(ctx, subject.task)
 	if err != nil || len(attempts) != 2 || !attempts[1].SessionRef.IsKnown() {
-		t.Fatalf("once the entry was answered the task has attempts %+v, %v; want attempt 2 with its worker started", attempts, err)
+		fatalUnlessSweepsStoppedClearing(t, unestablished,
+			"once the entry was answered the task has attempts %+v, %v; want attempt 2 with its worker started", attempts, err)
 	}
 }
 
@@ -183,6 +189,12 @@ func TestALaunchClaimedWhoseWorkerNeverStartedIsHeldAtTheNextDispatch(t *testing
 func TestKeptWorkRefusingAWorkerHandoffRaisesNoFallbackHold(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
+	// The handoff dispatches the backup's attempt over the copy the first
+	// attempt left standing, which the process sweep has to clear before
+	// the claim, on sweep_internal_test.go's terms for a host whose sweeps
+	// do not.
+	const unestablished = "that kept work refusing a worker handoff raises no fallback hold"
+	requireSweepClearsHere(t, unestablished)
 	ctx := t.Context()
 	// The backup answers the instructions file's line, "work", on the
 	// stream the Claude adapter reads, so a worker that started shows
@@ -216,7 +228,7 @@ func TestKeptWorkRefusingAWorkerHandoffRaisesNoFallbackHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.switchWorker(ctx, task, d.attempt, nil, nil, role.Agent, role, agents.FailureUnavailable); !errors.Is(err, store.ErrDispatchHeld) {
-		t.Fatalf("the handoff = %v; want the backup's attempt refused for kept work", err)
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "the handoff = %v; want the backup's attempt refused for kept work", err)
 	}
 	if entry.ID == 0 {
 		t.Fatal("the handoff never reached the claim where the kept work was recorded")
@@ -253,7 +265,7 @@ func TestKeptWorkRefusingAWorkerHandoffRaisesNoFallbackHold(t *testing.T) {
 			break
 		}
 		if !time.Now().Before(deadline) {
-			t.Fatalf("after the answer the task has attempts %+v; want attempt 2 started on the backup", attempts)
+			fatalUnlessSweepsStoppedClearing(t, unestablished, "after the answer the task has attempts %+v; want attempt 2 started on the backup", attempts)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
