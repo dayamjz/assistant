@@ -130,7 +130,10 @@ type Created struct {
 // directory, which is the order PRD section 8 gives a run's row and its
 // directory. A crash between the two leaves a recorded task with no
 // instructions file, which the dispatch finds rather than this package; the
-// reverse, a directory with no record, cannot happen.
+// reverse, a directory with no record, cannot happen. Until the file is
+// written, a reader of the records sees the same gap without any crash: a
+// task recorded independent already resolves Dispatched, so a caller that
+// dispatches from the records keeps its read out of its own intakes.
 //
 // Refusals: a malformed request wraps ErrRequest; an unknown repository or
 // overlap task wraps store.ErrNotFound; a branch moved under the intake is a

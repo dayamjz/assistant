@@ -21,7 +21,7 @@ import (
 // repository whose worker is gone and whose copy, a repository of its own
 // detached at a commit of the worker's that no remote has, is kept as an
 // open entry. It returns the task and the entry.
-func plantKeptInvestigation(t *testing.T, h *home.Home, repositoryID string) (string, store.KeptWork) {
+func plantKeptInvestigation(t *testing.T, h *home.Home, subject, repositoryID string) (string, store.KeptWork) {
 	t.Helper()
 	ctx := t.Context()
 	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
@@ -72,7 +72,8 @@ func plantKeptInvestigation(t *testing.T, h *home.Home, repositoryID string) (st
 	if _, _, err := records.StoreTaskReport(ctx, store.TaskReport{TaskID: id, Body: `{"summary":"looked"}`, Report: []byte(`{"summary":"looked"}`)}, nil); err != nil {
 		t.Fatal(err)
 	}
-	entry, _, err := records.RecordKeptWork(ctx, store.KeptCopy{TaskID: id, CopyPath: copyPath, Holds: []string{head}, Reason: string(tasks.ReasonUnproven)})
+	entry, _, err := records.RecordKeptWork(ctx, store.KeptCopy{TaskID: id, CopyPath: copyPath, Holds: []string{head}, Lacks: []string{head},
+		Against: git(t, subject, "rev-parse", "HEAD"), Reason: string(tasks.ReasonUnproven)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +119,7 @@ func TestCarryingKeptWorkOnCreatesATaskWhoseWorkerStartsInTheKeptCopy(t *testing
 	h := newHome(t)
 	subject := newSubject(t)
 	repository := recordRepository(t, h, subject)
-	old, entry := plantKeptInvestigation(t, h, repository.ID)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
 	o, _ := workerOptions(t, h)
 	withServiceOptions(t, o, func(under serviceUnderTest) {
 		ctx := t.Context()
@@ -192,7 +193,7 @@ func TestAKeptCopyThatFailsTheAssertionIsNotCarriedOn(t *testing.T) {
 	h := newHome(t)
 	subject := newSubject(t)
 	repository := recordRepository(t, h, subject)
-	old, entry := plantKeptInvestigation(t, h, repository.ID)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
 	if err := os.RemoveAll(entry.CopyPath); err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +242,7 @@ func TestACarryOnAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testi
 	h := newHome(t)
 	subject := newSubject(t)
 	repository := recordRepository(t, h, subject)
-	_, entry := plantKeptInvestigation(t, h, repository.ID)
+	_, entry := plantKeptInvestigation(t, h, subject, repository.ID)
 	reserved, err := home.NewTaskID()
 	if err != nil {
 		t.Fatal(err)

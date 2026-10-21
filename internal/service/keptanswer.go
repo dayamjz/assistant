@@ -43,10 +43,14 @@ import (
 // worker's push would carry, or the owner run's own.
 //
 // What is landed is HEAD, and the entry is answered as a whole, so HEAD
-// must reach every commit the entry recorded the copy holding: one it does
-// not reach, a commit on another reference of the copy, would be answered
-// and never carried, which is kept work gone silent (P15). Such an entry is
-// refused naming the commits HEAD leaves behind, and nothing is recorded.
+// must reach every commit the entry records the default branch lacking,
+// store.KeptWork.Lacks: one it does not reach, a commit on another
+// reference of the copy, would be answered and never carried, which is kept
+// work gone silent (P15). Such an entry is refused naming the commits HEAD
+// leaves behind, and nothing is recorded. An entry whose basis is not
+// established (store.KeptWork.Established) says what the copy stands on
+// and nothing about what of it is at risk, so it is refused too, naming
+// why, until a later cleanup of the unchanged copy establishes it.
 //
 // The checks run before the answer is recorded, so a refused land records
 // nothing. The answer is then recorded through store.AnswerKeptWork, which
@@ -241,8 +245,13 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 		return refuse("its copy's HEAD names no commit")
 	}
 	out.head = inv.Head.Commit
+	if !entry.Established() {
+		return refuse("what its copy holds that the default branch lacks is not established (" +
+			entry.Unestablished.Or("the entry was recorded before the store kept that") +
+			"), so a landing cannot say what it would leave behind; the next cleanup of the unchanged copy establishes it")
+	}
 	var behind []string
-	for _, held := range entry.Holds {
+	for _, held := range entry.Lacks {
 		reaches, err := copyRepo.IsAncestor(ctx, held, out.head)
 		if err != nil {
 			return landing{}, fmt.Errorf("service: reading whether HEAD of the kept copy at %s reaches %s: %w", entry.CopyPath, held, err)

@@ -10,6 +10,11 @@ import (
 	"github.com/dayamjz/assistant/internal/session"
 )
 
+// SecondCheckHeading is the heading dispatch appends the second check to a
+// task's instructions under, for this package's external tests to tell the
+// coordinator's text from what dispatch wrote after it.
+const SecondCheckHeading = secondCheckHeading
+
 // SessionOf exposes to this package's external tests the terminal session
 // the service launched for a task, with the provider that holds it, and
 // whether it launched one. It exists only in the tests: the product reaches
@@ -34,6 +39,22 @@ func WithCleanupInterruptForTest(tb testing.TB, o Options, f func() error) Optio
 func WithBeforeStaleRemovalReleaseForTest(o Options, f func()) Options {
 	o.beforeStaleRemovalRelease = f
 	return o
+}
+
+// WithAfterIntakeBranchReleaseForTest returns o with the seam after
+// internal/tasks gives back an intake's branch exclusion set to f, for this
+// package's external tests: for a delivery intake, f runs after the task's
+// record and before its instructions file.
+func WithAfterIntakeBranchReleaseForTest(o Options, f func()) Options {
+	o.afterIntakeBranchRelease = f
+	return o
+}
+
+// DispatchDueForTest runs one dispatch pass, dispatchDue, for this
+// package's external tests, which use it to run the pass at a moment a
+// release or another task.create could.
+func (s *Service) DispatchDueForTest(ctx context.Context) {
+	s.dispatchDue(ctx)
 }
 
 // SetBeforeRefusalEndForTest installs beforeRefusalEnd for this

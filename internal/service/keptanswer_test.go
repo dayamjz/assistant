@@ -307,12 +307,13 @@ func TestALandingWhoseRunEndedBeforeItExecutedIsStartedAgain(t *testing.T) {
 	})
 }
 
-// A land answer carries HEAD, so an entry recorded holding a commit HEAD
-// does not reach is refused naming that commit, and records nothing: the
-// copy holds a commit on another reference beside the one HEAD stands on,
-// and an entry recorded with both is not landed, while the entry recorded
-// with HEAD's commit alone is. Without the check the entry is answered and
-// the other commit is never carried.
+// A land answer carries HEAD, so an entry whose default branch lacks a
+// commit HEAD does not reach is refused naming that commit, and records
+// nothing: the copy holds a commit on another reference beside the one HEAD
+// stands on, and an entry recording both as lacking is not landed, nor is
+// one whose basis is not established, while the entry recording HEAD's
+// commit alone is. Without the check the entry is answered and the other
+// commit is never carried.
 func TestALandingIsRefusedWhenHEADLeavesAHeldCommitBehind(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -329,8 +330,17 @@ func TestALandingIsRefusedWhenHEADLeavesAHeldCommitBehind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !entry.Established() {
+		t.Fatalf("the entry the real cleanup recorded is not established: %+v", entry)
+	}
 	both, _, err := records.RecordKeptWork(t.Context(), store.KeptCopy{RunID: entry.RunID.Or(""), CopyPath: entry.CopyPath,
-		Holds: append(append([]string{}, entry.Holds...), aside), Reason: entry.Reason})
+		Holds: append(append([]string{}, entry.Holds...), aside), Lacks: append(append([]string{}, entry.Lacks...), aside),
+		Against: entry.Against.Or(""), Reason: entry.Reason})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unestablished, _, err := records.RecordKeptWork(t.Context(), store.KeptCopy{RunID: entry.RunID.Or(""), CopyPath: entry.CopyPath,
+		Holds: append(append([]string{}, entry.Holds...), "unestablished"), Unestablished: "the upstream could not be read", Reason: entry.Reason})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,6 +355,11 @@ func TestALandingIsRefusedWhenHEADLeavesAHeldCommitBehind(t *testing.T) {
 		}
 		if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), both.ID); err != nil || !still.Open() {
 			t.Fatalf("after the refusal the entry reads %+v, %v; want it open", still, err)
+		}
+		err = under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+			Run: entry.RunID.Or(""), Hold: unestablished.Key(), Answer: string(store.KeptLand)}, &out)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "not established") {
+			t.Fatalf("landing an unestablished entry = %v; want it refused as not established", err)
 		}
 		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
 			Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptLand)}, &out); err != nil || out.Run == "" {

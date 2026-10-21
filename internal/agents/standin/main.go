@@ -32,12 +32,6 @@ const (
 	sweepDirFlag  = "--standin-sweep-dir="
 )
 
-// mainCalled records that Main ran in this process, which ownProcesses
-// checks before it starts this binary again as the owner sweep: a binary
-// whose TestMain does not call Main would not be the sweep when started as
-// one, so nothing would end what its tests leave behind.
-var mainCalled bool
-
 // Statuses the stand-in exits with when it cannot do its job at all. They are
 // distinct from ExitUnscripted, which is the stand-in working correctly and
 // reporting that the script did not cover the invocation. Each prints what
@@ -82,7 +76,7 @@ const (
 // forgets the call is told so rather than being left to read the resulting
 // agent failures.
 func Main() {
-	mainCalled = true
+	noteMain()
 	args := os.Args[1:]
 	if owner, ok := flagValue(args, sweepFlag); ok {
 		dir, _ := flagValue(args, sweepDirFlag)

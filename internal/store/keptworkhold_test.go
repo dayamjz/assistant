@@ -51,7 +51,7 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 
 	// An entry naming no project holds nothing anywhere.
 	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: "tasknoprojct", CopyPath: "/tasks/tasknoprojct/copy",
-		Holds: []string{"cccc"}, Reason: "unproven"}); err != nil {
+		Holds: []string{"cccc"}, Reason: "unproven", Against: "mmmm"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"taskheldnewa", "taskelsewher", "tasknoprojct"} {
@@ -61,7 +61,7 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 	}
 
 	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/repo-1/run-1",
-		Holds: []string{"aaaa"}, Reason: "unproven"})
+		Holds: []string{"aaaa"}, Reason: "unproven", Against: "mmmm"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestALaunchClaimWithNoStartedWorkerLeavesItsTaskHeld(t *testing.T) {
 	}
 
 	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/repo-1/run-1",
-		Holds: []string{"aaaa"}, Reason: "unproven"}); err != nil {
+		Holds: []string{"aaaa"}, Reason: "unproven", Against: "mmmm"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ClaimAttemptLaunch(ctx, "taskheldlnch", held.Sequence); !errors.Is(err, ErrDispatchHeld) {

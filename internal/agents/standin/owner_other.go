@@ -32,6 +32,12 @@ func requireOwned(testing.TB, string) string { return "" }
 // skips a terminal test on a platform this file builds for.
 func ownedTmux() string { return "" }
 
+// noteMain records nothing here. Whether Main ran is read only before
+// RunOwned starts this binary again as the owner sweep, and RunOwned starts
+// none here. New's own check that Main is wired is the handshake, which
+// asks the binary and holds on every platform.
+func noteMain() {}
+
 // heldMain returns at once here, where no test holds a process.
 func heldMain([]string) {}
 

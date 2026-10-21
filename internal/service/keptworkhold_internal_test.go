@@ -31,7 +31,7 @@ func keepWorkIn(t *testing.T, records *store.Store) store.KeptWork {
 		t.Fatalf("recording the kept copy's owner: %v", err)
 	}
 	entry, _, err := records.RecordKeptWork(ctx, store.KeptCopy{TaskID: owner, CopyPath: "/worktrees/" + owner,
-		Holds: []string{"aaaa"}, Reason: "unproven"})
+		Holds: []string{"aaaa"}, Reason: "unproven", Against: "mmmm"})
 	if err != nil {
 		t.Fatalf("recording kept work: %v", err)
 	}

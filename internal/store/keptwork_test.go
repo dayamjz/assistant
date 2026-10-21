@@ -20,7 +20,7 @@ func TestKeptWorkIsWrittenOncePerCopyAndWhatItHolds(t *testing.T) {
 	run := seedRun(t, s)
 
 	first, wrote, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/home/worktrees/repo-1/run-1",
-		Holds: []string{"aaaa"}, Reason: "unproven", Detail: "fetched https://user:secret@example.test/one.git"})
+		Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd", Detail: "fetched https://user:secret@example.test/one.git"})
 	if err != nil || !wrote {
 		t.Fatalf("RecordKeptWork = %v, wrote %v; want a new entry", err, wrote)
 	}
@@ -35,12 +35,12 @@ func TestKeptWorkIsWrittenOncePerCopyAndWhatItHolds(t *testing.T) {
 	}
 
 	again, wrote, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/home/worktrees/repo-1/run-1",
-		Holds: []string{"aaaa"}, Reason: "unproven", Detail: "asked again"})
+		Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd", Detail: "asked again"})
 	if err != nil || wrote || again.ID != first.ID || again.Detail != first.Detail {
 		t.Fatalf("the same copy and commits again = %+v, wrote %v, %v; want the first entry unchanged", again, wrote, err)
 	}
 	moved, wrote, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/home/worktrees/repo-1/run-1",
-		Holds: []string{"cccc"}, Reason: "copy-dirty"})
+		Holds: []string{"cccc"}, Reason: "copy-dirty", Against: "dddd"})
 	if err != nil || !wrote || moved.ID == first.ID {
 		t.Fatalf("the same copy holding other commits = %+v, wrote %v, %v; want a second entry", moved, wrote, err)
 	}
@@ -50,17 +50,17 @@ func TestKeptWorkIsWrittenOncePerCopyAndWhatItHolds(t *testing.T) {
 	}
 
 	for name, k := range map[string]KeptCopy{
-		"no owner":      {CopyPath: "/c", Reason: "unproven"},
-		"two owners":    {TaskID: "t", RunID: run.ID, CopyPath: "/c", Reason: "unproven"},
-		"no copy":       {RunID: run.ID, Reason: "unproven"},
+		"no owner":      {CopyPath: "/c", Reason: "unproven", Against: "dddd"},
+		"two owners":    {TaskID: "t", RunID: run.ID, CopyPath: "/c", Reason: "unproven", Against: "dddd"},
+		"no copy":       {RunID: run.ID, Reason: "unproven", Against: "dddd"},
 		"no reason":     {RunID: run.ID, CopyPath: "/c"},
-		"missing owner": {TaskID: "nobody", CopyPath: "/c", Reason: "unproven"},
+		"missing owner": {TaskID: "nobody", CopyPath: "/c", Reason: "unproven", Against: "dddd"},
 	} {
 		if _, _, err := s.RecordKeptWork(ctx, k); err == nil {
 			t.Errorf("%s: RecordKeptWork wrote an entry", name)
 		}
 	}
-	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: "nobody", CopyPath: "/c", Reason: "unproven"}); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: "nobody", CopyPath: "/c", Reason: "unproven", Against: "dddd"}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("an owner that is not there = %v; want ErrNotFound", err)
 	}
 }
@@ -76,7 +76,7 @@ func TestKeptWorkIsAnsweredOnceAndOtherwiseSealed(t *testing.T) {
 	s := openStore(t)
 	seedTask(t, s, "taskkeptwork")
 	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: "taskkeptwork", CopyPath: "/home/tasks/taskkeptwork/copy",
-		Holds: []string{"aaaa", "bbbb"}, Reason: "unproven", Detail: "none of the three proofs could be established"})
+		Holds: []string{"aaaa", "bbbb"}, Reason: "unproven", Against: "dddd", Detail: "none of the three proofs could be established"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,11 +141,11 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
-	open, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/run-1", Holds: []string{"aaaa"}, Reason: "unproven"})
+	open, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/run-1", Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	answered, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/run-1", Holds: []string{"bbbb"}, Reason: "copy-dirty"})
+	answered, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/run-1", Holds: []string{"bbbb"}, Reason: "copy-dirty", Against: "dddd"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestARepositoryWithOpenKeptWorkIsNotForgotten(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/home/worktrees/repo-1/run-1",
-		Holds: []string{"aaaa"}, Reason: "unproven"})
+		Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestARemovalReservationStopsNewRunsAndNeverRefusesKeptWork(t *testing.T) {
 		return run
 	}
 	kept := func(run Run) KeptCopy {
-		return KeptCopy{RunID: run.ID, CopyPath: "/w/" + run.ID, Holds: []string{"aaaa"}, Reason: "unproven"}
+		return KeptCopy{RunID: run.ID, CopyPath: "/w/" + run.ID, Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd"}
 	}
 
 	entryFirst := openStore(t)
