@@ -4,6 +4,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/config"
+
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
@@ -159,5 +163,78 @@ func TestALaunchClaimedWhoseWorkerNeverStartedIsHeldAtTheNextDispatch(t *testing
 	attempts, err = subject.records.TaskAttempts(ctx, subject.task)
 	if err != nil || len(attempts) != 2 || !attempts[1].SessionRef.IsKnown() {
 		t.Fatalf("once the entry was answered the task has attempts %+v, %v; want attempt 2 with its worker started", attempts, err)
+	}
+}
+
+// Kept work that appears while a worker handoff is under way is not a
+// worker failure. The primary worker's process could not start, which is
+// the handoff switchWorker is asked with no worker (launchTask asks it so
+// when host.Create fails with a failure agents.FallbackAllowed admits), so
+// the configured backup is selected and its attempt dispatched; kept work
+// is recorded in the project between the attempts' read and the claim, so
+// the claim refuses the backup's attempt as it refuses any new task's. No
+// worker-fallback hold is raised, the task's slot is given back, and once
+// the entry is answered a dispatch pass starts the task on its own, on the
+// backup the sealed selection names. Without the handoff reading the
+// refusal as kept work the task is left held on the fallback's hold with
+// one attempt and no session, and the answer dispatches nothing.
+func TestKeptWorkRefusingAWorkerHandoffRaisesNoFallbackHold(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	ctx := t.Context()
+	backup := standin.New(t, standin.Script{Worker: &standin.WorkerScript{Greeting: "worker ready"}})
+	subject := newLaunchSubject(t, backup)
+	s := subject.service
+	role := config.Role{Agent: "cursor", Fallback: &config.Role{Agent: "claude"}}
+	s.cfg.Roles = config.Roles{config.RoleWorker: role}
+	s.terminals = heldTerminals{s}
+	s.stopCtx = ctx
+	// The seam runs in every dispatch between its read and its claim; the
+	// first is the task's own dispatch, and the second the handoff's, which
+	// is where the kept work is recorded.
+	var entry store.KeptWork
+	claims := 0
+	s.betweenAttemptReadAndClaim = func() {
+		if claims++; claims == 2 {
+			entry = keepWorkIn(t, subject.records)
+		}
+	}
+	d, err := s.dispatchTask(ctx, subject.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	task, err := s.store.Task(ctx, subject.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.switchWorker(ctx, task, d.attempt, nil, nil, role.Agent, role, agents.FailureUnavailable); !errors.Is(err, store.ErrDispatchHeld) {
+		t.Fatalf("the handoff = %v; want the backup's attempt refused for kept work", err)
+	}
+	if entry.ID == 0 {
+		t.Fatal("the handoff never reached the claim where the kept work was recorded")
+	}
+	if _, selected, err := s.store.TaskFallback(ctx, subject.task); err != nil || !selected {
+		t.Fatalf("the handoff was not recorded: %v, %v", selected, err)
+	}
+	holds, err := s.store.OpenHolds(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range holds {
+		if h.TaskID.Or("") == subject.task {
+			t.Fatalf("the refused handoff raised the hold %s", h.Key)
+		}
+	}
+	if _, slot := s.isolationOf(subject.task); slot {
+		t.Fatal("the refused handoff kept the task's slot, so no pass would dispatch it")
+	}
+	if _, err := subject.records.AnswerKeptWork(ctx, entry.ID, store.KeptLand, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	s.dispatchDue(ctx)
+	s.work.Wait()
+	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
+	if err != nil || len(attempts) != 2 || !attempts[1].SessionRef.IsKnown() || attempts[1].Adapter.Or("") != "claude" {
+		t.Fatalf("after the answer the task has attempts %+v, %v; want attempt 2 started on the backup", attempts, err)
 	}
 }
