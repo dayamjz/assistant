@@ -185,9 +185,11 @@ func (l lsofRun) readCwds(ctx context.Context) (map[int]string, error) {
 // SIGKILL again, which ends a descendant a leader that exited on its own
 // left in it. Then the leader is reaped, with WaitDelay set to what is left
 // of the deadline for output a descendant that left the group holds open,
-// so the whole run returns within l.deadline. A deadline that passed is
-// ErrSweepTimedOut and ctx ending is ctx's error, each in place of whatever
-// the killed run printed or exited with.
+// so the whole run returns within l.deadline, and the wait for that reap
+// also ends when ctx does. A deadline that passed, including one that
+// passed while output was still held open, is ErrSweepTimedOut, and ctx
+// ending at any point is ctx's error, each in place of whatever the run
+// printed or exited with: output is never taken as whole past either.
 //
 // Residual gaps: a descendant that left the group is not ended, only stops
 // being waited on; a leader that SIGKILL does not end before the deadline
@@ -240,9 +242,28 @@ func (l lsofRun) run(ctx context.Context) ([]byte, error) {
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	cmd.WaitDelay = remaining(end)
-	err := cmd.Wait()
-	if stopped != nil {
+	reaped := make(chan error, 1)
+	go func() { reaped <- cmd.Wait() }()
+	bound := time.NewTimer(remaining(end))
+	defer bound.Stop()
+	var err error
+	select {
+	case err = <-reaped:
+	case <-bound.C:
+	case <-ctx.Done():
+	}
+	// The output is taken as whole only when the reap came back before the
+	// deadline passed and before ctx ended, and without os/exec having
+	// closed a pipe a process that left the group still held, which it does
+	// once WaitDelay, the rest of the deadline, has passed. Past either
+	// check the reap is left to its goroutine and the output is never read.
+	switch {
+	case stopped != nil:
 		return nil, stopped
+	case ctx.Err() != nil:
+		return nil, fmt.Errorf("agents: running %s: %w", l.program, ctx.Err())
+	case !time.Now().Before(end), errors.Is(err, exec.ErrWaitDelay):
+		return nil, fmt.Errorf("%w: the output of %s was not complete within %s and its process group was ended", ErrSweepTimedOut, l.program, l.deadline)
 	}
 	out := stdout.Bytes()
 	if err != nil {

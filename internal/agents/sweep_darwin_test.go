@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -302,4 +303,111 @@ func TestASweepWhoseLsofExitsInTimeStillClears(t *testing.T) {
 	}
 	requireClearUnlessHostBlocks(t, r, blockers, "the sweep of an empty copy")
 	hostLimit(t, blockers, "that a timely lsof run clears the sweep")
+}
+
+// TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation is
+// review's case against the output wait: a program standing where lsof is
+// prints a working directory record for this process that the listing
+// accepts, starts a descendant in a process group of its own that holds the
+// output open for hold, and exits at once. The run never takes that output
+// as whole once its deadline has passed or its context has ended: held past
+// the deadline it is agents.ErrSweepTimedOut within the deadline, never a
+// bare exec.ErrWaitDelay; cancelled while held it is context.Canceled at the
+// cancellation, cancelled once the leader has exited and the descendant
+// holds the output, never a wait for the deadline, and that holds when the
+// descendant lets go of the output after the cancellation too, which is
+// never a success. The last row is the positive control: let go at once
+// and not cancelled, the same output is read and accepted, so the refusals
+// above are not the output's.
+func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	requiresIdentityRead(t)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := filepath.EvalSymlinks(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name     string
+		hold     string
+		deadline time.Duration
+		cancel   bool
+		want     error
+		within   time.Duration
+	}{
+		{"held past the deadline", "3600", 500 * time.Millisecond, false, agents.ErrSweepTimedOut, 500 * time.Millisecond},
+		{"held when cancelled", "3600", 5 * time.Second, true, context.Canceled, 0},
+		{"let go after the cancellation", "1", 5 * time.Second, true, context.Canceled, 0},
+		{"let go at once", "0", 2 * time.Second, false, nil, 2 * time.Second},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body := "/usr/bin/perl -e 'setpgrp(0,0); open(my $f, \">>\", $ARGV[0]) or die; print $f \"$$\\n\"; close $f; select(undef, undef, undef, $ARGV[1])' PIDS " + c.hold + " &\n" +
+				"printf 'p%s\\nfcwd\\nn%s\\n' " + strconv.Itoa(os.Getpid()) + " '" + cwd + "'\n/bin/sleep 0.05\nexit 0\n"
+			program, pidFile := standInLsof(t, t.TempDir(), body)
+			ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+			defer cancel()
+			// A cancelled row cancels once the leader has exited and the
+			// descendant is holding the output, so the cancellation lands in
+			// the output wait, and is timed from there.
+			started := make(chan time.Time, 1)
+			started <- time.Now()
+			returned := make(chan struct{})
+			if c.cancel {
+				<-started
+				go func() {
+					for {
+						select {
+						case <-returned:
+							return
+						case <-time.After(10 * time.Millisecond):
+						}
+						data, _ := os.ReadFile(pidFile)
+						fields := strings.Fields(string(data))
+						if len(fields) != 2 {
+							continue
+						}
+						leader, _ := strconv.Atoi(fields[0])
+						if _, present, err := agents.Identify(leader); err == nil && !present {
+							started <- time.Now()
+							cancel()
+							return
+						}
+					}
+				}()
+			}
+			cwds, err := agents.ReadCwdsWithLsof(ctx, program, c.deadline)
+			close(returned)
+			var took time.Duration
+			select {
+			case from := <-started:
+				took = time.Since(from)
+			default:
+				t.Fatalf("the read answered %v, %v before the cancellation it was to be timed from", cwds, err)
+			}
+			for _, pid := range startedPIDs(t, pidFile, 2) {
+				if id, present, idErr := agents.Identify(pid); idErr == nil && present {
+					t.Cleanup(func() {
+						if presence, err := id.Presence(); err == nil && presence == agents.PresencePresent {
+							_ = syscall.Kill(id.PID, syscall.SIGKILL)
+						}
+					})
+				}
+			}
+			if took > c.within+sweepReturnSlack {
+				t.Fatalf("the read answered %v %s after it started or was cancelled, want it within %s and %s of slack", err, took, c.within, sweepReturnSlack)
+			}
+			if c.want == nil {
+				if err != nil || cwds[os.Getpid()] != cwd {
+					t.Fatalf("the read of output let go at once answered %v, %v, want this process's working directory %q", cwds, err, cwd)
+				}
+				return
+			}
+			if !errors.Is(err, c.want) || cwds != nil || errors.Is(err, exec.ErrWaitDelay) {
+				t.Fatalf("the read answered %v, %v, want %v and no working directories", cwds, err, c.want)
+			}
+		})
+	}
 }

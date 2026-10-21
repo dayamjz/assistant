@@ -81,6 +81,13 @@ var LsofOutput = systemLsof.run
 // LsofDeadline is the deadline the listing's lsof run carries.
 const LsofDeadline = lsofDeadline
 
+// ReadCwdsWithLsof is the listing's read of the working directories, made
+// through the same run with program in place of /usr/sbin/lsof and
+// deadline in place of LsofDeadline, so a test can cancel ctx partway.
+func ReadCwdsWithLsof(ctx context.Context, program string, deadline time.Duration) (map[int]string, error) {
+	return lsofRun{program: program, deadline: deadline}.readCwds(ctx)
+}
+
 // SweepWithLsof is Sweeper.Sweep with every read the listing makes real and
 // lsof's run made through the same code with program in place of
 // /usr/sbin/lsof and deadline in place of LsofDeadline, so a test can stand
