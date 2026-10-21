@@ -317,15 +317,16 @@ func TestASweepWhoseLsofExitsInTimeStillClears(t *testing.T) {
 // output open for hold, and exits at once. The run never takes that output
 // as whole once its deadline has passed or its context has ended: held past
 // the deadline it is agents.ErrSweepTimedOut within the deadline, never a
-// bare exec.ErrWaitDelay; cancelled while held it is context.Canceled at the
-// cancellation, cancelled once the leader has exited and the descendant
+// bare exec.ErrWaitDelay; cancelled while held it is context.Canceled
+// within the run's grace of the cancellation, which is how long held output
+// is waited on, cancelled once the leader has exited and the descendant
 // holds the output, never a wait for the deadline, and that holds when the
 // descendant lets go of the output after the cancellation too, which is
 // never a success, and when the cancellation comes after the cutoff has
-// killed a leader that was still running, during the cleanup after it,
-// the cancellation wins over the timeout. The last row is the positive control: let go at once
-// and not cancelled, the same output is read and accepted, so the refusals
-// above are not the output's.
+// killed a leader that was still running, during the wait for its output
+// after that, the cancellation wins over the timeout. The last row is the
+// positive control: let go at once and not cancelled, the same output is
+// read and accepted, so the refusals above are not the output's.
 func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	requiresIdentityRead(t)
@@ -343,15 +344,14 @@ func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *t
 		run      string
 		deadline time.Duration
 		cancel   bool
-		cancelAt time.Duration
 		want     error
 		within   time.Duration
 	}{
-		{"held past the deadline", "3600", "0.05", 500 * time.Millisecond, false, 0, agents.ErrSweepTimedOut, 500 * time.Millisecond},
-		{"held when cancelled", "3600", "0.05", 5 * time.Second, true, 0, context.Canceled, 0},
-		{"let go after the cancellation", "1", "0.05", 5 * time.Second, true, 0, context.Canceled, 0},
-		{"cancelled after the cutoff while held", "3600", "3600", 2 * time.Second, true, 1900 * time.Millisecond, context.Canceled, 0},
-		{"let go at once", "0", "0.05", 2 * time.Second, false, 0, nil, 2 * time.Second},
+		{"held past the deadline", "3600", "0.05", 500 * time.Millisecond, false, agents.ErrSweepTimedOut, 500 * time.Millisecond},
+		{"held when cancelled", "3600", "0.05", 5 * time.Second, true, context.Canceled, agents.LsofGrace(5 * time.Second)},
+		{"let go after the cancellation", "1", "0.05", 5 * time.Second, true, context.Canceled, agents.LsofGrace(5 * time.Second)},
+		{"cancelled after the cutoff while held", "3600", "3600", 5 * time.Second, true, context.Canceled, agents.LsofGrace(5 * time.Second)},
+		{"let go at once", "0", "0.05", 2 * time.Second, false, nil, 2 * time.Second},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			body := "/usr/bin/perl -e 'setpgrp(0,0); open(my $f, \">>\", $ARGV[0]) or die; print $f \"$$\\n\"; close $f; select(undef, undef, undef, $ARGV[1])' PIDS " + c.hold + " &\n" +
@@ -361,24 +361,14 @@ func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *t
 			defer cancel()
 			// A cancelled row cancels once the leader has exited and the
 			// descendant is holding the output, so the cancellation lands in
-			// the output wait, and is timed from there. A row with cancelAt
-			// cancels at that point from the start instead: past the cutoff
-			// that killed a leader still running, during the cleanup that
-			// follows it, which a cancellation wins over the timeout.
+			// the output wait, and is timed from there. A leader that runs
+			// for an hour has exited only because the cutoff killed it, so
+			// that row's cancellation lands in the output wait after the
+			// cutoff, which a cancellation wins over the timeout.
 			started := make(chan time.Time, 1)
 			started <- time.Now()
 			returned := make(chan struct{})
-			if c.cancelAt > 0 {
-				<-started
-				go func() {
-					select {
-					case <-returned:
-					case <-time.After(c.cancelAt):
-						started <- time.Now()
-						cancel()
-					}
-				}()
-			} else if c.cancel {
+			if c.cancel {
 				<-started
 				go func() {
 					for {

@@ -3,9 +3,10 @@
 // or its context ends. It is PRD section 8's "the program runs in a process
 // group that the invoker ends when the call returns or times out", as one
 // mechanism the packages that invoke short-lived programs share rather than
-// each writing their own: internal/vcs runs git through it and
-// internal/forge runs gh through it, and internal/agents waits on its lsof
-// run through AwaitExit.
+// each writing their own: internal/vcs runs git through it,
+// internal/forge runs gh through it, internal/agents runs lsof and its tmux
+// clients through it, and internal/managed runs launchctl and systemctl
+// through it.
 //
 // It decides nothing about what a program's exit means. Run returns what
 // os/exec's Wait reported, or a refusal of its own, and the caller reads its

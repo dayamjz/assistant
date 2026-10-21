@@ -81,6 +81,10 @@ var LsofOutput = systemLsof.run
 // LsofDeadline is the deadline the listing's lsof run carries.
 const LsofDeadline = lsofDeadline
 
+// LsofGrace is the grace an lsof run under deadline gives procgroup.Run,
+// which is how long output held open past lsof's exit is waited on.
+var LsofGrace = lsofGrace
+
 // ReadCwdsWithLsof is the listing's read of the working directories, made
 // through the same run with program in place of /usr/sbin/lsof and
 // deadline in place of LsofDeadline, so a test can cancel ctx partway.
