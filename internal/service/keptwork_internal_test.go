@@ -76,7 +76,7 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	var entry store.KeptWork
 	deadline := time.Now().Add(loopWait)
 	for {
-		kept, err := l.records(t).UnansweredKeptWork(ctx)
+		kept, err := l.records(t).OpenKeptWork(ctx)
 		if err != nil {
 			t.Fatal(err)
 		}

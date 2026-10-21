@@ -44,9 +44,9 @@ func TestKeptWorkIsWrittenOncePerCopyAndWhatItHolds(t *testing.T) {
 	if err != nil || !wrote || moved.ID == first.ID {
 		t.Fatalf("the same copy holding other commits = %+v, wrote %v, %v; want a second entry", moved, wrote, err)
 	}
-	unanswered, err := s.UnansweredKeptWork(ctx)
+	unanswered, err := s.OpenKeptWork(ctx)
 	if err != nil || len(unanswered) != 2 || unanswered[0].ID != first.ID || !slices.Equal(unanswered[0].Holds, []string{"aaaa"}) {
-		t.Fatalf("UnansweredKeptWork = %+v, %v; want both, oldest first", unanswered, err)
+		t.Fatalf("OpenKeptWork = %+v, %v; want both, oldest first", unanswered, err)
 	}
 
 	for name, k := range map[string]KeptCopy{
@@ -114,8 +114,8 @@ func TestKeptWorkIsAnsweredOnceAndOtherwiseSealed(t *testing.T) {
 	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || got.Answer.Or("") != KeptDiscard {
 		t.Fatalf("after a refused second answer the entry reads %+v, %v; want the first answer", got, err)
 	}
-	if unanswered, err := s.UnansweredKeptWork(ctx); err != nil || len(unanswered) != 0 {
-		t.Fatalf("UnansweredKeptWork = %+v, %v; want none once answered", unanswered, err)
+	if unanswered, err := s.OpenKeptWork(ctx); err != nil || len(unanswered) != 0 {
+		t.Fatalf("OpenKeptWork = %+v, %v; want none once answered", unanswered, err)
 	}
 
 	for name, statement := range map[string]string{
@@ -127,5 +127,65 @@ func TestKeptWorkIsAnsweredOnceAndOtherwiseSealed(t *testing.T) {
 		if _, err := s.write.ExecContext(ctx, statement, entry.ID); err == nil || !strings.Contains(err.Error(), "kept work entry") {
 			t.Errorf("%s was not refused by the seal: %v", name, err)
 		}
+	}
+}
+
+// An entry closes without an answer only when its owner's copy is marked
+// removed on a proof, in that transaction: the open entry is closed as
+// KeptRemovedOnProof with the proof, it is no longer listed, an answer to it
+// is refused, and the closure cannot be written again or reopened. An entry
+// a person already answered keeps its answer, and recording a proof alone,
+// with no removal, closes nothing.
+func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+	open, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/run-1", Holds: []string{"aaaa"}, Reason: "unproven"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/w/run-1", Holds: []string{"bbbb"}, Reason: "copy-dirty"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AnswerKeptWork(ctx, answered.ID, KeptCarryOn, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run.ID, Proof: Known(CleanupProofRemoteBranch), Examined: []string{"aaaa"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.KeptWorkEntry(ctx, open.ID); err != nil || !got.Open() {
+		t.Fatalf("a proof recorded with no removal closed the entry: %+v, %v", got, err)
+	}
+	if err := s.MarkRunCleanupRemoved(ctx, run.ID, time.Now()); err != nil {
+		t.Fatalf("MarkRunCleanupRemoved: %v", err)
+	}
+	closed, err := s.KeptWorkEntry(ctx, open.ID)
+	if err != nil || closed.Closure.Or("") != KeptRemovedOnProof || closed.ClosedProof.Or("") != CleanupProofRemoteBranch ||
+		!closed.ClosedAt.IsKnown() || closed.Answered() || closed.Open() {
+		t.Fatalf("after the removal the entry reads %+v, %v; want it closed as removed on the remote-branch proof", closed, err)
+	}
+	if kept, err := s.KeptWorkEntry(ctx, answered.ID); err != nil || kept.Answer.Or("") != KeptCarryOn || kept.Closure.IsKnown() {
+		t.Fatalf("the answered entry reads %+v, %v; want its answer kept and no closure", kept, err)
+	}
+	if listed, err := s.OpenKeptWork(ctx); err != nil || len(listed) != 0 {
+		t.Fatalf("OpenKeptWork = %+v, %v; want none", listed, err)
+	}
+	if _, err := s.AnswerKeptWork(ctx, open.ID, KeptDiscard, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkClosed) {
+		t.Fatalf("answering a closed entry = %v; want ErrKeptWorkClosed", err)
+	}
+	for name, statement := range map[string]string{
+		"a second closure":   `UPDATE kept_work SET closed_at = '2000-01-01T00:00:00.000000000Z' WHERE id = ?`,
+		"a reopening":        `UPDATE kept_work SET closure = NULL, closed_proof = NULL, closed_at = NULL WHERE id = ?`,
+		"an answer after it": `UPDATE kept_work SET answer = 'land', answered_by = 'person', answered_at = closed_at WHERE id = ?`,
+	} {
+		if _, err := s.write.ExecContext(ctx, statement, open.ID); err == nil || !strings.Contains(err.Error(), "kept work entry") {
+			t.Errorf("%s was not refused by the seal: %v", name, err)
+		}
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET closure = 'removed-on-proof', closed_proof = 'remote-branch', closed_at = answered_at WHERE id = ?`,
+		answered.ID); err == nil || !strings.Contains(err.Error(), "kept work entry") {
+		t.Errorf("closing an answered entry was not refused by the seal: %v", err)
 	}
 }

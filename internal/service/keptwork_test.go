@@ -168,3 +168,58 @@ func readServiceLog(t *testing.T, h *home.Home) string {
 	}
 	return string(text)
 }
+
+// A kept copy whose work later lands is removed on that proof and its entry
+// closes with it, as the program's closure and never as a discard: the run's
+// copy is kept and recorded, the commit it stands on is then pushed to the
+// upstream branch, and the next service's recovery removes the copy on the
+// remote-branch proof. Status no longer lists the entry, and the entry
+// records the closure and the proof with no answer. Without the closure the
+// removed copy's entry stays listed.
+func TestAKeptCopyWhoseWorkLandsIsRemovedAndItsEntryClosed(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+
+	var entry store.KeptWork
+	withService(t, h, func(under serviceUnderTest) {
+		started := startRunSkipping(t, under.client, subject, afterIntent()...)
+		runByID(t, under.client, started.Record.ID)
+		status := statusOf(t, under.client, subject)
+		if len(status.KeptWork) != 1 {
+			t.Fatalf("status lists kept work %+v, want the run's one entry", status.KeptWork)
+		}
+		entry = status.KeptWork[0]
+	})
+	git(t, subject, "push", "--quiet", "origin", "work")
+
+	withService(t, h, func(under serviceUnderTest) {
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			if _, err := os.Stat(entry.CopyPath); os.IsNotExist(err) {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("recovery left the copy at %s standing after its work landed; the log reads:\n%s", entry.CopyPath, readServiceLog(t, h))
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if listed := statusOf(t, under.client, subject).KeptWork; len(listed) != 0 {
+			t.Fatalf("status still lists kept work %+v for a copy removed on a proof", listed)
+		}
+	})
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = records.Close() }()
+	closed, err := records.KeptWorkEntry(t.Context(), entry.ID)
+	if err != nil || closed.Closure.Or("") != store.KeptRemovedOnProof ||
+		closed.ClosedProof.Or("") != store.CleanupProofRemoteBranch || closed.Answered() {
+		t.Fatalf("entry %d reads %+v (%v), want it closed as removed on the remote-branch proof with no answer", entry.ID, closed, err)
+	}
+}

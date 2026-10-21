@@ -160,8 +160,9 @@ func (s *Store) MarkCleanupRemoved(ctx context.Context, taskID string, at time.T
 		return fmt.Errorf("store: marking the cleanup of task %s removed: the removal has no time", taskID)
 	}
 	return s.inTx(ctx, func(tx *sql.Tx) error {
+		var proof string
 		var removed Optional[string]
-		err := tx.QueryRowContext(ctx, `SELECT removed_at FROM task_cleanup WHERE task_id = ?`, taskID).Scan(&removed)
+		err := tx.QueryRowContext(ctx, `SELECT proof, removed_at FROM task_cleanup WHERE task_id = ?`, taskID).Scan(&proof, &removed)
 		if err != nil {
 			return fmt.Errorf("store: marking the cleanup of task %s removed: %w", taskID, errNoRows(err))
 		}
@@ -172,7 +173,7 @@ func (s *Store) MarkCleanupRemoved(ctx context.Context, taskID string, at time.T
 			encodeTime(at), taskID); err != nil {
 			return fmt.Errorf("store: marking the cleanup of task %s removed: %w", taskID, err)
 		}
-		return nil
+		return closeKeptWorkOnRemovalTx(ctx, tx, "task_id", taskID, proof, at)
 	})
 }
 

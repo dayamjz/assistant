@@ -78,9 +78,16 @@ import (
 // through reclaimAtRecovery, for a finished run whose copy still stands. What
 // surfaces the entry is the supervisor loop, as a kept-work wake about the
 // task the entry's owner is or is attributed to, and the status and catch-up
-// reads, which list every unanswered entry; supervise.go and catchup.go own
-// those. Answering an entry is #411's second part and is not in this build:
-// nothing here acts on an answer, and nothing holds a dispatch on an entry.
+// reads, which list every open entry; supervise.go and catchup.go own
+// those. An entry closes without an answer only when its copy is removed
+// on a P12 proof: internal/store's MarkCleanupRemoved and
+// MarkRunCleanupRemoved close the owner's open entries in the transaction
+// that marks the removal, so a copy whose work later landed (recovery's
+// reclaim among the paths) leaves no entry listed for a copy that is gone.
+// This build records and surfaces kept work and does not yet hold
+// dispatch: an open entry does not stop a new task in its project from
+// dispatching, and nothing here acts on an answer. Both are #411's second
+// part.
 
 // keepWork records the kept work entry for a kept copy and logs what came of
 // it. It is the one call a site makes for a copy kept because its work has

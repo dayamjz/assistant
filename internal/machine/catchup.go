@@ -45,10 +45,11 @@ type CatchUp struct {
 	// Stopped is every task that resolves Failed or Unknown, each with its
 	// next action in its phrase.
 	Stopped []Task `json:"stopped"`
-	// Kept is every kept work entry nobody has answered, oldest first: PRD
-	// section 6's kept work, which surfaces in this read at once. It is not
-	// filtered by the seen mark, because an entry is shown until it is
-	// answered.
+	// Kept is every kept work entry still open, oldest first: neither
+	// answered nor closed by the copy's removal on a proof. It is PRD
+	// section 6's kept work, which surfaces in this read at once, and it is
+	// not filtered by the seen mark, because an entry is shown while it is
+	// open.
 	Kept []store.KeptWork `json:"kept"`
 	// Supervision is the pull guard's finding over the same fleet,
 	// computed by the service that answered, as Tasks carries it: the

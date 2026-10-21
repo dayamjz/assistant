@@ -263,7 +263,7 @@ func answer(v any) (json.RawMessage, error) {
 // and is exactly the state assistant init exists to change. The local branch
 // state includes PRD section 11's classification, through custodyStatus,
 // which fetches nothing and writes nothing in the working copy. Every
-// unanswered kept work entry of the working copy's repository is listed
+// open kept work entry of the working copy's repository is listed
 // whichever branch it was kept on, because PRD section 6 has kept work
 // surface in status at once and holds a project rather than a branch.
 func (s *Service) status(ctx context.Context, req machine.StatusRequest) (machine.Status, error) {
@@ -291,7 +291,7 @@ func (s *Service) status(ctx context.Context, req machine.StatusRequest) (machin
 		return out, nil
 	}
 	out.Repository = &repository
-	kept, err := s.store.UnansweredKeptWork(ctx)
+	kept, err := s.store.OpenKeptWork(ctx)
 	if err != nil {
 		return machine.Status{}, err
 	}

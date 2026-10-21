@@ -165,8 +165,13 @@
 // once by RecordKeptWork with its one owner, a task or a run, and the
 // project and branch read off that owner's row in the same transaction. A
 // copy holding the same commits at the same path is the same row, so the
-// write is idempotent. AnswerKeptWork is its one revision, made once with
-// the answer and its Resolver; MarkKeptWorkSurfaced moves when it last
+// write is idempotent. Its one revision closes it, made once and only while
+// it is open: AnswerKeptWork with a person's answer and its Resolver, or the
+// program's KeptRemovedOnProof, which only MarkCleanupRemoved and
+// MarkRunCleanupRemoved write, in the transaction that marks the owner's
+// copy removed on a proof, so the program never closes an entry by
+// discarding it; OpenKeptWork lists neither kind of closed row.
+// MarkKeptWorkSurfaced moves when it last
 // surfaced, only forward. The schema seals all three, and a row is not
 // deleted while its owner stands. keptwork.go names the gap a run's entry
 // leaves when its repository is forgotten.

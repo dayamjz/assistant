@@ -2046,8 +2046,14 @@ var schema = []migration{
 			// decision's word for why it was kept and detail its account,
 			// redacted, as evidence.
 			//
-			// The row is written once. The answer, with who gave it and
-			// when, is its one revision, made once. surfaced_at is the one
+			// The row is written once. Its one revision closes it, made once
+			// and only while it is open: either a person's answer, with who
+			// gave it and when, or the program's closure, written only in the
+			// transaction that marks the copy's cleanup removed on a P12
+			// proof, with the proof that removed it. The two exclude each
+			// other, and a closure is never a discard: it records a copy the
+			// program removed because its work was shown safe elsewhere,
+			// which is the only removal the program makes. surfaced_at is the one
 			// other column that moves, and only forward: it is when the
 			// entry was last raised to someone, which the PRD's row lists
 			// beside the answer, so it cannot be fixed at the write. A copy
@@ -2074,12 +2080,18 @@ var schema = []migration{
 				answer        TEXT CHECK (answer IN ('land', 'carry-on', 'discard')),
 				answered_by   TEXT,
 				answered_at   TEXT,
+				closure       TEXT CHECK (closure IN ('removed-on-proof')),
+				closed_proof  TEXT,
+				closed_at     TEXT,
 				CHECK ((task_id IS NULL) <> (run_id IS NULL)),
 				CHECK ((answer IS NULL) = (answered_by IS NULL)),
 				CHECK ((answer IS NULL) = (answered_at IS NULL)),
+				CHECK ((closure IS NULL) = (closed_proof IS NULL)),
+				CHECK ((closure IS NULL) = (closed_at IS NULL)),
+				CHECK (answer IS NULL OR closure IS NULL),
 				UNIQUE (copy_path, holds)
 			) STRICT`,
-			`CREATE INDEX kept_work_unanswered ON kept_work(id) WHERE answer IS NULL`,
+			`CREATE INDEX kept_work_open ON kept_work(id) WHERE answer IS NULL AND closure IS NULL`,
 			`CREATE TRIGGER kept_work_is_written_once
 				BEFORE UPDATE OF id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at ON kept_work
 				BEGIN
@@ -2087,9 +2099,15 @@ var schema = []migration{
 				END`,
 			`CREATE TRIGGER kept_work_is_answered_once
 				BEFORE UPDATE OF answer, answered_by, answered_at ON kept_work
-				WHEN OLD.answer IS NOT NULL
+				WHEN OLD.answer IS NOT NULL OR OLD.closure IS NOT NULL
 				BEGIN
-					SELECT RAISE(ABORT, 'store: a kept work entry is answered once and the first answer stands');
+					SELECT RAISE(ABORT, 'store: a kept work entry is answered once, only while it is open, and the first answer stands');
+				END`,
+			`CREATE TRIGGER kept_work_is_closed_once
+				BEFORE UPDATE OF closure, closed_proof, closed_at ON kept_work
+				WHEN OLD.closure IS NOT NULL OR OLD.answer IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is closed once, only while it is open, and the first closure stands');
 				END`,
 			`CREATE TRIGGER kept_work_surfaces_forward
 				BEFORE UPDATE OF surfaced_at ON kept_work

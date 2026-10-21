@@ -35,8 +35,10 @@ paths: ["internal/store/**"]
   row per kept copy and the commits it holds (`RecordKeptWork` finds the row
   already written for the same pair), naming one owner, a task or a run,
   with project and branch read off that owner's row. It is written once;
-  `AnswerKeptWork` is its one revision, made once, and `surfaced_at` the one
-  other column that moves, only forward. A run's entry goes with its run in
+  its one revision closes it, once: a person's answer (`AnswerKeptWork`) or
+  the program's `KeptRemovedOnProof`, written only by `MarkCleanupRemoved`
+  and `MarkRunCleanupRemoved` in the removal's transaction, never a discard.
+  `surfaced_at` is the one other column that moves, only forward. A run's entry goes with its run in
   `ForgetRepository`, answered or not, which `keptwork.go` names as a gap.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number

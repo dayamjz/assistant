@@ -455,16 +455,23 @@ proof held, or the copy holds changes, files or a stash no commit records),
 the service records a kept-work entry for it: whose copy it was, the
 project and branch, the commits the copy was read to hold, and why it was
 kept. A restart does the same for a finished run's copy it finds still
-standing. Each unanswered entry is listed after the four parts of the
+standing. Each open entry is listed after the four parts of the
 catch-up read (`kept` in `--json`) and in `assistant status` for its
 project (`kept_work` in `--json`). An entry about a task, or about a run
 attributed to a task, also raises one `kept-work` wake, which reaches the
 coordinator and the notify command like any other wake; an entry about a
 run no task names, such as the run your own push started, raises none.
 
-Answering an entry (land, carry on or discard), and holding new task work
-in a project until its entries are answered, are not in this build yet: the
-copy stays where it is, and nothing removes it for you.
+If the copy's work later turns up somewhere safe, for example once you push
+its commit to the upstream branch, the next cleanup of it (for a run's copy,
+the next service start) removes the copy on that proof and closes the entry
+as removed on a proof, recorded as the program's and never as a discard; a
+closed entry is no longer listed. Nothing else removes a kept copy.
+
+This build records and surfaces kept work and does not yet hold dispatch:
+a new task in a project with an open entry still dispatches. Answering an
+entry (land, carry on or discard) and holding new task work until its
+entries are answered are #411 part 2.
 
 ## Waiting on a fleet
 

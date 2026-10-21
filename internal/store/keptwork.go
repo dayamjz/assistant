@@ -38,13 +38,27 @@ func (a KeptAnswer) Recognized() bool {
 	return false
 }
 
+// KeptClosure is how the program closed an entry nobody answered. The set
+// is closed and holds one member, and none of its members is a discard.
+type KeptClosure string
+
+// KeptRemovedOnProof is the entry's copy removed by the cleanup decision on
+// one of P12's proofs: its work was shown safe elsewhere after it was kept,
+// a commit pushed to the upstream branch since among them. Only
+// MarkCleanupRemoved and MarkRunCleanupRemoved write it, in the transaction
+// that marks the removal, so nothing but a proven removal closes an entry
+// this way.
+const KeptRemovedOnProof KeptClosure = "removed-on-proof"
+
 // KeptWork is one row of PRD section 8's kept work record: an isolated copy
 // kept because its work has not landed, PRD principle P15's "kept work is
 // never silent". It is written once, by RecordKeptWork, when the copy is
-// kept; its one revision is the answer, made once by AnswerKeptWork; and
-// SurfacedAt, the PRD row's "when it last surfaced", is the one other field
-// that moves, only forward, through MarkKeptWorkSurfaced. The schema's seals
-// hold all three.
+// kept. Its one revision closes it, once and only while it is open: a
+// person's answer through AnswerKeptWork, or the program's closure,
+// KeptRemovedOnProof, when the copy is removed on a proof. SurfacedAt, the
+// PRD row's "when it last surfaced", is the one other field that moves,
+// only forward, through MarkKeptWorkSurfaced. The schema's seals hold all of
+// it.
 //
 // What it holds is what the copy was read to hold when it was kept, not
 // what it holds now: a copy changed since is described by the entry a later
@@ -97,10 +111,19 @@ type KeptWork struct {
 	AnsweredBy Optional[Resolver] `json:"-"`
 	// AnsweredAt is when the answer was recorded.
 	AnsweredAt Optional[time.Time] `json:"answered_at"`
+	// Closure is the program's closure, unknown unless the copy was
+	// removed on a proof; ClosedProof is that proof and ClosedAt when.
+	Closure     Optional[KeptClosure]  `json:"closure"`
+	ClosedProof Optional[CleanupProof] `json:"closed_proof"`
+	ClosedAt    Optional[time.Time]    `json:"closed_at"`
 }
 
-// Answered reports whether the entry carries its answer.
+// Answered reports whether the entry carries a person's answer.
 func (k KeptWork) Answered() bool { return k.Answer.IsKnown() }
+
+// Open reports whether the entry is still owed a decision: neither answered
+// nor closed by the program.
+func (k KeptWork) Open() bool { return !k.Answer.IsKnown() && !k.Closure.IsKnown() }
 
 // KeptCopy is what a caller states when a copy is kept: whose it is, where
 // it stands, what it was read to hold, and why it was kept. The project and
@@ -124,6 +147,10 @@ type KeptCopy struct {
 // ErrKeptWorkAnswered is returned by AnswerKeptWork for an entry already
 // answered. The first answer stands and nothing is written.
 var ErrKeptWorkAnswered = errors.New("store: the kept work entry is already answered")
+
+// ErrKeptWorkClosed is returned by AnswerKeptWork for an entry the program
+// closed because its copy was removed on a proof. Nothing is written.
+var ErrKeptWorkClosed = errors.New("store: the kept work entry was closed when its copy was removed on a proof")
 
 // ErrUnknownKeptAnswer is returned by AnswerKeptWork for an answer outside
 // KeptAnswers.
@@ -204,28 +231,28 @@ func (s *Store) KeptWorkEntry(ctx context.Context, id int64) (KeptWork, error) {
 	return k, nil
 }
 
-// UnansweredKeptWork returns every entry that carries no answer, oldest
-// first. It is the read the supervisor loop, status and the catch-up read
-// list kept work from.
-func (s *Store) UnansweredKeptWork(ctx context.Context) ([]KeptWork, error) {
+// OpenKeptWork returns every entry still owed a decision, neither answered
+// nor closed, oldest first. It is the read the supervisor loop, status and
+// the catch-up read list kept work from.
+func (s *Store) OpenKeptWork(ctx context.Context) ([]KeptWork, error) {
 	if err := s.live(); err != nil {
 		return nil, err
 	}
-	rows, err := s.read.QueryContext(ctx, keptWorkColumns+` FROM kept_work WHERE answer IS NULL ORDER BY id`)
+	rows, err := s.read.QueryContext(ctx, keptWorkColumns+` FROM kept_work WHERE answer IS NULL AND closure IS NULL ORDER BY id`)
 	if err != nil {
-		return nil, fmt.Errorf("store: reading the unanswered kept work: %w", err)
+		return nil, fmt.Errorf("store: reading the open kept work: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []KeptWork
 	for rows.Next() {
 		k, err := scanKeptWork(rows)
 		if err != nil {
-			return nil, fmt.Errorf("store: reading the unanswered kept work: %w", err)
+			return nil, fmt.Errorf("store: reading the open kept work: %w", err)
 		}
 		out = append(out, k)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: reading the unanswered kept work: %w", err)
+		return nil, fmt.Errorf("store: reading the open kept work: %w", err)
 	}
 	return out, nil
 }
@@ -254,7 +281,7 @@ func (s *Store) MarkKeptWorkSurfaced(ctx context.Context, id int64, at time.Time
 
 // AnswerKeptWork records the entry's answer and who gave it, once. An
 // answer outside KeptAnswers is ErrUnknownKeptAnswer, the zero Resolver is
-// ErrNoResolver, an entry already answered is ErrKeptWorkAnswered, and an
+// ErrNoResolver, an entry already answered is ErrKeptWorkAnswered, one the program closed is ErrKeptWorkClosed, and an
 // unknown identifier is ErrNotFound; in each case nothing is written. It
 // records and acts on nothing: what an answer does to the copy is its
 // caller's, and who answered is recorded and never consulted, on
@@ -276,6 +303,9 @@ func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 		if k.Answered() {
 			return ErrKeptWorkAnswered
 		}
+		if k.Closure.IsKnown() {
+			return ErrKeptWorkClosed
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ? WHERE id = ?`,
 			string(a), who, encodeTime(nowUTC()), id); err != nil {
 			return err
@@ -290,14 +320,14 @@ func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 }
 
 const keptWorkColumns = `SELECT id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
-	surfaced_at, answer, answered_by, answered_at`
+	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at`
 
 func scanKeptWork(sc scanner) (KeptWork, error) {
 	var k KeptWork
 	var holds, kept string
-	var surfaced, answer, by, answered Optional[string]
+	var surfaced, answer, by, answered, closure, proof, closed Optional[string]
 	if err := sc.Scan(&k.ID, &k.TaskID, &k.RunID, &k.RepositoryID, &k.Branch, &k.CopyPath, &holds, &k.Reason, &k.Detail,
-		&kept, &surfaced, &answer, &by, &answered); err != nil {
+		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed); err != nil {
 		return KeptWork{}, err
 	}
 	if err := json.Unmarshal([]byte(holds), &k.Holds); err != nil {
@@ -322,7 +352,33 @@ func scanKeptWork(sc scanner) (KeptWork, error) {
 	if k.AnsweredAt, err = optionalTimeValue(answered, "answered_at"); err != nil {
 		return KeptWork{}, err
 	}
+	if c, ok := closure.Get(); ok {
+		if KeptClosure(c) != KeptRemovedOnProof {
+			return KeptWork{}, fmt.Errorf("column closure: not a closure of kept work: %q", c)
+		}
+		k.Closure = Known(KeptClosure(c))
+	}
+	if p, ok := proof.Get(); ok {
+		k.ClosedProof = Known(CleanupProof(p))
+	}
+	if k.ClosedAt, err = optionalTimeValue(closed, "closed_at"); err != nil {
+		return KeptWork{}, err
+	}
 	return k, nil
+}
+
+// closeKeptWorkOnRemovalTx closes, as KeptRemovedOnProof, every open entry
+// the owner's copy has, inside the transaction that marks that copy's
+// cleanup removed on proof. column is task_id or run_id, and nothing outside
+// this package can name it.
+func closeKeptWorkOnRemovalTx(ctx context.Context, tx *sql.Tx, column, owner, proof string, at time.Time) error {
+	_, err := tx.ExecContext(ctx, `UPDATE kept_work SET closure = ?, closed_proof = ?, closed_at = ?
+		WHERE `+column+` = ? AND answer IS NULL AND closure IS NULL`,
+		string(KeptRemovedOnProof), proof, encodeTime(at), owner)
+	if err != nil {
+		return fmt.Errorf("closing the kept work of the removed copy: %w", err)
+	}
+	return nil
 }
 
 // optionalText is an empty string as an unknown column and anything else as

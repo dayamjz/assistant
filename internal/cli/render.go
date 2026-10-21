@@ -694,7 +694,7 @@ func readOutTask(w io.Writer, task machine.Task) {
 // phrase, the decision's row for a run held at one; a hold's is its row,
 // beside the project of the task it names. Landed records past the read's
 // bound are counted on a row of their own. Kept work follows the four parts
-// under a row of its own, one line per unanswered entry. Identifiers, the answer's
+// under a row of its own, one line per open entry. Identifiers, the answer's
 // command line and the records themselves are the structured rendering's,
 // which the rows that need one point at.
 func readOutCatchUp(w io.Writer, c machine.CatchUp) {
@@ -734,7 +734,7 @@ func readOutCatchUp(w io.Writer, c machine.CatchUp) {
 	}
 }
 
-// keptWorkLine is one unanswered kept work entry: the branch it was kept on,
+// keptWorkLine is one open kept work entry: the branch it was kept on,
 // which is the person's own text and escaped, beside its row, or the row
 // alone for a copy kept on no branch. Its copy's path and the commits it
 // holds are the structured rendering's, which the row points at.

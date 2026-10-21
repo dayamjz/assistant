@@ -575,7 +575,7 @@ func (s *Service) pass(c *incarnation) passReport {
 		return report
 	}
 	ctx, cancel = s.sup.bound(c.ctx)
-	kept, err := s.store.UnansweredKeptWork(ctx)
+	kept, err := s.store.OpenKeptWork(ctx)
 	cancel()
 	if err != nil {
 		report.Err = err
@@ -751,7 +751,7 @@ type observation struct {
 	// coordinator handed up about it, oldest first, read from the
 	// escalation record (P8), and empty for a task in no domain.
 	escalations []store.Escalation
-	// kept is every unanswered kept work entry whose owner is the task or a
+	// kept is every open kept work entry whose owner is the task or a
 	// run attributed to it, oldest first, read from the kept work record.
 	kept []store.KeptWork
 }
@@ -782,7 +782,7 @@ func surfacedKey(kind supervisor.Kind, marker string) string { return string(kin
 // written and not acknowledged once escalation_window has elapsed from the
 // instant the record says it was written, not yet surfaced, a decision the
 // task's domain's subordinate coordinator handed up, not yet surfaced, an
-// unanswered kept work entry about the task, not yet surfaced, and for a
+// open kept work entry about the task, not yet surfaced, and for a
 // watched task each event past the marker's sequence and then its
 // terminal. The first five are made for every task, watched or not, and
 // each surfaces once: its key is in the wake table afterwards. The
@@ -975,7 +975,7 @@ func escalationMarker(id int64) string { return fmt.Sprintf("escalation:%d", id)
 // surfaces once.
 func keptWorkMarker(id int64) string { return fmt.Sprintf("kept-work:%d", id) }
 
-// keptWorkByTask places each unanswered kept work entry on the task it is
+// keptWorkByTask places each open kept work entry on the task it is
 // about: the task that owns it, or the task a run that owns it is attributed
 // to, read off the task's own snapshot. An entry about a run no task names is
 // on no task, so it raises no wake; status and the catch-up read list it, and
