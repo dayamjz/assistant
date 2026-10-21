@@ -169,7 +169,7 @@ func TestKeysAreTheWholeSchemaAndUnique(t *testing.T) {
 		KeyRunBudget, KeyIgnorePatterns, KeyReviewPathRules, KeyJudgePaths, KeyDocumentOwnership,
 		KeySuppressProjectInstructions, KeyNoCI, KeyChecksTimeout, KeySessionReuse,
 		KeyDecisionModel, KeySupervisionBeaconInterval, KeyEscalationWindow, KeyRecheckWindow,
-		KeyStallInspectionCount, KeyRelaunchAttempts, KeyStopGrace, KeyCommandTimeout, KeyCommitFixMessage, KeyAllowPushedCommands,
+		KeyStallInspectionCount, KeyRelaunchAttempts, KeyStopGrace, KeyCommandTimeout, KeyPromotionWindow, KeyCommitFixMessage, KeyAllowPushedCommands,
 		KeyAutonomyMerge,
 		KeyDelivery, KeyAllowStandingConsent, KeySessionProvider,
 		KeyUsageCeilingWindow, KeyUsageCeilingInputTokens, KeyUsageCeilingOutputTokens,

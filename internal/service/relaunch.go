@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/store"
@@ -96,8 +98,10 @@ import (
 // The worker is started with the task's instructions file, second check
 // included, followed by relaunchNote: which attempt this is, that the
 // previous terminal was found gone with the work not landed, and that the
-// copy is as the previous worker left it. It is appended at launch and not
-// written into the file, so the file stays the coordinator's text plus the
+// copy is as the previous worker left it. A promoted investigation's
+// relaunch, coordinator.go's after promotion_window among them, adds the
+// stored report as its starting point (promotedReportNote). It is appended
+// at launch and not written into the file, so the file stays the coordinator's text plus the
 // second check and a later attempt does not read an earlier attempt's note.
 
 // relaunchedKind is the note internal/taskstate gives a relaunch, appended
@@ -170,6 +174,9 @@ type relaunched struct {
 	launch     dispatched
 	superseded string
 	swept      string
+	// fromReport says the launch's note carries the stored report of the
+	// investigation the task was promoted from.
+	fromReport bool
 }
 
 // relaunchTask relaunches one task in place, on the terms this file's
@@ -276,6 +283,10 @@ func (s *Service) relaunchClaimed(ctx context.Context, id, stopNote string) (rel
 	if err != nil {
 		return relaunched{}, err
 	}
+	report, fromReport, err := s.promotedReportOf(ctx, r.Record)
+	if err != nil {
+		return relaunched{}, err
+	}
 
 	// The re-probe, then the sweep, then the claim.
 	latest := attempts[len(attempts)-1]
@@ -357,6 +368,9 @@ func (s *Service) relaunchClaimed(ctx context.Context, id, stopNote string) (rel
 		}
 		told += steeringNote(stopNote, unacknowledged)
 	}
+	if fromReport {
+		told += promotedReportNote(report)
+	}
 	return relaunched{
 		launch: dispatched{
 			id: id, proof: proof, attempt: attempt.Sequence, want: e.want, instructions: e.instructions,
@@ -364,7 +378,42 @@ func (s *Service) relaunchClaimed(ctx context.Context, id, stopNote string) (rel
 		},
 		superseded: ref,
 		swept:      swept.words,
+		fromReport: fromReport,
 	}, nil
+}
+
+// promotedReportOf reads the stored report of the investigation a delivery
+// task was promoted from, which is the starting point PRD section 6 gives a
+// worker relaunched after promotion_window. Only an investigation stores a
+// report and promotion keeps the row, so a delivery task with one is a
+// promoted investigation; a delivery task without one, and every
+// investigation, has none to carry. A read that fails refuses the relaunch
+// before anything is claimed rather than starting a worker without the
+// report it is owed.
+func (s *Service) promotedReportOf(ctx context.Context, task store.Task) (store.TaskReport, bool, error) {
+	if task.Shape != store.TaskDelivery {
+		return store.TaskReport{}, false, nil
+	}
+	report, err := s.store.TaskReport(ctx, task.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return store.TaskReport{}, false, nil
+	case err != nil:
+		return store.TaskReport{}, false, fmt.Errorf("service: reading the stored report of promoted task %s for its relaunch: %w", task.ID, err)
+	}
+	return report, true, nil
+}
+
+// promotedReportNote is the stored report a promoted task's relaunched
+// worker starts from, after the relaunch note: the body as stored, which
+// internal/tasks redacted before storing it, under words that say whose
+// account it is.
+func promotedReportNote(report store.TaskReport) string {
+	return "\n\n## The investigation's report\n\n" +
+		"This task began as an investigation and was promoted to delivery. The worker that investigated filed the " +
+		"report below at " + report.RecordedAt.UTC().Format(time.RFC3339) + " and is no longer running. Start from " +
+		"it rather than investigating again: it is that worker's own account, kept as evidence, and what you are to " +
+		"deliver is the intent in your instructions.\n\n" + strings.TrimSpace(report.Body) + "\n"
 }
 
 // acknowledgeSuperseded acknowledges, as the program, every queued wake that

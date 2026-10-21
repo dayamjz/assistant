@@ -34,14 +34,15 @@ import (
 // again when a landed task's terminal is next observed Dead, from the
 // supervisor's pass and from task.stop.
 //
-// An investigation task's copy is cleaned up once its report is stored. The
-// report arrives from the task's worker over its route, as task.event's
-// report kind, which workers.go hands to route.go's fileReport, and
-// storeTaskReport stores it through internal/tasks and then asks for the
-// cleanup. The worker that filed it is usually still running then, so that
-// first ask is refused with the live terminal and keeps the copy; landed.go's
-// pass asks again once the terminal is observed Dead, on the terms it states
-// for a reported investigation, and that is the ask that removes the copy.
+// An investigation task's copy is not cleaned up when its report is
+// stored. The report arrives from the task's worker over its route, as
+// task.event's report kind, which workers.go hands to route.go's
+// fileReport, and storeTaskReport stores it through internal/tasks; the
+// copy is then kept for a promotion, whose relaunch after promotion_window
+// is in that same copy, on landed.go's terms for a reported investigation.
+// Its cleanup is asked once the coordinator records its findings relayed,
+// which moves the task into the terminal tier, through settleLanded and
+// the supervisor's pass.
 //
 // Both task-copy sites hand internal/tasks the terminal's liveness as the
 // service's task reader resolved it, Basis.Process of the resolution the
@@ -108,12 +109,10 @@ func (s *Service) cleanUpLanded(ctx context.Context, record store.Run) {
 
 // storeTaskReport stores an investigation task's report through
 // internal/tasks, publishes the holds it registered and the history entry
-// that claims Reported at internal/taskstate's event tier, asks for its
-// copy's cleanup, and then releases what is queued behind the task, through
-// releaseInBackground. It returns what the store refused; the cleanup's
-// answer goes to the log on this file's terms, and a task whose terminal
-// could not be read after the report was stored is a cleanup not asked for
-// rather than one asked with a stated liveness.
+// that claims Reported at internal/taskstate's event tier, and then
+// releases what is queued behind the task, through releaseInBackground. It
+// returns what the store refused. It asks no cleanup of the task's copy,
+// which is kept for a promotion on this file's terms.
 //
 // The release follows the stored report and not the history entry or a log
 // line (P8): it is asked only once StoreReport has returned the row, which
@@ -135,13 +134,6 @@ func (s *Service) storeTaskReport(ctx context.Context, taskID, raw string) (task
 		s.publishHoldState(h)
 	}
 	s.publishTaskEvent(stored.Event)
-	resolved, err := s.tasks().Resolved(ctx, taskID)
-	if err != nil {
-		s.log.Printf("the isolated copy of task %s was not cleaned up: its terminal could not be read: %v", taskID, err)
-		s.releaseInBackground()
-		return stored, nil
-	}
-	s.logCleanup(s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: taskID, Terminal: resolved.State.Basis.Process}))
 	s.releaseInBackground()
 	return stored, nil
 }

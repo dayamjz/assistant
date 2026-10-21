@@ -46,7 +46,8 @@ paths: ["internal/service/**"]
   alike.
 - Cleanup and sweep: it is the caller of `internal/tasks`' cleanup decision
   and decides nothing of it, and no verb reaches any of it. `cleanup.go` owns
-  the sites, `landed.go` ending a landed task's worker and asking again, and
+  the sites, `landed.go` ending a landed task's worker and asking again, and a
+  reported investigation's after `promotion_window` while keeping its copy, and
   `runsweep.go` the sweep of a finished run's copy: what the order
   guarantees and its gaps.
 - Run activity: whether anything is advancing a run is a third fact neither

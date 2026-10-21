@@ -44,6 +44,7 @@ recheck_window: 3h
 stall_inspection_count: 5
 relaunch_attempts: 3
 stop_grace: 45s
+promotion_window: 2h
 command_timeout: 45m
 commit:
   fix_message: "fix(gate): {summary}"
@@ -86,6 +87,7 @@ const wholeSchemaJSON = `{
 	"stall_inspection_count": 5,
 	"relaunch_attempts": 3,
 	"stop_grace": "45s",
+	"promotion_window": "2h",
 	"command_timeout": "45m",
 	"commit": {"fix_message": "fix(gate): {summary}"},
 	"allow_pushed_commands": true,
