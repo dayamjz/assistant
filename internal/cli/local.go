@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -364,6 +365,13 @@ type originAmbiguous struct{}
 // can read them with git remote -v.
 func (originAmbiguous) Error() string { return machine.PhraseInitOriginAmbiguous.String() }
 
+// betweenEjectPreflightAndRemoval runs after eject has reserved the
+// repository's removal and before it checks the standing run copies and
+// touches the gate. It is nil in production and set only by this package's
+// tests, which use it to start a run of the repository inside that window
+// and show the reservation refuses it.
+var betweenEjectPreflightAndRemoval func()
+
 // eject removes the gate and its records.
 //
 // It prints what it would remove and does nothing until it is told again with
@@ -407,17 +415,79 @@ func eject(ctx context.Context, in *invocation) (any, error) {
 	if !confirm {
 		return nil, ejectPlan(binding.GateID, working)
 	}
-	if err := records.RepositoryRemovable(ctx, binding.GateID); err != nil {
+	// The preflight reserves the removal, for this process, in the
+	// transaction that found the repository forgettable, so no run of it
+	// starts from here on and no run copy can appear under the gate
+	// (internal/store's ReserveRepositoryRemoval). Every run copy still
+	// standing is then refused over, decided or not: a finished run whose
+	// cleanup has not yet decided its copy, or one kept for its work, still
+	// depends on the gate, and the gate is never removed under it. A
+	// service that opens after this process died releases the reservation.
+	owner := store.RemovalOwner{PID: os.Getpid()}
+	if self, found, err := agents.Identify(owner.PID); err == nil && found {
+		owner.Start = self.Start
+	}
+	if err := records.ReserveRepositoryRemoval(ctx, binding.GateID, owner); err != nil {
+		return nil, err
+	}
+	release := func() { _, _ = records.ReleaseRepositoryRemoval(ctx, binding.GateID, owner) }
+	if betweenEjectPreflightAndRemoval != nil {
+		betweenEjectPreflightAndRemoval()
+	}
+	if err := in.refuseStandingRunCopies(ctx, records, binding.GateID); err != nil {
+		release()
 		return nil, err
 	}
 	if err := gate.Remove(ctx, gate.Spec{Home: in.home.Root(), WorkingPath: working}, gate.WithIndex(records)); err != nil {
+		release()
 		return nil, err
 	}
 	removed, err := records.ForgetRepository(ctx, binding.GateID)
 	if err != nil {
+		release()
 		return nil, err
 	}
 	return machine.Eject{Removed: true, Repository: binding.GateID, Runs: removed}, nil
+}
+
+// standingCopiesError is eject's refusal while run copies of the repository
+// stand on disk: each one may hold work only the gate has, whether its
+// cleanup has not decided it yet or kept it.
+type standingCopiesError struct {
+	repository string
+	copies     []string
+}
+
+func (e *standingCopiesError) Error() string {
+	return fmt.Sprintf("the gate %s is not removed, because these run copies still stand and depend on it: %s. "+
+		"The service decides each copy when its run finishes, or at its next start: a copy whose work is safe elsewhere is removed, "+
+		"and one that is not becomes kept work that status lists. Run it again once they are gone",
+		e.repository, strings.Join(e.copies, ", "))
+}
+
+// refuseStandingRunCopies reads, for every run of the repository, whether its
+// copy stands where the home puts it, and refuses with standingCopiesError
+// when any does. It reads the disk and never the kept work record alone,
+// because a copy nobody has decided yet has no entry.
+func (in *invocation) refuseStandingRunCopies(ctx context.Context, records *store.Store, repository string) error {
+	runs, err := records.RunsForRepository(ctx, repository)
+	if err != nil {
+		return err
+	}
+	var standing []string
+	for _, r := range runs {
+		path := in.home.Worktree(r.RepositoryID, r.ID)
+		switch _, err := os.Lstat(path); {
+		case err == nil:
+			standing = append(standing, path)
+		case !errors.Is(err, os.ErrNotExist):
+			return fmt.Errorf("reading whether the copy of run %s stands at %s: %w", r.ID, path, err)
+		}
+	}
+	if len(standing) > 0 {
+		return &standingCopiesError{repository: repository, copies: standing}
+	}
+	return nil
 }
 
 // ejectPlan is what a removal would do, reported as a refusal to do it yet.

@@ -262,7 +262,9 @@ func answer(v any) (json.RawMessage, error) {
 // whole answer: a working copy with no gate is a legitimate thing to ask about
 // and is exactly the state assistant init exists to change. The local branch
 // state includes PRD section 11's classification, through custodyStatus,
-// which fetches nothing and writes nothing in the working copy.
+// which fetches nothing and writes nothing in the working copy. Kept work
+// is listed on keptWorkInStatus's terms, whether or not the working copy has
+// a repository record.
 func (s *Service) status(ctx context.Context, req machine.StatusRequest) (machine.Status, error) {
 	build := s.build
 	out := machine.Status{
@@ -284,10 +286,16 @@ func (s *Service) status(ctx context.Context, req machine.StatusRequest) (machin
 		if !errors.Is(err, ErrNoRepository) {
 			return machine.Status{}, err
 		}
+		if out.KeptWork, err = s.keptWorkInStatus(ctx, ""); err != nil {
+			return machine.Status{}, err
+		}
 		out.Detail = "this working copy has no repository record; run assistant init"
 		return out, nil
 	}
 	out.Repository = &repository
+	if out.KeptWork, err = s.keptWorkInStatus(ctx, repository.ID); err != nil {
+		return machine.Status{}, err
+	}
 	if out.Branch == nil || out.Branch.Name == "" {
 		return out, nil
 	}
@@ -313,6 +321,29 @@ func (s *Service) status(ctx context.Context, req machine.StatusRequest) (machin
 	}
 	out.ActiveRun = &view
 	out.Custody = s.custodyStatus(ctx, repository)
+	return out, nil
+}
+
+// keptWorkInStatus is the open kept work a status lists: every entry whose
+// project is repository, whichever branch it was kept on, because PRD
+// section 6 has kept work surface in status at once and holds a project
+// rather than a branch, and every entry whose owner names no project, an
+// investigation task's with no repository among them, because such an entry
+// belongs to no working copy and so has to be shown by every status for a
+// status to show it at all. An empty repository is a working copy with no
+// repository record, which lists the second kind alone.
+func (s *Service) keptWorkInStatus(ctx context.Context, repository string) ([]store.KeptWork, error) {
+	open, err := s.store.OpenKeptWork(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []store.KeptWork
+	for _, k := range open {
+		project, named := k.RepositoryID.Get()
+		if !named || (repository != "" && project == repository) {
+			out = append(out, k)
+		}
+	}
 	return out, nil
 }
 

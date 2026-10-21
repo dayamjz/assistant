@@ -291,6 +291,9 @@ func (s *Store) ForgetRepository(ctx context.Context, id string) (int, error) {
 			}
 			removed++
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM repository_removal WHERE repository_id = ?`, id); err != nil {
+			return fmt.Errorf("store: forgetting repository %s: %w", id, err)
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM repository WHERE id = ?`, id); err != nil {
 			return fmt.Errorf("store: forgetting repository %s: %w", id, err)
 		}
@@ -356,6 +359,11 @@ var runRecords = []runRecord{
 	{table: "agent_invocation", remove: `DELETE FROM agent_invocation WHERE run = ?`},
 	{table: "merge_record", remove: `DELETE FROM merge_record WHERE run = ?`, afterRun: true},
 	{table: "run_cleanup", remove: `DELETE FROM run_cleanup WHERE run = ?`, afterRun: true},
+	// A kept work entry about a run's copy goes with the run only once it is
+	// answered or closed on a proof: refuseUnlessForgettable refuses a
+	// repository with an open one before anything is removed, and the
+	// delete's own filter and the table's seal hold the same line again.
+	{table: "kept_work", remove: `DELETE FROM kept_work WHERE run_id = ? AND (answer IS NOT NULL OR closure IS NOT NULL)`, afterRun: true},
 	// A seen mark of a merge record is keyed by the run through its kind,
 	// which the catalog cannot say, so it is named here; it goes after the
 	// merge record it marks, which its seal requires.
@@ -394,6 +402,112 @@ func (s *Store) RepositoryRemovable(ctx context.Context, id string) error {
 	})
 }
 
+// RemovalOwner is the process holding a repository's removal reservation:
+// its identifier and the platform's reading of its start time, the pair
+// internal/agents' Identity carries, so a service opening the home can tell
+// a live eject from one that died. A zero Start is a platform that could read
+// none, which no later check can verify, and such a reservation is released
+// at the next open.
+type RemovalOwner struct {
+	PID   int
+	Start uint64
+}
+
+// RepositoryRemoval is one reservation ReserveRepositoryRemoval wrote.
+type RepositoryRemoval struct {
+	Repository string
+	Owner      RemovalOwner
+	ReservedAt time.Time
+}
+
+// ReserveRepositoryRemoval is eject's preflight when it means to act: it
+// asks refuseUnlessForgettable and, in the same transaction, reserves the
+// repository's removal for owner, so CreateRun refuses a run of it from then
+// on until ForgetRepository removes the reservation with the repository,
+// ReleaseRepositoryRemoval clears it, or a service opening the home finds
+// its owner gone. An entry committed first refuses the reservation with
+// *KeptWorkOpenError; no new run copy can appear once it stands. It returns
+// the same refusals RepositoryRemovable does, takes the reservation over
+// for owner when one stands, and answers nil with nothing written for a
+// repository that is not there.
+func (s *Store) ReserveRepositoryRemoval(ctx context.Context, id string, owner RemovalOwner) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		var one int
+		switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM repository WHERE id = ?`, id).Scan(&one); {
+		case isNoRows(err):
+			return nil
+		case err != nil:
+			return fmt.Errorf("store: reserving the removal of repository %s: %w", id, err)
+		}
+		runIDs, err := repositoryRunIDs(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if err := refuseUnlessForgettable(ctx, tx, id, runIDs); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO repository_removal (repository_id, owner_pid, owner_start, reserved_at)
+			VALUES (?, ?, ?, ?) ON CONFLICT (repository_id) DO UPDATE SET
+				owner_pid = excluded.owner_pid, owner_start = excluded.owner_start, reserved_at = excluded.reserved_at`,
+			id, owner.PID, int64(owner.Start), encodeTime(nowUTC())); err != nil {
+			return fmt.Errorf("store: reserving the removal of repository %s: %w", id, err)
+		}
+		return nil
+	})
+}
+
+// RepositoryRemovals returns every reservation standing, for the service
+// that releases the ones whose owner is gone when it opens.
+func (s *Store) RepositoryRemovals(ctx context.Context) ([]RepositoryRemoval, error) {
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	rows, err := s.read.QueryContext(ctx, `SELECT repository_id, owner_pid, owner_start, reserved_at FROM repository_removal ORDER BY repository_id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the repository removals: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RepositoryRemoval
+	for rows.Next() {
+		var r RepositoryRemoval
+		var start int64
+		var at string
+		if err := rows.Scan(&r.Repository, &r.Owner.PID, &start, &at); err != nil {
+			return nil, fmt.Errorf("store: reading the repository removals: %w", err)
+		}
+		r.Owner.Start = uint64(start)
+		if r.ReservedAt, err = decodeTime(at); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: reading the repository removals: %w", err)
+	}
+	return out, nil
+}
+
+// ReleaseRepositoryRemoval clears the reservation owner holds of the
+// repository's removal, for an eject that did not complete or whose owner is
+// gone, and reports whether it cleared one. It is anchored on the owner: the
+// one statement deletes the row only while it still names that process, so
+// a reservation another eject took over since the caller read it stands.
+// Clearing one that is not there, or not that owner's, is not an error.
+func (s *Store) ReleaseRepositoryRemoval(ctx context.Context, id string, owner RemovalOwner) (bool, error) {
+	released := false
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM repository_removal WHERE repository_id = ? AND owner_pid = ? AND owner_start = ?`,
+			id, owner.PID, int64(owner.Start))
+		if err != nil {
+			return fmt.Errorf("store: releasing the removal of repository %s: %w", id, err)
+		}
+		n, err := res.RowsAffected()
+		released = n == 1
+		return err
+	})
+	return released, err
+}
+
 // refuseUnlessForgettable is the whole of what stops a repository being
 // forgotten. It is one function so that the question asked before a removal
 // and the check made inside it cannot answer differently.
@@ -406,6 +520,9 @@ func refuseUnlessForgettable(ctx context.Context, tx *sql.Tx, id string, runIDs 
 		return fmt.Errorf("%w: task %s works on a branch of repository %s", ErrRepositoryInUse, taskID, id)
 	case !errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("store: checking which tasks work on repository %s: %w", id, err)
+	}
+	if err := refuseIfKeptWorkIsOpen(ctx, tx, id); err != nil {
+		return err
 	}
 	for _, runID := range runIDs {
 		if err := refuseIfRunIsHeldByATask(ctx, tx, id, runID); err != nil {

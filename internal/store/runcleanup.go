@@ -176,7 +176,7 @@ func (s *Store) MarkRunCleanupRemoved(ctx context.Context, run string, at time.T
 		if _, err := tx.ExecContext(ctx, `UPDATE run_cleanup SET removed_at = ? WHERE run = ?`, encodeTime(at), run); err != nil {
 			return fmt.Errorf("store: marking the cleanup of run %s removed: %w", run, err)
 		}
-		return nil
+		return closeKeptWorkOnRemovalTx(ctx, tx, "run_id", run, proof.Or(""), at)
 	})
 }
 

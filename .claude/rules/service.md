@@ -49,6 +49,11 @@ paths: ["internal/service/**"]
   the sites, `landed.go` ending a landed task's worker and asking again, and
   `runsweep.go` the sweep of a finished run's copy: what the order
   guarantees and its gaps.
+- Kept work: `cleanup.go`'s `keepWork` is the one call that turns a copy
+  kept for its work into a kept work entry, from every cleanup site and from
+  recovery's `reclaimAtRecovery`; `supervise.go` raises each open
+  entry about a task once as a `kept-work` wake, and status and the catch-up
+  read list them. Answers and the dispatch hold are #411's second part.
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances
   in, and `report` reads it rather than inferring it.

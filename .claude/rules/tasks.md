@@ -22,6 +22,10 @@ paths: ["internal/tasks/**"]
 - It is P12's decision and the only writer of the cleanup record. An
   inconclusive proof is a `ProofAttempt` on the `*CleanupRefusal`, never a
   proof, and no remedy names a flag.
+- It is also the one writer of the kept work record: `Keep` reads what a
+  kept copy holds from the copy and records the entry, and
+  `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
+  refusals are a copy kept for its work; `kept_test.go` places every reason.
 
 Read `doc.go` before changing the floor or the clear condition, and for the
 residual gaps; read `promote.go`'s opening comment and `doc.go` before

@@ -408,8 +408,10 @@ func Coverage() []Established {
 				"with the default grace checks that a second SIGTERM forces the stop at once. Nothing " +
 				"else P15 asks is driven: a run's, a worker's, a delegation's or a notify command's " +
 				"processes ended by their normal path or by a killed service, a descendant that left " +
-				"its group, a check by working directory, and the kept-work record, which does not " +
-				"exist in this build. Both walks drive a run through methods internal/ipc restricts, " +
+				"its group, a check by working directory, and the kept-work record, which " +
+				"internal/service's tests reach through the package: a refused cleanup writing an " +
+				"entry and raising one wake, and a restart recording a finished run's standing copy; " +
+				"its answers and the dispatch hold are not in this build. Both walks drive a run through methods internal/ipc restricts, " +
 				"so on a platform where that package reads no local socket peer credentials they are " +
 				"skipped rather than passing, and they build only on unix."},
 	}

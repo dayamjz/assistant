@@ -17,6 +17,16 @@ func ShortenReceiveWait(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { receiveWait = was })
 }
 
+// BetweenEjectPreflightAndRemoval runs f inside eject's window between the
+// reserved preflight and the gate's removal for the rest of the test. It
+// changes a package variable, so a test using it does not run in parallel.
+func BetweenEjectPreflightAndRemoval(t *testing.T, f func()) {
+	t.Helper()
+	was := betweenEjectPreflightAndRemoval
+	betweenEjectPreflightAndRemoval = f
+	t.Cleanup(func() { betweenEjectPreflightAndRemoval = was })
+}
+
 // Subcommands is each verb that takes a subcommand and its table, read from
 // the tables the verbs dispatch on, as name and summary pairs in table
 // order, so a test holds a verb's help to every row it dispatches rather than

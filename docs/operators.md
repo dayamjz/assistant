@@ -472,6 +472,61 @@ is both under way and stopped, so it is counted in both, and the counts are
 not meant to be summed. Agent usage is not in the read: it stays the usage
 view, `assistant runs --usage`.
 
+### Kept work
+
+When a run's or a task's isolated copy is kept because its work is not on
+the shared branch or anywhere else the cleanup check can prove it safe (no
+proof held, or the copy holds changes, files or a stash no commit records),
+the service records a kept-work entry for it: whose copy it was, the
+project and branch, the commits the copy was read to hold, and why it was
+kept. A restart does the same for a finished run's copy it finds still
+standing. Each open entry is listed after the four parts of the
+catch-up read (`kept` in `--json`) and in `assistant status`
+(`kept_work` in `--json`): a working copy's status lists the entries whose
+repository is that working copy's, and every status lists the entries whose
+owner names no repository, such as an investigation task started without
+one, because those belong to no working copy. An entry about a task, or about a run
+attributed to a task, also raises one `kept-work` wake, which reaches the
+coordinator and the notify command like any other wake. This build
+deviates from PRD section 6 for an entry about a run no task names, such as
+the run your own push started: it is listed by `status` and the catch-up
+read, but it never reaches the private channel or the coordinator until
+#458 lands.
+
+If the copy's work later turns up somewhere safe, for example once you push
+its commit to the upstream branch, the next cleanup of it (for a run's copy,
+the next service start) removes the copy on that proof and closes the entry
+as removed on a proof, recorded as the program's and never as a discard; a
+closed entry is no longer listed. Nothing else removes a kept copy. A
+service that stops between removing the copy and marking it removed leaves
+the entry open; the next start completes the mark from the recorded proof
+and closes it. An entry whose copy is gone with no proof recorded, a copy
+removed by hand among them, is named in the service log at each start and
+stays open.
+
+`assistant eject --confirm` is refused while the repository has an open
+kept-work entry, before the gate is touched, and the refusal names each
+entry's copy, whose it was and the commits it holds. Until answering kept
+work ships (#411 part 2), the way past it is the work landing: once its
+commits are on the upstream branch or in the default branch, the next
+service start removes the copy on that proof and closes the entry. Part 2's
+discard will be your other way.
+
+Eject is also refused while any run copy of the repository still stands on
+disk, whether its run's cleanup has not decided it yet or kept it, and the
+refusal names each copy: a run's copy is cut from the gate, so removing the
+gate would leave the copy unable to read its own commits. Cancelling a run
+asks its copy's cleanup at once, so a copy whose work is on the upstream is
+removed then. Once eject has checked that the repository can be removed, it
+reserves the removal, and no new run of the repository starts until the
+eject finishes; a service that starts after an eject died releases that
+reservation.
+
+This build records and surfaces kept work and does not yet hold dispatch:
+a new task in a project with an open entry still dispatches. Answering an
+entry (land, carry on or discard) and holding new task work until its
+entries are answered are #411 part 2.
+
 ## Waiting on a fleet
 
 A coordinator agent running tasks through `assistant coordinator` does not

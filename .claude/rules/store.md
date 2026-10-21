@@ -31,6 +31,22 @@ paths: ["internal/store/**"]
 - localLandingMigration's `local_landing` is PRD section 8's local landing
   record, written once by `RecordLocalLanding` in the transaction that closes
   the approval hold and sealed like `merge_record`.
+- keptWorkMigration's `kept_work` is PRD section 8's kept work record: one
+  row per kept copy and the commits it holds (`RecordKeptWork` finds the row
+  already written for the same pair), naming one owner, a task or a run,
+  with project and branch read off that owner's row. It is written once;
+  its one revision closes it, once: a person's answer (`AnswerKeptWork`) or
+  the program's `KeptRemovedOnProof`, written only by `MarkCleanupRemoved`
+  and `MarkRunCleanupRemoved` in the removal's transaction, never a discard.
+  `surfaced_at` is the one other column that moves, only forward. `ForgetRepository` and
+  `RepositoryRemovable` refuse a repository with an open entry
+  (`*KeptWorkOpenError`), and a run's entry goes with its run only once it
+  is answered or closed. Eject's preflight is `ReserveRepositoryRemoval`,
+  which writes `repository_removal`, naming the eject's process, in the
+  transaction that found the repository forgettable; `CreateRun` refuses a
+  run of a reserved repository (`ErrRepositoryBeingRemoved`), and nothing
+  refuses a kept work entry over a reservation. internal/service releases a
+  reservation whose owner is gone when it opens.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number
   what they append from the shipped list rather than spelling a version out.

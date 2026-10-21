@@ -547,12 +547,23 @@ func (s *Service) cancel(ctx context.Context, req machine.CancelRequest) (machin
 	}
 	forget := s.endRun(req.Run)
 	defer forget()
-	if _, err := built.runs.Terminate(ctx, req.Run); err != nil {
+	terminated, err := built.runs.Terminate(ctx, req.Run)
+	if err != nil {
 		var moved *store.RunStatusError
 		if errors.As(err, &moved) && runs.Finished(moved.Actual) {
 			return machine.Run{}, cancelRefused{machine.CancelRefused{Run: req.Run, Reason: machine.CancelRunEnded, Status: moved.Actual}}
 		}
 		return machine.Run{}, err
+	}
+	// The run finished, so its copy is owed the cleanup decision now, as
+	// settle owes it, rather than at the next start: until it is decided it
+	// is a copy eject has to refuse over, and one holding unlanded work is
+	// kept work nobody has been told about. A run a segment is still inside
+	// is left to that segment, which reclaims once it returns, through
+	// settle or, when it returns without settling, through carryOn, so a
+	// copy is never examined under a stage body still writing to it.
+	if !s.isAdvancing(req.Run) {
+		s.reclaimed(ctx, terminated)
 	}
 	// The run finished, so a task queued behind the one it was attributed to
 	// may have cleared; tasks.go names this among the sites that release.
@@ -1111,6 +1122,14 @@ type ending struct {
 // here. That is a bound on the shape of the thing rather than a counter
 // somebody has to keep.
 func (s *Service) carryOn(runID string, how ending) {
+	// A segment that returned without settling settled no reclaim either, so
+	// a run its ending left finished, a cancel while a stage body was inside
+	// it among them, has its copy asked of the cleanup decision here, from the
+	// recorded status: cancel leaves such a run's reclaim to its segment, and
+	// this is that segment's half on every path it can end by.
+	if how.stranded && s.stopCtx.Err() == nil {
+		s.reclaimIfFinished(runID)
+	}
 	switch how.disposition(s.stopCtx.Err() != nil) {
 	case dispositionEnded:
 		s.log.Printf("run %s was ended through the protocol; nothing carries it on", runID)
@@ -1120,6 +1139,21 @@ func (s *Service) carryOn(runID string, how ending) {
 		s.log.Printf("run %s lost the caller waiting on it; carrying it on", runID)
 		s.continueRun(runID)
 	}
+}
+
+// reclaimIfFinished asks reclaimed of the run when its record says it is
+// finished, and of nothing else, reading the status through runs.Finished on
+// sweepFinishedAtRecovery's terms.
+func (s *Service) reclaimIfFinished(runID string) {
+	record, err := s.store.Run(s.stopCtx, runID)
+	if err != nil {
+		s.log.Printf("the copy of run %s was not reclaimed after its segment ended: the record could not be read: %v", runID, err)
+		return
+	}
+	if !record.Status.Recognized() || !runs.Finished(record.Status) {
+		return
+	}
+	s.reclaimed(s.stopCtx, record)
 }
 
 // disposition is what becomes of a run whose segment has ended, and the closed
@@ -1380,6 +1414,11 @@ func (s *Service) recover(ctx context.Context) {
 	// so nothing has moved a run past the checkpoint its row names since
 	// that service stopped; consent.go owns how.
 	s.finishConsentRows(ctx)
+	// An eject that died after reserving its repository's removal left a
+	// reservation that refuses every run of it; P15's restart rule has the
+	// next service release what an owner that is gone left, and
+	// releaseStaleRemovals does, before anything is reclaimed or started.
+	s.releaseStaleRemovals(ctx)
 	repositories, err := s.store.Repositories(ctx)
 	if err != nil {
 		s.log.Printf("recovery could not list repositories: %v", err)
@@ -1440,6 +1479,13 @@ func (s *Service) recover(ctx context.Context) {
 	// the record through internal/runs, never off the copy, so no active
 	// run's copy is touched; runsweep.go owns the sweep and what it records.
 	s.sweepFinishedAtRecovery(ctx, read)
+	// PRD section 11's "remove isolated copies no run owns": the same
+	// finished runs' standing copies are then asked of the cleanup decision
+	// again, off this goroutine, so a copy whose work has since landed is
+	// removed and one still holding unlanded work becomes a kept work entry
+	// rather than staying on disk unrecorded; cleanup.go owns what a refusal
+	// becomes.
+	s.reclaimAtRecovery(ctx, read)
 	// PRD section 11's fleet reconciliation, after the runs and before
 	// anything is served: the queued wakes are drained as input, every task
 	// of this home is read with its terminal probed under a bound, and a

@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -192,6 +193,17 @@ type Options struct {
 	// are here rather than on the Service because the loop starts inside
 	// Open; supervise.go says what each is, and the product sets none.
 	hooks supervisionHooks
+	// cleanupTest and interruptCleanupMark are the cleanup decision's seam
+	// between a copy's removal and its mark, which export_test.go's
+	// WithCleanupInterruptForTest sets and the product never does; Open
+	// hands them to internal/tasks' InterruptBeforeMarkForTest.
+	cleanupTest          testing.TB
+	interruptCleanupMark func() error
+	// beforeStaleRemovalRelease runs in recovery between reading a removal
+	// reservation whose owner is gone and releasing it; export_test.go's
+	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
+	// does.
+	beforeStaleRemovalRelease func()
 	// sweepCopy is the Service field of the same name, set before recovery
 	// runs. It is here rather than only on the Service because recovery
 	// sweeps finished runs' copies inside Open, so a test that records what
@@ -372,6 +384,10 @@ type Service struct {
 	// package's tests, which use it to hold the run pending while they
 	// assert queue state, or to move the run first so the ending fails.
 	beforeRefusalEnd func()
+	// beforeStaleRemovalRelease is Options' seam of that name, which
+	// recovery runs before each anchored release of a dead eject's
+	// reservation. It is nil in production.
+	beforeStaleRemovalRelease func()
 	// afterConsentRegistered runs in underStandingConsent once
 	// writeConsentAnswer has registered a standing-consent hold and before
 	// the answer is given. It is nil in production and set only by this
@@ -577,24 +593,25 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		return nil, unstarted(err)
 	}
 	s := &Service{
-		home:       o.Home,
-		lock:       lock,
-		log:        log,
-		instance:   instance,
-		newStages:  o.NewStages,
-		build:      o.Build,
-		catalog:    o.Catalog,
-		newFixer:   o.NewFixer,
-		registry:   newRegistry(),
-		topologies: make(map[string]*topology),
-		advancing:  make(map[string]*slot),
-		isolated:   make(map[string]tasks.Isolation),
-		claiming:   make(map[string]bool),
-		launched:   make(map[string]launchedWorker),
-		delegated:  make(map[string]launchedSubordinate),
-		survivors:  session.NewSurvivors(),
-		starting:   make(map[branchKey]*branchGate),
-		stopping:   make(chan struct{}),
+		home:                      o.Home,
+		lock:                      lock,
+		log:                       log,
+		instance:                  instance,
+		newStages:                 o.NewStages,
+		build:                     o.Build,
+		catalog:                   o.Catalog,
+		newFixer:                  o.NewFixer,
+		registry:                  newRegistry(),
+		topologies:                make(map[string]*topology),
+		advancing:                 make(map[string]*slot),
+		beforeStaleRemovalRelease: o.beforeStaleRemovalRelease,
+		isolated:                  make(map[string]tasks.Isolation),
+		claiming:                  make(map[string]bool),
+		launched:                  make(map[string]launchedWorker),
+		delegated:                 make(map[string]launchedSubordinate),
+		survivors:                 session.NewSurvivors(),
+		starting:                  make(map[branchKey]*branchGate),
+		stopping:                  make(chan struct{}),
 
 		workerRoute:      o.WorkerRoute,
 		coordinatorRoute: o.CoordinatorRoute,
@@ -685,7 +702,10 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	if s.queue, err = s.newQueue(); err != nil {
 		return err
 	}
-	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err != nil {
+	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err == nil && o.interruptCleanupMark != nil {
+		err = s.cleaner.InterruptBeforeMarkForTest(o.cleanupTest, o.interruptCleanupMark)
+	}
+	if err != nil {
 		return err
 	}
 
