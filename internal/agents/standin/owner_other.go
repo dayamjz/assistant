@@ -42,3 +42,11 @@ func HeldWait(tb testing.TB, _ string) string {
 	tb.Fatal("standin: a held process has no owner watch on this platform")
 	return ""
 }
+
+// HeldWaitIdentified fails tb here, as HeldWait does. ReadHeldIdentity has
+// no counterpart here, since no held process records one.
+func HeldWaitIdentified(tb testing.TB, _, _ string) string {
+	tb.Helper()
+	tb.Fatal("standin: a held process has no owner watch on this platform")
+	return ""
+}

@@ -78,28 +78,23 @@ func TestAPushFromAProcessTheGateCannotPlaceIsRefusedInThePersonsWords(t *testin
 // kernel before the push is released. It returns what the push printed and
 // its exit status.
 //
-// Until the release the shell waits on standin.HeldWait's held process, a
-// process of this binary that ends with the test binary (P15) and that
-// RunOwned's check lists, rather than on a loop of its own, which #440 found
-// outliving a failed or killed test with parent 1 and invisible to that
-// check. A cleanup registered before the shell starts ends the held process
-// when the test fails before the release, so the shell exits without
-// pushing. What it does not end: once released, the git push and the shell
-// around it run under no owner watch of their own, and end when the push
-// does.
+// Until the release the shell waits on standin.HeldWaitIdentified's held
+// process, a process of this binary that ends with the test binary (P15)
+// and that RunOwned's check lists, rather than on a loop of its own, which
+// #440 found outliving a failed or killed test with parent 1 and invisible
+// to that check. A cleanup registered before the shell starts ends the held
+// process when the test fails before the release, so the shell exits
+// without pushing (endHeldIn). What it does not end: once released, the git
+// push and the shell around it run under no owner watch of their own, and
+// end when the push does.
 func gitDaemonized(t *testing.T, dir string, args ...string) (string, int) {
 	t.Helper()
 	files := t.TempDir()
-	pid, heldPID, release := filepath.Join(files, "pid"), filepath.Join(files, "held"), filepath.Join(files, "release")
+	pid, held, release := filepath.Join(files, "pid"), filepath.Join(files, "held"), filepath.Join(files, "release")
 	out, errOut, code := filepath.Join(files, "out"), filepath.Join(files, "err"), filepath.Join(files, "code")
-	var held agents.Identity
-	t.Cleanup(func() { endHeldIn(heldPID, held) })
-	// The held process says its own identifier, then becomes the held
-	// process by exec, so the identifier is the held process's.
-	hold := "echo $$ > " + quoted(heldPID+".tmp") + " && mv " + quoted(heldPID+".tmp") + " " + quoted(heldPID) +
-		" && exec " + standin.HeldWait(t, release)
+	t.Cleanup(func() { endHeldIn(t, held, pid, code) })
 	pusher := "echo $$ > " + quoted(pid+".tmp") + " && mv " + quoted(pid+".tmp") + " " + quoted(pid) + "; " +
-		"/bin/sh -c " + quoted(hold) + " && " +
+		standin.HeldWaitIdentified(t, release, held) + " && " +
 		"git -C " + quoted(dir) + " " + quotedAll(args) + " > " + quoted(out) + " 2> " + quoted(errOut) +
 		"; echo $? > " + quoted(code+".tmp") + " && mv " + quoted(code+".tmp") + " " + quoted(code)
 	// The starter is in a session of its own, so neither it nor what it
@@ -147,11 +142,14 @@ func gitDaemonized(t *testing.T, dir string, args ...string) (string, int) {
 		}
 		current = parent
 	}
-	heldID, found, err := agents.Identify(awaitNumberIn(t, heldPID))
-	if err != nil || !found {
-		t.Fatalf("the held process the daemon waits on: %+v, %v, %v", heldID, found, err)
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		if _, err := standin.ReadHeldIdentity(held); err == nil {
+			break
+		} else if !time.Now().Before(deadline) {
+			t.Fatalf("the held process the daemon waits on never recorded its identity: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	held = heldID
 	if err := os.WriteFile(release, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -161,31 +159,31 @@ func gitDaemonized(t *testing.T, dir string, args ...string) (string, int) {
 	return string(pushed) + string(refused), status
 }
 
-// endHeldIn ends the held process gitDaemonized's shell waits on, named by
-// held, or, when the test failed before reading its identity, by the
-// identifier in the file at path, if one was written: the release is
-// written only after held is set, so a process the file names then has not
-// been released. A process already gone is left alone. What it does not
-// close: an identifier read from the file names whatever process holds that
-// number at the moment it is read, which is the held process unless it
-// exited and the number was reused in between.
-func endHeldIn(path string, held agents.Identity) {
-	if held.PID == 0 {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return
-		}
-		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-		if err != nil {
-			return
-		}
-		id, found, err := agents.Identify(pid)
-		if err != nil || !found {
-			return
-		}
-		held = id
+// endHeldIn ends the held process gitDaemonized's shell waits on, by the
+// identity it recorded of itself at identity, process identifier and start
+// time together (standin.ReadHeldIdentity). standin.Process.End checks that
+// identifier still has that start time before each signal and sends none
+// when it does not, so a held process that exited, and whose identifier
+// another process now has, is never signalled. With no identity to read it
+// signals nothing: when the pusher at pusher ran and no exit status reached
+// code, a held process may be running unidentified, and t is failed saying
+// so, leaving it to the owner watch and RunOwned's check rather than to a
+// guess. The residual gap is End's own: the moment between its identity
+// check and its signal.
+func endHeldIn(t *testing.T, identity, pusher, code string) {
+	id, err := standin.ReadHeldIdentity(identity)
+	if err == nil {
+		standin.Process{Identity: id}.End()
+		return
 	}
-	standin.Process{Identity: held}.End()
+	if _, perr := os.Stat(pusher); perr != nil {
+		return
+	}
+	if _, cerr := os.Stat(code); cerr == nil {
+		return
+	}
+	t.Errorf("the held process gitDaemonized's push waits on has no identity to read (%v), so nothing was signalled; "+
+		"the owner watch ends it with this test binary and RunOwned's check reports it if it outlives the tests", err)
 }
 
 // awaitNumberIn waits for path to hold a number and returns it.
