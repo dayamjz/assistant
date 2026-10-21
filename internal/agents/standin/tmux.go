@@ -39,7 +39,7 @@ func Tmux(tb testing.TB) string {
 	if runtime.GOOS == "windows" {
 		tb.Skip("terminal workers are hosted in tmux, which this platform does not run, so this terminal test was not run")
 	}
-	requireOwned(tb)
+	requireOwned(tb, "terminal servers, which leave its process group,")
 	if path := ownedTmux(); path != "" {
 		return path
 	}

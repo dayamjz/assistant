@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // ServeReceivePack runs the receiving side of one push into this bare
@@ -18,7 +20,13 @@ import (
 // still hold: the repository is named with --git-dir, and the environment is
 // envFor's, so a GIT_DIR the pushing git left in the environment does not
 // redirect the receive. The hooks the repository runs during the receive are
-// started by git and inherit that environment.
+// started by git and inherit that environment. It runs through procgroup.Run
+// as every invocation here does, so the receive and whatever its hooks leave
+// in its process group are ended when it returns, and it runs under the
+// handle's invocation deadline when ctx carries none. An *os.File given as
+// in, out or errOut reaches git as itself; any other reader or writer is
+// copied by procgroup.Run, so one that blocks does not hold the call past the
+// bound procgroup.Run states.
 //
 // A receive git refuses comes back as a *CommandError carrying git's exit
 // status. Its message is empty, because what git said went to errOut, which
@@ -32,15 +40,16 @@ func (r *Repository) ServeReceivePack(ctx context.Context, in io.Reader, out, er
 	full = append(full, globalArgs...)
 	full = append(full, "receive-pack", r.path)
 
-	cmd := exec.CommandContext(ctx, r.set.git, full...)
+	ctx, cancel := procgroup.Bound(ctx, r.set.deadline)
+	defer cancel()
+	cmd := exec.Command(r.set.git, full...)
 	cmd.Dir = r.path
 	cmd.Env = envFor(os.Environ(), r.set.ssh)
 	cmd.Stdin = in
 	cmd.Stdout = out
 	cmd.Stderr = errOut
-	cmd.WaitDelay = killGrace
 
-	runErr := cmd.Run()
+	runErr := procgroup.Run(ctx, cmd, killGrace)
 	if runErr == nil {
 		return nil
 	}

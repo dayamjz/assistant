@@ -704,14 +704,15 @@ func TestACallTheContextEndsIsARefusal(t *testing.T) {
 }
 
 // A provider that exits while a descendant still holds its output pipes must
-// not hold the call. Killing the provider does not close a pipe a descendant
-// inherited, and nothing here pursues that descendant, so what releases the
-// call is the grace deadline. What it collected under that deadline is refused
-// rather than reported, because it may be short of what the provider wrote.
+// not hold the call. A descendant that left the provider's process group is
+// not reached by ending that group, and nothing here pursues it, so what
+// releases the call is the grace deadline. What it collected under that
+// deadline is refused rather than reported, because it may be short of what
+// the provider wrote.
 func TestAProviderWhoseOutputIsHeldOpenIsReleasedRatherThanWaitedOn(t *testing.T) {
 	answer := rollup(checkRunNode("build", "COMPLETED", "SUCCESS"))
 	h := newHarness(t,
-		ghScript{"checks": {{Stdout: answer, HoldPipes: true}}},
+		ghScript{"checks": {{Stdout: answer, HoldPipes: true, Detach: true}}},
 		forge.WithProviderGrace(100*time.Millisecond))
 
 	start := time.Now()

@@ -366,6 +366,74 @@ func TestAnAttemptWithNoSessionIsStartingInsideTheWindowAndGonePastIt(t *testing
 	}
 }
 
+// A delegation that has claimed no attempt yet is starting, not gone:
+// domain.delegate records the delegation and claims its first attempt in two
+// transactions, so a pass landing between the two reads a standing
+// delegation with no attempt. Inside escalation_window from the delegation
+// row's CreatedAt the pass surfaces no subordinate-gone and starts no
+// unobserved clock; past it, with still no attempt, the delegation is read
+// as unobservable at attempt zero, which is what a crash between the two
+// writes leaves. A loop that read the empty attempt list as gone at once
+// queued the attempt-zero subordinate-gone wake that #451's flake was: the
+// coordinator was told a subordinate was gone that went on to start. The
+// window is read off the delegation row (P8). The counterfeit is the same
+// observation with the delegation recorded longer ago than the window,
+// which surfaces, so the check can tell a loop that stopped reading the
+// window from one that reads it.
+func TestADelegationWithNoAttemptIsStartingInsideTheWindowAndGonePastIt(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P8)
+	h, records := loopHomeConfigured(t, `{"supervision_beacon_interval": "1s", "escalation_window": "1m", "relaunch_attempts": 0}`)
+	ctx := t.Context()
+	clock := &fakeClock{now: time.Now()}
+	l := openLoop(t, h, records, newScriptedTerminals(), clock)
+	defer func() { _ = l.service.Close() }()
+	l.nextPass(t)
+
+	// The delegation is recorded on the live service the way
+	// domain.delegate's first write records it, and the pass lands before
+	// the attempt is claimed.
+	d, err := l.records(t).Delegate(ctx, store.DelegationRequest{Domain: "alpha", Delivery: config.DeliveryGated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.Advance(time.Since(clock.Now()) + 10*time.Second)
+	inside := l.pass(t)
+	if r := inside.Delegations["alpha"]; r.Err != nil || len(domainDetections(inside, "alpha", supervisor.KindSubordinateGone)) != 0 {
+		t.Fatalf("the pass over a delegation claiming its first attempt reported %+v, want no subordinate-gone detected", r)
+	}
+	if m, _, err := l.records(t).DelegationMarkers(ctx, d.ID); err != nil || m.UnobservedSince.IsKnown() || m.GoneSurfacedAt.IsKnown() {
+		t.Fatalf("the pass over a delegation claiming its first attempt started its unobserved clock: %+v (%v)", m, err)
+	}
+	if rows := domainWakesOfKind(t, l.records(t), d.ID, supervisor.KindSubordinateGone); len(rows) != 0 {
+		t.Fatalf("the pass over a delegation claiming its first attempt queued %+v", rows)
+	}
+
+	clock.Advance(2 * time.Minute)
+	past := l.pass(t)
+	got := domainDetections(past, "alpha", supervisor.KindSubordinateGone)
+	if len(got) != 1 || !got[0].Verdict.Surfaces() || !strings.HasPrefix(got[0].Marker, "subordinate-gone:unobservable:0:") {
+		t.Fatalf("past the window the detections are %+v, want one surfaced unobservable subordinate-gone at attempt zero", got)
+	}
+	if rows := domainWakesOfKind(t, l.records(t), d.ID, supervisor.KindSubordinateGone); len(rows) != 1 || rows[0].Domain != "alpha" {
+		t.Fatalf("past the window the subordinate-gone wakes are %+v, want one", rows)
+	}
+
+	// The decision alone, both ways.
+	now := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	cfg := config.Config{EscalationWindow: time.Minute}
+	starting := delegationObservation{delegation: store.Delegation{ID: 1, Domain: "alpha", CreatedAt: now.Add(-10 * time.Second)},
+		liveness: taskstate.Unobserved, surfaced: map[string]bool{}}
+	if decided := decideDelegation(starting, cfg, now); len(decided.detections) != 0 || decided.write {
+		t.Fatalf("a delegation claiming its first attempt decided %+v, want nothing", decided)
+	}
+	stale := starting
+	stale.delegation.CreatedAt = now.Add(-2 * time.Minute)
+	if decided := decideDelegation(stale, cfg, now); len(decided.detections) != 1 || !decided.detections[0].Verdict.Surfaces() {
+		t.Fatalf("a delegation recorded before the window with no attempt decided %+v, want subordinate-gone surfaced", decided)
+	}
+}
+
 // A delegation's relaunch-bound hold is answerable from what catch-up says
 // and is answered by the delegation's end. The loop raises the hold past
 // the bound; catch-up lists it with --domain naming the domain, then

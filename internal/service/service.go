@@ -382,6 +382,12 @@ type Service struct {
 	// recovery runs before each anchored release of a dead eject's
 	// reservation. It is nil in production.
 	beforeStaleRemovalRelease func()
+	// afterConsentRegistered runs in underStandingConsent once
+	// writeConsentAnswer has registered a standing-consent hold and before
+	// the answer is given. It is nil in production and set only by this
+	// package's tests, which use it to look at the stream at the point a
+	// service that stopped there would have left it.
+	afterConsentRegistered func()
 	// sweepCopy stands in for the sweep this service asks of a copy: the
 	// one relaunch.go and dispatch.go ask of a task's standing copy, and the
 	// one runsweep.go asks of a finished run's. It is nil in production,

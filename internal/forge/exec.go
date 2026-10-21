@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // DefaultMaxOutput bounds what one provider invocation may print on standard
@@ -26,23 +28,35 @@ const maxStderr = 8 << 10
 // maxStderr, so a reader is never shown a fragment that looks whole.
 const stderrTruncatedMarker = "[provider message truncated]"
 
-// DefaultProviderGrace is the deadline given to cmd.WaitDelay on every
-// invocation, which bounds two waits the standard library folds into one
-// setting.
+// DefaultProviderGrace is the grace procgroup.Run is given on every
+// invocation; procgroup.Run says each wait it bounds.
 //
-// After a context ends and the provider is killed, it is how long the call
-// waits for the output pipes before abandoning them, so a descendant that
-// inherited one and holds it open cannot keep a cancelled call waiting past
-// it. Without that bound the caller's checks_timeout could not bound a check
-// read, because the wait for those pipes is not the wait a context ends.
+// After a context ends and the provider's process group has been sent
+// SIGKILL, it is how long the provider gets to exit before the call answers
+// without it.
 //
-// It also bounds the wait for those pipes to close after a provider exits on
-// its own, and that case has a cost worth stating rather than implying away:
-// an invocation whose output was still held open at the deadline is refused
-// rather than reported, because what was collected may be missing bytes the
-// provider wrote, and a partial answer read as a whole one is the failure this
-// package exists to prevent.
+// It also bounds the wait for the output pipes to close once the provider
+// has exited. The group is ended before that
+// wait, so what can still hold a pipe open then is a descendant that left the
+// group. Without that bound the caller's checks_timeout could not bound a
+// check read, because the wait for those pipes is not the wait a context
+// ends. It has a cost worth stating rather than implying away: an invocation
+// whose output was still held open at the deadline is refused rather than
+// reported, because what was collected may be missing bytes the provider
+// wrote, and a partial answer read as a whole one is the failure this package
+// exists to prevent.
 const DefaultProviderGrace = 2 * time.Second
+
+// DefaultInvocationDeadline is the deadline one invocation runs under when
+// the context it was called with carries none, which is what a context
+// derived through context.WithoutCancel carries. Every invocation here is a
+// handful of requests to the code host with an answer bounded by
+// DefaultMaxOutput, so a provider still running at two minutes is taken as
+// wedged rather than slow, and is ended with its process group. A caller's
+// own deadline is kept even when it is later. It is a fixed value rather than
+// a configuration key; whether an operator should be able to change it is an
+// open question for the owner (#430).
+const DefaultInvocationDeadline = 2 * time.Minute
 
 // providerEnv is applied over the base environment of every invocation.
 //
@@ -78,14 +92,15 @@ var providerEnv = map[string]string{
 type Option func(*settings)
 
 type settings struct {
-	bin     string
-	dir     string
-	repo    string
-	head    string
-	base    []string
-	baseSet bool
-	maxOut  int64
-	grace   time.Duration
+	bin      string
+	dir      string
+	repo     string
+	head     string
+	base     []string
+	baseSet  bool
+	maxOut   int64
+	grace    time.Duration
+	deadline time.Duration
 }
 
 // newSettings settles the defaults and applies the options over them. It is
@@ -93,7 +108,7 @@ type settings struct {
 // adapter NewGitHub builds and the probe GitHubHost.Probe answers describe the
 // same invocation rather than two spellings of it.
 func newSettings(opts []Option) settings {
-	s := settings{bin: DefaultGitHubBinary, maxOut: DefaultMaxOutput, grace: DefaultProviderGrace}
+	s := settings{bin: DefaultGitHubBinary, maxOut: DefaultMaxOutput, grace: DefaultProviderGrace, deadline: DefaultInvocationDeadline}
 	for _, opt := range opts {
 		opt(&s)
 	}
@@ -173,14 +188,27 @@ func WithMaxOutput(n int64) Option {
 // default is DefaultProviderGrace, and what the deadline buys and costs is
 // stated there.
 //
-// A value of zero or less leaves the default in place. A zero WaitDelay is the
-// standard library's way of asking for no deadline at all, which is exactly
-// the unbounded wait this setting exists to prevent, so it is not something a
-// caller can ask for by passing nothing.
+// A value of zero or less leaves the default in place, because a grace of
+// zero bounds nothing, which is exactly the unbounded wait this setting
+// exists to prevent, so it is not something a caller can ask for by passing
+// nothing.
 func WithProviderGrace(d time.Duration) Option {
 	return func(s *settings) {
 		if d > 0 {
 			s.grace = d
+		}
+	}
+}
+
+// WithInvocationDeadline sets the deadline one invocation runs under when the
+// context it was called with carries none. The default is
+// DefaultInvocationDeadline, which says what it bounds. A value of zero or
+// less leaves the default in place, because no deadline at all is what this
+// setting exists to rule out.
+func WithInvocationDeadline(d time.Duration) Option {
+	return func(s *settings) {
+		if d > 0 {
+			s.deadline = d
 		}
 	}
 }
@@ -206,13 +234,23 @@ type procResult struct {
 	// collected whole from output that may be missing bytes the provider
 	// wrote.
 	waitErr error
+	// ended is the error of the context the invocation ran under, read once
+	// it returned: the caller's context's error, or the invocation
+	// deadline's when the caller's context carried none. It is nil when
+	// neither ended.
+	ended error
 }
 
 // runProvider runs one provider invocation to completion and collects what it
 // produced. It writes stdin to the child and closes it, so a child reading
-// there reaches the end of the input rather than waiting for a person.
+// there reaches the end of the input rather than waiting for a person. It
+// runs under the adapter's invocation deadline when ctx carries none, and
+// reports that deadline's passing in ended, since ctx itself does not end
+// then.
 func runProvider(ctx context.Context, s *settings, env []string, stdin string, args []string) procResult {
-	cmd := exec.CommandContext(ctx, s.bin, args...)
+	ctx, cancel := procgroup.Bound(ctx, s.deadline)
+	defer cancel()
+	cmd := exec.Command(s.bin, args...)
 	cmd.Dir = s.dir
 	cmd.Env = env
 	// With nothing to carry, standard input stays os.DevNull, which is the end
@@ -228,19 +266,18 @@ func runProvider(ctx context.Context, s *settings, env []string, stdin string, a
 	errBuf := &capWriter{limit: maxStderr, truncate: true}
 	cmd.Stdout = out
 	cmd.Stderr = errBuf
-	// WaitDelay bounds how long this call waits for the output pipes after the
-	// provider has exited or its context has ended, so a descendant that
-	// inherited one and holds it open costs at most the grace period and then
-	// ends the invocation, rather than keeping a cancelled call waiting on a
-	// pipe nobody is going to close.
-	cmd.WaitDelay = s.grace
 
-	if err := cmd.Start(); err != nil {
-		return procResult{code: -1, startErr: err}
+	// procgroup.Run starts the provider as the leader of a process group of
+	// its own, ends the whole group when the provider exits and when ctx
+	// ends, and copies the streams itself under the grace, so a descendant
+	// still in the group cannot hold the output pipes at all and one that
+	// left it costs at most the grace period.
+	waitErr := procgroup.Run(ctx, cmd, s.grace)
+	if cmd.Process == nil {
+		return procResult{code: -1, startErr: waitErr}
 	}
-	waitErr := cmd.Wait()
 
-	res := procResult{stderr: errBuf.text(), code: -1, over: out.over, waitErr: waitErr}
+	res := procResult{stderr: errBuf.text(), code: -1, over: out.over, waitErr: waitErr, ended: ctx.Err()}
 	if cmd.ProcessState != nil {
 		res.code = cmd.ProcessState.ExitCode()
 	}

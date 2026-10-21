@@ -26,6 +26,7 @@ func TestMain(m *testing.M) {
 	Main()
 	atTerminalMain()
 	tmuxOwnerMain()
+	unownedMain(m)
 	os.Exit(RunOwned(m.Run))
 }
 

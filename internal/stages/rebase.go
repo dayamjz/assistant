@@ -37,6 +37,23 @@ import (
 // anchor.go owns the target and the encoding, and the push stage decides
 // against what this records.
 //
+// # A branch that already holds commits the run was not given (P6)
+//
+// PRD section 5 has this stage rebase onto the branch target as well as the
+// base. Where the branch the push will update holds commits that are not in
+// the commit submitted to the run, somebody else pushed them, and the run's
+// own commits are replayed onto the commit this pass observed rather than onto
+// the base, so the push is a fast-forward from the anchor and their commits
+// survive it (#396). That happens on its own only where their commits and the
+// run's change touch different paths: a colleague's edit to a file the run
+// also changed always asks a person, before anything is replayed.
+// incorporateBranch owns that and its other holds: a replay that conflicts is
+// abandoned and asks a person, a replay whose tree is not exactly the branch's
+// tree with the run's entries is discarded and asks too, and so does a branch
+// that does not contain the current base, because bringing the base in would
+// rewrite those commits. The push stage's
+// would-discard refusal stays the backstop for a run carried past any of them.
+//
 // # Fix rounds
 //
 // This stage has 3 fix rounds available per config.FixRounds.Rebase. When
@@ -182,6 +199,28 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	if onto == "" {
 		onto = branch
 	}
+	baseCommit := ""
+	if present[onto] {
+		resolved, err := copied.ResolveCommit(ctx, fmt.Sprintf("refs/remotes/%s/%s", remote, onto))
+		if err != nil {
+			return pipeline.Output{}, fmt.Errorf("stages: resolving rebase target %s: %w", onto, err)
+		}
+		baseCommit = resolved
+	}
+
+	// A branch holding commits nobody gave this run is brought into the head
+	// before anything is replayed onto the base, and is then the whole of
+	// what this pass does: incorporateBranch says why the base cannot be
+	// rebased onto past it.
+	incorporated, handled, err := incorporateBranch(ctx, copied, incorporating{
+		branch: branch, base: onto, submitted: submitted, anchor: anchor, baseCommit: baseCommit,
+	})
+	if err != nil {
+		return pipeline.Output{}, err
+	}
+	if handled {
+		return withWrites(incorporated, writes), nil
+	}
 	// An upstream that does not hold the target has nothing newer for this
 	// change to be replayed onto, which is what a first push of a branch to a
 	// repository whose base is not there either looks like. That is not a
@@ -192,11 +231,7 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 		return withWrites(nothingToRebaseOnto(onto, remote, submitted), writes), nil
 	}
 	target := fmt.Sprintf("refs/remotes/%s/%s", remote, onto)
-
-	targetCommit, err := copied.ResolveCommit(ctx, target)
-	if err != nil {
-		return pipeline.Output{}, fmt.Errorf("stages: resolving rebase target %s: %w", target, err)
-	}
+	targetCommit := baseCommit
 
 	// Check if the current HEAD is already up to date with target
 	currentHead, err := copied.ResolveCommit(ctx, "HEAD")

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -89,7 +90,7 @@ func TestAPushFromAShellAtATerminalIsAdmittedThroughTheChain(t *testing.T) {
 		next := commitFile(t, subject, "work.txt", "a change from a script's background job\n")
 		dir := t.TempDir()
 		jobPID, shellPID, release := filepath.Join(dir, "job"), filepath.Join(dir, "shell"), filepath.Join(dir, "release")
-		pusher := "while [ ! -e " + shellQuote(release) + " ]; do sleep 0.02; done; exec git -C " + shellQuote(subject) +
+		pusher := standin.HeldWait(t, release) + " && exec git -C " + shellQuote(subject) +
 			" push " + shellQuote(gate.RemoteName) + " work"
 		script := "set -m; echo $$ > " + shellQuote(shellPID) + "; /bin/sh -c " + shellQuote(pusher) + " & " +
 			"echo $! > " + shellQuote(jobPID) + "; wait $!"
@@ -201,7 +202,7 @@ func TestAWorkersPushOnAChainTheKernelRewroteIsRefusedNotAdmittedAsAPersons(t *t
 		dir := t.TempDir()
 		pid, shell, release := filepath.Join(dir, "pid"), filepath.Join(dir, "shell"), filepath.Join(dir, "release")
 		out, errOut, code := filepath.Join(dir, "out"), filepath.Join(dir, "err"), filepath.Join(dir, "code")
-		pusher := "while [ ! -e " + shellQuote(release) + " ]; do sleep 0.02; done; " +
+		pusher := standin.HeldWait(t, release) + " && " +
 			"git -C " + shellQuote(copyPath) + " push " + shellQuote(gate.RemoteName) + " task/orphaned > " +
 			shellQuote(out) + " 2> " + shellQuote(errOut) + "; echo $? > " + shellQuote(code+".tmp") +
 			" && mv " + shellQuote(code+".tmp") + " " + shellQuote(code)
@@ -255,7 +256,7 @@ func gitDaemonized(t *testing.T, dir string, args ...string) (string, int) {
 	pid, release := filepath.Join(files, "pid"), filepath.Join(files, "release")
 	out, errOut, code := filepath.Join(files, "out"), filepath.Join(files, "err"), filepath.Join(files, "code")
 	pusher := "echo $$ > " + shellQuote(pid+".tmp") + " && mv " + shellQuote(pid+".tmp") + " " + shellQuote(pid) + "; " +
-		"while [ ! -e " + shellQuote(release) + " ]; do sleep 0.02; done; " +
+		standin.HeldWait(t, release) + " && " +
 		"git -C " + shellQuote(dir) + " " + shellQuote(args...) + " > " + shellQuote(out) + " 2> " + shellQuote(errOut) +
 		"; echo $? > " + shellQuote(code+".tmp") + " && mv " + shellQuote(code+".tmp") + " " + shellQuote(code)
 	// The starter is in a session of its own, so neither it nor what it
