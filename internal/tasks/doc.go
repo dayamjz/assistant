@@ -287,8 +287,10 @@
 //     acquires both by design, and nothing here tells a person's push on it
 //     from the task's.
 //   - The instructions file is written after the record, so a crash between
-//     the two leaves a recorded task with no instructions. The reverse
-//     cannot happen, and the dispatch is what finds the gap.
+//     the two leaves a recorded task with no instructions, and a reader
+//     between them sees one that has none yet. The reverse cannot happen;
+//     the dispatch is what finds the crash's gap, and keeping a dispatch's
+//     read out of an intake in flight is the caller's.
 //   - The exclusion is one service's, as internal/service's own doc says of
 //     its branch gate. Two services over one store would not see each
 //     other's holds; the store's anchor then refuses one of two concurrent

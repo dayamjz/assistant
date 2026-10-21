@@ -41,6 +41,22 @@ func WithBeforeStaleRemovalReleaseForTest(o Options, f func()) Options {
 	return o
 }
 
+// WithAfterIntakeBranchReleaseForTest returns o with the seam after
+// internal/tasks gives back an intake's branch exclusion set to f, for this
+// package's external tests: for a delivery intake, f runs after the task's
+// record and before its instructions file.
+func WithAfterIntakeBranchReleaseForTest(o Options, f func()) Options {
+	o.afterIntakeBranchRelease = f
+	return o
+}
+
+// DispatchDueForTest runs one dispatch pass, dispatchDue, for this
+// package's external tests, which use it to run the pass at a moment a
+// release or another task.create could.
+func (s *Service) DispatchDueForTest(ctx context.Context) {
+	s.dispatchDue(ctx)
+}
+
 // SetBeforeRefusalEndForTest installs beforeRefusalEnd for this
 // package's external tests. It exists only in the tests, on that field's
 // terms in service.go.

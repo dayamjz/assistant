@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -139,6 +140,133 @@ func TestTaskCreateIsTheCoordinatorsAndNotAWorkers(t *testing.T) {
 		if !errors.Is(err, ipc.ErrInvalidRequest) {
 			t.Fatalf("a delivery naming no branch = %v, want ErrInvalidRequest", err)
 		}
+	})
+}
+
+// A dispatch pass that runs while task.create is between the task's record
+// and its instructions file, as a release or a second task.create can, does
+// not take the task: the record already reads Dispatched, but the file
+// dispatch appends to and the worker reads is not written yet, and a pass
+// that took the task then would refuse it and keep its slot, so nothing in
+// this service would dispatch it again. The pass is run at that moment
+// through the seam after intake gives back the branch exclusion, and the
+// test reads the records and the file there to confirm it is that moment.
+// The task is then dispatched and launched by the pass task.create runs once
+// its intake has returned, with its instructions final (#460).
+func TestADispatchPassDuringAnIntakeLeavesTheTaskToTheIntakesOwn(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	quietMaintenance(t, subject)
+	repository := recordRepository(t, h, subject)
+	quietMaintenance(t, gateRepositoryOf(t, h, subject))
+	o, _ := workerOptions(t, h)
+
+	var opened atomic.Pointer[service.Service]
+	var passes atomic.Int32
+	o = service.WithAfterIntakeBranchReleaseForTest(o, func() {
+		passes.Add(1)
+		recorded, err := recordsOf(t, h).Tasks(t.Context())
+		if err != nil || len(recorded) != 1 {
+			t.Errorf("between the record and the file the store holds tasks %+v (%v), want the one being created", recorded, err)
+			return
+		}
+		instructions, err := h.TaskInstructions(recorded[0].ID)
+		if err != nil {
+			t.Errorf("TaskInstructions: %v", err)
+			return
+		}
+		if _, err := os.Stat(instructions); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the seam ran with the instructions file already written (%v), so it is not the moment this test needs", err)
+			return
+		}
+		opened.Load().DispatchDueForTest(t.Context())
+	})
+	withServiceOptions(t, o, func(running serviceUnderTest) {
+		opened.Store(running.service)
+		request := machine.TaskCreateRequest{
+			Shape: "delivery", Project: "one", Instructions: "Build the thing.\n",
+			Repository: repository.ID, Branch: "task/during",
+		}
+		var created machine.TaskCreated
+		if err := running.client.Call(t.Context(), ipc.MethodTaskCreate, request, &created); err != nil {
+			t.Fatalf("task.create: %v", err)
+		}
+		if got := passes.Load(); got != 1 {
+			t.Fatalf("the seam between the record and the file ran %d times, want once", got)
+		}
+		launchedAttempt(t, h, created.Record.ID)
+		raw, err := os.ReadFile(created.Instructions)
+		if err != nil {
+			t.Fatalf("reading the instructions file: %v", err)
+		}
+		appended, ok := strings.CutPrefix(string(raw), request.Instructions)
+		if !ok || !strings.HasPrefix(appended, "\n\n"+service.SecondCheckHeading+"\n") ||
+			strings.Count(string(raw), service.SecondCheckHeading) != 1 {
+			t.Fatalf("the instructions file reads %q, want the request's followed by the second check once", raw)
+		}
+	})
+}
+
+// A dispatch pass skipped for an intake in flight is made up by the pass
+// task.create runs after that intake, also when the intake is refused. The
+// refusal is a delivery onto a branch a person's run is on, decided
+// under the branch exclusion, so the seam after intake gives it back runs
+// for the refused intake; there a task is recorded Dispatched with its
+// instructions, as a release would leave one, and a dispatch pass is run
+// and skipped because the intake is still in flight. The recorded task is
+// then launched, which only the pass after the refusal can have done (#460).
+func TestADispatchPassSkippedForARefusedIntakeIsMadeUpAfterIt(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	quietMaintenance(t, subject)
+	repository := recordRepository(t, h, subject)
+	quietMaintenance(t, gateRepositoryOf(t, h, subject))
+	records := openRecords(t, h)
+	run, err := records.CreateRun(t.Context(), store.Run{
+		ID: "run-person", RepositoryID: repository.ID, Branch: "task/taken", SubmittedHead: "aaaa", Base: "bbbb",
+		Intent: "validate", IntentSource: "push", ConfigDigest: "cfg",
+		Build: store.Build{Version: "v0", Revision: "0123456789abcdef", Go: "go1.25.0"},
+	})
+	if err == nil {
+		_, err = records.TransitionRun(t.Context(), run.ID, []store.RunStatus{store.RunPending}, store.RunFailed)
+	}
+	if closeErr := records.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatalf("recording a person's finished run on the branch: %v", err)
+	}
+	o, _ := workerOptions(t, h)
+
+	var opened atomic.Pointer[service.Service]
+	var planted atomic.Value
+	o = service.WithAfterIntakeBranchReleaseForTest(o, func() {
+		if planted.Load() != nil {
+			t.Error("the seam after an intake's branch exclusion ran more than once")
+			return
+		}
+		planted.Store(recordDispatchedTask(t, h, repository, store.TaskInvestigation, ""))
+		opened.Load().DispatchDueForTest(t.Context())
+	})
+	withServiceOptions(t, o, func(running serviceUnderTest) {
+		opened.Store(running.service)
+		var created machine.TaskCreated
+		err := running.client.Call(t.Context(), ipc.MethodTaskCreate, machine.TaskCreateRequest{
+			Shape: "delivery", Project: "one", Instructions: "Take a person's branch.\n",
+			Repository: repository.ID, Branch: "task/taken",
+		}, &created)
+		if !errors.Is(err, ipc.ErrRefused) {
+			t.Fatalf("task.create onto a branch a person's run is on = %v, want ErrRefused", err)
+		}
+		id, ok := planted.Load().(string)
+		if !ok {
+			t.Fatal("the refused intake never reached the seam after its branch exclusion")
+		}
+		launchedAttempt(t, h, id)
 	})
 }
 

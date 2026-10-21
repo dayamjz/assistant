@@ -32,7 +32,14 @@ func (s *Service) newQueue() (*tasks.Queue, error) {
 		Store:  s.store,
 		Reader: s.tasks(),
 		Exclude: func(ctx context.Context, repository, branch string) (func(), error) {
-			return s.holdBranch(ctx, branchKey{repository: repository, branch: branch})
+			release, err := s.holdBranch(ctx, branchKey{repository: repository, branch: branch})
+			if err != nil || s.afterIntakeBranchRelease == nil {
+				return release, err
+			}
+			return func() {
+				release()
+				s.afterIntakeBranchRelease()
+			}, nil
 		},
 		BranchInGate: s.branchInGate,
 		GatePath:     s.gatePathOf,

@@ -204,6 +204,11 @@ type Options struct {
 	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
 	// does.
 	beforeStaleRemovalRelease func()
+	// afterIntakeBranchRelease is the Service field of the same name, which
+	// export_test.go's WithAfterIntakeBranchReleaseForTest sets and the
+	// product never does. It is here rather than only on the Service because
+	// Open builds the queue that runs it.
+	afterIntakeBranchRelease func()
 	// sweepCopy is the Service field of the same name, set before recovery
 	// runs. It is here rather than only on the Service because recovery
 	// sweeps finished runs' copies inside Open, so a test that records what
@@ -216,7 +221,8 @@ type Options struct {
 //
 // It is safe for concurrent use. Its one exclusion is per run: a run advances
 // in one place at a time, and everything else is either read-only or
-// serialized by the packages it composes.
+// serialized by the packages it composes, except the intake field's, which
+// keeps a dispatch pass's read of the tasks out of a task intake.
 type Service struct {
 	// usageReadFaults is how many of the next usage budget readings fail,
 	// which only this package's tests set (export_test.go), so a test can
@@ -373,6 +379,14 @@ type Service struct {
 	// wakes.wait reads the queue again; wakewait.go owns it and says why it
 	// is a hint and never a record.
 	wakeBell wakeBell
+	// intake keeps a dispatch pass's read of the tasks apart from a task
+	// intake: createTask holds the write side across internal/tasks' Create,
+	// which writes a task's record before its instructions file, and
+	// dispatchDue reads the tasks only under the read side, skipping its pass
+	// while an intake holds or is taking the write side. dispatch.go's dispatchDue says
+	// why the skip loses nothing. It is not mu, because an intake reads the
+	// gate and the project's configuration while it holds it.
+	intake sync.RWMutex
 	// betweenAttemptReadAndClaim runs in a dispatch after the attempts have
 	// been read and before the attempt is claimed. It is nil in production
 	// and set only by this package's tests, which use it to hold two
@@ -388,6 +402,13 @@ type Service struct {
 	// recovery runs before each anchored release of a dead eject's
 	// reservation. It is nil in production.
 	beforeStaleRemovalRelease func()
+	// afterIntakeBranchRelease runs once internal/tasks has given back the
+	// branch exclusion an intake or a promotion took through newQueue's
+	// Exclude. For a delivery intake that is after the task's record and
+	// before its instructions file. It is nil in production and set only by
+	// this package's tests, which use it to run a dispatch pass at that
+	// moment.
+	afterIntakeBranchRelease func()
 	// afterConsentRegistered runs in underStandingConsent once
 	// writeConsentAnswer has registered a standing-consent hold and before
 	// the answer is given. It is nil in production and set only by this
@@ -605,6 +626,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		topologies:                make(map[string]*topology),
 		advancing:                 make(map[string]*slot),
 		beforeStaleRemovalRelease: o.beforeStaleRemovalRelease,
+		afterIntakeBranchRelease:  o.afterIntakeBranchRelease,
 		isolated:                  make(map[string]tasks.Isolation),
 		claiming:                  make(map[string]bool),
 		launched:                  make(map[string]launchedWorker),
