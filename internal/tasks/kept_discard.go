@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/gate"
@@ -35,13 +36,21 @@ import (
 // list that may overstate or understate; a later cleanup of the unchanged
 // copy establishes it. A copy that is gone is ErrCopyGone.
 //
-// The digest is over the copy's state as shown: its path, the commit HEAD
-// stands on, every reference tip, the commits lacking, and the three
-// indicators. The same copy in the same state digests the same, and a
-// commit, a reference moved, an edit, a file added or removed, or a stash
-// made or dropped since changes it, which is what lets Discard refuse a
-// copy that no longer holds exactly what was shown (ErrLossChanged). It is
-// a confirmation and not a secret.
+// The digest is over everything the discard would destroy, as shown: the
+// copy's path, the commit HEAD stands on, every reference tip of a task's
+// clone and the stash of either kind, the tree the index holds (git's own
+// object identity for the staged content of every tracked path), every
+// path git reports changed or untracked with the content it holds in the
+// working tree (a hash of its bytes, or that it is gone), the commits
+// lacking, and the three indicators. The same copy in the same state
+// digests the same, and a commit, a reference moved, an edit to a tracked
+// file, a change staged, a file added, edited or removed, or a stash made
+// or dropped since changes it, which is what lets Discard refuse a copy that
+// no longer holds exactly what was shown (ErrLossChanged). Names and counts
+// alone would not: an edit that keeps a file's name is a change to what
+// would be lost, so the content is read. It is a confirmation and not a
+// secret, and a file git is configured to ignore is not read, as it is not
+// an indicator and not among the paths git reports.
 //
 // # The removal
 //
@@ -103,18 +112,66 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	loss := Loss{Head: inv.Head.Commit, Lacks: append([]string{}, entry.Lacks...), Dirty: inv.Dirty, Untracked: inv.Untracked, Stash: inv.Stash}
 	var b strings.Builder
 	b.WriteString(entry.CopyPath + "\n" + inv.Head.Commit + "\n")
-	if entry.TaskID.IsKnown() {
+	for _, ref := range inv.Refs {
 		// A task's clone has references of its own; a run's worktree reads
-		// the gate's, which are not the copy's state.
-		for _, ref := range inv.Refs {
+		// the gate's, which are not the copy's state, so of those only the
+		// stash, which is the copy's, is read.
+		if entry.TaskID.IsKnown() || ref.Name == "refs/stash" {
 			b.WriteString(ref.Name + "=" + ref.Commit + "\n")
 		}
+	}
+	index, err := copied.WriteTree(ctx)
+	if err != nil {
+		// An index git cannot write as a tree, one with unmerged entries,
+		// is named as such; the unmerged paths' contents are read below.
+		index = "unwritable: " + err.Error()
+	}
+	b.WriteString("index=" + index + "\n")
+	changes, err := copied.Changes(ctx)
+	if err != nil {
+		return Loss{}, fmt.Errorf("tasks: reading the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	for _, p := range changes.Paths {
+		content, err := contentOf(filepath.Join(entry.CopyPath, filepath.FromSlash(p.Path)))
+		if err != nil {
+			return Loss{}, fmt.Errorf("tasks: reading %s in the kept copy at %s: %w", p.Path, entry.CopyPath, err)
+		}
+		fmt.Fprintf(&b, "%s untracked=%v gone=%v %s\n", p.Path, p.Untracked, p.Gone, content)
 	}
 	b.WriteString(strings.Join(loss.Lacks, ",") + "\n")
 	fmt.Fprintf(&b, "%v %v %v\n", inv.Dirty, inv.Untracked, inv.Stash)
 	sum := sha256.Sum256([]byte(b.String()))
 	loss.Digest = hex.EncodeToString(sum[:])[:12]
 	return loss, nil
+}
+
+// contentOf is a hash of what the working tree holds at path, or "gone" for
+// a path no longer there and "link" plus its target for a symbolic link,
+// which is what git would record of it.
+func contentOf(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "gone", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(path)
+		if err != nil {
+			return "", err
+		}
+		return "link " + target, nil
+	}
+	if info.IsDir() {
+		return "directory", nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // Discard removes the entry's copy when it still holds exactly what digest

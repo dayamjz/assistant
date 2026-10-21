@@ -199,6 +199,12 @@ type Options struct {
 	// hands them to internal/tasks' InterruptBeforeMarkForTest.
 	cleanupTest          testing.TB
 	interruptCleanupMark func() error
+	// intakeTest and interruptIntake are intake's seam between a task's row
+	// and its instructions file, which export_test.go's
+	// WithIntakeInterruptForTest sets and the product never does; Open hands
+	// them to internal/tasks' InterruptAfterRecordForTest.
+	intakeTest      testing.TB
+	interruptIntake func() error
 	// beforeStaleRemovalRelease runs in recovery between reading a removal
 	// reservation whose owner is gone and releasing it; export_test.go's
 	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
@@ -738,6 +744,11 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	s.checkpoints = checkpoints.New(records)
 	if s.queue, err = s.newQueue(); err != nil {
 		return err
+	}
+	if o.interruptIntake != nil {
+		if err := s.queue.InterruptAfterRecordForTest(o.intakeTest, o.interruptIntake); err != nil {
+			return err
+		}
 	}
 	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err == nil && o.interruptCleanupMark != nil {
 		err = s.cleaner.InterruptBeforeMarkForTest(o.cleanupTest, o.interruptCleanupMark)

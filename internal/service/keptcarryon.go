@@ -56,13 +56,16 @@ import (
 // identifier, the copy is moved to the task's own path and reshaped as
 // dispatch shapes a fresh clone, the note is appended to the instructions
 // file, and the entry is marked carried on. Every step after the answer is
-// idempotent on what it finds (the row stands, the copy stands at the new
-// path, the note is in the file), so a service that stops anywhere in it is
-// completed by the next call or the next start from the entry alone, which
-// names the task: completeCarryOnsAtOpen reads every carry-on not marked.
-// A stop before the task's row is written leaves an entry naming a task
-// that does not exist yet, which the completion creates; a stop after the
-// move leaves the copy at the new path, which it finds. What is not
+// idempotent on what it finds (the row stands, the instructions file
+// stands, the copy stands at the new path, the note is in the file), so a
+// service that stops anywhere in it is completed by the next call or the
+// next start from the entry alone, which names the task:
+// completeCarryOnsAtOpen reads every carry-on not marked. A stop before the
+// task's row is written leaves an entry naming a task that does not exist
+// yet, which the completion creates; a stop between the row and the
+// instructions file, inside intake, leaves a row with no file, which
+// intake's own CompleteIntake writes before the copy is moved; a stop after
+// the move leaves the copy at the new path, which it finds. What is not
 // recovered: a copy gone from both paths, which is reported and left.
 //
 // Once the slot is given back a dispatch pass is asked for, and the task
@@ -217,18 +220,25 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
-	// The record, through intake, unless an earlier call wrote it.
+	// The record, through intake, unless an earlier call wrote it; and then
+	// intake's second step, the instructions file, which a stop between the
+	// two left unwritten, completed by intake itself on a row that stands
+	// without it and left alone where it stands.
+	instructionsText := s.carryOnInstructions(plan.old)
 	if _, err := s.store.Task(ctx, id); errors.Is(err, store.ErrNotFound) {
 		if _, err := s.queue.Create(ctx, tasks.Request{
 			ID: id, Shape: string(plan.old.Shape), Project: plan.old.Project, Mode: plan.old.Mode, Role: plan.old.Role,
 			Domain: plan.old.Domain, Repository: plan.repository.ID, Branch: plan.branch,
-			Instructions: s.carryOnInstructions(plan.old),
+			Instructions: instructionsText,
 		}); err != nil {
 			return machine.KeptWorkAnswered{}, refusalOf(err)
 		}
 		s.log.Printf("task %s was created to carry kept work entry %d on from task %s", id, entry.ID, plan.old.ID)
 	} else if err != nil {
 		return machine.KeptWorkAnswered{}, err
+	}
+	if _, err := s.queue.CompleteIntake(ctx, id, instructionsText); err != nil {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("service: completing the intake of task %s, which carries kept work entry %d on: %w", id, entry.ID, err)
 	}
 	// The copy, moved to the task's own path unless an earlier call moved it,
 	// and asserted where it stands before the move.

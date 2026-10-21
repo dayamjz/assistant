@@ -251,11 +251,43 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 		return Created{}, err
 	}
 
+	if q.betweenRecordAndInstructions != nil {
+		if err := q.betweenRecordAndInstructions(); err != nil {
+			return Created{}, err
+		}
+	}
 	instructions, err := q.writeInstructions(id, req.Instructions)
 	if err != nil {
 		return Created{}, err
 	}
 	return Created{Task: created, Cause: cause, BlockerState: blockerState, Instructions: instructions}, nil
+}
+
+// CompleteIntake is intake's second step, the instructions file under the
+// task's directory, for a task whose row Create wrote and whose file a stop
+// left unwritten: it writes text there when no file stands and leaves a
+// file that does as it is, and returns the file's path. A task with no row
+// is store.ErrNotFound, wrapped, since the record comes first and this
+// writes no record. Its one caller is internal/service's carry on of kept
+// work, which creates the task under an identifier it reserved and
+// completes a stopped intake from the entry at the next start.
+func (q *Queue) CompleteIntake(ctx context.Context, id, text string) (string, error) {
+	if _, err := q.store.Task(ctx, id); err != nil {
+		return "", err
+	}
+	path, err := q.home.TaskInstructions(id)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("tasks: reading the instructions of task %s: %w", id, err)
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("%w: no instructions", ErrRequest)
+	}
+	return q.writeInstructions(id, text)
 }
 
 // recordedPosture is the posture a delivery task is recorded under, at

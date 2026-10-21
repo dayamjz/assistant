@@ -12,6 +12,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -298,4 +299,62 @@ func waitLaunched(t *testing.T, h *home.Home, task string) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// A carry on stopped inside the task's intake, after its row and before its
+// instructions file, is completed by the next start in intake's own order:
+// the first service's intake is stopped at that point through the seam, so
+// the answer is recorded, the row stands and no file does; the next start
+// finds the row, has intake write the file, moves the copy, writes the
+// note, marks the entry, and the task dispatches into the copy. Without
+// intake's second step at completion the row is taken as a finished intake,
+// the copy is moved, the note cannot be written and the task never
+// dispatches.
+func TestACarryOnStoppedInsideIntakeIsCompletedAtTheNextStart(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	stopped := errors.New("the service stopped between the task's row and its instructions file")
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, service.WithIntakeInterruptForTest(t, o, func() error { return stopped }), func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		if err == nil {
+			t.Fatalf("the carry on completed past the stopped intake: %+v", out)
+		}
+	})
+	answered, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+	if err != nil || answered.Answer.Or("") != store.KeptCarryOn || answered.CarriedOnAt.IsKnown() {
+		t.Fatalf("after the stop the entry reads %+v, %v; want it answered carry-on and not carried on", answered, err)
+	}
+	reserved := answered.CarriedOnTask.Or("")
+	if _, err := recordsOf(t, h).Task(t.Context(), reserved); err != nil {
+		t.Fatalf("after the stop task %s has no row: %v", reserved, err)
+	}
+	instructions, err := h.TaskInstructions(reserved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(instructions); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("after the stop task %s has an instructions file: %v", reserved, err)
+	}
+	if _, err := os.Stat(entry.CopyPath); err != nil {
+		t.Fatalf("the stopped carry on moved the copy: %v", err)
+	}
+
+	o, _ = workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		waitCarriedOn(t, h, entry.ID)
+		text, err := os.ReadFile(instructions)
+		if err != nil || !strings.HasPrefix(string(text), "Investigate the parser.") || !strings.Contains(string(text), "## Carried on, written by the program") {
+			t.Fatalf("the next start left task %s's instructions as %q (%v); want the intake text and the note", reserved, text, err)
+		}
+		waitLaunched(t, h, reserved)
+	})
 }

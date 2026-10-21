@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
@@ -13,9 +15,11 @@ import (
 )
 
 // What a discard would lose is read from the entry's basis and the copy as
-// it stands, with a digest that names exactly that state: the same copy
-// digests the same twice, a file no commit records changes it, and removing
-// the file brings the first digest back. Discard refuses a digest that is
+// it stands, with a digest that names exactly that state, contents
+// included: the same copy digests the same twice, a file no commit records
+// changes it, and removing the file brings the first digest back; an edit
+// to a tracked file and a second untracked file change it while every name
+// and indicator stays the same, and staging the edit changes it again. Discard refuses a digest that is
 // not the copy's and removes nothing, removes the clone on the copy's own
 // digest, and treats a copy already gone as nothing to lose; Loss refuses
 // an entry whose basis is not established and a copy that is gone. Without
@@ -69,6 +73,70 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	if _, err := s.cleaner.Discard(ctx, entry, "not-the-digest", ""); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("a discard on another digest = %v; want ErrLossChanged", err)
 	}
+	// The contents, not the names: a dirty copy with an untracked file is
+	// shown, then the tracked file is edited again and another file is
+	// added, which keeps every name and both indicators the same; the
+	// digest shown no longer names the copy, and a discard on it is refused.
+	// Staging the edit changes it again.
+	tracked := filepath.Join(tk.copy, "own.txt")
+	if err := os.WriteFile(tracked, []byte("edited once\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stray, []byte("the first untracked file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dirty, err := s.cleaner.Loss(ctx, entry)
+	if err != nil || !dirty.Dirty || !dirty.Untracked || dirty.Digest == first.Digest {
+		t.Fatalf("a dirty copy with an untracked file = %+v, %v; want both indicators and another digest", dirty, err)
+	}
+	// The contents alone first: the same names, the same indicators, other
+	// bytes in the tracked file and in the untracked one.
+	if err := os.WriteFile(tracked, []byte("edited twice, which the names do not show\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stray, []byte("the first untracked file, rewritten\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	edited, err := s.cleaner.Loss(ctx, entry)
+	if names := changedPaths(t, tk.copy); !slices.Equal(names, []string{"own.txt", "stray.txt"}) {
+		t.Fatalf("after the edits git reports %v changed, want the same two names as before them", names)
+	}
+	if err != nil || edited.Digest == dirty.Digest || edited.Dirty != dirty.Dirty || edited.Untracked != dirty.Untracked {
+		t.Fatalf("after the edits Loss = %+v, %v; want the same indicators and another digest than %s", edited, err, dirty.Digest)
+	}
+	if _, err := s.cleaner.Discard(ctx, entry, dirty.Digest, ""); !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("a discard on the digest shown before the edits = %v; want ErrLossChanged", err)
+	}
+	// Then another file beside them.
+	if err := os.WriteFile(filepath.Join(tk.copy, "second.txt"), []byte("more new work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	added, err := s.cleaner.Loss(ctx, entry)
+	if err != nil || added.Digest == edited.Digest {
+		t.Fatalf("with a second file Loss = %+v, %v; want another digest than %s", added, err, edited.Digest)
+	}
+	if _, err := s.cleaner.Discard(ctx, entry, dirty.Digest, ""); !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("a discard on the digest shown before the edits and the file = %v; want ErrLossChanged", err)
+	}
+	if _, err := os.Stat(filepath.Join(tk.copy, "second.txt")); err != nil {
+		t.Fatalf("the refused discard removed the new work: %v", err)
+	}
+	rawGit(t, tk.copy, "add", "own.txt")
+	staged, err := s.cleaner.Loss(ctx, entry)
+	if err != nil || staged.Digest == added.Digest {
+		t.Fatalf("with the edit staged Loss = %+v, %v; want another digest than %s", staged, err, added.Digest)
+	}
+	rawGit(t, tk.copy, "reset", "--quiet", "own.txt")
+	rawGit(t, tk.copy, "checkout", "--", "own.txt")
+	if err := os.Remove(filepath.Join(tk.copy, "second.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(stray); err != nil {
+		t.Fatal(err)
+	}
+	if back, err := s.cleaner.Loss(ctx, entry); err != nil || back.Digest != first.Digest {
+		t.Fatalf("with everything undone the copy digests %s (%v), want %s again", back.Digest, err, first.Digest)
+	}
 	lost, err := s.cleaner.Discard(ctx, entry, first.Digest, "")
 	if err != nil || lost.Digest != first.Digest {
 		t.Fatalf("Discard = %+v, %v; want the copy removed on its own digest", lost, err)
@@ -89,4 +157,18 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	if _, err := s.cleaner.Loss(ctx, unestablished); !errors.Is(err, ErrLossUnestablished) {
 		t.Fatalf("Loss of an unestablished entry = %v; want ErrLossUnestablished", err)
 	}
+}
+
+// changedPaths is what git reports changed or untracked in the copy, by
+// name, sorted.
+func changedPaths(t *testing.T, copyPath string) []string {
+	t.Helper()
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(rawGit(t, copyPath, "status", "--porcelain", "--untracked-files=all")), "\n") {
+		if fields := strings.Fields(line); len(fields) > 1 {
+			out = append(out, fields[len(fields)-1])
+		}
+	}
+	slices.Sort(out)
+	return out
 }

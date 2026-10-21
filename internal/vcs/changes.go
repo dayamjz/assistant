@@ -28,6 +28,24 @@ type Changes struct {
 	// Unmerged reports a path with an unresolved merge conflict, which has
 	// to be resolved and staged before it can be committed.
 	Unmerged bool
+	// Paths is every path the indicators above were read from, in git's
+	// order: each tracked path whose index or working tree differs from
+	// HEAD, each unmerged path, and each untracked file. A path git is
+	// configured to ignore is not among them, as it is not an indicator.
+	Paths []ChangedPath
+}
+
+// ChangedPath is one path Changes reports: where it is under the working
+// copy, whether git tracks it, and whether the working tree no longer has
+// it.
+type ChangedPath struct {
+	// Path is the path relative to the working copy's root, as git prints
+	// it.
+	Path string
+	// Untracked reports a file no commit records.
+	Untracked bool
+	// Gone reports a tracked path deleted from the working tree.
+	Gone bool
 }
 
 // Dirty reports whether a tracked file differs from HEAD in the tree or in
@@ -87,6 +105,18 @@ func parseChanges(out string) (Changes, error) {
 			if entry[3] != '.' {
 				c.Unstaged = true
 			}
+			// The path is the last field, after eight single-space
+			// separated fields for an ordinary entry and nine for a rename
+			// or copy, and may itself carry spaces.
+			fieldsBefore := 8
+			if entry[0] == '2' {
+				fieldsBefore = 9
+			}
+			path, ok := fieldAfter(entry, fieldsBefore)
+			if !ok {
+				return Changes{}, &outputError{op: "status", detail: "unrecognized entry " + entry}
+			}
+			c.Paths = append(c.Paths, ChangedPath{Path: path, Gone: entry[3] == 'D'})
 			if entry[0] == '2' {
 				// A rename entry carries its original path in the next
 				// field. Renames are turned off above, so none is
@@ -96,8 +126,18 @@ func parseChanges(out string) (Changes, error) {
 			}
 		case 'u':
 			c.Unmerged = true
+			path, ok := fieldAfter(entry, 10)
+			if !ok {
+				return Changes{}, &outputError{op: "status", detail: "unrecognized entry " + entry}
+			}
+			c.Paths = append(c.Paths, ChangedPath{Path: path})
 		case '?':
 			c.Untracked = true
+			path, ok := fieldAfter(entry, 1)
+			if !ok {
+				return Changes{}, &outputError{op: "status", detail: "unrecognized entry " + entry}
+			}
+			c.Paths = append(c.Paths, ChangedPath{Path: path, Untracked: true})
 		case '!':
 			// Ignored entries are not asked for; one that arrives changes
 			// nothing, because an ignored file is not an indicator here.
@@ -106,4 +146,35 @@ func parseChanges(out string) (Changes, error) {
 		}
 	}
 	return c, nil
+}
+
+// fieldAfter returns what follows the first n single-space separated fields
+// of entry, which is a porcelain v2 entry's path, and false when the entry
+// has no such field or it is empty.
+func fieldAfter(entry string, n int) (string, bool) {
+	rest := entry
+	for range n {
+		i := strings.IndexByte(rest, ' ')
+		if i < 0 {
+			return "", false
+		}
+		rest = rest[i+1:]
+	}
+	return rest, rest != ""
+}
+
+// WriteTree is the tree the index holds, as git writes it, which names the
+// staged content of every tracked path by object identity. It writes tree
+// objects and no reference, moves nothing, and refuses with git's own error
+// on an index with unmerged entries. It refuses with ErrNotARepository on a
+// bare repository, which has no index of a working copy's.
+func (r *Repository) WriteTree(ctx context.Context) (string, error) {
+	if r.kind != KindWorktree {
+		return "", &openError{path: r.path, kind: KindWorktree}
+	}
+	out, err := r.run(ctx, "write-tree", "write-tree")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }

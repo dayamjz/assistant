@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"testing"
+
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/store"
@@ -96,6 +98,24 @@ type Queue struct {
 	// set only by this package's tests, which use it to stand in for a
 	// crash there.
 	betweenFlipAndCopy func()
+	// betweenRecordAndInstructions runs in an intake after the task's row
+	// is written and before its instructions file is, and an error it
+	// returns ends the intake there, which is the state a service that
+	// stopped there leaves. It is nil in production and set only through
+	// InterruptAfterRecordForTest.
+	betweenRecordAndInstructions func() error
+}
+
+// InterruptAfterRecordForTest makes every intake this Queue makes stop after
+// the task's row is written and before its instructions file is whenever f
+// returns an error, which is the state a service that stopped there leaves.
+// It takes the test, so nothing but a test installs it.
+func (q *Queue) InterruptAfterRecordForTest(tb testing.TB, f func() error) error {
+	if tb == nil {
+		return errors.New("tasks: InterruptAfterRecordForTest is a test's seam and takes the test")
+	}
+	q.betweenRecordAndInstructions = f
+	return nil
 }
 
 // New builds a Queue, refusing with ErrIncomplete when any dependency is nil.

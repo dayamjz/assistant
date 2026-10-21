@@ -33,6 +33,15 @@ func WithCleanupInterruptForTest(tb testing.TB, o Options, f func() error) Optio
 	return o
 }
 
+// WithIntakeInterruptForTest returns o with intake's seam between a task's
+// row and its instructions file set to f, for this package's external
+// tests: an intake whose f returns an error ends with the row written and
+// no file, as a service that stopped there leaves it.
+func WithIntakeInterruptForTest(tb testing.TB, o Options, f func() error) Options {
+	o.intakeTest, o.interruptIntake = tb, f
+	return o
+}
+
 // WithBeforeStaleRemovalReleaseForTest returns o with recovery's seam between
 // reading a dead eject's removal reservation and releasing it set to f, for
 // this package's external tests.

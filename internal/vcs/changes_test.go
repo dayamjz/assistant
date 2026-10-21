@@ -1,9 +1,11 @@
 package vcs_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -33,14 +35,16 @@ func TestChangesSeparatesUntrackedUnstagedAndStaged(t *testing.T) {
 	check := func(when string, want vcs.Changes) {
 		t.Helper()
 		got := changesOf(t, copy)
-		if got != want {
+		// The indicators are compared here; the paths they were read from
+		// are TestChangesListsThePathsItReadFrom's.
+		if got.Untracked != want.Untracked || got.Unstaged != want.Unstaged || got.Staged != want.Staged || got.Unmerged != want.Unmerged {
 			t.Errorf("%s: Changes = %+v, want %+v", when, got, want)
 		}
 		inv := inventory(t, copy)
 		if inv.Dirty != want.Dirty() || inv.Untracked != want.Untracked {
 			t.Errorf("%s: Inventory reads dirty=%v untracked=%v, and Changes %+v", when, inv.Dirty, inv.Untracked, want)
 		}
-		if got.Clean() != (want == vcs.Changes{}) {
+		if got.Clean() != want.Clean() || got.Clean() != (len(got.Paths) == 0) {
 			t.Errorf("%s: Clean = %v for %+v", when, got.Clean(), got)
 		}
 	}
@@ -108,4 +112,54 @@ func TestChangesRefusesABareRepository(t *testing.T) {
 	if _, err := bare.Changes(ctx(t)); !errors.Is(err, vcs.ErrNotARepository) {
 		t.Errorf("Changes on a bare repository: %v, want ErrNotARepository", err)
 	}
+}
+
+// Changes lists the paths its indicators were read from, as git prints
+// them, with whether each is untracked or gone from the tree: an untracked
+// file, a staged file, an edited tracked file, a path with a space in it,
+// and a tracked file deleted in the tree, each once; a clean tree lists
+// none. WriteTree names the index's content by git's own tree identity,
+// so staging a change moves it and nothing else in the tree does.
+func TestChangesListsThePathsItReadFrom(t *testing.T) {
+	gitEnvironment(t)
+	copy, _, _, _ := clonedCopy(t)
+	dir := copy.Path()
+	ctx := context.Background()
+	paths := func(when string, want []vcs.ChangedPath) {
+		t.Helper()
+		got := changesOf(t, copy).Paths
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: Paths = %+v, want %+v", when, got, want)
+		}
+	}
+	paths("a fresh clone", nil)
+	clean, err := copy.WriteTree(ctx)
+	if err != nil || clean == "" {
+		t.Fatalf("WriteTree of a clean index = %q, %v", clean, err)
+	}
+
+	writeFile(t, filepath.Join(dir, "new.txt"), "untracked\n")
+	writeFile(t, filepath.Join(dir, "with space.txt"), "untracked too\n")
+	paths("two untracked files", []vcs.ChangedPath{{Path: "new.txt", Untracked: true}, {Path: "with space.txt", Untracked: true}})
+	if tree, err := copy.WriteTree(ctx); err != nil || tree != clean {
+		t.Fatalf("WriteTree with untracked files = %q, %v; want the clean index's %s", tree, err, clean)
+	}
+
+	rawGit(t, dir, "add", "new.txt")
+	paths("one staged", []vcs.ChangedPath{{Path: "new.txt"}, {Path: "with space.txt", Untracked: true}})
+	staged, err := copy.WriteTree(ctx)
+	if err != nil || staged == clean {
+		t.Fatalf("WriteTree with a file staged = %q, %v; want another tree than %s", staged, err, clean)
+	}
+
+	writeFile(t, filepath.Join(dir, "kept.txt"), "edited\n")
+	paths("a tracked file edited", []vcs.ChangedPath{{Path: "kept.txt"}, {Path: "new.txt"}, {Path: "with space.txt", Untracked: true}})
+	if tree, err := copy.WriteTree(ctx); err != nil || tree != staged {
+		t.Fatalf("WriteTree with an unstaged edit = %q, %v; want the index's %s unchanged", tree, err, staged)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "kept.txt")); err != nil {
+		t.Fatal(err)
+	}
+	paths("a tracked file deleted in the tree", []vcs.ChangedPath{{Path: "kept.txt", Gone: true}, {Path: "new.txt"}, {Path: "with space.txt", Untracked: true}})
 }
