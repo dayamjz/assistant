@@ -68,8 +68,9 @@ paths: ["internal/service/**"]
   the kept copy; and discard (`keptdiscard.go`), shown with a digest and
   removed only on it through `internal/tasks`' `Loss` and `Discard`, with
   the answer recorded first and what "person-only" is and is not enforced
-  by stated in its header; all three completed at open when a stopped
-  service left them. A promotion answers its copy's entry carry on in the
+  by stated in its header, a confirmation held to `foreground.go`'s
+  relation as the approval hold is; all three completed at open when a
+  stopped service left them. A promotion answers its copy's entry carry on in the
   flip, which is `store.TransitionTaskShape`'s write with the resolver
   `promoteTask` passes.
 - Run activity: whether anything is advancing a run is a third fact neither

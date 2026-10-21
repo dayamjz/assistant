@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -148,9 +149,18 @@ func TestKeptWorkIsAnsweredLandFromTheCommandLine(t *testing.T) {
 // discarded row; the rows are held to the vocabulary. --confirm beside any
 // other answer, or with no digest, is incorrect usage before anything is
 // asked. A confirmation under --json, and one from a process not at a
-// terminal, is refused with the row saying so before anything reaches the
-// service: nothing is recorded and the copy stands. Without the terminal
-// check the confirmation from nowhere removes the copy.
+// terminal, is refused with the row saying so by the surface itself, before
+// anything reaches the service, which the refusal's text shows by carrying
+// the row alone and no method's name: nothing is recorded and the copy
+// stands. A confirmation given at a terminal is forwarded, and what then
+// happens is the service's: it admits the confirmation from a peer in a
+// terminal's foreground and refuses one that is not, which is this test
+// process's own standing and not something the test decides, so the
+// forwarded confirmation is held to one of those two answers, each carried
+// as the service's; internal/service's own test drives both from processes
+// it places. Without the surface's check the confirmation from nowhere is
+// forwarded and comes back as the service's answer instead of the row
+// alone.
 func TestKeptWorkIsDiscardedFromTheCommandLine(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -205,8 +215,10 @@ func TestKeptWorkIsDiscardedFromTheCommandLine(t *testing.T) {
 		run(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest),
 		atTerminal(t, h, subject, "", "--json", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest),
 	} {
-		if refused.code != machine.ExitFailure || !strings.Contains(refused.stdout+refused.stderr, needsTerminal) {
-			t.Fatalf("a confirmation from no terminal, or under --json, exited %s:\n%s%s\nwant the row %q", refused.code, refused.stdout, refused.stderr, needsTerminal)
+		said := refused.stdout + refused.stderr
+		if refused.code != machine.ExitFailure || !strings.Contains(said, needsTerminal) || strings.Contains(said, string(ipc.MethodKeptWorkAnswer)) {
+			t.Fatalf("a confirmation from no terminal, or under --json, exited %s:\n%s\nwant the row %q from the surface itself, naming no method",
+				refused.code, said, needsTerminal)
 		}
 	}
 	if _, err := os.Stat(entry.CopyPath); err != nil {
@@ -218,18 +230,29 @@ func TestKeptWorkIsDiscardedFromTheCommandLine(t *testing.T) {
 
 	done := atTerminal(t, h, subject, "", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest)
 	doneRow := machine.KeptWorkAnsweredPhrase(machine.KeptWorkAnswered{Effect: machine.KeptWorkDiscarded}).String()
-	if done.code != machine.ExitOK || !strings.Contains(done.stdout, doneRow) {
-		t.Fatalf("the confirmed discard at a terminal exited %s:\n%s%s\nwant the row %q", done.code, done.stdout, done.stderr, doneRow)
-	}
-	if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the discarded copy still stands: %v", err)
-	}
-	if gone, err := openStore(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || gone.Answer.Or("") != store.KeptDiscard || !gone.DiscardedAt.IsKnown() {
-		t.Fatalf("after the discard the entry reads %+v, %v; want it answered discard and discarded", gone, err)
-	}
-	again := atTerminal(t, h, subject, "", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest)
-	if again.code != machine.ExitOK || !strings.Contains(again.stdout, doneRow) {
-		t.Fatalf("the discard again reads out as:\n%s%s\nwant the row %q", again.stdout, again.stderr, doneRow)
-	}
 	vocabtest.Assert(t, doneRow)
+	switch said := done.stdout + done.stderr; {
+	case done.code == machine.ExitOK && strings.Contains(done.stdout, doneRow):
+		// This process is in a terminal's foreground, so the service
+		// admitted the confirmation it was forwarded.
+		if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the discarded copy still stands: %v", err)
+		}
+		if gone, err := openStore(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || gone.Answer.Or("") != store.KeptDiscard || !gone.DiscardedAt.IsKnown() {
+			t.Fatalf("after the discard the entry reads %+v, %v; want it answered discard and discarded", gone, err)
+		}
+		again := atTerminal(t, h, subject, "", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest)
+		if again.code != machine.ExitOK || !strings.Contains(again.stdout, doneRow) {
+			t.Fatalf("the discard again reads out as:\n%s%s\nwant the row %q", again.stdout, again.stderr, doneRow)
+		}
+	case done.code == machine.ExitFailure && strings.Contains(said, needsTerminal) && strings.Contains(said, string(ipc.MethodKeptWorkAnswer)):
+		// This process is not in a terminal's foreground, so the service
+		// refused the confirmation it was forwarded, with its own row.
+		if _, err := os.Stat(entry.CopyPath); err != nil {
+			t.Fatalf("the service's refusal removed the copy: %v", err)
+		}
+	default:
+		t.Fatalf("the confirmation at a terminal exited %s:\n%s\nwant the service's answer either way, the row %q or the refusal %q from %s",
+			done.code, said, doneRow, needsTerminal, ipc.MethodKeptWorkAnswer)
+	}
 }

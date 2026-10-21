@@ -3,6 +3,8 @@ package tasks
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -402,5 +404,89 @@ func TestIntakeRecordsAWorkerRoleAndRefusesTheOthers(t *testing.T) {
 	got := f.create(t, req)
 	if got.Task.Role != "pages" {
 		t.Fatalf("the task records role %q, want pages", got.Task.Role)
+	}
+}
+
+// An intake's instructions file is written whole: a write that fails
+// partway leaves nothing under the file's name and no partial file that a
+// later read takes for it, and CompleteIntake then writes the file for the
+// row the stop left, while leaving a file that stands as it is. Without the
+// whole write a partial file under the name is taken for the instructions.
+func TestIntakeWritesItsInstructionsWholeAndCompleteIntakeFillsAGap(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	f := newFixture(t)
+	ctx := context.Background()
+	stopped := errors.New("the service stopped inside the intake")
+	if err := f.queue.InterruptAfterRecordForTest(t, func() error { return stopped }); err != nil {
+		t.Fatal(err)
+	}
+	req := delivery("")
+	req.Branch = "task/stopped"
+	if _, err := f.queue.Create(ctx, req); !errors.Is(err, stopped) {
+		t.Fatalf("the interrupted intake = %v; want the stop", err)
+	}
+	all, err := f.store.Tasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	for _, task := range all {
+		if task.Branch.Or("") == "task/stopped" {
+			id = task.ID
+		}
+	}
+	if id == "" {
+		t.Fatal("the interrupted intake wrote no row")
+	}
+	path, err := f.home.TaskInstructions(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the interrupted intake left a file under the instructions' name: %v", err)
+	}
+	// The whole write itself: a path whose directory refuses the rename
+	// leaves nothing under the name, and a successful one leaves the whole
+	// content and no file beside it.
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeWhole(filepath.Join(dir, "missing", "x"), []byte("x")); err == nil {
+		t.Fatal("a write into a directory that is not there succeeded")
+	}
+	if err := writeWhole(path, []byte("whole\n")); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != filepath.Base(path) {
+			t.Fatalf("the whole write left %s beside the file", e.Name())
+		}
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.queue.InterruptAfterRecordForTest(t, nil); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := f.queue.CompleteIntake(ctx, id, "Do the work.\n")
+	if err != nil || completed != path {
+		t.Fatalf("CompleteIntake = %q, %v; want the file written at %s", completed, err, path)
+	}
+	if text, err := os.ReadFile(path); err != nil || string(text) != "Do the work.\n" {
+		t.Fatalf("the completed file reads %q, %v", text, err)
+	}
+	if _, err := f.queue.CompleteIntake(ctx, id, "something else\n"); err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := os.ReadFile(path); string(text) != "Do the work.\n" {
+		t.Fatalf("CompleteIntake rewrote a file that stood: %q", text)
+	}
+	if _, err := f.queue.CompleteIntake(ctx, "tasknobodyaa", "x"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("CompleteIntake of a task with no row = %v; want ErrNotFound", err)
 	}
 }

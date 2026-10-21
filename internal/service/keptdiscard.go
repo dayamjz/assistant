@@ -53,18 +53,35 @@ import (
 // credentials and the caller's lineage), a subordinate coordinator is
 // refused (refuseDecision), and nothing in the program discards on its own,
 // since the one producer of a discard answer is this method and its one
-// caller is the command surface. What the command surface enforces, by the
-// owner's decision on #411: a confirmation is taken only from a person at
-// a terminal (internal/cli's Environment.Interactive, never under --json),
-// so a headless coordinator agent, which reaches the service over the
-// socket from no terminal, cannot confirm one, while the preview stays
-// scriptable. What neither enforces, on internal/store's Resolver terms: a
-// person running an agent in a terminal's foreground can have it confirm,
-// and a confirmation that reaches this method over the socket from such a
-// process is indistinguishable here from the person's own, so the answer
-// is recorded as the machine interface's (ipc.Request.HoldResolver) and
-// never as a person's. The terminal check narrows who can confirm; it does
-// not witness a person, and the record never claims one.
+// caller is the command surface. What this file enforces for a
+// confirmation, by the owner's decision on #411: foreground.go's relation,
+// the one the local landing's approval hold is held to, so a confirmation
+// is admitted only from a peer the kernel places in the foreground of its
+// controlling terminal (agents.ReadLineage, Lineage.Foreground), decided
+// here from the credentials and the lineage and never from anything the
+// caller states; a peer with no controlling terminal, one in a group the
+// terminal was not handed to, and one whose lineage cannot be read are
+// refused, the first two with discardOffTerminal and the last as
+// unavailable, before the answer is recorded. A headless coordinator agent,
+// which reaches the service over the socket from no terminal, cannot
+// confirm one, whether through the command line or the socket itself, while
+// the preview stays scriptable. internal/cli refuses the same confirmation
+// earlier, under --json or off a terminal (Environment.Interactive), with
+// the same row, which is the early refusal and not the mechanism.
+//
+// What the relation buys and does not, on foreground.go's terms: a
+// terminal's foreground is not a person. A program that allocates a
+// pseudo-terminal of its own, a terminal multiplexer among them, puts its
+// command in a terminal's foreground, and a person running an agent in a
+// terminal's foreground can have it confirm; such a confirmation is
+// indistinguishable here from the person's own, so the answer is recorded
+// as the machine interface's (ipc.Request.HoldResolver) and never as a
+// person's, on internal/store's Resolver terms. And the lineage is read when
+// the request is decided, so a chain the kernel rewrote when a process
+// between the peer and its terminal exited, which workers.go names for a
+// worker's push, reads as the chain that stands then. The relation narrows
+// who can confirm; it does not witness a person, and the record never
+// claims one.
 
 // discardKeptWork is the discard answer, on this file's terms.
 func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry store.KeptWork, confirm string) (machine.KeptWorkAnswered, error) {
@@ -79,6 +96,12 @@ func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry st
 		shown := lossOf(loss)
 		if confirm == "" {
 			return machine.KeptWorkAnswered{Entry: entry, Effect: machine.KeptWorkDiscardShown, Loss: &shown}, nil
+		}
+		if err := s.refuseOffTerminal(req); err != nil {
+			if errors.Is(err, ipc.ErrNotAtTerminal) {
+				return machine.KeptWorkAnswered{}, discardOffTerminal{cause: err}
+			}
+			return machine.KeptWorkAnswered{}, err
 		}
 		if confirm != loss.Digest {
 			return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d was not discarded: the digest given, %s, is not the "+
@@ -105,6 +128,22 @@ func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry st
 	}
 	return s.completeDiscard(ctx, entry)
 }
+
+// discardOffTerminal is the refusal of a discard confirmation from a peer
+// not in the foreground of a terminal, foreground.go's relation applied to
+// the one other answer PRD section 6 gives the person alone. Its text is
+// the row a person reads, machine.PhraseDiscardNeedsTerminal, with what the
+// relation read; it unwraps to ipc.ErrNotAtTerminal, which is the code that
+// crosses the wire.
+type discardOffTerminal struct{ cause error }
+
+// Error is the row, then what was read of the peer.
+func (e discardOffTerminal) Error() string {
+	return machine.PhraseDiscardNeedsTerminal.String() + " (" + e.cause.Error() + ")"
+}
+
+// Unwrap resolves to the relation's refusal, so the wire code is its own.
+func (e discardOffTerminal) Unwrap() error { return e.cause }
 
 // refusedLoss is the refusal of a discard whose loss could not be read.
 func refusedLoss(entry store.KeptWork, err error) error {

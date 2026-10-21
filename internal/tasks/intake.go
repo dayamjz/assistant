@@ -266,9 +266,12 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 // CompleteIntake is intake's second step, the instructions file under the
 // task's directory, for a task whose row Create wrote and whose file a stop
 // left unwritten: it writes text there when no file stands and leaves a
-// file that does as it is, and returns the file's path. A task with no row
-// is store.ErrNotFound, wrapped, since the record comes first and this
-// writes no record. Its one caller is internal/service's carry on of kept
+// file that does as it is, and returns the file's path. A file that stands
+// is whole, because intake writes it through writeWhole, to a file of its
+// own and then a rename, so a stop inside the write leaves nothing under
+// the file's name and this writes it; a file under the name is never a
+// partial one. A task with no row is store.ErrNotFound, wrapped, since the
+// record comes first and this writes no record. Its one caller is internal/service's carry on of kept
 // work, which creates the task under an identifier it reserved and
 // completes a stopped intake from the entry at the next start.
 func (q *Queue) CompleteIntake(ctx context.Context, id, text string) (string, error) {
@@ -404,10 +407,49 @@ func (q *Queue) writeInstructions(id, text string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("tasks: creating the directory of task %s: %w", id, err)
 	}
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+	if err := writeWhole(path, []byte(text)); err != nil {
 		return "", fmt.Errorf("tasks: writing the instructions of task %s: %w", id, err)
 	}
 	return path, nil
+}
+
+// writeWhole writes content to path whole: to a file of its own beside
+// path first, synced, and then renamed over path, which the filesystem
+// makes one step. So a stop at any point leaves either no file under path
+// or the whole content there, never part of it; a stop between the write
+// and the rename leaves the file of its own beside path, which the next
+// write over the same path replaces. It is the one way a file under a
+// task's directory is written by intake, and CompleteIntake's reading of a
+// file that stands as whole rests on it.
+func writeWhole(path string, content []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	partial := f.Name()
+	if _, err := f.Write(content); err != nil {
+		_ = f.Close()
+		_ = os.Remove(partial)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(partial)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(partial)
+		return err
+	}
+	if err := os.Chmod(partial, 0o600); err != nil {
+		_ = os.Remove(partial)
+		return err
+	}
+	if err := os.Rename(partial, path); err != nil {
+		_ = os.Remove(partial)
+		return err
+	}
+	return nil
 }
 
 // branchNameRefusal says why a branch name is refused, or nothing when it is

@@ -37,10 +37,17 @@ paths: ["internal/tasks/**"]
   refusals are a copy kept for its work; `kept_test.go` places every reason.
 - `kept_discard.go` is the copy's half of PRD section 6's discard: `Loss`
   reads what removing the copy would lose, the entry's `Lacks` and the
-  inventory's three indicators, with a digest of the copy's state, refusing
-  an unestablished entry; `Discard` removes the copy only on that digest,
-  the one use of `vcs.RemoveWorktreeDiscardingChanges`, behind a person's
-  answer and no proof.
+  inventory's three indicators, with a digest over everything the discard
+  would destroy (the index at every stage by `vcs.IndexEntries`, every
+  changed or untracked path by its bytes, an untracked directory walked,
+  the stash, the tips, `Lacks`), refusing an unestablished entry; `Discard`
+  removes the copy only on that digest, the one use of
+  `vcs.RemoveWorktreeDiscardingChanges`, behind a person's answer and no
+  proof.
+- Intake writes the instructions file whole, `writeWhole` (a file of its
+  own, then a rename), so a file under the name is never partial, and
+  `CompleteIntake` is intake's second step for a row a stop left without
+  its file; `InterruptAfterRecordForTest` is the seam between the two.
 
 Read `doc.go` before changing the floor or the clear condition, and for the
 residual gaps; read `promote.go`'s opening comment and `doc.go` before

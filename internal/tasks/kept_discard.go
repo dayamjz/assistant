@@ -38,11 +38,14 @@ import (
 //
 // The digest is over everything the discard would destroy, as shown: the
 // copy's path, the commit HEAD stands on, every reference tip of a task's
-// clone and the stash of either kind, the tree the index holds (git's own
-// object identity for the staged content of every tracked path), every
-// path git reports changed or untracked with the content it holds in the
-// working tree (a hash of its bytes, or that it is gone), the commits
-// lacking, and the three indicators. The same copy in the same state
+// clone and the stash of either kind, every entry of the index at every
+// stage (git's own object identity for the staged content of every tracked
+// path, and of each side of a conflicted one), every path git reports
+// changed or untracked with the content it holds in the working tree (a
+// hash of its bytes, or that it is gone; for an untracked directory, which
+// is how git reports a nested repository, every file under it by the
+// filesystem, its own .git included, since git will not look inside), the
+// commits lacking, and the three indicators. The same copy in the same state
 // digests the same, and a commit, a reference moved, an edit to a tracked
 // file, a change staged, a file added, edited or removed, or a stash made
 // or dropped since changes it, which is what lets Discard refuse a copy that
@@ -120,13 +123,13 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 			b.WriteString(ref.Name + "=" + ref.Commit + "\n")
 		}
 	}
-	index, err := copied.WriteTree(ctx)
+	entries, err := copied.IndexEntries(ctx)
 	if err != nil {
-		// An index git cannot write as a tree, one with unmerged entries,
-		// is named as such; the unmerged paths' contents are read below.
-		index = "unwritable: " + err.Error()
+		return Loss{}, fmt.Errorf("tasks: reading the index of the kept copy at %s: %w", entry.CopyPath, err)
 	}
-	b.WriteString("index=" + index + "\n")
+	for _, e := range entries {
+		fmt.Fprintf(&b, "index %s %s %d %s\n", e.Mode, e.Object, e.Stage, e.Path)
+	}
 	changes, err := copied.Changes(ctx)
 	if err != nil {
 		return Loss{}, fmt.Errorf("tasks: reading the kept copy at %s: %w", entry.CopyPath, err)
@@ -145,9 +148,12 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	return loss, nil
 }
 
-// contentOf is a hash of what the working tree holds at path, or "gone" for
-// a path no longer there and "link" plus its target for a symbolic link,
-// which is what git would record of it.
+// contentOf is a hash of what the working tree holds at path: "gone" for a
+// path no longer there, "link" plus its target for a symbolic link, which
+// is what git would record of it, and for a directory a hash over every
+// entry under it, walked by the filesystem, each file by its bytes and each
+// link by its target, so an untracked directory git reports as one path, a
+// nested repository among them, is covered down to its contents.
 func contentOf(path string) (string, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -163,9 +169,37 @@ func contentOf(path string) (string, error) {
 		}
 		return "link " + target, nil
 	}
-	if info.IsDir() {
-		return "directory", nil
+	if !info.IsDir() {
+		return hashFile(path)
 	}
+	h := sha256.New()
+	err = filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(path, p)
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			_, _ = fmt.Fprintf(h, "dir %s\n", filepath.ToSlash(rel))
+			return nil
+		}
+		content, err := contentOf(p)
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(h, "%s %s\n", filepath.ToSlash(rel), content)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return "tree " + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// hashFile is a hash of the file's bytes.
+func hashFile(path string) (string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return "", err

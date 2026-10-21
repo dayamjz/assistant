@@ -572,17 +572,19 @@ worker ended with its copy kept) answers that entry carry on itself, in the
 promotion's own write, since the promoted worker continues in that copy;
 the entry closes with the promotion and never without it.
 
-Discard is yours alone. A confirmation is taken only from you at a
-terminal: `--confirm` under `--json`, or from a process whose input and
-error are not one terminal (a coordinator agent, a script, a cron job), is
-refused before it reaches the service and removes nothing; a task's worker
-and a subordinate coordinator are refused it there too, and nothing in the
-program discards on its own. The preview is not restricted. What the record
-says about who discarded is what the service witnesses, which is the
-machine interface and not a person: an agent you run in a terminal's
-foreground can confirm as you would, so the answer is recorded as the
-machine interface's and never claims a person decided (section 8's
-resolver rule).
+Discard is yours alone. The service admits a confirmation only from a
+process in the foreground of its controlling terminal, the same relation a
+local task's approval is held to, decided from what the kernel reports of
+the caller and not from anything the caller says, so a coordinator agent, a
+script, a cron job or a call over the socket from no terminal is refused
+and removes nothing; the command line refuses `--confirm` under `--json` or
+off a terminal before it asks the service; and a task's worker and a
+subordinate coordinator are refused it too. Nothing in the program discards
+on its own, and the preview is not restricted. What the record says about
+who discarded is what the service witnesses, which is the machine interface
+and not a person: an agent you run in a terminal's foreground can confirm
+as you would, so the answer is recorded as the machine interface's and
+never claims a person decided (section 8's resolver rule).
 
 ## Waiting on a fleet
 

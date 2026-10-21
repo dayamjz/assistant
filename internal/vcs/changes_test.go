@@ -118,8 +118,8 @@ func TestChangesRefusesABareRepository(t *testing.T) {
 // them, with whether each is untracked or gone from the tree: an untracked
 // file, a staged file, an edited tracked file, a path with a space in it,
 // and a tracked file deleted in the tree, each once; a clean tree lists
-// none. WriteTree names the index's content by git's own tree identity,
-// so staging a change moves it and nothing else in the tree does.
+// none. IndexEntries names the index's content by git's own object
+// identity, so staging a change moves it and nothing else in the tree does.
 func TestChangesListsThePathsItReadFrom(t *testing.T) {
 	gitEnvironment(t)
 	copy, _, _, _ := clonedCopy(t)
@@ -133,29 +133,39 @@ func TestChangesListsThePathsItReadFrom(t *testing.T) {
 		}
 	}
 	paths("a fresh clone", nil)
-	clean, err := copy.WriteTree(ctx)
-	if err != nil || clean == "" {
-		t.Fatalf("WriteTree of a clean index = %q, %v", clean, err)
+	index := func(when string) []vcs.IndexEntry {
+		t.Helper()
+		entries, err := copy.IndexEntries(ctx)
+		if err != nil || len(entries) == 0 {
+			t.Fatalf("%s: IndexEntries = %+v, %v", when, entries, err)
+		}
+		for _, e := range entries {
+			if e.Mode == "" || e.Object == "" || e.Path == "" || e.Stage != 0 {
+				t.Fatalf("%s: an entry reads %+v, want a mode, an object, a path and stage 0", when, e)
+			}
+		}
+		return entries
 	}
+	clean := index("a clean index")
 
 	writeFile(t, filepath.Join(dir, "new.txt"), "untracked\n")
 	writeFile(t, filepath.Join(dir, "with space.txt"), "untracked too\n")
 	paths("two untracked files", []vcs.ChangedPath{{Path: "new.txt", Untracked: true}, {Path: "with space.txt", Untracked: true}})
-	if tree, err := copy.WriteTree(ctx); err != nil || tree != clean {
-		t.Fatalf("WriteTree with untracked files = %q, %v; want the clean index's %s", tree, err, clean)
+	if entries := index("untracked files"); !slices.Equal(entries, clean) {
+		t.Fatalf("IndexEntries with untracked files = %+v; want the clean index's %+v", entries, clean)
 	}
 
 	rawGit(t, dir, "add", "new.txt")
 	paths("one staged", []vcs.ChangedPath{{Path: "new.txt"}, {Path: "with space.txt", Untracked: true}})
-	staged, err := copy.WriteTree(ctx)
-	if err != nil || staged == clean {
-		t.Fatalf("WriteTree with a file staged = %q, %v; want another tree than %s", staged, err, clean)
+	staged := index("a file staged")
+	if slices.Equal(staged, clean) || len(staged) != len(clean)+1 {
+		t.Fatalf("IndexEntries with a file staged = %+v; want one more entry than %+v", staged, clean)
 	}
 
 	writeFile(t, filepath.Join(dir, "kept.txt"), "edited\n")
 	paths("a tracked file edited", []vcs.ChangedPath{{Path: "kept.txt"}, {Path: "new.txt"}, {Path: "with space.txt", Untracked: true}})
-	if tree, err := copy.WriteTree(ctx); err != nil || tree != staged {
-		t.Fatalf("WriteTree with an unstaged edit = %q, %v; want the index's %s unchanged", tree, err, staged)
+	if entries := index("an unstaged edit"); !slices.Equal(entries, staged) {
+		t.Fatalf("IndexEntries with an unstaged edit = %+v; want the index's %+v unchanged", entries, staged)
 	}
 
 	if err := os.Remove(filepath.Join(dir, "kept.txt")); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -171,4 +172,111 @@ func changedPaths(t *testing.T, copyPath string) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// The digest covers the index at every stage and an untracked directory
+// down to its contents: a conflicted copy whose staged side is edited and
+// whose working version is then restored keeps every indicator and name and
+// digests differently, and so does an edit inside an untracked directory,
+// a nested repository among them, which git reports as one path. Without
+// the index's entries the conflicted copy's staged work is removed on the
+// stale digest; without the walk the nested edit is.
+func TestADiscardDigestCoversTheIndexAndUntrackedDirectories(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/conflict")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	entry := got.Entry
+
+	// A conflict on own.txt: a branch edits it one way, the task's branch
+	// another, and a merge leaves it unmerged with three stages.
+	base := rawGit(t, tk.copy, "rev-parse", "HEAD~1")
+	rawGit(t, tk.copy, "checkout", "--quiet", "-b", "other", base)
+	commit(t, tk.copy, "own.txt", "the other side\n", "the other side's commit")
+	rawGit(t, tk.copy, "checkout", "--quiet", "task/conflict")
+	if _, err := rawGitErr(tk.copy, "merge", "--quiet", "--no-commit", "other"); err == nil {
+		t.Fatal("the merge did not conflict")
+	}
+	conflicted, err := s.cleaner.Loss(ctx, entry)
+	if err != nil || !conflicted.Dirty {
+		t.Fatalf("Loss of a conflicted copy = %+v, %v; want it dirty", conflicted, err)
+	}
+	working, err := os.ReadFile(filepath.Join(tk.copy, "own.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stage a resolution, then restore the conflicted working version: the
+	// names, the indicators and the tree are as shown, and the index is not.
+	if err := os.WriteFile(filepath.Join(tk.copy, "own.txt"), []byte("resolved one way\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "add", "own.txt")
+	if err := os.WriteFile(filepath.Join(tk.copy, "own.txt"), working, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staged, err := s.cleaner.Loss(ctx, entry)
+	if err != nil || staged.Digest == conflicted.Digest {
+		t.Fatalf("with a resolution staged and the working version restored Loss = %+v, %v; want another digest than %s", staged, err, conflicted.Digest)
+	}
+	if _, err := s.cleaner.Discard(ctx, entry, conflicted.Digest, ""); !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("a discard on the digest shown before the resolution was staged = %v; want ErrLossChanged", err)
+	}
+	_, _ = rawGitErr(tk.copy, "merge", "--abort")
+	rawGit(t, tk.copy, "reset", "--quiet", "--hard", "HEAD")
+	if names := changedPaths(t, tk.copy); len(names) != 0 {
+		t.Fatalf("after the merge was undone git reports %v changed, want nothing", names)
+	}
+
+	// An untracked directory holding a nested repository: git reports the
+	// directory as one path, and an edit inside it is a change to what
+	// would be lost.
+	nested := filepath.Join(tk.copy, "nested")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, nested, "init", "--quiet", "-b", "main", ".")
+	if err := os.WriteFile(filepath.Join(nested, "inner.txt"), []byte("inner work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.cleaner.Loss(ctx, entry)
+	if err != nil || !before.Untracked {
+		t.Fatalf("Loss with a nested repository = %+v, %v; want it untracked", before, err)
+	}
+	if names := changedPaths(t, tk.copy); !slices.Equal(names, []string{"nested/"}) {
+		t.Fatalf("git reports %v, want the nested repository as the one directory nested/", names)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "inner.txt"), []byte("inner work, edited\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.cleaner.Loss(ctx, entry)
+	if err != nil || after.Digest == before.Digest {
+		t.Fatalf("with a file inside the nested repository edited Loss = %+v, %v; want another digest than %s", after, err, before.Digest)
+	}
+	if _, err := s.cleaner.Discard(ctx, entry, before.Digest, ""); !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("a discard on the digest shown before the nested edit = %v; want ErrLossChanged", err)
+	}
+	rawGit(t, nested, "add", "inner.txt")
+	committed, err := s.cleaner.Loss(ctx, entry)
+	if err != nil || committed.Digest == after.Digest {
+		t.Fatalf("with the nested repository's own index moved Loss = %+v, %v; want another digest than %s", committed, err, after.Digest)
+	}
+}
+
+// rawGitErr runs git directly in dir and returns what it printed and the
+// error, for a command the test expects to fail.
+func rawGitErr(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
 }
