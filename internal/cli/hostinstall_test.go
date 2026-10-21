@@ -26,9 +26,12 @@ type installer struct {
 	executable string
 }
 
+// newInstaller names an executable under a directory with a space in its
+// name, so every case holds the line to the quoting a pasted command needs
+// whatever the temporary directory is called (#415).
 func newInstaller(t *testing.T) installer {
 	t.Helper()
-	return installer{home: newHome(t), userHome: t.TempDir(), executable: filepath.Join(t.TempDir(), "assistant")}
+	return installer{home: newHome(t), userHome: t.TempDir(), executable: filepath.Join(t.TempDir(), "with space", "assistant")}
 }
 
 // settings is where the host's user settings live under this HOME.
@@ -38,10 +41,33 @@ func (i installer) settings() string {
 
 // command is the hook's command line, written out here rather than asked of
 // the package, so a line that named another binary or another home fails.
-// The temporary paths need no shell quoting, which the assertion below on
-// the answer's own command checks.
+// Each path is one shell word through hookWord, so the line is the one a
+// person can paste whatever the temporary directory is called (#415).
 func (i installer) command() string {
-	return i.executable + " --home " + i.home.Root() + " host stop"
+	return stopLine(i.executable, i.home.Root())
+}
+
+// stopLine is the stop guard's command line for binary over the home at
+// root, each path rendered as one shell word.
+func stopLine(binary, root string) string {
+	return hookWord(binary) + " --home " + hookWord(root) + " host stop"
+}
+
+// hookWord renders path as one POSIX shell word the way a person would
+// write it: as it is when every byte is one no shell treats specially, and
+// otherwise in single quotes, with a single quote in it closed, escaped and
+// reopened. It is written here rather than asked of the package, so a line
+// the installer quoted wrongly, or left unquoted, fails the comparison.
+func hookWord(path string) string {
+	plain := func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-+:@%=,", r)
+	}
+	for _, r := range path {
+		if !plain(r) {
+			return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+		}
+	}
+	return path
 }
 
 // run drives the installer with env as the whole environment.
@@ -283,7 +309,7 @@ func TestHostInstallRefusesAConflictAndLeavesTheFileAsItWas(t *testing.T) {
 	principles.Cite(t, principles.P1)
 	vocabtest.Control(t)
 
-	other := filepath.Join(t.TempDir(), "assistant") + " --home " + filepath.Join(t.TempDir(), "elsewhere") + " host stop"
+	other := stopLine(filepath.Join(t.TempDir(), "assistant"), filepath.Join(t.TempDir(), "elsewhere"))
 	cases := []struct {
 		name    string
 		content string
