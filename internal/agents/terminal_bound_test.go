@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -242,5 +243,116 @@ func TestEachKindOfTmuxClientEndsAtItsBound(t *testing.T) {
 			}
 			requireGone(t, ids)
 		})
+	}
+}
+
+// TestAClaudeTerminalSendRefusesAScreenReadingThatRanPastItsBound is
+// review's case against the send's readiness wait: a Claude Code worker's
+// send reads the screen before it types, and a reading whose client never
+// answers is ended at tmuxReadBound like every other client. The send then
+// refuses with agents.ErrTerminalClientTimedOut and agents.ErrTerminalNotReady
+// under a context that never ends, rather than reading again for as long as
+// the server stays wedged, and the client's group is gone, asked by
+// identity. Nothing was typed: the next send, once the server answers again,
+// is the worker's second message, after its instructions, and the refused
+// text is not among them. Before the bound ended the wait, the refused send
+// read again, typed, and answered nil.
+func TestAClaudeTerminalSendRefusesAScreenReadingThatRanPastItsBound(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	requiresIdentityRead(t)
+	never := context.WithoutCancel(t.Context())
+	w := newWedgedTmux(t)
+	term := agents.Terminal{Tmux: w.tmux, Socket: filepath.Join(standin.SocketDir(t), "s")}
+	agent := standin.New(t, standin.Script{Worker: &standin.WorkerScript{}},
+		agents.WithTerminationGrace(300*time.Millisecond), agents.WithBaseEnvironment(claudeTerminalEnv(t)))
+	worker, err := agents.OpenTerminalWorker(never, agent.Runner(), term, workerSpec(t))
+	if err != nil {
+		t.Fatalf("starting a Claude Code terminal worker: %v", err)
+	}
+	t.Cleanup(worker.Close)
+	awaitInteractive(t, agent, answered(1))
+
+	w.wedge(t, "capture-pane")
+	type answer struct {
+		err     error
+		elapsed time.Duration
+	}
+	done := make(chan answer, 1)
+	returned := make(chan struct{})
+	go func() {
+		start := time.Now()
+		err := worker.Send(never, "refused")
+		done <- answer{err, time.Since(start)}
+		close(returned)
+	}()
+	ids := w.wedgedClient(t, returned)
+	within := agents.TmuxReadBound + 3*agents.TmuxClientGrace + 2*time.Second
+	var got answer
+	select {
+	case got = <-done:
+	case <-time.After(within):
+		t.Fatalf("a send over a screen reading that never answers was still blocked %s after it started, past the reading's bound of %s", within, agents.TmuxReadBound)
+	}
+	if !errors.Is(got.err, agents.ErrTerminalClientTimedOut) || !errors.Is(got.err, agents.ErrTerminalNotReady) || errors.Is(got.err, context.DeadlineExceeded) {
+		t.Fatalf("a send over a screen reading that never answers answered %v after %s, want agents.ErrTerminalClientTimedOut and agents.ErrTerminalNotReady and not a caller's deadline", got.err, got.elapsed)
+	}
+	if got.elapsed < agents.TmuxReadBound {
+		t.Fatalf("the send answered %v after %s, before the reading's bound of %s: something other than the bound ended it", got.err, got.elapsed, agents.TmuxReadBound)
+	}
+	requireGone(t, ids)
+
+	if err := worker.Send(t.Context(), "after"); err != nil {
+		t.Fatalf("a send once the server answered again: %v", err)
+	}
+	call := awaitInteractive(t, agent, answered(2))
+	if want := []string{"work on the task", "after"}; !slices.Equal(call.Lines, want) {
+		t.Fatalf("the worker answered %q, want %q: the refused send was typed", call.Lines, want)
+	}
+}
+
+// TestATerminalStartCancelledDuringItsClientAnswersTheCancellation is
+// review's case against the cancellation promise: a start whose client that
+// starts the server never answers, cancelled by its caller while that client
+// runs, answers the caller's context.Canceled, with the client's own failure
+// kept beside it, within the client's graces of the cancellation; the
+// client's group is gone, asked by identity, and so is the socket. Before
+// runTmux put the caller's error first, the start answered the client's
+// "signal: killed" alone.
+func TestATerminalStartCancelledDuringItsClientAnswersTheCancellation(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	requiresIdentityRead(t)
+	w := newWedgedTmux(t)
+	term := agents.Terminal{Tmux: w.tmux, Socket: filepath.Join(standin.SocketDir(t), "s")}
+	agent := standin.NewWorker(t, standin.Script{Worker: &standin.WorkerScript{}},
+		agents.WithTerminationGrace(300*time.Millisecond))
+	w.wedge(t, "new-session")
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	defer cancel()
+	done := make(chan error, 1)
+	returned := make(chan struct{})
+	go func() {
+		worker, err := agents.OpenTerminalWorker(ctx, agent.Runner(), term, workerSpec(t))
+		if err == nil {
+			worker.Close()
+		}
+		done <- err
+		close(returned)
+	}()
+	ids := w.wedgedClient(t, returned)
+	cancelled := time.Now()
+	cancel()
+	within := 3*agents.TmuxClientGrace + agents.TmuxEndBound + 2*time.Second
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(within):
+		t.Fatalf("a start cancelled during its client was still blocked %s after the cancellation", within)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a start cancelled during its client answered %v after %s, want context.Canceled", err, time.Since(cancelled))
+	}
+	requireGone(t, ids)
+	if _, err := os.Lstat(term.Socket); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the socket outlived the cancelled start: %v", err)
 	}
 }
