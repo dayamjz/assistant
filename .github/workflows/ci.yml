@@ -171,3 +171,20 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+      # The same lint cross-checked for the other two platforms the module
+      # builds for. Build constraints decide which files a run sees, so a
+      # symbol read only from a linux || darwin file is unused on Windows and
+      # only a run with that GOOS says so (#435). Both are cross-checks on
+      # this runner: they type-check and lint, and run nothing there.
+      - name: golangci-lint (darwin)
+        uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: darwin
+        with:
+          version: v2.12.2
+      - name: golangci-lint (windows)
+        uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: windows
+        with:
+          version: v2.12.2
