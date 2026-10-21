@@ -127,7 +127,7 @@ func TestUnderTmuxAWorkersCommandIsPlacedThroughTheServer(t *testing.T) {
 	// worker stands while it is read; a shell that exited would leave the
 	// sleep reparented, which is placement.go's named gap and not this test.
 	command := `sleep 60 >/dev/null 2>&1 & echo "$!" > child.tmp && mv child.tmp child; exec ` +
-		HeldWait(t, "release")
+		standin.HeldWait(t, "release")
 	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(dir, "release"), nil, 0o600) })
 	if err := worker.Send(t.Context(), "run: "+command); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -235,7 +235,7 @@ func TestUnderTmuxAPersonsWindowIsTheWorkersAndAPersonOutsideIsNot(t *testing.T)
 	outside := filepath.Join(dir, "outside")
 	script := `echo "$$" > ` + outside + `.tmp && mv ` + outside + `.tmp ` + outside + ` && ` +
 		`"$0" -S "$1" send-keys -t worker -l "run: sleep 60 >/dev/null 2>&1 & echo \$! > ` + typed + `.tmp && mv ` + typed + `.tmp ` + typed +
-		`; exec ` + HeldWait(t, "release") + `" && ` +
+		`; exec ` + standin.HeldWait(t, "release") + `" && ` +
 		`"$0" -S "$1" send-keys -t worker Enter && exec sleep 60`
 	person := exec.Command("/bin/sh", "-c", script, term.Tmux, term.Socket)
 	if err := person.Start(); err != nil {

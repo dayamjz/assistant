@@ -20,60 +20,11 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 )
 
-// A process a test has a shell hold until it is released is this binary
-// run as heldVerb (HeldMain), never a shell loop: #432 found 23 loops
-// waiting on a release file left running with parent 1 on macOS. A loop is
-// /bin/sh, whose start environment macOS does not show, so neither the
-// owner sweep nor the check RunOwned runs could see it, and nothing ended
-// it once its test binary was killed, timed out, or failed before the
-// release. The held process is started through env with the owner
-// identity assigned in its environment (HeldWait), so its arguments are
-// only heldVerb and the file; it ends with the owner that variable names
-// (standin.WatchOwner, which TestMain arms first), and it is a process of
-// this binary, which the check lists by executable.
-
-// heldVerb is the first argument that makes this binary the held process.
-const heldVerb = "held-process"
-
-// HeldMain makes this binary, started as heldVerb FILE, the held process:
-// it exits 0 once FILE exists, and otherwise runs until it is killed or
-// its owner is gone, either of which is a nonzero exit. Without the owner
-// variable it refuses at once, since nothing would end it. It returns at
-// once in every process not started for that.
-func HeldMain() {
-	if len(os.Args) != 3 || os.Args[1] != heldVerb {
-		return
-	}
-	if os.Getenv(standin.OwnerVar) == "" {
-		fmt.Fprintf(os.Stderr, "%s: %s is unset, so nothing would end this process with its test\n", heldVerb, standin.OwnerVar)
-		os.Exit(2)
-	}
-	for {
-		if _, err := os.Stat(os.Args[2]); err == nil {
-			os.Exit(0)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// HeldWait is the shell command that runs the held process until file
-// exists, given the owner identity explicitly so that no environment a
-// worker or a shell builds can drop it, and that exits nonzero when the
-// held process was ended rather than released, so a shell that goes on
-// with && after it goes no further. It fails t outside standin.RunOwned,
-// where there is no owner for the process to end with.
-func HeldWait(t *testing.T, file string) string {
-	t.Helper()
-	owner := os.Getenv(standin.OwnerVar)
-	if owner == "" {
-		t.Fatalf("%s is unset, so a held process would end with nothing; run the tests under standin.RunOwned", standin.OwnerVar)
-	}
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return "env " + standin.OwnerVar + "=" + shellWord(owner) + " " + shellWord(self) + " " + heldVerb + " " + shellWord(file)
-}
+// A process a test has a shell hold until it is released is
+// standin.HeldWait's held process, never a shell loop (#432): held_unix.go
+// in internal/agents/standin owns why and what it does not cover. heldShell
+// adds the cleanup that ends one a test started, so a failing test ends it
+// rather than leaving it to the owner watch.
 
 // heldShell has worker run a shell that writes its own identifier to self
 // in dir and then becomes the held process, and returns the identifier and
@@ -92,7 +43,7 @@ func heldShell(t *testing.T, worker agents.Worker, dir string) (int, agents.Iden
 // process on purpose calls.
 func startHeld(t *testing.T, worker agents.Worker, dir string) (int, agents.Identity) {
 	t.Helper()
-	if err := worker.Send(t.Context(), "run: echo $$ > self.tmp && mv self.tmp self; exec "+HeldWait(t, "release")); err != nil {
+	if err := worker.Send(t.Context(), "run: echo $$ > self.tmp && mv self.tmp self; exec "+standin.HeldWait(t, "release")); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	pid := atoiFile(t, filepath.Join(dir, "self"))
