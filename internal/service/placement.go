@@ -278,7 +278,7 @@ func placeAlongChain(pid int, read func(int) (agents.Lineage, error), set placer
 	if err != nil {
 		return placement{}, fmt.Errorf("%w: reading process %d: %w", errAncestry, pid, err)
 	}
-	out := placement{}
+	out := placement{kind: placedNobody}
 	foreground := false
 	for range maxAncestry {
 		out.chain = append(out.chain, current)
