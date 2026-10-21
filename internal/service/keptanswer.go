@@ -61,13 +61,15 @@ import (
 // the run or failed, so a second answer or the open-time completer meeting
 // a landing under way here is refused as being landed now rather than
 // starting a second run. One service holds a home, so the memory is the
-// whole of it; the claim covers a service that stopped inside the window. A service that stops between the answer and the
-// record leaves an entry answered land with no landing run, and the next
-// call or the next start completes it: an entry not yet claimed is landed
-// from the start, and one claimed but naming no run has completeLanding look
-// for the run the claim started, a run of the branch at the copy's commit
-// recorded since the claim that executed or still may, which it names
-// rather than starting twice. A run recorded and ended before it executed,
+// whole of it; the claim covers a service that stopped inside the window.
+//
+// A service that stops between the answer and the record leaves an entry
+// answered land with no landing run, and the next call or the next start
+// completes it: an entry not yet claimed is landed from the start, and one
+// claimed but naming no run has completeLanding look for the run the claim
+// started, a run of the branch at the copy's commit recorded since the
+// claim that executed or still may, which it names rather than starting
+// twice. A run recorded and ended before it executed,
 // one whose reference the gate never took, is not that run, so the retry
 // starts another. What that does not cover: a copy that changed after the
 // answer lands what it holds when the landing is completed.
