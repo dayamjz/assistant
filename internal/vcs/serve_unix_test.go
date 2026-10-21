@@ -58,6 +58,12 @@ func TestAReceiveFromAnIdlePusherEndsAtItsDeadline(t *testing.T) {
 // even though receive-pack itself exits 0: the pusher's writer failing, here
 // over a closed file, is reported as os/exec reports it, so undelivered
 // protocol output does not read as a completed receive.
+//
+// The writer waits before it fails, so receive-pack has written its whole
+// advertisement into the pipe, read the flush packet and exited 0 by then.
+// Failing at once would close the pipe under a receive-pack still writing,
+// which then dies of SIGPIPE, an exit that takes precedence and would let
+// this test pass whether or not the writer's failure is reported.
 func TestAReceiveWhoseOutputCannotBeDeliveredIsReported(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "closed")
 	if err != nil {
@@ -66,10 +72,26 @@ func TestAReceiveWhoseOutputCannotBeDeliveredIsReported(t *testing.T) {
 	_ = f.Close()
 	// A flush packet is a push that sends no commands, which receive-pack
 	// answers after its advertisement and then exits 0.
-	err = serveWithin(t, strings.NewReader("0000"), bufio.NewWriterSize(f, 16))
+	err = serveWithin(t, strings.NewReader("0000"), bufio.NewWriterSize(lateWriter{f}, 16))
+	var cmdErr *vcs.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("ServeReceivePack = %v; want a *CommandError", err)
+	}
+	if cmdErr.ExitCode != 0 {
+		t.Fatalf("receive-pack exited %d, so the writer's failure was not what this checked: %v", cmdErr.ExitCode, err)
+	}
 	if !errors.Is(err, os.ErrClosed) {
 		t.Errorf("ServeReceivePack = %v; want the pusher's writer's os.ErrClosed", err)
 	}
+}
+
+// lateWriter writes to w after half a second, which is how long the receive
+// in TestAReceiveWhoseOutputCannotBeDeliveredIsReported is given to finish.
+type lateWriter struct{ w io.Writer }
+
+func (l lateWriter) Write(p []byte) (int, error) {
+	time.Sleep(500 * time.Millisecond)
+	return l.w.Write(p)
 }
 
 // A pushing side that never reads what receive-pack writes, as well as never
