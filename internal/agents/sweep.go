@@ -19,6 +19,15 @@ import (
 // the platforms with a listing; every other platform answers this.
 var ErrSweepUnsupported = errors.New("agents: this platform has no verified listing of process working directories, so no sweep was made")
 
+// ErrSweepTimedOut is Sweeper.Sweep's answer when the platform's listing
+// runs an external program and that program did not finish within the
+// deadline its run carries. It is "could not prove" on ErrSweepUnsupported's
+// terms: it is returned beside the zero SweepResult, no process was looked
+// at and none was signalled, and it never means the sweep found nothing.
+// The program's process group was ended before it was returned. Only the
+// macOS listing runs a program, so only it answers this.
+var ErrSweepTimedOut = errors.New("agents: the process listing did not finish within its deadline, so no sweep was made")
+
 // SweepResult is what one sweep of one copy did. The zero value is not a
 // clean sweep: Clear is false for it, and a result returned beside an error
 // is always the zero value, so a caller that drops the error cannot read an
@@ -235,7 +244,8 @@ func (r SweepResult) String() string {
 //   - Linux lists from /proc. macOS lists the process table through
 //     kern.proc.all and reads every working directory with one run of
 //     /usr/sbin/lsof, so a sweep there fails when that program is missing
-//     or its run is refused, and fails rather than compares for a copy whose
+//     or its run is refused, answers ErrSweepTimedOut when that run does
+//     not finish within its deadline, and fails rather than compares for a copy whose
 //     path holds a byte listUnder names; a process lsof reports no working
 //     directory for is read as unreadable whatever the reason was. Every
 //     other platform answers ErrSweepUnsupported.
@@ -257,8 +267,9 @@ func NewSweeper(h *home.Home, grace time.Duration, report func(dir string, r Swe
 // Sweep ends the processes running under dir, on Sweeper's terms, and
 // reports what it did. An error is returned beside the zero SweepResult and
 // means nothing was signalled: a dir home.CopyAt refuses, wrapping
-// home.ErrNotACopy; ErrSweepUnsupported on a platform with no listing; and
-// any failure of the listing itself, including ctx ending during it. A ctx
+// home.ErrNotACopy; ErrSweepUnsupported on a platform with no listing;
+// ErrSweepTimedOut when the listing's program ran past its deadline; and
+// any other failure of the listing itself, including ctx ending during it. A ctx
 // that ends while signalled processes are being waited on cuts the waits
 // short, and what is still running then is reported Survived.
 func (s *Sweeper) Sweep(ctx context.Context, dir string) (SweepResult, error) {

@@ -2,15 +2,19 @@ package agents_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // realLsof is the real output of the lsof run the listing makes, with this
@@ -112,4 +116,122 @@ func TestASweepOfACopyWhoseNameLsofCouldRenderDifferentlyFails(t *testing.T) {
 	if err == nil || errors.Is(err, agents.ErrSweepUnsupported) || errors.Is(err, home.ErrNotACopy) || r.Clear() {
 		t.Fatalf("sweeping %s answered %s, %v, want a failed listing and the zero result", dir, r, err)
 	}
+}
+
+// hangingLsof writes a program into dir that stands where lsof is and never
+// exits: a shell that ignores SIGTERM and waits on a sleep it started in its
+// own process group, each writing its identifier to the returned file
+// first. It is the run a wedged lsof makes, with a descendant beside it.
+func hangingLsof(t *testing.T, dir string) (program, pids string) {
+	t.Helper()
+	program, pids = filepath.Join(dir, "lsof"), filepath.Join(dir, "pids")
+	script := "#!/bin/sh\ntrap '' TERM\necho $$ > " + pids + "\n/bin/sleep 3600 &\necho $! >> " + pids + "\nwait\n"
+	if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return program, pids
+}
+
+// startedPIDs reads the two identifiers hangingLsof's program wrote, waiting
+// up to sweepEnded for both to be written.
+func startedPIDs(t *testing.T, file string) []int {
+	t.Helper()
+	deadline := time.Now().Add(sweepEnded)
+	for {
+		data, _ := os.ReadFile(file)
+		if fields := strings.Fields(string(data)); len(fields) == 2 {
+			var pids []int
+			for _, f := range fields {
+				pid, err := strconv.Atoi(f)
+				if err != nil {
+					t.Fatalf("the stand-in lsof wrote %q, want identifiers", data)
+				}
+				pids = append(pids, pid)
+			}
+			return pids
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the stand-in lsof wrote %q within %s, want two identifiers", data, sweepEnded)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestASweepWhoseLsofNeverExitsEndsItAtTheDeadlineAndProvesNothing holds
+// P15 for the listing's one external program: with a program standing where
+// lsof is that never exits and ignores SIGTERM, a sweep under a context that
+// never ends, as internal/service's sweepFinished gives it, returns within
+// the run's deadline and a bounded slack, with agents.ErrSweepTimedOut and
+// the zero result, which is not clear; and neither the stand-in nor the
+// process it started in its group is running afterwards, checked by
+// identifier. Without the deadline the sweep blocks for as long as the
+// stand-in runs.
+func TestASweepWhoseLsofNeverExitsEndsItAtTheDeadlineAndProvesNothing(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	requiresIdentityRead(t)
+	base := sweepBase(t)
+	h, _ := sweepHome(t, base, "hanging")
+	dir := makeTaskCopy(t, h)
+	program, pidFile := hangingLsof(t, base)
+	const deadline = 500 * time.Millisecond
+
+	type answer struct {
+		r   agents.SweepResult
+		err error
+	}
+	done := make(chan answer, 1)
+	started := time.Now()
+	go func() {
+		r, err := agents.SweepWithLsof(context.WithoutCancel(t.Context()), agents.NewSweeper(h, sweepGrace, nil), dir, program, deadline)
+		done <- answer{r, err}
+	}()
+	pids := startedPIDs(t, pidFile)
+	t.Cleanup(func() {
+		for _, pid := range pids {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+
+	var got answer
+	select {
+	case got = <-done:
+	case <-time.After(deadline + sweepEnded):
+		t.Fatalf("the sweep was still blocked on a stand-in lsof that never exits %s after it started, against a deadline of %s", time.Since(started).Round(time.Millisecond), deadline)
+	}
+	if !errors.Is(got.err, agents.ErrSweepTimedOut) || got.r.Clear() || got.r.String() != (agents.SweepResult{}).String() {
+		t.Fatalf("the sweep over a stand-in lsof that never exits answered %s, %v, want the zero result and agents.ErrSweepTimedOut", got.r, got.err)
+	}
+	if errors.Is(got.err, agents.ErrSweepUnsupported) || errors.Is(got.err, context.DeadlineExceeded) {
+		t.Fatalf("the timed out sweep answered %v, which a caller would read as another refusal", got.err)
+	}
+	for _, pid := range pids {
+		gone := time.Now().Add(sweepEnded)
+		for {
+			_, present, err := agents.Identify(pid)
+			if err == nil && !present {
+				break
+			}
+			if !time.Now().Before(gone) {
+				t.Fatalf("process %d, which the stand-in lsof's run started, reads present (%v) %s after the sweep returned", pid, err, sweepEnded)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+// TestASweepWhoseLsofExitsInTimeStillClears is the positive control for the
+// test above: the real /usr/sbin/lsof, run through the same seam under the
+// production deadline over an empty copy, gives a sweep that clears, or one
+// blocked only by the host's standing blockers, which hostLimit records.
+func TestASweepWhoseLsofExitsInTimeStillClears(t *testing.T) {
+	requiresIdentityRead(t)
+	blockers := hostBlockers(t)
+	h, _ := sweepHome(t, sweepBase(t), "timely")
+	dir := makeTaskCopy(t, h)
+	r, err := agents.SweepWithLsof(t.Context(), agents.NewSweeper(h, sweepGrace, nil), dir, "/usr/sbin/lsof", agents.LsofDeadline)
+	if err != nil {
+		t.Fatalf("sweeping an empty copy with the real lsof under the production deadline: %v", err)
+	}
+	requireClearUnlessHostBlocks(t, r, blockers, "the sweep of an empty copy")
+	hostLimit(t, blockers, "that a timely lsof run clears the sweep")
 }

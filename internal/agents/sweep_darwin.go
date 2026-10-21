@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -50,7 +52,7 @@ var errLsofNoSelf = errors.New("agents: lsof did not report this process's own w
 // such a byte in a name other than as itself, and a copy whose name could
 // not be compared would be a sweep that found nothing under it.
 func listUnder(ctx context.Context, dir string) (listing, error) {
-	return listUnderReading(ctx, dir, readCwds)
+	return listUnderReading(ctx, dir, systemLsof.readCwds)
 }
 
 // listUnderReading is listUnder with the working directories read by
@@ -113,6 +115,32 @@ func lsofComparable(dir string) error {
 	return nil
 }
 
+// lsofRun is the lsof run readCwds makes: the program run and the deadline
+// it runs under. systemLsof is the one the listing makes; a test names
+// another program through the same run.
+type lsofRun struct {
+	program  string
+	deadline time.Duration
+}
+
+// systemLsof is the run listUnder makes.
+var systemLsof = lsofRun{program: lsofPath, deadline: lsofDeadline}
+
+// lsofDeadline bounds one lsof run, on run's terms. It is a fixed bound of
+// this package rather than a configuration key, because it bounds a reading
+// helper no operator decision turns on, and a key would be a row in
+// internal/config's table for nothing to set. Its size is the one
+// terminalCommandTimeout gives a tmux client: a run over every process of a
+// development machine took under a second when this was written, so a run
+// still going at ten is taken as wedged, and the sweep it fails costs a run's
+// ending at most this long.
+const lsofDeadline = terminalCommandTimeout
+
+// lsofGroupGrace bounds both waits run makes after its lsof was waited on:
+// for output a descendant that left the group holds open, and for what
+// terminateGroup ends.
+const lsofGroupGrace = time.Second
+
 // readCwds runs lsof once over every process, selecting only working
 // directory descriptors and asking for the process, descriptor and name
 // fields, and returns the working directory it reported for each process.
@@ -124,8 +152,8 @@ func lsofComparable(dir string) error {
 // was reported for it, not the status. A run that ended any other way, whose
 // output parseLsof refuses, or whose output does not report this process's
 // own working directory is a failed listing.
-func readCwds(ctx context.Context) (map[int]string, error) {
-	out, err := runLsof(ctx)
+func (l lsofRun) readCwds(ctx context.Context) (map[int]string, error) {
+	out, err := l.run(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -139,18 +167,53 @@ func readCwds(ctx context.Context) (map[int]string, error) {
 	return cwds, nil
 }
 
-// runLsof is readCwds' run of lsof, and returns its standard output when it
+// run is readCwds' run of lsof, and returns its standard output when it
 // exited with a status readCwds accepts.
-func runLsof(ctx context.Context) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, lsofPath, "-n", "-P", "-w", "-d", "cwd", "-F", "pfn")
+//
+// The run carries l.deadline whatever ctx carries, because the sweep's
+// callers may hand it a context that never ends: internal/service's
+// sweepFinished runs under context.WithoutCancel. lsof is started as the
+// leader of a process group of its own. When the deadline passes, or ctx
+// ends, while os/exec still waits on the leader, that whole group is sent
+// SIGKILL, so a leader that ignores SIGTERM and a descendant that stayed in
+// its group are both ended; the leader is not yet reaped then, so its
+// identifier still names the group. A deadline that passed is
+// ErrSweepTimedOut and ctx ending is ctx's error, each in place of whatever
+// the killed run printed or exited with. Once the leader has been waited
+// on, by either path, terminateGroup ends whatever is left in the group on
+// the terms and the residual race an agent invocation's group has, and
+// WaitDelay bounds the wait for output a descendant that left the group
+// still holds open.
+func (l lsofRun) run(ctx context.Context) ([]byte, error) {
+	bound, cancel := context.WithTimeout(ctx, l.deadline)
+	defer cancel()
+	cmd := exec.CommandContext(bound, l.program, "-n", "-P", "-w", "-d", "cwd", "-F", "pfn")
 	cmd.Env = []string{}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
+	cmd.WaitDelay = lsofGroupGrace
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
+	if cmd.Process != nil {
+		terminateGroup(cmd.Process.Pid, lsofGroupGrace, groupEmpty, nil)
+	}
+	switch {
+	case ctx.Err() != nil:
+		return nil, fmt.Errorf("agents: running %s: %w", l.program, ctx.Err())
+	case errors.Is(bound.Err(), context.DeadlineExceeded):
+		return nil, fmt.Errorf("%w: %s ran past %s and its process group was ended", ErrSweepTimedOut, l.program, l.deadline)
+	}
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			return nil, fmt.Errorf("agents: running %s: %w (%s)", lsofPath, err, firstLine(stderr.String()))
+			return nil, fmt.Errorf("agents: running %s: %w (%s)", l.program, err, firstLine(stderr.String()))
 		}
 	}
 	return out, nil

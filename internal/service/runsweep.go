@@ -103,8 +103,9 @@ import (
 //   - store.SweepUnsupported: agents.ErrSweepUnsupported, which is every
 //     platform but Linux and macOS. Nothing was looked for, and a descendant
 //     that left its group may still be running in the copy.
-//   - store.SweepFailed: the listing failed, or the copy path stands as
-//     something that is not the copy.
+//   - store.SweepFailed: the listing failed, including agents.ErrSweepTimedOut
+//     for a listing program that ran past its deadline, or the copy path
+//     stands as something that is not the copy.
 //   - store.SweepNotCleared: the sweep left survivors, unverified or
 //     unreadable processes, named as agents.SweepResult.String names them in
 //     the record's detail and counted in its Remaining.
@@ -145,9 +146,10 @@ import (
 //   - Every gap agents.Sweeper names: a process that left the copy before the
 //     listing, the carve-outs, and identifier reuse.
 //   - The sweep runs inside the call that ended the run, so its cost is that
-//     call's: a read of the process table, and when something is found, waits
-//     of up to reapGrace after each of the two signals, on top of the same
-//     for every group ended first. A push that supersedes a run pays it under
+//     call's: a read of the process table, on macOS one lsof run bounded by
+//     its own deadline whatever the context here carries, and when
+//     something is found, waits of up to reapGrace after each of the two
+//     signals, on top of the same for every group ended first. A push that supersedes a run pays it under
 //     the branch's exclusion.
 
 // sweepFinished ends what still runs in a finished run's isolated copy, on
@@ -156,7 +158,8 @@ import (
 // store.SweptAtFinish, and recovery's with store.SweptAtRecovery.
 func (s *Service) sweepFinished(ctx context.Context, run store.Run, occasion store.SweepOccasion) {
 	// The ending has committed, so a caller that gives up now cannot take it
-	// back; the sweep's waits are bounded by reapGrace, not by that caller.
+	// back; the sweep's waits are bounded by reapGrace and its listing by
+	// the deadline agents gives the listing's program, not by that caller.
 	ctx = context.WithoutCancel(ctx)
 	if !run.Status.Recognized() || !runs.Finished(run.Status) {
 		s.log.Printf("the isolated copy of run %s is not swept: the run is %s, which is not a status this build reads as final", run.ID, run.Status)
