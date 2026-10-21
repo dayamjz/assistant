@@ -25,9 +25,11 @@ import (
 // /bin/sh, whose start environment macOS does not show, so neither the
 // owner sweep nor the check RunOwned runs could see it, and nothing ended
 // it once its test binary was killed, timed out, or failed before the
-// release. The held process carries the owner identity on its command
-// line, ends with its owner (standin.WatchOwner, which TestMain arms
-// first), and is a process of this binary, which the check lists.
+// release. The held process is started through env with the owner
+// identity assigned in its environment (HeldWait), so its arguments are
+// only heldVerb and the file; it ends with the owner that variable names
+// (standin.WatchOwner, which TestMain arms first), and it is a process of
+// this binary, which the check lists by executable.
 
 // heldVerb is the first argument that makes this binary the held process.
 const heldVerb = "held-process"
