@@ -19,11 +19,35 @@ func (s *Service) SessionOf(id string) (session.Provider, *session.Session, bool
 	return s.sessionOf(id)
 }
 
+// WithCleanupInterruptForTest returns o with the cleanup decision's seam
+// between a copy's removal and its mark set to f, for this package's
+// external tests: a removal whose f returns an error is left unmarked, as a
+// service that stopped there leaves it.
+func WithCleanupInterruptForTest(tb testing.TB, o Options, f func() error) Options {
+	o.cleanupTest, o.interruptCleanupMark = tb, f
+	return o
+}
+
+// WithBeforeStaleRemovalReleaseForTest returns o with recovery's seam between
+// reading a dead eject's removal reservation and releasing it set to f, for
+// this package's external tests.
+func WithBeforeStaleRemovalReleaseForTest(o Options, f func()) Options {
+	o.beforeStaleRemovalRelease = f
+	return o
+}
+
 // SetBeforeRefusalEndForTest installs beforeRefusalEnd for this
 // package's external tests. It exists only in the tests, on that field's
 // terms in service.go.
 func (s *Service) SetBeforeRefusalEndForTest(f func()) {
 	s.beforeRefusalEnd = f
+}
+
+// SetAfterConsentRegisteredForTest installs afterConsentRegistered for this
+// package's external tests. It exists only in the tests, on that field's
+// terms in service.go.
+func (s *Service) SetAfterConsentRegisteredForTest(f func()) {
+	s.afterConsentRegistered = f
 }
 
 // SubordinateSessionOf exposes to this package's external tests the

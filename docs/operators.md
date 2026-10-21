@@ -233,12 +233,37 @@ push, pull request, and checks holds do not offer a fix round: push forwards a
 commit, so a round there would be pushed before you saw it, and a round after
 push would leave a commit nothing pushes.
 
+When the branch already holds commits the commit you submitted does not
+contain, somebody else pushed them, and the rebase stage replays the run's
+own commits onto the branch as it observed it rather than onto the base, so
+the push is a fast-forward and their commits survive it. It does that on its
+own only when their commits and your change touch different files. A
+colleague's edit to a file your change also changed always holds the rebase
+stage for you, as `rebase-branch-overlap`, naming those files, before anything
+is replayed. That is the price of never placing one side's edit by matching the
+other's lines, which a merge, a merge driver or a patch offset can each get
+wrong without a conflict. The remedy is to bring their commits into your
+change yourself and push again.
+
+Three other cases hold too. `rebase-branch-replay-unverified` means the
+replayed result is not exactly their branch with your files' versions in it,
+at the paths the hold names, for example because git left one of your
+commits out as already applied or dropped a mode change. `rebase-branch-conflict`
+means a replay over different files still stopped on a conflict. In both, no
+replay is carried on and the run's head is the one you submitted.
+`rebase-branch-behind-base` means the branch does not contain the current
+base, and bringing the base in would rewrite their commits: approving carries
+the run on from the branch without the base's newest commits. Approving past
+`rebase-branch-overlap`, `rebase-branch-conflict` or
+`rebase-branch-replay-unverified` reaches the push stage's refusal below.
+
 A push hold whose finding is `push-refused` with reason `would-discard` means
 the branch holds commits the run's commit does not contain and that the run
 would lose by pushing. Either the branch moved after the run observed it, or
-it already held them when the run began: somebody else pushed to it, and the
-commit you submitted neither contains their work nor stands on it, including
-a commit that is behind the branch. A run only replaces commits that were in
+it already held them when the run began and the run was carried past the
+rebase stage's hold without them: somebody else pushed to it, and the commit
+you submitted neither contains their work nor stands on it, including a
+commit that is behind the branch. A run only replaces commits that were in
 the commit you submitted, or in what it pushed earlier itself, which is what
 its own rebase rewrites. The finding names the commits it would lose,
 counting rather than listing any past a fixed bound, and states the remedy:
@@ -456,6 +481,61 @@ computed from the parts in the same document. A task that resolves as unknown
 is both under way and stopped, so it is counted in both, and the counts are
 not meant to be summed. Agent usage is not in the read: it stays the usage
 view, `assistant runs --usage`.
+
+### Kept work
+
+When a run's or a task's isolated copy is kept because its work is not on
+the shared branch or anywhere else the cleanup check can prove it safe (no
+proof held, or the copy holds changes, files or a stash no commit records),
+the service records a kept-work entry for it: whose copy it was, the
+project and branch, the commits the copy was read to hold, and why it was
+kept. A restart does the same for a finished run's copy it finds still
+standing. Each open entry is listed after the four parts of the
+catch-up read (`kept` in `--json`) and in `assistant status`
+(`kept_work` in `--json`): a working copy's status lists the entries whose
+repository is that working copy's, and every status lists the entries whose
+owner names no repository, such as an investigation task started without
+one, because those belong to no working copy. An entry about a task, or about a run
+attributed to a task, also raises one `kept-work` wake, which reaches the
+coordinator and the notify command like any other wake. This build
+deviates from PRD section 6 for an entry about a run no task names, such as
+the run your own push started: it is listed by `status` and the catch-up
+read, but it never reaches the private channel or the coordinator until
+#458 lands.
+
+If the copy's work later turns up somewhere safe, for example once you push
+its commit to the upstream branch, the next cleanup of it (for a run's copy,
+the next service start) removes the copy on that proof and closes the entry
+as removed on a proof, recorded as the program's and never as a discard; a
+closed entry is no longer listed. Nothing else removes a kept copy. A
+service that stops between removing the copy and marking it removed leaves
+the entry open; the next start completes the mark from the recorded proof
+and closes it. An entry whose copy is gone with no proof recorded, a copy
+removed by hand among them, is named in the service log at each start and
+stays open.
+
+`assistant eject --confirm` is refused while the repository has an open
+kept-work entry, before the gate is touched, and the refusal names each
+entry's copy, whose it was and the commits it holds. Until answering kept
+work ships (#411 part 2), the way past it is the work landing: once its
+commits are on the upstream branch or in the default branch, the next
+service start removes the copy on that proof and closes the entry. Part 2's
+discard will be your other way.
+
+Eject is also refused while any run copy of the repository still stands on
+disk, whether its run's cleanup has not decided it yet or kept it, and the
+refusal names each copy: a run's copy is cut from the gate, so removing the
+gate would leave the copy unable to read its own commits. Cancelling a run
+asks its copy's cleanup at once, so a copy whose work is on the upstream is
+removed then. Once eject has checked that the repository can be removed, it
+reserves the removal, and no new run of the repository starts until the
+eject finishes; a service that starts after an eject died releases that
+reservation.
+
+This build records and surfaces kept work and does not yet hold dispatch:
+a new task in a project with an open entry still dispatches. Answering an
+entry (land, carry on or discard) and holding new task work until its
+entries are answered are #411 part 2.
 
 ## Waiting on a fleet
 

@@ -268,7 +268,8 @@ func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
 	if o.State.Basis.Process == taskstate.Dead {
 		s.markLandedTried(id, latestRef(o.Snapshot.Attempts))
 	}
-	s.logCleanup(s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: id, Terminal: o.State.Basis.Process}))
+	done, err := s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: id, Terminal: o.State.Basis.Process})
+	s.logCleanup(ctx, done, err)
 }
 
 // landedFromPass is the supervisor pass's trigger, over the resolutions the

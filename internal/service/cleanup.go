@@ -3,9 +3,13 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // Where the cleanup decision is called from, and with what.
@@ -65,10 +69,180 @@ import (
 // no caller to return it to, so it goes to the log. For a run's copy the
 // decision recorded it as well, on the run's cleanup record, and report
 // composes that into the run's answer; a task copy's refusal is recorded
-// nowhere yet, because the surface that would show it is #110's.
+// only when it is kept work, as the entry below.
+//
+// # Kept work
+//
+// A refusal internal/tasks reports Unlanded is a copy kept because its work
+// has not landed, and PRD principle P15 has that surface at once rather than
+// stay on disk as a log line. Every site above hands such a refusal to
+// keepWork, the one place a kept copy becomes a kept work entry
+// (store.KeptWork, written by internal/tasks' Keep); recovery reaches it too,
+// through reclaimAtRecovery, for a finished run whose copy still stands. What
+// surfaces the entry is the supervisor loop, as a kept-work wake about the
+// task the entry's owner is or is attributed to, and the status and catch-up
+// reads, which list every open entry; supervise.go and catchup.go own
+// those. An entry closes without an answer only when its copy is removed
+// on a P12 proof: internal/store's MarkCleanupRemoved and
+// MarkRunCleanupRemoved close the owner's open entries in the transaction
+// that marks the removal, so a copy whose work later landed (recovery's
+// reclaim among the paths) leaves no entry listed for a copy that is gone.
+// This build records and surfaces kept work and does not yet hold
+// dispatch: an open entry does not stop a new task in its project from
+// dispatching, and nothing here acts on an answer. Both are #411's second
+// part.
+
+// keepWork records the kept work entry for a kept copy and logs what came of
+// it. It is the one call a site makes for a copy kept because its work has
+// not landed, and the call meant for an investigation's copy kept past
+// promotion_window, with tasks.KeptPromotionWindow as the reason, which
+// #438 adds. A write
+// that failed is logged and refuses nothing, because the copy is kept either
+// way and the next cleanup of it asks again; an entry already recorded for
+// the copy and its commits is logged as such and written again nowhere.
+func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
+	owner := "task " + kept.Task
+	if kept.Run != "" {
+		owner = "run " + kept.Run
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	switch {
+	case err != nil:
+		s.log.Printf("the isolated copy of %s is kept and its kept work entry could not be recorded: %v", owner, err)
+	case got.Recorded:
+		s.log.Printf("the isolated copy of %s is kept work entry %d (%s)", owner, got.Entry.ID, got.Entry.Reason)
+	default:
+		s.log.Printf("the isolated copy of %s is already kept work entry %d", owner, got.Entry.ID)
+	}
+}
+
+// releaseStaleRemovals releases every repository removal reservation whose
+// owner, the eject process internal/store's RemovalOwner names, is gone:
+// absent, replaced by another process with its identifier, or recorded with
+// no start time, which nothing can verify. A reservation whose owner still
+// runs is left, because that eject may be removing the gate now, and so is
+// one whose owner could not be read, which the log says; both stop new runs
+// of the repository until the eject finishes or a later open finds the
+// owner gone.
+func (s *Service) releaseStaleRemovals(ctx context.Context) {
+	reserved, err := s.store.RepositoryRemovals(ctx)
+	if err != nil {
+		s.log.Printf("the repository removal reservations could not be read at recovery: %v", err)
+		return
+	}
+	for _, r := range reserved {
+		gone := r.Owner.Start == 0
+		if !gone {
+			presence, err := agents.Identity{PID: r.Owner.PID, Start: r.Owner.Start}.Presence()
+			if err != nil {
+				s.log.Printf("the removal of repository %s is reserved by process %d, which could not be read, so the reservation stands: %v",
+					r.Repository, r.Owner.PID, err)
+				continue
+			}
+			gone = presence != agents.PresencePresent
+		}
+		if !gone {
+			s.log.Printf("the removal of repository %s is reserved by process %d, which still runs, so the reservation stands", r.Repository, r.Owner.PID)
+			continue
+		}
+		if s.beforeStaleRemovalRelease != nil {
+			s.beforeStaleRemovalRelease()
+		}
+		// Anchored on the owner read and judged gone: a reservation another
+		// eject took over since the read stands.
+		released, err := s.store.ReleaseRepositoryRemoval(ctx, r.Repository, r.Owner)
+		switch {
+		case err != nil:
+			s.log.Printf("the removal reservation of repository %s, whose eject is gone, could not be released: %v", r.Repository, err)
+		case released:
+			s.log.Printf("released the removal reservation of repository %s: the eject that held it is gone", r.Repository)
+		default:
+			s.log.Printf("the removal reservation of repository %s was taken over by another eject since it was read, so it stands", r.Repository)
+		}
+	}
+}
+
+// reclaimAtRecovery asks reclaimed of every run among records that the
+// record shows finished and whose isolated copy still stands, on
+// sweepFinishedAtRecovery's terms for which runs those are, and of every
+// such run whose copy is gone while its cleanup record holds a proof not yet
+// marked removed: a service that stopped between the removal and the mark,
+// which internal/tasks' resume completes from the recorded proof, closing
+// the run's kept work in the mark's transaction. It then asks
+// settleKeptAtRecovery of the kept work still open. All of it runs on one
+// goroutine registered under work, because each ask of a standing copy reads
+// the upstream for its proofs and a home holding several kept copies should
+// come back serving first. A run among records that was unfinished is passed
+// over: the move that finished it during recovery reclaimed it then. A copy
+// whose run has no record at all is not looked for, which is a gap this
+// names.
+func (s *Service) reclaimAtRecovery(ctx context.Context, records []store.Run) {
+	var finished []store.Run
+	for _, record := range records {
+		if !record.Status.Recognized() || !runs.Finished(record.Status) {
+			continue
+		}
+		if _, err := os.Lstat(s.home.Worktree(record.RepositoryID, record.ID)); errors.Is(err, os.ErrNotExist) {
+			cleanup, err := s.store.RunCleanup(ctx, record.ID)
+			if err != nil || !cleanup.Proof.IsKnown() || cleanup.RemovedAt.IsKnown() {
+				continue
+			}
+		}
+		finished = append(finished, record)
+	}
+	if !s.startWork() {
+		return
+	}
+	go func() {
+		defer s.work.Done()
+		for _, record := range finished {
+			if s.stopCtx.Err() != nil {
+				return
+			}
+			s.reclaimed(s.stopCtx, record)
+		}
+		s.settleKeptAtRecovery(s.stopCtx)
+	}()
+}
+
+// settleKeptAtRecovery looks at every open kept work entry whose copy is
+// gone, after the runs' reclaim, and decides from the owner's cleanup record
+// and the copy's absence, never from the entry alone. A task's copy whose
+// cleanup record holds a proof not yet marked removed is a removal a stopped
+// service did not mark, and internal/tasks' CleanUp completes it from the
+// recorded proof, closing the entry in the mark's transaction; the
+// terminal is not consulted for a copy that is gone, which is that
+// package's resume. Any other entry whose copy is gone, with no proof
+// recorded for it, is reported in the log and left open: the program never
+// closes kept work it cannot show was removed on a proof (P6, P15).
+func (s *Service) settleKeptAtRecovery(ctx context.Context) {
+	open, err := s.store.OpenKeptWork(ctx)
+	if err != nil {
+		s.log.Printf("the open kept work could not be read at recovery: %v", err)
+		return
+	}
+	for _, k := range open {
+		if _, err := os.Lstat(k.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				s.log.Printf("kept work entry %d: the copy at %s could not be read: %v", k.ID, k.CopyPath, err)
+			}
+			continue
+		}
+		if task, ok := k.TaskID.Get(); ok {
+			cleanup, err := s.store.TaskCleanup(ctx, task)
+			if err == nil && !cleanup.RemovedAt.IsKnown() {
+				done, err := s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: task, Terminal: taskstate.Unobserved})
+				s.logCleanup(ctx, done, err)
+				continue
+			}
+		}
+		s.log.Printf("kept work entry %d names the copy at %s, which is gone with no recorded proof that its work landed; "+
+			"the entry is left open and nothing here closes it", k.ID, k.CopyPath)
+	}
+}
 
 // reclaimed calls reclaimCopy and logs what it could not do, on the terms
-// copy.go states.
+// copy.go states, and hands a copy kept for its work to keepWork.
 func (s *Service) reclaimed(ctx context.Context, record store.Run) {
 	err := s.reclaimCopy(ctx, record)
 	var refused *tasks.CleanupRefusal
@@ -76,6 +250,9 @@ func (s *Service) reclaimed(ctx context.Context, record store.Run) {
 	case err == nil:
 	case errors.As(err, &refused):
 		s.log.Printf("the isolated copy of run %s is left standing (%s): %s", record.ID, refused.Reason, refused.Detail)
+		if kept, ok := tasks.KeptOf(refused); ok {
+			s.keepWork(ctx, kept)
+		}
 	default:
 		s.log.Printf("the isolated copy of run %s was not reclaimed: %v", record.ID, err)
 	}
@@ -138,14 +315,18 @@ func (s *Service) storeTaskReport(ctx context.Context, taskID, raw string) (task
 	return stored, nil
 }
 
-// logCleanup says what a task copy's cleanup did or why it did not.
-func (s *Service) logCleanup(done tasks.Cleanup, err error) {
+// logCleanup says what a task copy's cleanup did or why it did not, and
+// hands a copy kept for its work to keepWork.
+func (s *Service) logCleanup(ctx context.Context, done tasks.Cleanup, err error) {
 	var refused *tasks.CleanupRefusal
 	switch {
 	case err == nil:
 		s.log.Printf("the isolated copy of task %s: %s on %s", done.Task, done.Result, done.Proof)
 	case errors.As(err, &refused):
 		s.log.Printf("the isolated copy of task %s is left standing (%s): %s", refused.Task, refused.Reason, refused.Detail)
+		if kept, ok := tasks.KeptOf(refused); ok {
+			s.keepWork(ctx, kept)
+		}
 	default:
 		s.log.Printf("the isolated copy of task %s was not cleaned up: %v", done.Task, err)
 	}

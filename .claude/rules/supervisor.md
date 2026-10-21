@@ -19,6 +19,8 @@ paths: ["internal/supervisor/**"]
   the matrix test. `subordinate-gone` and `subordinate-escalated` are the
   subordinate's two kinds; the first is carried on `internal/store`'s domain
   wake, and `InFlightOf` counts those rows as a third input.
+- `kept-work` is PRD section 6's kept work, actionable and never a
+  subordinate's, raised once per kept work entry on the task wake.
 
 Read both `doc.go` files (`doc.go` and `feed/doc.go`) before changing any of
 that, and for the residual gaps; `kind.go` is the one owner of what a wake kind

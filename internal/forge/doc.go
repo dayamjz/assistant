@@ -296,21 +296,30 @@
 // run waits, when it re-reads, and when it gives up belong to the checks stage
 // and to checks_timeout.
 //
-// It does not own a process tree. A provider invocation is one short-lived
-// process, and a context that ends kills that process.
+// Every provider invocation runs under a deadline and in a process group of
+// its own, through internal/procgroup, which is PRD section 8's rule for an
+// external program. The deadline is the caller's context's, or
+// DefaultInvocationDeadline where that context carries none, as one derived
+// through context.WithoutCancel does not. On linux and darwin the provider is
+// the leader of its group, and the whole group is sent SIGKILL when the
+// provider exits and when the deadline passes, before the provider is
+// reaped, so a descendant still in the group neither outlives the call nor
+// holds its output pipes.
 //
-// What the grace deadline on every invocation buys is that the call is
-// released either way. Killing the provider does not close the output pipes a
-// descendant inherited, and waiting for those is not a wait a context ends, so
-// without the deadline a descendant that stalls could hold Checks or Get open
-// indefinitely and the caller's checks_timeout would bound nothing. With it,
-// that costs at most DefaultProviderGrace and then the invocation refuses.
+// What the grace on every invocation buys is that the call is released even
+// by a descendant that left the group, by setsid or setpgid of its own:
+// ending the group does not reach it, waiting for the pipes it inherited is
+// not a wait a context ends, and without the grace it could hold Checks or Get
+// open indefinitely and the caller's checks_timeout would bound nothing. With
+// it, that costs at most DefaultProviderGrace and then the invocation
+// refuses.
 //
-// The residual gap is that the descendant itself is not pursued. Nothing here
-// signals it and no process group is terminated, which is what internal/agents
-// does for an agent, so a provider command that leaves long-lived children
-// behind leaves them running after the invocation has returned. What that
-// costs is a stray process rather than a stuck run.
+// The residual gaps are internal/procgroup's, which its package comment
+// names: such a descendant is not pursued and goes on running after the call
+// returned; a descendant a provider meant to outlive the call is ended if it
+// stayed in the group; when this process is killed outright the group goes
+// on until it exits by itself; and on Windows only the provider itself is
+// killed, and none of its descendants.
 //
 // It does not write a pull request body. What a body says is the pull request
 // stage's to decide; this package carries the text it is handed.

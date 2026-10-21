@@ -102,6 +102,10 @@ type heldService struct {
 	// returned is closed when the segment that begins the run has returned,
 	// which is after its own carryOn has decided.
 	returned chan struct{}
+	// pastCancel keeps the stage body inside after its context is cancelled,
+	// until let releases it, so a test can act while an ended run's segment
+	// is certainly still inside it.
+	pastCancel atomic.Bool
 }
 
 // begin starts a run and returns its record once the segment advancing it is
@@ -211,9 +215,13 @@ func newHeldService(t *testing.T) *heldService {
 				return func(ctx context.Context, _ pipeline.Input) (pipeline.Output, error) {
 					held.entries.Add(1)
 					entered.Do(func() { close(held.inside) })
-					select {
-					case <-held.release:
-					case <-ctx.Done():
+					if held.pastCancel.Load() {
+						<-held.release
+					} else {
+						select {
+						case <-held.release:
+						case <-ctx.Done():
+						}
 					}
 					// The context decides, not the select. Both channels are
 					// ready once an ending cancels the segment and the teardown

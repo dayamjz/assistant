@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/forge"
@@ -340,6 +341,11 @@ type Cleaner struct {
 	// this package's tests, which use it to hold a cleanup at the point
 	// where a promotion of the same task is held, so the two claims race.
 	betweenDecisionAndClaim func()
+	// betweenRemovalAndMark runs after the copy is removed and before the
+	// removal is marked on the record. It is nil in production and set only
+	// through InterruptBeforeMarkForTest; an error it returns stands in for
+	// a service that stopped there, and the removal is left unmarked.
+	betweenRemovalAndMark func() error
 }
 
 // NewCleaner builds a Cleaner, refusing with ErrIncomplete when any
@@ -354,6 +360,22 @@ func NewCleaner(d CleanupDeps) (*Cleaner, error) {
 		return nil, fmt.Errorf("%w: no code host", ErrIncomplete)
 	}
 	return &Cleaner{home: d.Home, store: d.Store, forge: d.Forge}, nil
+}
+
+// InterruptBeforeMarkForTest makes every removal this Cleaner makes stop
+// after the copy is gone and before the removal is marked whenever f
+// returns an error, which is the state a service that stopped there leaves:
+// a proof recorded, no copy, no mark. It is a test's seam for showing that a
+// later cleanup completes such a removal from the recorded proof. It takes
+// the test and refuses a nil one, on store.ForgetHoldForTest's terms, so a
+// production path does not reach it by accident; that does not stop a
+// deliberate caller that builds a testing.T of its own.
+func (c *Cleaner) InterruptBeforeMarkForTest(tb testing.TB, f func() error) error {
+	if tb == nil {
+		return errors.New("tasks: InterruptBeforeMarkForTest is a test's seam and takes the test")
+	}
+	c.betweenRemovalAndMark = f
+	return nil
 }
 
 // CleanUp decides whether a task's copy may be removed and removes it when
@@ -546,6 +568,11 @@ func (c *Cleaner) finishTask(ctx context.Context, id string, record store.TaskCl
 	if err := removeTaskCopy(copied.Path(), removal); err != nil {
 		return Cleanup{}, err
 	}
+	if c.betweenRemovalAndMark != nil {
+		if err := c.betweenRemovalAndMark(); err != nil {
+			return Cleanup{}, err
+		}
+	}
 	if err := c.store.MarkCleanupRemoved(ctx, id, time.Now()); err != nil {
 		return Cleanup{}, err
 	}
@@ -689,6 +716,11 @@ func (c *Cleaner) finishRun(ctx context.Context, id string, record store.RunClea
 	}
 	if err := removeRunCopy(ctx, bare, copied.Path(), removal); err != nil {
 		return Cleanup{}, err
+	}
+	if c.betweenRemovalAndMark != nil {
+		if err := c.betweenRemovalAndMark(); err != nil {
+			return Cleanup{}, err
+		}
 	}
 	if err := c.store.MarkRunCleanupRemoved(ctx, id, time.Now()); err != nil {
 		return Cleanup{}, err

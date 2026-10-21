@@ -99,10 +99,10 @@
 // either while the hold is open. The
 // holds are internal/store's, carried on TaskSnapshot, which already reads
 // every hold naming the task in the snapshot's own transaction; no record
-// is added and nothing here learns what a hold's key means. The producers in
-// this build are internal/service's two relaunch holds, the one the relaunch
-// bound raises and the one a relaunch with no process sweep raises, and
-// internal/tasks' StoreReport, which registers an investigation's asks.
+// is added and nothing here learns what a hold's key means. Any open hold
+// naming the task counts, whoever registered it: internal/tasks' StoreReport
+// registers an investigation's asks, and internal/service's publish.go lists
+// the sites there that write one.
 // Answering a hold resolves it, and a resolved hold is not read, so the task
 // falls back to whatever the tiers below say; the answer is a record, and
 // no event says the task stopped waiting (P8). Basis.Hold names the hold

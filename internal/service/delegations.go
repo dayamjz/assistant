@@ -39,7 +39,15 @@ import (
 // is, so a pass landing between the two would otherwise read a subordinate
 // that is coming up as gone. Past that window with no session it is read
 // as unobservable, since nothing can be probed for it, and a start that
-// failed is then told to the coordinator the way a gone one is.
+// failed is then told to the coordinator the way a gone one is. A
+// delegation that has claimed no attempt yet is starting on the same terms,
+// with the window read off the delegation row's CreatedAt: domain.delegate
+// records the delegation and claims its first attempt in two transactions,
+// so a pass landing between the two reads a standing delegation with no
+// attempt, and reading that as gone tells the coordinator its subordinate
+// is gone at attempt zero while the first attempt is being claimed (#451).
+// Past the window with still no attempt it is read as unobservable, which
+// is what a crash between the two writes leaves.
 //
 // # The bound's hold
 //
@@ -128,7 +136,11 @@ func decideDelegationWith(o delegationObservation, cfg config.Config, now time.T
 		d.write = o.has && (o.markers.UnobservedSince.IsKnown() || o.markers.GoneSurfacedAt.IsKnown())
 		return d
 	}
-	if o.ref == "" && o.attempt > 0 && elapsed(o.started, cfg.EscalationWindow, now) == supervisor.WindowOpen {
+	claimed := o.started
+	if o.attempt == 0 {
+		claimed = o.delegation.CreatedAt
+	}
+	if o.ref == "" && elapsed(claimed, cfg.EscalationWindow, now) == supervisor.WindowOpen {
 		// Starting, on the file comment's terms: nothing surfaces and the
 		// markers are left as they are, so a start that comes up clears
 		// them as Live and one that does not is read past the window.

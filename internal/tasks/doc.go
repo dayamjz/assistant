@@ -373,9 +373,11 @@
 //     under is asserting that instead.
 //   - The "promoted" entry is a note, so a promoted task whose newest entry
 //     it is resolves Unknown at the event tier until the worker's next
-//     entry, as a task does after any note; the process tier answers above
-//     it once the probe is wired. The same rule keeps a task whose newest
-//     entry is a worker's note out of Promotable until its next state entry.
+//     entry, as a task does after any note; the process tier, which
+//     internal/service's terminal probe feeds, answers above it whenever
+//     the probe reads the worker Live or Dead. The same rule keeps a task
+//     whose newest entry is a worker's note out of Promotable until its
+//     next state entry.
 //   - Nothing tells the running worker its contract changed but its own
 //     history and the instructions file. Sending the new contract through
 //     the session is #91's route, and nothing here uses it.
@@ -387,7 +389,8 @@
 //     clone is read by nothing and overwritten by the next check.
 //   - A task copy's refusal is returned and recorded nowhere, because the
 //     surface that would show it is #110's; a run copy's is recorded on the
-//     run's cleanup record. Who answers a task's hold is #91's surface.
+//     run's cleanup record. A task's hold is answered through
+//     internal/service's task.respond (taskholds.go).
 //   - The evidence copy of a report is written after the row, so a crash
 //     between the two leaves a stored report with no copy. The row is the
 //     source and nothing reads the copy.

@@ -24,14 +24,14 @@ const (
 	// body reads the supplied intent and launches nothing, the review body
 	// launches the agent this harness resolves - which the default journey
 	// scripts to answer nothing, so a taken review stops at an ask recording
-	// that no review happened - and the pull request body fails because the
-	// run's record names no repository on the code host, so every walk here
-	// asks to skip those two stages, and the test body holds wherever the
-	// run's resolved configuration names no command, which is every walk but
-	// the P7 branch one. The run a task's worker starts by pushing cannot ask
-	// for a skip; it takes the review stage with the stand-in scripted clean
-	// and holds at the first stage its configuration holds at, before the
-	// pull request stage.
+	// that no review happened - so every walk that does not reach the push
+	// stage asks to skip the review stage, most naming the pull request stage
+	// beside it, which a local upstream's no_code_host skips after push
+	// anyway; the test body holds wherever the run's resolved configuration
+	// names no command, which is every walk but the P7 branch one. The run a
+	// task's worker starts by pushing cannot ask for a skip; it takes the
+	// review stage with the stand-in scripted clean and holds at the first
+	// stage its configuration holds at, before the pull request stage.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable
@@ -80,11 +80,10 @@ func Coverage() []Established {
 		{principles.P2, ReachBinary,
 			"One run of the binary reaches every stage it does not ask to skip; a second run skips one " +
 				"more of them for that run only; and a home whose configuration document asks for a " +
-				"standing skip stops the service before it serves. Both runs skip review and the pull " +
-				"request stage, because the review body launches the agent this harness scripts to " +
-				"answer nothing and the pull request body fails because the run's record names no " +
-				"repository on the code host, so no run here both takes the pull request stage and reaches the end of " +
-				"the gate, and none reviews anything. Two narrow facts are what establish the third: " +
+				"standing skip stops the service before it serves. Both runs skip review, because the " +
+				"review body launches the agent this harness scripts to answer nothing, and name the " +
+				"pull request stage too, which the fixture's local upstream would skip after push through " +
+				"no_code_host anyway, so no run here takes the pull request stage and none reviews anything. Two narrow facts are what establish the third: " +
 				"internal/config's key table admits no key named skip, and a key it does not admit is " +
 				"refused where the document is walked, before the service binds. A second key of another " +
 				"name is driven beside it and held to the same answer, so the refusal is not read off one " +
@@ -177,15 +176,21 @@ func Coverage() []Established {
 				"remedy, and that the remote still holds that commit. The third walk's remote holds a " +
 				"commit somebody else pushed before the run began, so the run observes it and a lease " +
 				"on that anchor would hold; once diverged from it and once behind it, it establishes " +
-				"that the push stage holds on a would-discard refusal naming exactly that commit, " +
-				"anchored on it, and that the remote keeps it. What the lease walk does not " +
+				"that the rebase stage incorporates that commit, so the push forwards the head the lint " +
+				"stage checked as a fast-forward anchored on it and the remote still reaches it, with " +
+				"the run's own change where there is one. A run over the same remote whose change " +
+				"changes the file that commit changed holds at the rebase stage on an ask naming it as " +
+				"observed, " +
+				"and the remote keeps it; it never reaches the push stage. The push stage's " +
+				"would-discard refusal over such a commit, the backstop for a run carried past those " +
+				"holds, is held at package reach by internal/stages. What the lease walk does not " +
 				"establish is held at package reach: that following the remedy makes the decision allow " +
 				"a fast-forward, which no surface here drives a run through. All three walks need a " +
 				"service and a run, so they are skipped rather " +
 				"than passing where internal/ipc reads no peer credentials or no local socket " +
-				"transport exists. The pull request and checks stages are skipped on all three, because no " +
-				"record here names a repository on a code host and this fixture has none for " +
-				"internal/forge to address. The killed run, and the contention check beside it, are " +
+				"transport exists. The pull request and checks stages are skipped on all three, because the " +
+				"fixture's upstream is a local repository with no code host for internal/forge to " +
+				"address, so begin sets no_code_host. The killed run, and the contention check beside it, are " +
 				"driven through methods internal/ipc restricts, so on a platform where that package reads " +
 				"no local socket peer credentials both are skipped rather than passing, and the two " +
 				"package-reach observations are the whole of what is established there. The kill path " +
@@ -403,8 +408,10 @@ func Coverage() []Established {
 				"with the default grace checks that a second SIGTERM forces the stop at once. Nothing " +
 				"else P15 asks is driven: a run's, a worker's, a delegation's or a notify command's " +
 				"processes ended by their normal path or by a killed service, a descendant that left " +
-				"its group, a check by working directory, and the kept-work record, which does not " +
-				"exist in this build. Both walks drive a run through methods internal/ipc restricts, " +
+				"its group, a check by working directory, and the kept-work record, which " +
+				"internal/service's tests reach through the package: a refused cleanup writing an " +
+				"entry and raising one wake, and a restart recording a finished run's standing copy; " +
+				"its answers and the dispatch hold are not in this build. Both walks drive a run through methods internal/ipc restricts, " +
 				"so on a platform where that package reads no local socket peer credentials they are " +
 				"skipped rather than passing, and they build only on unix."},
 	}

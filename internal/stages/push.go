@@ -62,6 +62,10 @@ import (
 // other. The basis is read from the run's own state, so it carries the
 // provenance the anchor's checkpoint carries and nothing more.
 //
+// The rebase stage incorporates such commits before the run does its work, so
+// a run reaches this refusal over them only when a person carried it past one
+// of that stage's holds; the refusal is the backstop, not the path.
+//
 // # A second push (P6)
 //
 // A run the checks stage sent back to rebase, or back to review with a repair
@@ -429,7 +433,8 @@ func pushedReport(decision safety.Decision) findings.Report {
 	dropped := decision.Rewritten()
 	if len(dropped) == 0 {
 		return findings.Report{
-			Summary:  fmt.Sprintf("Forwarded %s to %s.", decision.Proposed(), decision.Target()),
+			Summary: fmt.Sprintf("Forwarded %s to %s: %s, anchored on %s as this run observed it.",
+				decision.Proposed(), decision.Target(), decision.Kind(), decision.Anchor().State()),
 			Revision: decision.Proposed(),
 		}
 	}

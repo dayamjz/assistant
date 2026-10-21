@@ -26,8 +26,27 @@ func sweep(string, string) int { return 1 }
 // requireOwned asks nothing here. On Windows, Tmux skips the test before it
 // asks; no other platform this file builds for is a supported one, and none
 // has the process reads the sweep would end a server through.
-func requireOwned(testing.TB) {}
+func requireOwned(testing.TB, string) string { return "" }
 
 // ownedTmux is empty here, since RunOwned writes no tmux wrapper, so Tmux
 // skips a terminal test on a platform this file builds for.
 func ownedTmux() string { return "" }
+
+// heldMain returns at once here, where no test holds a process.
+func heldMain([]string) {}
+
+// HeldWait fails tb here: with no owner watch, a held process would end with
+// nothing, so no test may start one. held_unix.go is the contract.
+func HeldWait(tb testing.TB, _ string) string {
+	tb.Helper()
+	tb.Fatal("standin: a held process has no owner watch on this platform")
+	return ""
+}
+
+// HeldWaitIdentified fails tb here, as HeldWait does. ReadHeldIdentity has
+// no counterpart here, since no held process records one.
+func HeldWaitIdentified(tb testing.TB, _, _ string) string {
+	tb.Helper()
+	tb.Fatal("standin: a held process has no owner watch on this platform")
+	return ""
+}

@@ -286,6 +286,7 @@ var noticeRows = map[supervisor.Kind]Phrase{
 	supervisor.KindCheckResult:           phraseNoticeCheckResult,
 	supervisor.KindSubordinateGone:       phraseNoticeDomainCoordinatorGone,
 	supervisor.KindSubordinateEscalated:  phraseNoticeHandedUp,
+	supervisor.KindKeptWork:              phraseNoticeKeptWork,
 }
 
 // QueuedWakePhrase is the row one listed notice reads as, chosen by its

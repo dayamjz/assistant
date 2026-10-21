@@ -117,13 +117,33 @@
 // Two residual gaps, stated rather than papered over. A credential helper
 // configured in the user's git configuration is still invoked, because that is
 // where legitimate credentials come from; if that helper itself blocks on a
-// user, the invocation blocks with it, and the caller's context deadline is
+// user, the invocation blocks with it, and its deadline, described below, is
 // what ends it. And this package chooses the ssh command every invocation
 // runs under, which overrides a core.sshCommand set in git configuration, so a
 // caller that relies on core.sshCommand loses it here. A caller supplies its
 // own with WithSSHCommand, which is the only route: an ssh command left in the
 // environment is removed along with the rest of redirectingVars rather than
 // adopted.
+//
+// # Every invocation is bounded and ended with its group
+//
+// PRD section 8 asks that every invocation of an external program carry a
+// deadline and run in a process group the invoker ends when the call returns
+// or times out. Every git this package starts goes through internal/procgroup
+// for that, ServeReceivePack included. The deadline is the caller's context's,
+// or the handle's invocation deadline (WithInvocationDeadline, ten minutes by
+// default) where that context carries none, as one derived through
+// context.WithoutCancel does not. On linux and darwin git is the leader of a
+// group of its own, and the whole group is sent SIGKILL when git exits and
+// when the deadline passes, before git is reaped, so a descendant still in
+// the group neither outlives the call nor holds its output pipes.
+//
+// What this does not cover is procgroup's to state, and its package comment
+// does: a descendant that left the group is not ended, only stops being
+// waited on after killGrace; a descendant meant to outlive the call is ended
+// if it stayed in the group; when this process is killed outright the group
+// goes on until it exits by itself; and on Windows only git itself is
+// killed, and none of its descendants.
 //
 // # What this package deliberately does not do
 //

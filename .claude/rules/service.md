@@ -50,6 +50,11 @@ paths: ["internal/service/**"]
   reported investigation's after `promotion_window` while keeping its copy, and
   `runsweep.go` the sweep of a finished run's copy: what the order
   guarantees and its gaps.
+- Kept work: `cleanup.go`'s `keepWork` is the one call that turns a copy
+  kept for its work into a kept work entry, from every cleanup site and from
+  recovery's `reclaimAtRecovery`; `supervise.go` raises each open
+  entry about a task once as a `kept-work` wake, and status and the catch-up
+  read list them. Answers and the dispatch hold are #411's second part.
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances
   in, and `report` reads it rather than inferring it.
@@ -75,7 +80,8 @@ paths: ["internal/service/**"]
 - Terminals: every task reader is built through `reader`, probing through
   the service's `Terminals`, the one seam a terminal is observed through;
   liveness has one producer, the provider's probe, and nothing writes an
-  event to say Running. Which provider `driverFor` builds is
+  event to say Running. Which provider a launch builds over the adapter
+  `agents.Route` selected, and `driverFor` over the resolved agent, is
   `terminals.go`'s `sessionHost`, from the global layer only.
 - Reconciliation and relaunch: a launched task is never dispatched again;
   what a restart does about it is `reconcile.go`'s. `relaunch.go`'s
@@ -87,7 +93,6 @@ paths: ["internal/service/**"]
   registered by force and the caller exits. Its header owns which groups and
   the gaps.
 - Supervisor loop: PRD section 5's supervisor loop lives in `supervise.go`;
-  read its header before changing it, and for the residual gaps. One gap it
-  does not state: the verdict's level is not recorded on the wake row.
+  read its header before changing it, and for the residual gaps.
 
 Read `doc.go` before changing any of that, and for the residual gaps.

@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -192,6 +193,23 @@ type Options struct {
 	// are here rather than on the Service because the loop starts inside
 	// Open; supervise.go says what each is, and the product sets none.
 	hooks supervisionHooks
+	// cleanupTest and interruptCleanupMark are the cleanup decision's seam
+	// between a copy's removal and its mark, which export_test.go's
+	// WithCleanupInterruptForTest sets and the product never does; Open
+	// hands them to internal/tasks' InterruptBeforeMarkForTest.
+	cleanupTest          testing.TB
+	interruptCleanupMark func() error
+	// beforeStaleRemovalRelease runs in recovery between reading a removal
+	// reservation whose owner is gone and releasing it; export_test.go's
+	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
+	// does.
+	beforeStaleRemovalRelease func()
+	// sweepCopy is the Service field of the same name, set before recovery
+	// runs. It is here rather than only on the Service because recovery
+	// sweeps finished runs' copies inside Open, so a test that records what
+	// recovery's sweep answered has no Service to set it on until that
+	// sweep is over. The product sets none.
+	sweepCopy func(ctx context.Context, dir string) (agents.SweepResult, error)
 }
 
 // Service is one home's background service.
@@ -366,12 +384,24 @@ type Service struct {
 	// package's tests, which use it to hold the run pending while they
 	// assert queue state, or to move the run first so the ending fails.
 	beforeRefusalEnd func()
+	// beforeStaleRemovalRelease is Options' seam of that name, which
+	// recovery runs before each anchored release of a dead eject's
+	// reservation. It is nil in production.
+	beforeStaleRemovalRelease func()
+	// afterConsentRegistered runs in underStandingConsent once
+	// writeConsentAnswer has registered a standing-consent hold and before
+	// the answer is given. It is nil in production and set only by this
+	// package's tests, which use it to look at the stream at the point a
+	// service that stopped there would have left it.
+	afterConsentRegistered func()
 	// sweepCopy stands in for the sweep this service asks of a copy: the
 	// one relaunch.go and dispatch.go ask of a task's standing copy, and the
 	// one runsweep.go asks of a finished run's. It is nil in production,
 	// where the sweep is an agents.Sweeper over this service's home, and set
 	// only by this package's tests, to an answer the real sweep gives on a
-	// platform this test does not run on or to a recorder of what was asked.
+	// platform this test does not run on or to a recorder of what was asked,
+	// directly or through Options.sweepCopy, which Open copies here before
+	// recovery sweeps anything.
 	sweepCopy func(ctx context.Context, dir string) (agents.SweepResult, error)
 	// givingUp is whether Close has stopped taking background work. It is
 	// read and written under mu with the registration itself, which is what
@@ -568,27 +598,29 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		return nil, unstarted(err)
 	}
 	s := &Service{
-		home:       o.Home,
-		lock:       lock,
-		log:        log,
-		instance:   instance,
-		newStages:  o.NewStages,
-		build:      o.Build,
-		catalog:    o.Catalog,
-		newFixer:   o.NewFixer,
-		registry:   newRegistry(),
-		topologies: make(map[string]*topology),
-		advancing:  make(map[string]*slot),
-		isolated:   make(map[string]tasks.Isolation),
-		claiming:   make(map[string]bool),
-		launched:   make(map[string]launchedWorker),
-		delegated:  make(map[string]launchedSubordinate),
-		survivors:  session.NewSurvivors(),
-		starting:   make(map[branchKey]*branchGate),
-		stopping:   make(chan struct{}),
+		home:                      o.Home,
+		lock:                      lock,
+		log:                       log,
+		instance:                  instance,
+		newStages:                 o.NewStages,
+		build:                     o.Build,
+		catalog:                   o.Catalog,
+		newFixer:                  o.NewFixer,
+		registry:                  newRegistry(),
+		topologies:                make(map[string]*topology),
+		advancing:                 make(map[string]*slot),
+		beforeStaleRemovalRelease: o.beforeStaleRemovalRelease,
+		isolated:                  make(map[string]tasks.Isolation),
+		claiming:                  make(map[string]bool),
+		launched:                  make(map[string]launchedWorker),
+		delegated:                 make(map[string]launchedSubordinate),
+		survivors:                 session.NewSurvivors(),
+		starting:                  make(map[branchKey]*branchGate),
+		stopping:                  make(chan struct{}),
 
 		workerRoute:      o.WorkerRoute,
 		coordinatorRoute: o.CoordinatorRoute,
+		sweepCopy:        o.sweepCopy,
 	}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.WithoutCancel(ctx))
 	// The terminal seam is the service's own provider unless a test passed
@@ -675,7 +707,10 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	if s.queue, err = s.newQueue(); err != nil {
 		return err
 	}
-	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err != nil {
+	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err == nil && o.interruptCleanupMark != nil {
+		err = s.cleaner.InterruptBeforeMarkForTest(o.cleanupTest, o.interruptCleanupMark)
+	}
+	if err != nil {
 		return err
 	}
 

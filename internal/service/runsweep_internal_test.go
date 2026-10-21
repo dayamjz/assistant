@@ -26,18 +26,27 @@ import (
 
 // sweepsAsked records every directory the service asks a sweep of, and
 // answers with the real sweep over the service's home, so a test reads both
-// what was asked and what the real sweep did about it.
+// what was asked and what the real sweep answered it.
 type sweepsAsked struct {
 	mu      sync.Mutex
 	dirs    []string
+	answers []sweepAnswer
 	sweeper *agents.Sweeper
 }
 
+// sweepAnswer is what the real sweep answered one ask.
+type sweepAnswer struct {
+	r   agents.SweepResult
+	err error
+}
+
 func (a *sweepsAsked) sweep(ctx context.Context, dir string) (agents.SweepResult, error) {
+	r, err := a.sweeper.Sweep(ctx, dir)
 	a.mu.Lock()
 	a.dirs = append(a.dirs, dir)
+	a.answers = append(a.answers, sweepAnswer{r: r, err: err})
 	a.mu.Unlock()
-	return a.sweeper.Sweep(ctx, dir)
+	return r, err
 }
 
 // of counts the sweeps asked of dir.
@@ -53,11 +62,482 @@ func (a *sweepsAsked) of(dir string) int {
 	return n
 }
 
+// last is what the real sweep answered the latest ask of dir, and fails the
+// test when none was asked or that sweep returned an error.
+func (a *sweepsAsked) last(t *testing.T, dir string) agents.SweepResult {
+	t.Helper()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for i := len(a.dirs) - 1; i >= 0; i-- {
+		if a.dirs[i] == dir {
+			if err := a.answers[i].err; err != nil {
+				t.Fatalf("the sweep the service asked of %s failed: %v", dir, err)
+			}
+			return a.answers[i].r
+		}
+	}
+	t.Fatalf("no sweep was asked of %s; asked %v", dir, a.dirs)
+	return agents.SweepResult{}
+}
+
+// ending is what the real sweep answered the ask of dir that ended id, and
+// fails the test when no sweep the service asked of dir ended it.
+func (a *sweepsAsked) ending(t *testing.T, dir string, id agents.Identity) agents.SweepResult {
+	t.Helper()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for i, d := range a.dirs {
+		if d == dir && a.answers[i].err == nil && slices.Contains(a.answers[i].r.Ended, id) {
+			return a.answers[i].r
+		}
+	}
+	t.Fatalf("no sweep the service asked of %s ended %s", dir, id)
+	return agents.SweepResult{}
+}
+
+// unendedBefore is placed less what was ended by the sweeps of dir asked
+// before the latest one, which is what the latest could still find there:
+// a move can be swept twice, on runsweep.go's terms.
+func (a *sweepsAsked) unendedBefore(dir string, placed []agents.Identity) []agents.Identity {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	latest := -1
+	for i, d := range a.dirs {
+		if d == dir {
+			latest = i
+		}
+	}
+	return slices.DeleteFunc(slices.Clone(placed), func(id agents.Identity) bool {
+		for i := range latest {
+			if a.dirs[i] == dir && slices.Contains(a.answers[i].r.Ended, id) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// sweepAttempts is how many sweeps of one copy in a row untilClear lets be
+// refused by processes the test did not place there before it reports the
+// host instead.
+const sweepAttempts = 5
+
+// untilClear reads the sweep the service last asked of dir, the first, and
+// returns it with the first sweep from there on that cleared, which must
+// have ended exactly what was still placed in dir when it ran. each is
+// called with every sweep read, first included, so the caller can hold
+// what the service recorded of it. A sweep that did not clear is held to
+// refusedByOthers, with placed, the processes the test left in dir, less
+// any an earlier sweep of dir ended, for the first sweep, and with nothing
+// for every later one, since the first ended them. A refusal that rule rejects is the copy's and fails the test at
+// once. One it accepts is P6's refusal working on a process the test did
+// not place in dir (#449 saw tmux's setgid utempter helper, started by
+// another test, be one), which is logged, and again is called, which must
+// have the service ask exactly one more sweep of dir. After sweepAttempts
+// accepted refusals in a row the failure goes through
+// fatalUnlessSweepsStoppedClearing, which skips, or fails under
+// standin.RequireSweepClearVar, when an empty copy elsewhere is refused too
+// and fails otherwise: a host that refuses every sweep is reported as the
+// host's, and a run of short-lived blockers longer than sweepAttempts
+// fails loudly rather than passing unchecked.
+//
+// What it cannot tell: a process whose working directory the sweep could
+// not read is one nothing can place outside dir, so accepting a refusal
+// rests on dir holding nothing but what the test placed there, all of it
+// ended, which refusedByOthers checks of the sweep's own listing, and on
+// the copy being one no process of the service's own was started in, which
+// the caller's setup arranges. Where the blocking process stood is read by
+// nothing here.
+func (a *sweepsAsked) untilClear(t *testing.T, unestablished, dir string, placed []agents.Identity,
+	each func(agents.SweepResult), again func()) (first, cleared agents.SweepResult) {
+	t.Helper()
+	first = a.last(t, dir)
+	placed = a.unendedBefore(dir, placed)
+	r := first
+	for attempt := 1; ; attempt++ {
+		each(r)
+		if r.Clear() {
+			if err := endedExactly(r, placed); err != nil {
+				t.Fatalf("the sweep the service asked of %s cleared, and %v (%s)", dir, err, r)
+			}
+			return first, r
+		}
+		if err := refusedByOthers(r, dir, placed); err != nil {
+			t.Fatalf("the sweep the service asked of %s did not clear, and the refusal is the copy's: %v (%s)", dir, err, r)
+		}
+		if attempt == sweepAttempts {
+			fatalUnlessSweepsStoppedClearing(t, unestablished,
+				"%d sweeps of %s in a row were refused by processes the test did not place there, the last %s", attempt, dir, r)
+		}
+		t.Logf("the sweep the service asked of %s was refused by processes the test did not place there, as P6 requires (%s); asking again", dir, r)
+		placed = nil
+		before := a.of(dir)
+		again()
+		if n := a.of(dir); n != before+1 {
+			t.Fatalf("asking again asked %d sweep(s) of %s, want one", n-before, dir)
+		}
+		r = a.last(t, dir)
+	}
+}
+
+// The ways refusedByOthers rejects a sweep, one per clause, so its positive
+// control can show each clause is reached.
+var (
+	errSweepCleared    = errors.New("the sweep cleared, so there is no refusal to attribute")
+	errSweepOtherDir   = errors.New("the sweep is not of the copy")
+	errSweepSurvivor   = errors.New("a process under the copy survived the sweep")
+	errSweepUnverified = errors.New("the sweep left processes undecided")
+	errSweepFoundOther = errors.New("the sweep found processes under the copy the test did not place there")
+	errSweepPlacedHeld = errors.New("a process the test placed in the copy is among those that blocked the sweep")
+	errSweepPlacedLeft = errors.New("the processes the sweep ended are not exactly the ones the test placed in the copy")
+)
+
+// refusedByOthers is nil when r, a sweep of dir, did not clear only because
+// of processes whose working directory it could not read, none of which is
+// one of placed, the processes the test left in dir, and when everything
+// the sweep found under dir is exactly placed, all of it ended. Otherwise
+// it wraps the error of the first clause r breaks. It reads nothing but r
+// and decides nothing from a blocker's name: a blocker is matched against
+// placed by identity alone.
+func refusedByOthers(r agents.SweepResult, dir string, placed []agents.Identity) error {
+	switch {
+	case r.Clear():
+		return errSweepCleared
+	case r.Dir != dir:
+		return fmt.Errorf("%w: it is of %q, not %s", errSweepOtherDir, r.Dir, dir)
+	case len(r.Survived) != 0:
+		return fmt.Errorf("%w: %v", errSweepSurvivor, r.Survived)
+	case len(r.Unverified) != 0:
+		return fmt.Errorf("%w: %v", errSweepUnverified, r.Unverified)
+	case len(r.Exited)+len(r.Replaced) != 0:
+		return fmt.Errorf("%w: exited %v, replaced %v", errSweepFoundOther, r.Exited, r.Replaced)
+	}
+	for _, b := range r.UnreadableBlocking {
+		if slices.Contains(placed, b.Identity) {
+			return fmt.Errorf("%w: %s", errSweepPlacedHeld, b)
+		}
+	}
+	return endedExactly(r, placed)
+}
+
+// endedExactly is nil when the processes r ended are exactly placed, and
+// otherwise wraps errSweepPlacedLeft naming both.
+func endedExactly(r agents.SweepResult, placed []agents.Identity) error {
+	order := func(x, y agents.Identity) int { return x.PID - y.PID }
+	ended, want := slices.Clone(r.Ended), slices.Clone(placed)
+	slices.SortFunc(ended, order)
+	slices.SortFunc(want, order)
+	if !slices.Equal(ended, want) {
+		return fmt.Errorf("%w: ended %v, placed %v", errSweepPlacedLeft, ended, want)
+	}
+	return nil
+}
+
+// refusalRuleHolds is refusedByOthers' positive control, over a real sweep
+// r of dir in which the service ended placed, the one process the test put
+// there. foreign and other are two more processes the test started outside
+// every copy, standing for processes it did not place in dir: foreign is
+// the one that blocks, and other the one a counterfeit has the sweep find
+// or end under dir. Every blocker a counterfeit carries is the one
+// agents.BlockerFor read of that process while it ran.
+//
+// Every counterfeit is built from r only through listedSweep, whose
+// methods change a result the way the listing and the ending step do, and
+// is then held to realShape, which checks every invariant those steps
+// keep; so no counterfeit is a shape the real sweep cannot return.
+// realShape itself is shown to reject one shape per invariant first, the
+// reviewed counterfeit, a blocker beside an unreadable count of zero,
+// among them. The base is r with its blockers taken away, which is a
+// sweep that cleared. The rule must accept the base with foreign
+// blocking, and reject the base itself and every counterfeit, each for the
+// clause it is built to reach.
+func refusalRuleHolds(t *testing.T, r agents.SweepResult, dir string, placed, foreign, other leftProcess) {
+	t.Helper()
+	if foreign.id.PID == other.id.PID || placed.id.PID == foreign.id.PID || placed.id.PID == other.id.PID {
+		t.Fatalf("the control needs distinct processes, got placed %s, foreign %s, other %s", placed.id, foreign.id, other.id)
+	}
+	if err := realShape(r); err != nil {
+		t.Fatalf("the real sweep %s fails the shape check: %v", r, err)
+	}
+	realShapeRejects(t, r, foreign.blocker(t))
+	ids := []agents.Identity{placed.id}
+	base := listedSweep{r}.unblockAll()
+	if !base.r.Clear() {
+		t.Fatalf("the sweep %s with its blockers taken away does not clear, so the control has no base", r)
+	}
+	built := func(l listedSweep) agents.SweepResult {
+		if err := realShape(l.r); err != nil {
+			t.Fatalf("a counterfeit is a shape the real sweep cannot return: %v (%s)", err, l.r)
+		}
+		return l.r
+	}
+	if err := refusedByOthers(built(base), dir, ids); !errors.Is(err, errSweepCleared) {
+		t.Fatalf("a sweep that cleared is read as %v, want %v", err, errSweepCleared)
+	}
+	blocked := base.block(foreign.blocker(t))
+	if err := refusedByOthers(built(blocked), dir, ids); err != nil {
+		t.Fatalf("a sweep blocked only by a process outside the copy is read as the copy's: %v", err)
+	}
+	for _, c := range []struct {
+		name string
+		l    listedSweep
+		want error
+	}{
+		{"of another copy", blocked.of(dir + "-other"), errSweepOtherDir},
+		{"the placed process survived", blocked.unlist(placed.id).survived(placed.id), errSweepSurvivor},
+		{"the placed process undecided", blocked.unlist(placed.id).undecided(placed.id.PID), errSweepUnverified},
+		{"another process under the copy", blocked.exited(other.id), errSweepFoundOther},
+		{"the placed process blocked", base.unlist(placed.id).block(placed.blocker(t)), errSweepPlacedHeld},
+		{"the placed process not ended", blocked.unlist(placed.id), errSweepPlacedLeft},
+		{"another process ended", blocked.ended(other.id), errSweepPlacedLeft},
+	} {
+		if err := refusedByOthers(built(c.l), dir, ids); !errors.Is(err, c.want) {
+			t.Errorf("the counterfeit %q is read as %v, want %v", c.name, err, c.want)
+		}
+	}
+}
+
+// listedSweep is a sweep result changed only the way agents' listing
+// (listUnderReading on each platform, addRead and addRefused) and its
+// ending step (endListed) change one, so a result built through its
+// methods from a real one keeps every invariant realShape checks. Each
+// method returns a changed copy and leaves its receiver as it was.
+type listedSweep struct{ r agents.SweepResult }
+
+// copied is l with every slice its own, so a change to the copy reaches
+// nothing l shares.
+func (l listedSweep) copied() listedSweep {
+	c := l.r
+	c.Ended, c.Exited, c.Replaced, c.Survived = slices.Clone(c.Ended), slices.Clone(c.Exited), slices.Clone(c.Replaced), slices.Clone(c.Survived)
+	c.Unverified, c.UnreadableBlocking = slices.Clone(c.Unverified), slices.Clone(c.UnreadableBlocking)
+	return listedSweep{c}
+}
+
+// block is addRefused listing a process blocking: it is counted
+// unreadable and its blocker appended.
+func (l listedSweep) block(b agents.Blocker) listedSweep {
+	c := l.copied()
+	c.r.Unreadable++
+	c.r.UnreadableBlocking = append(c.r.UnreadableBlocking, b)
+	return c
+}
+
+// unblockAll is the same listing on a host where the blocking processes
+// were not running: each leaves the unreadable count with its blocker.
+func (l listedSweep) unblockAll() listedSweep {
+	c := l.copied()
+	c.r.Unreadable -= len(c.r.UnreadableBlocking)
+	c.r.UnreadableBlocking = nil
+	return c
+}
+
+// unlist is the same listing with id not under the directory: a readable
+// process outside it, which nothing counts, so id leaves whichever of the
+// ending step's sets holds it.
+func (l listedSweep) unlist(id agents.Identity) listedSweep {
+	c := l.copied()
+	drop := func(ids []agents.Identity) []agents.Identity {
+		return slices.DeleteFunc(ids, func(x agents.Identity) bool { return x == id })
+	}
+	c.r.Ended, c.r.Exited, c.r.Replaced, c.r.Survived = drop(c.r.Ended), drop(c.r.Exited), drop(c.r.Replaced), drop(c.r.Survived)
+	return c
+}
+
+// ended, exited and survived are addRead listing id under the directory
+// and the ending step then finding it gone after a signal, gone before
+// one, or still running after the forceful one.
+func (l listedSweep) ended(id agents.Identity) listedSweep {
+	c := l.copied()
+	c.r.Ended = append(c.r.Ended, id)
+	return c
+}
+
+func (l listedSweep) exited(id agents.Identity) listedSweep {
+	c := l.copied()
+	c.r.Exited = append(c.r.Exited, id)
+	return c
+}
+
+func (l listedSweep) survived(id agents.Identity) listedSweep {
+	c := l.copied()
+	c.r.Survived = append(c.r.Survived, id)
+	return c
+}
+
+// undecided is the ending step failing to read the presence of a process
+// addRead listed under the directory, which reports it unverified and
+// counts nothing unreadable, since its working directory was read.
+func (l listedSweep) undecided(pid int) listedSweep {
+	c := l.copied()
+	c.r.Unverified = append(c.r.Unverified, pid)
+	return c
+}
+
+// of is the same listing of another directory.
+func (l listedSweep) of(dir string) listedSweep {
+	c := l.copied()
+	c.r.Dir = dir
+	return c
+}
+
+// The invariants realShape checks, one error each. Every one is read off
+// agents' listing code, which this file states rather than imports, so a
+// change there that breaks one shows up here as a real sweep failing the
+// check at the top of refusalRuleHolds.
+var (
+	// errShapeUnlisted: a result with no error was listed, and Sweep sets
+	// Dir on every listed result.
+	errShapeUnlisted = errors.New("the result names no directory, which every listed sweep does")
+	// errShapeIdentifier: both listings skip an identifier of zero or less
+	// and this process's own.
+	errShapeIdentifier = errors.New("the result lists an identifier the listing skips")
+	// errShapeTwoSets: each process is classified once, readable or
+	// refused, and a listed one lands in exactly one of the ending step's
+	// sets, so no identifier is in two of Ended, Exited, Replaced,
+	// Survived, Unverified and UnreadableBlocking.
+	errShapeTwoSets = errors.New("one process is in two of the result's sets")
+	// errShapeCount: addRefused counts a process unreadable before it lists
+	// it blocking, and also counts the refused ones it sets aside or
+	// reports unverified, so Unreadable is at least len(UnreadableBlocking)
+	// and never negative.
+	errShapeCount = errors.New("the unreadable count is below the blockers it must include")
+	// errShapeUIDs: readRefused fails, and addRefused reports the process
+	// unverified, when its user identifiers cannot be read, so a blocker
+	// always carries them.
+	errShapeUIDs = errors.New("a blocker carries no user identifiers")
+	// errShapeName: blockerOf records a name or why the name could not be
+	// read.
+	errShapeName = errors.New("a blocker carries neither a name nor why it could not be read")
+)
+
+// realShape is nil when r keeps every invariant above, and otherwise wraps
+// the first one r breaks.
+func realShape(r agents.SweepResult) error {
+	if r.Dir == "" {
+		return errShapeUnlisted
+	}
+	if r.Unreadable < len(r.UnreadableBlocking) {
+		return fmt.Errorf("%w: %d unreadable, %d blocking", errShapeCount, r.Unreadable, len(r.UnreadableBlocking))
+	}
+	seen := map[int]string{}
+	note := func(set string, pid int) error {
+		if pid <= 0 || pid == os.Getpid() {
+			return fmt.Errorf("%w: %d in %s", errShapeIdentifier, pid, set)
+		}
+		if was, ok := seen[pid]; ok {
+			return fmt.Errorf("%w: process %d is in both %s and %s", errShapeTwoSets, pid, was, set)
+		}
+		seen[pid] = set
+		return nil
+	}
+	for _, s := range []struct {
+		name string
+		ids  []agents.Identity
+	}{{"Ended", r.Ended}, {"Exited", r.Exited}, {"Replaced", r.Replaced}, {"Survived", r.Survived}} {
+		for _, id := range s.ids {
+			if err := note(s.name, id.PID); err != nil {
+				return err
+			}
+		}
+	}
+	for _, pid := range r.Unverified {
+		if err := note("Unverified", pid); err != nil {
+			return err
+		}
+	}
+	for _, b := range r.UnreadableBlocking {
+		if err := note("UnreadableBlocking", b.PID); err != nil {
+			return err
+		}
+		if len(b.UIDs) == 0 {
+			return fmt.Errorf("%w: %s", errShapeUIDs, b)
+		}
+		if b.Name == "" && b.NameErr == nil {
+			return fmt.Errorf("%w: %s", errShapeName, b)
+		}
+	}
+	return nil
+}
+
+// realShapeRejects is realShape's own positive control: from the real
+// sweep r and a real blocker b of a process outside every copy, one shape
+// per invariant that breaks it and nothing else, each written by hand on
+// purpose since no listing step produces it, and each must be rejected
+// for that invariant. The first is the counterfeit #450's review found: a
+// blocker added beside an unreadable count of zero.
+func realShapeRejects(t *testing.T, r agents.SweepResult, b agents.Blocker) {
+	t.Helper()
+	clean := listedSweep{r}.unblockAll().r
+	for _, c := range []struct {
+		name  string
+		shape func(s *agents.SweepResult)
+		want  error
+	}{
+		{"a blocker beside an unreadable count of zero", func(s *agents.SweepResult) {
+			s.Unreadable, s.UnreadableBlocking = 0, []agents.Blocker{b}
+		}, errShapeCount},
+		{"a negative unreadable count", func(s *agents.SweepResult) { s.Unreadable = -1 }, errShapeCount},
+		{"no directory", func(s *agents.SweepResult) { s.Dir = "" }, errShapeUnlisted},
+		{"this process listed", func(s *agents.SweepResult) { s.Exited = []agents.Identity{{PID: os.Getpid(), Start: 1}} }, errShapeIdentifier},
+		{"an identifier of zero", func(s *agents.SweepResult) { s.Unverified = []int{0} }, errShapeIdentifier},
+		{"one process blocking and exited", func(s *agents.SweepResult) {
+			s.Unreadable, s.UnreadableBlocking, s.Exited = s.Unreadable+1, []agents.Blocker{b}, []agents.Identity{b.Identity}
+		}, errShapeTwoSets},
+		{"a blocker with no user identifiers", func(s *agents.SweepResult) {
+			s.Unreadable, s.UnreadableBlocking = s.Unreadable+1, []agents.Blocker{{Identity: b.Identity, Name: b.Name}}
+		}, errShapeUIDs},
+		{"a blocker with neither name nor reason", func(s *agents.SweepResult) {
+			s.Unreadable, s.UnreadableBlocking = s.Unreadable+1, []agents.Blocker{{Identity: b.Identity, UIDs: b.UIDs}}
+		}, errShapeName},
+	} {
+		s := listedSweep{clean}.copied().r
+		c.shape(&s)
+		if err := realShape(s); !errors.Is(err, c.want) {
+			t.Errorf("the impossible shape %q is read as %v, want %v", c.name, err, c.want)
+		}
+	}
+}
+
+// recordsSweep fails the test unless got is what sweepFinished records, on
+// occasion, of a sweep that answered r without an error: cleared with what
+// it ended when r cleared, and otherwise not cleared, with what it ended
+// and what it left counted.
+func recordsSweep(t *testing.T, got store.RunCopySweep, r agents.SweepResult, occasion store.SweepOccasion) {
+	t.Helper()
+	outcome, ended, remaining := store.SweepCleared, store.Known(len(r.Ended)), store.Known(0)
+	if !r.Clear() {
+		outcome, remaining = store.SweepNotCleared, store.Known(len(r.Survived)+len(r.Unverified)+len(r.UnreadableBlocking))
+	}
+	if got.Outcome != outcome || got.Occasion != occasion || got.Ended != ended || got.Remaining != remaining {
+		t.Fatalf("the sweep is recorded as %+v, want %s %s with %v ended and %v remaining, for the sweep %s",
+			got, outcome, occasion, ended, remaining, r)
+	}
+}
+
+// leftProcess is a process leaveRunning started: its identity, a channel
+// closed once it has exited, and what agents.BlockerFor read of it while it
+// ran.
+type leftProcess struct {
+	id         agents.Identity
+	exited     <-chan struct{}
+	asBlocker  agents.Blocker
+	blockerErr error
+}
+
+// blocker is the Blocker agents.BlockerFor read of the process when it was
+// started, and fails the test when that read did not produce one.
+func (p leftProcess) blocker(t *testing.T) agents.Blocker {
+	t.Helper()
+	if p.blockerErr != nil {
+		t.Fatalf("reading %s as a sweep reads a blocker: %v", p.id, p.blockerErr)
+	}
+	return p.asBlocker
+}
+
 // leaveRunning starts a process in dir in a session of its own, so neither
 // an invocation's process group nor this test's reaches it: the detached
-// descendant PRD section 8 says group termination does not end. It returns
-// a channel closed once the process has exited.
-func leaveRunning(t *testing.T, dir string) <-chan struct{} {
+// descendant PRD section 8 says group termination does not end.
+func leaveRunning(t *testing.T, dir string) leftProcess {
 	t.Helper()
 	left := exec.Command("sleep", "60")
 	left.Dir = dir
@@ -71,7 +551,20 @@ func leaveRunning(t *testing.T, dir string) <-chan struct{} {
 		_ = left.Process.Kill()
 		<-exited
 	})
-	return exited
+	id, found, err := agents.Identify(left.Process.Pid)
+	if err != nil || !found {
+		t.Fatalf("reading the identity of the process left in %s: found %v, %v", dir, found, err)
+	}
+	proc := leftProcess{id: id, exited: exited}
+	// Read now, while the process runs, since a sweep may end it before a
+	// control asks; a platform with no listing answers an error here, which
+	// only blocker reports.
+	var present bool
+	proc.asBlocker, present, proc.blockerErr = agents.BlockerFor(id)
+	if proc.blockerErr == nil && !present {
+		proc.blockerErr = fmt.Errorf("%s exited before it was read", id)
+	}
+	return proc
 }
 
 // stillRunning fails the test when the process behind exited has gone, after
@@ -106,8 +599,13 @@ func ended(t *testing.T, exited <-chan struct{}, after string) {
 // sweep is asked of exactly that copy and the process is gone. The same
 // recorder seeing a sweep on each ending, and the same process ending under
 // it, is the positive control that the absence before it is not a recorder
-// or a process that could never have shown one. Skips where the existing
-// sweep tests skip, with the same reasons.
+// or a process that could never have shown one. Each sweep's record is held
+// to what the real sweep answered, and a sweep refused only by processes
+// the test did not place in the copy is asked again on untilClear's terms,
+// because whether some other process's working directory is readable is
+// the host's and not the copy's (#449); refusalRuleHolds is that rule's
+// positive control. Skips where the existing sweep tests skip, with the
+// same reasons.
 func TestARunsCopyIsSweptOnceTheRunIsFinalAndNeverBefore(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
@@ -132,7 +630,8 @@ func TestARunsCopyIsSweptOnceTheRunIsFinalAndNeverBefore(t *testing.T) {
 			}
 			// The probe above is the test's own and not one the service
 			// asked, so the recorder starts empty here.
-			exited := leaveRunning(t, copyPath)
+			left := leaveRunning(t, copyPath)
+			exited := left.exited
 			stillRunning(t, exited, "the run was running")
 			if n := asked.of(copyPath); n != 0 {
 				t.Fatalf("a sweep was asked %d time(s) of the copy of a running run", n)
@@ -183,15 +682,21 @@ func TestARunsCopyIsSweptOnceTheRunIsFinalAndNeverBefore(t *testing.T) {
 			if n := asked.of(copyPath); n == 0 {
 				t.Fatalf("no sweep was asked of the copy of a run that %s; asked %v", ending, asked.dirs)
 			}
-			// What the sweep came to is recorded on the run, as the move's
-			// own sweep, and the run's status answer carries it.
-			sweep, err := s.store.RunCopySweep(ctx, record.ID)
-			if err != nil {
-				t.Fatalf("the sweep of the run's copy was not recorded: %v", err)
+			// What each sweep came to is recorded on the run, as the move's
+			// own sweep, and the run's status answer carries the latest. A
+			// sweep refused by a process this test did not place in the
+			// copy is P6 working, and the move's sweep is asked again
+			// until one clears, on untilClear's terms.
+			recorded := func(r agents.SweepResult) {
+				sweep, err := s.store.RunCopySweep(ctx, record.ID)
+				if err != nil {
+					t.Fatalf("the sweep of the run's copy was not recorded: %v", err)
+				}
+				recordsSweep(t, sweep, r, store.SweptAtFinish)
 			}
-			if sweep.Outcome != store.SweepCleared || sweep.Occasion != store.SweptAtFinish || sweep.Ended.Or(0) < 1 {
-				fatalUnlessSweepsStoppedClearing(t, unestablished, "the sweep is recorded as %+v, want cleared at finish with the process ended", sweep)
-			}
+			asked.untilClear(t, unestablished, copyPath, []agents.Identity{left.id}, recorded,
+				func() { s.sweepFinished(ctx, final, store.SweptAtFinish) })
+			refusalRuleHolds(t, asked.ending(t, copyPath, left.id), copyPath, left, leaveRunning(t, t.TempDir()), leaveRunning(t, t.TempDir()))
 			if answer, err := s.view(ctx, record.ID); err != nil || answer.CopySweep == nil || answer.CopySweep.Outcome != store.SweepCleared {
 				t.Fatalf("the run's status answer carries the sweep %+v (%v)", answer.CopySweep, err)
 			}
@@ -279,10 +784,17 @@ func finishedRun(t *testing.T, records *store.Store, id, head string) store.Run 
 // each copy in a session of its own. The service is closed and a second
 // service opened on the same home: the finished run's process is gone, the
 // held run's runs on, and the finished run's record says the sweep cleared
-// its copy at recovery and ended one process, which its status answer
-// carries, in the structured rendering as well, while the held run has no
-// sweep recorded and its answer carries none. The process ending under the
-// same recovery that leaves the other alone is the positive control.
+// its copy at recovery and what it ended, which its status answer carries,
+// in the structured rendering as well, while the held run has no sweep
+// asked or recorded and its answer carries none. The process ending under
+// the same recovery that leaves the other alone is the positive control.
+// Each recovery's record is held to what the real sweep answered it. A
+// recovery whose sweep was refused only by processes the test did not
+// place in the copy, which #449 saw tmux's setgid utempter helper do, is
+// P6's refusal working: the service is opened again, on untilClear's
+// terms, until a recovery's sweep clears, and that one ended nothing,
+// since the first ended the process. refusalRuleHolds is the positive
+// control for the rule that accepts such a refusal.
 func TestRecoverySweepsAFinishedRunsStandingCopyAndNeverAnActiveRunsCopy(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
@@ -312,7 +824,7 @@ func TestRecoverySweepsAFinishedRunsStandingCopyAndNeverAnActiveRunsCopy(t *test
 	}
 	activeLeft := leaveRunning(t, activeCopy)
 	finishedLeft := leaveRunning(t, finishedCopy)
-	stillRunning(t, finishedLeft, "no service had asked a sweep of the finished run's copy")
+	stillRunning(t, finishedLeft.exited, "no service had asked a sweep of the finished run's copy")
 
 	if err := s.Close(); err != nil {
 		t.Fatalf("closing the first service: %v", err)
@@ -322,29 +834,53 @@ func TestRecoverySweepsAFinishedRunsStandingCopyAndNeverAnActiveRunsCopy(t *test
 		t.Fatal(err)
 	}
 	runner := standin.New(t, standin.Script{}).Runner()
-	reopened, err := Open(ctx, Options{
-		Home:      s.home,
-		NewStages: stages.All,
-		NewFixer:  stages.Fix,
-		Build:     build,
-		Catalog:   agents.NewCatalog(fixedRunner{runner: runner}, cursorFactory{runner: runner}),
-		LockWait:  -1,
-	})
-	if err != nil {
-		t.Fatalf("reopening the service on the same home: %v", err)
+	asked := &sweepsAsked{sweeper: agents.NewSweeper(s.home, reapGrace, nil)}
+	var reopened *Service
+	reopen := func() {
+		if reopened != nil {
+			if err := reopened.Close(); err != nil {
+				t.Fatalf("closing the reopened service: %v", err)
+			}
+		}
+		next, err := Open(ctx, Options{
+			Home:      s.home,
+			NewStages: stages.All,
+			NewFixer:  stages.Fix,
+			Build:     build,
+			Catalog:   agents.NewCatalog(fixedRunner{runner: runner}, cursorFactory{runner: runner}),
+			LockWait:  -1,
+			sweepCopy: asked.sweep,
+		})
+		if err != nil {
+			t.Fatalf("reopening the service on the same home: %v", err)
+		}
+		reopened = next
 	}
+	reopen()
 	t.Cleanup(func() { _ = reopened.Close() })
 
-	ended(t, finishedLeft, "recovery found the finished run's copy standing")
-	stillRunning(t, activeLeft, "recovery ran with the run held")
-	sweep, err := reopened.store.RunCopySweep(ctx, finished.ID)
-	if err != nil {
-		t.Fatalf("the finished run's sweep was not recorded: %v", err)
+	ended(t, finishedLeft.exited, "recovery found the finished run's copy standing")
+	stillRunning(t, activeLeft.exited, "recovery ran with the run held")
+	// A sweep refused by a process this test did not place in the copy is
+	// P6 working, and the service is opened again, whose recovery sweeps
+	// the standing copy again, until one clears, on untilClear's terms.
+	var sweep store.RunCopySweep
+	_, cleared := asked.untilClear(t, unestablished, finishedCopy, []agents.Identity{finishedLeft.id},
+		func(r agents.SweepResult) {
+			var err error
+			if sweep, err = reopened.store.RunCopySweep(ctx, finished.ID); err != nil {
+				t.Fatalf("the finished run's sweep was not recorded: %v", err)
+			}
+			recordsSweep(t, sweep, r, store.SweptAtRecovery)
+			if n := asked.of(activeCopy); n != 0 {
+				t.Fatalf("recovery asked %d sweep(s) of the held run's copy", n)
+			}
+			stillRunning(t, activeLeft.exited, "recovery ran with the run held")
+		}, reopen)
+	if !cleared.Clear() {
+		t.Fatalf("untilClear returned a sweep that did not clear: %s", cleared)
 	}
-	if sweep.Outcome != store.SweepCleared || sweep.Occasion != store.SweptAtRecovery ||
-		sweep.Ended != store.Known(1) || sweep.Remaining != store.Known(0) {
-		fatalUnlessSweepsStoppedClearing(t, unestablished, "the finished run's sweep is recorded as %+v, want cleared at recovery with one ended", sweep)
-	}
+	refusalRuleHolds(t, asked.ending(t, finishedCopy, finishedLeft.id), finishedCopy, finishedLeft, leaveRunning(t, t.TempDir()), leaveRunning(t, t.TempDir()))
 	if _, err := reopened.store.RunCopySweep(ctx, active.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the held run has a sweep recorded (%v), and an active run's copy is never swept", err)
 	}

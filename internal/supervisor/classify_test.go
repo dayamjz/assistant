@@ -178,6 +178,20 @@ var oracle = map[cell]supervisor.Level{
 	{supervisor.KindSubordinateEscalated, proof, open, true}:      supervisor.Surface,
 	{supervisor.KindSubordinateEscalated, proof, elapsed, false}:  supervisor.Surface,
 	{supervisor.KindSubordinateEscalated, proof, elapsed, true}:   supervisor.Surface,
+
+	// "kept work" -> Surface: section 6's "it surfaces at once". The record
+	// is listed as soon as it is written; this wake is detected on the
+	// loop's next pass, and once detected nothing absorbs it, because a copy
+	// kept for its work is a decision owed to a person whatever the
+	// evidence, the window or the flag say.
+	{supervisor.KindKeptWork, absent, open, false}:    supervisor.Surface,
+	{supervisor.KindKeptWork, absent, open, true}:     supervisor.Surface,
+	{supervisor.KindKeptWork, absent, elapsed, false}: supervisor.Surface,
+	{supervisor.KindKeptWork, absent, elapsed, true}:  supervisor.Surface,
+	{supervisor.KindKeptWork, proof, open, false}:     supervisor.Surface,
+	{supervisor.KindKeptWork, proof, open, true}:      supervisor.Surface,
+	{supervisor.KindKeptWork, proof, elapsed, false}:  supervisor.Surface,
+	{supervisor.KindKeptWork, proof, elapsed, true}:   supervisor.Surface,
 }
 
 // recipient is PRD section 8's wake row, written out one kind at a time
@@ -203,6 +217,9 @@ var recipient = map[supervisor.Kind]bool{
 	supervisor.KindMessageUnacknowledged: true,
 	supervisor.KindSubordinateGone:       false,
 	supervisor.KindSubordinateEscalated:  false,
+	// Kept work is answered land, carry on or discard, a person's decision
+	// section 6 gives no subordinate.
+	supervisor.KindKeptWork: false,
 }
 
 // eventKindWithRole picks a task event kind of the given role from

@@ -355,6 +355,9 @@ func (s *Service) underStandingConsent(ctx context.Context, runID string, topo *
 		if !s.writeConsentAnswer(ctx, runID, key, result, answer) {
 			return result, nil
 		}
+		if s.afterConsentRegistered != nil {
+			s.afterConsentRegistered()
+		}
 		applied := false
 		next, err := topo.executor.AnswerUnattended(ctx, runID, string(answer.option), answer.detail,
 			func(graph.CheckpointID) {
@@ -417,6 +420,12 @@ func consentKeySeq(runID, key string) (int, bool) {
 // taken at this checkpoint, so it is not taken again: the decision is left
 // for a person. An open one is this decision's own row from an attempt that
 // did not finish it, and the answer goes ahead under it.
+//
+// An open row is published as hold.state as the store returned it, before
+// the answer is given, so a subscriber learns of the open hold even when the
+// service stops before finishConsentAnswer publishes its resolution. A row
+// already resolved is not published again: nothing was written, and its
+// resolution was published when it was made.
 func (s *Service) writeConsentAnswer(ctx context.Context, runID, key string, at graph.Result, answer consentAnswer) bool {
 	h, err := s.store.RegisterHold(context.WithoutCancel(ctx), store.Hold{
 		Key:     key,
@@ -429,6 +438,9 @@ func (s *Service) writeConsentAnswer(ctx context.Context, runID, key string, at 
 		s.log.Printf("run %s holds for a person: standing consent would answer %s at the %s stage and the record "+
 			"of it was refused, so the answer was not given: %v", runID, answer.resolution(), answer.stage, err)
 		return false
+	}
+	if h.Open() {
+		s.publishHoldState(h)
 	}
 	if resolution, done := h.Resolution.Get(); done {
 		s.log.Printf("run %s holds for a person: standing consent already decided the %s stage's hold at checkpoint "+

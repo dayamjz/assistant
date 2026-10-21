@@ -11,9 +11,15 @@ import (
 // TestThePushStageRefusesToReplaceABranchHoldingCommitsTheRunLacks is issue
 // #396 at the stage, over a real upstream: the branch already holds a commit
 // somebody else pushed when the run observes it, and the run's commit does
-// not contain that commit. The anchor is the rebase stage's own observation,
-// so it names the colleague's commit and the lease on it would hold; the
-// stage refuses anyway, and the branch keeps the commit.
+// not contain that commit. The anchor names the colleague's commit, as the
+// rebase stage's observation does, so the lease on it would hold; the stage
+// refuses anyway, and the branch keeps the commit.
+//
+// This is the backstop. The rebase stage incorporates such a commit
+// (rebase_incorporate_test.go), so a run reaches the push stage without it
+// only past one of that stage's holds, approved by a person; the anchor is
+// therefore stated here rather than taken by running the rebase stage, which
+// would incorporate the commit and leave nothing to refuse.
 //
 // Two shapes: the run's commit diverged from the colleague's, both on the
 // base, and the run's commit standing behind it, the colleague having pushed
@@ -38,10 +44,7 @@ func TestThePushStageRefusesToReplaceABranchHoldingCommitsTheRunLacks(t *testing
 			} else {
 				colleague = run.commitOnUpstreamBranch(t, "topic", "colleague.txt", "pushed beside the run's commit\n")
 			}
-			run.anchor = run.anchorFromRebaseStage(t)
-			if run.anchor == "" {
-				t.Fatal("the rebase stage recorded no anchor")
-			}
+			run.anchor = run.anchorFor(t, "refs/heads/topic", true, colleague)
 
 			refused := refusedDescription(t, run.mustPush(t))
 			if got := lineAfter(refused, "reason: "); got != string(safety.ReasonWouldDiscard) {

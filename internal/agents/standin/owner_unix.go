@@ -208,10 +208,9 @@ const tmuxWrapperMark = "# standin: the tmux a test finds, which runs the real o
 // environment, whatever environment it was started with, and every
 // argument it was given.
 func tmuxWrapper(value, real string) string {
-	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 	return "#!/bin/sh\n" + tmuxWrapperMark + "\n" +
-		OwnerVar + "=" + quote(value) + "\nexport " + OwnerVar + "\n" +
-		"exec " + quote(real) + ` "$@"` + "\n"
+		OwnerVar + "=" + shellWord(value) + "\nexport " + OwnerVar + "\n" +
+		"exec " + shellWord(real) + ` "$@"` + "\n"
 }
 
 // realTmux is the first tmux on path that is not a wrapper tmuxWrapper wrote,
@@ -281,21 +280,27 @@ func ownedTmux() string {
 	return owning.tmux
 }
 
-// requireOwned fails tb unless it is called inside RunOwned's run, where
-// ownership is recorded and the check is certain to follow. Tmux calls it,
-// so a package whose tests start a terminal server cannot leave the sweep,
-// the wrapper or the check unwired and pass.
-func requireOwned(tb testing.TB) {
+// requireOwned fails tb unless it is called inside RunOwned's run in this
+// process, where ownership is recorded and the check is certain to follow,
+// and otherwise returns this process's owner identity as OwnerVar spells it.
+// The proof is state only RunOwned sets in this process, never OwnerVar,
+// which a binary another package's tests started inherits without running
+// RunOwned. starts says what the test starts, for the refusal. Tmux and
+// HeldWait call it, so a package whose tests start a terminal server or a
+// held process cannot leave the sweep, the wrapper or the check unwired
+// and pass.
+func requireOwned(tb testing.TB, starts string) string {
 	tb.Helper()
 	owning.mu.Lock()
-	checked := owning.checked
+	checked, value := owning.checked, owning.value
 	owning.mu.Unlock()
-	if checked {
-		return
+	if checked && value != "" {
+		return value
 	}
-	tb.Fatalf("standin: this package's tests start terminal servers, which leave its process group, and they are not running inside standin.RunOwned, " +
-		"so nothing would end one a test leaves running, or report it once the tests return. End TestMain, after Main, with:\n\n" +
-		"\tos.Exit(standin.RunOwned(m.Run))\n")
+	tb.Fatalf("standin: this test starts %s and is not running inside standin.RunOwned in this process, "+
+		"so nothing would end one it leaves running, or report it once the tests return. End TestMain, after Main, with:\n\n"+
+		"\tos.Exit(standin.RunOwned(m.Run))\n", starts)
+	return ""
 }
 
 // startSweep starts this binary again as the owner sweep for value, which

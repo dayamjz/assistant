@@ -138,8 +138,13 @@ const (
 	// hold with --answer, given the task. A retry relaunches once more
 	// through the same anchored relaunch and is not counted against this row
 	// for that one attempt; the next failure holds again. Zero relaunches
-	// nothing and holds every such task. internal/service's reconcile.go is
-	// the one reader, and its taskholds.go owns the hold and its answers.
+	// nothing and holds every such task. Only internal/service reads it:
+	// reconcile.go and relaunch.go for this relaunch, taskholds.go and
+	// workerfallback.go where a stop's retry, or a worker fallback's switch
+	// or retry, would begin an attempt past it, and subordinates.go and
+	// delegations.go for a subordinate coordinator's relaunch, which it
+	// bounds on the same terms. taskholds.go owns a task's hold and its
+	// answers.
 	// PRD section 10's keys table has its row and the limits table its
 	// ceiling; the floor is zero.
 	KeyRelaunchAttempts Key = "relaunch_attempts"
@@ -353,7 +358,7 @@ const (
 	// next call across the home and holds for a person. The comparison is
 	// against the run's own rows of the agent invocation record, read at each
 	// comparison; internal/service's runbudget.go owns that reading and what
-	// it leaves open. PRD section 10's schema does not yet have the row.
+	// it leaves open. PRD section 10's keys table has its row.
 	KeyRunUsageBudgetOutputTokens Key = "run_usage_budget.output_tokens"
 )
 

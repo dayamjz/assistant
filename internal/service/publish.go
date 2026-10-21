@@ -13,12 +13,12 @@ import (
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
-// The two state publishers beside runs.go's publishRunState: a task's
-// resolved state and a hold opening or closing. Both are ipc.ClassState, so a
-// stream that overflows collapses them into its gap marker rather than
-// dropping them, and both carry a revision from the one delivery counter
-// every state event of this service draws on, so a consumer orders the three
-// kinds against each other.
+// The two state publishers beside runs.go's publishRunState and workers.go's
+// publishTaskEvent: a task's resolved state and a hold opening or closing.
+// Both are ipc.ClassState, so a stream that overflows collapses them into its
+// gap marker rather than dropping them, and both carry a revision from the
+// one delivery counter every state event of this service's open stream draws
+// on, so a consumer orders the four kinds against each other.
 //
 // # task.state has one reader
 //
@@ -45,14 +45,19 @@ import (
 //
 // # hold.state is published where a hold is written
 //
-// A hold is written at four sites in this service, and each publishes the
-// hold as it then stands: storeTaskReport, where an investigation's report
-// registers one per ask finding; the checks-hold closure, where the one
-// closure PRD section 8 lets the program make resolves the hold in the same
-// transaction as the run's move; and taskholds.go's two, where
-// reconciliation registers the hold the relaunch bound raises and where an
-// answer given the task resolves a task's hold. The payload is the store.Hold record, on
-// machine's rule that a record travels as its owner's type.
+// Every site in this service that writes a hold publishes it as the store
+// returned it: storeTaskReport, where an investigation's report registers
+// one per ask finding; the checks-hold closure, where the one closure PRD
+// section 8 lets the program make resolves the hold in the same transaction
+// as the run's move; consent.go's registration of a standing-consent hold,
+// published open before its answer is given, and its resolution; local.go's
+// approval hold, the landing that closes it and its other answers; steer.go's
+// stop hold; taskholds.go's three registrations (the
+// relaunch bound, the relaunch with no sweep and the dispatch with no sweep)
+// and its answer to a task's hold; workerfallback.go's hold; and
+// subordinates.go's delegation hold, its answer, and the holds an ended
+// delegation closes. The payload is the store.Hold record, on machine's rule
+// that a record travels as its owner's type.
 
 // published is what this service has published about each task: the basis of
 // the last task.state it sent, keyed by task. It is guarded by its own mutex

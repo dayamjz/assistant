@@ -49,14 +49,16 @@ import (
 // cost and not a correctness gap, and it ends when an agent is installed or
 // the service restarts.
 //
-// Capture on a service with no provider is the one producer of
-// ErrTerminalsUnavailable: the provider as a whole could not be obtained,
-// which is the case that error names, rather than one terminal failing to
-// read. Once the driver is built it stays built, so the provider is never
-// unavailable afterwards, and the loop reaches Capture only for a terminal
-// the same pass probed Live, which only a built provider answers; the
-// producer is therefore reached by a caller that captures without probing
-// and not by the loop's pass, and it is stated rather than widened.
+// Capture on a service with no provider produces ErrTerminalsUnavailable,
+// and so does peek.go's capture for task.peek, which asks a held session's
+// host directly and falls back to the driver's provider on the same terms:
+// the provider as a whole could not be obtained, which is the case that
+// error names, rather than one terminal failing to read. Once the driver is
+// built it stays built, so the provider is never unavailable afterwards, and
+// the loop reaches Capture only for a terminal the same pass probed Live,
+// which only a built provider answers; the error is therefore reached by a
+// caller that captures without probing and not by the loop's pass, and it is
+// stated rather than widened.
 //
 // # Residual gaps
 //

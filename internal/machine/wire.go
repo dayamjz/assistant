@@ -145,6 +145,13 @@ type Status struct {
 	// reporting that the service is down is this command's job. It is absent
 	// when the guard was not computed.
 	Supervision *Supervision `json:"supervision,omitempty"`
+	// KeptWork is every kept work entry still open (neither answered nor
+	// closed by the copy's removal on a proof) whose project is this working
+	// copy's repository, and every open entry whose owner names no project,
+	// oldest first: PRD section 6's kept work, which surfaces in status at
+	// once. It is absent when there is
+	// none, and when the service did not answer.
+	KeptWork []store.KeptWork `json:"kept_work,omitempty"`
 	// Detail names what could not be reported and why, and is empty when
 	// everything was.
 	Detail string `json:"detail,omitempty"`

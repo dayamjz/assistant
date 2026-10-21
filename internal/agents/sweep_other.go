@@ -11,5 +11,9 @@ import "context"
 // established and exercised on their CI by this package.
 func listUnder(context.Context, string) (listing, error) { return listing{}, ErrSweepUnsupported }
 
+// BlockerFor answers ErrSweepUnsupported here: with no listing there is no
+// read a sweep makes of a refused process to repeat.
+func BlockerFor(Identity) (Blocker, bool, error) { return Blocker{}, false, ErrSweepUnsupported }
+
 // signalProcess is never reached here, because listUnder lists nothing.
 func signalProcess(int, bool) error { return ErrSweepUnsupported }

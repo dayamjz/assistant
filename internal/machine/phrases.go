@@ -1957,6 +1957,7 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseMessageUnread, phraseMessageRead, phraseMessageRefused, phraseMessageUnknown,
 		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept, phraseRepairAdded, phraseRepairNotYetAdded)
+	out = append(out, keptWorkRows()...)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseNoticeQueued, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
