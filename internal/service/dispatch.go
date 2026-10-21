@@ -271,6 +271,19 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // settles. A task refused resolves Failed from the entry the refusal appended
 // and is kept out by the resolver as well as by the slot.
 //
+// The tasks are read under the read side of the intake exclusion
+// createTask holds across an intake, so a pass never reads a task whose
+// record is written and whose instructions file is not yet. A pass that
+// finds an intake holding or taking that exclusion is skipped rather than waited on, so a release
+// on a run's segment does not wait behind an intake's reads. Nothing is
+// lost by the skip: createTask starts a pass once its intake has returned,
+// refused or not, and that pass is either run or skipped for a later
+// intake that starts one of its own; a service giving up its home starts
+// none, and the next open dispatches. That covers this service's intakes
+// only: a crash between the record and the file leaves a task with no
+// instructions, which the pass refuses as errTaskRecord, internal/tasks'
+// residual gap.
+//
 // A dispatch that reaches proven is launched in the same pass, through
 // launch.go, and the slot covers the launch as well: a launch that failed is
 // not retried until the next open either, because the attempt it would be
@@ -278,7 +291,12 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // second process against one record. What came of the launch is logged, and
 // a refusal of the launch's own assertion is recorded the way dispatch's is.
 func (s *Service) dispatchDue(ctx context.Context) {
+	if !s.intake.TryRLock() {
+		s.log.Printf("dispatching was left to the task intake in flight, which dispatches once it has returned")
+		return
+	}
 	resolved, err := s.tasks().All(ctx)
+	s.intake.RUnlock()
 	if err != nil {
 		s.log.Printf("dispatching: the tasks could not be read: %v", err)
 		return

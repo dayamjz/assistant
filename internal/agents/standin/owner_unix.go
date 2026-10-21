@@ -135,6 +135,16 @@ func setChecked(running bool) {
 	owning.checked = running
 }
 
+// mainCalled records that Main ran in this process, which ownProcesses
+// checks before it starts this binary again as the owner sweep: a binary
+// whose TestMain does not call Main would not be the sweep when started as
+// one, so nothing would end what its tests leave behind. Main sets it
+// through noteMain, the one writer.
+var mainCalled bool
+
+// noteMain records that Main ran in this process.
+func noteMain() { mainCalled = true }
+
 // ownProcesses records this process as the owner of every process the tests
 // start, and starts the owner sweep that ends those still running once it is
 // gone. RunOwned calls it, so the owner is the binary that runs the tests. A

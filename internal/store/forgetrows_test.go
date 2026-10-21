@@ -170,7 +170,7 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 	// The entry is written before the removal is marked, so the mark closes
 	// it on its proof: an open one would refuse the forgetting, which
 	// TestARepositoryWithOpenKeptWorkIsNotForgotten holds.
-	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/run", Holds: []string{"aaaa"}, Reason: "unproven"}); err != nil {
+	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/run", Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd"}); err != nil {
 		t.Fatalf("RecordKeptWork: %v", err)
 	}
 	if err := s.MarkRunCleanupRemoved(ctx, run.ID, now); err != nil {
@@ -333,7 +333,7 @@ func TestWrittenOnceRunRecordsAreNotDeletedWhileTheirRunStands(t *testing.T) {
 	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run.ID, Proof: Known(CleanupProofDefaultBranch), Examined: []string{"aaaa"}}); err != nil {
 		t.Fatalf("RecordRunCleanup: %v", err)
 	}
-	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/run", Holds: []string{"aaaa"}, Reason: "unproven"})
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/run", Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd"})
 	if err != nil {
 		t.Fatalf("RecordKeptWork: %v", err)
 	}
