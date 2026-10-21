@@ -8,20 +8,20 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/redact"
 )
 
 // commandGrace is what a configured command's output is given to arrive once
-// the command itself has ended, and what os/exec's WaitDelay is set to.
+// the command itself has ended, and the grace procgroup.Run is given.
 //
 // It is what two waits are measured against. The first is this file's own read
 // of the command's output after the command exited, which is where a
 // descendant still holding the pipe would otherwise hold the call for as long
-// as it lives. The second is os/exec's wait for the command to end after the
-// run was cancelled.
+// as it lives. The second is procgroup.Run's wait for the command to exit
+// once its group was killed, which procgroup.Run's doc owns.
 //
 // The first of those is a bound on unix and not everywhere. What ends that
 // wait is closing the read end, and os.File.Close undertakes to cancel a
@@ -42,15 +42,17 @@ import (
 // Both waits begin after the command exited or after the run was cancelled, so
 // this bounds neither how long the command itself runs nor what the command
 // leaves behind. commandSpec.timeout bounds how long the command runs, and
-// inGroup ends, on unix, every descendant that stayed in the command's
-// process group. A descendant that left the group, or any descendant on
-// another platform, is what the read's grace is still for: giving up on the
-// output closes this side of the pipe and nothing more, so such a child goes
-// on running with the descriptor it inherited.
+// procgroup.Run ends, on linux and darwin, every descendant that stayed in
+// the command's process group, before the command is reaped. A descendant
+// that left the group, or any descendant on another platform, is what the
+// read's grace is still for: giving up on the output closes this side of the
+// pipe and nothing more, so such a child goes on running with the descriptor
+// it inherited. procgroup's package comment owns those gaps.
 const commandGrace = 5 * time.Second
 
 // errCommandTimedOut is what a result carries when the command ran past
-// commandSpec.timeout and was ended, on unix with its process group.
+// commandSpec.timeout and was ended, on linux and darwin with its process
+// group.
 var errCommandTimedOut = errors.New("stages: the command ran past its time limit")
 
 // errOutputAbandoned is what a result carries when the command's output was
@@ -69,8 +71,9 @@ type commandSpec struct {
 	// dir is the directory it runs in.
 	dir string
 	// stdin is written to the command's standard input, which is then
-	// closed. Empty leaves standard input the null device, which is what
-	// every stage's command gets.
+	// closed, by procgroup.Run, which also closes it once the command has
+	// exited whatever was still unwritten. Empty leaves standard input the
+	// null device, which is what every stage's command gets.
 	stdin string
 	// record receives everything the command wrote, standard output and
 	// standard error interleaved as the command produced them, after redact
@@ -83,11 +86,12 @@ type commandSpec struct {
 	// stage's report. Zero keeps none.
 	projection int
 	// grace is how long the command's output is given to arrive after the
-	// command ended, and what os/exec's WaitDelay is set to. The stage passes
-	// commandGrace; a caller passing zero leaves both of the waits described
-	// there unbounded, so a descendant holding the pipe holds the call. It is
-	// a field rather than the constant read directly so a test can reach the
-	// give-up path without waiting the stage's grace out.
+	// command ended, and the grace procgroup.Run is given. The stage passes
+	// commandGrace. It must be positive: procgroup.Run refuses a grace that
+	// bounds nothing, and the command is then not started and the result
+	// carries that refusal. It is a field rather than the constant read
+	// directly so a test can reach the give-up path without waiting the
+	// stage's grace out.
 	grace time.Duration
 	// timeout, when positive, is how long the command may run before it is
 	// ended with its process group and the result carries
@@ -178,11 +182,11 @@ type commandResult struct {
 // exit status rather than one os/exec decides whether to report.
 //
 // What that does not buy is any hold over the command's descendants. That is
-// inGroup's: the command leads a process group of its own, which is ended
-// once the command has ended and before its output is waited for, so a child
-// still in the group no longer holds the pipe. A child that left the group
-// keeps the other side, and keeps running; commandGrace says what is and is
-// not bounded.
+// procgroup.Run's: the command leads a process group of its own, which is
+// ended once the command has exited and before it is reaped, so before its
+// output is waited for, and a child still in the group no longer holds the
+// pipe. A child that left the group keeps the other side, and keeps running;
+// commandGrace says what is and is not bounded.
 func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	tail := &tailWriter{limit: spec.projection}
 	out := io.MultiWriter(spec.record, tail)
@@ -212,56 +216,23 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	}
 	defer func() { _ = read.Close() }()
 
-	cmd := shellCommand(runCtx, spec.command, spec.dir)
-	endGroup := inGroup(cmd)
+	cmd := shellCommand(spec.command, spec.dir)
 	// Standard input is left unset, which os/exec reads as the null device, so
 	// a command that reads it reaches end of file at once rather than waiting
-	// for a person who is not there. A spec carrying stdin has it written and
-	// then closed, so that command too reaches end of file once it has read
-	// what it was given. Standard output and standard error are
-	// the one descriptor, so the two arrive interleaved as the command wrote
-	// them; os/exec passes the same file to both rather than duplicating it.
-	//
-	// Standard input is a pipe this call writes rather than a reader handed
-	// to os/exec, for the reason the output is: os/exec would copy a reader
-	// on a goroutine Wait then waits on, so a descendant holding the input
-	// unread could hold Wait for a further WaitDelay. Here the writer is
-	// abandoned by closing its end once the output is settled, the way the
-	// output's read is, so no wait of this call is measured against it.
-	var feed *stdinFeed
+	// for a person who is not there. A spec carrying stdin hands it to
+	// procgroup.Run as a reader, which Run copies through a pipe of its own
+	// and closes once written, and closes regardless once the command has
+	// exited, so no wait of this call is measured against a descendant
+	// holding the input unread.
 	if spec.stdin != "" {
-		inRead, inWrite, err := os.Pipe()
-		if err != nil {
-			_ = write.Close()
-			return settle(commandResult{code: -1,
-				err: fmt.Errorf("opening a pipe for the command's input: %w", err)})
-		}
-		cmd.Stdin = inRead
-		feed = &stdinFeed{file: inWrite}
-		defer func() { _ = inRead.Close() }()
-		defer feed.close()
+		cmd.Stdin = strings.NewReader(spec.stdin)
 	}
+	// Standard output and standard error are the one descriptor, so the two
+	// arrive interleaved as the command wrote them; os/exec passes the same
+	// file to both rather than duplicating it, and procgroup.Run passes a
+	// file through rather than copying it.
 	cmd.Stdout = write
 	cmd.Stderr = write
-	cmd.WaitDelay = spec.grace
-
-	if err := cmd.Start(); err != nil {
-		_ = write.Close()
-		return settle(commandResult{code: -1, err: err})
-	}
-	if feed != nil {
-		// The child holds its own copy of the read end. Closing this
-		// process's means a write no remaining process will read fails
-		// rather than blocking on a reader that is this process.
-		_ = cmd.Stdin.(*os.File).Close()
-		go feed.write(spec.stdin)
-	}
-	// os/exec does not close a descriptor a caller supplied, and the child now
-	// holds its own copy. Closing the parent's is what lets the read below
-	// reach end of file once the last holder is gone; leaving it open would
-	// hold every run for ever, since this process would itself be the writer
-	// the read is waiting on.
-	_ = write.Close()
 
 	copied := make(chan error, 1)
 	go func() {
@@ -280,16 +251,27 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 
 	// The copy is already draining while the command runs, so waiting on the
 	// command cannot deadlock against a command that outruns the pipe buffer.
-	waitErr := cmd.Wait()
+	// procgroup.Run ends the command's group, on the platforms it groups on,
+	// when the command exits and before it is reaped, and at once when runCtx
+	// ends, so a descendant still in the group stops holding the pipe before
+	// the read below is waited for.
+	runErr := procgroup.Run(runCtx, cmd, spec.grace)
+	// os/exec does not close a descriptor a caller supplied, and the child
+	// held its own copy. Closing the parent's is what lets the read reach end
+	// of file once the last holder is gone; leaving it open would hold every
+	// run for ever, since this process would itself be the writer the read is
+	// waiting on.
+	_ = write.Close()
+	if cmd.Process == nil {
+		<-copied
+		return settle(commandResult{code: -1, err: runErr})
+	}
 	// Whether this call's own bound ended the command is read now, when the
 	// command has ended, and not after the output is waited for: a descendant
 	// outside the group can hold the output past the bound, and the bound
 	// passing then says nothing about what ended the command. A deadline or
 	// cancellation of ctx's own is the caller's to read from ctx.
 	timedOut := spec.timeout > 0 && ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded)
-	// The group is ended before the output is waited for, so a descendant
-	// still in it stops holding the pipe and the read below reaches its end.
-	endGroup()
 
 	res := commandResult{code: -1, short: awaitOutput(copied, read, spec.grace)}
 	if cmd.ProcessState != nil {
@@ -297,7 +279,7 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 		res.code = cmd.ProcessState.ExitCode()
 	}
 	if !res.exited {
-		res.err = waitErr
+		res.err = runErr
 		if timedOut {
 			res.err = fmt.Errorf("%w of %s, so it was ended", errCommandTimedOut, spec.timeout)
 		}
@@ -305,30 +287,10 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	return settle(res)
 }
 
-// stdinFeed writes a command's standard input and then closes it, so the
-// command reaches end of file once it has read what it was given. close may
-// be called at any point and more than once: it ends a write still blocked
-// on a full pipe, which then fails, and the command sees end of file or a
-// broken pipe. Nothing waits for the write to return.
-type stdinFeed struct {
-	file *os.File
-	once sync.Once
-}
-
-func (f *stdinFeed) write(text string) {
-	_, _ = io.WriteString(f.file, text)
-	f.close()
-}
-
-func (f *stdinFeed) close() { f.once.Do(func() { _ = f.file.Close() }) }
-
 // awaitOutput waits for the read of the command's output to finish and returns
 // nil when it reached the end of it. It is called after the command has ended,
 // so anything still arriving is a descendant writing to the descriptor it
 // inherited.
-//
-// A grace of zero waits without bound, which is what a caller that named no
-// grace asked for.
 //
 // The grace expiring is not by itself what ends the wait: closing the read end
 // is, and this call then waits for the read to return before answering, so
@@ -338,9 +300,6 @@ func (f *stdinFeed) close() { f.once.Do(func() { _ = f.file.Close() }) }
 // where that close left a read in flight therefore leaves this call waiting on
 // it, and commandGrace says which platforms undertake to end it.
 func awaitOutput(copied <-chan error, read *os.File, grace time.Duration) error {
-	if grace <= 0 {
-		return <-copied
-	}
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
 	select {
