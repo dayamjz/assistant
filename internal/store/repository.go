@@ -291,6 +291,9 @@ func (s *Store) ForgetRepository(ctx context.Context, id string) (int, error) {
 			}
 			removed++
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM repository_removal WHERE repository_id = ?`, id); err != nil {
+			return fmt.Errorf("store: forgetting repository %s: %w", id, err)
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM repository WHERE id = ?`, id); err != nil {
 			return fmt.Errorf("store: forgetting repository %s: %w", id, err)
 		}
@@ -396,6 +399,53 @@ func (s *Store) RepositoryRemovable(ctx context.Context, id string) error {
 			return err
 		}
 		return refuseUnlessForgettable(ctx, tx, id, runIDs)
+	})
+}
+
+// ReserveRepositoryRemoval is eject's preflight when it means to act: it
+// asks refuseUnlessForgettable and, in the same transaction, reserves the
+// repository's removal, so RecordKeptWork refuses an entry for it from then
+// on until ForgetRepository removes the reservation with the repository or
+// ReleaseRepositoryRemoval clears it. A kept work entry and the reservation
+// therefore have exactly one loser in either order: an entry committed
+// first refuses the reservation with *KeptWorkOpenError, and a reservation
+// committed first refuses the entry with ErrRepositoryBeingRemoved. It
+// returns the same refusals RepositoryRemovable does, reserves again
+// harmlessly, and answers nil with nothing written for a repository that
+// is not there.
+func (s *Store) ReserveRepositoryRemoval(ctx context.Context, id string) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		var one int
+		switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM repository WHERE id = ?`, id).Scan(&one); {
+		case isNoRows(err):
+			return nil
+		case err != nil:
+			return fmt.Errorf("store: reserving the removal of repository %s: %w", id, err)
+		}
+		runIDs, err := repositoryRunIDs(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if err := refuseUnlessForgettable(ctx, tx, id, runIDs); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO repository_removal (repository_id, reserved_at) VALUES (?, ?)
+			ON CONFLICT (repository_id) DO NOTHING`, id, encodeTime(nowUTC())); err != nil {
+			return fmt.Errorf("store: reserving the removal of repository %s: %w", id, err)
+		}
+		return nil
+	})
+}
+
+// ReleaseRepositoryRemoval clears a reservation ReserveRepositoryRemoval
+// wrote, for an eject that did not complete. Clearing one that is not there
+// is not an error.
+func (s *Store) ReleaseRepositoryRemoval(ctx context.Context, id string) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM repository_removal WHERE repository_id = ?`, id); err != nil {
+			return fmt.Errorf("store: releasing the removal of repository %s: %w", id, err)
+		}
+		return nil
 	})
 }
 

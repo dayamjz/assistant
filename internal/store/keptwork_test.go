@@ -248,5 +248,68 @@ func TestARepositoryWithOpenKeptWorkIsNotForgotten(t *testing.T) {
 	if _, err := s.KeptWorkEntry(ctx, entry.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("the closed entry survived the forgetting: %v", err)
 	}
+}
 
+// A kept work entry and eject's reserved preflight have exactly one loser
+// in either order. An entry committed first refuses the reservation with the
+// typed refusal naming it. A reservation committed first refuses the entry
+// with ErrRepositoryBeingRemoved and writes nothing, and once the
+// reservation is released the same entry is recorded. A reserved repository
+// is forgotten with its reservation.
+func TestAKeptWorkEntryAndARemovalReservationHaveExactlyOneLoser(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	finished := func(s *Store) Run {
+		run := seedRun(t, s)
+		if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunPending}, RunRunning); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunRunning}, RunFailed); err != nil {
+			t.Fatal(err)
+		}
+		return run
+	}
+	kept := func(run Run) KeptCopy {
+		return KeptCopy{RunID: run.ID, CopyPath: "/w/" + run.ID, Holds: []string{"aaaa"}, Reason: "unproven"}
+	}
+
+	entryFirst := openStore(t)
+	run := finished(entryFirst)
+	if _, _, err := entryFirst.RecordKeptWork(ctx, kept(run)); err != nil {
+		t.Fatal(err)
+	}
+	var open *KeptWorkOpenError
+	if err := entryFirst.ReserveRepositoryRemoval(ctx, run.RepositoryID); !errors.As(err, &open) {
+		t.Fatalf("reserving the removal after the entry = %v, want a KeptWorkOpenError", err)
+	}
+
+	reservedFirst := openStore(t)
+	run = finished(reservedFirst)
+	if err := reservedFirst.ReserveRepositoryRemoval(ctx, run.RepositoryID); err != nil {
+		t.Fatalf("ReserveRepositoryRemoval: %v", err)
+	}
+	if _, _, err := reservedFirst.RecordKeptWork(ctx, kept(run)); !errors.Is(err, ErrRepositoryBeingRemoved) {
+		t.Fatalf("recording kept work after the reservation = %v, want ErrRepositoryBeingRemoved", err)
+	}
+	if listed, err := reservedFirst.OpenKeptWork(ctx); err != nil || len(listed) != 0 {
+		t.Fatalf("the refused entry was written: %+v, %v", listed, err)
+	}
+	if err := reservedFirst.ReleaseRepositoryRemoval(ctx, run.RepositoryID); err != nil {
+		t.Fatal(err)
+	}
+	if _, wrote, err := reservedFirst.RecordKeptWork(ctx, kept(run)); err != nil || !wrote {
+		t.Fatalf("recording kept work once the reservation was released = %v, wrote %v", err, wrote)
+	}
+
+	forgotten := openStore(t)
+	run = finished(forgotten)
+	if err := forgotten.ReserveRepositoryRemoval(ctx, run.RepositoryID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := forgotten.ForgetRepository(ctx, run.RepositoryID); err != nil {
+		t.Fatalf("forgetting a reserved repository = %v", err)
+	}
+	if n := tableRows(t, forgotten, "repository_removal"); n != 0 {
+		t.Fatalf("the reservation outlived its repository: %d rows", n)
+	}
 }

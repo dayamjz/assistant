@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/custody"
 	"github.com/dayamjz/assistant/internal/gate"
@@ -966,6 +967,66 @@ func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
 	}
 	if _, err := records.KeptWorkEntry(ctx, entry.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the closed entry survived the eject: %v", err)
+	}
+}
+
+// The window between eject's preflight and its removal of the gate, driven
+// deterministically: a kept work entry a finishing run's cleanup would write
+// is written inside that window, through the store's own accessor, by the
+// seam eject runs there. The reservation the preflight committed refuses it
+// with store.ErrRepositoryBeingRemoved, nothing is recorded, and the eject
+// completes, so no entry is ever left open over a gate that is gone. It
+// changes a package variable, so it does not run in parallel.
+func TestAKeptWorkEntryWrittenDuringEjectIsRefused(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+
+	created := run(t, h, subject, "--json", "init")
+	if created.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", created.code, created.stdout, created.stderr)
+	}
+	var built machine.Init
+	if err := json.Unmarshal([]byte(created.stdout), &built); err != nil {
+		t.Fatalf("init does not decode: %v\n%s", err, created.stdout)
+	}
+	standingOnChange(t, subject, "a-change")
+	started := run(t, h, subject, "--json", "--intent", "a change held at its first stage")
+	if started.code != machine.ExitOK {
+		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
+	}
+	id := decodeRun(t, started.stdout).Record.ID
+	if got := run(t, h, subject, "--json", "--cancel"); got.code != machine.ExitOK {
+		t.Fatalf("ending the run exited %s:\n%s", got.code, got.stdout)
+	}
+
+	records := openStore(t, h)
+	defer func() { _ = records.Close() }()
+	ctx := t.Context()
+	var during error
+	inWindow := false
+	cli.BetweenEjectPreflightAndRemoval(t, func() {
+		inWindow = true
+		_, _, during = records.RecordKeptWork(ctx, store.KeptCopy{RunID: id,
+			CopyPath: filepath.Join(h.Root(), "worktrees", "kept-during-eject"), Holds: []string{"0123abcd"}, Reason: "unproven"})
+	})
+	ejected := run(t, h, subject, "eject", "--confirm")
+	if !inWindow {
+		t.Fatal("eject never reached the window between its preflight and the gate's removal")
+	}
+	if !errors.Is(during, store.ErrRepositoryBeingRemoved) {
+		t.Fatalf("the entry written inside the eject's window = %v, want ErrRepositoryBeingRemoved", during)
+	}
+	if ejected.code != machine.ExitOK {
+		t.Fatalf("eject --confirm exited %s:\n%s%s", ejected.code, ejected.stdout, ejected.stderr)
+	}
+	if _, err := os.Stat(built.Gate.Repository); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the gate at %s survived the eject: %v", built.Gate.Repository, err)
+	}
+	if open, err := records.OpenKeptWork(ctx); err != nil || len(open) != 0 {
+		t.Fatalf("kept work was left open over the removed gate: %+v, %v", open, err)
 	}
 }
 

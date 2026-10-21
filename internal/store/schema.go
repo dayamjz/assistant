@@ -2117,6 +2117,18 @@ var schema = []migration{
 				BEGIN
 					SELECT RAISE(ABORT, 'store: when a kept work entry last surfaced only moves forward');
 				END`,
+			// A repository's removal reserved by eject's preflight, in the
+			// transaction that found it forgettable: RecordKeptWork refuses an
+			// entry whose project has a row here, inside its own
+			// transaction, and the preflight refuses a repository with an
+			// open entry inside its, so between a kept copy's entry and an
+			// eject exactly one of the two writes loses in either order.
+			// ForgetRepository removes the row with the repository, and an
+			// eject that does not complete releases it.
+			`CREATE TABLE repository_removal (
+				repository_id TEXT PRIMARY KEY REFERENCES repository(id),
+				reserved_at   TEXT NOT NULL
+			) STRICT`,
 			`CREATE TRIGGER kept_work_is_not_removed
 				BEFORE DELETE ON kept_work
 				WHEN OLD.task_id IS NOT NULL OR (OLD.answer IS NULL AND OLD.closure IS NULL)

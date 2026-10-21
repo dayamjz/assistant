@@ -364,6 +364,12 @@ type originAmbiguous struct{}
 // can read them with git remote -v.
 func (originAmbiguous) Error() string { return machine.PhraseInitOriginAmbiguous.String() }
 
+// betweenEjectPreflightAndRemoval runs after eject has reserved the
+// repository's removal and before it touches the gate. It is nil in
+// production and set only by this package's tests, which use it to commit a
+// kept work entry inside that window.
+var betweenEjectPreflightAndRemoval func()
+
 // eject removes the gate and its records.
 //
 // It prints what it would remove and does nothing until it is told again with
@@ -407,10 +413,18 @@ func eject(ctx context.Context, in *invocation) (any, error) {
 	if !confirm {
 		return nil, ejectPlan(binding.GateID, working)
 	}
-	if err := records.RepositoryRemovable(ctx, binding.GateID); err != nil {
+	// The preflight reserves the removal in the transaction that found the
+	// repository forgettable, so a kept work entry a finishing run or a
+	// recovery records from here on is refused rather than committed under
+	// a gate about to go (internal/store's ReserveRepositoryRemoval).
+	if err := records.ReserveRepositoryRemoval(ctx, binding.GateID); err != nil {
 		return nil, err
 	}
+	if betweenEjectPreflightAndRemoval != nil {
+		betweenEjectPreflightAndRemoval()
+	}
 	if err := gate.Remove(ctx, gate.Spec{Home: in.home.Root(), WorkingPath: working}, gate.WithIndex(records)); err != nil {
+		_ = records.ReleaseRepositoryRemoval(ctx, binding.GateID)
 		return nil, err
 	}
 	removed, err := records.ForgetRepository(ctx, binding.GateID)

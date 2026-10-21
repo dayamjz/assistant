@@ -479,7 +479,11 @@ entry's copy, whose it was and the commits it holds. Until answering kept
 work ships (#411 part 2), the way past it is the work landing: once its
 commits are on the upstream branch or in the default branch, the next
 service start removes the copy on that proof and closes the entry. Part 2's
-discard will be your other way.
+discard will be your other way. The check and a reservation of the
+removal are one write, so a run that finishes while the eject is under way
+cannot record kept work under a gate about to go: its copy is kept, the
+service log says no entry was recorded because the repository is being
+removed, and the eject completes.
 
 This build records and surfaces kept work and does not yet hold dispatch:
 a new task in a project with an open entry still dispatches. Answering an

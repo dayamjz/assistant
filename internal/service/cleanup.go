@@ -105,6 +105,9 @@ func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
 	}
 	got, err := s.cleaner.Keep(ctx, kept)
 	switch {
+	case errors.Is(err, store.ErrRepositoryBeingRemoved):
+		s.log.Printf("the isolated copy of %s is kept and no kept work entry was recorded, because its repository is being "+
+			"removed by an eject that was confirmed first: %v", owner, err)
 	case err != nil:
 		s.log.Printf("the isolated copy of %s is kept and its kept work entry could not be recorded: %v", owner, err)
 	case got.Recorded:
