@@ -118,6 +118,25 @@ func blockerOf(r refused) Blocker {
 	return Blocker{Identity: r.id, UIDs: r.uids, Name: name, NameErr: err}
 }
 
+// BlockerFor is the Blocker a sweep records for the process id names when
+// that process keeps the sweep from clearing, read the way the sweep reads
+// it: readRefused's reads, the user identifiers and then a zero signal and
+// the identity again, and then blockerOf's command name. It decides
+// nothing: no working directory is read and no carve-out is applied, so it
+// does not say whether a sweep would block on the process, only what a
+// Blocker for it carries. present is false, with no error, when the
+// process has exited; any read readRefused fails on is the error. Its
+// consumer is internal/service's test of how a refused sweep is
+// attributed, which builds a blocker from it rather than writing one
+// without the user identifiers a real one always carries.
+func BlockerFor(id Identity) (Blocker, bool, error) {
+	r, present, err := readRefused(id)
+	if err != nil || !present {
+		return Blocker{}, present, err
+	}
+	return blockerOf(r), true, nil
+}
+
 // viewer is this process as the classification of a refused process sees
 // it: its real and effective user identifiers, and the identities on its
 // parent chain.

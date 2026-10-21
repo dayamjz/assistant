@@ -358,3 +358,47 @@ func TestABlockerWhoseNameCannotBeReadIsStillReported(t *testing.T) {
 		t.Fatalf("the blocker for an ended process reads %+v (%s), want the name unreadable", b, b)
 	}
 }
+
+// TestBlockerForIsTheBlockerTheSweepRecords holds agents.BlockerFor to the
+// listing: a real process of this test's user, detached in a copy and
+// refused through a real refusal carried over, is listed blocking by the
+// sweep, and BlockerFor of the same identity is equal to that blocker,
+// user identifiers and name included. Once the process has exited,
+// BlockerFor answers not present rather than a blocker, as the listing
+// skips a process that exited during its reads.
+func TestBlockerForIsTheBlockerTheSweepRecords(t *testing.T) {
+	requiresSweep(t)
+	refusal := realRefusal(t)
+	h, _ := sweepHome(t, sweepBase(t), "home")
+	copyDir := makeTaskCopy(t, h)
+	d := startDetached(t, copyDir, false)
+
+	r, err := agents.SweepRefusing(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir, func(pid int) bool { return pid == d.id.PID }, refusal)
+	if err != nil {
+		t.Fatalf("sweeping %s: %v", copyDir, err)
+	}
+	i := slices.IndexFunc(r.UnreadableBlocking, func(b agents.Blocker) bool { return b.Identity == d.id })
+	if i < 0 {
+		t.Fatalf("the sweep did %s, want %s blocking", r, d.id)
+	}
+	listed := r.UnreadableBlocking[i]
+	got, present, err := agents.BlockerFor(d.id)
+	if err != nil || !present {
+		t.Fatalf("BlockerFor(%s): present %v, %v", d.id, present, err)
+	}
+	if got.Identity != listed.Identity || !slices.Equal(got.UIDs, listed.UIDs) || got.Name != listed.Name || (got.NameErr == nil) != (listed.NameErr == nil) {
+		t.Fatalf("BlockerFor(%s) is %s, want the blocker the sweep listed, %s", d.id, got, listed)
+	}
+	if len(got.UIDs) == 0 {
+		t.Fatalf("BlockerFor(%s) carries no user identifiers: %s", d.id, got)
+	}
+
+	if err := syscall.Kill(d.id.PID, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	<-d.ended
+	waitEnded(t, d, "being killed")
+	if b, present, err := agents.BlockerFor(d.id); present || err != nil {
+		t.Fatalf("BlockerFor of an exited process is %s, present %v, %v, want not present", b, present, err)
+	}
+}
