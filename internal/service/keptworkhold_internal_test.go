@@ -115,3 +115,49 @@ func TestAnEntryClosedWhileAHeldDispatchHasTheSlotStillDispatchesTheTask(t *test
 		t.Fatalf("after the entry closed the task has attempts %+v, %v; want the pass its release asked for to have dispatched it", attempts, err)
 	}
 }
+
+// A launch whose claim committed and whose worker never started leaves its
+// task held like a fresh one. Attempt 1 is dispatched and its launch claimed
+// with no session recorded, the record a provider that refused the process
+// leaves; kept work is then recorded in the project, and a service over the
+// same records, which is what the next start is, dispatches nothing: the
+// task waits and no attempt 2 is claimed. Once the entry is answered the
+// same pass dispatches attempt 2 and its worker starts, which is the
+// positive control. Without the hold reading a recorded session alone, the
+// claim exempts the task and attempt 2's worker starts while the entry is
+// open.
+func TestALaunchClaimedWhoseWorkerNeverStartedIsHeldAtTheNextDispatch(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	ctx := t.Context()
+	subject := newLaunchSubject(t, workerStandIn(t))
+	subject.service.cfg.Agent = []string{subject.agent.Runner().Name()}
+	subject.service.stopCtx = ctx
+	d, err := subject.service.dispatchTask(ctx, subject.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	if err := subject.records.ClaimAttemptLaunch(ctx, subject.task, d.attempt); err != nil {
+		t.Fatalf("claiming attempt 1's launch: %v", err)
+	}
+	entry := keepWorkIn(t, subject.records)
+
+	// The next start: a service holding no slot for the task.
+	subject.service.mu.Lock()
+	delete(subject.service.isolated, subject.task)
+	subject.service.mu.Unlock()
+	subject.service.dispatchDue(ctx)
+	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
+	if err != nil || len(attempts) != 1 || attempts[0].SessionRef.IsKnown() {
+		t.Fatalf("with the entry open the task has attempts %+v, %v; want attempt 1 alone, with no worker", attempts, err)
+	}
+
+	if _, err := subject.records.AnswerKeptWork(ctx, entry.ID, store.KeptLand, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	subject.service.dispatchDue(ctx)
+	attempts, err = subject.records.TaskAttempts(ctx, subject.task)
+	if err != nil || len(attempts) != 2 || !attempts[1].SessionRef.IsKnown() {
+		t.Fatalf("once the entry was answered the task has attempts %+v, %v; want attempt 2 with its worker started", attempts, err)
+	}
+}

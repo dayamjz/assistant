@@ -16,13 +16,15 @@ import (
 // dispatch meets cannot disagree about what holds it.
 //
 // A task is held when all three are true in one read: it names a project
-// (its repository), no attempt of it has claimed a worker launch or
-// recorded a terminal session, and an entry of that project is open
-// (neither answered nor closed). The second is what makes it a new task: a
-// task whose worker launch was claimed once is work already under way, which
-// PRD section 6 says the hold does not interrupt, so neither its relaunch,
-// nor a fallback to its backup worker, nor a dispatch retried after a
-// launch is held.
+// (its repository), no attempt of it has recorded a terminal session, and an
+// entry of that project is open (neither answered nor closed). The second is
+// what makes it a new task. A recorded session is the one fact here that a
+// worker started: SetAttemptSession writes it only after the process did,
+// so a task with one is work already under way, which PRD section 6 says the
+// hold does not interrupt, and neither its relaunch nor a fallback after its
+// worker ran is held. A launch claim alone proves nothing started: a claim
+// whose process the provider then refused, or whose service stopped before
+// the session was recorded, leaves its task held like a fresh one.
 //
 // The hold is checked at both of the moments new work begins, each inside
 // the transaction that records it: BeginDispatchAttempt, the attempt claim a
@@ -31,8 +33,9 @@ import (
 // recorded after a dispatch claimed its attempt therefore still stops the
 // worker from starting. What neither closes is the instant between the
 // launch claim's commit and the process start: an entry recorded there does
-// not stop that launch, which by the record had already begun when the
-// entry was written. An entry naming no project, an investigation's started without a
+// not stop that launch. Once its session is recorded the task is work under
+// way; if the process never starts, the task is held again at its next
+// dispatch. An entry naming no project, an investigation's started without a
 // repository, holds no task, since kept work in one project never holds
 // another and that entry is in none.
 //
@@ -135,8 +138,10 @@ var ErrAttemptLaunchClaimed = errors.New("store: the attempt's launch is already
 // written. A caller starts the worker only after this returns nil, and makes
 // no further write that could refuse between the two. An attempt already
 // claimed is ErrAttemptLaunchClaimed and one that does not exist is
-// ErrNotFound, both wrapped. A task launched before is never held, so a
-// relaunch's or a fallback's claim is refused only for being claimed twice.
+// ErrNotFound, both wrapped. A task whose worker started before, by a
+// recorded session, is never held, so a relaunch's claim is refused only for
+// being claimed twice. The claim is a record that a launch was begun, and is
+// never read as proof that a worker started.
 func (s *Store) ClaimAttemptLaunch(ctx context.Context, taskID string, sequence int64) error {
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		var claimed Optional[string]
@@ -180,7 +185,7 @@ func keptWorkHoldingTx(ctx context.Context, tx *sql.Tx, taskID string) ([]KeptWo
 	}
 	var launched int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM task_attempt WHERE task_id = ? AND (session_ref IS NOT NULL OR launch_claimed_at IS NOT NULL)`,
+		`SELECT COUNT(*) FROM task_attempt WHERE task_id = ? AND session_ref IS NOT NULL`,
 		taskID).Scan(&launched); err != nil {
 		return nil, project, err
 	}

@@ -47,8 +47,9 @@ paths: ["internal/store/**"]
   run of a reserved repository (`ErrRepositoryBeingRemoved`), and nothing
   refuses a kept work entry over a reservation. internal/service releases a
   reservation whose owner is gone when it opens. `keptworkhold.go` is the
-  dispatch hold's one predicate: a task naming a project, whose launch was
-  never claimed, whose project has an open entry; `BeginDispatchAttempt`
+  dispatch hold's one predicate: a task naming a project, none of whose
+  attempts recorded a session (a claim alone proves no worker started),
+  whose project has an open entry; `BeginDispatchAttempt`
   and `ClaimAttemptLaunch` (the last write before a worker starts) refuse
   it with `*DispatchHeldError` in their own transactions, and
   `BeginTaskAttempt`, the relaunch claim, is never held.

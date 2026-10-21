@@ -143,10 +143,10 @@ import (
 // the copy is cut or asserted is read by that claim, and the worker is not
 // started. Each refusal is a *store.DispatchHeldError, and nothing is written
 // for it. The one window left is between the launch claim's commit and the
-// process start, where an entry recorded does not stop that launch; by the
-// record the launch had begun before the entry was written, which is work
-// already under way, and the claim makes the task launched for every later
-// read of the hold, a relaunch's and a fallback's included. The task keeps resolving Dispatched from its history, because nothing
+// process start, where an entry recorded does not stop that launch. Only a
+// recorded session, written after the process started, makes the task work
+// under way for later reads of the hold; a launch whose process never
+// started leaves the task held like a fresh one at its next dispatch. The task keeps resolving Dispatched from its history, because nothing
 // here appends an entry for the wait: the wait is read off the kept work
 // record every time (P8), which taskView composes into the task's answer as
 // machine.Task.KeptWork.

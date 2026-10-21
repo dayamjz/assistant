@@ -114,11 +114,14 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 }
 
 // The launch claim asks the same hold in its own transaction: a held task's
-// claim is refused with the typed refusal and writes nothing, an unheld
-// task's is written once and a second is refused, and a task whose launch
-// was claimed is work under way, which no entry recorded afterwards holds,
-// at its next dispatch claim or its next launch claim.
-func TestTheLaunchClaimIsHeldByKeptWorkAndMakesItsTaskWorkUnderWay(t *testing.T) {
+// claim is refused with the typed refusal and writes nothing, and an unheld
+// task's is written once and a second is refused. A claim alone is not work
+// under way: a task whose launch was claimed and whose worker never started,
+// with no session recorded, is held by an entry recorded afterwards at its
+// next dispatch claim and its next launch claim, which is the sequence of a
+// provider that refused the process after the claim. Only a recorded session
+// exempts a task from then on.
+func TestALaunchClaimWithNoStartedWorkerLeavesItsTaskHeld(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
 	ctx := context.Background()
@@ -126,8 +129,10 @@ func TestTheLaunchClaimIsHeldByKeptWorkAndMakesItsTaskWorkUnderWay(t *testing.T)
 	run := seedRun(t, s)
 	keptHoldTask(t, s, "taskclaimeda", "repo-1", "one")
 	keptHoldTask(t, s, "taskheldlnch", "repo-1", "two")
+	keptHoldTask(t, s, "taskstarteda", "repo-1", "three")
 	claimed := beginAttempt(t, s, "taskclaimeda", 0)
 	held := beginAttempt(t, s, "taskheldlnch", 0)
+	started := beginAttempt(t, s, "taskstarteda", 0)
 	if err := s.ClaimAttemptLaunch(ctx, "taskclaimeda", claimed.Sequence); err != nil {
 		t.Fatalf("an unheld launch claim: %v", err)
 	}
@@ -136,6 +141,12 @@ func TestTheLaunchClaimIsHeldByKeptWorkAndMakesItsTaskWorkUnderWay(t *testing.T)
 	}
 	if err := s.ClaimAttemptLaunch(ctx, "taskclaimeda", 9); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a claim of an attempt that does not exist = %v; want ErrNotFound", err)
+	}
+	if err := s.ClaimAttemptLaunch(ctx, "taskstarteda", started.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAttemptSession(ctx, "taskstarteda", started.Sequence, "ref-started"); err != nil {
+		t.Fatal(err)
 	}
 
 	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/repo-1/run-1",
@@ -148,14 +159,23 @@ func TestTheLaunchClaimIsHeldByKeptWorkAndMakesItsTaskWorkUnderWay(t *testing.T)
 	if err := s.ClaimAttemptLaunch(ctx, "taskheldlnch", held.Sequence); !errors.Is(err, ErrDispatchHeld) {
 		t.Fatalf("the refused claim wrote something: a second ask = %v; want ErrDispatchHeld again", err)
 	}
-	if got, err := s.KeptWorkHolding(ctx, "taskclaimeda"); err != nil || len(got) != 0 {
-		t.Fatalf("a task whose launch was claimed is held by %+v, %v; want nothing", got, err)
+
+	// The claimed launch whose worker never started is held like a fresh task.
+	if got, err := s.KeptWorkHolding(ctx, "taskclaimeda"); err != nil || len(got) != 1 {
+		t.Fatalf("a task whose launch was claimed and never started is held by %+v, %v; want the entry", got, err)
 	}
-	next, err := s.BeginDispatchAttempt(ctx, "taskclaimeda", claimed.Sequence)
+	if _, err := s.BeginDispatchAttempt(ctx, "taskclaimeda", claimed.Sequence); !errors.Is(err, ErrDispatchHeld) {
+		t.Fatalf("its next dispatch = %v; want ErrDispatchHeld", err)
+	}
+	// A task whose worker started is work under way.
+	if got, err := s.KeptWorkHolding(ctx, "taskstarteda"); err != nil || len(got) != 0 {
+		t.Fatalf("a task whose worker started is held by %+v, %v; want nothing", got, err)
+	}
+	next, err := s.BeginDispatchAttempt(ctx, "taskstarteda", started.Sequence)
 	if err != nil {
-		t.Fatalf("the next dispatch of a task whose launch was claimed: %v", err)
+		t.Fatalf("the next attempt of a task whose worker started: %v", err)
 	}
-	if err := s.ClaimAttemptLaunch(ctx, "taskclaimeda", next.Sequence); err != nil {
-		t.Fatalf("the next launch of a task whose launch was claimed: %v", err)
+	if err := s.ClaimAttemptLaunch(ctx, "taskstarteda", next.Sequence); err != nil {
+		t.Fatalf("the next launch of a task whose worker started: %v", err)
 	}
 }

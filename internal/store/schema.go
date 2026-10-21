@@ -2153,10 +2153,10 @@ var schema = []migration{
 			// When the attempt's worker launch was claimed, written once by
 			// ClaimAttemptLaunch immediately before the process is started,
 			// in the transaction that found the task not held by kept work.
-			// The record precedes the process, on task_attempt's terms, so a
-			// launch whose claim stands is work under way by the record's
-			// lights and the dispatch hold does not apply to its task again.
-			// NULL is no launch claimed: a row written before this column,
+			// The record precedes the process, on task_attempt's terms, and
+			// says a launch was begun, never that a worker started: the
+			// session reference is that fact, and the dispatch hold reads it
+			// alone. NULL is no launch claimed: a row written before this column,
 			// or an attempt whose launch never reached its claim.
 			`ALTER TABLE task_attempt ADD COLUMN launch_claimed_at TEXT`,
 			`CREATE TRIGGER task_attempt_launch_is_claimed_once
