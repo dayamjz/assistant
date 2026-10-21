@@ -44,10 +44,12 @@ paths: ["internal/tasks/**"]
   removes the copy only on that digest, the one use of
   `vcs.RemoveWorktreeDiscardingChanges`, behind a person's answer and no
   proof.
-- Intake writes the instructions file whole, `writeWhole` (a file of its
-  own, then a rename), so a file under the name is never partial, and
-  `CompleteIntake` is intake's second step for a row a stop left without
-  its file; `InterruptAfterRecordForTest` is the seam between the two.
+- Intake writes the instructions file whole and never through a link,
+  `writeWhole` (an exclusively created partial of a fresh name, then a
+  rename; a path standing as a link is `*InstructionsLinkError`), so a file
+  under the name is never partial, and `CompleteIntake` is intake's second
+  step for a row a stop left without its file, removing stale partials as
+  names; `InterruptAfterRecordForTest` is the seam between the two.
 
 Read `doc.go` before changing the floor or the clear condition, and for the
 residual gaps; read `promote.go`'s opening comment and `doc.go` before

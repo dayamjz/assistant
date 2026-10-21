@@ -481,7 +481,7 @@ func TestIntakeWritesItsInstructionsWholeAndCompleteIntakeFillsAGap(t *testing.T
 	// A stop between the partial file's write and its rename: the partial
 	// file stands under its one fixed name and nothing under the
 	// instructions' name.
-	if err := os.WriteFile(partialOf(path), []byte("Do the wo"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), partialPrefix(path)+"-stopped"), []byte("Do the wo"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.queue.InterruptAfterRecordForTest(t, nil); err != nil {
@@ -494,17 +494,17 @@ func TestIntakeWritesItsInstructionsWholeAndCompleteIntakeFillsAGap(t *testing.T
 	if text, err := os.ReadFile(path); err != nil || string(text) != "Do the work.\n" {
 		t.Fatalf("the completed file reads %q, %v", text, err)
 	}
-	if _, err := os.Stat(partialOf(path)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), partialPrefix(path)+"-stopped")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("CompleteIntake left the partial file beside the instructions: %v", err)
 	}
 	// A partial file a stop left beside a whole one is removed too.
-	if err := os.WriteFile(partialOf(path), []byte("stale"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(filepath.Dir(path), partialPrefix(path)+"-stopped"), []byte("stale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.queue.CompleteIntake(ctx, id, "Do the work.\n"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(partialOf(path)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(filepath.Dir(path), partialPrefix(path)+"-stopped")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("CompleteIntake left a stale partial file beside a whole one: %v", err)
 	}
 	if _, err := f.queue.CompleteIntake(ctx, id, "something else\n"); err != nil {
@@ -515,5 +515,101 @@ func TestIntakeWritesItsInstructionsWholeAndCompleteIntakeFillsAGap(t *testing.T
 	}
 	if _, err := f.queue.CompleteIntake(ctx, "tasknobodyaa", "x"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("CompleteIntake of a task with no row = %v; want ErrNotFound", err)
+	}
+}
+
+// Intake's file writes never go through a link. The reviewer's case: a row
+// with no instructions file and a link at the old fixed partial name to a
+// file holding uncommitted work; CompleteIntake writes its own file under
+// the instructions' name, removes the link as a name, and leaves the
+// target's contents and the target itself untouched. A regular partial file
+// planted beside is removed. And an instructions file that stands as a link
+// is refused with the typed error, its target untouched and nothing renamed
+// onto it. Without the exclusive create the link's target is overwritten;
+// without the link check the linked instructions are accepted.
+func TestIntakeWritesNeverGoThroughALink(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	f := newFixture(t)
+	ctx := context.Background()
+	stopped := errors.New("the service stopped inside the intake")
+	if err := f.queue.InterruptAfterRecordForTest(t, func() error { return stopped }); err != nil {
+		t.Fatal(err)
+	}
+	req := delivery("")
+	req.Branch = "task/linked"
+	if _, err := f.queue.Create(ctx, req); !errors.Is(err, stopped) {
+		t.Fatalf("the interrupted intake = %v; want the stop", err)
+	}
+	if err := f.queue.InterruptAfterRecordForTest(t, nil); err != nil {
+		t.Fatal(err)
+	}
+	all, err := f.store.Tasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	for _, task := range all {
+		if task.Branch.Or("") == "task/linked" {
+			id = task.ID
+		}
+	}
+	path, err := f.home.TaskInstructions(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	work := filepath.Join(t.TempDir(), "uncommitted.txt")
+	if err := os.WriteFile(work, []byte("uncommitted work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	planted := filepath.Join(dir, "."+filepath.Base(path)+".partial")
+	if err := os.Symlink(work, planted); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dir, "."+filepath.Base(path)+".partial-stale")
+	if err := os.WriteFile(stale, []byte("half"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.queue.CompleteIntake(ctx, id, "Do the work.\n"); err != nil {
+		t.Fatalf("CompleteIntake: %v", err)
+	}
+	if text, err := os.ReadFile(work); err != nil || string(text) != "uncommitted work\n" {
+		t.Fatalf("the link's target reads %q, %v; want it untouched", text, err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		t.Fatalf("the instructions stand as %v, %v; want a file of their own", info, err)
+	}
+	if text, err := os.ReadFile(path); err != nil || string(text) != "Do the work.\n" {
+		t.Fatalf("the instructions read %q, %v", text, err)
+	}
+	for _, p := range []string{planted, stale} {
+		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s was left beside the instructions: %v", filepath.Base(p), err)
+		}
+	}
+
+	// The instructions file itself a link: refused, the target untouched.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(work, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.queue.CompleteIntake(ctx, id, "Do the work.\n"); !errors.Is(err, ErrInstructionsLink) {
+		t.Fatalf("CompleteIntake over a linked instructions file = %v; want ErrInstructionsLink", err)
+	}
+	if err := writeWhole(path, []byte("through the link\n")); !errors.Is(err, ErrInstructionsLink) {
+		t.Fatalf("writeWhole over a linked path = %v; want ErrInstructionsLink", err)
+	}
+	if text, err := os.ReadFile(work); err != nil || string(text) != "uncommitted work\n" {
+		t.Fatalf("the link's target reads %q, %v; want it untouched", text, err)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the refused write replaced the link: %v, %v", info, err)
 	}
 }
