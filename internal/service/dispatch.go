@@ -132,26 +132,38 @@ import (
 // # Kept work holds a new task's dispatch
 //
 // PRD section 6's "kept work is answered before new task work starts": while
-// the task's project has an open kept work entry, a task never launched is
-// not dispatched. internal/store owns which entries hold which task
-// (keptworkhold.go), and this file asks it twice: once through
-// KeptWorkHolding right after the task's resolution is read, before any
-// sweep, clone or claim, and again inside the claim itself, which is
-// store.BeginDispatchAttempt deciding in the transaction that would write the
-// attempt, so an entry recorded between the two still holds the dispatch.
-// Either refusal is a *store.DispatchHeldError, and nothing is written for
-// it. The task keeps resolving Dispatched from its history, because nothing
+// the task's project has an open kept work entry, a task whose worker launch
+// was never claimed is not dispatched or launched. internal/store owns which
+// entries hold which task (keptworkhold.go), and three places ask it: this
+// file through KeptWorkHolding right after the task's resolution is read,
+// before any sweep, clone or claim; store.BeginDispatchAttempt inside the
+// attempt claim; and store.ClaimAttemptLaunch inside the launch claim
+// launch.go makes as its last write before the worker's process starts. The
+// last is what binds the hold to the launch itself: an entry recorded while
+// the copy is cut or asserted is read by that claim, and the worker is not
+// started. Each refusal is a *store.DispatchHeldError, and nothing is written
+// for it. The one window left is between the launch claim's commit and the
+// process start, where an entry recorded does not stop that launch; by the
+// record the launch had begun before the entry was written, which is work
+// already under way, and the claim makes the task launched for every later
+// read of the hold, a relaunch's and a fallback's included. The task keeps resolving Dispatched from its history, because nothing
 // here appends an entry for the wait: the wait is read off the kept work
 // record every time (P8), which taskView composes into the task's answer as
 // machine.Task.KeptWork.
 //
-// A held dispatch gives its slot back rather than settling it, because the
-// slot is otherwise kept for the service's lifetime and a held task has to
-// dispatch as soon as its project's entries are answered or closed. What
-// asks again is every call of dispatchDue: at open, after every release, and
-// after a cleanup that removed a copy, which is the one way an entry closes
-// without an answer in this build (cleanup.go). A relaunch is not new work
-// and claims through store.BeginTaskAttempt, so it is never held.
+// A held dispatch or launch gives its slot back, through releaseHeldSlot,
+// rather than settling it, because the slot is otherwise kept for the
+// service's lifetime and a held task has to dispatch as soon as its
+// project's entries are answered or closed. What asks again is every call of
+// dispatchDue: at open, after every release, and after a cleanup that
+// removed a copy, which is the one way an entry closes without an answer in
+// this build (cleanup.go). A pass that runs while the slot is still taken
+// passes the task over, so releaseHeldSlot reads the hold again after the
+// slot is gone and asks for another pass when it no longer holds: an entry
+// closed before that read is seen by it, and one closed after it is closed
+// after the slot was free, so the pass its closure asks for finds the task.
+// A relaunch is not new work and claims through store.BeginTaskAttempt, so
+// it is never held.
 //
 // # The second check
 //
@@ -360,7 +372,7 @@ func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, erro
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	s.settleDispatch(id, settle, d, err)
+	s.settleDispatch(ctx, id, settle, d, err)
 	return d, err
 }
 
@@ -378,22 +390,39 @@ func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, er
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	s.settleDispatch(id, settle, d, err)
+	s.settleDispatch(ctx, id, settle, d, err)
 	return d, err
 }
 
 // settleDispatch settles the slot a dispatch took with what it ended at, or,
-// for a dispatch kept work held, gives the slot back, so the next
-// dispatchDue asks again; this file's opening comment says why.
-func (s *Service) settleDispatch(id string, settle func(tasks.Isolation), d dispatched, err error) {
+// for a dispatch kept work held, gives the slot back through
+// releaseHeldSlot; this file's opening comment says why.
+func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tasks.Isolation), d dispatched, err error) {
 	if !errors.Is(err, store.ErrDispatchHeld) {
 		settle(d.proof)
 		return
 	}
+	if s.betweenHeldAndRelease != nil {
+		s.betweenHeldAndRelease()
+	}
+	s.releaseHeldSlot(ctx, id)
+}
+
+// releaseHeldSlot gives back the slot of a task kept work held at its
+// dispatch or its launch, and then reads the hold again: when nothing holds
+// the task any more, or the read fails, it asks dispatchDue again through
+// dispatchInBackground, so an entry that closed while the slot was taken is
+// never a dispatch nobody asks for. This file's opening comment says why
+// that order loses no closure.
+func (s *Service) releaseHeldSlot(ctx context.Context, id string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	delete(s.isolated, id)
 	delete(s.claiming, id)
+	s.mu.Unlock()
+	holding, err := s.store.KeptWorkHolding(ctx, id)
+	if err != nil || len(holding) == 0 {
+		s.dispatchInBackground()
+	}
 }
 
 // claimDispatch takes the task's slot, so a second pass over the tasks does

@@ -166,6 +166,10 @@ const domainNotificationMigration = "domain wake notification"
 // record, for the reason sealCheckpointTableMigration is a constant.
 const keptWorkMigration = "kept work record"
 
+// attemptLaunchMigration names the migration that adds a task attempt's
+// launch claim, for the reason sealCheckpointTableMigration is a constant.
+const attemptLaunchMigration = "task attempt launch claim"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2139,6 +2143,27 @@ var schema = []migration{
 					OR EXISTS (SELECT 1 FROM run WHERE id = OLD.run_id)
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a kept work entry is not deleted while it is open or while its owner stands');
+				END`,
+		},
+	},
+	{
+		version: 52,
+		name:    attemptLaunchMigration,
+		statements: []string{
+			// When the attempt's worker launch was claimed, written once by
+			// ClaimAttemptLaunch immediately before the process is started,
+			// in the transaction that found the task not held by kept work.
+			// The record precedes the process, on task_attempt's terms, so a
+			// launch whose claim stands is work under way by the record's
+			// lights and the dispatch hold does not apply to its task again.
+			// NULL is no launch claimed: a row written before this column,
+			// or an attempt whose launch never reached its claim.
+			`ALTER TABLE task_attempt ADD COLUMN launch_claimed_at TEXT`,
+			`CREATE TRIGGER task_attempt_launch_is_claimed_once
+				BEFORE UPDATE OF launch_claimed_at ON task_attempt
+				WHEN OLD.launch_claimed_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task attempt''s launch is claimed once and the claim is not rewritten');
 				END`,
 		},
 	},

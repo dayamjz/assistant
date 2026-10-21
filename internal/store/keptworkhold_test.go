@@ -112,3 +112,50 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 		t.Errorf("after the answer OpenKeptWorkOf(repo-1) = %+v, %v; want none", kept, err)
 	}
 }
+
+// The launch claim asks the same hold in its own transaction: a held task's
+// claim is refused with the typed refusal and writes nothing, an unheld
+// task's is written once and a second is refused, and a task whose launch
+// was claimed is work under way, which no entry recorded afterwards holds,
+// at its next dispatch claim or its next launch claim.
+func TestTheLaunchClaimIsHeldByKeptWorkAndMakesItsTaskWorkUnderWay(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+	keptHoldTask(t, s, "taskclaimeda", "repo-1", "one")
+	keptHoldTask(t, s, "taskheldlnch", "repo-1", "two")
+	claimed := beginAttempt(t, s, "taskclaimeda", 0)
+	held := beginAttempt(t, s, "taskheldlnch", 0)
+	if err := s.ClaimAttemptLaunch(ctx, "taskclaimeda", claimed.Sequence); err != nil {
+		t.Fatalf("an unheld launch claim: %v", err)
+	}
+	if err := s.ClaimAttemptLaunch(ctx, "taskclaimeda", claimed.Sequence); !errors.Is(err, ErrAttemptLaunchClaimed) {
+		t.Fatalf("a second launch claim = %v; want ErrAttemptLaunchClaimed", err)
+	}
+	if err := s.ClaimAttemptLaunch(ctx, "taskclaimeda", 9); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a claim of an attempt that does not exist = %v; want ErrNotFound", err)
+	}
+
+	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/repo-1/run-1",
+		Holds: []string{"aaaa"}, Reason: "unproven"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ClaimAttemptLaunch(ctx, "taskheldlnch", held.Sequence); !errors.Is(err, ErrDispatchHeld) {
+		t.Fatalf("a held task's launch claim = %v; want ErrDispatchHeld", err)
+	}
+	if err := s.ClaimAttemptLaunch(ctx, "taskheldlnch", held.Sequence); !errors.Is(err, ErrDispatchHeld) {
+		t.Fatalf("the refused claim wrote something: a second ask = %v; want ErrDispatchHeld again", err)
+	}
+	if got, err := s.KeptWorkHolding(ctx, "taskclaimeda"); err != nil || len(got) != 0 {
+		t.Fatalf("a task whose launch was claimed is held by %+v, %v; want nothing", got, err)
+	}
+	next, err := s.BeginDispatchAttempt(ctx, "taskclaimeda", claimed.Sequence)
+	if err != nil {
+		t.Fatalf("the next dispatch of a task whose launch was claimed: %v", err)
+	}
+	if err := s.ClaimAttemptLaunch(ctx, "taskclaimeda", next.Sequence); err != nil {
+		t.Fatalf("the next launch of a task whose launch was claimed: %v", err)
+	}
+}

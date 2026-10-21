@@ -55,9 +55,11 @@ paths: ["internal/service/**"]
   entry about a task once as a `kept-work` wake, and status and the catch-up
   read list them. `dispatch.go` holds a new task's dispatch while its
   project has an open entry, asking internal/store's one predicate
-  (`KeptWorkHolding`, then `BeginDispatchAttempt` at the claim), giving the
-  slot back so a later `dispatchDue` asks again, and a removal asks it again
-  (`redispatchAfterRemoval`); `taskView` and `report` name the entries.
+  (`KeptWorkHolding`, `BeginDispatchAttempt` at the claim, and
+  `launch.go`'s `ClaimAttemptLaunch` before the worker starts);
+  `releaseHeldSlot` gives the slot back and reads the hold again, and a
+  removal asks again (`redispatchAfterRemoval`); `taskView` and `report`
+  name the entries.
   Answers are #411's remaining part.
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances

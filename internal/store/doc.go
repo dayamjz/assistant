@@ -184,12 +184,15 @@
 //
 // An open entry also holds a new task's dispatch in its project, PRD
 // section 6's "kept work is answered before new task work starts".
-// keptworkhold.go is the one predicate (a task naming a project, never
-// launched, whose project has an open entry), read by KeptWorkHolding and by
-// BeginDispatchAttempt, which refuses a held task with a *DispatchHeldError
-// in the transaction that would write its attempt. It is derived from the
-// two records on every read and stored nowhere. BeginTaskAttempt, the
-// relaunch claim, is not held.
+// keptworkhold.go is the one predicate (a task naming a project, whose
+// launch was never claimed, whose project has an open entry), read by
+// KeptWorkHolding, by BeginDispatchAttempt and by ClaimAttemptLaunch
+// (migration 52's launch_claimed_at, written once immediately before a
+// worker's process starts), each refusing a held task with a
+// *DispatchHeldError in the transaction that would write. It is derived from
+// the records on every read and stored nowhere. BeginTaskAttempt, the
+// relaunch claim, is not held, and a task whose launch was claimed is never
+// held again.
 //
 // # The wake queue and the markers it is written with
 //
