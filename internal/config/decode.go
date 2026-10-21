@@ -377,6 +377,12 @@ func decodeStopGrace(k Key, v any) (any, error) {
 	return decodeBoundedDuration(k, v, "a stop grace", "30s", MinStopGrace, MaxStopGrace)
 }
 
+// decodeCommandTimeout is decodeBoundedDuration between MinCommandTimeout
+// and MaxCommandTimeout.
+func decodeCommandTimeout(k Key, v any) (any, error) {
+	return decodeBoundedDuration(k, v, "a command timeout", "30m", MinCommandTimeout, MaxCommandTimeout)
+}
+
 // decodeRecheckWindow is decodeBoundedDuration between MinRecheckWindow and
 // MaxRecheckWindow.
 func decodeRecheckWindow(k Key, v any) (any, error) {

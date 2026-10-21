@@ -1086,6 +1086,26 @@ configuration (`config.yaml` in the home) or from `assistant.json` on the
 default branch, never from the branch under validation, unless the operator has
 set `allow_pushed_commands`. That opt-out cannot be set from a pushed branch.
 
+The test, lint and document commands are started by the service, on the host
+it runs on, with your credentials and at the service's own scheduling
+priority, so a full-repository command can use every core. Three bounds apply
+to each one:
+
+- It may run for `command_timeout` (30m unless configured, between 1m and
+  24h, set only in your own configuration file; a repository file naming it
+  is refused). Past that it is ended and the stage holds for you naming the
+  time limit. Raise it when a repository's targeted check legitimately runs
+  longer.
+- On macOS and Linux it runs in a process group of its own, and the group is
+  ended when the command returns or reaches its limit, so a child it started
+  does not outlive it. A child that moved out of the group (`setsid`, a
+  daemonizing tool) is not ended.
+- The service runs at most a quarter of the host's logical CPUs' worth of
+  these commands at once (at least one); a run whose command finds no free
+  slot waits, and reads as running while it does. Nothing lowers a command's
+  priority, so one command can still saturate the host by itself: keep the
+  commands targeted.
+
 ## Repositories with no code host
 
 A repository whose upstream is a local path or a `file://` remote has no code

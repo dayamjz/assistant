@@ -13,12 +13,11 @@ import (
 // through, runCommand, so it is a line of shell handed to the platform's
 // interpreter whole, it inherits the service's environment, its output is
 // redacted on the way in, and every residual gap commandGrace states about
-// that runner holds for it too, with one narrowing: on unix the command is
-// the leader of a process group of its own, and ending it by its context
-// ends that group (endGroupOnCancel), so a descendant still in the group
-// does not outlive a cancellation holding the output. A descendant that left
-// the group, and one left behind by a command that exited on its own, are
-// not ended.
+// that runner holds for it too: on unix the command is the leader of a
+// process group of its own, which is ended when the command returns or its
+// context ends (inGroup), and a descendant that left the group is not ended.
+// Unlike a stage's command it takes no command slot and no time limit of
+// runCommand's own, because its caller's context is its deadline.
 //
 // It is exported for one consumer, internal/service's notify.go, which runs
 // the global-only notify.command once per wake. That is the reason this
@@ -82,7 +81,6 @@ func RunOperatorCommand(ctx context.Context, c OperatorCommand) OperatorResult {
 		record:     io.Discard,
 		projection: c.Tail,
 		grace:      grace,
-		group:      true,
 		redact:     redact.New(),
 	})
 	out := OperatorResult{Exited: res.exited, Code: res.code, Tail: res.tail, Err: res.err}

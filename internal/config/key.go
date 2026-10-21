@@ -154,6 +154,18 @@ const (
 	// the PRD's; the floor and ceiling are chosen, not measured, and PRD
 	// section 10's limits table has no row for them yet.
 	KeyStopGrace Key = "stop_grace"
+	// KeyCommandTimeout is "command_timeout": how long one configured stage
+	// command (commands.test, commands.lint, commands.document) may run
+	// before internal/stages ends it with its process group and the stage
+	// holds on a check that answered nothing, PRD P15's deadline for a check
+	// command. It is global-only because the deadline protects the
+	// operator's machine: a repository that could raise it could hold the
+	// host as long as it liked. An operator sets it when a repository's
+	// targeted check legitimately runs longer than the default, which is the
+	// one remedy a fixed bound would leave them without. internal/stages is
+	// the one reader. The default, floor and ceiling are chosen, not
+	// measured, and PRD section 10's schema does not yet have the row.
+	KeyCommandTimeout Key = "command_timeout"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
 	// template. It shapes the subject line and nothing else: a fix commit
 	// also carries a body, the fixer's whole account of the round, which
@@ -433,6 +445,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.RelaunchAttempts = v.(int) }},
 	{KeyStopGrace, TrustGlobal, DefaultStopGrace, decodeStopGrace,
 		func(c *Config, v any) { c.StopGrace = v.(time.Duration) }},
+	{KeyCommandTimeout, TrustGlobal, DefaultCommandTimeout, decodeCommandTimeout,
+		func(c *Config, v any) { c.CommandTimeout = v.(time.Duration) }},
 	{KeyCommitFixMessage, TrustPushed, DefaultCommitFixMessage, decodeFixMessage,
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},
 	{KeyAllowPushedCommands, TrustTrusted, false, decodeBool,

@@ -41,26 +41,17 @@ import (
 //
 // Both waits begin after the command exited or after the run was cancelled, so
 // this bounds neither how long the command itself runs nor what the command
-// leaves behind.
-//
-// Nothing here bounds the command's own runtime. There is no stage-level
-// timeout and no configuration key holding one, so a configured command that
-// hangs holds the run's segment until an operator cancels the run, which is
-// the recourse that ends it. A duration would belong in internal/config's key
-// table, which is that schema's single owner, so adding one is its own change
-// rather than something this file may decide.
-//
-// Nor does it end a descendant. Giving up on the output closes this side of
-// the pipe and nothing more: this file starts one process and ends that one
-// process, and a child the command left behind goes on running with the
-// descriptor it inherited. internal/agents terminates the process tree an
-// agent invocation started, and nothing here does the equivalent for a
-// configured command, so a command that starts something and detaches leaves
-// it behind. That is a gap rather than a decision this file is entitled to
-// make quietly. The one narrowing is an operator's command, which sets
-// commandSpec.group: on unix its process group is ended when its context
-// is, and endGroupOnCancel says what that still does not reach.
+// leaves behind. commandSpec.timeout bounds how long the command runs, and
+// inGroup ends, on unix, every descendant that stayed in the command's
+// process group. A descendant that left the group, or any descendant on
+// another platform, is what the read's grace is still for: giving up on the
+// output closes this side of the pipe and nothing more, so such a child goes
+// on running with the descriptor it inherited.
 const commandGrace = 5 * time.Second
+
+// errCommandTimedOut is what a result carries when the command ran past
+// commandSpec.timeout and was ended, on unix with its process group.
+var errCommandTimedOut = errors.New("stages: the command ran past its time limit")
 
 // errOutputAbandoned is what a result carries when the command's output was
 // still arriving after the grace expired and this call stopped reading it.
@@ -98,13 +89,17 @@ type commandSpec struct {
 	// a field rather than the constant read directly so a test can reach the
 	// give-up path without waiting the stage's grace out.
 	grace time.Duration
-	// group, when set, runs the command as the leader of a process group of
-	// its own and has cancelling ctx end that whole group rather than the
-	// interpreter alone (endGroupOnCancel), so a descendant still in the
-	// group cannot hold the output pipe past a cancellation. Only an
-	// operator's command sets it; a stage's command keeps the gap
-	// commandGrace states.
-	group bool
+	// timeout, when positive, is how long the command may run before it is
+	// ended with its process group and the result carries
+	// errCommandTimedOut. A stage body passes config.KeyCommandTimeout's
+	// value through StageDeps.stageCommand; zero adds no bound of its own to
+	// ctx's, which is what an operator's command, bounded by its caller,
+	// passes.
+	timeout time.Duration
+	// slots, when non-nil, is the set the command takes a slot from before
+	// it starts and returns it to once it has ended (commandSlots). A stage
+	// body passes the shared set; nil takes none.
+	slots commandSlots
 	// redact is applied to the command's output on its way into the record
 	// and the projection, upstream of both, so that the projection's bound
 	// cannot cut a credential's recognizable shape apart before it is
@@ -182,15 +177,32 @@ type commandResult struct {
 // read reached the end of the output becomes a fact this file holds for every
 // exit status rather than one os/exec decides whether to report.
 //
-// What that does not buy is any hold over the command's descendants. Giving up
-// closes this side of the pipe; a child that inherited the other side keeps
-// it, and keeps running. commandGrace says what is and is not bounded.
+// What that does not buy is any hold over the command's descendants. That is
+// inGroup's: the command leads a process group of its own, which is ended
+// once the command has ended and before its output is waited for, so a child
+// still in the group no longer holds the pipe. A child that left the group
+// keeps the other side, and keeps running; commandGrace says what is and is
+// not bounded.
 func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	tail := &tailWriter{limit: spec.projection}
 	out := io.MultiWriter(spec.record, tail)
 	settle := func(res commandResult) commandResult {
 		res.tail, res.omitted = tail.projection()
 		return res
+	}
+
+	if spec.slots != nil {
+		if err := spec.slots.acquire(ctx); err != nil {
+			return settle(commandResult{code: -1,
+				err: fmt.Errorf("waiting for a free command slot: %w", err)})
+		}
+		defer spec.slots.release()
+	}
+	runCtx := ctx
+	if spec.timeout > 0 {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, spec.timeout)
+		defer cancel()
 	}
 
 	read, write, err := os.Pipe()
@@ -200,10 +212,8 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	}
 	defer func() { _ = read.Close() }()
 
-	cmd := shellCommand(ctx, spec.command, spec.dir)
-	if spec.group {
-		endGroupOnCancel(cmd)
-	}
+	cmd := shellCommand(runCtx, spec.command, spec.dir)
+	endGroup := inGroup(cmd)
 	// Standard input is left unset, which os/exec reads as the null device, so
 	// a command that reads it reaches end of file at once rather than waiting
 	// for a person who is not there. A spec carrying stdin has it written and
@@ -271,16 +281,22 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	// The copy is already draining while the command runs, so waiting on the
 	// command cannot deadlock against a command that outruns the pipe buffer.
 	waitErr := cmd.Wait()
+	// The group is ended before the output is waited for, so a descendant
+	// still in it stops holding the pipe and the read below reaches its end.
+	endGroup()
 
 	res := commandResult{code: -1, short: awaitOutput(copied, read, spec.grace)}
-	if cmd.ProcessState == nil {
-		res.err = waitErr
-		return settle(res)
+	if cmd.ProcessState != nil {
+		res.exited = cmd.ProcessState.Exited()
+		res.code = cmd.ProcessState.ExitCode()
 	}
-	res.exited = cmd.ProcessState.Exited()
-	res.code = cmd.ProcessState.ExitCode()
 	if !res.exited {
 		res.err = waitErr
+		// Only the bound this call set is reported as a timeout: a deadline
+		// or cancellation of ctx's own is the caller's to read from ctx.
+		if spec.timeout > 0 && ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			res.err = fmt.Errorf("%w of %s, so it was ended", errCommandTimedOut, spec.timeout)
+		}
 	}
 	return settle(res)
 }

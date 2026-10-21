@@ -94,9 +94,11 @@ const documentProjectionBytes = 8 << 10
 // The key is documented as documentation updates and this stage runs what it is
 // given.
 //
-// A command that leaves a process behind leaves it running, and nothing bounds
-// how long the command itself runs. commandGrace says what that bounds and
-// what it does not.
+// The command runs on StageDeps.stageCommand's terms: it waits for a command
+// slot, runs at most command_timeout, after which the stage holds on a check
+// that answered nothing, and on unix its process group is ended when it
+// returns, so only a process that left the group is left behind.
+// commandGrace says what is still not bounded.
 //
 // Redaction removes the one shape internal/redact recognizes, a credential in
 // a URL's userinfo, and nothing else.
@@ -146,14 +148,7 @@ func runDocumentCommand(ctx context.Context, deps StageDeps, in pipeline.Input) 
 
 	record := openDocumentEvidence(deps.Home.EvidenceLog(runID, in.Stage.String()), deps.redact)
 	record.header(command, commit, copied.Path())
-	result := runCommand(ctx, commandSpec{
-		command:    command,
-		dir:        copied.Path(),
-		record:     record,
-		projection: documentProjectionBytes,
-		grace:      commandGrace,
-		redact:     deps.redact,
-	})
+	result := runCommand(ctx, deps.stageCommand(command, copied.Path(), record, documentProjectionBytes))
 	record.footer(result)
 	record.cutShort(result.short)
 	record.close()
