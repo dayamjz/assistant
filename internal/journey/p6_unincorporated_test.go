@@ -31,6 +31,12 @@ type unincorporated struct {
 	// own is the subject of the run's own commit, empty where the working
 	// copy committed nothing.
 	own string
+	// submitted is the commit the working copy submitted, resolved through the
+	// same read as after: the run's own commit, or in the behind shape where
+	// the branch stood before the colleague pushed. It is never the colleague's
+	// commit or the one the push forwards, which is what lets a counterfeit
+	// stand the remote at a real commit that is not the expected one.
+	submitted string
 	// forwarded is the head the lint stage last checked, which is the commit
 	// the push stage forwards.
 	forwarded string
@@ -145,6 +151,7 @@ func walkOverUnincorporated(t *testing.T, file, own string) (unincorporated, mac
 		}
 		subject.commit(t, name, "A paragraph of this run's own.\n", own)
 	}
+	observed.submitted = subject.git(t, subject.work, "rev-parse", "HEAD")
 
 	agent := standin.New(t, standin.Script{Steps: []standin.Step{{
 		Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly"),
@@ -240,7 +247,7 @@ func incorporatedCheck(withOwn bool) journey.Check[unincorporated] {
 				return u
 			}},
 			{Named: "the remote stands somewhere the push did not forward", Break: func(u unincorporated) unincorporated {
-				u.after = u.colleague + "^"
+				u.after = u.submitted
 				return u
 			}},
 			{Named: "the push was an anchored force", Break: func(u unincorporated) unincorporated {
@@ -375,7 +382,7 @@ func overlapCheck() journey.Check[overlapped] {
 				})
 			}},
 			{Named: "the run's commit replaced the colleague's", Break: func(c overlapped) overlapped {
-				c.after = c.colleague + "^"
+				c.after = c.submitted
 				return c
 			}},
 		},
