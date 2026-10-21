@@ -173,6 +173,22 @@ const (
 	// the one reader. The default, floor and ceiling are chosen, not
 	// measured, and PRD section 10's schema does not yet have the row.
 	KeyCommandTimeout Key = "command_timeout"
+	// KeyPromotionWindow is "promotion_window": how long a reported
+	// investigation's worker is kept after its report is stored, so that a
+	// promotion in the same sitting continues the worker that wrote it, PRD
+	// section 6's kept work and section 10's row. Past it internal/service
+	// ends the worker through the session it holds and keeps the copy, and
+	// a later promotion relaunches a worker there with the stored report as
+	// its starting point. It is global-only for
+	// KeySupervisionBeaconInterval's reason: keeping or ending a process is
+	// the service's act on the operator's machine, and a repository has no
+	// standing over how long one idles on its behalf. It is not a loop
+	// bound: it stops no run and parks nothing. The window is counted from
+	// the stored report's own time, so a restart does not restart it.
+	// internal/service's landed.go is the one reader. The default is the
+	// PRD's; the floor and ceiling are chosen, not measured, and PRD
+	// section 10's limits table has no row for them yet.
+	KeyPromotionWindow Key = "promotion_window"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
 	// template. It shapes the subject line and nothing else: a fix commit
 	// also carries a body, the fixer's whole account of the round, which
@@ -454,6 +470,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.StopGrace = v.(time.Duration) }},
 	{KeyCommandTimeout, TrustGlobal, DefaultCommandTimeout, decodeCommandTimeout,
 		func(c *Config, v any) { c.CommandTimeout = v.(time.Duration) }},
+	{KeyPromotionWindow, TrustGlobal, DefaultPromotionWindow, decodePromotionWindow,
+		func(c *Config, v any) { c.PromotionWindow = v.(time.Duration) }},
 	{KeyCommitFixMessage, TrustPushed, DefaultCommitFixMessage, decodeFixMessage,
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},
 	{KeyAllowPushedCommands, TrustTrusted, false, decodeBool,

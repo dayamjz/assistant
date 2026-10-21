@@ -19,9 +19,10 @@ import (
 )
 
 // PRD principle P15's "kept work is never silent", at the task-copy site,
-// through the real service and its supervisor loop: a reported
-// investigation whose worker has ended is owed its copy's cleanup, which the
-// loop's pass asks, and a copy holding a commit no proof can place anywhere
+// through the real service and its supervisor loop: an investigation whose
+// findings are recorded relayed and whose worker has ended is owed its
+// copy's cleanup, which the loop's pass asks (a report alone keeps the copy
+// for a promotion, on landed.go's terms), and a copy holding a commit no proof can place anywhere
 // safe is refused as unproven and kept. That refusal becomes one kept work
 // entry naming the task, its reason and the commits the copy holds; the next
 // pass raises it as one kept-work wake, actionable and appended, records
@@ -66,8 +67,14 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reporter.StoreReport(ctx, id, `{"summary":"looked and committed what it found"}`); err != nil {
+	stored, err := reporter.StoreReport(ctx, id, `{"summary":"looked and committed what it found"}`)
+	if err != nil {
 		t.Fatalf("storing the report: %v", err)
+	}
+	// The coordinator relays the findings, which is what owes the copy its
+	// cleanup; the record is task.relay's, anchored on the report's entry.
+	if _, _, err := records.RecordTaskRelay(ctx, id, stored.Event.Sequence); err != nil {
+		t.Fatalf("recording the findings relayed: %v", err)
 	}
 
 	terminals := newScriptedTerminals()
@@ -125,6 +132,91 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	}
 	if len(read.Kept) != 1 || read.Kept[0].ID != entry.ID {
 		t.Fatalf("the catch-up read lists kept work %+v, want entry %d", read.Kept, entry.ID)
+	}
+	if _, err := os.Stat(copyPath + "/finding.txt"); err != nil {
+		t.Fatalf("the kept copy was touched: %v", err)
+	}
+}
+
+// PRD principle P15 across a crash at the promotion window: a service that
+// ended a reported investigation's worker at the window and stopped before
+// keeping its copy leaves a dead terminal and no entry, which is the home
+// planted here. The next service's pass reads the window passed and the
+// worker gone, holds no session to end, and records the kept copy as one
+// entry for the window holding the worker's commit, so the keep is not
+// missed; later passes write no second one.
+func TestAWindowKeepAStoppedServiceMissedIsRecordedByTheNext(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	h, records := loopHomeConfigured(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`+"\n")
+	ctx := t.Context()
+	const id = "windowmissed"
+	copyPath, err := h.TaskCopy(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.CreateTask(ctx, store.Task{
+		ID: id, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: copyPath,
+	}, store.Disposition{}); err != nil {
+		t.Fatalf("recording the task: %v", err)
+	}
+	if _, err := records.BeginTaskAttempt(ctx, id, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.SetAttemptSession(ctx, id, 1, "pane-window"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(copyPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	heldGit(t, copyPath, "init", "--quiet", "-b", "main", ".")
+	if err := os.WriteFile(copyPath+"/finding.txt", []byte("what the worker found\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	heldGit(t, copyPath, "add", "-A")
+	heldGit(t, copyPath, "commit", "--quiet", "-m", "the worker's own commit")
+	head := heldGit(t, copyPath, "rev-parse", "HEAD")
+	reporter, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records, Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reporter.StoreReport(ctx, id, `{"summary":"looked and committed what it found"}`); err != nil {
+		t.Fatalf("storing the report: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond) // the window passes before the next service opens
+
+	terminals := newScriptedTerminals()
+	terminals.dead("pane-window")
+	l := openLoop(t, h, records, terminals, &fakeClock{now: time.Now()})
+	defer func() { _ = l.service.Close() }()
+	l.nextPass(t)
+	var entry store.KeptWork
+	deadline := time.Now().Add(loopWait)
+	for {
+		kept, err := l.records(t).OpenKeptWork(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(kept) > 1 {
+			t.Fatalf("the window kept %d entries, want one: %+v", len(kept), kept)
+		}
+		if len(kept) == 1 {
+			entry = kept[0]
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("no kept work entry was written for the copy the window kept; the log reads:\n%s", serviceLogOf(t, h))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if entry.TaskID.Or("") != id || entry.Reason != tasks.KeptPromotionWindow || !slices.Contains(entry.Holds, head) || entry.Answered() {
+		t.Fatalf("the entry = %+v, want task %s's unanswered copy kept for the window, holding %s", entry, id, head)
+	}
+	for range 3 {
+		l.pass(t)
+	}
+	if kept, err := l.records(t).OpenKeptWork(ctx); err != nil || len(kept) != 1 || kept[0].ID != entry.ID {
+		t.Fatalf("later passes left kept work %+v (%v), want entry %d alone", kept, err, entry.ID)
 	}
 	if _, err := os.Stat(copyPath + "/finding.txt"); err != nil {
 		t.Fatalf("the kept copy was touched: %v", err)

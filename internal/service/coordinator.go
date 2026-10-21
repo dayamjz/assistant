@@ -32,8 +32,11 @@ import (
 // store.RecordTaskRelay, the one writer of the findings relayed record,
 // anchored to the resolution it read. A promotion then sends the task's live
 // worker its brief through steer.go's deliverMessage, the route task.message
-// takes, rather than a send of its own. What this file adds is who may ask
-// and how an answer or a refusal crosses the wire.
+// takes, rather than a send of its own, and when the worker has ended, a
+// reported investigation's after promotion_window among them (landed.go),
+// it relaunches one in the same copy through relaunchTask, on
+// task.relaunch's terms. What this file adds is who may ask and how an
+// answer or a refusal crosses the wire.
 //
 // # Who may ask
 //
@@ -150,16 +153,37 @@ func (s *Service) createTask(ctx context.Context, req ipc.Request, r machine.Tas
 // asserted under is the one every worker of this service is started with,
 // the same agents.WorkerEnvironment(os.Environ(), nil) assertCopy uses, and
 // never one the caller states.
+//
+// The promotion and its brief run under the task's slot (claimSteer), so the
+// supervisor's pass cannot end the worker for its promotion window between
+// the flip and the brief; a slot a dispatch, relaunch, stop or window end of
+// the task holds refuses the promotion before anything is written. When the
+// brief's probe reads the latest attempt's worker Dead, the slot is given
+// back and the task is relaunched in place through relaunchTask, the one
+// anchored relaunch, which decides from its own read and is held to
+// everything task.relaunch is: the floor, the re-probe, the sweep, the
+// claim, and relaunch_attempts, which counts this relaunch like any other
+// because it counts attempts and not who asked. The relaunched worker is
+// begun with the instructions file, which already carries the brief, and
+// the stored report as its starting point (relaunch.go). A refused relaunch
+// does not undo the promotion: the answer says why in Brief.Unsent, and a
+// later task.relaunch begins the worker on the same terms. A worker that
+// reads Unobserved is neither briefed nor relaunched, as before.
 func (s *Service) promoteTask(ctx context.Context, req ipc.Request, r machine.TaskPromoteRequest) (machine.TaskPromoted, error) {
 	if _, err := s.refuseDecision(ctx, req, r.Task, fmt.Sprintf("asked to promote task %s to a delivery on %s in repository %s: %s",
 		r.Task, r.Branch, r.Repository, r.Intent)); err != nil {
 		return machine.TaskPromoted{}, err
+	}
+	release, err := s.claimSteer(r.Task)
+	if err != nil {
+		return machine.TaskPromoted{}, refusalOf(err)
 	}
 	promoted, err := s.queue.Promote(ctx, tasks.Promotion{
 		Task: r.Task, Repository: r.Repository, Branch: r.Branch, Intent: r.Intent, Delivery: r.Delivery,
 		Environment: agents.WorkerEnvironment(os.Environ(), nil),
 	})
 	if err != nil {
+		release()
 		return machine.TaskPromoted{}, refusalOf(err)
 	}
 	s.log.Printf("task %s was promoted to delivery on %s by %s", r.Task, r.Branch, peerOf(req))
@@ -170,8 +194,34 @@ func (s *Service) promoteTask(ctx context.Context, req ipc.Request, r machine.Ta
 		at := report.RecordedAt
 		out.ReportRecordedAt = &at
 	}
-	out.Brief = s.briefPromoted(ctx, req, r.Task, promoted.Brief)
+	var liveness taskstate.Liveness
+	out.Brief, liveness = s.briefPromoted(ctx, req, r.Task, promoted.Brief)
+	release()
+	if liveness == taskstate.Dead {
+		out.Relaunch, out.Brief = s.relaunchPromoted(ctx, req, r.Task, out.Brief)
+	}
 	return out, nil
+}
+
+// relaunchPromoted relaunches a promoted task whose worker read Dead, on
+// promoteTask's terms, and returns the relaunch and the briefing amended to
+// say what became of the brief: carried by the relaunched worker's
+// instructions, or not, with the refusal named.
+func (s *Service) relaunchPromoted(ctx context.Context, req ipc.Request, task string, brief machine.Briefing) (*machine.TaskRelaunched, machine.Briefing) {
+	out, err := s.relaunchTask(ctx, task)
+	if err != nil {
+		brief.Unsent += "; no worker was relaunched for it: " + err.Error()
+		s.log.Printf("promoted task %s was not relaunched: %v", task, err)
+		return nil, brief
+	}
+	s.log.Printf("task %s was promoted with its worker ended, so it was relaunched in place as attempt %d by %s, superseding session %s; %s",
+		task, out.launch.attempt, peerOf(req), out.superseded, out.swept)
+	s.launchInBackground(out.launch)
+	brief.Unsent += fmt.Sprintf("; a worker was relaunched in the same copy as attempt %d and is begun with the brief in its instructions", out.launch.attempt)
+	if out.fromReport {
+		brief.Unsent += " and the stored report as its starting point"
+	}
+	return &machine.TaskRelaunched{Task: task, Attempt: out.launch.attempt, Superseded: out.superseded, Swept: out.swept}, brief
 }
 
 // briefPromoted sends a promoted task's live worker its brief, the text the
@@ -184,21 +234,28 @@ func (s *Service) promoteTask(ctx context.Context, req ipc.Request, r machine.Ta
 // for a worker nothing can reach would be refused by the send anyway, and
 // the instructions file already carries the brief to whatever worker is
 // begun on the task next. A brief over machine.MaxMessageBytes is not sent
-// either, on task.message's terms. Nothing here undoes or refuses the
+// to a live worker either, on task.message's terms, and is answered
+// TooLarge; the size is checked only after the probe, so it never hides the
+// Dead reading a promotion relaunches on. Nothing here undoes or refuses the
 // promotion, which stands whatever became of the brief: the answer carries
 // what did, typed.
 //
 // The probe and the send are two steps: a worker that exits between them is
 // sent nothing, and the record says refused with the reason, as a message to
-// it would.
-func (s *Service) briefPromoted(ctx context.Context, req ipc.Request, task, brief string) machine.Briefing {
-	unsent := func(format string, args ...any) machine.Briefing {
-		b := machine.Briefing{Unsent: fmt.Sprintf(format, args...)}
+// it would. It returns what the probe read beside the briefing, Unobserved
+// when no probe was made, which is what promoteTask decides a relaunch from.
+func (s *Service) briefPromoted(ctx context.Context, req ipc.Request, task, brief string) (machine.Briefing, taskstate.Liveness) {
+	b, observed := s.briefLatest(ctx, req, task, brief)
+	if !b.Delivered() && b.Message == nil {
 		s.log.Printf("the brief for promoted task %s was not sent: %s", task, b.Unsent)
-		return b
 	}
-	if len(brief) > machine.MaxMessageBytes {
-		return unsent("the brief is %d bytes, over the message limit of %d", len(brief), machine.MaxMessageBytes)
+	return b, observed
+}
+
+// briefLatest is briefPromoted before its log line.
+func (s *Service) briefLatest(ctx context.Context, req ipc.Request, task, brief string) (machine.Briefing, taskstate.Liveness) {
+	unsent := func(format string, args ...any) (machine.Briefing, taskstate.Liveness) {
+		return machine.Briefing{Unsent: fmt.Sprintf(format, args...)}, taskstate.Unobserved
 	}
 	latest, ok, err := s.latestAttempt(ctx, task)
 	if err != nil {
@@ -215,8 +272,13 @@ func (s *Service) briefPromoted(ctx context.Context, req ipc.Request, task, brie
 	observed := s.terminals.Probe(bound, ref)
 	cancel()
 	if observed.Liveness != taskstate.Live {
-		return unsent("the worker of attempt %d (session %s) is not one this service can reach: the probe answered %s (%s)",
+		b, _ := unsent("the worker of attempt %d (session %s) is not one this service can reach: the probe answered %s (%s)",
 			latest.Sequence, ref, observed.Liveness, observed.Detail)
+		return b, observed.Liveness
+	}
+	if len(brief) > machine.MaxMessageBytes {
+		return machine.Briefing{TooLarge: true, Unsent: fmt.Sprintf("the brief is %d bytes, over the message limit of %d, so it was "+
+			"not sent to the live worker of attempt %d", len(brief), machine.MaxMessageBytes, latest.Sequence)}, observed.Liveness
 	}
 	m, err := s.deliverMessage(ctx, req, req.MessageSender(), task, latest.Sequence, ref, brief)
 	if err != nil {
@@ -224,9 +286,9 @@ func (s *Service) briefPromoted(ctx context.Context, req ipc.Request, task, brie
 		if m.ID != 0 {
 			b.Message = &m
 		}
-		return b
+		return b, observed.Liveness
 	}
-	return machine.Briefing{Message: &m}
+	return machine.Briefing{Message: &m}, observed.Liveness
 }
 
 // relaunchTaskFor relaunches a task whose terminal is gone, for the
@@ -378,6 +440,7 @@ func refusalOf(err error) error {
 		errors.Is(err, errRelaunchNotDue),
 		errors.Is(err, errRelaunchNotDead),
 		errors.Is(err, errRelaunchInFlight),
+		errors.Is(err, errSteerInFlight),
 		errors.As(err, &held),
 		errors.As(err, &unswept),
 		errors.As(err, &unproven):

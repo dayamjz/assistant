@@ -77,6 +77,9 @@ func TestResolveWithNoConfigurationYieldsDefaults(t *testing.T) {
 	if c.StopGrace != 30*time.Second {
 		t.Errorf("StopGrace = %v, want 30s", c.StopGrace)
 	}
+	if c.PromotionWindow != time.Hour {
+		t.Errorf("PromotionWindow = %v, want 1h", c.PromotionWindow)
+	}
 	if c.CommandTimeout != 30*time.Minute {
 		t.Errorf("CommandTimeout = %v, want 30m", c.CommandTimeout)
 	}
@@ -440,7 +443,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 	globalOnly := map[Key]bool{
 		KeyChecksTimeout: true, KeySessionReuse: true, KeyDecisionModel: true, KeySupervisionBeaconInterval: true,
 		KeyEscalationWindow: true, KeyRecheckWindow: true, KeyStallInspectionCount: true,
-		KeyRelaunchAttempts: true, KeyStopGrace: true, KeyCommandTimeout: true, KeyAutonomyMerge: true, KeySessionProvider: true,
+		KeyRelaunchAttempts: true, KeyStopGrace: true, KeyCommandTimeout: true, KeyPromotionWindow: true, KeyAutonomyMerge: true, KeySessionProvider: true,
 		KeyUsageCeilingWindow: true, KeyUsageCeilingInputTokens: true, KeyUsageCeilingOutputTokens: true,
 		KeyUsageCeilingCacheReadTokens: true, KeyUsageCeilingCacheCreationTokens: true,
 		KeyNotifyCommand:              true,
@@ -477,6 +480,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyRelaunchAttempts:                `{"relaunch_attempts": 1}`,
 		KeyStopGrace:                       `{"stop_grace": "5s"}`,
 		KeyCommandTimeout:                  `{"command_timeout": "5m"}`,
+		KeyPromotionWindow:                 `{"promotion_window": "2h"}`,
 		KeyAutonomyMerge:                   `{"autonomy": {"merge": ["owner/name"]}}`,
 		KeyDelivery:                        `{"delivery": "local"}`,
 		KeyAllowStandingConsent:            `{"allow_standing_consent": true}`,
@@ -524,7 +528,7 @@ func TestTrustGlobalIsAssignedToExactlyTheGlobalOnlyKeys(t *testing.T) {
 			global = append(global, k)
 		}
 	}
-	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count,relaunch_attempts,stop_grace,command_timeout,autonomy.merge,session_provider,usage_ceiling.window,usage_ceiling.input_tokens,usage_ceiling.output_tokens,usage_ceiling.cache_read_tokens,usage_ceiling.cache_creation_tokens,notify.command,run_usage_budget.output_tokens"
+	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count,relaunch_attempts,stop_grace,command_timeout,promotion_window,autonomy.merge,session_provider,usage_ceiling.window,usage_ceiling.input_tokens,usage_ceiling.output_tokens,usage_ceiling.cache_read_tokens,usage_ceiling.cache_creation_tokens,notify.command,run_usage_budget.output_tokens"
 	if got := strings.Join(keyStrings(global), ","); got != want {
 		t.Errorf("TrustGlobal keys = %q, want %s", got, want)
 	}

@@ -345,6 +345,19 @@ What follows for whoever runs the service:
   to finish or a restart. One whose report raised decisions reads `held`
   until they are answered, and what is queued behind it is released at the
   next of those instead.
+- A reported investigation's worker is kept for `promotion_window` in your
+  own configuration file (1h unless configured, between 1s and 24h; a
+  repository file naming it is refused), counted from when the report was
+  stored, so a promotion in the same sitting continues it. Past the window
+  the service ends the worker and keeps the copy; a later promotion
+  relaunches a worker in that copy with the stored report as its starting
+  point. A worker an earlier service started is ended by the identity its
+  session reference recorded, and one that cannot be verified is named in
+  the service log and left running. Once the worker is ended, a copy that
+  holds work, a commit or a file no commit records, is recorded as one
+  kept-work entry (see Kept work below); a copy exactly as its dispatch cut
+  it holds nothing to keep and gets none. Like every entry, it does not
+  hold a new task in the project yet.
 - A reported investigation reads `complete` only once the coordinator
   records its findings relayed with `assistant coordinator relayed ID`. The
   service then ends the worker it holds for the task and removes its copy on

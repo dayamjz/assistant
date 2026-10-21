@@ -934,6 +934,13 @@ type TaskPromoted struct {
 	// Brief is what became of the brief the promotion sends the task's
 	// live worker: the same text that file was given.
 	Brief Briefing `json:"brief"`
+	// Relaunch is the relaunch the promotion asked for because the task's
+	// worker had ended, a reported investigation's after promotion_window
+	// among them, on task.relaunch's terms, and absent when none began: the
+	// worker was live, could not be observed, or the relaunch was refused,
+	// which Brief.Unsent then says. The relaunched worker is begun with the
+	// instructions file, the brief included, and the stored report.
+	Relaunch *TaskRelaunched `json:"relaunch,omitempty"`
 }
 
 // Briefing is what became of a promotion's brief to the worker of the
@@ -952,6 +959,12 @@ type Briefing struct {
 	// refused or could not be marked. Empty exactly when Message says
 	// written.
 	Unsent string `json:"unsent,omitempty"`
+	// TooLarge says the brief was refused rather than sent because it is
+	// over MaxMessageBytes, on task.message's terms. It is decided after the
+	// probe, so a worker the probe read Dead is relaunched whatever the
+	// brief's size, and it is set only for a live worker the brief did not
+	// reach.
+	TooLarge bool `json:"too_large,omitempty"`
 }
 
 // Delivered reports whether the record says the brief was written to the

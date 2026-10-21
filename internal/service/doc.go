@@ -589,16 +589,16 @@
 // recorded by the decision on the run's cleanup record and composed into
 // the run's answer by report, so status says a local copy was kept rather
 // than only the log. A delivery task's copy is cleaned up at the same two
-// sites when the merge record landed it, and an investigation task's when
-// its report is stored; both hand internal/tasks the terminal's liveness as
-// the service's own task reader resolved it, so a copy whose worker is
-// still running is kept with the live refusal and one whose worker is gone
-// is examined on the proof, and cleanup.go owns the three sites and the
-// window after the read. A landed task's worker this service holds is
-// ended first, and the decision is asked again when its terminal is next
-// observed Dead, from the supervisor's pass and from task.stop, which
-// registers no relaunch hold for a task in the terminal tier; landed.go owns
-// that, its cadence and its gaps. No verb or protocol method calls the
+// sites when the merge record landed it, and an investigation task's once
+// the coordinator records its findings relayed; both hand internal/tasks
+// the terminal's liveness as the service's own task reader resolved it, so
+// a copy whose worker is still running is kept with the live refusal and
+// one whose worker is gone is examined on the proof, and cleanup.go owns
+// the three sites and the window after the read. A landed task's worker
+// this service holds is ended first, and the decision is asked again when
+// its terminal is next observed Dead, from the supervisor's pass and from
+// task.stop, which registers no relaunch hold for a task in the terminal
+// tier; landed.go owns that, its cadence and its gaps. No verb or protocol method calls the
 // decision except through that stop.
 //
 // # Stopping is bounded, and shutdown.go owns it
