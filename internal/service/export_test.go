@@ -43,6 +43,12 @@ func (s *Service) SetBeforeRefusalEndForTest(f func()) {
 	s.beforeRefusalEnd = f
 }
 
+// SetBetweenLandingClaimAndStartForTest installs betweenLandingClaimAndStart
+// for this package's external tests, on that field's terms in service.go.
+func (s *Service) SetBetweenLandingClaimAndStartForTest(f func()) {
+	s.betweenLandingClaimAndStart = f
+}
+
 // SetAfterConsentRegisteredForTest installs afterConsentRegistered for this
 // package's external tests. It exists only in the tests, on that field's
 // terms in service.go.

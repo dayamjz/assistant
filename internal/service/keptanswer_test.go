@@ -416,3 +416,60 @@ func TestTwoLandAnswersStartOneRunBetweenThem(t *testing.T) {
 		}
 	})
 }
+
+// A second land answer made while one is between its claim and its run is
+// refused rather than starting a second run: the first answer is held at
+// the seam after its claim, a second answer is made there and refused as
+// being landed now with no run started, and the first then starts the one
+// run, which a later answer names. Without the in-process slot the second
+// answer finds the claim written and no run, and starts one of its own.
+func TestALandAnswerDuringAnothersStartIsRefused(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	entry := keptEntryOf(t, h, subject)
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptLand)}
+		inWindow := false
+		under.service.SetBetweenLandingClaimAndStartForTest(func() {
+			if inWindow {
+				return
+			}
+			inWindow = true
+			client, err := ipc.Dial(ctx, under.service.Socket(), ipc.ClientConfig{})
+			if err != nil {
+				t.Errorf("dialing inside the window: %v", err)
+				return
+			}
+			defer func() { _ = client.Close() }()
+			var out machine.KeptWorkAnswered
+			err = client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &out)
+			if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "being landed") {
+				t.Errorf("a second answer inside the window = %+v, %v; want it refused as being landed now", out, err)
+			}
+			if runs, err := recordsOf(t, h).RunsForRepository(ctx, repository.ID); err != nil || len(runs) != 1 {
+				t.Errorf("inside the window the repository has %d runs (%v); want the kept one alone", len(runs), err)
+			}
+		})
+		var first machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &first); err != nil || first.Run == "" {
+			t.Fatalf("the first answer = %+v, %v", first, err)
+		}
+		if !inWindow {
+			t.Fatal("the first answer never reached the window between its claim and its run")
+		}
+		var again machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &again); err != nil || again.Run != first.Run {
+			t.Fatalf("a later answer = %+v, %v; want run %s named", again, err, first.Run)
+		}
+		if runs, err := recordsOf(t, h).RunsForRepository(ctx, repository.ID); err != nil || len(runs) != 2 {
+			t.Fatalf("the repository has %d runs (%v); want the kept one and the landing's", len(runs), err)
+		}
+	})
+}

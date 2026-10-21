@@ -384,6 +384,16 @@ type Service struct {
 	// production and set only by this package's tests, which use it to
 	// close the entry and run another dispatch pass inside that window.
 	betweenHeldAndRelease func()
+	// betweenLandingClaimAndStart runs in a landing of kept work after its
+	// claim and before it brings the commit into the gate and starts the
+	// run. It is nil in production and set only by this package's tests,
+	// which use it to make a second answer inside that window.
+	betweenLandingClaimAndStart func()
+	// landings is the kept work entries a landing is carrying out in this
+	// service now, keyed by entry: the in-process half of the landing's
+	// exactly-once, on keptanswer.go's terms. It is read and written under
+	// mu.
+	landings map[int64]bool
 	// beforeRefusalEnd runs in endRefused, after begin refused a run and
 	// before the run is ended. It is nil in production and set only by this
 	// package's tests, which use it to hold the run pending while they

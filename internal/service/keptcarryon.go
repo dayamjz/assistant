@@ -46,12 +46,14 @@ import (
 //
 // # The order, and what a stop leaves
 //
-// The identifier is minted first and the task's dispatch slot taken for it,
-// so no dispatch pass cuts a fresh clone at the path the copy is about to
-// stand at. The answer is then recorded with the identifier,
+// The identifier is minted first and the answer recorded with it,
 // store.AnswerKeptWorkCarryOn, which closes the entry, so the new task is
-// not held by it. Then, in the order intake keeps, the task is created with
-// that identifier, the copy is moved to the task's own path and reshaped as
+// not held by it. completeCarryOn then takes the task's dispatch slot for
+// that identifier before anything else, so no dispatch pass cuts a fresh
+// clone at the path the copy is about to stand at; between the answer and
+// the slot no task row exists yet, so no pass can find the task to
+// dispatch. Then, in the order intake keeps, the task is created with that
+// identifier, the copy is moved to the task's own path and reshaped as
 // dispatch shapes a fresh clone, the note is appended to the instructions
 // file, and the entry is marked carried on. Every step after the answer is
 // idempotent on what it finds (the row stands, the copy stands at the new

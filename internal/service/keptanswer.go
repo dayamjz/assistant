@@ -53,9 +53,15 @@ import (
 // lets exactly one answer stand, and the landing is carried out under an
 // anchored claim: store.ClaimKeptWorkLanding is written once before the
 // run is started, so two answers landing one entry start one run between
-// them (the second finds the first's claim and is refused while the first
-// has not yet recorded its run), and store.RecordKeptWorkLanding names the
-// run on the row after. A service that stops between the answer and the
+// them, and store.RecordKeptWorkLanding names the run on the row after. The
+// claim alone does not close the window between it and the record, where
+// a second answer finds the claim written and no run yet: that window is
+// held in this service's memory, landings, which completeLanding takes for
+// the entry before it reads the claim and gives back when it has recorded
+// the run or failed, so a second answer or the open-time completer meeting
+// a landing under way here is refused as being landed now rather than
+// starting a second run. One service holds a home, so the memory is the
+// whole of it; the claim covers a service that stopped inside the window. A service that stops between the answer and the
 // record leaves an entry answered land with no landing run, and the next
 // call or the next start completes it: an entry not yet claimed is landed
 // from the start, and one claimed but naming no run has completeLanding look
@@ -257,6 +263,19 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 	if run, ok := entry.LandedRun.Get(); ok {
 		return machine.KeptWorkAnswered{Entry: entry, Effect: machine.KeptWorkLanded, Run: run}, nil
 	}
+	if !s.takeLanding(entry.ID) {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d is being landed by another answer now", ipc.ErrRefused, entry.ID)
+	}
+	defer s.releaseLanding(entry.ID)
+	// The entry is read again under the slot, so a landing recorded between
+	// this answer's read and the slot is found rather than done twice.
+	var err error
+	if entry, err = s.store.KeptWorkEntry(ctx, entry.ID); err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	if run, ok := entry.LandedRun.Get(); ok {
+		return machine.KeptWorkAnswered{Entry: entry, Effect: machine.KeptWorkLanded, Run: run}, nil
+	}
 	plan, err := s.landingOf(ctx, entry)
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
@@ -285,6 +304,9 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 		entry = claimed
 	}
 	if run == "" {
+		if s.betweenLandingClaimAndStart != nil {
+			s.betweenLandingClaimAndStart()
+		}
 		gatePath, err := s.gatePathOf(ctx, plan.repository)
 		if err != nil {
 			return machine.KeptWorkAnswered{}, err
@@ -310,6 +332,28 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 	}
 	s.log.Printf("kept work entry %d was answered land: run %s validates %s on %s", entry.ID, run, plan.head, plan.branch)
 	return machine.KeptWorkAnswered{Entry: landed, Effect: machine.KeptWorkLanded, Run: run}, nil
+}
+
+// takeLanding takes the entry's landing slot in this service, and reports
+// false when a landing of the entry holds it now.
+func (s *Service) takeLanding(id int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.landings == nil {
+		s.landings = make(map[int64]bool)
+	}
+	if s.landings[id] {
+		return false
+	}
+	s.landings[id] = true
+	return true
+}
+
+// releaseLanding gives the entry's landing slot back.
+func (s *Service) releaseLanding(id int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.landings, id)
 }
 
 // landedRunSince finds the run a claimed landing of the entry already
