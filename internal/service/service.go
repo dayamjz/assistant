@@ -411,11 +411,17 @@ type Service struct {
 	// was still waiting when stop_grace ran out. It holds a string, and
 	// nothing until Close begins.
 	closing atomic.Value
-	work    sync.WaitGroup
+	// stopBy is the instant stop_grace runs out for this stop, fixed by
+	// stopDeadline the first time Shutdown or Close asks for it.
+	stopBy struct {
+		once sync.Once
+		at   time.Time
+	}
+	work sync.WaitGroup
 	// sup is the supervisor loop's state: its beacon writer, its watchdog's
 	// done channel, and what Close reads. It is nil until startSupervision,
 	// which Open runs after recovery, and it is deliberately not registered
-	// under work, because Close waits for it a bounded grace and for work
+	// under work, because Close waits for it until stopDeadline and for work
 	// without bound; supervise.go owns the loop and Close's doc owns the
 	// exception.
 	sup *supervision
@@ -769,14 +775,23 @@ func (s *Service) Stop(restarting bool) {
 // context cannot be ended, and a Close that waited for it would hold the
 // store open and the lock taken for as long as the wedge lasts, which turns
 // a wedged loop into an unstoppable service holding the home. So Close
-// waits CloseGrace for the loop and its watchdog, and then abandons them
-// with ErrSupervisionAbandoned in its result and goes on to close the store
-// and release the lock. What makes that safe is the incarnation fence
-// supervise.go states: the abandoned goroutine is refused at every write it
-// could still make. The residual gap is the goroutine itself, which runs on
-// inside this process until the wedged call returns or the process ends.
+// waits for the loop and its watchdog to end on their own until
+// stopDeadline, the instant stop_grace runs out for this stop, and only then
+// abandons them with ErrSupervisionAbandoned in its result and goes on to
+// close the store and release the lock; the service log says which it was.
+// What makes that safe is the incarnation fence supervise.go states: the
+// abandoned goroutine is refused at every write it could still make.
+//
+// The residual gaps: the goroutine itself runs on inside this process until
+// the wedged call returns or the process ends; and nothing tells a wedged
+// loop from one honouring its cancellation that is merely slow, so a loop
+// that needs longer than what remains of stop_grace is abandoned too. That
+// instant is the one at which Shutdown forces the stop, so under Shutdown
+// the abandonment gives up nothing the stop had not already given up; a
+// caller of Close alone is held to the same bound.
 func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
+		s.stopDeadline()
 		s.Stop(false)
 		var errs []error
 		s.closingAt("closing the protocol server, which waits for every request in flight")
