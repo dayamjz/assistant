@@ -37,6 +37,30 @@ func attemptsOf(t *testing.T, h *home.Home, id string) []store.TaskAttempt {
 	return attempts
 }
 
+// launchedAttempt waits for the task's first attempt to record a session,
+// which launch.go writes after dispatch.go has appended the second check to
+// the task's instructions, on the same pass: once it is recorded, the
+// instructions file is final for that attempt.
+func launchedAttempt(t *testing.T, h *home.Home, id string) store.TaskAttempt {
+	t.Helper()
+	deadline := time.Now().Add(launchWait)
+	for {
+		attempts := attemptsOf(t, h, id)
+		if len(attempts) > 1 {
+			t.Fatalf("task %s has attempts %+v, want the dispatch's alone", id, attempts)
+		}
+		if len(attempts) == 1 {
+			if _, ok := attempts[0].SessionRef.Get(); ok {
+				return attempts[0]
+			}
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("task %s never recorded a launched session; its attempts are %+v", id, attempts)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // kindsOf is the task's history as a list of kinds, in sequence order.
 func kindsOf(t *testing.T, h *home.Home, id string) []string {
 	t.Helper()
@@ -83,8 +107,18 @@ func TestTaskCreateIsTheCoordinatorsAndNotAWorkers(t *testing.T) {
 		if err != nil || stored.Shape != store.TaskInvestigation || stored.RepositoryID.Or("") != w.repository.ID {
 			t.Fatalf("the store holds %+v (%v) for the created task, want an investigation of %s", stored, err, w.repository.ID)
 		}
-		if raw, err := os.ReadFile(created.Instructions); err != nil || string(raw) != investigation.Instructions {
-			t.Fatalf("the instructions file reads %q (%v), want the request's", raw, err)
+		// The file is read once the launch record says it is final: dispatch
+		// appends the second check after this answer, so a read before that
+		// record is a race with the dispatch pass (#460).
+		launchedAttempt(t, w.home, created.Record.ID)
+		raw, err := os.ReadFile(created.Instructions)
+		if err != nil {
+			t.Fatalf("reading the instructions file: %v", err)
+		}
+		appended, ok := strings.CutPrefix(string(raw), investigation.Instructions)
+		if !ok || !strings.HasPrefix(appended, "\n\n"+service.SecondCheckHeading+"\n") ||
+			strings.Count(string(raw), service.SecondCheckHeading) != 1 {
+			t.Fatalf("the instructions file reads %q, want the request's followed by the second check once", raw)
 		}
 
 		var queued machine.TaskCreated

@@ -10,6 +10,11 @@ import (
 	"github.com/dayamjz/assistant/internal/session"
 )
 
+// SecondCheckHeading is the heading dispatch appends the second check to a
+// task's instructions under, for this package's external tests to tell the
+// coordinator's text from what dispatch wrote after it.
+const SecondCheckHeading = secondCheckHeading
+
 // SessionOf exposes to this package's external tests the terminal session
 // the service launched for a task, with the provider that holds it, and
 // whether it launched one. It exists only in the tests: the product reaches
