@@ -41,6 +41,12 @@ import (
 // writer in flight, which then ends without writing again; and, for
 // ErrAbandoned, a goroutine that reaps the leader once it exits.
 //
+// For ErrAbandoned, cmd.ProcessState is nil when Run returns and stays nil
+// once that goroutine has reaped the leader, which it does through
+// cmd.Process and not cmd.Wait: an abandoned program has no exit status for
+// the caller, and nothing Run left running writes a field of cmd. cmd.Wait
+// must not be called on it.
+//
 // cmd.Process is nil exactly when nothing was started, and the error is then
 // ErrMisconfigured when Run refused cmd, ctx's error when ctx had already
 // ended, or cmd.Start's or a pipe's. Once the program started, the error is
@@ -86,10 +92,15 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 			timer.Stop()
 			endGroup(pgid)
 		case <-timer.C:
+			// The reap goes through cmd.Process rather than cmd.Wait,
+			// which would write cmd.ProcessState after Run returned and
+			// race every caller reading it. Every stream the child holds
+			// is a file or nil, so cmd.Wait would have nothing else to
+			// finish: no copier, no pipe of its own, no context.
 			go func() {
 				<-exited
 				endGroup(pgid)
-				_ = cmd.Wait()
+				_, _ = cmd.Process.Wait()
 			}()
 			_ = s.cut(grace)
 			return ErrAbandoned

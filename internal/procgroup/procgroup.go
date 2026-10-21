@@ -43,6 +43,8 @@
 //     group, so no later incarnation reclaims it.
 //   - A leader SIGKILL does not end within the grace is left to a goroutine
 //     that reaps it once it exits, and Run answers ErrAbandoned without it.
+//     Its exit status is then nobody's: the goroutine reaps it without
+//     writing cmd.ProcessState, which stays nil.
 //   - Anything else in this process that reaped every child, a wait on any
 //     process, would undo the unreaped guarantee. Nothing in this module
 //     does.
@@ -60,6 +62,9 @@ import (
 // ErrAbandoned is Run's answer when the context ended, the group was sent
 // SIGKILL, and the leader still had not exited within the grace. The leader is
 // reaped by a goroutine once it does exit, and nothing it wrote is reported.
+// It reports no exit status either: cmd.ProcessState is nil and stays nil, so
+// a caller reading it reads "no status" and races nothing, and a caller may
+// not call cmd.Wait on an abandoned program.
 var ErrAbandoned = errors.New("procgroup: the program did not exit within the grace after its group was killed")
 
 // ErrMisconfigured is Run's refusal of a command it cannot start on its own

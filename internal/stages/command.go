@@ -274,6 +274,8 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	timedOut := spec.timeout > 0 && ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded)
 
 	res := commandResult{code: -1, short: awaitOutput(copied, read, spec.grace)}
+	// A command procgroup.Run abandoned reports no status: procgroup.ErrAbandoned
+	// owns that its process state stays nil, so this read finds none.
 	if cmd.ProcessState != nil {
 		res.exited = cmd.ProcessState.Exited()
 		res.code = cmd.ProcessState.ExitCode()
@@ -282,6 +284,12 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 		res.err = runErr
 		if timedOut {
 			res.err = fmt.Errorf("%w of %s, so it was ended", errCommandTimedOut, spec.timeout)
+			if errors.Is(runErr, procgroup.ErrAbandoned) {
+				// Its group was sent SIGKILL, but the command had not exited
+				// when this call stopped waiting for it, so the result says
+				// that too rather than that it was ended.
+				res.err = fmt.Errorf("%w of %s, and %w", errCommandTimedOut, spec.timeout, runErr)
+			}
 		}
 	}
 	return settle(res)
