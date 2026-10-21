@@ -360,45 +360,64 @@ func TestABlockerWhoseNameCannotBeReadIsStillReported(t *testing.T) {
 }
 
 // TestBlockerForIsTheBlockerTheSweepRecords holds agents.BlockerFor to the
-// listing: a real process of this test's user, detached in a copy and
+// listing: a real process of this test's user, running in a copy and
 // refused through a real refusal carried over, is listed blocking by the
 // sweep, and BlockerFor of the same identity is equal to that blocker,
 // user identifiers and name included. Once the process has exited,
 // BlockerFor answers not present rather than a blocker, as the listing
-// skips a process that exited during its reads.
+// skips a process that exited during its reads: first while it has
+// exited and nothing has reaped it, and then once it is reaped.
+//
+// The process is this test's child, so both states are reached by waiting
+// on the kernel rather than by reading: a descriptor the process held
+// closing is no proof it has exited, and #465 was this test reading a
+// killed process as running after that close. The unreaped state is
+// planted on Linux only (waitExitedUnreaped says why), and
+// TestEndGroupCountsAnExitedUnreapedMemberAsGone holds the identity read
+// of one on both platforms.
 func TestBlockerForIsTheBlockerTheSweepRecords(t *testing.T) {
 	requiresSweep(t)
 	refusal := realRefusal(t)
 	h, _ := sweepHome(t, sweepBase(t), "home")
 	copyDir := makeTaskCopy(t, h)
-	d := startDetached(t, copyDir, false)
+	c := startChild(t, copyDir)
 
-	r, err := agents.SweepRefusing(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir, func(pid int) bool { return pid == d.id.PID }, refusal)
+	r, err := agents.SweepRefusing(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir, func(pid int) bool { return pid == c.id.PID }, refusal)
 	if err != nil {
 		t.Fatalf("sweeping %s: %v", copyDir, err)
 	}
-	i := slices.IndexFunc(r.UnreadableBlocking, func(b agents.Blocker) bool { return b.Identity == d.id })
+	i := slices.IndexFunc(r.UnreadableBlocking, func(b agents.Blocker) bool { return b.Identity == c.id })
 	if i < 0 {
-		t.Fatalf("the sweep did %s, want %s blocking", r, d.id)
+		t.Fatalf("the sweep did %s, want %s blocking", r, c.id)
 	}
 	listed := r.UnreadableBlocking[i]
-	got, present, err := agents.BlockerFor(d.id)
+	got, present, err := agents.BlockerFor(c.id)
 	if err != nil || !present {
-		t.Fatalf("BlockerFor(%s): present %v, %v", d.id, present, err)
+		t.Fatalf("BlockerFor(%s): present %v, %v", c.id, present, err)
 	}
 	if got.Identity != listed.Identity || !slices.Equal(got.UIDs, listed.UIDs) || got.Name != listed.Name || (got.NameErr == nil) != (listed.NameErr == nil) {
-		t.Fatalf("BlockerFor(%s) is %s, want the blocker the sweep listed, %s", d.id, got, listed)
+		t.Fatalf("BlockerFor(%s) is %s, want the blocker the sweep listed, %s", c.id, got, listed)
 	}
 	if len(got.UIDs) == 0 {
-		t.Fatalf("BlockerFor(%s) carries no user identifiers: %s", d.id, got)
+		t.Fatalf("BlockerFor(%s) carries no user identifiers: %s", c.id, got)
 	}
 
-	if err := syscall.Kill(d.id.PID, syscall.SIGKILL); err != nil {
+	if err := syscall.Kill(c.id.PID, syscall.SIGKILL); err != nil {
 		t.Fatal(err)
 	}
-	<-d.ended
-	waitEnded(t, d, "being killed")
-	if b, present, err := agents.BlockerFor(d.id); present || err != nil {
-		t.Fatalf("BlockerFor of an exited process is %s, present %v, %v, want not present", b, present, err)
+	if waitExitedUnreaped(t, c.id.PID) {
+		// The control: signal zero still reaches the process, so it is in
+		// the process table and the answer below is about a zombie, not
+		// about a process already gone.
+		if err := syscall.Kill(c.id.PID, 0); err != nil {
+			t.Fatalf("signal zero to the exited, unreaped process %d: %v, want it still in the process table", c.id.PID, err)
+		}
+		if b, present, err := agents.BlockerFor(c.id); present || err != nil {
+			t.Fatalf("BlockerFor of an exited, unreaped process is %s, present %v, %v, want not present", b, present, err)
+		}
+	}
+	c.reap(t)
+	if b, present, err := agents.BlockerFor(c.id); present || err != nil {
+		t.Fatalf("BlockerFor of an exited, reaped process is %s, present %v, %v, want not present", b, present, err)
 	}
 }
