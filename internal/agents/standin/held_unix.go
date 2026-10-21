@@ -27,6 +27,15 @@ import (
 // arms before Main), and it is a process of this binary, which the check
 // lists by executable.
 //
+// The property HeldWait needs is that the held process ends with an owner
+// that will look for it: the test binary whose RunOwned check follows the
+// test that started it. So the owner it names is this process, as
+// RunOwned recorded it, and it refuses unless RunOwned's run is running in
+// this process (requireOwned). An inherited OwnerVar is no proof of that:
+// a test binary another package's tests started inherits it without
+// running RunOwned, and a held process naming that outer owner would
+// outlive the inner binary unreported by any check of its own.
+//
 // A test that has to end a held process itself asks it to record its own
 // identity (HeldWaitIdentified) and reads that back (ReadHeldIdentity), so
 // what it signals is the process the held process read itself to be, start
@@ -108,9 +117,9 @@ func recordHeldIdentity(path string) error {
 // until file exists, given the owner identity explicitly so that no
 // environment a worker or a shell builds can drop it, and that exits
 // nonzero when the held process was ended rather than released, so a shell
-// that goes on with && after it goes no further. It fails tb outside
-// RunOwned, where there is no owner for the process to end with. The held
-// process only ends with its owner when the package's TestMain calls
+// that goes on with && after it goes no further. It fails tb unless
+// RunOwned's run is running in this process, whatever OwnerVar holds. The
+// held process only ends with its owner when the package's TestMain calls
 // WatchOwner and then Main, which every RunOwned package's does.
 func HeldWait(tb testing.TB, file string) string {
 	tb.Helper()
@@ -129,10 +138,7 @@ func HeldWaitIdentified(tb testing.TB, file, identity string) string {
 // heldCommand is the command line HeldWait and HeldWaitIdentified build.
 func heldCommand(tb testing.TB, args ...string) string {
 	tb.Helper()
-	owner := os.Getenv(OwnerVar)
-	if owner == "" {
-		tb.Fatalf("%s is unset, so a held process would end with nothing; run the tests under standin.RunOwned", OwnerVar)
-	}
+	owner := requireOwned(tb, "a held process")
 	self, err := os.Executable()
 	if err != nil {
 		tb.Fatal(err)

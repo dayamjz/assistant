@@ -3,14 +3,99 @@
 package standin
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 )
+
+// heldUnownedVar names a directory when a test starts this binary to run
+// TestHeldWaitOutsideRunOwnedChild outside RunOwned (unownedMain), with the
+// owner variable it inherited from the outer binary left in place.
+const heldUnownedVar = "STANDIN_TEST_HELD_UNOWNED"
+
+// unownedMain runs this binary's tests without RunOwned when heldUnownedVar
+// is set, the shape of a test binary another package's tests started: it
+// inherits OwnerVar and records no ownership of its own. It returns at once
+// otherwise.
+func unownedMain(m *testing.M) {
+	if os.Getenv(heldUnownedVar) == "" {
+		return
+	}
+	os.Exit(m.Run())
+}
+
+// TestHeldWaitOutsideRunOwnedChild is the test the binary unownedMain runs
+// executes, and is skipped otherwise. It asks for a held process that
+// records its identity in the directory heldUnownedVar names, starts it,
+// and passes once it has recorded it, leaving it running.
+func TestHeldWaitOutsideRunOwnedChild(t *testing.T) {
+	dir := os.Getenv(heldUnownedVar)
+	if dir == "" {
+		t.Skip("run by TestHeldWaitRefusesABinaryNotRunningRunOwned as a test binary of its own")
+	}
+	identity := filepath.Join(dir, "identity")
+	cmd := exec.Command("/bin/sh", "-c", "exec "+HeldWaitIdentified(t, filepath.Join(dir, "release"), identity))
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		if _, err := ReadHeldIdentity(identity); err == nil {
+			t.Log("a held process started outside RunOwned")
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("the held process never recorded its identity")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// HeldWait refuses in a test binary that is not running RunOwned even when
+// it inherited a nonempty OwnerVar from the binary that started it, because
+// the held process would name that outer owner and no check of the inner
+// binary's would look for it. The child is this binary run without
+// RunOwned with this process's OwnerVar in its environment; it must fail
+// with the refusal and start nothing. Before the refusal read RunOwned's
+// own state, the child passed and its held process kept running. The
+// control is every other held process in this package's tests, asked for
+// inside RunOwned.
+func TestHeldWaitRefusesABinaryNotRunningRunOwned(t *testing.T) {
+	t.Parallel()
+	if os.Getenv(OwnerVar) == "" {
+		t.Fatalf("%s is unset in a test under RunOwned, so the child would not inherit one", OwnerVar)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	identity := filepath.Join(dir, "identity")
+	t.Cleanup(func() {
+		if id, err := ReadHeldIdentity(identity); err == nil {
+			(Process{Identity: id}).End()
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
+	child := exec.CommandContext(ctx, self, "-test.run=^TestHeldWaitOutsideRunOwnedChild$", "-test.count=1", "-test.v")
+	child.Env = append(os.Environ(), heldUnownedVar+"="+dir)
+	out, err := child.CombinedOutput()
+	if err == nil {
+		t.Fatalf("a binary not running RunOwned started a held process and passed:\n%s", out)
+	}
+	if !strings.Contains(string(out), "is not running inside standin.RunOwned in this process") {
+		t.Fatalf("the child failed without HeldWait's refusal:\n%s", out)
+	}
+	if id, err := ReadHeldIdentity(identity); err == nil {
+		t.Fatalf("the refused child still started held process %d:\n%s", id.PID, out)
+	}
+}
 
 // heldRun is a held process startIdentifiedHeld started: exited is closed
 // once it has been waited for, with its error then in err.

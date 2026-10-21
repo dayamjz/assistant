@@ -26,7 +26,7 @@ func sweep(string, string) int { return 1 }
 // requireOwned asks nothing here. On Windows, Tmux skips the test before it
 // asks; no other platform this file builds for is a supported one, and none
 // has the process reads the sweep would end a server through.
-func requireOwned(testing.TB) {}
+func requireOwned(testing.TB, string) string { return "" }
 
 // ownedTmux is empty here, since RunOwned writes no tmux wrapper, so Tmux
 // skips a terminal test on a platform this file builds for.
