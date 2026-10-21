@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"strings"
 	"sync"
@@ -105,6 +107,40 @@ func TestAFailedCallIsNeverAnAnswer(t *testing.T) {
 			assertFailed(t, c.Trace(t.Context(), "notes.md", "adds a line", diff), tc.want)
 			assertFailed(t, c.Screen(t.Context(), "notes.md", diff), tc.want)
 		})
+	}
+}
+
+// A client's request survives another provider in the process stopping. That
+// was #470: httptest.Server.Close closes the idle connections of
+// http.DefaultTransport, and a reply with no body puts its connection back
+// among the idle ones before the client has its response, so a sibling
+// subtest's provider stopping at that moment turned "an empty body" into a
+// transport failure. The trace hook PutIdleConn runs at that moment, so the
+// test stops a sibling there on every request rather than waiting for chance
+// to line the two up.
+func TestAnotherProviderStoppingDoesNotReachAClient(t *testing.T) {
+	t.Parallel()
+	provider := judgetest.New(t, judgetest.Always(judgetest.Raw(http.StatusOK, "")))
+	c := client(provider)
+	for range 200 {
+		sibling := httptest.NewServer(http.NotFoundHandler())
+		var once sync.Once
+		ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+			PutIdleConn: func(err error) {
+				if err == nil {
+					once.Do(sibling.Close)
+				}
+			},
+		})
+		assertFailed(t, c.Screen(ctx, "notes.md", diff), judge.FailureUnreadable)
+		// The hook firing is what makes this test test anything: without it
+		// no sibling stopped while the reply was in flight.
+		stopped := true
+		once.Do(func() { stopped = false })
+		if !stopped {
+			t.Fatal("no connection went idle during the request, so no sibling stopped while it was in flight")
+		}
+		sibling.Close()
 	}
 }
 
