@@ -198,18 +198,23 @@ func TestAKeptCopyWhoseWorkLandsIsRemovedAndItsEntryClosed(t *testing.T) {
 	git(t, subject, "push", "--quiet", "origin", "work")
 
 	withService(t, h, func(under serviceUnderTest) {
+		// The copy goes first and the removal is marked after it, which is
+		// what closes the entry, so both are waited for: a copy gone with
+		// its entry still listed is the state between the two, and only one
+		// that outlasts the deadline is the defect.
 		deadline := time.Now().Add(30 * time.Second)
 		for {
-			if _, err := os.Stat(entry.CopyPath); os.IsNotExist(err) {
+			_, err := os.Stat(entry.CopyPath)
+			gone := os.IsNotExist(err)
+			listed := statusOf(t, under.client, subject).KeptWork
+			if gone && len(listed) == 0 {
 				break
 			}
 			if !time.Now().Before(deadline) {
-				t.Fatalf("recovery left the copy at %s standing after its work landed; the log reads:\n%s", entry.CopyPath, readServiceLog(t, h))
+				t.Fatalf("after its work landed the copy at %s is gone: %v, and status lists kept work %+v; want it gone and nothing listed; the log reads:\n%s",
+					entry.CopyPath, gone, listed, readServiceLog(t, h))
 			}
 			time.Sleep(20 * time.Millisecond)
-		}
-		if listed := statusOf(t, under.client, subject).KeptWork; len(listed) != 0 {
-			t.Fatalf("status still lists kept work %+v for a copy removed on a proof", listed)
 		}
 	})
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
