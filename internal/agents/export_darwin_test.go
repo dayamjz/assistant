@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"os"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -18,7 +19,7 @@ type Refusal struct{ PID int }
 // table, other than this one, that is running and that the reading left
 // out. ok is false where there is none, or the reading failed.
 func RealRefusal(ctx context.Context) (Refusal, bool) {
-	cwds, err := readCwds(ctx)
+	cwds, err := systemLsof.readCwds(ctx)
 	if err != nil {
 		return Refusal{}, false
 	}
@@ -47,7 +48,7 @@ func RealRefusal(ctx context.Context) (Refusal, bool) {
 func SweepRefusing(ctx context.Context, s *Sweeper, dir string, refuse func(pid int) bool, _ Refusal) (SweepResult, error) {
 	return s.sweep(ctx, dir, func(ctx context.Context, d string) (listing, error) {
 		return listUnderReading(ctx, d, func(ctx context.Context) (map[int]string, error) {
-			cwds, err := readCwds(ctx)
+			cwds, err := systemLsof.readCwds(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -75,4 +76,25 @@ var ParseLsof = parseLsof
 
 // LsofOutput is the real output of the lsof run readCwds makes, so a test
 // can derive the shapes the parse refuses from what it is really given.
-var LsofOutput = runLsof
+var LsofOutput = systemLsof.run
+
+// LsofDeadline is the deadline the listing's lsof run carries.
+const LsofDeadline = lsofDeadline
+
+// ReadCwdsWithLsof is the listing's read of the working directories, made
+// through the same run with program in place of /usr/sbin/lsof and
+// deadline in place of LsofDeadline, so a test can cancel ctx partway.
+func ReadCwdsWithLsof(ctx context.Context, program string, deadline time.Duration) (map[int]string, error) {
+	return lsofRun{program: program, deadline: deadline}.readCwds(ctx)
+}
+
+// SweepWithLsof is Sweeper.Sweep with every read the listing makes real and
+// lsof's run made through the same code with program in place of
+// /usr/sbin/lsof and deadline in place of LsofDeadline, so a test can stand
+// a program that never exits where lsof is.
+func SweepWithLsof(ctx context.Context, s *Sweeper, dir, program string, deadline time.Duration) (SweepResult, error) {
+	run := lsofRun{program: program, deadline: deadline}
+	return s.sweep(ctx, dir, func(ctx context.Context, d string) (listing, error) {
+		return listUnderReading(ctx, d, run.readCwds)
+	})
+}

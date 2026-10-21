@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -55,7 +57,7 @@ var errLsofNoSelf = errors.New("agents: lsof did not report this process's own w
 // path holds against the real lsof run, so it is compared like any other
 // byte: parseLsof takes a name as the whole of its line after the n (#415).
 func listUnder(ctx context.Context, dir string) (listing, error) {
-	return listUnderReading(ctx, dir, readCwds)
+	return listUnderReading(ctx, dir, systemLsof.readCwds)
 }
 
 // listUnderReading is listUnder with the working directories read by
@@ -118,6 +120,32 @@ func lsofComparable(dir string) error {
 	return nil
 }
 
+// lsofRun is the lsof run readCwds makes: the program run and the deadline
+// it runs under. systemLsof is the one the listing makes; a test names
+// another program through the same run.
+type lsofRun struct {
+	program  string
+	deadline time.Duration
+}
+
+// systemLsof is the run listUnder makes.
+var systemLsof = lsofRun{program: lsofPath, deadline: lsofDeadline}
+
+// lsofDeadline bounds one whole lsof run, on run's terms: starting it,
+// waiting on it, ending its group and collecting its output all fall inside
+// it. It is a fixed bound of this package rather than a configuration key,
+// because it bounds a reading helper no operator decision turns on, and a
+// key would be a row in internal/config's table for nothing to set. Its size
+// is the one terminalCommandTimeout gives a tmux client: a run over every
+// process of a development machine took under a second when this was
+// written, so a run still going at nine is taken as wedged.
+const lsofDeadline = terminalCommandTimeout
+
+// lsofCleanupShare is the part of a run's deadline kept back for ending its
+// group and collecting its output: lsof itself is given the deadline less
+// one lsofCleanupShare-th of it, and is killed when that passes.
+const lsofCleanupShare = 10
+
 // readCwds runs lsof once over every process, selecting only working
 // directory descriptors and asking for the process, descriptor and name
 // fields, and returns the working directory it reported for each process.
@@ -129,8 +157,8 @@ func lsofComparable(dir string) error {
 // was reported for it, not the status. A run that ended any other way, whose
 // output parseLsof refuses, or whose output does not report this process's
 // own working directory is a failed listing.
-func readCwds(ctx context.Context) (map[int]string, error) {
-	out, err := runLsof(ctx)
+func (l lsofRun) readCwds(ctx context.Context) (map[int]string, error) {
+	out, err := l.run(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -144,21 +172,187 @@ func readCwds(ctx context.Context) (map[int]string, error) {
 	return cwds, nil
 }
 
-// runLsof is readCwds' run of lsof, and returns its standard output when it
+// run is readCwds' run of lsof, and returns its standard output when it
 // exited with a status readCwds accepts.
-func runLsof(ctx context.Context) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, lsofPath, "-n", "-P", "-w", "-d", "cwd", "-F", "pfn")
+//
+// The run carries l.deadline whatever ctx carries, because the sweep's
+// callers may hand it a context that never ends: internal/service's
+// sweepFinished runs under context.WithoutCancel. lsof is started as the
+// leader of a process group of its own, and the group is signalled only
+// while that leader is unreaped, so its identifier cannot have been given
+// to another process and still names this group. That is mechanism rather
+// than timing: nothing reaps the leader until cmd.Wait, which is called
+// only after the last signal, and the wait for its exit is a kqueue's
+// NOTE_EXIT, which leaves it unreaped. When lsof has not exited by its share
+// of the deadline, or ctx ends first, the group is sent SIGKILL, so a
+// leader that ignores SIGTERM and a descendant that stayed in its group are
+// both ended. Once the leader has exited, by either path, the group is sent
+// SIGKILL again, which ends a descendant a leader that exited on its own
+// left in it. Then the leader is reaped, with WaitDelay set to what is left
+// of the deadline for output a descendant that left the group holds open,
+// so the whole run returns within l.deadline, and the wait for that reap
+// also ends when ctx does. A deadline that passed, including one that
+// passed while output was still held open, is ErrSweepTimedOut, and ctx
+// ending at any point is ctx's error, each in place of whatever the run
+// printed or exited with: output is never taken as whole past either.
+//
+// Residual gaps: a descendant that left the group is not ended, only stops
+// being waited on; a leader that SIGKILL does not end before the deadline
+// is left to a goroutine that reaps it once it exits, and the run still
+// answers at the deadline; and anything else in this process that reaped
+// every child, a wait on any process, would undo the unreaped guarantee,
+// which nothing in this module does.
+func (l lsofRun) run(ctx context.Context) ([]byte, error) {
+	end := time.Now().Add(l.deadline)
+	cut := time.NewTimer(l.deadline - l.deadline/lsofCleanupShare)
+	defer cut.Stop()
+	cmd := exec.Command(l.program, "-n", "-P", "-w", "-d", "cwd", "-F", "pfn")
 	cmd.Env = []string{}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("agents: running %s: %w", l.program, err)
+	}
+	pgid := cmd.Process.Pid
+	// answer is what the run returns in place of err: ctx's error once ctx
+	// has ended, whatever else stopped the run, so a cancellation observed
+	// before the run answers always wins.
+	answer := func(err error) error {
+		if ctx.Err() != nil {
+			return fmt.Errorf("agents: running %s: %w", l.program, ctx.Err())
+		}
+		return err
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- awaitExitUnreaped(pgid) }()
+	var stopped error
+	select {
+	case err := <-exited:
+		if err != nil {
+			// Its exit cannot be observed, but the leader is still
+			// unreaped, since only cmd.Wait reaps it, so the group is
+			// still this run's to end before that reap.
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			reapWithin(cmd, end)
+			return nil, answer(fmt.Errorf("agents: waiting on %s: %w", l.program, err))
+		}
+	case <-cut.C:
+		stopped = fmt.Errorf("%w: %s ran past %s and its process group was ended", ErrSweepTimedOut, l.program, l.deadline-l.deadline/lsofCleanupShare)
+	case <-ctx.Done():
+		stopped = fmt.Errorf("agents: running %s: %w", l.program, ctx.Err())
+	}
+	if stopped != nil {
+		_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		select {
+		case <-exited:
+		case <-time.After(remaining(end)):
+			go func() {
+				<-exited
+				_ = cmd.Wait()
+			}()
+			return nil, answer(stopped)
+		}
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	cmd.WaitDelay = remaining(end)
+	reaped := make(chan error, 1)
+	go func() { reaped <- cmd.Wait() }()
+	bound := time.NewTimer(remaining(end))
+	defer bound.Stop()
+	var err error
+	select {
+	case err = <-reaped:
+	case <-bound.C:
+	case <-ctx.Done():
+	}
+	// The output is taken as whole only when the reap came back before the
+	// deadline passed and before ctx ended, and without os/exec having
+	// closed a pipe a process that left the group still held, which it does
+	// once WaitDelay, the rest of the deadline, has passed. Past either
+	// check the reap is left to its goroutine and the output is never read.
+	switch {
+	case ctx.Err() != nil, stopped != nil:
+		return nil, answer(stopped)
+	case !time.Now().Before(end), errors.Is(err, exec.ErrWaitDelay):
+		return nil, answer(fmt.Errorf("%w: the output of %s was not complete within %s and its process group was ended", ErrSweepTimedOut, l.program, l.deadline))
+	}
+	out := stdout.Bytes()
 	if err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			return nil, fmt.Errorf("agents: running %s: %w (%s)", lsofPath, err, firstLine(stderr.String()))
+			return nil, fmt.Errorf("agents: running %s: %w (%s)", l.program, err, firstLine(stderr.String()))
 		}
 	}
 	return out, nil
+}
+
+// awaitExitUnreaped blocks until the child pid has exited and returns
+// without reaping it, so its identifier stays its own until cmd.Wait reaps
+// it. It waits on a kqueue for the process's NOTE_EXIT, which reports an
+// exit and reaps nothing, and then reads the process table, so an exit
+// before the registration is not waited on for ever: a child that is a
+// zombie, or that the registration could not find, has exited, since
+// nothing but cmd.Wait reaps it.
+func awaitExitUnreaped(pid int) error {
+	kq, err := unix.Kqueue()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(kq) }()
+	var change unix.Kevent_t
+	unix.SetKevent(&change, pid, unix.EVFILT_PROC, unix.EV_ADD|unix.EV_ONESHOT)
+	change.Fflags = unix.NOTE_EXIT
+	// The registration is made without blocking, so the process table can
+	// be read between it and the wait.
+	changes, timeout := []unix.Kevent_t{change}, &unix.Timespec{}
+	events := make([]unix.Kevent_t, 1)
+	for {
+		n, err := unix.Kevent(kq, changes, events, timeout)
+		switch {
+		case errors.Is(err, unix.EINTR):
+			continue
+		case errors.Is(err, unix.ESRCH):
+			return nil
+		case err != nil:
+			return err
+		case n == 1 && events[0].Flags&unix.EV_ERROR != 0 && events[0].Data == int64(unix.ESRCH):
+			return nil
+		case n == 1 && events[0].Flags&unix.EV_ERROR != 0:
+			return unix.Errno(events[0].Data)
+		case n == 1 && events[0].Fflags&unix.NOTE_EXIT != 0:
+			return nil
+		}
+		if changes != nil {
+			changes, timeout = nil, nil
+			if _, running, err := kinfo(pid); err != nil {
+				return err
+			} else if !running {
+				return nil
+			}
+		}
+	}
+}
+
+// reapWithin reaps cmd's leader, waiting until end at most, and leaves the
+// reap to a goroutine of its own when end passes first.
+func reapWithin(cmd *exec.Cmd, end time.Time) {
+	cmd.WaitDelay = remaining(end)
+	reaped := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(reaped)
+	}()
+	select {
+	case <-reaped:
+	case <-time.After(remaining(end)):
+	}
+}
+
+// remaining is how long is left until end, never less than a millisecond,
+// because a WaitDelay of zero is os/exec's way of asking for no bound.
+func remaining(end time.Time) time.Duration {
+	return max(time.Until(end), time.Millisecond)
 }
 
 // parseLsof reads lsof's field output for working directory descriptors: a
