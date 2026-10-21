@@ -98,10 +98,10 @@ func TestKeptWorkIsAnsweredOnceAndOtherwiseSealed(t *testing.T) {
 	if _, err := s.AnswerKeptWork(ctx, entry.ID, "keep", ResolvedByMachineInterface()); !errors.Is(err, ErrUnknownKeptAnswer) {
 		t.Fatalf("an answer outside the set = %v; want ErrUnknownKeptAnswer", err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, Resolver{}); !errors.Is(err, ErrNoResolver) {
+	if _, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, "shown", Resolver{}); !errors.Is(err, ErrNoResolver) {
 		t.Fatalf("an answer from nobody = %v; want ErrNoResolver", err)
 	}
-	answered, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface())
+	answered, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, "shown", ResolvedByMachineInterface())
 	if err != nil {
 		t.Fatalf("AnswerKeptWork: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 	if listed, err := s.OpenKeptWork(ctx); err != nil || len(listed) != 0 {
 		t.Fatalf("OpenKeptWork = %+v, %v; want none", listed, err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, open.ID, KeptDiscard, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkClosed) {
+	if _, err := s.AnswerKeptWorkDiscard(ctx, open.ID, "shown", ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkClosed) {
 		t.Fatalf("answering a closed entry = %v; want ErrKeptWorkClosed", err)
 	}
 	for name, statement := range map[string]string{

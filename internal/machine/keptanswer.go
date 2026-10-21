@@ -22,6 +22,31 @@ type KeptWorkAnswerRequest struct {
 	Hold string `json:"hold"`
 	// Answer is land, carry-on or discard.
 	Answer string `json:"answer"`
+	// Confirm is, with a discard answer, the digest a discard shown
+	// beforehand carried (KeptWorkLoss.Digest): without it a discard shows
+	// what would be lost and removes nothing, and with it the copy is
+	// removed only when it still holds exactly what that digest was shown
+	// for. It is refused with any other answer.
+	Confirm string `json:"confirm,omitempty"`
+}
+
+// KeptWorkLoss is what discarding a kept copy would lose, as the program
+// read it: the commits the default branch lacks, the three indicators of
+// what no commit records, the commit HEAD stands on, and the digest of
+// all of it, which a discard is confirmed with.
+type KeptWorkLoss struct {
+	// Head is the commit the copy's HEAD stands on.
+	Head string `json:"head"`
+	// Lacks is the commits the copy holds that the default branch lacks.
+	Lacks []string `json:"lacks"`
+	// Dirty, Untracked and Stash say whether the copy holds a tracked
+	// change, a file no commit records, and a stash.
+	Dirty     bool `json:"dirty"`
+	Untracked bool `json:"untracked"`
+	Stash     bool `json:"stash"`
+	// Digest confirms exactly this: a discard given it removes the copy
+	// only while the copy still holds what it digests.
+	Digest string `json:"digest"`
 }
 
 // KeptWorkEffect is what an answer to a kept work entry did. The set is
@@ -39,6 +64,14 @@ const (
 	// saying what is already there. Its worker starts on the dispatch that
 	// follows.
 	KeptWorkCarriedOn KeptWorkEffect = "carried-on"
+	// KeptWorkDiscardShown is a discard given without Confirm: Loss says
+	// exactly what would be lost and carries the digest to confirm with,
+	// and nothing was recorded or removed.
+	KeptWorkDiscardShown KeptWorkEffect = "discard-shown"
+	// KeptWorkDiscarded is a discard answer recorded, with what it was
+	// shown, and carried out: the copy is gone, and Loss is what went with
+	// it.
+	KeptWorkDiscarded KeptWorkEffect = "discarded"
 )
 
 // KeptWorkAnswered is the answer to a KeptWorkAnswerRequest: the entry as
@@ -53,6 +86,9 @@ type KeptWorkAnswered struct {
 	Run string `json:"run,omitempty"`
 	// Task is the task a carry on created, empty for every other effect.
 	Task string `json:"task,omitempty"`
+	// Loss is what a discard would lose or lost, for the two discard
+	// effects, and absent for every other.
+	Loss *KeptWorkLoss `json:"loss,omitempty"`
 }
 
 // phraseKeptWorkLanded is the row a landed answer reads as.
@@ -69,15 +105,37 @@ var phraseKeptWorkCarriedOn = Phrase{
 	Decision:    "Follow the new work with assistant tasks; it asks you what any work would.",
 }
 
+// phraseKeptWorkDiscardShown is the row a discard shown and not confirmed
+// reads as. What would be lost and the digest are the structured
+// rendering's, which the row points at (P13).
+var phraseKeptWorkDiscardShown = Phrase{
+	Outcome:     "Nothing was removed: this is what discarding that local copy would lose.",
+	Consequence: "The copy stays, with everything it holds, until you confirm.",
+	Decision:    "Read exactly what would be lost, and the digest of it, with --json; to remove the copy, give the same answer again with --confirm and that digest, which is taken only while the copy still holds exactly that.",
+}
+
+// phraseKeptWorkDiscarded is the row a discard carried out reads as.
+var phraseKeptWorkDiscarded = Phrase{
+	Outcome:     "That local copy was removed, with everything in it that was nowhere else.",
+	Consequence: "What was in it is gone, and new work in the same project no longer waits on it.",
+	Decision:    "Nothing to decide.",
+}
+
 // KeptWorkAnsweredPhrase is the line a person reads for an answered kept
-// work entry: the carried-on row for a carry on and the landed row for a
-// landing.
+// work entry: one row per effect.
 func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
-	if a.Effect == KeptWorkCarriedOn {
+	switch a.Effect {
+	case KeptWorkCarriedOn:
 		return phraseKeptWorkCarriedOn
+	case KeptWorkDiscardShown:
+		return phraseKeptWorkDiscardShown
+	case KeptWorkDiscarded:
+		return phraseKeptWorkDiscarded
 	}
 	return phraseKeptWorkLanded
 }
 
 // keptAnswerRows is this file's rows for TablePhrases.
-func keptAnswerRows() []Phrase { return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn} }
+func keptAnswerRows() []Phrase {
+	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, phraseKeptWorkDiscarded}
+}

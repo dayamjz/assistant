@@ -65,8 +65,11 @@ paths: ["internal/service/**"]
   claimed once (`ClaimKeptWorkLanding`) and carried out through
   `startPushedBranch`; carry on (`keptcarryon.go`), which creates a new task
   through `queue.Create` with the identifier the answer named and adopts
-  the kept copy; both completed at open when a stopped service left them.
-  Discard is refused.
+  the kept copy; and discard (`keptdiscard.go`), shown with a digest and
+  removed only on it through `internal/tasks`' `Loss` and `Discard`, with
+  the answer recorded first and what "person-only" is and is not enforced
+  by stated in its header; all three completed at open when a stopped
+  service left them.
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances
   in, and `report` reads it rather than inferring it.

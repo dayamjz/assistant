@@ -551,8 +551,28 @@ anything is written into it; the task the copy outlived keeps its record,
 the new task's instructions are the old intake text with a note saying
 what is already there, and the task dispatches into the copy as any task
 does. A run's copy is not carried on in this build (it is a worktree of the
-gate on a branch of yours, which a task's copy cannot be): land it, or push
-its commit yourself. Discard is refused in this build and records nothing.
+gate on a branch of yours, which a task's copy cannot be): land it, push
+its commit yourself, or discard it.
+
+Discard, `--answer discard` with the same flags, is given twice. Alone it
+shows exactly what removing the copy would lose, in the structured answer
+(`--json`): the commits the default branch lacks, whether the copy holds a
+change, a file or a stash no commit records, and a digest of all of it; it
+records and removes nothing. Given again with `--confirm DIGEST` it removes
+the copy only while the copy still holds exactly what that digest was shown
+for, so a commit, an edit, a file or a stash made since is refused and you
+are told to look again. The entry then records the answer, what it was
+shown and who gave it. An entry whose "what the default branch lacks" is
+not established (the upstream could not be read when the copy was kept) is
+refused rather than shown a list that may be wrong; the next cleanup of the
+unchanged copy establishes it.
+
+Discard is yours alone: a task's worker and a subordinate coordinator are
+refused it, and nothing in the program discards on its own. What the
+record says about who discarded is what this surface witnesses, which is
+the machine interface and not a person: a coordinator agent and you reach
+the service the same way, so the answer is recorded as the machine
+interface's and never claims a person decided (section 8's resolver rule).
 
 ## Waiting on a fleet
 

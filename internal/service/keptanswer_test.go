@@ -16,8 +16,9 @@ import (
 
 // PRD section 6's land answer, through the real socket: a run's copy kept on
 // an unpushed commit is an open entry holding a new task of its project. An
-// answer of carry-on or discard is refused and records nothing, and so is a
-// land naming the wrong owner. Land then records the answer, brings the
+// answer of carry-on, a discard confirmed with a digest that is not the
+// copy's, and a land naming the wrong owner are each refused and record
+// nothing. Land then records the answer, brings the
 // copy's commit into the gate and starts a run of the entry's branch at it
 // the way a push does, names that run on the entry, and lifts the hold, so
 // the waiting task dispatches. The same answer again names the same run and
@@ -57,7 +58,7 @@ func TestLandingKeptWorkStartsARunOfItsBranchAndLiftsTheHold(t *testing.T) {
 		}
 		for _, refused := range []machine.KeptWorkAnswerRequest{
 			{Run: started.Record.ID, Hold: entry.Key(), Answer: string(store.KeptCarryOn)},
-			{Run: started.Record.ID, Hold: entry.Key(), Answer: string(store.KeptDiscard)},
+			{Run: started.Record.ID, Hold: entry.Key(), Answer: string(store.KeptDiscard), Confirm: "not-the-digest"},
 			{Run: "some-other-run", Hold: entry.Key(), Answer: string(store.KeptLand)},
 		} {
 			if _, err := answer(refused); !errors.Is(err, ipc.ErrRefused) {

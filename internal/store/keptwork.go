@@ -170,6 +170,13 @@ type KeptWork struct {
 	// instant is a carry on not yet carried out.
 	CarriedOnTask Optional[string]    `json:"carried_on_task"`
 	CarriedOnAt   Optional[time.Time] `json:"carried_on_at"`
+	// DiscardDigest is the confirmation of what a discard answer was
+	// shown, written with the answer by AnswerKeptWorkDiscard, and
+	// DiscardedAt is when the copy went, written by MarkKeptWorkDiscarded.
+	// An entry answered discard with a digest and no instant is a discard
+	// not yet carried out.
+	DiscardDigest Optional[string]    `json:"discard_digest"`
+	DiscardedAt   Optional[time.Time] `json:"discarded_at"`
 }
 
 // Key is the name a person gives --hold to answer this entry, PRD section
@@ -550,10 +557,25 @@ func (s *Store) MarkKeptWorkSurfaced(ctx context.Context, id int64, at time.Time
 // caller's, and who answered is recorded and never consulted, on
 // Resolver's terms.
 func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver) (KeptWork, error) {
-	if a == KeptCarryOn {
+	switch a {
+	case KeptCarryOn:
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a carry-on answer names the task carrying it on, through AnswerKeptWorkCarryOn", id)
+	case KeptDiscard:
+		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a discard answer records what it was shown, through AnswerKeptWorkDiscard", id)
 	}
-	return s.answerKeptWork(ctx, id, a, by, "")
+	return s.answerKeptWork(ctx, id, a, by, "", "")
+}
+
+// AnswerKeptWorkDiscard is AnswerKeptWork for the discard answer, which
+// records what the answer was shown, the digest of what the copy holds that
+// would be lost, in the same write: PRD section 6's "recording who
+// discarded what". An empty digest is refused. It records and removes
+// nothing; the removal is the caller's, against the digest.
+func (s *Store) AnswerKeptWorkDiscard(ctx context.Context, id int64, digest string, by Resolver) (KeptWork, error) {
+	if strings.TrimSpace(digest) == "" {
+		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a discard answer records what it was shown, and was shown nothing", id)
+	}
+	return s.answerKeptWork(ctx, id, KeptDiscard, by, "", digest)
 }
 
 // AnswerKeptWorkCarryOn is AnswerKeptWork for the carry-on answer, which
@@ -566,12 +588,13 @@ func (s *Store) AnswerKeptWorkCarryOn(ctx context.Context, id int64, task string
 	if err := home.ValidTaskID(task); err != nil {
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: the task carrying it on: %w", id, err)
 	}
-	return s.answerKeptWork(ctx, id, KeptCarryOn, by, task)
+	return s.answerKeptWork(ctx, id, KeptCarryOn, by, task, "")
 }
 
 // answerKeptWork is the one write of an answer, with the carry-on task
-// beside a carry-on answer and nothing beside any other.
-func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver, task string) (KeptWork, error) {
+// beside a carry-on answer, the digest beside a discard, and nothing beside
+// land.
+func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver, task, digest string) (KeptWork, error) {
 	if !a.Recognized() {
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: %w: %q", id, ErrUnknownKeptAnswer, a)
 	}
@@ -591,8 +614,8 @@ func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 		if k.Closure.IsKnown() {
 			return ErrKeptWorkClosed
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ? WHERE id = ?`,
-			string(a), who, encodeTime(nowUTC()), optionalText(task), id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?, discard_digest = ? WHERE id = ?`,
+			string(a), who, encodeTime(nowUTC()), optionalText(task), optionalText(digest), id); err != nil {
 			return err
 		}
 		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
@@ -606,15 +629,15 @@ func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 
 const keptWorkColumns = `SELECT id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
 	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, lacks, against, unestablished,
-	landing_claimed_at, landed_run, carried_on_task, carried_on_at`
+	landing_claimed_at, landed_run, carried_on_task, carried_on_at, discard_digest, discarded_at`
 
 func scanKeptWork(sc scanner) (KeptWork, error) {
 	var k KeptWork
 	var holds, kept string
-	var surfaced, answer, by, answered, closure, proof, closed, lacks, landingClaimed, carriedOn Optional[string]
+	var surfaced, answer, by, answered, closure, proof, closed, lacks, landingClaimed, carriedOn, discarded Optional[string]
 	if err := sc.Scan(&k.ID, &k.TaskID, &k.RunID, &k.RepositoryID, &k.Branch, &k.CopyPath, &holds, &k.Reason, &k.Detail,
 		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &lacks, &k.Against, &k.Unestablished,
-		&landingClaimed, &k.LandedRun, &k.CarriedOnTask, &carriedOn); err != nil {
+		&landingClaimed, &k.LandedRun, &k.CarriedOnTask, &carriedOn, &k.DiscardDigest, &discarded); err != nil {
 		return KeptWork{}, err
 	}
 	if err := json.Unmarshal([]byte(holds), &k.Holds); err != nil {
@@ -663,6 +686,9 @@ func scanKeptWork(sc scanner) (KeptWork, error) {
 		return KeptWork{}, err
 	}
 	if k.CarriedOnAt, err = optionalTimeValue(carriedOn, "carried_on_at"); err != nil {
+		return KeptWork{}, err
+	}
+	if k.DiscardedAt, err = optionalTimeValue(discarded, "discarded_at"); err != nil {
 		return KeptWork{}, err
 	}
 	return k, nil
@@ -825,6 +851,61 @@ func (s *Store) KeptWorkCarryOnsOwed(ctx context.Context) ([]KeptWork, error) {
 	out, err := scanKeptWorkRows(rows)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading the kept work carry-ons owed: %w", err)
+	}
+	return out, nil
+}
+
+// ErrKeptWorkNotDiscard is returned by MarkKeptWorkDiscarded for an entry
+// not answered discard.
+var ErrKeptWorkNotDiscard = errors.New("store: the kept work entry is not answered discard")
+
+// ErrKeptWorkDiscarded is returned by MarkKeptWorkDiscarded for an entry
+// already discarded.
+var ErrKeptWorkDiscarded = errors.New("store: the kept work entry is already discarded")
+
+// MarkKeptWorkDiscarded records that the copy a discard answer was shown
+// is gone, once: an entry not answered discard is ErrKeptWorkNotDiscard,
+// one already marked is ErrKeptWorkDiscarded, and an unknown identifier is
+// ErrNotFound. It records and removes nothing.
+func (s *Store) MarkKeptWorkDiscarded(ctx context.Context, id int64) (KeptWork, error) {
+	var out KeptWork
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		if err != nil {
+			return errNoRows(err)
+		}
+		if k.Answer.Or("") != KeptDiscard || !k.DiscardDigest.IsKnown() {
+			return ErrKeptWorkNotDiscard
+		}
+		if k.DiscardedAt.IsKnown() {
+			return ErrKeptWorkDiscarded
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET discarded_at = ? WHERE id = ?`, encodeTime(nowUTC()), id); err != nil {
+			return err
+		}
+		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		return err
+	})
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: marking kept work entry %d discarded: %w", id, err)
+	}
+	return out, nil
+}
+
+// KeptWorkDiscardsOwed returns every entry answered discard whose copy is
+// not yet marked gone, oldest first: a discard a stopped service recorded
+// and did not carry out, which the next start completes.
+func (s *Store) KeptWorkDiscardsOwed(ctx context.Context) ([]KeptWork, error) {
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	rows, err := s.read.QueryContext(ctx, keptWorkColumns+` FROM kept_work WHERE answer = 'discard' AND discarded_at IS NULL ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the kept work discards owed: %w", err)
+	}
+	out, err := scanKeptWorkRows(rows)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the kept work discards owed: %w", err)
 	}
 	return out, nil
 }

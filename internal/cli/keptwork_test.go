@@ -2,6 +2,8 @@ package cli_test
 
 import (
 	"encoding/json"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -136,4 +138,73 @@ func TestKeptWorkIsAnsweredLandFromTheCommandLine(t *testing.T) {
 		t.Fatalf("landing again exited %s, want the landed row:\n%s%s", again.code, again.stdout, again.stderr)
 	}
 	vocabtest.Assert(t, line)
+}
+
+// PRD section 9's discard through the command line: --answer discard alone
+// answers with what would be lost and the digest, in the structured answer,
+// and reads out as the shown row; given again with --confirm and that
+// digest it removes the copy and reads out as the discarded row; both rows
+// are held to the vocabulary. --confirm beside any other answer, or with no
+// digest, is incorrect usage before anything is asked.
+func TestKeptWorkIsDiscardedFromTheCommandLine(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	vocabtest.Control(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+	initialize(t, h, subject)
+	standingOnChange(t, subject, "a-change")
+	if started := run(t, h, subject, "--json", "--intent", "a change kept in its copy"); started.code != machine.ExitOK {
+		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
+	}
+	if got := run(t, h, subject, "--json", "--cancel"); got.code != machine.ExitOK {
+		t.Fatalf("ending the run exited %s:\n%s", got.code, got.stdout)
+	}
+	var status machine.Status
+	if got := run(t, h, subject, "--json", "status"); json.Unmarshal([]byte(got.stdout), &status) != nil || len(status.KeptWork) != 1 {
+		t.Fatalf("status lists kept work %+v, want one entry:\n%s", status.KeptWork, got.stdout)
+	}
+	entry := status.KeptWork[0]
+	owner := "--run=" + entry.RunID.Or("")
+
+	for _, args := range [][]string{
+		{owner, "--answer", "land", "--hold", entry.Key(), "--confirm", "abc"},
+		{owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", ""},
+		{"--confirm", "abc"},
+	} {
+		if got := run(t, h, subject, args...); got.code != machine.ExitUsage {
+			t.Errorf("assistant %s exited %s, want incorrect usage:\n%s%s", strings.Join(args, " "), got.code, got.stdout, got.stderr)
+		}
+	}
+	shown := run(t, h, subject, "--json", owner, "--answer", "discard", "--hold", entry.Key())
+	var answered machine.KeptWorkAnswered
+	if shown.code != machine.ExitOK || json.Unmarshal([]byte(shown.stdout), &answered) != nil ||
+		answered.Effect != machine.KeptWorkDiscardShown || answered.Loss == nil || answered.Loss.Digest == "" {
+		t.Fatalf("the discard shown exited %s with %+v:\n%s%s", shown.code, answered, shown.stdout, shown.stderr)
+	}
+	read := run(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key())
+	shownRow := machine.KeptWorkAnsweredPhrase(answered).String()
+	if read.code != machine.ExitOK || !strings.Contains(read.stdout, shownRow) {
+		t.Fatalf("the discard shown reads out as:\n%s%s\nwant the row %q", read.stdout, read.stderr, shownRow)
+	}
+	vocabtest.Assert(t, shownRow)
+	if _, err := os.Stat(entry.CopyPath); err != nil {
+		t.Fatalf("showing the discard removed the copy: %v", err)
+	}
+	done := run(t, h, subject, "--json", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest)
+	var discarded machine.KeptWorkAnswered
+	if done.code != machine.ExitOK || json.Unmarshal([]byte(done.stdout), &discarded) != nil || discarded.Effect != machine.KeptWorkDiscarded {
+		t.Fatalf("the confirmed discard exited %s with %+v:\n%s%s", done.code, discarded, done.stdout, done.stderr)
+	}
+	if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the discarded copy still stands: %v", err)
+	}
+	doneRow := machine.KeptWorkAnsweredPhrase(discarded).String()
+	again := run(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest)
+	if again.code != machine.ExitOK || !strings.Contains(again.stdout, doneRow) {
+		t.Fatalf("the discard again reads out as:\n%s%s\nwant the row %q", again.stdout, again.stderr, doneRow)
+	}
+	vocabtest.Assert(t, doneRow)
 }

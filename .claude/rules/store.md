@@ -63,7 +63,13 @@ paths: ["internal/store/**"]
   `BeginTaskAttempt`, the relaunch claim, is never held. Migration 53's `landed_run` is the run a
   land answer started, written once by `RecordKeptWorkLanding` and only on
   an entry answered land; `KeptWork.Key` and `ParseKeptWorkKey` are the one
-  spelling of `--hold kept-work/N`.
+  spelling of `--hold kept-work/N`. Migration 55's `carried_on_task` is
+  named with the carry-on answer (`AnswerKeptWorkCarryOn`) and
+  `carried_on_at` once the task owns the copy; migration 56's
+  `discard_digest` is what the discard answer was shown
+  (`AnswerKeptWorkDiscard`) and `discarded_at` once the copy went. Each
+  answer's record is its own accessor, and `AnswerKeptWork` takes land
+  alone.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number
   what they append from the shipped list rather than spelling a version out.

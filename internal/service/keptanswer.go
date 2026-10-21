@@ -21,9 +21,8 @@ import (
 // which is the owner's decision on #411: the hold answer is the surface,
 // and the kept work record is the record.
 //
-// This build takes land and carry on. Discard is refused with ipc.ErrRefused
-// and records nothing: it waits on #466, the entry listing only what the
-// default branch lacks, which its preview is built from.
+// This build takes all three answers. Land is below, carrying on is
+// keptcarryon.go's and discarding is keptdiscard.go's.
 //
 // # Land
 //
@@ -112,14 +111,17 @@ func (s *Service) answerKeptWork(ctx context.Context, req ipc.Request, r machine
 	if entry.TaskID.Or("") != r.Task || entry.RunID.Or("") != r.Run {
 		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d is %s, not the one named", ipc.ErrRefused, id, keptOwner(entry))
 	}
+	if r.Confirm != "" && store.KeptAnswer(r.Answer) != store.KeptDiscard {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: a confirmation is read with the discard answer alone, and was given with %q",
+			ipc.ErrInvalidRequest, r.Answer)
+	}
 	switch store.KeptAnswer(r.Answer) {
 	case store.KeptLand:
 		return s.landKeptWork(ctx, req, entry)
 	case store.KeptCarryOn:
 		return s.carryOnKeptWork(ctx, req, entry)
 	case store.KeptDiscard:
-		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d was not answered: discarding kept work is not in this build, "+
-			"so nothing was recorded and nothing was removed", ipc.ErrRefused, id)
+		return s.discardKeptWork(ctx, req, entry, r.Confirm)
 	default:
 		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: %q is not an answer to kept work; the answers are land, carry-on and discard",
 			ipc.ErrInvalidRequest, r.Answer)

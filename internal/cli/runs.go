@@ -84,6 +84,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		task         string
 		hold         string
 		runFlag      runTarget
+		confirm      string
 		domain       string
 		consent      bool
 	)
@@ -98,6 +99,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&hold, "hold", "", "with --task --answer: which of the task's own holds to close "+
 			"(the hold's key, or a finding id under that task); without it the only open one is answered, and more than one open is refused; "+
 			"a kept work entry's key, kept-work/N, answers that entry, with --task or --run=RUN naming whose copy it is")
+		set.StringVar(&confirm, "confirm", "", "with --answer discard and --hold kept-work/N: the digest a discard shown beforehand carried; "+
+			"without it the discard shows what would be lost and removes nothing")
 		set.Var(&runFlag, "run", "with --task --answer: answer the task's current run even while "+
 			"the task still has holds of its own open; written --run=RUN with --answer and --hold kept-work/N, the run whose kept copy is answered")
 		set.Var(&cancel, cancelFlagName, "end this branch's run, wherever it stands; written --"+cancelFlagName+
@@ -139,10 +142,11 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	targetRun := runFlag.on && !runFlag.named
 	running := flagWasSet(in.flags, "run") && !runFlag.named
 	domained := flagWasSet(in.flags, "domain")
-	if _, kept := store.ParseKeptWorkKey(hold); kept || runFlag.named {
+	if _, kept := store.ParseKeptWorkKey(hold); kept || runFlag.named || flagWasSet(in.flags, "confirm") {
 		return in.keptWorkAnswer(ctx, keptWorkFlags{
 			answered: answered, answer: answer, hold: hold, kept: kept, task: task, tasked: tasked,
 			run: runFlag, runSet: flagWasSet(in.flags, "run"), fixing: fixing, others: in.flagsBeside(),
+			confirm: confirm, confirmSet: flagWasSet(in.flags, "confirm"),
 		})
 	}
 	switch {
@@ -849,6 +853,9 @@ type keptWorkFlags struct {
 	answered, kept, tasked, runSet, fixing bool
 	answer, hold, task                     string
 	run                                    runTarget
+	// confirm is --confirm, read with --answer discard alone.
+	confirm    string
+	confirmSet bool
 	// others names every other flag that was given, which an answer to kept
 	// work reads none of.
 	others []string
@@ -860,6 +867,8 @@ type keptWorkFlags struct {
 // other flag is refused rather than ignored.
 func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any, error) {
 	switch {
+	case !f.kept && f.confirmSet:
+		return nil, usagef("--confirm takes the digest a discard of kept work was shown, and is read only with --answer discard and --hold kept-work/N")
 	case !f.kept:
 		return nil, usagef("--run=RUN names the run whose kept copy is answered, and is read only with --hold kept-work/N and --answer")
 	case !f.answered:
@@ -875,13 +884,17 @@ func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any,
 		return nil, usagef("--run answers a task's current run, and --hold %s a kept work entry; pass one", f.hold)
 	case f.run.named && strings.TrimSpace(f.run.run) == "":
 		return nil, usagef("--run= was given no run; it takes the identifier of the run whose kept copy is answered")
+	case f.confirmSet && f.answer != string(store.KeptDiscard):
+		return nil, usagef("--confirm is read with --answer discard alone, and was given with --answer %s", f.answer)
+	case f.confirmSet && strings.TrimSpace(f.confirm) == "":
+		return nil, usagef("--confirm was given no digest; it takes the one a discard shown beforehand carried")
 	case len(f.others) > 0:
-		return nil, usagef("an answer to kept work reads --answer, --hold and --task or --run=RUN, and not --%s", f.others[0])
+		return nil, usagef("an answer to kept work reads --answer, --hold, --task or --run=RUN, and --confirm with discard, and not --%s", f.others[0])
 	}
 	in.progressf("answering kept work %s with %q", f.hold, f.answer)
 	var answered machine.KeptWorkAnswered
 	err := in.callService(ctx, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
-		Task: f.task, Run: f.run.run, Hold: f.hold, Answer: f.answer,
+		Task: f.task, Run: f.run.run, Hold: f.hold, Answer: f.answer, Confirm: f.confirm,
 	}, &answered)
 	return answered, err
 }
@@ -893,7 +906,7 @@ func (in *invocation) flagsBeside() []string {
 	var out []string
 	in.flags.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "answer", "hold", "task", "run", jsonFlagName, homeFlagName:
+		case "answer", "hold", "task", "run", "confirm", jsonFlagName, homeFlagName:
 		default:
 			out = append(out, f.Name)
 		}

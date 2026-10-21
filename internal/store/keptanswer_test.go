@@ -44,7 +44,7 @@ func TestALandingRunIsRecordedOnceOnAnEntryAnsweredLand(t *testing.T) {
 	if _, err := s.RecordKeptWorkLanding(ctx, land.ID, run.ID); !errors.Is(err, ErrKeptWorkNotLand) {
 		t.Fatalf("a landing on an open entry = %v; want ErrKeptWorkNotLand", err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, other.ID, KeptDiscard, ResolvedByMachineInterface()); err != nil {
+	if _, err := s.AnswerKeptWorkDiscard(ctx, other.ID, "shown", ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.RecordKeptWorkLanding(ctx, other.ID, run.ID); !errors.Is(err, ErrKeptWorkNotLand) {
@@ -151,5 +151,62 @@ func TestACarryOnAnswerNamesItsTaskOnceAndIsCarriedOutOnce(t *testing.T) {
 	}
 	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET carried_on_task = 'taskother000' WHERE id = ?`, land.ID); err == nil {
 		t.Fatal("the schema let a carry-on task be written on an entry answered land")
+	}
+}
+
+// A discard answer records what it was shown in the same write, refusing an
+// empty digest and the generic answer; the copy's going is marked once,
+// only on an entry answered discard; the owed listing drops the entry when
+// it is; and the schema seals both against a direct rewrite.
+func TestADiscardAnswerRecordsWhatItWasShownOnceAndIsCarriedOutOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/e", Holds: []string{"eeee"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface()); err == nil {
+		t.Fatal("a discard answer shown nothing was recorded")
+	}
+	if _, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, " ", ResolvedByMachineInterface()); err == nil {
+		t.Fatal("a discard answer with an empty digest was recorded")
+	}
+	if _, err := s.MarkKeptWorkDiscarded(ctx, entry.ID); !errors.Is(err, ErrKeptWorkNotDiscard) {
+		t.Fatalf("marking an open entry discarded = %v; want ErrKeptWorkNotDiscard", err)
+	}
+	answered, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, "abc123", ResolvedByMachineInterface())
+	if err != nil || answered.Answer.Or("") != KeptDiscard || answered.DiscardDigest.Or("") != "abc123" || answered.DiscardedAt.IsKnown() {
+		t.Fatalf("the discard answer = %+v, %v; want discard shown abc123, not yet discarded", answered, err)
+	}
+	if owed, err := s.KeptWorkDiscardsOwed(ctx); err != nil || len(owed) != 1 || owed[0].ID != entry.ID {
+		t.Fatalf("KeptWorkDiscardsOwed = %+v, %v; want the entry", owed, err)
+	}
+	done, err := s.MarkKeptWorkDiscarded(ctx, entry.ID)
+	if err != nil || !done.DiscardedAt.IsKnown() {
+		t.Fatalf("marking the entry discarded = %+v, %v", done, err)
+	}
+	if _, err := s.MarkKeptWorkDiscarded(ctx, entry.ID); !errors.Is(err, ErrKeptWorkDiscarded) {
+		t.Fatalf("marking it again = %v; want ErrKeptWorkDiscarded", err)
+	}
+	if owed, err := s.KeptWorkDiscardsOwed(ctx); err != nil || len(owed) != 0 {
+		t.Fatalf("KeptWorkDiscardsOwed = %+v, %v; want none once discarded", owed, err)
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discard_digest = 'other' WHERE id = ?`, entry.ID); err == nil {
+		t.Fatal("the schema let what the discard was shown be rewritten")
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discarded_at = '2020-01-01T00:00:00Z' WHERE id = ?`, entry.ID); err == nil {
+		t.Fatal("the schema let the discarded instant be rewritten")
+	}
+	land, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/f", Holds: []string{"ffff"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AnswerKeptWork(ctx, land.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discard_digest = 'abc' WHERE id = ?`, land.ID); err == nil {
+		t.Fatal("the schema let a discard digest be written on an entry answered land")
 	}
 }

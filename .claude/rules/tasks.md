@@ -35,6 +35,12 @@ paths: ["internal/tasks/**"]
   proof. And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
   refusals are a copy kept for its work; `kept_test.go` places every reason.
+- `kept_discard.go` is the copy's half of PRD section 6's discard: `Loss`
+  reads what removing the copy would lose, the entry's `Lacks` and the
+  inventory's three indicators, with a digest of the copy's state, refusing
+  an unestablished entry; `Discard` removes the copy only on that digest,
+  the one use of `vcs.RemoveWorktreeDiscardingChanges`, behind a person's
+  answer and no proof.
 
 Read `doc.go` before changing the floor or the clear condition, and for the
 residual gaps; read `promote.go`'s opening comment and `doc.go` before

@@ -13,14 +13,13 @@ import "github.com/dayamjz/assistant/internal/store"
 // cleanup decision later removes it on a proof, which closes the entry, and
 // nothing else removes it; while an entry is open, no new task in its
 // project starts (internal/store's keptworkhold.go), and a push still runs.
-// This build takes two of the three answers, land and carry on
-// (keptanswer.go), so a row that offers an answer offers those, names how
-// they are given, and says discarding is not yet taken.
+// This build takes the three answers (keptanswer.go), so a row that offers
+// an answer names how they are given.
 var (
 	phraseKeptWork = Phrase{
 		Outcome:     "This work was kept in its local copy, because it is not yet on the shared branch or anywhere else safe.",
 		Consequence: "The copy stays unless its work later turns up somewhere safe, and no new task in the same project starts until it is decided; your own pushes still go ahead.",
-		Decision:    "Read what it holds with --json; to have it validated, answer land with assistant, --task and the work's identifier or --run= and the validation's, --answer land and --hold with the entry's key, which assistant --json status shows; or carry-on in place of land to begin new work in the copy; discarding it is not yet something this build does.",
+		Decision:    "Read what it holds with --json; to have it validated, answer land with assistant, --task and the work's identifier or --run= and the validation's, --answer land and --hold with the entry's key, which assistant --json status shows; or carry-on in place of land to begin new work in the copy, or discard to be shown what removing it would lose.",
 	}
 	phraseKeptWorkPart = Phrase{
 		Outcome:     "This work was kept in local copies because it is not yet anywhere safe, oldest first.",

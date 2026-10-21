@@ -185,6 +185,11 @@ const keptWorkLandingMigration = "kept work landing run"
 // is a constant.
 const keptWorkCarryOnMigration = "kept work carry-on task"
 
+// keptWorkDiscardMigration names the migration that adds what a discard
+// answer to kept work was shown and when the copy went, for the reason
+// sealCheckpointTableMigration is a constant.
+const keptWorkDiscardMigration = "kept work discard"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2289,6 +2294,34 @@ var schema = []migration{
 				WHEN OLD.carried_on_at IS NOT NULL OR OLD.carried_on_task IS NULL OR NEW.carried_on_at IS NULL
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a kept work entry is carried on once, and only by the task it names');
+				END`,
+		},
+	},
+	{
+		version: 56,
+		name:    keptWorkDiscardMigration,
+		statements: []string{
+			// PRD section 6's discard: "the program shows exactly what will
+			// be lost, and it removes the copy only on that answer, recording
+			// who discarded what". discard_digest is the confirmation of
+			// what was shown, written with the discard answer by
+			// AnswerKeptWorkDiscard, so the row says what the person was
+			// shown; discarded_at is when the copy went, written once by
+			// MarkKeptWorkDiscarded, and an entry answered discard with none
+			// is a discard not yet carried out.
+			`ALTER TABLE kept_work ADD COLUMN discard_digest TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN discarded_at TEXT`,
+			`CREATE TRIGGER kept_work_discard_is_shown_once
+				BEFORE UPDATE OF discard_digest ON kept_work
+				WHEN NEW.discard_digest IS NOT OLD.discard_digest AND (OLD.discard_digest IS NOT NULL OR NEW.answer IS NOT 'discard')
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry records what its discard was shown once, with its discard answer');
+				END`,
+			`CREATE TRIGGER kept_work_is_discarded_once
+				BEFORE UPDATE OF discarded_at ON kept_work
+				WHEN OLD.discarded_at IS NOT NULL OR OLD.discard_digest IS NULL OR NEW.discarded_at IS NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is discarded once, and only on the answer that was shown what it loses');
 				END`,
 		},
 	},
