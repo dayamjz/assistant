@@ -833,7 +833,7 @@ func (g *GitHub) runExact(ctx context.Context, op, stdin string, full []string) 
 			Cause:  res.startErr,
 		}
 	}
-	if err := ctx.Err(); err != nil {
+	if err := res.ended; err != nil {
 		return nil, &Refusal{
 			Reason: ReasonUnavailable,
 			Op:     op,
