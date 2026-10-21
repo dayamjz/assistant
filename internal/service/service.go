@@ -192,6 +192,12 @@ type Options struct {
 	// are here rather than on the Service because the loop starts inside
 	// Open; supervise.go says what each is, and the product sets none.
 	hooks supervisionHooks
+	// sweepCopy is the Service field of the same name, set before recovery
+	// runs. It is here rather than only on the Service because recovery
+	// sweeps finished runs' copies inside Open, so a test that records what
+	// recovery's sweep answered has no Service to set it on until that
+	// sweep is over. The product sets none.
+	sweepCopy func(ctx context.Context, dir string) (agents.SweepResult, error)
 }
 
 // Service is one home's background service.
@@ -377,7 +383,9 @@ type Service struct {
 	// one runsweep.go asks of a finished run's. It is nil in production,
 	// where the sweep is an agents.Sweeper over this service's home, and set
 	// only by this package's tests, to an answer the real sweep gives on a
-	// platform this test does not run on or to a recorder of what was asked.
+	// platform this test does not run on or to a recorder of what was asked,
+	// directly or through Options.sweepCopy, which Open copies here before
+	// recovery sweeps anything.
 	sweepCopy func(ctx context.Context, dir string) (agents.SweepResult, error)
 	// givingUp is whether Close has stopped taking background work. It is
 	// read and written under mu with the registration itself, which is what
@@ -590,6 +598,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 
 		workerRoute:      o.WorkerRoute,
 		coordinatorRoute: o.CoordinatorRoute,
+		sweepCopy:        o.sweepCopy,
 	}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.WithoutCancel(ctx))
 	// The terminal seam is the service's own provider unless a test passed
