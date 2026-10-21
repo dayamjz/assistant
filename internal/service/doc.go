@@ -589,8 +589,8 @@
 // recorded by the decision on the run's cleanup record and composed into
 // the run's answer by report, so status says a local copy was kept rather
 // than only the log. A delivery task's copy is cleaned up at the same two
-// sites when the merge record landed it, and an investigation task's when
-// its report is stored; both hand internal/tasks the terminal's liveness as
+// sites when the merge record landed it, and an investigation task's once
+// the coordinator records its findings relayed; both hand internal/tasks the terminal's liveness as
 // the service's own task reader resolved it, so a copy whose worker is
 // still running is kept with the live refusal and one whose worker is gone
 // is examined on the proof, and cleanup.go owns the three sites and the
