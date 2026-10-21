@@ -98,7 +98,11 @@ func requireSweepClearsHere(t *testing.T, unestablished string) {
 //
 // The residual gap is on the loud side: a process that started blocking
 // before the test's sweep and stopped before this second read fails the
-// test. Nothing here decides from the failure's text, so a failure with
+// test, which #449 saw tmux's setgid utempter helper, a process that lives
+// for one utmp write, do. A test that reads the sweep's own answer closes
+// that for its sweep through runsweep_internal_test.go's untilClear, which
+// attributes the refusal and asks again; one that sees a sweep only through
+// what it caused, a relaunch refused or a hold raised, still has it. Nothing here decides from the failure's text, so a failure with
 // another cause on a host that refuses every sweep is skipped too; on such a
 // host the test would have been skipped had it started a moment later, and
 // it establishes nothing there either way.
