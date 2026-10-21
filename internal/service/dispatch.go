@@ -129,6 +129,30 @@ import (
 // started by a WorkerRunner that builds it the same way again; no second
 // strip list exists, and none should.
 //
+// # Kept work holds a new task's dispatch
+//
+// PRD section 6's "kept work is answered before new task work starts": while
+// the task's project has an open kept work entry, a task never launched is
+// not dispatched. internal/store owns which entries hold which task
+// (keptworkhold.go), and this file asks it twice: once through
+// KeptWorkHolding right after the task's resolution is read, before any
+// sweep, clone or claim, and again inside the claim itself, which is
+// store.BeginDispatchAttempt deciding in the transaction that would write the
+// attempt, so an entry recorded between the two still holds the dispatch.
+// Either refusal is a *store.DispatchHeldError, and nothing is written for
+// it. The task keeps resolving Dispatched from its history, because nothing
+// here appends an entry for the wait: the wait is read off the kept work
+// record every time (P8), which taskView composes into the task's answer as
+// machine.Task.KeptWork.
+//
+// A held dispatch gives its slot back rather than settling it, because the
+// slot is otherwise kept for the service's lifetime and a held task has to
+// dispatch as soon as its project's entries are answered or closed. What
+// asks again is every call of dispatchDue: at open, after every release, and
+// after a cleanup that removed a copy, which is the one way an entry closes
+// without an answer in this build (cleanup.go). A relaunch is not new work
+// and claims through store.BeginTaskAttempt, so it is never held.
+//
 // # The second check
 //
 // tasks.Expect builds the shell line PRD principle P11 has a worker run
@@ -271,6 +295,9 @@ func (s *Service) dispatchDue(ctx context.Context) {
 		switch {
 		case err == nil:
 			s.log.Printf("task %s was dispatched: its copy at %s is proven isolated", r.Record.ID, d.proof.Copy)
+		case errors.Is(err, store.ErrDispatchHeld):
+			s.log.Printf("task %s waits: %v", r.Record.ID, err)
+			continue
 		case errors.Is(err, store.ErrTaskMoved):
 			s.log.Printf("task %s was not dispatched here: %v", r.Record.ID, err)
 			continue
@@ -321,6 +348,8 @@ type dispatched struct {
 // cannot be dispatched as written is errTaskRecord; a dispatch another caller
 // claimed first is store.ErrTaskMoved; a standing copy the platform cannot
 // sweep is a *dispatchUnswept, held for a person and otherwise unrecorded,
+// a task kept work in its project holds is a *store.DispatchHeldError, with
+// nothing recorded and the slot given back,
 // unless that hold was answered retry; a sweep that ran and did not clear
 // the copy is a *copyUnswept; a copy that fails the assertion is an
 // *isolationRefused, recorded. Every other error is a failure of a read or a
@@ -331,7 +360,7 @@ func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, erro
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	settle(d.proof)
+	s.settleDispatch(id, settle, d, err)
 	return d, err
 }
 
@@ -349,8 +378,22 @@ func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, er
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	settle(d.proof)
+	s.settleDispatch(id, settle, d, err)
 	return d, err
+}
+
+// settleDispatch settles the slot a dispatch took with what it ended at, or,
+// for a dispatch kept work held, gives the slot back, so the next
+// dispatchDue asks again; this file's opening comment says why.
+func (s *Service) settleDispatch(id string, settle func(tasks.Isolation), d dispatched, err error) {
+	if !errors.Is(err, store.ErrDispatchHeld) {
+		settle(d.proof)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.isolated, id)
+	delete(s.claiming, id)
 }
 
 // claimDispatch takes the task's slot, so a second pass over the tasks does
@@ -442,6 +485,15 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 			resolved.State.State, resolved.State.Source)
 	}
 	record := resolved.Record
+	// Kept work in the task's project holds it before anything is swept,
+	// cut or claimed; the claim below asks again in its own transaction.
+	holding, err := s.store.KeptWorkHolding(ctx, id)
+	if err != nil {
+		return dispatched{}, err
+	}
+	if len(holding) > 0 {
+		return dispatched{}, &store.DispatchHeldError{Task: id, Repository: record.RepositoryID.Or(""), Entries: holding}
+	}
 	e, err := s.expectationOf(ctx, record)
 	if err != nil {
 		return dispatched{}, err
@@ -495,7 +547,7 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	if s.betweenAttemptReadAndClaim != nil {
 		s.betweenAttemptReadAndClaim()
 	}
-	attempt, err := s.store.BeginTaskAttempt(ctx, id, latest)
+	attempt, err := s.store.BeginDispatchAttempt(ctx, id, latest)
 	if err != nil {
 		return dispatched{}, err
 	}

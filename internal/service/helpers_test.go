@@ -387,6 +387,13 @@ func writeFile(path, content string) error {
 // through a door the product does not have.
 func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repository {
 	t.Helper()
+	return recordRepositoryAs(t, h, "subject", workingPath)
+}
+
+// recordRepositoryAs is recordRepository under the identifier id, for a test
+// that records more than one repository in a home.
+func recordRepositoryAs(t *testing.T, h *home.Home, id, workingPath string) store.Repository {
+	t.Helper()
 	if err := h.Create(); err != nil {
 		t.Fatalf("creating the home: %v", err)
 	}
@@ -397,7 +404,7 @@ func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repo
 	}
 	defer func() { _ = records.Close() }()
 	repository, err := records.UpsertRepository(t.Context(), store.Repository{
-		ID:          "subject",
+		ID:          id,
 		WorkingPath: workingPath,
 		// Read off the working copy's own origin, which is where assistant
 		// init reads it from, so the record says what the product would have

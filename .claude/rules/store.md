@@ -46,7 +46,11 @@ paths: ["internal/store/**"]
   transaction that found the repository forgettable; `CreateRun` refuses a
   run of a reserved repository (`ErrRepositoryBeingRemoved`), and nothing
   refuses a kept work entry over a reservation. internal/service releases a
-  reservation whose owner is gone when it opens.
+  reservation whose owner is gone when it opens. `keptworkhold.go` is the
+  dispatch hold's one predicate: a task naming a project, never launched,
+  whose project has an open entry; `BeginDispatchAttempt` refuses it with
+  `*DispatchHeldError` in the claim's transaction, and `BeginTaskAttempt`,
+  the relaunch claim, is never held.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number
   what they append from the shipped list rather than spelling a version out.

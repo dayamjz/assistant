@@ -280,8 +280,12 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   or the copy of a run attributed to it, was kept because its work is not
   anywhere safe; the entry is in `assistant --json status` under
   `kept_work` and in the catch-up read under `kept`. Tell the person: it is
-  theirs to decide. Answering it is not in this build yet, and it does not
-  hold new tasks in the project from dispatching. The
+  theirs to decide. Answering it is not in this build yet. While the
+  project has an open entry, a task you create in it is recorded and not
+  started: it reads `dispatched` and its answer (`task.get`) names the
+  entries holding it under `kept_work`; it starts on its own once they are
+  answered or closed. Tasks in other projects, work already running and a
+  person's own push are not held. The
   program's own records of creating and dispatching a task wake nobody.
 - `acknowledge` also closes a wake `listen` printed that you dealt with
   without draining. Naming an id no wake has, or one already acknowledged,

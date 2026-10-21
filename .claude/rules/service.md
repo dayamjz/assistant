@@ -53,7 +53,12 @@ paths: ["internal/service/**"]
   kept for its work into a kept work entry, from every cleanup site and from
   recovery's `reclaimAtRecovery`; `supervise.go` raises each open
   entry about a task once as a `kept-work` wake, and status and the catch-up
-  read list them. Answers and the dispatch hold are #411's second part.
+  read list them. `dispatch.go` holds a new task's dispatch while its
+  project has an open entry, asking internal/store's one predicate
+  (`KeptWorkHolding`, then `BeginDispatchAttempt` at the claim), giving the
+  slot back so a later `dispatchDue` asks again, and a removal asks it again
+  (`redispatchAfterRemoval`); `taskView` and `report` name the entries.
+  Answers are #411's remaining part.
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances
   in, and `report` reads it rather than inferring it.
