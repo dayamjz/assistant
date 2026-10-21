@@ -567,6 +567,11 @@ not established (the upstream could not be read when the copy was kept) is
 refused rather than shown a list that may be wrong; the next cleanup of the
 unchanged copy establishes it.
 
+A promotion of an investigation whose copy has a kept-work entry (its
+worker ended with its copy kept) answers that entry carry on itself, in the
+promotion's own write, since the promoted worker continues in that copy;
+the entry closes with the promotion and never without it.
+
 Discard is yours alone: a task's worker and a subordinate coordinator are
 refused it, and nothing in the program discards on its own. What the
 record says about who discarded is what this surface witnesses, which is

@@ -192,7 +192,7 @@ func (s *promotionSubject) workerSays(t *testing.T, id, kind, detail string) {
 
 // request is a well-formed promotion of the task onto topic.
 func request(id string) Promotion {
-	return Promotion{Task: id, Repository: cleanupRepository, Branch: "topic", Intent: "make the change the report found",
+	return Promotion{By: store.ResolvedByMachineInterface(), Task: id, Repository: cleanupRepository, Branch: "topic", Intent: "make the change the report found",
 		Environment: cleanEnv()}
 }
 
@@ -329,7 +329,7 @@ func TestPromoteFlipsTheTaskInPlaceAndShapesItsCopy(t *testing.T) {
 		}
 
 		// A second promotion refuses on the shape, and writes nothing.
-		_, err = s.queue.Promote(ctx, Promotion{Task: tk.id, Repository: cleanupRepository, Branch: "other",
+		_, err = s.queue.Promote(ctx, Promotion{By: store.ResolvedByMachineInterface(), Task: tk.id, Repository: cleanupRepository, Branch: "other",
 			Intent: "again", Environment: cleanEnv()})
 		var notPromotable *NotPromotableError
 		if !errors.As(err, &notPromotable) || !errors.Is(err, ErrNotPromotable) || notPromotable.Shape != store.TaskDelivery {
@@ -752,7 +752,7 @@ func TestPromoteHoldsTheBranchToIntakesRules(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.queue.Promote(ctx, Promotion{Task: absent, Repository: cleanupRepository, Branch: "b", Intent: "i"}); !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.queue.Promote(ctx, Promotion{By: store.ResolvedByMachineInterface(), Task: absent, Repository: cleanupRepository, Branch: "b", Intent: "i"}); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("a task that does not exist = %v, want store.ErrNotFound", err)
 		}
 		s.untouched(t, tk, n)

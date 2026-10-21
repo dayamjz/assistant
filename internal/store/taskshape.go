@@ -75,10 +75,20 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // whether the copy was cut from that repository is a fact about the copy,
 // which internal/tasks' Promote answers for, and the store records what it
 // was asked to. Its one writer is that function.
+//
+// by is who promoted, which the copy's open kept work entries, if any, are
+// answered carry-on as (PRD section 6: "the promotion records the entry's
+// answer as carry on, which closes it"), naming the promoted task as the
+// task carrying them on, in this same transaction; a zero Resolver is
+// ErrNoResolver and nothing is written.
 func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to TaskShape, repository, branch string,
-	delivery config.Delivery, intent string, anchor int64, detail string) (Task, TaskEvent, error) {
+	delivery config.Delivery, intent string, anchor int64, detail string, by Resolver) (Task, TaskEvent, error) {
 	if strings.TrimSpace(id) == "" {
 		return Task{}, TaskEvent{}, fmt.Errorf("store: a shape transition names no task")
+	}
+	who, err := resolverText(by)
+	if err != nil {
+		return Task{}, TaskEvent{}, fmt.Errorf("store: task %s: a promotion records who promoted: %w", id, err)
 	}
 	if from != TaskInvestigation || to != TaskDelivery {
 		return Task{}, TaskEvent{}, fmt.Errorf("store: task %s: %w, not %q to %q", id, ErrShapeTransition, from, to)
@@ -98,7 +108,7 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 
 	now := nowUTC()
 	var sequence int64
-	err := s.inTx(ctx, func(tx *sql.Tx) error {
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		var stands string
 		if err := tx.QueryRowContext(ctx, `SELECT shape FROM task WHERE id = ?`, id).Scan(&stands); err != nil {
 			return errNoRows(err)
@@ -127,10 +137,28 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 			return err
 		}
 		sequence = tip + 1
-		_, err := tx.ExecContext(ctx,
+		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO task_event (task_id, sequence, kind, detail, at) VALUES (?, ?, ?, ?, ?)`,
-			id, sequence, PromotedEventKind, detail, encodeTime(now))
-		return err
+			id, sequence, PromotedEventKind, detail, encodeTime(now)); err != nil {
+			return err
+		}
+		// PRD section 6: a promotion of a task whose copy has an open kept
+		// work entry records the entry's answer as carry on, naming the
+		// promoted task itself as the one carrying it on, since the worker
+		// continues in that same copy, and the entry closes with the
+		// promotion and never without it. An entry on another copy is not
+		// touched. The task is named with the answer and the copy's
+		// ownership marked after, as the carry-on seals have it.
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?
+			WHERE task_id = ? AND answer IS NULL AND closure IS NULL`,
+			string(KeptCarryOn), who, encodeTime(now), id, id); err != nil {
+			return fmt.Errorf("recording the copy's kept work as carried on by the promotion: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET carried_on_at = ?
+			WHERE task_id = ? AND carried_on_task = ? AND carried_on_at IS NULL`, encodeTime(now), id, id); err != nil {
+			return fmt.Errorf("recording the copy's kept work as carried on by the promotion: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		var moved *TaskMovedError

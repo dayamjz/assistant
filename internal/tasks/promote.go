@@ -27,6 +27,13 @@ import (
 //
 // # The flip comes first, and it is one anchored write
 //
+// The flip also answers the copy's open kept work entries, if any, as
+// carry on, naming the promoted task as the task carrying them on: PRD
+// section 6 has a later promotion relaunch a worker in the kept copy with
+// the entry's answer recorded as carry on, and the one transaction is what
+// keeps the entry from closing without the promotion or the promotion from
+// leaving it open. store.TransitionTaskShape owns the write.
+//
 // store.TransitionTaskShape writes the shape, the repository, the branch,
 // the delivery posture and the delivery intent on the task row together with
 // the "promoted" entry, in one transaction,
@@ -238,6 +245,11 @@ type Promotion struct {
 	// stricter than the project's and never lighter, which is a
 	// *PostureError.
 	Delivery string
+	// By is who promotes, which the copy's open kept work entries, if any,
+	// are answered carry-on as in the flip, on store.TransitionTaskShape's
+	// terms: internal/service passes what internal/ipc derives from the
+	// surface. The zero Resolver is refused.
+	By store.Resolver
 	// Environment is the environment the worker runs under, as
 	// agents.WorkerEnvironment computes it for a launch; the assertion
 	// refuses one vcs.StripRedirecting would change. The worker was
@@ -326,6 +338,9 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 	if strings.TrimSpace(req.Intent) == "" {
 		return Promoted{}, fmt.Errorf("%w: no intent", ErrRequest)
 	}
+	if req.By == (store.Resolver{}) {
+		return Promoted{}, fmt.Errorf("%w: a promotion names who promotes", ErrRequest)
+	}
 	var requested config.Delivery
 	if text := strings.TrimSpace(req.Delivery); text != "" {
 		var err error
@@ -378,7 +393,7 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 			q.betweenReadAndWrite()
 		}
 		out.Task, out.Event, err = q.store.TransitionTaskShape(ctx, req.Task, store.TaskInvestigation, store.TaskDelivery,
-			repository.ID, branch, posture, strings.TrimSpace(req.Intent), r.State.Basis.EventSequence, detail)
+			repository.ID, branch, posture, strings.TrimSpace(req.Intent), r.State.Basis.EventSequence, detail, req.By)
 		return err
 	}
 	release, err := q.hold(ctx, repository.ID, branch)

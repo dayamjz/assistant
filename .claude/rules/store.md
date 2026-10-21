@@ -69,7 +69,10 @@ paths: ["internal/store/**"]
   `discard_digest` is what the discard answer was shown
   (`AnswerKeptWorkDiscard`) and `discarded_at` once the copy went. Each
   answer's record is its own accessor, and `AnswerKeptWork` takes land
-  alone.
+  alone. `TransitionTaskShape` answers the promoted task's own copy's open
+  entries carry-on, naming that task, in the flip's transaction, as PRD
+  section 6's promotion paragraph says; it takes the promoter's `Resolver`
+  for that.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number
   what they append from the shipped list rather than spelling a version out.

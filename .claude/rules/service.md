@@ -69,7 +69,9 @@ paths: ["internal/service/**"]
   removed only on it through `internal/tasks`' `Loss` and `Discard`, with
   the answer recorded first and what "person-only" is and is not enforced
   by stated in its header; all three completed at open when a stopped
-  service left them.
+  service left them. A promotion answers its copy's entry carry on in the
+  flip, which is `store.TransitionTaskShape`'s write with the resolver
+  `promoteTask` passes.
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances
   in, and `report` reads it rather than inferring it.

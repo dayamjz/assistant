@@ -288,7 +288,8 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   in the answer (`task`), so the old task stays as it ended; a run's copy
   cannot be carried on; `--answer discard` is the person's and not yours:
   it shows what would be lost with a digest and removes the copy only on
-  `--confirm DIGEST`, and you are refused it. While the
+  `--confirm DIGEST`, and you are refused it. Promoting an investigation
+  whose copy has an entry answers that entry carry on by itself. While the
   project has an open entry, a task you create in it is recorded and not
   started: it reads `dispatched` and its answer (`task.get`) names the
   entries holding it under `kept_work`; it starts on its own once they are

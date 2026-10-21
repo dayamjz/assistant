@@ -172,12 +172,17 @@ func (s *Service) promoteTask(ctx context.Context, req ipc.Request, r machine.Ta
 	}
 	promoted, err := s.queue.Promote(ctx, tasks.Promotion{
 		Task: r.Task, Repository: r.Repository, Branch: r.Branch, Intent: r.Intent, Delivery: r.Delivery,
+		By:          req.HoldResolver(),
 		Environment: agents.WorkerEnvironment(os.Environ(), nil),
 	})
 	if err != nil {
 		return machine.TaskPromoted{}, refusalOf(err)
 	}
 	s.log.Printf("task %s was promoted to delivery on %s by %s", r.Task, r.Branch, peerOf(req))
+	// The flip answered the copy's open kept work, if any, as carry on,
+	// which no longer holds the project's new tasks, so a dispatch pass is
+	// asked for as it is after any answer to kept work.
+	s.dispatchInBackground()
 	out := machine.TaskPromoted{
 		Record: promoted.Task, Event: promoted.Event, Head: promoted.Head, Instructions: promoted.Instructions,
 	}
