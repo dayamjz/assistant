@@ -392,6 +392,11 @@ type Service struct {
 	// pass asks once per reference rather than at every interval. It is
 	// memory and nothing durable, guarded by mu; landed.go owns it.
 	landedTried map[string]string
+	// windowTried holds, per reported investigation, the session reference
+	// of a worker this service did not launch whose end by verified
+	// identity it already asked for after the promotion window, so the
+	// pass asks once per reference per service life; landed.go owns it.
+	windowTried map[string]string
 
 	revision atomic.Uint64
 	// published is the basis of the last task.state this service sent per

@@ -952,6 +952,12 @@ type Briefing struct {
 	// refused or could not be marked. Empty exactly when Message says
 	// written.
 	Unsent string `json:"unsent,omitempty"`
+	// TooLarge says the brief was refused rather than sent because it is
+	// over MaxMessageBytes, on task.message's terms. It is decided after the
+	// probe, so a worker the probe read Dead is relaunched whatever the
+	// brief's size, and it is set only for a live worker the brief did not
+	// reach.
+	TooLarge bool `json:"too_large,omitempty"`
 }
 
 // Delivered reports whether the record says the brief was written to the

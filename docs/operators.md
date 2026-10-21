@@ -324,10 +324,12 @@ What follows for whoever runs the service:
   own configuration file (1h unless configured, between 1s and 24h; a
   repository file naming it is refused), counted from when the report was
   stored, so a promotion in the same sitting continues it. Past the window
-  the service ends the worker it holds and keeps the copy; a later
-  promotion relaunches a worker in that copy with the stored report as its
-  starting point. A worker an earlier service started is not ended by the
-  window.
+  the service ends the worker and keeps the copy; a later promotion
+  relaunches a worker in that copy with the stored report as its starting
+  point. A worker an earlier service started is ended by the identity its
+  session reference recorded, and one that cannot be verified is named in
+  the service log and left running. The kept copy has no kept-work entry
+  yet, so it is not surfaced and does not hold a new task in the project.
 - A reported investigation reads `complete` only once the coordinator
   records its findings relayed with `assistant coordinator relayed ID`. The
   service then ends the worker it holds for the task and removes its copy on

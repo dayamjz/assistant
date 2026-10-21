@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/service"
+	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
@@ -92,16 +93,26 @@ func (inv investigation) reported(t *testing.T, running serviceUnderTest) launch
 	if _, code := callAs(t, w, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: store.ReportReadyEventKind, Detail: windowReport}); code != "" {
 		t.Fatalf("the worker's report was refused with %q", code)
 	}
-	waitState(t, running.client, inv.task, "read Reported with its worker live", reportedFromTheReport(taskstate.Live))
+	// Under a one-second window the worker may already be ended by the
+	// first read, so either terminal reading is the report tier's answer.
+	waitState(t, running.client, inv.task, "read Reported from its report", func(r taskstate.Resolution) bool {
+		return reportedFromTheReport(taskstate.Live)(r) || reportedFromTheReport(taskstate.Dead)(r)
+	})
 	return w
 }
 
 // promote promotes the task from this process, outside every worker group.
 func (inv investigation) promote(t *testing.T, running serviceUnderTest, branch string) machine.TaskPromoted {
 	t.Helper()
+	return inv.promoteWith(t, running, branch, "Cache each parse.")
+}
+
+// promoteWith is promote with the intent stated.
+func (inv investigation) promoteWith(t *testing.T, running serviceUnderTest, branch, intent string) machine.TaskPromoted {
+	t.Helper()
 	var promoted machine.TaskPromoted
 	if err := running.client.Call(t.Context(), ipc.MethodTaskPromote, machine.TaskPromoteRequest{
-		Task: inv.task, Repository: inv.repository.ID, Branch: branch, Intent: "Cache each parse.",
+		Task: inv.task, Repository: inv.repository.ID, Branch: branch, Intent: intent,
 	}, &promoted); err != nil {
 		t.Fatalf("task.promote: %v", err)
 	}
@@ -117,6 +128,22 @@ func (inv investigation) copyStands(t *testing.T, when string) {
 	}
 	if info, err := os.Stat(copyPath); err != nil || !info.IsDir() {
 		t.Fatalf("the investigation's copy is gone %s: %v", when, err)
+	}
+}
+
+// workerEnded waits until the service holds no session for the task, which
+// is how the window's end through the held session shows.
+func (inv investigation) workerEnded(t *testing.T, running serviceUnderTest) {
+	t.Helper()
+	deadline := time.Now().Add(launchWait)
+	for {
+		if _, _, held := running.service.SessionOf(inv.task); !held {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatal("the reported worker was still held long past its promotion window")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -207,16 +234,7 @@ func TestAReportedWorkerPastThePromotionWindowIsEndedAndAPromotionRelaunchesItFr
 	inv.serve(t, func(running serviceUnderTest) {
 		w := inv.reported(t, running)
 		ended := w.session.Reference().String()
-		deadline := time.Now().Add(launchWait)
-		for {
-			if _, _, held := running.service.SessionOf(inv.task); !held {
-				break
-			}
-			if !time.Now().Before(deadline) {
-				t.Fatal("the reported worker was still held long past its promotion window")
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
+		inv.workerEnded(t, running)
 		waitProbe(t, w.provider, ended, taskstate.Dead)
 		waitState(t, running.client, inv.task, "read Reported with its worker ended", reportedFromTheReport(taskstate.Dead))
 		passes()
@@ -255,5 +273,85 @@ func TestAPromotionAfterARestartRelaunchesTheReportedInvestigationFromTheRecord(
 		}
 		inv.copyStands(t, "after a restart")
 		inv.relaunchedFromTheReport(t, running, inv.promote(t, running, "task/window-restarted"), ended)
+	})
+}
+
+// P15 for a worker an earlier service left: the first service files the
+// report under a one-hour window and is then left the way SIGKILL leaves it,
+// its worker running and no service holding a handle to it. The next service,
+// whose operator has shortened the window to a second, holds no session, so
+// it ends the survivor through agents.EndGroup on the identity the attempt's
+// recorded reference carries: the process is gone, the task reads Reported
+// over a dead terminal, the log names the verified identity, and the copy
+// stands.
+func TestAReportedWorkerAnEarlierServiceLeftIsEndedPastThePromotionWindow(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1h"}`)
+	var survivor session.Reference
+	inv.serve(t, func(running serviceUnderTest) {
+		survivor = inv.reported(t, running).session.Reference()
+		running.service.AbandonSessionsForTest(t)
+	})
+	homeIsFree(t, inv.home)
+	identity := agents.Identity{PID: survivor.PID, Start: survivor.Start}
+	t.Cleanup(func() { _, _ = agents.EndGroup(identity, time.Second) })
+	if presence, err := identity.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Fatalf("the worker reads %q (%v) after its service closed, want it still running, or there is no survivor", presence, err)
+	}
+	if err := os.WriteFile(inv.home.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	inv.serve(t, func(running serviceUnderTest) {
+		deadline := time.Now().Add(launchWait)
+		for {
+			presence, err := identity.Presence()
+			if err == nil && presence != agents.PresencePresent {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the survivor still reads %q (%v) long past its promotion window", presence, err)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		waitState(t, running.client, inv.task, "read Reported over its ended survivor", reportedFromTheReport(taskstate.Dead))
+		if log := serviceLog(t, inv.home); !strings.Contains(log, "by its verified identity") {
+			t.Fatalf("the service log does not say the survivor was ended by its verified identity:\n%s", log)
+		}
+		inv.copyStands(t, "after the survivor was ended for the window")
+	})
+}
+
+// An oversized brief does not hide the reading a promotion relaunches on.
+// With the worker live, an intent past the message limit is refused as
+// TooLarge, nothing is sent and nothing relaunched; with the worker ended
+// for the window, the same intent still relaunches a worker in the copy from
+// the report, begun with the brief through its instructions.
+func TestAnOversizedBriefStillLetsAPromotionRelaunch(t *testing.T) {
+	t.Parallel()
+	service.RequireSweepClearsHere(t, "a promotion with an oversized brief relaunching the reported investigation")
+	intent := "Cache each parse. " + strings.Repeat("x", machine.MaxMessageBytes)
+
+	live := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1h"}`)
+	live.serve(t, func(running serviceUnderTest) {
+		live.reported(t, running)
+		promoted := live.promoteWith(t, running, "task/brief-too-large", intent)
+		if !promoted.Brief.TooLarge || promoted.Brief.Message != nil || promoted.Relaunch != nil {
+			t.Fatalf("an oversized brief to a live worker answered %+v, want it refused as too large and no relaunch", promoted.Brief)
+		}
+	})
+
+	ended := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`)
+	ended.serve(t, func(running serviceUnderTest) {
+		ref := ended.reported(t, running).session.Reference().String()
+		ended.workerEnded(t, running)
+		waitState(t, running.client, ended.task, "read Reported with its worker ended", reportedFromTheReport(taskstate.Dead))
+		passes() // the window's end holds the task's slot until its goroutine returns
+		promoted := ended.promoteWith(t, running, "task/brief-too-large", intent)
+		if promoted.Brief.TooLarge {
+			t.Fatalf("an oversized brief to an ended worker answered %+v, want the relaunch decided instead", promoted.Brief)
+		}
+		ended.relaunchedFromTheReport(t, running, promoted, ref)
 	})
 }

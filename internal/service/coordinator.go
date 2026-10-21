@@ -234,7 +234,9 @@ func (s *Service) relaunchPromoted(ctx context.Context, req ipc.Request, task st
 // for a worker nothing can reach would be refused by the send anyway, and
 // the instructions file already carries the brief to whatever worker is
 // begun on the task next. A brief over machine.MaxMessageBytes is not sent
-// either, on task.message's terms. Nothing here undoes or refuses the
+// to a live worker either, on task.message's terms, and is answered
+// TooLarge; the size is checked only after the probe, so it never hides the
+// Dead reading a promotion relaunches on. Nothing here undoes or refuses the
 // promotion, which stands whatever became of the brief: the answer carries
 // what did, typed.
 //
@@ -255,9 +257,6 @@ func (s *Service) briefLatest(ctx context.Context, req ipc.Request, task, brief 
 	unsent := func(format string, args ...any) (machine.Briefing, taskstate.Liveness) {
 		return machine.Briefing{Unsent: fmt.Sprintf(format, args...)}, taskstate.Unobserved
 	}
-	if len(brief) > machine.MaxMessageBytes {
-		return unsent("the brief is %d bytes, over the message limit of %d", len(brief), machine.MaxMessageBytes)
-	}
 	latest, ok, err := s.latestAttempt(ctx, task)
 	if err != nil {
 		return unsent("the task's attempts could not be read: %v", err)
@@ -276,6 +275,10 @@ func (s *Service) briefLatest(ctx context.Context, req ipc.Request, task, brief 
 		b, _ := unsent("the worker of attempt %d (session %s) is not one this service can reach: the probe answered %s (%s)",
 			latest.Sequence, ref, observed.Liveness, observed.Detail)
 		return b, observed.Liveness
+	}
+	if len(brief) > machine.MaxMessageBytes {
+		return machine.Briefing{TooLarge: true, Unsent: fmt.Sprintf("the brief is %d bytes, over the message limit of %d, so it was "+
+			"not sent to the live worker of attempt %d", len(brief), machine.MaxMessageBytes, latest.Sequence)}, observed.Liveness
 	}
 	m, err := s.deliverMessage(ctx, req, req.MessageSender(), task, latest.Sequence, ref, brief)
 	if err != nil {
