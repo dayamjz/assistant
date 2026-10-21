@@ -94,12 +94,12 @@ import (
 
 // keepWork records the kept work entry for a kept copy and logs what came of
 // it. It is the one call a site makes for a copy kept because its work has
-// not landed, and the call meant for an investigation's copy kept past
-// promotion_window, with tasks.KeptPromotionWindow as the reason, which
-// #438 adds. A write
-// that failed is logged and refuses nothing, because the copy is kept either
-// way and the next cleanup of it asks again; an entry already recorded for
-// the copy and its commits is logged as such and written again nowhere.
+// not landed; an investigation's copy kept past promotion_window, whose
+// reason would be tasks.KeptPromotionWindow, is not handed to it in this
+// build, on landed.go's terms. A write that failed is logged and refuses
+// nothing, because the copy is kept either way and the next cleanup of it
+// asks again; an entry already recorded for the copy and its commits is
+// logged as such and written again nowhere.
 func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
 	owner := "task " + kept.Task
 	if kept.Run != "" {

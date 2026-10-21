@@ -128,9 +128,10 @@ import (
 //     task's (the first gap); one whose reference cannot be verified is
 //     reported in the log once per reference per service life and left
 //     running.
-//   - A copy kept after the window has no kept-work entry, so it is not
-//     surfaced and a new task in its project still dispatches, until #411's
-//     kept-work record lands; a reported investigation that is never
+//   - A copy kept after the window has no kept-work entry: endReportedWorker
+//     writes none, so tasks.KeptPromotionWindow has no producer yet and the
+//     copy is not surfaced, and no open entry holds dispatch in this build
+//     anyway (#411's second part); a reported investigation that is never
 //     promoted or relayed keeps its copy indefinitely meanwhile.
 //   - A reported investigation whose report opened a finding hold resolves
 //     Held, which the supervisor watches the terminal of, so the window's

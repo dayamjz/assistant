@@ -26,9 +26,9 @@ import (
 
 // KeptPromotionWindow is the reason an investigation's copy is kept once its
 // worker is ended at the end of promotion_window, PRD section 6's "when the
-// window passes, the worker is ended and its copy is kept". It answers to
-// #438, which ends that worker and raises the entry through internal/service;
-// nothing in this build produces it yet.
+// window passes, the worker is ended and its copy is kept". internal/service
+// ends that worker at the window and does not yet record the entry, so
+// nothing in this build produces it.
 const KeptPromotionWindow = "promotion-window-passed"
 
 // Kept names a copy kept because its work has not landed: its one owner, a
