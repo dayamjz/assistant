@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // lsofPath is the lsof this package runs. It is named by absolute path, so
@@ -225,7 +227,7 @@ func (l lsofRun) run(ctx context.Context) ([]byte, error) {
 		return err
 	}
 	exited := make(chan error, 1)
-	go func() { exited <- awaitExitUnreaped(pgid) }()
+	go func() { exited <- procgroup.AwaitExit(pgid) }()
 	var stopped error
 	select {
 	case err := <-exited:
@@ -285,53 +287,6 @@ func (l lsofRun) run(ctx context.Context) ([]byte, error) {
 		}
 	}
 	return out, nil
-}
-
-// awaitExitUnreaped blocks until the child pid has exited and returns
-// without reaping it, so its identifier stays its own until cmd.Wait reaps
-// it. It waits on a kqueue for the process's NOTE_EXIT, which reports an
-// exit and reaps nothing, and then reads the process table, so an exit
-// before the registration is not waited on for ever: a child that is a
-// zombie, or that the registration could not find, has exited, since
-// nothing but cmd.Wait reaps it.
-func awaitExitUnreaped(pid int) error {
-	kq, err := unix.Kqueue()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = unix.Close(kq) }()
-	var change unix.Kevent_t
-	unix.SetKevent(&change, pid, unix.EVFILT_PROC, unix.EV_ADD|unix.EV_ONESHOT)
-	change.Fflags = unix.NOTE_EXIT
-	// The registration is made without blocking, so the process table can
-	// be read between it and the wait.
-	changes, timeout := []unix.Kevent_t{change}, &unix.Timespec{}
-	events := make([]unix.Kevent_t, 1)
-	for {
-		n, err := unix.Kevent(kq, changes, events, timeout)
-		switch {
-		case errors.Is(err, unix.EINTR):
-			continue
-		case errors.Is(err, unix.ESRCH):
-			return nil
-		case err != nil:
-			return err
-		case n == 1 && events[0].Flags&unix.EV_ERROR != 0 && events[0].Data == int64(unix.ESRCH):
-			return nil
-		case n == 1 && events[0].Flags&unix.EV_ERROR != 0:
-			return unix.Errno(events[0].Data)
-		case n == 1 && events[0].Fflags&unix.NOTE_EXIT != 0:
-			return nil
-		}
-		if changes != nil {
-			changes, timeout = nil, nil
-			if _, running, err := kinfo(pid); err != nil {
-				return err
-			} else if !running {
-				return nil
-			}
-		}
-	}
 }
 
 // reapWithin reaps cmd's leader, waiting until end at most, and leaves the

@@ -33,6 +33,10 @@ const (
 	fakeGitStallOn = "VCS_TEST_FAKE_GIT_STALL_ON"
 	fakeGitHolder  = "VCS_TEST_FAKE_GIT_PIPE_HOLDER"
 	fakeGitVersion = "VCS_TEST_FAKE_GIT_VERSION"
+	fakeGitHangOn  = "VCS_TEST_FAKE_GIT_HANG_ON"
+	fakeGitDetach  = "VCS_TEST_FAKE_GIT_DETACH_HOLDER"
+	fakeGitPIDs    = "VCS_TEST_FAKE_GIT_PIDS"
+	fakeGitRelease = "VCS_TEST_FAKE_GIT_RELEASE"
 )
 
 // pipeHold is how long the grandchild keeps the pipes it inherited open. It
@@ -59,7 +63,7 @@ func fakeGitMain() int {
 	if os.Getenv(fakeGitHolder) != "" {
 		// The grandchild that inherited git's standard output and error.
 		// Keeping them open while git itself exits is the whole of its job.
-		time.Sleep(pipeHold)
+		awaitRelease(pipeHold)
 		return 0
 	}
 
@@ -141,25 +145,24 @@ func fakeGitMain() int {
 	// limit and leave its pipes open. The marker names the subcommand that
 	// does it, so the probes an open needs still answer normally.
 	if marker := os.Getenv(fakeGitHoldOn); marker != "" && slices.Contains(args, marker) {
-		exe, err := os.Executable()
-		if err != nil {
-			return 3
-		}
-		holder := exec.Command(exe)
-		holder.Env = append(os.Environ(), fakeGitHolder+"=1")
-		// The holder outlives the test that started it, and this process was
-		// started with its working directory inside the test's temporary
-		// directory. On Windows a directory that is a live process's working
-		// directory cannot be removed, so the holder is moved out of the tree
-		// the test cleanup deletes.
-		holder.Dir = os.TempDir()
-		holder.Stdout = os.Stdout
-		holder.Stderr = os.Stderr
-		if err := holder.Start(); err != nil {
+		if !startHolder() {
 			return 3
 		}
 		// Exit without waiting, leaving the pipes open behind this process.
 		return 0
+	}
+
+	// A git that never exits, with a grandchild holding its pipes as well:
+	// the shape of a wedged transport. It waits for the test's release
+	// rather than for a signal, so the test ends it without signalling a
+	// process identifier that may have been reused.
+	if marker := os.Getenv(fakeGitHangOn); marker != "" && slices.Contains(args, marker) {
+		recordPID(os.Getpid())
+		if !startHolder() {
+			return 3
+		}
+		awaitRelease(time.Hour)
+		return 3
 	}
 
 	// Output first, then a wait long enough for a caller's deadline to end the
@@ -177,6 +180,67 @@ func fakeGitMain() int {
 		return n
 	}
 	return 0
+}
+
+// startHolder starts the grandchild that inherits this process's standard
+// output and error and outlives it, and reports whether it started. It stays
+// in this process's group unless the test asked for it to leave, which is the
+// one descendant an invocation's group cannot reach.
+func startHolder() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	holder := exec.Command(exe)
+	holder.Env = append(os.Environ(), fakeGitHolder+"=1")
+	// The holder outlives the test that started it, and this process was
+	// started with its working directory inside the test's temporary
+	// directory. On Windows a directory that is a live process's working
+	// directory cannot be removed, so the holder is moved out of the tree
+	// the test cleanup deletes.
+	holder.Dir = os.TempDir()
+	holder.Stdout = os.Stdout
+	holder.Stderr = os.Stderr
+	if os.Getenv(fakeGitDetach) != "" {
+		leaveGroup(holder)
+	}
+	if holder.Start() != nil {
+		return false
+	}
+	// Recorded here rather than by the holder, so the record exists before
+	// this process can exit and have its group ended.
+	recordPID(holder.Process.Pid)
+	return true
+}
+
+// recordPID appends pid to the file useFakeGit named, so a test can tell
+// whether that process is still running.
+func recordPID(pid int) {
+	path := os.Getenv(fakeGitPIDs)
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	_, _ = f.WriteString(strconv.Itoa(pid) + "\n")
+	_ = f.Close()
+}
+
+// awaitRelease returns once the release file useFakeGit named exists, or
+// after limit, whichever is first.
+func awaitRelease(limit time.Duration) {
+	path := os.Getenv(fakeGitRelease)
+	end := time.Now().Add(limit)
+	for time.Now().Before(end) {
+		if path != "" {
+			if _, err := os.Stat(path); err == nil {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // fakeCommit is the commit identifier the stand-in resolves every revision to.
@@ -253,7 +317,34 @@ func useFakeGit(t *testing.T) (logPath string, binary string) {
 	logPath = t.TempDir() + string(os.PathSeparator) + "invocations.jsonl"
 	t.Setenv(fakeGitMode, "1")
 	t.Setenv(fakeGitLog, logPath)
+	// Whatever a stand-in leaves running records its identifier and waits
+	// for the release file, so the test ends it at cleanup without
+	// signalling anything. The cleanup is registered after the directory
+	// holding both files, so it runs before that directory is removed, and
+	// it waits for every recorded process to be gone before it returns, so
+	// the release file outlives every process that polls for it.
+	dir := t.TempDir()
+	release := dir + string(os.PathSeparator) + "release"
+	pids := dir + string(os.PathSeparator) + "pids"
+	t.Setenv(fakeGitRelease, release)
+	t.Setenv(fakeGitPIDs, pids)
+	t.Cleanup(func() {
+		_ = os.WriteFile(release, nil, 0o600)
+		awaitStandIns(t, readPIDs(pids))
+	})
 	return logPath, exe
+}
+
+// readPIDs returns the identifiers recorded in path, in the order recorded.
+func readPIDs(path string) []int {
+	data, _ := os.ReadFile(path)
+	var out []int
+	for _, line := range strings.Fields(string(data)) {
+		if n, err := strconv.Atoi(line); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // fakeBareDir returns an existing directory to stand in for a bare repository.
