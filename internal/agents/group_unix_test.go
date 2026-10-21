@@ -306,6 +306,15 @@ func TestForceGroupEndsAGroupThatIgnoresThePoliteSignalAtOnce(t *testing.T) {
 	if took > 2*time.Second {
 		t.Fatalf("ForceGroup took %v to end the group, want it at once rather than after a polite wait", took)
 	}
+	// On Linux groupGone reads an exited, unreaped member as gone, and the
+	// leader is this test's child, reaped by the goroutine above, so signal
+	// zero still reaches it until that goroutine has run. Wait for the reap
+	// before asking whether anything is left in the group.
+	select {
+	case <-waited:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("the stubborn stand-in %d was not reaped 5s after ForceGroup reported its group ended", id.PID)
+	}
 	if groupAlive(id.PID) {
 		t.Fatalf("the group %d still holds a process after ForceGroup reported it ended", id.PID)
 	}
