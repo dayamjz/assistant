@@ -210,6 +210,15 @@ func (l lsofRun) run(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("agents: running %s: %w", l.program, err)
 	}
 	pgid := cmd.Process.Pid
+	// answer is what the run returns in place of err: ctx's error once ctx
+	// has ended, whatever else stopped the run, so a cancellation observed
+	// before the run answers always wins.
+	answer := func(err error) error {
+		if ctx.Err() != nil {
+			return fmt.Errorf("agents: running %s: %w", l.program, ctx.Err())
+		}
+		return err
+	}
 	exited := make(chan error, 1)
 	go func() { exited <- awaitExitUnreaped(pgid) }()
 	var stopped error
@@ -221,7 +230,7 @@ func (l lsofRun) run(ctx context.Context) ([]byte, error) {
 			// still this run's to end before that reap.
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 			reapWithin(cmd, end)
-			return nil, fmt.Errorf("agents: waiting on %s: %w", l.program, err)
+			return nil, answer(fmt.Errorf("agents: waiting on %s: %w", l.program, err))
 		}
 	case <-cut.C:
 		stopped = fmt.Errorf("%w: %s ran past %s and its process group was ended", ErrSweepTimedOut, l.program, l.deadline-l.deadline/lsofCleanupShare)
@@ -237,7 +246,7 @@ func (l lsofRun) run(ctx context.Context) ([]byte, error) {
 				<-exited
 				_ = cmd.Wait()
 			}()
-			return nil, stopped
+			return nil, answer(stopped)
 		}
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
@@ -258,12 +267,10 @@ func (l lsofRun) run(ctx context.Context) ([]byte, error) {
 	// once WaitDelay, the rest of the deadline, has passed. Past either
 	// check the reap is left to its goroutine and the output is never read.
 	switch {
-	case stopped != nil:
-		return nil, stopped
-	case ctx.Err() != nil:
-		return nil, fmt.Errorf("agents: running %s: %w", l.program, ctx.Err())
+	case ctx.Err() != nil, stopped != nil:
+		return nil, answer(stopped)
 	case !time.Now().Before(end), errors.Is(err, exec.ErrWaitDelay):
-		return nil, fmt.Errorf("%w: the output of %s was not complete within %s and its process group was ended", ErrSweepTimedOut, l.program, l.deadline)
+		return nil, answer(fmt.Errorf("%w: the output of %s was not complete within %s and its process group was ended", ErrSweepTimedOut, l.program, l.deadline))
 	}
 	out := stdout.Bytes()
 	if err != nil {

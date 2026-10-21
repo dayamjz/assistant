@@ -316,7 +316,9 @@ func TestASweepWhoseLsofExitsInTimeStillClears(t *testing.T) {
 // cancellation, cancelled once the leader has exited and the descendant
 // holds the output, never a wait for the deadline, and that holds when the
 // descendant lets go of the output after the cancellation too, which is
-// never a success. The last row is the positive control: let go at once
+// never a success, and when the cancellation comes after the cutoff has
+// killed a leader that was still running, during the cleanup after it,
+// the cancellation wins over the timeout. The last row is the positive control: let go at once
 // and not cancelled, the same output is read and accepted, so the refusals
 // above are not the output's.
 func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *testing.T) {
@@ -333,29 +335,45 @@ func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *t
 	for _, c := range []struct {
 		name     string
 		hold     string
+		run      string
 		deadline time.Duration
 		cancel   bool
+		cancelAt time.Duration
 		want     error
 		within   time.Duration
 	}{
-		{"held past the deadline", "3600", 500 * time.Millisecond, false, agents.ErrSweepTimedOut, 500 * time.Millisecond},
-		{"held when cancelled", "3600", 5 * time.Second, true, context.Canceled, 0},
-		{"let go after the cancellation", "1", 5 * time.Second, true, context.Canceled, 0},
-		{"let go at once", "0", 2 * time.Second, false, nil, 2 * time.Second},
+		{"held past the deadline", "3600", "0.05", 500 * time.Millisecond, false, 0, agents.ErrSweepTimedOut, 500 * time.Millisecond},
+		{"held when cancelled", "3600", "0.05", 5 * time.Second, true, 0, context.Canceled, 0},
+		{"let go after the cancellation", "1", "0.05", 5 * time.Second, true, 0, context.Canceled, 0},
+		{"cancelled after the cutoff while held", "3600", "3600", 2 * time.Second, true, 1900 * time.Millisecond, context.Canceled, 0},
+		{"let go at once", "0", "0.05", 2 * time.Second, false, 0, nil, 2 * time.Second},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			body := "/usr/bin/perl -e 'setpgrp(0,0); open(my $f, \">>\", $ARGV[0]) or die; print $f \"$$\\n\"; close $f; select(undef, undef, undef, $ARGV[1])' PIDS " + c.hold + " &\n" +
-				"printf 'p%s\\nfcwd\\nn%s\\n' " + strconv.Itoa(os.Getpid()) + " '" + cwd + "'\n/bin/sleep 0.05\nexit 0\n"
+				"printf 'p%s\\nfcwd\\nn%s\\n' " + strconv.Itoa(os.Getpid()) + " '" + cwd + "'\n/bin/sleep " + c.run + "\nexit 0\n"
 			program, pidFile := standInLsof(t, t.TempDir(), body)
 			ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 			defer cancel()
 			// A cancelled row cancels once the leader has exited and the
 			// descendant is holding the output, so the cancellation lands in
-			// the output wait, and is timed from there.
+			// the output wait, and is timed from there. A row with cancelAt
+			// cancels at that point from the start instead: past the cutoff
+			// that killed a leader still running, during the cleanup that
+			// follows it, which a cancellation wins over the timeout.
 			started := make(chan time.Time, 1)
 			started <- time.Now()
 			returned := make(chan struct{})
-			if c.cancel {
+			if c.cancelAt > 0 {
+				<-started
+				go func() {
+					select {
+					case <-returned:
+					case <-time.After(c.cancelAt):
+						started <- time.Now()
+						cancel()
+					}
+				}()
+			} else if c.cancel {
 				<-started
 				go func() {
 					for {
