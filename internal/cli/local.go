@@ -429,7 +429,7 @@ func eject(ctx context.Context, in *invocation) (any, error) {
 	if err := records.ReserveRepositoryRemoval(ctx, binding.GateID, owner); err != nil {
 		return nil, err
 	}
-	release := func() { _ = records.ReleaseRepositoryRemoval(ctx, binding.GateID) }
+	release := func() { _, _ = records.ReleaseRepositoryRemoval(ctx, binding.GateID, owner) }
 	if betweenEjectPreflightAndRemoval != nil {
 		betweenEjectPreflightAndRemoval()
 	}

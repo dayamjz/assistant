@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/service"
@@ -419,5 +422,65 @@ func TestARemovalReservationWhoseEjectIsGoneIsReleasedAtOpen(t *testing.T) {
 	}
 	if !strings.Contains(readServiceLog(t, h), "released the removal reservation of repository "+repository.ID) {
 		t.Fatalf("the service log does not say the dead eject's reservation was released:\n%s", readServiceLog(t, h))
+	}
+}
+
+// Recovery's release of a dead eject's reservation is anchored on the owner
+// it read: a new eject that takes the reservation over between recovery's
+// read and its release keeps it, and a run of the repository is still
+// refused, so no run copy can appear under a gate that eject is removing.
+// The takeover is made through the seam between the read and the release,
+// by the store's own reservation for a live owner, this test's process.
+func TestAReservationTakenOverAfterRecoveryReadsItStands(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	sleeper := exec.Command("sleep", "60")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	dead, found, err := agents.Identify(sleeper.Process.Pid)
+	_ = sleeper.Process.Kill()
+	_ = sleeper.Wait()
+	if err != nil || !found {
+		t.Skipf("this platform cannot identify a process (%v), so an owner's death cannot be shown", err)
+	}
+	self, found, err := agents.Identify(os.Getpid())
+	if err != nil || !found {
+		t.Fatalf("identifying this test's own process: %v", err)
+	}
+	live := store.RemovalOwner{PID: self.PID, Start: self.Start}
+
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = records.Close() }()
+	if err := records.ReserveRepositoryRemoval(t.Context(), repository.ID, store.RemovalOwner{PID: dead.PID, Start: dead.Start}); err != nil {
+		t.Fatal(err)
+	}
+	var takeover error
+	opts := service.WithBeforeStaleRemovalReleaseForTest(options(t, h), func() {
+		takeover = records.ReserveRepositoryRemoval(context.Background(), repository.ID, live)
+	})
+	withServiceOptions(t, opts, func(under serviceUnderTest) {
+		if takeover != nil {
+			t.Fatalf("the new eject's reservation inside recovery's window: %v", takeover)
+		}
+		var run machine.Run
+		err := under.client.Call(t.Context(), ipc.MethodRunStart, machine.StartRequest{
+			Working: machine.Working{WorkingPath: subject}, Intent: "started while an eject holds the repository",
+		}, &run)
+		if err == nil || !strings.Contains(err.Error(), "being removed") {
+			t.Fatalf("a run while the new eject holds the repository = %v, want it refused", err)
+		}
+	})
+	reserved, err := records.RepositoryRemovals(t.Context())
+	if err != nil || len(reserved) != 1 || reserved[0].Owner != live {
+		t.Fatalf("after recovery the reservations are %+v (%v), want the new eject's alone", reserved, err)
 	}
 }

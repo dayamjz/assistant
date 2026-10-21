@@ -487,16 +487,25 @@ func (s *Store) RepositoryRemovals(ctx context.Context) ([]RepositoryRemoval, er
 	return out, nil
 }
 
-// ReleaseRepositoryRemoval clears a reservation ReserveRepositoryRemoval
-// wrote, for an eject that did not complete or whose owner is gone. Clearing
-// one that is not there is not an error.
-func (s *Store) ReleaseRepositoryRemoval(ctx context.Context, id string) error {
-	return s.inTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM repository_removal WHERE repository_id = ?`, id); err != nil {
+// ReleaseRepositoryRemoval clears the reservation owner holds of the
+// repository's removal, for an eject that did not complete or whose owner is
+// gone, and reports whether it cleared one. It is anchored on the owner: the
+// one statement deletes the row only while it still names that process, so
+// a reservation another eject took over since the caller read it stands.
+// Clearing one that is not there, or not that owner's, is not an error.
+func (s *Store) ReleaseRepositoryRemoval(ctx context.Context, id string, owner RemovalOwner) (bool, error) {
+	released := false
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM repository_removal WHERE repository_id = ? AND owner_pid = ? AND owner_start = ?`,
+			id, owner.PID, int64(owner.Start))
+		if err != nil {
 			return fmt.Errorf("store: releasing the removal of repository %s: %w", id, err)
 		}
-		return nil
+		n, err := res.RowsAffected()
+		released = n == 1
+		return err
 	})
+	return released, err
 }
 
 // refuseUnlessForgettable is the whole of what stops a repository being

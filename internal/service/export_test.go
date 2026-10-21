@@ -28,6 +28,14 @@ func WithCleanupInterruptForTest(tb testing.TB, o Options, f func() error) Optio
 	return o
 }
 
+// WithBeforeStaleRemovalReleaseForTest returns o with recovery's seam between
+// reading a dead eject's removal reservation and releasing it set to f, for
+// this package's external tests.
+func WithBeforeStaleRemovalReleaseForTest(o Options, f func()) Options {
+	o.beforeStaleRemovalRelease = f
+	return o
+}
+
 // SetBeforeRefusalEndForTest installs beforeRefusalEnd for this
 // package's external tests. It exists only in the tests, on that field's
 // terms in service.go.

@@ -559,8 +559,9 @@ func (s *Service) cancel(ctx context.Context, req machine.CancelRequest) (machin
 	// settle owes it, rather than at the next start: until it is decided it
 	// is a copy eject has to refuse over, and one holding unlanded work is
 	// kept work nobody has been told about. A run a segment is still inside
-	// is left to that segment's own settle, which reclaims once it returns,
-	// so a copy is never examined under a stage body still writing to it.
+	// is left to that segment, which reclaims once it returns, through
+	// settle or, when it returns without settling, through carryOn, so a
+	// copy is never examined under a stage body still writing to it.
 	if !s.isAdvancing(req.Run) {
 		s.reclaimed(ctx, terminated)
 	}
@@ -1121,6 +1122,14 @@ type ending struct {
 // here. That is a bound on the shape of the thing rather than a counter
 // somebody has to keep.
 func (s *Service) carryOn(runID string, how ending) {
+	// A segment that returned without settling settled no reclaim either, so
+	// a run its ending left finished, a cancel while a stage body was inside
+	// it among them, has its copy asked of the cleanup decision here, from the
+	// recorded status: cancel leaves such a run's reclaim to its segment, and
+	// this is that segment's half on every path it can end by.
+	if how.stranded && s.stopCtx.Err() == nil {
+		s.reclaimIfFinished(runID)
+	}
 	switch how.disposition(s.stopCtx.Err() != nil) {
 	case dispositionEnded:
 		s.log.Printf("run %s was ended through the protocol; nothing carries it on", runID)
@@ -1130,6 +1139,21 @@ func (s *Service) carryOn(runID string, how ending) {
 		s.log.Printf("run %s lost the caller waiting on it; carrying it on", runID)
 		s.continueRun(runID)
 	}
+}
+
+// reclaimIfFinished asks reclaimed of the run when its record says it is
+// finished, and of nothing else, reading the status through runs.Finished on
+// sweepFinishedAtRecovery's terms.
+func (s *Service) reclaimIfFinished(runID string) {
+	record, err := s.store.Run(s.stopCtx, runID)
+	if err != nil {
+		s.log.Printf("the copy of run %s was not reclaimed after its segment ended: the record could not be read: %v", runID, err)
+		return
+	}
+	if !record.Status.Recognized() || !runs.Finished(record.Status) {
+		return
+	}
+	s.reclaimed(s.stopCtx, record)
 }
 
 // disposition is what becomes of a run whose segment has ended, and the closed

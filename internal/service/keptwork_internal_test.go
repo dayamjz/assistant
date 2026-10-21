@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/forge"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
@@ -252,5 +253,47 @@ func TestAnInterruptedTaskCopyRemovalIsCompletedAtTheNextOpen(t *testing.T) {
 	}
 	if cleanup, err := l.records(t).TaskCleanup(ctx, id); err != nil || !cleanup.RemovedAt.IsKnown() {
 		t.Fatalf("the task's cleanup record reads %+v (%v), want the removal marked", cleanup, err)
+	}
+}
+
+// A cancel that arrives while a stage body is still inside the run leaves
+// the copy's cleanup to the segment, and the segment honours it on the path
+// where its body returns context.Canceled without settling: the run's copy,
+// holding a file no commit records, becomes a kept work entry once the
+// segment returns. The body is held inside past the cancel and then let out,
+// so it returns its cancelled context's error with the run already ended. Without carryOn's reclaim of a finished run nothing asks
+// the cleanup and the kept work is silent.
+func TestACancelInsideAStageBodyStillRecordsTheRunsKeptWork(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	held := newHeldService(t)
+	held.pastCancel.Store(true)
+	record := held.begin(t)
+	copyPath := held.service.home.Worktree("subject", record.ID)
+	if err := os.WriteFile(filepath.Join(copyPath, "uncommitted.txt"), []byte("work the body left\n"), 0o600); err != nil {
+		t.Fatalf("leaving work in the run's copy: %v", err)
+	}
+	if !held.service.isAdvancing(record.ID) {
+		t.Fatal("the segment is not inside the run, so this is not the case under test")
+	}
+	if _, err := held.service.cancel(t.Context(), machine.CancelRequest{Run: record.ID}); err != nil {
+		t.Fatalf("ending the run: %v", err)
+	}
+	// The body is still inside, so the cancel left the reclaim to it.
+	if kept, err := held.service.store.OpenKeptWork(t.Context()); err != nil || len(kept) != 0 {
+		t.Fatalf("the cancel reclaimed under a body still inside the run: %+v, %v", kept, err)
+	}
+	held.let()
+	held.awaitSegment(t)
+
+	kept, err := held.service.store.OpenKeptWork(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 1 || kept[0].RunID.Or("") != record.ID || kept[0].Reason != string(tasks.ReasonCopyUntracked) {
+		t.Fatalf("after the cancelled segment returned the open kept work is %+v, want run %s's copy kept for its untracked file", kept, record.ID)
+	}
+	if _, err := os.Stat(filepath.Join(copyPath, "uncommitted.txt")); err != nil {
+		t.Fatalf("the kept copy's file was touched: %v", err)
 	}
 }

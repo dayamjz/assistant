@@ -199,6 +199,11 @@ type Options struct {
 	// hands them to internal/tasks' InterruptBeforeMarkForTest.
 	cleanupTest          testing.TB
 	interruptCleanupMark func() error
+	// beforeStaleRemovalRelease runs in recovery between reading a removal
+	// reservation whose owner is gone and releasing it; export_test.go's
+	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
+	// does.
+	beforeStaleRemovalRelease func()
 }
 
 // Service is one home's background service.
@@ -373,6 +378,10 @@ type Service struct {
 	// package's tests, which use it to hold the run pending while they
 	// assert queue state, or to move the run first so the ending fails.
 	beforeRefusalEnd func()
+	// beforeStaleRemovalRelease is Options' seam of that name, which
+	// recovery runs before each anchored release of a dead eject's
+	// reservation. It is nil in production.
+	beforeStaleRemovalRelease func()
 	// sweepCopy stands in for the sweep this service asks of a copy: the
 	// one relaunch.go and dispatch.go ask of a task's standing copy, and the
 	// one runsweep.go asks of a finished run's. It is nil in production,
@@ -570,24 +579,25 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		return nil, unstarted(err)
 	}
 	s := &Service{
-		home:       o.Home,
-		lock:       lock,
-		log:        log,
-		instance:   instance,
-		newStages:  o.NewStages,
-		build:      o.Build,
-		catalog:    o.Catalog,
-		newFixer:   o.NewFixer,
-		registry:   newRegistry(),
-		topologies: make(map[string]*topology),
-		advancing:  make(map[string]*slot),
-		isolated:   make(map[string]tasks.Isolation),
-		claiming:   make(map[string]bool),
-		launched:   make(map[string]launchedWorker),
-		delegated:  make(map[string]launchedSubordinate),
-		survivors:  session.NewSurvivors(),
-		starting:   make(map[branchKey]*branchGate),
-		stopping:   make(chan struct{}),
+		home:                      o.Home,
+		lock:                      lock,
+		log:                       log,
+		instance:                  instance,
+		newStages:                 o.NewStages,
+		build:                     o.Build,
+		catalog:                   o.Catalog,
+		newFixer:                  o.NewFixer,
+		registry:                  newRegistry(),
+		topologies:                make(map[string]*topology),
+		advancing:                 make(map[string]*slot),
+		beforeStaleRemovalRelease: o.beforeStaleRemovalRelease,
+		isolated:                  make(map[string]tasks.Isolation),
+		claiming:                  make(map[string]bool),
+		launched:                  make(map[string]launchedWorker),
+		delegated:                 make(map[string]launchedSubordinate),
+		survivors:                 session.NewSurvivors(),
+		starting:                  make(map[branchKey]*branchGate),
+		stopping:                  make(chan struct{}),
 
 		workerRoute:      o.WorkerRoute,
 		coordinatorRoute: o.CoordinatorRoute,

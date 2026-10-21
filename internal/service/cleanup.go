@@ -144,11 +144,20 @@ func (s *Service) releaseStaleRemovals(ctx context.Context) {
 			s.log.Printf("the removal of repository %s is reserved by process %d, which still runs, so the reservation stands", r.Repository, r.Owner.PID)
 			continue
 		}
-		if err := s.store.ReleaseRepositoryRemoval(ctx, r.Repository); err != nil {
-			s.log.Printf("the removal reservation of repository %s, whose eject is gone, could not be released: %v", r.Repository, err)
-			continue
+		if s.beforeStaleRemovalRelease != nil {
+			s.beforeStaleRemovalRelease()
 		}
-		s.log.Printf("released the removal reservation of repository %s: the eject that held it is gone", r.Repository)
+		// Anchored on the owner read and judged gone: a reservation another
+		// eject took over since the read stands.
+		released, err := s.store.ReleaseRepositoryRemoval(ctx, r.Repository, r.Owner)
+		switch {
+		case err != nil:
+			s.log.Printf("the removal reservation of repository %s, whose eject is gone, could not be released: %v", r.Repository, err)
+		case released:
+			s.log.Printf("released the removal reservation of repository %s: the eject that held it is gone", r.Repository)
+		default:
+			s.log.Printf("the removal reservation of repository %s was taken over by another eject since it was read, so it stands", r.Repository)
+		}
 	}
 }
 

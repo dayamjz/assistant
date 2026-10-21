@@ -302,8 +302,16 @@ func TestARemovalReservationStopsNewRunsAndNeverRefusesKeptWork(t *testing.T) {
 	if _, wrote, err := reserved.RecordKeptWork(ctx, kept(run)); err != nil || !wrote {
 		t.Fatalf("kept work under a reservation = %v, wrote %v; want it recorded", err, wrote)
 	}
-	if err := reserved.ReleaseRepositoryRemoval(ctx, run.RepositoryID); err != nil {
-		t.Fatal(err)
+	// The release is anchored on its owner: another process's release
+	// clears nothing, and the reservation still refuses a run.
+	if released, err := reserved.ReleaseRepositoryRemoval(ctx, run.RepositoryID, RemovalOwner{PID: owner.PID, Start: owner.Start + 1}); err != nil || released {
+		t.Fatalf("a release by another owner = %v, released %v; want nothing released", err, released)
+	}
+	if _, err := reserved.CreateRun(ctx, next); !errors.Is(err, ErrRepositoryBeingRemoved) {
+		t.Fatalf("a run after another owner's release = %v, want ErrRepositoryBeingRemoved", err)
+	}
+	if released, err := reserved.ReleaseRepositoryRemoval(ctx, run.RepositoryID, owner); err != nil || !released {
+		t.Fatalf("the owner's release = %v, released %v", err, released)
 	}
 	if _, err := reserved.CreateRun(ctx, next); err != nil {
 		t.Fatalf("a run once the reservation was released = %v", err)
