@@ -65,11 +65,11 @@ const KeptRemovedOnProof KeptClosure = "removed-on-proof"
 // cleanup writes for it, because the same path holding other commits is
 // another entry.
 //
-// The gap: ForgetRepository removes a run's entry with its run whether or
-// not it was answered, on run_cleanup's terms, because eject has removed the
-// gate the copy was cut from by then. Refusing the eject over an unanswered
-// entry is the strict reading of P15, and it waits on the answers being
-// reachable, #411's second part.
+// A repository with an open entry cannot be forgotten: ForgetRepository and
+// RepositoryRemovable refuse it with a *KeptWorkOpenError naming each entry,
+// so eject never removes a gate a kept copy was cut from while nobody has
+// decided about its work. A run's entry goes with its run only once it is
+// answered or closed.
 type KeptWork struct {
 	// ID is the row's identifier, which the store assigns and an answer
 	// names.
@@ -151,6 +151,72 @@ var ErrKeptWorkAnswered = errors.New("store: the kept work entry is already answ
 // ErrKeptWorkClosed is returned by AnswerKeptWork for an entry the program
 // closed because its copy was removed on a proof. Nothing is written.
 var ErrKeptWorkClosed = errors.New("store: the kept work entry was closed when its copy was removed on a proof")
+
+// ErrKeptWorkOpen matches every *KeptWorkOpenError.
+var ErrKeptWorkOpen = errors.New("store: the repository holds kept work nobody has decided")
+
+// KeptWorkOpenError is ForgetRepository's and RepositoryRemovable's refusal
+// of a repository that has open kept work entries, PRD principle P15's "the
+// program never discards it on its own": forgetting the repository would
+// take the gate the copies were cut from. It names each entry.
+type KeptWorkOpenError struct {
+	// Repository is the repository that was not forgotten.
+	Repository string
+	// Entries is every open entry of it, oldest first.
+	Entries []KeptWork
+}
+
+// Error names each entry's copy, its owner and the commits it holds, and the
+// way past the refusal in this build.
+func (e *KeptWorkOpenError) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "store: repository %s is not removed, because it holds kept work nobody has decided:", e.Repository)
+	for _, k := range e.Entries {
+		owner := "run " + k.RunID.Or("")
+		if task, ok := k.TaskID.Get(); ok {
+			owner = "task " + task
+		}
+		holds := "no commit of its own"
+		if len(k.Holds) > 0 {
+			holds = strings.Join(k.Holds, ", ")
+		}
+		fmt.Fprintf(&b, " entry %d, the copy of %s at %s, holding %s (%s);", k.ID, owner, k.CopyPath, holds, k.Reason)
+	}
+	b.WriteString(" until answering kept work ships (#411 part 2), the way past this is the work landing: once its commits are on " +
+		"the upstream branch or in the default branch, the next service start removes the copy on that proof and closes the entry; " +
+		"part 2's discard will be your other way")
+	return b.String()
+}
+
+// Unwrap makes the refusal match ErrKeptWorkOpen.
+func (e *KeptWorkOpenError) Unwrap() error { return ErrKeptWorkOpen }
+
+// refuseIfKeptWorkIsOpen is refuseUnlessForgettable's kept work check: every
+// open entry whose project is the repository, read in the removal's
+// transaction.
+func refuseIfKeptWorkIsOpen(ctx context.Context, tx *sql.Tx, repositoryID string) error {
+	rows, err := tx.QueryContext(ctx, keptWorkColumns+` FROM kept_work
+		WHERE repository_id = ? AND answer IS NULL AND closure IS NULL ORDER BY id`, repositoryID)
+	if err != nil {
+		return fmt.Errorf("store: checking the kept work of repository %s: %w", repositoryID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var open []KeptWork
+	for rows.Next() {
+		k, err := scanKeptWork(rows)
+		if err != nil {
+			return fmt.Errorf("store: checking the kept work of repository %s: %w", repositoryID, err)
+		}
+		open = append(open, k)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: checking the kept work of repository %s: %w", repositoryID, err)
+	}
+	if len(open) > 0 {
+		return &KeptWorkOpenError{Repository: repositoryID, Entries: open}
+	}
+	return nil
+}
 
 // ErrUnknownKeptAnswer is returned by AnswerKeptWork for an answer outside
 // KeptAnswers.

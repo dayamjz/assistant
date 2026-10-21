@@ -473,6 +473,14 @@ and closes it. An entry whose copy is gone with no proof recorded, a copy
 removed by hand among them, is named in the service log at each start and
 stays open.
 
+`assistant eject --confirm` is refused while the repository has an open
+kept-work entry, before the gate is touched, and the refusal names each
+entry's copy, whose it was and the commits it holds. Until answering kept
+work ships (#411 part 2), the way past it is the work landing: once its
+commits are on the upstream branch or in the default branch, the next
+service start removes the copy on that proof and closes the entry. Part 2's
+discard will be your other way.
+
 This build records and surfaces kept work and does not yet hold dispatch:
 a new task in a project with an open entry still dispatches. Answering an
 entry (land, carry on or discard) and holding new task work until its

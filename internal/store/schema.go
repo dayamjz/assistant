@@ -2061,10 +2061,12 @@ var schema = []migration{
 			// which the unique key holds, so a cleanup asked again of a copy
 			// that has not changed finds the entry it already wrote.
 			//
-			// A row is not deleted while its owner stands: never for a task,
-			// which nothing forgets, and for a run only once its run row is
-			// gone, on forgetRunRecordsMigration's terms, which only
-			// ForgetRepository does.
+			// A row is not deleted while it is open, while it names a task,
+			// which nothing forgets, or while its run stands: a closed run
+			// entry goes once its run row is gone, on
+			// forgetRunRecordsMigration's terms, which only ForgetRepository
+			// does, and ForgetRepository refuses a repository with an open
+			// entry before it removes anything.
 			`CREATE TABLE kept_work (
 				id            INTEGER PRIMARY KEY,
 				task_id       TEXT REFERENCES task(id),
@@ -2117,9 +2119,10 @@ var schema = []migration{
 				END`,
 			`CREATE TRIGGER kept_work_is_not_removed
 				BEFORE DELETE ON kept_work
-				WHEN OLD.task_id IS NOT NULL OR EXISTS (SELECT 1 FROM run WHERE id = OLD.run_id)
+				WHEN OLD.task_id IS NOT NULL OR (OLD.answer IS NULL AND OLD.closure IS NULL)
+					OR EXISTS (SELECT 1 FROM run WHERE id = OLD.run_id)
 				BEGIN
-					SELECT RAISE(ABORT, 'store: a kept work entry is not deleted while its owner stands');
+					SELECT RAISE(ABORT, 'store: a kept work entry is not deleted while it is open or while its owner stands');
 				END`,
 		},
 	},

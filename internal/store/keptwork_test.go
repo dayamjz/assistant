@@ -189,3 +189,64 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 		t.Errorf("closing an answered entry was not refused by the seal: %v", err)
 	}
 }
+
+// A repository whose run's copy is open kept work is not forgotten: the
+// preflight and the removal both refuse with a *KeptWorkOpenError naming the
+// entry's copy, its owner and what it holds, and nothing is removed. Once
+// the copy is removed on a proof the entry is closed and the repository is
+// forgotten with it.
+func TestARepositoryWithOpenKeptWorkIsNotForgotten(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+	if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunPending}, RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunRunning}, RunFailed); err != nil {
+		t.Fatal(err)
+	}
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/home/worktrees/repo-1/run-1",
+		Holds: []string{"aaaa"}, Reason: "unproven"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, ask := range map[string]func() error{
+		"RepositoryRemovable": func() error { return s.RepositoryRemovable(ctx, run.RepositoryID) },
+		"ForgetRepository":    func() error { _, err := s.ForgetRepository(ctx, run.RepositoryID); return err },
+	} {
+		err := ask()
+		var open *KeptWorkOpenError
+		if !errors.As(err, &open) || !errors.Is(err, ErrKeptWorkOpen) || len(open.Entries) != 1 || open.Entries[0].ID != entry.ID {
+			t.Fatalf("%s = %v, want a KeptWorkOpenError naming entry %d", name, err, entry.ID)
+		}
+		for _, want := range []string{entry.CopyPath, "run " + run.ID, "aaaa", "#411 part 2", "discard"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s's refusal %q does not name %q", name, err, want)
+			}
+		}
+	}
+	if _, err := s.Run(ctx, run.ID); err != nil {
+		t.Fatalf("the refused removal took the run: %v", err)
+	}
+	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || !got.Open() {
+		t.Fatalf("the refused removal touched the entry: %+v, %v", got, err)
+	}
+
+	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run.ID, Proof: Known(CleanupProofRemoteBranch), Examined: []string{"aaaa"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkRunCleanupRemoved(ctx, run.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RepositoryRemovable(ctx, run.RepositoryID); err != nil {
+		t.Fatalf("RepositoryRemovable once the entry closed = %v", err)
+	}
+	if _, err := s.ForgetRepository(ctx, run.RepositoryID); err != nil {
+		t.Fatalf("ForgetRepository once the entry closed = %v", err)
+	}
+	if _, err := s.KeptWorkEntry(ctx, entry.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the closed entry survived the forgetting: %v", err)
+	}
+
+}

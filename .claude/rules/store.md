@@ -38,8 +38,10 @@ paths: ["internal/store/**"]
   its one revision closes it, once: a person's answer (`AnswerKeptWork`) or
   the program's `KeptRemovedOnProof`, written only by `MarkCleanupRemoved`
   and `MarkRunCleanupRemoved` in the removal's transaction, never a discard.
-  `surfaced_at` is the one other column that moves, only forward. A run's entry goes with its run in
-  `ForgetRepository`, answered or not, which `keptwork.go` names as a gap.
+  `surfaced_at` is the one other column that moves, only forward. `ForgetRepository` and
+  `RepositoryRemovable` refuse a repository with an open entry
+  (`*KeptWorkOpenError`), and a run's entry goes with its run only once it
+  is answered or closed.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number
   what they append from the shipped list rather than spelling a version out.

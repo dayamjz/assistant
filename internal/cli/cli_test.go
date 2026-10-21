@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
@@ -889,6 +890,82 @@ func TestEjectRemovesEveryRecordOfAFinishedRunOrRefusesFirst(t *testing.T) {
 	}
 	if _, err := records.RunCleanup(ctx, id); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the run's cleanup record survived the eject: %v", err)
+	}
+}
+
+// PRD principle P15's "the program never discards it on its own", at eject:
+// a repository whose run's copy is open kept work is refused before the gate
+// is touched, naming the entry's copy, its owner and what it holds and the
+// way past in this build, and the same command completes once the entry is
+// closed by the copy's removal on a proof, taking the closed entry with the
+// run. The entry is written through the store's own accessor over a finished
+// run, which is the record a refused cleanup leaves.
+func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+
+	created := run(t, h, subject, "--json", "init")
+	if created.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", created.code, created.stdout, created.stderr)
+	}
+	var built machine.Init
+	if err := json.Unmarshal([]byte(created.stdout), &built); err != nil {
+		t.Fatalf("init does not decode: %v\n%s", err, created.stdout)
+	}
+	standingOnChange(t, subject, "a-change")
+	started := run(t, h, subject, "--json", "--intent", "a change held at its first stage")
+	if started.code != machine.ExitOK {
+		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
+	}
+	id := decodeRun(t, started.stdout).Record.ID
+	if got := run(t, h, subject, "--json", "--cancel"); got.code != machine.ExitOK {
+		t.Fatalf("ending the run exited %s:\n%s", got.code, got.stdout)
+	}
+
+	records := openStore(t, h)
+	defer func() { _ = records.Close() }()
+	ctx := t.Context()
+	copyPath := filepath.Join(h.Root(), "worktrees", "kept-copy-of-"+id)
+	entry, _, err := records.RecordKeptWork(ctx, store.KeptCopy{RunID: id, CopyPath: copyPath, Holds: []string{"0123abcd"}, Reason: "unproven"})
+	if err != nil {
+		t.Fatalf("RecordKeptWork: %v", err)
+	}
+
+	refused := run(t, h, subject, "eject", "--confirm")
+	if refused.code != machine.ExitFailure {
+		t.Fatalf("eject --confirm exited %s over open kept work, want failure:\n%s%s", refused.code, refused.stdout, refused.stderr)
+	}
+	said := refused.stdout + refused.stderr
+	for _, want := range []string{copyPath, "run " + id, "0123abcd", "#411 part 2", "landing"} {
+		if !strings.Contains(said, want) {
+			t.Fatalf("the refusal does not name %q:\n%s", want, said)
+		}
+	}
+	if _, err := os.Stat(built.Gate.Repository); err != nil {
+		t.Fatalf("the refused eject removed the gate at %s: %v", built.Gate.Repository, err)
+	}
+	if got, err := records.KeptWorkEntry(ctx, entry.ID); err != nil || !got.Open() {
+		t.Fatalf("the refused eject touched the entry: %+v, %v", got, err)
+	}
+
+	// The work landing closes the entry on the proof that removes the copy;
+	// a run whose service recorded the copy absent has no record yet.
+	if _, err := records.RecordRunCleanup(ctx, store.RunCleanup{Run: id, Proof: store.Known(store.CleanupProofDefaultBranch),
+		Examined: []string{"0123abcd"}}); err != nil {
+		t.Fatalf("RecordRunCleanup: %v", err)
+	}
+	if err := records.MarkRunCleanupRemoved(ctx, id, time.Now()); err != nil {
+		t.Fatalf("MarkRunCleanupRemoved: %v", err)
+	}
+	if got := run(t, h, subject, "eject", "--confirm"); got.code != machine.ExitOK {
+		t.Fatalf("eject --confirm exited %s once the entry closed:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	if _, err := records.KeptWorkEntry(ctx, entry.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the closed entry survived the eject: %v", err)
 	}
 }
 

@@ -173,8 +173,10 @@
 // discarding it; OpenKeptWork lists neither kind of closed row.
 // MarkKeptWorkSurfaced moves when it last
 // surfaced, only forward. The schema seals all three, and a row is not
-// deleted while its owner stands. keptwork.go names the gap a run's entry
-// leaves when its repository is forgotten.
+// deleted while it is open or while its owner stands. ForgetRepository and
+// RepositoryRemovable refuse a repository with an open entry with a
+// *KeptWorkOpenError naming each, so eject never takes a kept copy's gate
+// while nobody has decided about its work.
 //
 // # The wake queue and the markers it is written with
 //

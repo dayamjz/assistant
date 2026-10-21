@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // PRD principle P15's "kept work is never silent", at the task-copy site,
@@ -128,61 +130,118 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	}
 }
 
-// The task-copy half of completing an unmarked removal at the next open: a
-// task's kept copy whose cleanup record holds a proof and no mark, with the
-// copy gone, which is what a service that stopped between the removal and
-// the mark leaves, has its mark completed by recovery from that proof, and
-// the entry closes with it. Without recovery's task half the entry stays
-// open.
-func TestAnUnmarkedTaskCopyRemovalIsCompletedAtTheNextOpen(t *testing.T) {
+// The task-copy half of completing an interrupted removal at the next open,
+// through the real decision end to end. A landed delivery task's copy holds
+// a commit on no remote, so the real cleanup refuses it as unproven and the
+// refusal becomes a kept work entry. The commit is then pushed to the
+// upstream's task branch, the real cleanup establishes the remote-branch
+// proof and removes the copy, and the test-only seam stops it before the
+// mark, leaving a proof, no copy and an open entry. The next open's
+// recovery completes the mark from the recorded proof and the entry closes
+// with it. Without recovery's task half the entry stays open.
+func TestAnInterruptedTaskCopyRemovalIsCompletedAtTheNextOpen(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
 	h, records := loopHome(t)
 	ctx := t.Context()
-	const id = "keptunmarked"
+	primary, upstream, _ := heldSubject(t)
+	repository, err := records.UpsertRepository(ctx, store.Repository{
+		ID: "subject", WorkingPath: primary, UpstreamURL: upstream, DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id, branch = "keptunmarked", "task/one"
 	copyPath, err := h.TaskCopy(id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := records.CreateTask(ctx, store.Task{
-		ID: id, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: copyPath,
+		ID: id, Shape: store.TaskDelivery, Project: "one", Mode: "headless", WorktreePath: copyPath,
+		RepositoryID: store.Known(repository.ID), Branch: store.Known(branch),
 	}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(copyPath, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	heldGit(t, copyPath, "init", "--quiet", "-b", "main", ".")
-	heldGit(t, copyPath, "commit", "--quiet", "--allow-empty", "-m", "the worker's own commit")
-	head := heldGit(t, copyPath, "rev-parse", "HEAD")
+	heldGit(t, filepath.Dir(copyPath), "clone", "--quiet", primary, copyPath)
+	heldGit(t, copyPath, "checkout", "--quiet", "-b", branch)
+	if err := os.WriteFile(filepath.Join(copyPath, "work.txt"), []byte("the task's work\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	heldGit(t, copyPath, "add", "-A")
+	heldGit(t, copyPath, "commit", "--quiet", "-m", "the task's work")
+	// The task is landed by a merge record of a run attributed to it, so a
+	// restart neither dispatches nor relaunches it and its copy is owed the
+	// cleanup decision.
+	build, err := store.CurrentBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.CreateRun(ctx, store.Run{
+		ID: "run-landed", RepositoryID: repository.ID, Branch: branch, SubmittedHead: "aaaa", Base: "bbbb",
+		Intent: "validate", IntentSource: "push", ConfigDigest: "cfg", Build: build,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.TransitionRun(ctx, "run-landed", []store.RunStatus{store.RunPending}, store.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.TransitionRunOnPullRequest(ctx, "run-landed", []store.RunStatus{store.RunRunning}, store.RunPassed,
+		store.PullRequestRead{PullRequest: 7, Head: "aaaa", End: store.PullRequestMerged}, store.HoldClosure{}); err != nil {
+		t.Fatal(err)
+	}
+
 	cleaner, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records,
 		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	kept, err := cleaner.Keep(ctx, tasks.Kept{Task: id, Reason: string(tasks.ReasonUnproven), Detail: "not anywhere safe"})
-	if err != nil || !kept.Recorded {
-		t.Fatalf("Keep = %+v, %v", kept, err)
+	_, err = cleaner.CleanUp(ctx, tasks.TaskCopy{Task: id, Terminal: taskstate.Dead})
+	var refused *tasks.CleanupRefusal
+	if !errors.As(err, &refused) || refused.Reason != tasks.ReasonUnproven {
+		t.Fatalf("the first cleanup = %v, want an unproven refusal over work on no remote", err)
 	}
-	if _, err := records.RecordTaskCleanup(ctx, store.TaskCleanup{TaskID: id, Proof: store.CleanupProofDefaultBranch,
-		Examined: []string{head}}, store.TaskInvestigation); err != nil {
+	kept, ok := tasks.KeptOf(refused)
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	entry, err := cleaner.Keep(ctx, kept)
+	if err != nil || !entry.Recorded {
+		t.Fatalf("Keep = %+v, %v", entry, err)
+	}
+
+	heldGit(t, copyPath, "push", "--quiet", upstream, "HEAD:refs/heads/"+branch)
+	stopped := errors.New("the service stopped between the removal and the mark")
+	if err := cleaner.InterruptBeforeMarkForTest(t, func() error { return stopped }); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.RemoveAll(copyPath); err != nil {
-		t.Fatal(err)
+	if _, err := cleaner.CleanUp(ctx, tasks.TaskCopy{Task: id, Terminal: taskstate.Dead}); !errors.Is(err, stopped) {
+		t.Fatalf("the second cleanup = %v, want it stopped between the removal and the mark", err)
+	}
+	if _, err := os.Stat(copyPath); !os.IsNotExist(err) {
+		t.Fatalf("the interrupted removal left the copy: %v", err)
+	}
+	recorded, err := records.TaskCleanup(ctx, id)
+	if err != nil || recorded.Proof != store.CleanupProofRemoteBranch || recorded.RemovedAt.IsKnown() {
+		t.Fatalf("after the interruption the cleanup record reads %+v (%v), want the remote-branch proof unmarked", recorded, err)
+	}
+	if got, err := records.KeptWorkEntry(ctx, entry.Entry.ID); err != nil || !got.Open() {
+		t.Fatalf("after the interruption the entry reads %+v (%v), want it open, which is the window under test", got, err)
 	}
 
 	l := openLoop(t, h, records, newScriptedTerminals(), &fakeClock{now: time.Now()})
 	defer func() { _ = l.service.Close() }()
 	deadline := time.Now().Add(loopWait)
 	for {
-		got, err := l.records(t).KeptWorkEntry(ctx, kept.Entry.ID)
+		got, err := l.records(t).KeptWorkEntry(ctx, entry.Entry.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !got.Open() {
-			if got.Closure.Or("") != store.KeptRemovedOnProof || got.ClosedProof.Or("") != store.CleanupProofDefaultBranch {
-				t.Fatalf("the entry closed as %+v, want removed on the default-branch proof", got)
+			if got.Closure.Or("") != store.KeptRemovedOnProof || got.ClosedProof.Or("") != store.CleanupProofRemoteBranch {
+				t.Fatalf("the entry closed as %+v, want removed on the remote-branch proof", got)
 			}
 			break
 		}

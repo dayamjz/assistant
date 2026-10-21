@@ -356,11 +356,11 @@ var runRecords = []runRecord{
 	{table: "agent_invocation", remove: `DELETE FROM agent_invocation WHERE run = ?`},
 	{table: "merge_record", remove: `DELETE FROM merge_record WHERE run = ?`, afterRun: true},
 	{table: "run_cleanup", remove: `DELETE FROM run_cleanup WHERE run = ?`, afterRun: true},
-	// A kept work entry about a run's copy goes with the run on run_cleanup's
-	// terms, answered or not: eject removes the gate repository the copy was
-	// cut from as a linked worktree before it forgets the records, so this
-	// is not where the work is decided. keptwork.go names this as a gap.
-	{table: "kept_work", remove: `DELETE FROM kept_work WHERE run_id = ?`, afterRun: true},
+	// A kept work entry about a run's copy goes with the run only once it is
+	// answered or closed on a proof: refuseUnlessForgettable refuses a
+	// repository with an open one before anything is removed, and the
+	// delete's own filter and the table's seal hold the same line again.
+	{table: "kept_work", remove: `DELETE FROM kept_work WHERE run_id = ? AND (answer IS NOT NULL OR closure IS NOT NULL)`, afterRun: true},
 	// A seen mark of a merge record is keyed by the run through its kind,
 	// which the catalog cannot say, so it is named here; it goes after the
 	// merge record it marks, which its seal requires.
@@ -411,6 +411,9 @@ func refuseUnlessForgettable(ctx context.Context, tx *sql.Tx, id string, runIDs 
 		return fmt.Errorf("%w: task %s works on a branch of repository %s", ErrRepositoryInUse, taskID, id)
 	case !errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("store: checking which tasks work on repository %s: %w", id, err)
+	}
+	if err := refuseIfKeptWorkIsOpen(ctx, tx, id); err != nil {
+		return err
 	}
 	for _, runID := range runIDs {
 		if err := refuseIfRunIsHeldByATask(ctx, tx, id, runID); err != nil {

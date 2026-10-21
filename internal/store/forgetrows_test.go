@@ -167,11 +167,14 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run.ID, Proof: Known(CleanupProofDefaultBranch), Examined: []string{"aaaa"}}); err != nil {
 		t.Fatalf("RecordRunCleanup: %v", err)
 	}
-	if err := s.MarkRunCleanupRemoved(ctx, run.ID, now); err != nil {
-		t.Fatalf("MarkRunCleanupRemoved: %v", err)
-	}
+	// The entry is written before the removal is marked, so the mark closes
+	// it on its proof: an open one would refuse the forgetting, which
+	// TestARepositoryWithOpenKeptWorkIsNotForgotten holds.
 	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/run", Holds: []string{"aaaa"}, Reason: "unproven"}); err != nil {
 		t.Fatalf("RecordKeptWork: %v", err)
+	}
+	if err := s.MarkRunCleanupRemoved(ctx, run.ID, now); err != nil {
+		t.Fatalf("MarkRunCleanupRemoved: %v", err)
 	}
 	if _, err := s.TransitionRunOnPullRequest(ctx, run.ID, []RunStatus{RunRunning}, RunPassed,
 		PullRequestRead{PullRequest: 7, Head: "0123abc", End: PullRequestMerged}, HoldClosure{}); err != nil {
