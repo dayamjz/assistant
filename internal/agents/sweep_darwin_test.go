@@ -118,28 +118,32 @@ func TestASweepOfACopyWhoseNameLsofCouldRenderDifferentlyFails(t *testing.T) {
 	}
 }
 
-// hangingLsof writes a program into dir that stands where lsof is and never
-// exits: a shell that ignores SIGTERM and waits on a sleep it started in its
-// own process group, each writing its identifier to the returned file
-// first. It is the run a wedged lsof makes, with a descendant beside it.
-func hangingLsof(t *testing.T, dir string) (program, pids string) {
+// sweepReturnSlack is what a test allows past a run's deadline for the sweep
+// to hand its answer back: scheduling, not any wait the run makes, since the
+// run bounds all of those by its deadline.
+const sweepReturnSlack = 300 * time.Millisecond
+
+// standInLsof writes a program into dir that stands where lsof is: a shell
+// running body, in which PIDS is the file every process it starts writes
+// its identifier to, the shell first. It returns the program and that file.
+func standInLsof(t *testing.T, dir, body string) (program, pids string) {
 	t.Helper()
 	program, pids = filepath.Join(dir, "lsof"), filepath.Join(dir, "pids")
-	script := "#!/bin/sh\ntrap '' TERM\necho $$ > " + pids + "\n/bin/sleep 3600 &\necho $! >> " + pids + "\nwait\n"
+	script := "#!/bin/sh\necho $$ > " + pids + "\n" + strings.ReplaceAll(body, "PIDS", pids)
 	if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return program, pids
 }
 
-// startedPIDs reads the two identifiers hangingLsof's program wrote, waiting
-// up to sweepEnded for both to be written.
-func startedPIDs(t *testing.T, file string) []int {
+// startedPIDs reads the n identifiers a stand-in lsof wrote, waiting up to
+// sweepEnded for all of them to be written.
+func startedPIDs(t *testing.T, file string, n int) []int {
 	t.Helper()
 	deadline := time.Now().Add(sweepEnded)
 	for {
 		data, _ := os.ReadFile(file)
-		if fields := strings.Fields(string(data)); len(fields) == 2 {
+		if fields := strings.Fields(string(data)); len(fields) == n {
 			var pids []int
 			for _, f := range fields {
 				pid, err := strconv.Atoi(f)
@@ -151,41 +155,39 @@ func startedPIDs(t *testing.T, file string) []int {
 			return pids
 		}
 		if !time.Now().Before(deadline) {
-			t.Fatalf("the stand-in lsof wrote %q within %s, want two identifiers", data, sweepEnded)
+			t.Fatalf("the stand-in lsof wrote %q within %s, want %d identifiers", data, sweepEnded, n)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 }
 
-// TestASweepWhoseLsofNeverExitsEndsItAtTheDeadlineAndProvesNothing holds
-// P15 for the listing's one external program: with a program standing where
-// lsof is that never exits and ignores SIGTERM, a sweep under a context that
-// never ends, as internal/service's sweepFinished gives it, returns within
-// the run's deadline and a bounded slack, with agents.ErrSweepTimedOut and
-// the zero result, which is not clear; and neither the stand-in nor the
-// process it started in its group is running afterwards, checked by
-// identifier. Without the deadline the sweep blocks for as long as the
-// stand-in runs.
-func TestASweepWhoseLsofNeverExitsEndsItAtTheDeadlineAndProvesNothing(t *testing.T) {
-	principles.Cite(t, principles.P15)
+// sweepOverStandIn sweeps an empty copy of a fresh home under a context that
+// never ends, as internal/service's sweepFinished gives it, with the
+// stand-in body standing where lsof is under deadline. It waits for the n
+// identifiers the stand-in writes, fails the test unless the sweep answers
+// within deadline and sweepReturnSlack of its start, and fails it unless
+// every one of those processes reads gone by identifier soon after. It
+// returns what the sweep answered.
+func sweepOverStandIn(t *testing.T, body string, n int, deadline time.Duration) (agents.SweepResult, error) {
+	t.Helper()
 	requiresIdentityRead(t)
 	base := sweepBase(t)
-	h, _ := sweepHome(t, base, "hanging")
+	h, _ := sweepHome(t, base, "standin")
 	dir := makeTaskCopy(t, h)
-	program, pidFile := hangingLsof(t, base)
-	const deadline = 500 * time.Millisecond
+	program, pidFile := standInLsof(t, base, body)
 
 	type answer struct {
-		r   agents.SweepResult
-		err error
+		r       agents.SweepResult
+		err     error
+		elapsed time.Duration
 	}
 	done := make(chan answer, 1)
-	started := time.Now()
 	go func() {
+		started := time.Now()
 		r, err := agents.SweepWithLsof(context.WithoutCancel(t.Context()), agents.NewSweeper(h, sweepGrace, nil), dir, program, deadline)
-		done <- answer{r, err}
+		done <- answer{r, err, time.Since(started)}
 	}()
-	pids := startedPIDs(t, pidFile)
+	pids := startedPIDs(t, pidFile, n)
 	t.Cleanup(func() {
 		for _, pid := range pids {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
@@ -196,13 +198,10 @@ func TestASweepWhoseLsofNeverExitsEndsItAtTheDeadlineAndProvesNothing(t *testing
 	select {
 	case got = <-done:
 	case <-time.After(deadline + sweepEnded):
-		t.Fatalf("the sweep was still blocked on a stand-in lsof that never exits %s after it started, against a deadline of %s", time.Since(started).Round(time.Millisecond), deadline)
+		t.Fatalf("the sweep was still blocked on the stand-in lsof %s past a deadline of %s", sweepEnded, deadline)
 	}
-	if !errors.Is(got.err, agents.ErrSweepTimedOut) || got.r.Clear() || got.r.String() != (agents.SweepResult{}).String() {
-		t.Fatalf("the sweep over a stand-in lsof that never exits answered %s, %v, want the zero result and agents.ErrSweepTimedOut", got.r, got.err)
-	}
-	if errors.Is(got.err, agents.ErrSweepUnsupported) || errors.Is(got.err, context.DeadlineExceeded) {
-		t.Fatalf("the timed out sweep answered %v, which a caller would read as another refusal", got.err)
+	if got.elapsed > deadline+sweepReturnSlack {
+		t.Fatalf("the sweep answered %s, %v after %s, past its deadline of %s and %s of slack", got.r, got.err, got.elapsed, deadline, sweepReturnSlack)
 	}
 	for _, pid := range pids {
 		gone := time.Now().Add(sweepEnded)
@@ -216,6 +215,75 @@ func TestASweepWhoseLsofNeverExitsEndsItAtTheDeadlineAndProvesNothing(t *testing
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+	return got.r, got.err
+}
+
+// TestASweepWhoseLsofNeverExitsEndsItAtTheDeadlineAndProvesNothing holds
+// P15 for the listing's one external program: with a program standing where
+// lsof is that never exits and ignores SIGTERM, beside a process it started
+// in its group, a sweep under a context that never ends answers within the
+// run's deadline with agents.ErrSweepTimedOut and the zero result, which is
+// not clear, and neither process is running afterwards, checked by
+// identifier. Without the deadline the sweep blocks for as long as the
+// stand-in runs.
+func TestASweepWhoseLsofNeverExitsEndsItAtTheDeadlineAndProvesNothing(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	r, err := sweepOverStandIn(t, "trap '' TERM\n/bin/sleep 3600 &\necho $! >> PIDS\nwait\n", 2, 500*time.Millisecond)
+	if !errors.Is(err, agents.ErrSweepTimedOut) || r.Clear() || r.String() != (agents.SweepResult{}).String() {
+		t.Fatalf("the sweep over a stand-in lsof that never exits answered %s, %v, want the zero result and agents.ErrSweepTimedOut", r, err)
+	}
+	if errors.Is(err, agents.ErrSweepUnsupported) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the timed out sweep answered %v, which a caller would read as another refusal", err)
+	}
+}
+
+// TestALsofRunEndsWhatItLeftInItsGroupInsideTheDeadline is review's case
+// against the whole run's bound: a program standing where lsof is leaves a
+// descendant in its group that ignores SIGTERM and holds none of its output,
+// and then exits on its own, once before lsof's share of the deadline is
+// spent and once after. Either way the sweep answers within the deadline,
+// the descendant is gone by identifier, and the answer is a failure beside
+// the zero result: the listing's own refusal of output that does not report
+// this process when the program exited in time, and agents.ErrSweepTimedOut
+// when it did not. Ending the descendant only by a polite step, or only
+// after the deadline's wait, fails the bound.
+func TestALsofRunEndsWhatItLeftInItsGroupInsideTheDeadline(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	const deadline = 2 * time.Second
+	for _, c := range []struct {
+		name     string
+		exit     string
+		timedOut bool
+	}{
+		{"exits before its share", "1.6", false},
+		{"exits after its share", "1.94", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body := "(trap '' TERM; exec /bin/sleep 3600) >/dev/null 2>&1 </dev/null &\necho $! >> PIDS\n/bin/sleep " + c.exit + "\nexit 0\n"
+			r, err := sweepOverStandIn(t, body, 2, deadline)
+			if err == nil || r.Clear() || r.String() != (agents.SweepResult{}).String() || errors.Is(err, agents.ErrSweepTimedOut) != c.timedOut {
+				t.Fatalf("the sweep over a stand-in lsof that %s answered %s, %v, want a failure beside the zero result, timed out %v", c.name, r, err, c.timedOut)
+			}
+		})
+	}
+}
+
+// TestALsofRunThatExitsAtOnceIsNotWaitedOnUntilTheDeadline holds the wait
+// for the leader's exit against the exit that comes before the wait is
+// registered: a program standing where lsof is that exits as soon as it
+// has written its identifier is answered for well inside the deadline, as
+// the listing's refusal of output that does not report this process, and
+// never as a timeout.
+func TestALsofRunThatExitsAtOnceIsNotWaitedOnUntilTheDeadline(t *testing.T) {
+	const deadline = 5 * time.Second
+	started := time.Now()
+	r, err := sweepOverStandIn(t, "exit 0\n", 1, deadline)
+	if took := time.Since(started); took > deadline/2 {
+		t.Fatalf("the sweep over a stand-in lsof that exits at once took %s, want well inside its deadline of %s", took, deadline)
+	}
+	if err == nil || errors.Is(err, agents.ErrSweepTimedOut) || r.Clear() {
+		t.Fatalf("the sweep over a stand-in lsof that exits at once answered %s, %v, want the listing's own refusal and the zero result", r, err)
 	}
 }
 

@@ -275,9 +275,11 @@
 // it prints is read only by the listing's own parse. Its absence, a run that ended other than with status zero or one,
 // output the parse refuses, and output that leaves out this process's own
 // working directory each fail the listing, and a failed listing is an error
-// beside the zero SweepResult. The run carries a deadline of its own,
-// whatever context the sweep was given, in a process group the listing ends
-// when the deadline passes and sweeps once the run has returned; a run past
+// beside the zero SweepResult. The whole run, ending and output included,
+// falls inside a deadline of its own, whatever context the sweep was given.
+// It runs in a process group the listing kills when lsof's share of that
+// deadline passes and again once lsof has exited, both while lsof is still
+// unreaped, so the group identifier cannot name another group; a run past
 // it is ErrSweepTimedOut, which is "could not prove" and never Clear. A
 // descendant that left that group is not ended. Every other platform answers
 // ErrSweepUnsupported with that zero SweepResult, which is not Clear: a
