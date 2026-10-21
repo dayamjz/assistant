@@ -353,8 +353,11 @@ What follows for whoever runs the service:
   relaunches a worker in that copy with the stored report as its starting
   point. A worker an earlier service started is ended by the identity its
   session reference recorded, and one that cannot be verified is named in
-  the service log and left running. The kept copy has no kept-work entry
-  yet, so it is not surfaced and does not hold a new task in the project.
+  the service log and left running. Once the worker is ended, a copy that
+  holds work, a commit or a file no commit records, is recorded as one
+  kept-work entry (see Kept work below); a copy exactly as its dispatch cut
+  it holds nothing to keep and gets none. Like every entry, it does not
+  hold a new task in the project yet.
 - A reported investigation reads `complete` only once the coordinator
   records its findings relayed with `assistant coordinator relayed ID`. The
   service then ends the worker it holds for the task and removes its copy on

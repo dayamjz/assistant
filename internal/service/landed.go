@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -67,10 +68,13 @@ import (
 // window passed, promotionWindowPassed, the latest attempt's worker is
 // ended: through the session this service holds, or, for a worker an
 // earlier service launched, by the verified identity its recorded session
-// reference carries (endReportedWorker); nothing about the copy is decided: an
-// investigation's copy is kept whether its worker was ended by the window,
-// by a stop, or exited on its own, because a later promotion relaunches a
-// worker in it (coordinator.go). Its cleanup is owed only once the task
+// reference carries (endWindow). The copy is kept whether its worker was
+// ended by the window, by a stop, or exited on its own, because a later
+// promotion relaunches a worker in it (coordinator.go), and once the worker
+// is ended the copy is kept work (P15): endWindow hands it to keepWork with
+// tasks.KeptPromotionWindow, so it is one kept work entry, surfaced as every
+// other entry is, unless internal/tasks reads it as scratch, holding no
+// work. Its cleanup is owed only once the task
 // leaves the investigation lifecycle through its findings relayed record,
 // below. Nothing here reads the report's text: whether it is stored is the
 // row's to say, and what it says is the relaunch's starting point.
@@ -99,9 +103,13 @@ import (
 // in landedTried, because a refusal the proof answered (work that reached
 // no upstream, an unreadable remote) answers the same until something
 // outside this service changes, and asking at every interval would fetch
-// the upstream at every interval for nothing. A restart forgets the memory,
-// so each service start asks once more; that and a stop are how a refused
-// cleanup is asked again. The work runs on a goroutine registered through
+// the upstream at every interval for nothing. A window's keep settles at
+// most once per task and reference in this service's life, recorded in
+// windowKept, and a failed one is asked again at the next pass. A restart
+// forgets the memory, so each service start asks once more; that and a stop
+// are how a refused cleanup is asked again, and the store's RecordKeptWork
+// finding the entry an earlier life wrote is what keeps a window's keep to
+// one entry across lives. The work runs on a goroutine registered through
 // startWork, never on the loop's own, because a fetch is not bounded by the
 // beacon interval the loop's calls are held to, and it takes the task's
 // slot through claimSteer, so it never interleaves with a stop, a relaunch
@@ -128,11 +136,14 @@ import (
 //     task's (the first gap); one whose reference cannot be verified is
 //     reported in the log once per reference per service life and left
 //     running.
-//   - A copy kept after the window has no kept-work entry: endReportedWorker
-//     writes none, so tasks.KeptPromotionWindow has no producer yet and the
-//     copy is not surfaced, and no open entry holds dispatch in this build
-//     anyway (#411's second part); a reported investigation that is never
-//     promoted or relayed keeps its copy indefinitely meanwhile.
+//   - A copy kept after the window is kept work, but no open entry holds
+//     dispatch in this build (#411's second part), and a reported
+//     investigation that is never promoted or relayed keeps its copy
+//     indefinitely. A promotion is not an answer: an entry the window wrote
+//     stays open on the promoted task until its copy is removed on a proof.
+//   - A survivor whose end the window could not verify, or whose group did
+//     not end, gets no entry in this service's life, because it may still
+//     write in the copy; the next life asks again.
 //   - A reported investigation whose report opened a finding hold resolves
 //     Held, which the supervisor watches the terminal of, so the window's
 //     end raises a terminal-gone wake for it.
@@ -277,7 +288,9 @@ func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
 // pass already read, on the file comment's terms: for each task in the
 // terminal tier, and for each reported investigation whose promotion window
 // has passed, it ends the worker this service still holds for the latest
-// attempt, and for each one still owed a cleanup, landed or a relayed
+// attempt, an expired window's survivor and its copy's keep going to
+// endWindow, a worker read Dead included, and for each one still owed a
+// cleanup, landed or a relayed
 // investigation, whose terminal the pass read Dead under a reference not
 // yet tried, it asks the decision. The work goes to a goroutine registered
 // through startWork under the task's slot, and an expired window is read
@@ -300,8 +313,9 @@ func (s *Service) landedFromPass(observed []taskstate.Observed) {
 		ref := latestRef(o.Snapshot.Attempts)
 		held := ref != "" && s.holdsSession(id, ref)
 		survivor := expired && !held && ref != "" && o.State.Basis.Process == taskstate.Unobserved && !s.windowWasTried(id, ref)
+		gone := expired && !held && ref != "" && o.State.Basis.Process == taskstate.Dead && !s.windowKeptWasTried(id, ref)
 		owed := copyCleanupOwed(o) && o.State.Basis.Process == taskstate.Dead && !s.landedWasTried(id, ref)
-		if !held && !survivor && !owed {
+		if !held && !survivor && !gone && !owed {
 			continue
 		}
 		release, err := s.claimSteer(id)
@@ -318,27 +332,38 @@ func (s *Service) landedFromPass(observed []taskstate.Observed) {
 			switch {
 			case held && landed:
 				s.endLandedWorker(s.stopCtx, id)
-			case held || survivor:
-				s.endReportedWorker(s.stopCtx, id)
+			case held || survivor || gone:
+				s.endWindow(s.stopCtx, id)
 			}
 			s.cleanUpLandedTask(s.stopCtx, id)
 		}()
 	}
 }
 
-// endReportedWorker ends the worker of a reported investigation's latest
-// attempt once its promotion window has passed, read again under the task's
-// slot from a fresh read of the task, so a task the coordinator promoted
-// since the pass read it keeps its worker. It ends the worker through
-// steer.go's endWorker, never by a pattern: through the session this
-// service holds, or, for a worker an earlier service launched that the
-// pass read Unobserved, through agents.EndGroup on the identity the
-// attempt's recorded session reference carries, verified before anything
-// is signalled. A reference that cannot be verified (another home's, one
-// with no start time, one that does not decode) or a group that does not
-// end is reported in the log and left running, asked once per reference in
-// this service's life (windowTried). The copy is kept either way.
-func (s *Service) endReportedWorker(ctx context.Context, id string) {
+// endWindow is what the pass does about a reported investigation whose
+// promotion window has passed, read again under the task's slot from a fresh
+// read of the task, so a task the coordinator promoted since the pass read it
+// keeps its worker and gets no entry. It first ends the worker of the latest
+// attempt, through steer.go's endWorker and never by a pattern: through the
+// session this service holds, or, for a worker an earlier service launched
+// that the read found Unobserved, through agents.EndGroup on the identity the
+// attempt's recorded session reference carries, verified before anything is
+// signalled. A reference that cannot be verified (another home's, one with no
+// start time, one that does not decode) or a group that does not end is
+// reported in the log and left running, asked once per reference in this
+// service's life (windowTried), and its copy is not kept as an entry while
+// the worker may still write in it. A worker the read found Dead and this
+// service does not hold is already ended, by itself, by a stop, or by a
+// service that stopped before keeping its copy.
+//
+// Once the worker is ended, the copy is kept and handed to keepWork with
+// tasks.KeptPromotionWindow, which internal/tasks reads the copy for: an
+// entry naming what it holds, or none for a copy that holds no work on the
+// cleanup decision's scratch rule. That is once per reference in this
+// service's life (windowKept) after the keep settled, and once per copy and
+// commits across lives because RecordKeptWork finds the entry an earlier
+// life wrote; a keep that failed is asked again at the next pass.
+func (s *Service) endWindow(ctx context.Context, id string) {
 	o, err := s.tasks().ObserveTask(ctx, id)
 	if err != nil {
 		s.log.Printf("task %s: its promotion window could not be read again, so its worker was not ended: %v", id, err)
@@ -348,21 +373,51 @@ func (s *Service) endReportedWorker(ctx context.Context, id string) {
 		return
 	}
 	ref := latestRef(o.Snapshot.Attempts)
-	if ref == "" {
+	if ref == "" || s.windowKeptWasTried(id, ref) {
 		return
 	}
 	held := s.holdsSession(id, ref)
-	if !held {
-		s.markWindowTried(id, ref)
+	if held || o.State.Basis.Process != taskstate.Dead {
+		if !held {
+			if s.windowWasTried(id, ref) {
+				return
+			}
+			s.markWindowTried(id, ref)
+		}
+		ended, err := s.endWorker(id, ref)
+		if err != nil {
+			s.log.Printf("task %s is reported and its promotion window of %s has passed, and its worker (session %s) "+
+				"was not ended and is left running: %v", id, s.cfg.PromotionWindow, ref, err)
+			return
+		}
+		s.log.Printf("task %s is reported and its promotion window of %s has passed, so its worker (session %s) was ended: "+
+			"%s; its copy is kept for a promotion", id, s.cfg.PromotionWindow, ref, ended)
 	}
-	ended, err := s.endWorker(id, ref)
-	if err != nil {
-		s.log.Printf("task %s is reported and its promotion window of %s has passed, and its worker (session %s) "+
-			"was not ended and is left running: %v", id, s.cfg.PromotionWindow, ref, err)
-		return
+	if s.keepWork(ctx, tasks.Kept{Task: id, Reason: tasks.KeptPromotionWindow, Detail: fmt.Sprintf(
+		"the promotion window of %s passed after the report was stored and the worker (session %s) is ended; "+
+			"the copy is kept for a promotion", s.cfg.PromotionWindow, ref)}) {
+		s.markWindowKept(id, ref)
 	}
-	s.log.Printf("task %s is reported and its promotion window of %s has passed, so its worker (session %s) was ended: "+
-		"%s; its copy is kept for a promotion", id, s.cfg.PromotionWindow, ref, ended)
+}
+
+// markWindowKept records that the window's keep of the task's copy settled
+// under ref.
+func (s *Service) markWindowKept(id, ref string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.windowKept == nil {
+		s.windowKept = make(map[string]string)
+	}
+	s.windowKept[id] = ref
+}
+
+// windowKeptWasTried reports whether markWindowKept recorded ref for the
+// task.
+func (s *Service) windowKeptWasTried(id, ref string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept, ok := s.windowKept[id]
+	return ok && kept == ref
 }
 
 // markWindowTried records that the end of an unheld reported worker under

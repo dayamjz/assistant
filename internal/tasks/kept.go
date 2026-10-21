@@ -27,8 +27,10 @@ import (
 // KeptPromotionWindow is the reason an investigation's copy is kept once its
 // worker is ended at the end of promotion_window, PRD section 6's "when the
 // window passes, the worker is ended and its copy is kept". internal/service
-// ends that worker at the window and does not yet record the entry, so
-// nothing in this build produces it.
+// produces it once it has ended that worker at the window, or read it gone,
+// and Keep accepts it only for an investigation task's copy. A copy the
+// cleanup decision would remove as scratch holds no work, and Keep records
+// no entry for it (KeptEntry.Scratch).
 const KeptPromotionWindow = "promotion-window-passed"
 
 // Kept names a copy kept because its work has not landed: its one owner, a
@@ -85,6 +87,12 @@ type KeptEntry struct {
 	// Recorded is whether this call wrote it; false is an entry already
 	// recorded for the copy and the commits it holds.
 	Recorded bool
+	// Scratch is a KeptPromotionWindow keep of an investigation copy that
+	// holds no work on the cleanup decision's own scratch rule: no change,
+	// file or stash outside its commits, and an inventory equal to the
+	// snapshot its dispatch recorded, with no run and no pull request on its
+	// record. No entry was written, and Entry and Recorded are zero.
+	Scratch bool
 }
 
 // Keep records the kept work entry for a kept copy and reports whether this
@@ -92,17 +100,30 @@ type KeptEntry struct {
 // entry, on store.RecordKeptWork's terms, so asking again of an unchanged
 // copy writes nothing. It reads what the copy holds from the copy, and
 // refuses with ErrCleanupRecord a request naming no owner or both, a task
-// whose reserved copy is not where this home puts it, and a copy that is not
-// standing.
+// whose reserved copy is not where this home puts it, a copy that is not
+// standing, and a KeptPromotionWindow keep of anything but an investigation
+// task's copy, a task promoted since its caller read it among them. Such a
+// keep of a copy the cleanup decision would remove as scratch writes nothing
+// and reports Scratch.
 func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 	if (k.Task == "") == (k.Run == "") {
 		return KeptEntry{}, fmt.Errorf("%w: a kept copy names exactly one owner, a task or a run", ErrCleanupRecord)
 	}
+	window := k.Reason == KeptPromotionWindow
+	if window && k.Run != "" {
+		return KeptEntry{}, fmt.Errorf("%w: run %s's copy is not kept for a promotion window", ErrCleanupRecord, k.Run)
+	}
 	var path string
+	var task store.Task
 	if k.Task != "" {
-		task, err := c.store.Task(ctx, k.Task)
+		var err error
+		task, err = c.store.Task(ctx, k.Task)
 		if err != nil {
 			return KeptEntry{}, err
+		}
+		if window && task.Shape != store.TaskInvestigation {
+			return KeptEntry{}, fmt.Errorf("%w: task %s is a %s task, and only an investigation's copy is kept for a promotion window",
+				ErrCleanupRecord, task.ID, task.Shape)
 		}
 		if path, err = c.home.TaskCopy(task.ID); err != nil {
 			return KeptEntry{}, err
@@ -132,6 +153,9 @@ func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 	inv, err := copied.Inventory(ctx)
 	if err != nil {
 		return KeptEntry{}, fmt.Errorf("tasks: reading the kept copy at %s: %w", path, err)
+	}
+	if _, _, changed := treeRefusal(inv); window && !changed && scratch(task, inv) {
+		return KeptEntry{Scratch: true}, nil
 	}
 	holds := inventoryCommits(inv)
 	if k.Run != "" {

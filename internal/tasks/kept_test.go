@@ -1,6 +1,11 @@
 package tasks
 
 import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -58,4 +63,74 @@ func TestEveryRefusalIsPlacedAsKeptWorkOrNot(t *testing.T) {
 	if _, ok := KeptOf(nil); ok {
 		t.Error("KeptOf of no refusal answered a kept copy")
 	}
+}
+
+// A promotion window keep is held to the cleanup decision's own reading of
+// an investigation copy: an unchanged copy, scratch on that rule, holds no
+// work and writes no entry, while a copy with a commit or a file no commit
+// records is one entry naming what it holds, written once however often it
+// is asked. A delivery task's copy and a run's are refused, so the reason
+// names only the copy PRD section 6 keeps for a promotion. The scratch case
+// is the control for the other two: the same keep of the same fixture with
+// work in it does write.
+func TestAPromotionWindowKeepRecordsWorkAndNotScratch(t *testing.T) {
+	ctx := context.Background()
+	window := func(id string) Kept {
+		return Kept{Task: id, Reason: KeptPromotionWindow, Detail: "the window passed"}
+	}
+	t.Run("an unchanged copy is scratch and writes nothing", func(t *testing.T) {
+		s := newCleanupSubject(t, nil)
+		tk := s.investigationTask(t)
+		s.storeReport(t, tk.id)
+		got, err := s.cleaner.Keep(ctx, window(tk.id))
+		if err != nil || !got.Scratch || got.Recorded || got.Entry.ID != 0 {
+			t.Fatalf("keeping an unchanged copy answered %+v (%v), want scratch and no entry", got, err)
+		}
+		if open, err := s.store.OpenKeptWork(ctx); err != nil || len(open) != 0 {
+			t.Fatalf("an unchanged copy left kept work %+v (%v), want none", open, err)
+		}
+	})
+	t.Run("a commit is one entry, written once", func(t *testing.T) {
+		s := newCleanupSubject(t, nil)
+		tk := s.investigationTask(t)
+		s.storeReport(t, tk.id)
+		head := commit(t, tk.copy, "g.txt", "investigated\n", "investigated")
+		first, err := s.cleaner.Keep(ctx, window(tk.id))
+		if err != nil || first.Scratch || !first.Recorded || first.Entry.Reason != KeptPromotionWindow ||
+			first.Entry.TaskID.Or("") != tk.id || !slices.Contains(first.Entry.Holds, head) {
+			t.Fatalf("keeping a copy with a commit answered %+v (%v), want an entry holding %s", first, err, head)
+		}
+		again, err := s.cleaner.Keep(ctx, window(tk.id))
+		if err != nil || again.Recorded || again.Scratch || again.Entry.ID != first.Entry.ID {
+			t.Fatalf("keeping the same copy again answered %+v (%v), want entry %d found and not written", again, err, first.Entry.ID)
+		}
+		if open, err := s.store.OpenKeptWork(ctx); err != nil || len(open) != 1 {
+			t.Fatalf("the copy left kept work %+v (%v), want one entry", open, err)
+		}
+	})
+	t.Run("a file no commit records is not scratch", func(t *testing.T) {
+		s := newCleanupSubject(t, nil)
+		tk := s.investigationTask(t)
+		s.storeReport(t, tk.id)
+		if err := os.WriteFile(filepath.Join(tk.copy, "notes.txt"), []byte("found\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.cleaner.Keep(ctx, window(tk.id))
+		if err != nil || got.Scratch || !got.Recorded {
+			t.Fatalf("keeping a copy with an untracked file answered %+v (%v), want an entry", got, err)
+		}
+	})
+	t.Run("a delivery task's copy is refused", func(t *testing.T) {
+		s := newCleanupSubject(t, nil)
+		tk := s.deliveryTask(t, "task/window")
+		if got, err := s.cleaner.Keep(ctx, window(tk.id)); !errors.Is(err, ErrCleanupRecord) {
+			t.Fatalf("keeping a delivery copy for the window answered %+v (%v), want ErrCleanupRecord", got, err)
+		}
+	})
+	t.Run("a run's copy is refused", func(t *testing.T) {
+		s := newCleanupSubject(t, nil)
+		if got, err := s.cleaner.Keep(ctx, Kept{Run: "run-1", Reason: KeptPromotionWindow}); !errors.Is(err, ErrCleanupRecord) {
+			t.Fatalf("keeping a run's copy for the window answered %+v (%v), want ErrCleanupRecord", got, err)
+		}
+	})
 }

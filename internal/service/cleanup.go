@@ -78,7 +78,9 @@ import (
 // stay on disk as a log line. Every site above hands such a refusal to
 // keepWork, the one place a kept copy becomes a kept work entry
 // (store.KeptWork, written by internal/tasks' Keep); recovery reaches it too,
-// through reclaimAtRecovery, for a finished run whose copy still stands. What
+// through reclaimAtRecovery, for a finished run whose copy still stands, and
+// so does landed.go's endWindow, for a reported investigation's copy kept
+// once its worker is ended past promotion_window, which is not a refusal. What
 // surfaces the entry is the supervisor loop, as a kept-work wake about the
 // task the entry's owner is or is attributed to, and the status and catch-up
 // reads, which list every open entry; supervise.go and catchup.go own
@@ -92,15 +94,16 @@ import (
 // dispatching, and nothing here acts on an answer. Both are #411's second
 // part.
 
-// keepWork records the kept work entry for a kept copy and logs what came of
-// it. It is the one call a site makes for a copy kept because its work has
-// not landed; an investigation's copy kept past promotion_window, whose
-// reason would be tasks.KeptPromotionWindow, is not handed to it in this
-// build, on landed.go's terms. A write that failed is logged and refuses
-// nothing, because the copy is kept either way and the next cleanup of it
-// asks again; an entry already recorded for the copy and its commits is
-// logged as such and written again nowhere.
-func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
+// keepWork records the kept work entry for a kept copy, logs what came of
+// it, and reports whether the keep was settled: an entry recorded or found,
+// or a window keep of a copy read as scratch. It is the one call a site
+// makes for a copy kept because its work has not landed, and the call
+// landed.go's endWindow makes for an investigation's copy kept past
+// promotion_window, with tasks.KeptPromotionWindow as the reason. A write
+// that failed is logged and refuses nothing, because the copy is kept either
+// way and the next cleanup of it asks again; an entry already recorded for
+// the copy and its commits is logged as such and written again nowhere.
+func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) bool {
 	owner := "task " + kept.Task
 	if kept.Run != "" {
 		owner = "run " + kept.Run
@@ -109,11 +112,15 @@ func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
 	switch {
 	case err != nil:
 		s.log.Printf("the isolated copy of %s is kept and its kept work entry could not be recorded: %v", owner, err)
+		return false
+	case got.Scratch:
+		s.log.Printf("the isolated copy of %s is kept and holds no work the cleanup decision would keep it for, so no kept work entry was recorded", owner)
 	case got.Recorded:
 		s.log.Printf("the isolated copy of %s is kept work entry %d (%s)", owner, got.Entry.ID, got.Entry.Reason)
 	default:
 		s.log.Printf("the isolated copy of %s is already kept work entry %d", owner, got.Entry.ID)
 	}
+	return true
 }
 
 // releaseStaleRemovals releases every repository removal reservation whose
