@@ -354,6 +354,14 @@ var globalArgs = []string{
 // handle's invocation deadline when ctx carries none; the package comment
 // says what that bounds and what it does not.
 func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte, error) {
+	return r.runWith(ctx, op, nil, args...)
+}
+
+// runWith is run with extra environment entries set after the environment is
+// stripped, for the one operation that points git at a scratch index of its
+// own (TreeWithEntries). Nothing a caller's environment carries can reach git
+// through it: only what this package passes does.
+func (r *Repository) runWith(ctx context.Context, op string, extra []string, args ...string) ([]byte, error) {
 	ctx, cancel := procgroup.Bound(ctx, r.set.deadline)
 	defer cancel()
 	addr := r.addressing()
@@ -364,7 +372,7 @@ func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte
 
 	cmd := exec.Command(r.set.git, full...)
 	cmd.Dir = r.path
-	cmd.Env = envFor(os.Environ(), r.set.ssh)
+	cmd.Env = append(envFor(os.Environ(), r.set.ssh), extra...)
 	// A nil Stdin is os.DevNull, so anything git reads from standard input
 	// sees EOF rather than waiting for a person.
 	cmd.Stdin = nil
@@ -437,7 +445,13 @@ func invocationCause(runErr error, code int, ctxErr error) error {
 // returned as a *CommandError, so a command that fails for a reason the caller
 // did not anticipate cannot be read as one of the answers it did.
 func (r *Repository) runExpecting(ctx context.Context, op string, expected []int, args ...string) ([]byte, int, error) {
-	out, err := r.run(ctx, op, args...)
+	return r.runExpectingWith(ctx, op, nil, expected, args...)
+}
+
+// runExpectingWith is runExpecting on runWith's terms.
+func (r *Repository) runExpectingWith(ctx context.Context, op string, extra []string, expected []int,
+	args ...string) ([]byte, int, error) {
+	out, err := r.runWith(ctx, op, extra, args...)
 	if err == nil {
 		return out, 0, nil
 	}

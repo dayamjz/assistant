@@ -66,15 +66,23 @@ thing each, on a remote of their own copied from the walkable scenario's:
   remote still holds the landed commit. The remedy being followed is held at
   package reach only, because no surface here re-runs a run onto its new
   upstream.
-- `TestAPushOverARemoteHoldingCommitsTheRunLacksIsRefused` lands a commit on
+- `TestARunIncorporatesCommitsItsBranchHeldBeforeItBegan` lands a commit on
   the remote's branch from a second clone before the run starts, so the
   rebase stage observes the branch standing at it and a lease on that anchor
   would hold (#396). Once with the working copy committing beside it
-  (diverged) and once committing nothing (behind), it asserts the push stage
-  holds on a would-discard refusal naming exactly that commit, whose anchor is
-  that commit, and that the remote still holds it. An anchored force over
-  history the run was given is held at package reach, by `internal/stages`'
-  push tests, because no walk here rewrites history the remote already holds.
+  (diverged) and once committing nothing (behind), it asserts the rebase stage
+  incorporated it: the run stops nowhere past the configured holds, the push
+  forwards the head the lint stage checked as a fast-forward anchored on that
+  commit, and the remote still reaches it, with the run's own change in the
+  diverged shape. `TestARunThatChangedAFileItsBranchChangedHoldsAtRebase`
+  commits a change to the same file instead, and asserts the run's first hold
+  is the rebase stage's ask naming that commit as observed, with the remote
+  still standing at it. The push stage's would-discard refusal over such a
+  commit, the backstop for a run carried past those holds, and an anchored
+  force over history the run was given are held at package reach, by
+  `internal/stages`' push tests, because no walk here carries a run past the
+  rebase stage without incorporating or rewrites history the remote already
+  holds.
 - `TestCommitsAFixRoundWroteAfterReviewAreReviewedBeforeThePush` configures a
   lint command that appends a line to the change and fails the first time it
   runs. The automatic fix round launches the stand-in, which changes nothing,
@@ -158,8 +166,9 @@ product are still not reachable from a run today:
 - no run opens a pull request or reads checks, and only the three walks above
   reach the push stage's decision: the rebase body takes its P6 anchor through
   `internal/safety`'s `Observe` on every run, but every other run here holds at
-  the push stage for want of a completed review. Only the delivery walk moves
-  the remote; the other two are refused or held before anything is pushed. A
+  the push stage for want of a completed review, and the overlapping walk holds
+  at the rebase stage. The delivery walk and the incorporation walk move the
+  remote; the other two are refused or held before anything is pushed. A
   run does
   reach `internal/forge`: it derives its code-host repository specifier
   through `GitHubRepository` and its stages carry the `Host` the service

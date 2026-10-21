@@ -176,8 +176,14 @@ func Coverage() []Established {
 				"remedy, and that the remote still holds that commit. The third walk's remote holds a " +
 				"commit somebody else pushed before the run began, so the run observes it and a lease " +
 				"on that anchor would hold; once diverged from it and once behind it, it establishes " +
-				"that the push stage holds on a would-discard refusal naming exactly that commit, " +
-				"anchored on it, and that the remote keeps it. What the lease walk does not " +
+				"that the rebase stage incorporates that commit, so the push forwards the head the lint " +
+				"stage checked as a fast-forward anchored on it and the remote still reaches it, with " +
+				"the run's own change where there is one. A run over the same remote whose change " +
+				"changes the file that commit changed holds at the rebase stage on an ask naming it as " +
+				"observed, " +
+				"and the remote keeps it; it never reaches the push stage. The push stage's " +
+				"would-discard refusal over such a commit, the backstop for a run carried past those " +
+				"holds, is held at package reach by internal/stages. What the lease walk does not " +
 				"establish is held at package reach: that following the remedy makes the decision allow " +
 				"a fast-forward, which no surface here drives a run through. All three walks need a " +
 				"service and a run, so they are skipped rather " +
