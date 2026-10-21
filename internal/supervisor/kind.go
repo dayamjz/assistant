@@ -75,9 +75,11 @@ const (
 	// KindKeptWork is an isolated copy kept because its work has not
 	// landed, PRD section 6's kept work: section 8's kept work record,
 	// raised once per entry about the task the entry's owner is or is
-	// attributed to. It is always actionable, because P15 has kept work
-	// surface the moment it is kept, and it is a decision owed to a person,
-	// so it reaches the first coordinator and never a subordinate.
+	// attributed to, on the loop's next pass after the entry is written;
+	// status and the catch-up read list the entry as soon as it is written.
+	// It is always actionable, because P15 has kept work surface at once and
+	// it is a decision owed to a person, so it reaches the first coordinator
+	// and never a subordinate.
 	KindKeptWork Kind = "kept-work"
 )
 

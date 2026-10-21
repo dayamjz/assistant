@@ -481,8 +481,11 @@ the service records a kept-work entry for it: whose copy it was, the
 project and branch, the commits the copy was read to hold, and why it was
 kept. A restart does the same for a finished run's copy it finds still
 standing. Each open entry is listed after the four parts of the
-catch-up read (`kept` in `--json`) and in `assistant status` for its
-project (`kept_work` in `--json`). An entry about a task, or about a run
+catch-up read (`kept` in `--json`) and in `assistant status`
+(`kept_work` in `--json`): a working copy's status lists the entries whose
+repository is that working copy's, and every status lists the entries whose
+owner names no repository, such as an investigation task started without
+one, because those belong to no working copy. An entry about a task, or about a run
 attributed to a task, also raises one `kept-work` wake, which reaches the
 coordinator and the notify command like any other wake. This build
 deviates from PRD section 6 for an entry about a run no task names, such as

@@ -484,3 +484,60 @@ func TestAReservationTakenOverAfterRecoveryReadsItStands(t *testing.T) {
 		t.Fatalf("after recovery the reservations are %+v (%v), want the new eject's alone", reserved, err)
 	}
 }
+
+// Status lists kept work whose owner names no repository in every working
+// copy's answer, because such an entry belongs to no working copy and would
+// otherwise reach no status at all, and keeps out an entry of another
+// repository. The repository-less entry is an investigation task's, the
+// shape the real refusal writes for an investigation started with no
+// repository; both are written through the store's own accessor.
+func TestStatusListsKeptWorkWhoseOwnerNamesNoRepository(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	ctx := t.Context()
+	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const task = "keptnorepoxx"
+	copyPath, err := h.TaskCopy(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.CreateTask(ctx, store.Task{ID: task, Shape: store.TaskInvestigation, Project: "one",
+		Mode: "headless", WorktreePath: copyPath}, store.Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	unowned, _, err := records.RecordKeptWork(ctx, store.KeptCopy{TaskID: task, CopyPath: copyPath, Holds: []string{"aaaa"}, Reason: "unproven"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.UpsertRepository(ctx, store.Repository{ID: "other", WorkingPath: newSubject(t),
+		UpstreamURL: "https://example.test/other.git", DefaultBranch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	build, err := store.CurrentBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.CreateRun(ctx, store.Run{ID: "run-of-other", RepositoryID: "other", Branch: "topic", SubmittedHead: "bbbb",
+		Base: "bbbb", Intent: "validate", IntentSource: "push", Build: build, ConfigDigest: "cfg"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := records.RecordKeptWork(ctx, store.KeptCopy{RunID: "run-of-other", CopyPath: "/w/run-of-other", Holds: []string{"bbbb"}, Reason: "unproven"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = records.Close()
+
+	withService(t, h, func(under serviceUnderTest) {
+		listed := statusOf(t, under.client, subject).KeptWork
+		if len(listed) != 1 || listed[0].ID != unowned.ID {
+			t.Fatalf("status lists kept work %+v, want the repository-less entry %d alone", listed, unowned.ID)
+		}
+	})
+}

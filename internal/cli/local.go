@@ -366,9 +366,10 @@ type originAmbiguous struct{}
 func (originAmbiguous) Error() string { return machine.PhraseInitOriginAmbiguous.String() }
 
 // betweenEjectPreflightAndRemoval runs after eject has reserved the
-// repository's removal and before it touches the gate. It is nil in
-// production and set only by this package's tests, which use it to commit a
-// kept work entry inside that window.
+// repository's removal and before it checks the standing run copies and
+// touches the gate. It is nil in production and set only by this package's
+// tests, which use it to start a run of the repository inside that window
+// and show the reservation refuses it.
 var betweenEjectPreflightAndRemoval func()
 
 // eject removes the gate and its records.

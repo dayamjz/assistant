@@ -179,10 +179,11 @@ var oracle = map[cell]supervisor.Level{
 	{supervisor.KindSubordinateEscalated, proof, elapsed, false}:  supervisor.Surface,
 	{supervisor.KindSubordinateEscalated, proof, elapsed, true}:   supervisor.Surface,
 
-	// "kept work" -> Surface: section 6's "it surfaces at once" and P15's
-	// "surfaced the moment it is kept". A copy kept for its work is a
-	// decision owed to a person whatever the evidence, the window or the
-	// flag say.
+	// "kept work" -> Surface: section 6's "it surfaces at once". The record
+	// is listed as soon as it is written; this wake is detected on the
+	// loop's next pass, and once detected nothing absorbs it, because a copy
+	// kept for its work is a decision owed to a person whatever the
+	// evidence, the window or the flag say.
 	{supervisor.KindKeptWork, absent, open, false}:    supervisor.Surface,
 	{supervisor.KindKeptWork, absent, open, true}:     supervisor.Surface,
 	{supervisor.KindKeptWork, absent, elapsed, false}: supervisor.Surface,
