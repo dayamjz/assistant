@@ -38,6 +38,9 @@ import (
 //     counts, and every run this service is advancing, read off the slot
 //     the way report reads it.
 //   - Stopped without a decision is every task resolved Failed or Unknown.
+//   - Kept work is every kept work entry with no answer, oldest first, from
+//     store.UnansweredKeptWork, PRD section 6's "it surfaces at once: in the
+//     catch-up read". It is not one of the four parts the digest counts.
 //
 // Only Landed is filtered. The other three are never filtered by anything
 // but what they are, so an open decision is shown until it is answered.
@@ -148,6 +151,14 @@ func (s *Service) catchUp(ctx context.Context) (machine.CatchUp, error) {
 	sort.SliceStable(all, func(i, j int) bool { return all[i].at.before(all[j].at) })
 	for _, d := range all {
 		out.Waiting = append(out.Waiting, d.waiting)
+	}
+
+	out.Kept, err = s.store.UnansweredKeptWork(ctx)
+	if err != nil {
+		return machine.CatchUp{}, err
+	}
+	if out.Kept == nil {
+		out.Kept = []store.KeptWork{}
 	}
 
 	supervision := s.supervision(ctx)

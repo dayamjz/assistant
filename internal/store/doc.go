@@ -158,6 +158,19 @@
 // under Domain names (PendingDomainNotifications, ClaimDomainNotification,
 // SettleDomainNotification), one implementation serving both tables.
 //
+// # The kept work record
+//
+// PRD section 8's kept work record is keptWorkMigration's kept_work table:
+// one row per isolated copy kept because its work has not landed, written
+// once by RecordKeptWork with its one owner, a task or a run, and the
+// project and branch read off that owner's row in the same transaction. A
+// copy holding the same commits at the same path is the same row, so the
+// write is idempotent. AnswerKeptWork is its one revision, made once with
+// the answer and its Resolver; MarkKeptWorkSurfaced moves when it last
+// surfaced, only forward. The schema seals all three, and a row is not
+// deleted while its owner stands. keptwork.go names the gap a run's entry
+// leaves when its repository is forgotten.
+//
 // # The wake queue and the markers it is written with
 //
 // PRD section 8's wake is the durable wake queue: a table here and not a
@@ -487,14 +500,14 @@
 // would need synchronous FULL and would pay an fsync per commit for it; this
 // package does not make that claim.
 //
-// # Six columns are stored redacted
+// # Seven columns are stored redacted
 //
 // PRD section 8 stores repository URLs with credentials removed and recovers
 // the credentialed URL from the gate at run time. P14 gives credential removal
 // one owner, so this package does not implement it: Open requires a
 // [vcs.Redactor] and fails with ErrNoRedactor without one.
 //
-// What the redactor covers is six columns, and five accessors reach it.
+// What the redactor covers is seven columns, and six accessors reach it.
 // UpsertRepository runs it on repository.upstream_url and
 // repository.fork_url, the columns PRD section 8 designates for repository
 // URLs. AppendMessage runs it on message.text, what was sent to a worker, and
@@ -504,6 +517,8 @@
 // already stored when the hold resolution seal migration applies, before that
 // migration seals resolved rows. SettleNotification runs it on
 // notification.detail, how the operator's notify command ended.
+// RecordKeptWork runs it on kept_work.detail, the cleanup decision's account
+// of why a copy was kept.
 //
 // Every other column holds exactly what the caller passed. A push binding, a
 // pull request reference, a run's intent, a promoted task's delivery intent,

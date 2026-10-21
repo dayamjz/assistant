@@ -447,6 +447,25 @@ is both under way and stopped, so it is counted in both, and the counts are
 not meant to be summed. Agent usage is not in the read: it stays the usage
 view, `assistant runs --usage`.
 
+### Kept work
+
+When a run's or a task's isolated copy is kept because its work is not on
+the shared branch or anywhere else the cleanup check can prove it safe (no
+proof held, or the copy holds changes, files or a stash no commit records),
+the service records a kept-work entry for it: whose copy it was, the
+project and branch, the commits the copy was read to hold, and why it was
+kept. A restart does the same for a finished run's copy it finds still
+standing. Each unanswered entry is listed after the four parts of the
+catch-up read (`kept` in `--json`) and in `assistant status` for its
+project (`kept_work` in `--json`). An entry about a task, or about a run
+attributed to a task, also raises one `kept-work` wake, which reaches the
+coordinator and the notify command like any other wake; an entry about a
+run no task names, such as the run your own push started, raises none.
+
+Answering an entry (land, carry on or discard), and holding new task work
+in a project until its entries are answered, are not in this build yet: the
+copy stays where it is, and nothing removes it for you.
+
 ## Waiting on a fleet
 
 A coordinator agent running tasks through `assistant coordinator` does not

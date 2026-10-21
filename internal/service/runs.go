@@ -1440,6 +1440,13 @@ func (s *Service) recover(ctx context.Context) {
 	// the record through internal/runs, never off the copy, so no active
 	// run's copy is touched; runsweep.go owns the sweep and what it records.
 	s.sweepFinishedAtRecovery(ctx, read)
+	// PRD section 11's "remove isolated copies no run owns": the same
+	// finished runs' standing copies are then asked of the cleanup decision
+	// again, off this goroutine, so a copy whose work has since landed is
+	// removed and one still holding unlanded work becomes a kept work entry
+	// rather than staying on disk unrecorded; cleanup.go owns what a refusal
+	// becomes.
+	s.reclaimAtRecovery(read)
 	// PRD section 11's fleet reconciliation, after the runs and before
 	// anything is served: the queued wakes are drained as input, every task
 	// of this home is read with its terminal probed under a bound, and a

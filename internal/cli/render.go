@@ -371,6 +371,9 @@ func readOutStatus(w io.Writer, s machine.Status) {
 		}
 	}
 	readOutSupervision(w, s.Supervision)
+	for _, k := range s.KeptWork {
+		writeln(w, keptWorkLine(k))
+	}
 	if s.Repository == nil {
 		return
 	}
@@ -690,7 +693,8 @@ func readOutTask(w io.Writer, task machine.Task) {
 // phrase, so the two cannot read differently; a run's is its branch and its
 // phrase, the decision's row for a run held at one; a hold's is its row,
 // beside the project of the task it names. Landed records past the read's
-// bound are counted on a row of their own. Identifiers, the answer's
+// bound are counted on a row of their own. Kept work follows the four parts
+// under a row of its own, one line per unanswered entry. Identifiers, the answer's
 // command line and the records themselves are the structured rendering's,
 // which the rows that need one point at.
 func readOutCatchUp(w io.Writer, c machine.CatchUp) {
@@ -723,6 +727,22 @@ func readOutCatchUp(w io.Writer, c machine.CatchUp) {
 	for _, task := range c.Stopped {
 		readOutTask(w, task)
 	}
+	writeln(w)
+	writeln(w, machine.KeptWorkPartPhrase(c))
+	for _, k := range c.Kept {
+		writeln(w, keptWorkLine(k))
+	}
+}
+
+// keptWorkLine is one unanswered kept work entry: the branch it was kept on,
+// which is the person's own text and escaped, beside its row, or the row
+// alone for a copy kept on no branch. Its copy's path and the commits it
+// holds are the structured rendering's, which the row points at.
+func keptWorkLine(k store.KeptWork) string {
+	if branch, ok := k.Branch.Get(); ok {
+		return printable(branch) + ": " + machine.KeptWorkPhrase(k).String()
+	}
+	return machine.KeptWorkPhrase(k).String()
 }
 
 // readOutQueuedWakes is a person's listing of the queue: the count row, then

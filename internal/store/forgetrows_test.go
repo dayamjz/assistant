@@ -170,6 +170,9 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 	if err := s.MarkRunCleanupRemoved(ctx, run.ID, now); err != nil {
 		t.Fatalf("MarkRunCleanupRemoved: %v", err)
 	}
+	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/run", Holds: []string{"aaaa"}, Reason: "unproven"}); err != nil {
+		t.Fatalf("RecordKeptWork: %v", err)
+	}
 	if _, err := s.TransitionRunOnPullRequest(ctx, run.ID, []RunStatus{RunRunning}, RunPassed,
 		PullRequestRead{PullRequest: 7, Head: "0123abc", End: PullRequestMerged}, HoldClosure{}); err != nil {
 		t.Fatalf("running to passed on a merged pull request: %v", err)
@@ -327,6 +330,15 @@ func TestWrittenOnceRunRecordsAreNotDeletedWhileTheirRunStands(t *testing.T) {
 	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run.ID, Proof: Known(CleanupProofDefaultBranch), Examined: []string{"aaaa"}}); err != nil {
 		t.Fatalf("RecordRunCleanup: %v", err)
 	}
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/run", Holds: []string{"aaaa"}, Reason: "unproven"})
+	if err != nil {
+		t.Fatalf("RecordKeptWork: %v", err)
+	}
+	// An answered entry is refused deletion too while its run stands, so the
+	// seal is shown on the row forgetting would remove.
+	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface()); err != nil {
+		t.Fatalf("AnswerKeptWork: %v", err)
+	}
 	if _, err := s.TransitionRunOnPullRequest(ctx, run.ID, []RunStatus{RunRunning}, RunPassed,
 		PullRequestRead{PullRequest: 7, Head: "0123abc", End: PullRequestMerged}, HoldClosure{}); err != nil {
 		t.Fatalf("running to passed on a merged pull request: %v", err)
@@ -338,6 +350,7 @@ func TestWrittenOnceRunRecordsAreNotDeletedWhileTheirRunStands(t *testing.T) {
 		"merge_record": `DELETE FROM merge_record WHERE run = ?`,
 		"run_cleanup":  `DELETE FROM run_cleanup WHERE run = ?`,
 		"seen_mark":    `DELETE FROM seen_mark WHERE kind = 'merge' AND key = ?`,
+		"kept_work":    `DELETE FROM kept_work WHERE run_id = ?`,
 	} {
 		if _, err := s.write.ExecContext(ctx, remove, run.ID); err == nil ||
 			!strings.Contains(err.Error(), "while") {

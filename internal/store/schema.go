@@ -162,6 +162,10 @@ const delegationAttemptHostMigration = "delegation attempt host"
 // sealCheckpointTableMigration is a constant.
 const domainNotificationMigration = "domain wake notification"
 
+// keptWorkMigration names the migration that adds PRD section 8's kept work
+// record, for the reason sealCheckpointTableMigration is a constant.
+const keptWorkMigration = "kept work record"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2024,6 +2028,80 @@ var schema = []migration{
 				BEFORE DELETE ON domain_notification
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a notification is kept and is not deleted');
+				END`,
+		},
+	},
+	{
+		version: 51,
+		name:    keptWorkMigration,
+		statements: []string{
+			// PRD section 8's kept work record and principle P15's "kept work
+			// is never silent": one row per isolated copy kept because its
+			// work has not landed, naming the one owner it outlived, a task
+			// or a run. The project and the branch are read off the owner's
+			// row when the entry is written and copied here because a task's
+			// branch can be written later, at promotion, and the entry says
+			// what the copy was kept on. holds is what the copy was read to
+			// hold, a JSON list of commit identifiers; reason is the cleanup
+			// decision's word for why it was kept and detail its account,
+			// redacted, as evidence.
+			//
+			// The row is written once. The answer, with who gave it and
+			// when, is its one revision, made once. surfaced_at is the one
+			// other column that moves, and only forward: it is when the
+			// entry was last raised to someone, which the PRD's row lists
+			// beside the answer, so it cannot be fixed at the write. A copy
+			// holding the same commits at the same path is the same entry,
+			// which the unique key holds, so a cleanup asked again of a copy
+			// that has not changed finds the entry it already wrote.
+			//
+			// A row is not deleted while its owner stands: never for a task,
+			// which nothing forgets, and for a run only once its run row is
+			// gone, on forgetRunRecordsMigration's terms, which only
+			// ForgetRepository does.
+			`CREATE TABLE kept_work (
+				id            INTEGER PRIMARY KEY,
+				task_id       TEXT REFERENCES task(id),
+				run_id        TEXT REFERENCES run(id),
+				repository_id TEXT REFERENCES repository(id),
+				branch        TEXT,
+				copy_path     TEXT NOT NULL,
+				holds         TEXT NOT NULL,
+				reason        TEXT NOT NULL,
+				detail        TEXT NOT NULL,
+				kept_at       TEXT NOT NULL,
+				surfaced_at   TEXT,
+				answer        TEXT CHECK (answer IN ('land', 'carry-on', 'discard')),
+				answered_by   TEXT,
+				answered_at   TEXT,
+				CHECK ((task_id IS NULL) <> (run_id IS NULL)),
+				CHECK ((answer IS NULL) = (answered_by IS NULL)),
+				CHECK ((answer IS NULL) = (answered_at IS NULL)),
+				UNIQUE (copy_path, holds)
+			) STRICT`,
+			`CREATE INDEX kept_work_unanswered ON kept_work(id) WHERE answer IS NULL`,
+			`CREATE TRIGGER kept_work_is_written_once
+				BEFORE UPDATE OF id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at ON kept_work
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is written once when its copy is kept and is not rewritten');
+				END`,
+			`CREATE TRIGGER kept_work_is_answered_once
+				BEFORE UPDATE OF answer, answered_by, answered_at ON kept_work
+				WHEN OLD.answer IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is answered once and the first answer stands');
+				END`,
+			`CREATE TRIGGER kept_work_surfaces_forward
+				BEFORE UPDATE OF surfaced_at ON kept_work
+				WHEN NEW.surfaced_at IS NULL OR (OLD.surfaced_at IS NOT NULL AND NEW.surfaced_at < OLD.surfaced_at)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: when a kept work entry last surfaced only moves forward');
+				END`,
+			`CREATE TRIGGER kept_work_is_not_removed
+				BEFORE DELETE ON kept_work
+				WHEN OLD.task_id IS NOT NULL OR EXISTS (SELECT 1 FROM run WHERE id = OLD.run_id)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is not deleted while its owner stands');
 				END`,
 		},
 	},

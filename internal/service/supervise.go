@@ -69,6 +69,17 @@ import (
 // from the marker it last advanced to, so the events of its return are
 // classified then.
 //
+// A third is made for every task on the same terms: an unanswered kept work
+// entry about it, PRD section 6's kept work, read from the kept work record
+// and keyed by the entry so it surfaces once, as a kept-work wake. An entry
+// is about the task that owns it, or the task that owns or is attributed the
+// run that owns it. Two gaps: an entry about a run no task names, a person's
+// own push, is on no task and raises no wake, because the wake table's row
+// names a task, so it reaches the private channel not at all and the person
+// through status and the catch-up read alone; and when the entry surfaced is
+// written after its wake, in a transaction of its own, so a service that
+// stops between the two leaves the wake with no instant on the entry.
+//
 // A watched task's terminal is read only where supervisor.TerminalWatched
 // says so, which is every state but Reported, Landed and Complete. A task
 // that resolves Reported
@@ -563,10 +574,18 @@ func (s *Service) pass(c *incarnation) passReport {
 		report.Err = err
 		return report
 	}
+	ctx, cancel = s.sup.bound(c.ctx)
+	kept, err := s.store.UnansweredKeptWork(ctx)
+	cancel()
+	if err != nil {
+		report.Err = err
+		return report
+	}
+	keptByTask := keptWorkByTask(observed, kept)
 	providerWideSurfaced := false
 	for _, o := range observed {
 		id := o.Snapshot.Task.ID
-		report.Tasks[id] = s.superviseTask(c, o, probes, unacknowledged[id] > 0, unread[id], now, &providerWideSurfaced)
+		report.Tasks[id] = s.superviseTask(c, o, probes, unacknowledged[id] > 0, unread[id], keptByTask[id], now, &providerWideSurfaced)
 	}
 	// The delegations after the tasks, on delegations.go's terms: each
 	// standing one's subordinate probed, its gone surfaced on the queue's
@@ -578,10 +597,10 @@ func (s *Service) pass(c *incarnation) passReport {
 // superviseTask is the pass over one task: the terminal reading for a watched
 // task, the decision, and the writes.
 func (s *Service) superviseTask(c *incarnation, o taskstate.Observed, probes map[string]session.Observation,
-	queued bool, unread []store.Message, now time.Time, providerWideSurfaced *bool) taskReport {
+	queued bool, unread []store.Message, kept []store.KeptWork, now time.Time, providerWideSurfaced *bool) taskReport {
 	id := o.Snapshot.Task.ID
 	inFlight, decided := supervisor.StateInFlight(o.State.State)
-	obs := observation{observed: o, watched: inFlight || !decided || queued, unread: unread}
+	obs := observation{observed: o, watched: inFlight || !decided || queued, unread: unread, kept: kept}
 	var err error
 	ctx, cancel := s.sup.bound(c.ctx)
 	obs.markers, obs.has, err = s.store.WakeMarkers(ctx, id)
@@ -670,6 +689,17 @@ func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 			return out
 		}
 		out.Detections[i].Disposition = appended.Disposition
+		if entry, ok := d.keptWork[det.Marker]; ok && det.Kind == supervisor.KindKeptWork {
+			// When the entry last surfaced is its own column, written after
+			// the wake that raised it, in a transaction of its own; a
+			// service that stops between the two leaves the wake and no
+			// instant, which supervise.go's header names.
+			ctx, cancel := s.sup.bound(c.ctx)
+			if err := s.store.MarkKeptWorkSurfaced(ctx, entry, appended.Wake.CreatedAt); err != nil {
+				s.log.Printf("when kept work entry %d surfaced could not be recorded: %v", entry, err)
+			}
+			cancel()
+		}
 		if appended.Disposition == store.WakeAppended {
 			s.wakeBell.ring()
 			ctx, cancel := s.sup.bound(c.ctx)
@@ -721,6 +751,9 @@ type observation struct {
 	// coordinator handed up about it, oldest first, read from the
 	// escalation record (P8), and empty for a task in no domain.
 	escalations []store.Escalation
+	// kept is every unanswered kept work entry whose owner is the task or a
+	// run attributed to it, oldest first, read from the kept work record.
+	kept []store.KeptWork
 }
 
 // decision is what decide composed for one task: the detections with their
@@ -730,6 +763,9 @@ type decision struct {
 	detections []detection
 	advance    store.MarkerAdvance
 	write      bool
+	// keptWork is the kept work entry each kept-work detection's marker is
+	// about, so the write can record when that entry surfaced.
+	keptWork map[string]int64
 }
 
 func surfacedKey(kind supervisor.Kind, marker string) string { return string(kind) + "\x00" + marker }
@@ -745,9 +781,10 @@ func surfacedKey(kind supervisor.Kind, marker string) string { return string(kin
 // open hold record names that run, which already carries it, a message
 // written and not acknowledged once escalation_window has elapsed from the
 // instant the record says it was written, not yet surfaced, a decision the
-// task's domain's subordinate coordinator handed up, not yet surfaced, and
-// for a watched task each event past the marker's sequence and then its
-// terminal. The first four are made for every task, watched or not, and
+// task's domain's subordinate coordinator handed up, not yet surfaced, an
+// unanswered kept work entry about the task, not yet surfaced, and for a
+// watched task each event past the marker's sequence and then its
+// terminal. The first five are made for every task, watched or not, and
 // each surfaces once: its key is in the wake table afterwards. The
 // terminal
 // reading is one of: terminal gone, with the case and the unobserved-since
@@ -816,6 +853,18 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 			continue
 		}
 		wake, _ := supervisor.Of(supervisor.KindSubordinateEscalated)
+		detect(wake, marker, supervisor.WindowOpen, false, supervisor.Stall{})
+	}
+	for _, k := range o.kept {
+		marker := keptWorkMarker(k.ID)
+		if seen(supervisor.KindKeptWork, marker) {
+			continue
+		}
+		if d.keptWork == nil {
+			d.keptWork = make(map[string]int64)
+		}
+		d.keptWork[marker] = k.ID
+		wake, _ := supervisor.Of(supervisor.KindKeptWork)
 		detect(wake, marker, supervisor.WindowOpen, false, supervisor.Stall{})
 	}
 	if !o.watched {
@@ -920,6 +969,39 @@ func messageUnacknowledgedMarker(id int64) string { return fmt.Sprintf("message:
 // messageUnacknowledgedMarker's terms: the escalation record's identifier,
 // so each record surfaces once.
 func escalationMarker(id int64) string { return fmt.Sprintf("escalation:%d", id) }
+
+// keptWorkMarker composes a kept work entry's wake marker on
+// messageUnacknowledgedMarker's terms: the entry's identifier, so each entry
+// surfaces once.
+func keptWorkMarker(id int64) string { return fmt.Sprintf("kept-work:%d", id) }
+
+// keptWorkByTask places each unanswered kept work entry on the task it is
+// about: the task that owns it, or the task a run that owns it is attributed
+// to, read off the task's own snapshot. An entry about a run no task names is
+// on no task, so it raises no wake; status and the catch-up read list it, and
+// this file's header names that gap.
+func keptWorkByTask(observed []taskstate.Observed, kept []store.KeptWork) map[string][]store.KeptWork {
+	runTask := make(map[string]string)
+	for _, o := range observed {
+		for _, r := range o.Snapshot.Runs {
+			runTask[r.ID] = o.Snapshot.Task.ID
+		}
+		if run, ok := o.Snapshot.Task.RunID.Get(); ok {
+			runTask[run] = o.Snapshot.Task.ID
+		}
+	}
+	out := make(map[string][]store.KeptWork)
+	for _, k := range kept {
+		task, ok := k.TaskID.Get()
+		if !ok {
+			task, ok = runTask[k.RunID.Or("")]
+		}
+		if ok {
+			out[task] = append(out[task], k)
+		}
+	}
+	return out
+}
 
 // runHeldMarker composes the marker of the wake for a run moved to held:
 // the run and how many moves into held its record counts, which

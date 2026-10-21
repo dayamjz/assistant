@@ -31,6 +31,13 @@ paths: ["internal/store/**"]
 - localLandingMigration's `local_landing` is PRD section 8's local landing
   record, written once by `RecordLocalLanding` in the transaction that closes
   the approval hold and sealed like `merge_record`.
+- keptWorkMigration's `kept_work` is PRD section 8's kept work record: one
+  row per kept copy and the commits it holds (`RecordKeptWork` finds the row
+  already written for the same pair), naming one owner, a task or a run,
+  with project and branch read off that owner's row. It is written once;
+  `AnswerKeptWork` is its one revision, made once, and `surfaced_at` the one
+  other column that moves, only forward. A run's entry goes with its run in
+  `ForgetRepository`, answered or not, which `keptwork.go` names as a gap.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number
   what they append from the shipped list rather than spelling a version out.

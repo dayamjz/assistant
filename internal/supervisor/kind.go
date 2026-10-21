@@ -72,6 +72,13 @@ const (
 	// is always actionable, and it reaches the first coordinator and never
 	// the subordinate.
 	KindSubordinateEscalated Kind = "subordinate-escalated"
+	// KindKeptWork is an isolated copy kept because its work has not
+	// landed, PRD section 6's kept work: section 8's kept work record,
+	// raised once per entry about the task the entry's owner is or is
+	// attributed to. It is always actionable, because P15 has kept work
+	// surface the moment it is kept, and it is a decision owed to a person,
+	// so it reaches the first coordinator and never a subordinate.
+	KindKeptWork Kind = "kept-work"
 )
 
 // Class is how the flowchart decides a kind.
@@ -144,6 +151,7 @@ var kinds = []Row{
 	{Kind: KindMessageUnacknowledged, Class: ClassActionable, Produced: true, Subordinate: true},
 	{Kind: KindSubordinateGone, Class: ClassResurface, Produced: true, Subordinate: false},
 	{Kind: KindSubordinateEscalated, Class: ClassActionable, Produced: true, Subordinate: false},
+	{Kind: KindKeptWork, Class: ClassActionable, Produced: true, Subordinate: false},
 }
 
 // Kinds returns every kind's row, in the flowchart's order. The result is a
