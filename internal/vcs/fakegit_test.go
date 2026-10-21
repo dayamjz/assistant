@@ -213,7 +213,7 @@ func startHolder() bool {
 	return true
 }
 
-// recordPID appends pid to the file trackStandIns named, so a test can tell
+// recordPID appends pid to the file useFakeGit named, so a test can tell
 // whether that process is still running.
 func recordPID(pid int) {
 	path := os.Getenv(fakeGitPIDs)
@@ -317,12 +317,34 @@ func useFakeGit(t *testing.T) (logPath string, binary string) {
 	logPath = t.TempDir() + string(os.PathSeparator) + "invocations.jsonl"
 	t.Setenv(fakeGitMode, "1")
 	t.Setenv(fakeGitLog, logPath)
-	// Whatever a stand-in leaves running waits for this file, so the test
-	// ends it at cleanup without signalling anything.
-	release := t.TempDir() + string(os.PathSeparator) + "release"
+	// Whatever a stand-in leaves running records its identifier and waits
+	// for the release file, so the test ends it at cleanup without
+	// signalling anything. The cleanup is registered after the directory
+	// holding both files, so it runs before that directory is removed, and
+	// it waits for every recorded process to be gone before it returns, so
+	// the release file outlives every process that polls for it.
+	dir := t.TempDir()
+	release := dir + string(os.PathSeparator) + "release"
+	pids := dir + string(os.PathSeparator) + "pids"
 	t.Setenv(fakeGitRelease, release)
-	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+	t.Setenv(fakeGitPIDs, pids)
+	t.Cleanup(func() {
+		_ = os.WriteFile(release, nil, 0o600)
+		awaitStandIns(t, readPIDs(pids))
+	})
 	return logPath, exe
+}
+
+// readPIDs returns the identifiers recorded in path, in the order recorded.
+func readPIDs(path string) []int {
+	data, _ := os.ReadFile(path)
+	var out []int
+	for _, line := range strings.Fields(string(data)) {
+		if n, err := strconv.Atoi(line); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // fakeBareDir returns an existing directory to stand in for a bare repository.

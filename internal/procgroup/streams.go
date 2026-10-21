@@ -128,7 +128,7 @@ func (s *streams) started() {
 	if s.in != nil {
 		go func() {
 			pipe := &pipeEnd{f: s.in}
-			_, err := io.Copy(pipe, s.inFrom)
+			err := s.copyIn(pipe)
 			s.closeIn()
 			s.inErr <- s.inputError(err, pipe)
 		}()
@@ -139,18 +139,51 @@ func (s *streams) started() {
 		// Every error an output copy stops on is reported, whichever side it
 		// came from, as os/exec reports its own: before cut, nothing in Run
 		// has closed the read end, so an error here is the caller's writer's
-		// or the pipe's own, and after cut no copier's report is read.
+		// or the pipe's own, and after cut no copier's report is read. Both
+		// sides are wrapped to hide io.ReaderFrom and io.WriterTo, so the
+		// copy is io.Copy's own loop of a pipe read and then a caller write,
+		// and a caller writer cannot keep reading the pipe on its own.
 		go func() {
-			_, err := io.Copy(o.w, o.r)
+			_, err := io.Copy(struct{ io.Writer }{o.w}, struct{ io.Reader }{o.r})
 			_ = o.r.Close()
 			s.outDone <- err
 		}()
 	}
 }
 
+// copyIn copies the caller's reader into the child's standard input until
+// the reader ends, a write fails, or Run closes the input. It is a loop of
+// its own rather than io.Copy because it checks, before every read, whether
+// Run has closed the input, and reads nothing more from the caller's reader
+// once it has, whatever the read in flight returns: a (0, nil) answer, which
+// io.Copy would follow with another read, ends the copy here. What it cannot
+// do is end a read already in flight, so at most that one read is still
+// pending when Run returns.
+func (s *streams) copyIn(pipe *pipeEnd) error {
+	buf := make([]byte, 32<<10)
+	for !s.inClosed.Load() {
+		n, rerr := s.inFrom.Read(buf)
+		if n > 0 {
+			if s.inClosed.Load() {
+				return nil
+			}
+			if _, werr := pipe.Write(buf[:n]); werr != nil {
+				return werr
+			}
+		}
+		if errors.Is(rerr, io.EOF) {
+			return nil
+		}
+		if rerr != nil {
+			return rerr
+		}
+	}
+	return nil
+}
+
 // pipeEnd is Run's own write end of the child's standard input, wrapped so
 // the input copier can tell an error on that end from one the caller's reader
-// returned: it records the last error its own write met, and io.Copy returns
+// returned: it records the last error its own write met, and copyIn returns
 // that same error when it is what stopped the copy.
 type pipeEnd struct {
 	f   *os.File
@@ -203,10 +236,10 @@ func (s *streams) closeIn() {
 // write end, and past that cuts them. An expiry is exec.ErrWaitDelay, as
 // os/exec reports its own.
 //
-// The input copier is never waited on: its write end is closed here, so
-// once the caller's reader returns, the copy fails and the goroutine ends,
-// but a reader that never returns keeps that one goroutine, and only that,
-// for as long as it does not. So its error, the caller's reader's, is
+// The input copier is never waited on: the input is closed here, so once
+// the caller's read in flight returns, the copier ends without reading
+// again, but a read that never returns keeps that one goroutine, and only
+// that, for as long as it does not. So its error, the caller's reader's, is
 // reported only when the copy had already ended when this is called.
 func (s *streams) finish(grace time.Duration) error {
 	s.closeIn()

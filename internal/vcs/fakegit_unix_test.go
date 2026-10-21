@@ -6,9 +6,6 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -30,36 +27,33 @@ func alive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-// trackStandIns has every stand-in git that hangs and every grandchild
-// started from here on record its identifier, and returns a reader of what
-// was recorded. It is called after useFakeGit. Cleanup writes the release
-// useFakeGit named and then waits for each recorded process to be gone, so a
-// test ends what it started without signalling an identifier that may have
-// been reused.
+// standInExitBound is how long a released stand-in has to exit before its
+// test fails. A released stand-in returns within one poll of the release, so
+// this is generous.
+const standInExitBound = 5 * time.Second
+
+// awaitStandIns fails the test for each of pids still running
+// standInExitBound after its release, which is useFakeGit's cleanup's check
+// that a test ended every stand-in it started.
+func awaitStandIns(t *testing.T, pids []int) {
+	t.Helper()
+	for _, pid := range pids {
+		if !gone(pid, standInExitBound) {
+			t.Errorf("stand-in process %d is still running %s after its release", pid, standInExitBound)
+		}
+	}
+}
+
+// trackStandIns returns a reader of the identifiers of the stand-in gits
+// that hang and the grandchildren they start, which useFakeGit has them
+// record; it is called after useFakeGit.
 func trackStandIns(t *testing.T) func() []int {
 	t.Helper()
-	pids := filepath.Join(t.TempDir(), "pids")
-	t.Setenv(fakeGitPIDs, pids)
-	read := func() []int {
-		data, _ := os.ReadFile(pids)
-		var out []int
-		for _, line := range strings.Fields(string(data)) {
-			if n, err := strconv.Atoi(line); err == nil {
-				out = append(out, n)
-			}
-		}
-		return out
+	path := os.Getenv(fakeGitPIDs)
+	if path == "" {
+		t.Fatal("trackStandIns was called before useFakeGit")
 	}
-	release := os.Getenv(fakeGitRelease)
-	t.Cleanup(func() {
-		_ = os.WriteFile(release, nil, 0o600)
-		for _, pid := range read() {
-			if !gone(pid, 5*time.Second) {
-				t.Errorf("stand-in process %d is still running after its release", pid)
-			}
-		}
-	})
-	return read
+	return func() []int { return readPIDs(path) }
 }
 
 // gone waits up to limit for pid to stop being alive.

@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,6 +64,71 @@ func TestRunIsNotHeldByACallersIdleReader(t *testing.T) {
 	if err := runWithin(t, cmd, true); err == nil {
 		t.Errorf("Run of a program its deadline ended = nil; want the kill it reported")
 	}
+}
+
+// Once Run has returned, the input copier reads the caller's reader no more:
+// the read in flight at the deadline is released afterwards with (0, nil),
+// a valid answer io.Copy would follow with another read, and no second read
+// arrives.
+func TestRunReadsACallersReaderNoMoreOnceItReturned(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	r := newGatedReader()
+	t.Cleanup(r.close)
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), standInMode+"="+standInHang)
+	cmd.Stdin = r
+	if err := runWithin(t, cmd, true); err == nil {
+		t.Errorf("Run of a program its deadline ended = nil; want the kill it reported")
+	}
+	if !r.awaitReads(1, streamLimit) {
+		t.Fatalf("the copier never read the caller's reader, so nothing was checked")
+	}
+	r.release()
+	if r.awaitReads(2, time.Second) {
+		t.Errorf("the copier read the caller's reader again after Run had returned")
+	}
+}
+
+// gatedReader blocks every read until release or close, then answers the
+// first released read with (0, nil); it counts the reads it was asked for.
+type gatedReader struct {
+	reads    chan struct{}
+	released chan struct{}
+	closed   chan struct{}
+	once     sync.Once
+	n        atomic.Int32
+}
+
+func newGatedReader() *gatedReader {
+	return &gatedReader{reads: make(chan struct{}, 16), released: make(chan struct{}, 1), closed: make(chan struct{})}
+}
+
+func (g *gatedReader) Read([]byte) (int, error) {
+	g.n.Add(1)
+	g.reads <- struct{}{}
+	select {
+	case <-g.released:
+		return 0, nil
+	case <-g.closed:
+		return 0, io.EOF
+	}
+}
+
+func (g *gatedReader) release() { g.released <- struct{}{} }
+
+func (g *gatedReader) close() { g.once.Do(func() { close(g.closed) }) }
+
+// awaitReads reports whether at least n reads have been asked for within
+// limit.
+func (g *gatedReader) awaitReads(n int32, limit time.Duration) bool {
+	end := time.Now().Add(limit)
+	for g.n.Load() < n {
+		if time.Now().After(end) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return true
 }
 
 // A caller's writer that blocks does not hold Run past its bound: the

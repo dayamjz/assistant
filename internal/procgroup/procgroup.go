@@ -27,10 +27,12 @@
 //     call waiting on an output pipe, and nothing ends it.
 //   - A caller's reader or writer that blocks cannot be interrupted, so Run
 //     returns without the goroutine blocked in it: one reading the caller's
-//     reader stays until that read returns, and one writing to the caller's
-//     writer until that write returns. Neither touches the child, and
-//     neither does anything past the call it is blocked in, since the pipe
-//     it would use next is closed; Run's doc says when each can happen.
+//     reader stays until that one read returns, and one writing to the
+//     caller's writer until that one write returns. Neither touches the
+//     child, and neither calls the caller's reader or writer again: the
+//     input copier checks that Run closed the input before every read, and
+//     the output copier's next read is of a pipe end Run closed. Run's doc
+//     says when each can happen.
 //   - A descendant that stays in the group is ended when the leader exits,
 //     including one a program started on purpose to outlive the call. What
 //     that costs is whatever that descendant was for.

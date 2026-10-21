@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -53,6 +54,41 @@ func TestAReceiveFromAnIdlePusherEndsAtItsDeadline(t *testing.T) {
 		t.Errorf("ServeReceivePack = %v; want the deadline that ended it", err)
 	}
 }
+
+// A receive that ended at its deadline reads the pusher's input no more: the
+// read in flight then is released afterwards with (0, nil), which io.Copy
+// would follow with another read, and no second read arrives.
+func TestAReceiveReadsThePushersInputNoMoreOnceItReturned(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	var reads atomic.Int32
+	release, closed := make(chan struct{}, 1), make(chan struct{})
+	t.Cleanup(func() { close(closed) })
+	in := readerFunc(func([]byte) (int, error) {
+		reads.Add(1)
+		select {
+		case <-release:
+			return 0, nil
+		case <-closed:
+			return 0, io.EOF
+		}
+	})
+	if err := serveWithin(t, in, io.Discard); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("ServeReceivePack = %v; want the deadline that ended it", err)
+	}
+	if reads.Load() != 1 {
+		t.Fatalf("the pusher's input was read %d times before the release; want the one read in flight", reads.Load())
+	}
+	release <- struct{}{}
+	time.Sleep(time.Second)
+	if got := reads.Load(); got != 1 {
+		t.Errorf("the pusher's input was read %d times; want no read after the receive returned", got)
+	}
+}
+
+// readerFunc is an io.Reader made of a function, and is not an *os.File.
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
 
 // A receive whose output never reached the pushing side is not a success,
 // even though receive-pack itself exits 0: the pusher's writer failing, here

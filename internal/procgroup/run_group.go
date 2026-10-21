@@ -35,11 +35,11 @@ import (
 // ending plus those two once the leader exits after SIGKILL; a leader that
 // has not exited one grace after SIGKILL is ErrAbandoned, answered after one
 // grace more for the copiers. What it leaves running when it returns is at
-// most: a goroutine blocked reading the caller's reader, for as long as that
-// read does not return, whose next write then fails on the closed pipe; an
-// output copier blocked in the caller's writer, which writes nothing past
-// that one write; and, for ErrAbandoned, a goroutine that reaps the leader
-// once it exits.
+// most: a goroutine with one read of the caller's reader in flight, for as
+// long as that read does not return, which then ends without reading again
+// or writing what it read; an output copier with one write to the caller's
+// writer in flight, which then ends without writing again; and, for
+// ErrAbandoned, a goroutine that reaps the leader once it exits.
 //
 // cmd.Process is nil exactly when nothing was started, and the error is then
 // ErrMisconfigured when Run refused cmd, ctx's error when ctx had already
