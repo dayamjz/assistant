@@ -459,8 +459,11 @@ standing. Each open entry is listed after the four parts of the
 catch-up read (`kept` in `--json`) and in `assistant status` for its
 project (`kept_work` in `--json`). An entry about a task, or about a run
 attributed to a task, also raises one `kept-work` wake, which reaches the
-coordinator and the notify command like any other wake; an entry about a
-run no task names, such as the run your own push started, raises none.
+coordinator and the notify command like any other wake. This build
+deviates from PRD section 6 for an entry about a run no task names, such as
+the run your own push started: it is listed by `status` and the catch-up
+read, but it never reaches the private channel or the coordinator until
+#458 lands.
 
 If the copy's work later turns up somewhere safe, for example once you push
 its commit to the upstream branch, the next cleanup of it (for a run's copy,
@@ -479,11 +482,17 @@ entry's copy, whose it was and the commits it holds. Until answering kept
 work ships (#411 part 2), the way past it is the work landing: once its
 commits are on the upstream branch or in the default branch, the next
 service start removes the copy on that proof and closes the entry. Part 2's
-discard will be your other way. The check and a reservation of the
-removal are one write, so a run that finishes while the eject is under way
-cannot record kept work under a gate about to go: its copy is kept, the
-service log says no entry was recorded because the repository is being
-removed, and the eject completes.
+discard will be your other way.
+
+Eject is also refused while any run copy of the repository still stands on
+disk, whether its run's cleanup has not decided it yet or kept it, and the
+refusal names each copy: a run's copy is cut from the gate, so removing the
+gate would leave the copy unable to read its own commits. Cancelling a run
+asks its copy's cleanup at once, so a copy whose work is on the upstream is
+removed then. Once eject has checked that the repository can be removed, it
+reserves the removal, and no new run of the repository starts until the
+eject finishes; a service that starts after an eject died releases that
+reservation.
 
 This build records and surfaces kept work and does not yet hold dispatch:
 a new task in a project with an open entry still dispatches. Answering an

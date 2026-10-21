@@ -73,12 +73,14 @@ import (
 // entry about it, PRD section 6's kept work, read from the kept work record
 // and keyed by the entry so it surfaces once, as a kept-work wake. An entry
 // is about the task that owns it, or the task that owns or is attributed the
-// run that owns it. Two gaps: an entry about a run no task names, a person's
-// own push, is on no task and raises no wake, because the wake table's row
-// names a task, so it reaches the private channel not at all and the person
-// through status and the catch-up read alone; and when the entry surfaced is
-// written after its wake, in a transaction of its own, so a service that
-// stops between the two leaves the wake with no instant on the entry.
+// run that owns it. A deviation from PRD section 6, by the owner's decision
+// and followed up in #458: an entry about a run no task names, a person's
+// own push, is listed by status and the catch-up read but never reaches the
+// private channel or the coordinator until #458 lands, because it is on no
+// task and the wake table's row names one. And a gap: when the entry
+// surfaced is written after its wake, in a transaction of its own, so a
+// service that stops between the two leaves the wake with no instant on the
+// entry.
 //
 // A watched task's terminal is read only where supervisor.TerminalWatched
 // says so, which is every state but Reported, Landed and Complete. A task

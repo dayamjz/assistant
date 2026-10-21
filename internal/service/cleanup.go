@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
@@ -105,15 +106,49 @@ func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
 	}
 	got, err := s.cleaner.Keep(ctx, kept)
 	switch {
-	case errors.Is(err, store.ErrRepositoryBeingRemoved):
-		s.log.Printf("the isolated copy of %s is kept and no kept work entry was recorded, because its repository is being "+
-			"removed by an eject that was confirmed first: %v", owner, err)
 	case err != nil:
 		s.log.Printf("the isolated copy of %s is kept and its kept work entry could not be recorded: %v", owner, err)
 	case got.Recorded:
 		s.log.Printf("the isolated copy of %s is kept work entry %d (%s)", owner, got.Entry.ID, got.Entry.Reason)
 	default:
 		s.log.Printf("the isolated copy of %s is already kept work entry %d", owner, got.Entry.ID)
+	}
+}
+
+// releaseStaleRemovals releases every repository removal reservation whose
+// owner, the eject process internal/store's RemovalOwner names, is gone:
+// absent, replaced by another process with its identifier, or recorded with
+// no start time, which nothing can verify. A reservation whose owner still
+// runs is left, because that eject may be removing the gate now, and so is
+// one whose owner could not be read, which the log says; both stop new runs
+// of the repository until the eject finishes or a later open finds the
+// owner gone.
+func (s *Service) releaseStaleRemovals(ctx context.Context) {
+	reserved, err := s.store.RepositoryRemovals(ctx)
+	if err != nil {
+		s.log.Printf("the repository removal reservations could not be read at recovery: %v", err)
+		return
+	}
+	for _, r := range reserved {
+		gone := r.Owner.Start == 0
+		if !gone {
+			presence, err := agents.Identity{PID: r.Owner.PID, Start: r.Owner.Start}.Presence()
+			if err != nil {
+				s.log.Printf("the removal of repository %s is reserved by process %d, which could not be read, so the reservation stands: %v",
+					r.Repository, r.Owner.PID, err)
+				continue
+			}
+			gone = presence != agents.PresencePresent
+		}
+		if !gone {
+			s.log.Printf("the removal of repository %s is reserved by process %d, which still runs, so the reservation stands", r.Repository, r.Owner.PID)
+			continue
+		}
+		if err := s.store.ReleaseRepositoryRemoval(ctx, r.Repository); err != nil {
+			s.log.Printf("the removal reservation of repository %s, whose eject is gone, could not be released: %v", r.Repository, err)
+			continue
+		}
+		s.log.Printf("released the removal reservation of repository %s: the eject that held it is gone", r.Repository)
 	}
 }
 

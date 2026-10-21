@@ -175,8 +175,12 @@
 // surfaced, only forward. The schema seals all three, and a row is not
 // deleted while it is open or while its owner stands. ForgetRepository and
 // RepositoryRemovable refuse a repository with an open entry with a
-// *KeptWorkOpenError naming each, so eject never takes a kept copy's gate
-// while nobody has decided about its work.
+// *KeptWorkOpenError naming each. Eject's ReserveRepositoryRemoval writes
+// repository_removal, naming the eject's process, in the same transaction
+// as that check; CreateRun refuses a run of a reserved repository, and
+// internal/cli's eject then refuses while any run copy stands on disk, so
+// the gate is never removed under a copy that depends on it. No reservation
+// refuses a kept work entry.
 //
 // # The wake queue and the markers it is written with
 //

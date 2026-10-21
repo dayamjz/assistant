@@ -42,10 +42,11 @@ paths: ["internal/store/**"]
   `RepositoryRemovable` refuse a repository with an open entry
   (`*KeptWorkOpenError`), and a run's entry goes with its run only once it
   is answered or closed. Eject's preflight is `ReserveRepositoryRemoval`,
-  which writes `repository_removal` in the transaction that found the
-  repository forgettable, and `RecordKeptWork` refuses an entry for a
-  reserved repository (`ErrRepositoryBeingRemoved`), so the two writes have
-  exactly one loser in either order.
+  which writes `repository_removal`, naming the eject's process, in the
+  transaction that found the repository forgettable; `CreateRun` refuses a
+  run of a reserved repository (`ErrRepositoryBeingRemoved`), and nothing
+  refuses a kept work entry over a reservation. internal/service releases a
+  reservation whose owner is gone when it opens.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number
   what they append from the shipped list rather than spelling a version out.

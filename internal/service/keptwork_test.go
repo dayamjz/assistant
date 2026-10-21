@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -345,4 +347,77 @@ func TestAKeptCopyGoneWithNoProofIsReportedAndLeftOpen(t *testing.T) {
 			t.Fatalf("status lists %+v, want the entry still open", listed)
 		}
 	})
+}
+
+// PRD principle P15's restart rule for an eject's removal reservation: one
+// whose owner, the eject process, is gone is released when the next service
+// opens, so a repository is not left refusing every run because an eject
+// died after reserving; one whose owner still runs is left, because that
+// eject may be removing the gate now. The dead owner is a real process
+// identified while it ran and then ended; the live one is this test's own
+// process.
+func TestARemovalReservationWhoseEjectIsGoneIsReleasedAtOpen(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+
+	sleeper := exec.Command("sleep", "60")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	dead, found, err := agents.Identify(sleeper.Process.Pid)
+	if err != nil || !found {
+		_ = sleeper.Process.Kill()
+		_ = sleeper.Wait()
+		t.Skipf("this platform cannot identify a process (%v), so an owner's death cannot be shown", err)
+	}
+	_ = sleeper.Process.Kill()
+	_ = sleeper.Wait()
+	self, found, err := agents.Identify(os.Getpid())
+	if err != nil || !found {
+		t.Fatalf("identifying this test's own process: %v", err)
+	}
+
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := records.ReserveRepositoryRemoval(t.Context(), repository.ID, store.RemovalOwner{PID: dead.PID, Start: dead.Start}); err != nil {
+		t.Fatal(err)
+	}
+	alive, err := records.UpsertRepository(t.Context(), store.Repository{ID: "other", WorkingPath: newSubject(t),
+		UpstreamURL: "https://example.test/other.git", DefaultBranch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := records.ReserveRepositoryRemoval(t.Context(), alive.ID, store.RemovalOwner{PID: self.PID, Start: self.Start}); err != nil {
+		t.Fatal(err)
+	}
+	_ = records.Close()
+
+	withService(t, h, func(under serviceUnderTest) {
+		started := startRunSkipping(t, under.client, subject, afterIntent()...)
+		if started.Record.ID == "" {
+			t.Fatal("a run of the repository whose eject is gone did not start")
+		}
+	})
+	records, err = store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = records.Close() }()
+	reserved, err := records.RepositoryRemovals(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reserved) != 1 || reserved[0].Repository != alive.ID {
+		t.Fatalf("after the open the reservations are %+v, want only the live eject's, of %s", reserved, alive.ID)
+	}
+	if !strings.Contains(readServiceLog(t, h), "released the removal reservation of repository "+repository.ID) {
+		t.Fatalf("the service log does not say the dead eject's reservation was released:\n%s", readServiceLog(t, h))
+	}
 }

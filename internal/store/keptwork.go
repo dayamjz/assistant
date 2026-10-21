@@ -67,13 +67,12 @@ const KeptRemovedOnProof KeptClosure = "removed-on-proof"
 //
 // A repository with an open entry cannot be forgotten: ForgetRepository,
 // RepositoryRemovable and ReserveRepositoryRemoval refuse it with a
-// *KeptWorkOpenError naming each entry. Eject reserves the removal before it
-// touches the gate, and RecordKeptWork refuses an entry for a repository
-// whose removal is reserved, so an entry and an eject have exactly one loser
-// in either order: an entry written first stops the eject before the gate is
-// touched, and an eject reserved first refuses the entry, which the cleanup
-// that asked for it reports while keeping the copy. A run's entry goes with
-// its run only once it is answered or closed.
+// *KeptWorkOpenError naming each entry. An entry is never refused because an
+// eject is under way: eject reserves the removal, which stops new runs and so
+// new run copies, and then refuses while any run copy of the repository
+// still stands, decided or not, so the gate is never removed under a copy
+// that an entry could be written for. A run's entry goes with its run only
+// once it is answered or closed.
 type KeptWork struct {
 	// ID is the row's identifier, which the store assigns and an answer
 	// names.
@@ -156,11 +155,11 @@ var ErrKeptWorkAnswered = errors.New("store: the kept work entry is already answ
 // closed because its copy was removed on a proof. Nothing is written.
 var ErrKeptWorkClosed = errors.New("store: the kept work entry was closed when its copy was removed on a proof")
 
-// ErrRepositoryBeingRemoved is returned by RecordKeptWork for an entry whose
-// project's removal ReserveRepositoryRemoval reserved: an eject that found
-// the repository forgettable is under way, and the entry would be forgotten
-// with it. Nothing is written; the copy is still the caller's to keep.
-var ErrRepositoryBeingRemoved = errors.New("store: the repository is being removed, so no kept work entry is recorded for it")
+// ErrRepositoryBeingRemoved is returned by CreateRun for a run of a
+// repository whose removal ReserveRepositoryRemoval reserved: an eject that
+// found the repository forgettable is under way, and a run would cut a copy
+// under the gate it is about to remove. Nothing is written.
+var ErrRepositoryBeingRemoved = errors.New("store: the repository is being removed, so no run of it is started")
 
 // ErrKeptWorkOpen matches every *KeptWorkOpenError.
 var ErrKeptWorkOpen = errors.New("store: the repository holds kept work nobody has decided")
@@ -271,14 +270,20 @@ func (s *Store) RecordKeptWork(ctx context.Context, k KeptCopy) (KeptWork, bool,
 			}
 			repository, branch = Known(r), Known(b)
 		}
-		if id, ok := repository.Get(); ok {
-			var one int
-			switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM repository_removal WHERE repository_id = ?`, id).Scan(&one); {
-			case err == nil:
-				return fmt.Errorf("%w: repository %s", ErrRepositoryBeingRemoved, id)
-			case !isNoRows(err):
-				return err
-			}
+		// A copy whose removal on a proof is already marked is not kept:
+		// the entry would describe a copy that is gone with its work shown
+		// safe, which a cleanup asked of it before the removal can race.
+		cleanup := `SELECT removed_at FROM task_cleanup WHERE task_id = ?`
+		owner := k.TaskID
+		if k.RunID != "" {
+			cleanup, owner = `SELECT removed_at FROM run_cleanup WHERE run = ?`, k.RunID
+		}
+		var removed Optional[string]
+		switch err := tx.QueryRowContext(ctx, cleanup, owner).Scan(&removed); {
+		case err == nil && removed.IsKnown():
+			return fmt.Errorf("%w: the copy was removed on a proof", ErrCleanupRemoved)
+		case err != nil && !isNoRows(err):
+			return err
 		}
 		res, err := tx.ExecContext(ctx, `
 			INSERT INTO kept_work (task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at)

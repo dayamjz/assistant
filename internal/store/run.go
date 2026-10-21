@@ -340,6 +340,9 @@ func (s *Store) TransitionRunOnPark(ctx context.Context, id string, from []RunSt
 
 // CreateRun records a new run and returns it as stored.
 //
+// It refuses a run of a repository whose removal an eject reserved with
+// ErrRepositoryBeingRemoved, inside the transaction that would write it.
+//
 // It refuses a run that names no build with ErrBuildIdentityMissing and one
 // that names no configuration with ErrConfigDigestMissing. PRD section 8
 // requires a surprising result to be traceable to both, and a run recorded
@@ -367,6 +370,13 @@ func (s *Store) CreateRun(ctx context.Context, r Run) (Run, error) {
 
 	now := nowUTC()
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		var one int
+		switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM repository_removal WHERE repository_id = ?`, r.RepositoryID).Scan(&one); {
+		case err == nil:
+			return fmt.Errorf("%w: repository %s", ErrRepositoryBeingRemoved, r.RepositoryID)
+		case !isNoRows(err):
+			return err
+		}
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO run (
 				id, repository_id, branch, submitted_head, base, current_head, status,

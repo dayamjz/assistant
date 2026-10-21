@@ -808,7 +808,10 @@ func TestEjectRefusedByAnActiveRunRemovesNothing(t *testing.T) {
 	}
 
 	// Once the run is over the same command carries the removal out, so what
-	// was refused was the removal and not the command.
+	// was refused was the removal and not the command. The change is on the
+	// upstream first, so the cancel's cleanup removes the run's copy on the
+	// remote-branch proof rather than keeping it for eject to refuse over.
+	git(t, subject, "push", "--quiet", "origin", "a-change")
 	if got := run(t, h, subject, "--json", "--cancel"); got.code != machine.ExitOK {
 		t.Fatalf("ending the run exited %s:\n%s", got.code, got.stdout)
 	}
@@ -844,6 +847,9 @@ func TestEjectRemovesEveryRecordOfAFinishedRunOrRefusesFirst(t *testing.T) {
 		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
 	}
 	id := decodeRun(t, started.stdout).Record.ID
+	// The change is on the upstream, so the cancel's cleanup removes the
+	// run's copy on the remote-branch proof rather than keeping it.
+	git(t, subject, "push", "--quiet", "origin", "a-change")
 	if got := run(t, h, subject, "--json", "--cancel"); got.code != machine.ExitOK {
 		t.Fatalf("ending the run exited %s:\n%s", got.code, got.stdout)
 	}
@@ -894,20 +900,21 @@ func TestEjectRemovesEveryRecordOfAFinishedRunOrRefusesFirst(t *testing.T) {
 	}
 }
 
-// PRD principle P15's "the program never discards it on its own", at eject:
-// a repository whose run's copy is open kept work is refused before the gate
-// is touched, naming the entry's copy, its owner and what it holds and the
-// way past in this build, and the same command completes once the entry is
-// closed by the copy's removal on a proof, taking the closed entry with the
-// run. The entry is written through the store's own accessor over a finished
-// run, which is the record a refused cleanup leaves.
+// PRD principle P15's "the program never discards it on its own", at eject,
+// through the real cleanup. A cancelled run's copy holds a commit on no
+// remote, so the cancel's cleanup keeps it and records a kept work entry.
+// Eject is then refused before the gate is touched, naming the entry's copy,
+// its run, the commit and the way past. Once the commit is on the upstream
+// branch, the next service start removes the copy on the remote-branch
+// proof and closes the entry, and the same command completes, taking the
+// closed entry with the run.
 func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P15)
 	h := newHome(t)
 	subject := newSubject(t)
-	serve(t, h)
+	stop := serveUntilStopped(t, h)
 
 	created := run(t, h, subject, "--json", "init")
 	if created.code != machine.ExitOK {
@@ -922,26 +929,22 @@ func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
 	if started.code != machine.ExitOK {
 		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
 	}
-	id := decodeRun(t, started.stdout).Record.ID
+	record := decodeRun(t, started.stdout).Record
 	if got := run(t, h, subject, "--json", "--cancel"); got.code != machine.ExitOK {
 		t.Fatalf("ending the run exited %s:\n%s", got.code, got.stdout)
 	}
-
-	records := openStore(t, h)
-	defer func() { _ = records.Close() }()
-	ctx := t.Context()
-	copyPath := filepath.Join(h.Root(), "worktrees", "kept-copy-of-"+id)
-	entry, _, err := records.RecordKeptWork(ctx, store.KeptCopy{RunID: id, CopyPath: copyPath, Holds: []string{"0123abcd"}, Reason: "unproven"})
-	if err != nil {
-		t.Fatalf("RecordKeptWork: %v", err)
+	var status machine.Status
+	if got := run(t, h, subject, "--json", "status"); json.Unmarshal([]byte(got.stdout), &status) != nil || len(status.KeptWork) != 1 {
+		t.Fatalf("status lists kept work %+v, want the cancelled run's one entry:\n%s", status.KeptWork, got.stdout)
 	}
+	entry := status.KeptWork[0]
 
 	refused := run(t, h, subject, "eject", "--confirm")
 	if refused.code != machine.ExitFailure {
 		t.Fatalf("eject --confirm exited %s over open kept work, want failure:\n%s%s", refused.code, refused.stdout, refused.stderr)
 	}
 	said := refused.stdout + refused.stderr
-	for _, want := range []string{copyPath, "run " + id, "0123abcd", "#411 part 2", "landing"} {
+	for _, want := range []string{entry.CopyPath, "run " + record.ID, record.SubmittedHead, "#411 part 2", "landing"} {
 		if !strings.Contains(said, want) {
 			t.Fatalf("the refusal does not name %q:\n%s", want, said)
 		}
@@ -949,35 +952,45 @@ func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
 	if _, err := os.Stat(built.Gate.Repository); err != nil {
 		t.Fatalf("the refused eject removed the gate at %s: %v", built.Gate.Repository, err)
 	}
-	if got, err := records.KeptWorkEntry(ctx, entry.ID); err != nil || !got.Open() {
-		t.Fatalf("the refused eject touched the entry: %+v, %v", got, err)
-	}
 
-	// The work landing closes the entry on the proof that removes the copy;
-	// a run whose service recorded the copy absent has no record yet.
-	if _, err := records.RecordRunCleanup(ctx, store.RunCleanup{Run: id, Proof: store.Known(store.CleanupProofDefaultBranch),
-		Examined: []string{"0123abcd"}}); err != nil {
-		t.Fatalf("RecordRunCleanup: %v", err)
-	}
-	if err := records.MarkRunCleanupRemoved(ctx, id, time.Now()); err != nil {
-		t.Fatalf("MarkRunCleanupRemoved: %v", err)
+	git(t, subject, "push", "--quiet", "origin", "a-change")
+	stop()
+	serve(t, h)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var now machine.Status
+		got := run(t, h, subject, "--json", "status")
+		if err := json.Unmarshal([]byte(got.stdout), &now); err == nil && len(now.KeptWork) == 0 {
+			if _, err := os.Stat(entry.CopyPath); errors.Is(err, os.ErrNotExist) {
+				break
+			}
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the next start did not close the entry over a copy whose work landed:\n%s", got.stdout)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	if got := run(t, h, subject, "eject", "--confirm"); got.code != machine.ExitOK {
 		t.Fatalf("eject --confirm exited %s once the entry closed:\n%s%s", got.code, got.stdout, got.stderr)
 	}
-	if _, err := records.KeptWorkEntry(ctx, entry.ID); !errors.Is(err, store.ErrNotFound) {
+	records := openStore(t, h)
+	defer func() { _ = records.Close() }()
+	if _, err := records.KeptWorkEntry(t.Context(), entry.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the closed entry survived the eject: %v", err)
 	}
 }
 
-// The window between eject's preflight and its removal of the gate, driven
-// deterministically: a kept work entry a finishing run's cleanup would write
-// is written inside that window, through the store's own accessor, by the
-// seam eject runs there. The reservation the preflight committed refuses it
-// with store.ErrRepositoryBeingRemoved, nothing is recorded, and the eject
-// completes, so no entry is ever left open over a gate that is gone. It
-// changes a package variable, so it does not run in parallel.
-func TestAKeptWorkEntryWrittenDuringEjectIsRefused(t *testing.T) {
+// A finished run whose cleanup has not yet decided its copy keeps eject from
+// removing the gate. The run is recorded failed, as a service that stopped
+// before its cleanup leaves it, and its copy, a linked worktree of the gate
+// at the run's commit, stands with no entry. The preflight's reservation
+// succeeds and the eject then refuses naming the copy, leaving the gate, the
+// copy's commit readable, and no reservation. Once the copy is gone, the same
+// command completes, and inside its window, the seam between the reserved
+// preflight and the gate's removal, a new run of the repository is refused,
+// so no copy can appear under the gate. It changes a package variable, so it
+// does not run in parallel.
+func TestEjectIsRefusedWhileAFinishedRunsCopyStands(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P15)
 	h := newHome(t)
@@ -993,40 +1006,64 @@ func TestAKeptWorkEntryWrittenDuringEjectIsRefused(t *testing.T) {
 		t.Fatalf("init does not decode: %v\n%s", err, created.stdout)
 	}
 	standingOnChange(t, subject, "a-change")
-	started := run(t, h, subject, "--json", "--intent", "a change held at its first stage")
-	if started.code != machine.ExitOK {
-		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
-	}
-	id := decodeRun(t, started.stdout).Record.ID
-	if got := run(t, h, subject, "--json", "--cancel"); got.code != machine.ExitOK {
-		t.Fatalf("ending the run exited %s:\n%s", got.code, got.stdout)
-	}
+	head := git(t, subject, "rev-parse", "HEAD")
 
 	records := openStore(t, h)
 	defer func() { _ = records.Close() }()
 	ctx := t.Context()
+	binding, err := records.GateBinding(ctx, subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build, err := store.CurrentBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRun := func(id string) store.Run {
+		return store.Run{ID: id, RepositoryID: binding.GateID, Branch: "a-change", SubmittedHead: head, Base: head,
+			Intent: "validate", IntentSource: "push", Build: build, ConfigDigest: "cfg"}
+	}
+	const runID = "run-left-undecided"
+	if _, err := records.CreateRun(ctx, newRun(runID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.TransitionRun(ctx, runID, []store.RunStatus{store.RunPending}, store.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.TransitionRun(ctx, runID, []store.RunStatus{store.RunRunning}, store.RunFailed); err != nil {
+		t.Fatal(err)
+	}
+	copyPath := h.Worktree(binding.GateID, runID)
+	git(t, built.Gate.Repository, "fetch", "--quiet", subject, "+refs/heads/a-change:refs/assistant/runs/"+runID)
+	git(t, built.Gate.Repository, "worktree", "add", "--quiet", "--detach", copyPath, "refs/assistant/runs/"+runID)
+
+	refused := run(t, h, subject, "eject", "--confirm")
+	if refused.code != machine.ExitFailure {
+		t.Fatalf("eject --confirm exited %s while a run's copy stood, want failure:\n%s%s", refused.code, refused.stdout, refused.stderr)
+	}
+	if said := refused.stdout + refused.stderr; !strings.Contains(said, copyPath) {
+		t.Fatalf("the refusal does not name the copy %s:\n%s", copyPath, said)
+	}
+	if _, err := os.Stat(built.Gate.Repository); err != nil {
+		t.Fatalf("the refused eject removed the gate at %s: %v", built.Gate.Repository, err)
+	}
+	if got := git(t, copyPath, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("the standing copy reads %q after the refused eject, want its commit %s", got, head)
+	}
+	if reserved, err := records.RepositoryRemovals(ctx); err != nil || len(reserved) != 0 {
+		t.Fatalf("the refused eject left its reservation: %+v, %v", reserved, err)
+	}
+
+	git(t, built.Gate.Repository, "worktree", "remove", copyPath)
 	var during error
-	inWindow := false
 	cli.BetweenEjectPreflightAndRemoval(t, func() {
-		inWindow = true
-		_, _, during = records.RecordKeptWork(ctx, store.KeptCopy{RunID: id,
-			CopyPath: filepath.Join(h.Root(), "worktrees", "kept-during-eject"), Holds: []string{"0123abcd"}, Reason: "unproven"})
+		_, during = records.CreateRun(ctx, newRun("run-during-eject"))
 	})
-	ejected := run(t, h, subject, "eject", "--confirm")
-	if !inWindow {
-		t.Fatal("eject never reached the window between its preflight and the gate's removal")
+	if got := run(t, h, subject, "eject", "--confirm"); got.code != machine.ExitOK {
+		t.Fatalf("eject --confirm exited %s once the copy was gone:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 	if !errors.Is(during, store.ErrRepositoryBeingRemoved) {
-		t.Fatalf("the entry written inside the eject's window = %v, want ErrRepositoryBeingRemoved", during)
-	}
-	if ejected.code != machine.ExitOK {
-		t.Fatalf("eject --confirm exited %s:\n%s%s", ejected.code, ejected.stdout, ejected.stderr)
-	}
-	if _, err := os.Stat(built.Gate.Repository); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the gate at %s survived the eject: %v", built.Gate.Repository, err)
-	}
-	if open, err := records.OpenKeptWork(ctx); err != nil || len(open) != 0 {
-		t.Fatalf("kept work was left open over the removed gate: %+v, %v", open, err)
+		t.Fatalf("a run started inside the eject's window = %v, want ErrRepositoryBeingRemoved", during)
 	}
 }
 
