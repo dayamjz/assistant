@@ -224,3 +224,31 @@ func TestOutputThatReachesItsEndIsReportedWhole(t *testing.T) {
 		t.Fatalf("the record holds %q, and the command wrote %q", whole.String(), "first\nsecond\n")
 	}
 }
+
+// A command ended by something other than its time limit is not reported as
+// having run past it, even when a descendant outside its group holds the
+// output until after the limit would have passed: whether the limit ended the
+// command is read when the command ended, not once its output was waited for.
+// The shell signals itself well inside the limit, and the detached holder
+// keeps the pipe open for the whole grace, which reaches past the limit.
+func TestACommandEndedBeforeItsLimitIsNotReportedAsTimedOut(t *testing.T) {
+	t.Parallel()
+	var whole strings.Builder
+	result := runCommand(t.Context(), commandSpec{
+		command:    detachedHolder(t) + "; sleep 0.5; kill -TERM $$",
+		dir:        t.TempDir(),
+		record:     &whole,
+		projection: testProjectionBytes,
+		grace:      5 * time.Second,
+		timeout:    3 * time.Second,
+	})
+	if result.exited {
+		t.Fatalf("a command ended by a signal reported exit status %d as its own", result.code)
+	}
+	if result.short == nil {
+		t.Fatal("the detached holder did not hold the output through the grace, so this reached nothing")
+	}
+	if errors.Is(result.err, errCommandTimedOut) {
+		t.Fatalf("a command ended by SIGTERM inside its limit was reported as %v", result.err)
+	}
+}

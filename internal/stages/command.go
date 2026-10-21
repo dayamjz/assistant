@@ -281,6 +281,12 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	// The copy is already draining while the command runs, so waiting on the
 	// command cannot deadlock against a command that outruns the pipe buffer.
 	waitErr := cmd.Wait()
+	// Whether this call's own bound ended the command is read now, when the
+	// command has ended, and not after the output is waited for: a descendant
+	// outside the group can hold the output past the bound, and the bound
+	// passing then says nothing about what ended the command. A deadline or
+	// cancellation of ctx's own is the caller's to read from ctx.
+	timedOut := spec.timeout > 0 && ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded)
 	// The group is ended before the output is waited for, so a descendant
 	// still in it stops holding the pipe and the read below reaches its end.
 	endGroup()
@@ -292,9 +298,7 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	}
 	if !res.exited {
 		res.err = waitErr
-		// Only the bound this call set is reported as a timeout: a deadline
-		// or cancellation of ctx's own is the caller's to read from ctx.
-		if spec.timeout > 0 && ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		if timedOut {
 			res.err = fmt.Errorf("%w of %s, so it was ended", errCommandTimedOut, spec.timeout)
 		}
 	}
