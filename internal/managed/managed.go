@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // Kind is which service manager a definition is written for. The set is
@@ -58,7 +60,8 @@ const (
 	// the search path the caller gave.
 	ReasonManagerMissing Reason = "manager-missing"
 	// ReasonManagerRefused is a service manager that ran and exited with a
-	// failure, whose own output is in Detail.
+	// failure, whose own output is in Detail, or one still running at
+	// managerTimeout, whose process group was then ended, which Detail says.
 	ReasonManagerRefused Reason = "manager-refused"
 )
 
@@ -137,6 +140,10 @@ type Manager struct {
 	// userHome is the user's home folder, which the definition folder is
 	// under and the protected folders are in.
 	userHome string
+	// bound is the deadline one manager command runs under when the
+	// caller's context does not end sooner: managerTimeout, which this
+	// package's tests shorten to hold a command that never answers to it.
+	bound time.Duration
 }
 
 // ForThisPlatform returns the Manager for the operating system this build is
@@ -161,7 +168,7 @@ func forKind(kind Kind, getenv func(string) string, root string, uid int) (*Mana
 	if userHome == "" || !filepath.IsAbs(userHome) {
 		return nil, &Refusal{Reason: ReasonNoUserHome}
 	}
-	m := &Manager{kind: kind, searchPath: getenv("PATH"), uid: uid, userHome: userHome}
+	m := &Manager{kind: kind, searchPath: getenv("PATH"), uid: uid, userHome: userHome, bound: managerTimeout}
 	id := homeID(root)
 	switch kind {
 	case KindLaunchd:
@@ -342,8 +349,20 @@ func (m *Manager) command() string {
 }
 
 // managerTimeout bounds one manager command, so a manager that does not
-// answer refuses rather than holding the command that asked forever.
+// answer refuses rather than holding the command that asked forever. Every
+// command here asks the manager to load, start or unload a definition, and
+// none waits on the service itself: Start does not wait for it to answer,
+// and internal/cli asks for a removal only after the service's own stop, so
+// no command's length is the service's stop_grace. Thirty seconds is that
+// request with room for a manager that is busy, and a command still running
+// then is taken as one that will not answer.
 const managerTimeout = 30 * time.Second
+
+// managerGrace is the grace procgroup.Run is given for a manager command:
+// how long one sent SIGKILL gets to exit, and how long its output is waited
+// on once it has, before the call answers without it. A manager command
+// holds nothing that outlasts a SIGKILL, so the grace is short.
+const managerGrace = 2 * time.Second
 
 // outputLimit is how much of a manager's output a refusal carries.
 const outputLimit = 4096
@@ -351,21 +370,35 @@ const outputLimit = 4096
 // run invokes the manager command line with args, found on the search path
 // the caller's environment named rather than this process's, so the manager
 // asked is the one the caller would reach by name.
+//
+// It runs through procgroup.Run, PRD section 8's terms for an external
+// program: the command leads a process group of its own, under ctx and
+// m.bound, whichever ends first, and the group is ended when the command
+// returns or that deadline passes, so a manager command that does not answer
+// is ended together with anything it started in its group. A command that
+// failed once m.bound had passed, while ctx had not ended, is
+// ReasonManagerRefused saying so; procgroup's package comment states what
+// ending a group does not reach.
 func (m *Manager) run(ctx context.Context, args ...string) error {
 	bin, ok := lookPath(m.command(), m.searchPath)
 	if !ok {
 		return &Refusal{Reason: ReasonManagerMissing, Detail: m.command()}
 	}
-	ctx, cancel := context.WithTimeout(ctx, managerTimeout)
+	bounded, cancel := context.WithTimeout(ctx, m.bound)
 	defer cancel()
 	var out bytes.Buffer
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := exec.Command(bin, args...)
 	cmd.Stdout = &out
 	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
+	if err := procgroup.Run(bounded, cmd, managerGrace); err != nil {
 		said := strings.TrimSpace(out.String())
 		if len(said) > outputLimit {
 			said = said[:outputLimit]
+		}
+		if ctx.Err() == nil && bounded.Err() != nil {
+			return &Refusal{Reason: ReasonManagerRefused,
+				Detail: fmt.Sprintf("%s %s: still running after %s, so its process group was ended: %v: %s",
+					m.command(), strings.Join(args, " "), m.bound, err, said)}
 		}
 		return &Refusal{Reason: ReasonManagerRefused,
 			Detail: fmt.Sprintf("%s %s: %v: %s", m.command(), strings.Join(args, " "), err, said)}
