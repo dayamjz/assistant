@@ -235,18 +235,20 @@ func endedExactly(r agents.SweepResult, placed []agents.Identity) error {
 
 // refusalRuleHolds is refusedByOthers' positive control, over a real sweep
 // r of dir in which the service ended placed, the one process the test put
-// there. The base is r with its blockers removed, which is a sweep that
-// cleared, and each counterfeit is that base with one change a real sweep
-// can make: so the rule meets shapes of the real listing, starting from
-// the real one, and not values written from nothing. foreign and other are
-// two more processes the test started outside every copy, standing for
-// processes it did not place in dir: foreign is the one that blocks, and
-// other the one a counterfeit has the sweep find or end under dir. Every
-// blocker a counterfeit carries is the one agents.BlockerFor read of that
-// process while it ran, which is the read the sweep makes of a process it
-// lists blocking, so it carries the user identifiers and name a real one
-// does. realShape holds every counterfeit to what a real listing returns
-// before the rule meets it. The rule must accept the base with foreign
+// there. foreign and other are two more processes the test started outside
+// every copy, standing for processes it did not place in dir: foreign is
+// the one that blocks, and other the one a counterfeit has the sweep find
+// or end under dir. Every blocker a counterfeit carries is the one
+// agents.BlockerFor read of that process while it ran.
+//
+// Every counterfeit is built from r only through listedSweep, whose
+// methods change a result the way the listing and the ending step do, and
+// is then held to realShape, which checks every invariant those steps
+// keep; so no counterfeit is a shape the real sweep cannot return.
+// realShape itself is shown to reject one shape per invariant first, the
+// reviewed counterfeit, a blocker beside an unreadable count of zero,
+// among them. The base is r with its blockers taken away, which is a
+// sweep that cleared. The rule must accept the base with foreign
 // blocking, and reject the base itself and every counterfeit, each for the
 // clause it is built to reach.
 func refusalRuleHolds(t *testing.T, r agents.SweepResult, dir string, placed, foreign, other leftProcess) {
@@ -254,74 +256,186 @@ func refusalRuleHolds(t *testing.T, r agents.SweepResult, dir string, placed, fo
 	if foreign.id.PID == other.id.PID || placed.id.PID == foreign.id.PID || placed.id.PID == other.id.PID {
 		t.Fatalf("the control needs distinct processes, got placed %s, foreign %s, other %s", placed.id, foreign.id, other.id)
 	}
-	ids := []agents.Identity{placed.id}
-	base := r
-	base.UnreadableBlocking = nil
-	if !base.Clear() {
-		t.Fatalf("the sweep %s with its blockers removed does not clear, so the control has no base", r)
-	}
-	if err := realShape(base); err != nil {
+	if err := realShape(r); err != nil {
 		t.Fatalf("the real sweep %s fails the shape check: %v", r, err)
 	}
-	if err := refusedByOthers(base, dir, ids); !errors.Is(err, errSweepCleared) {
+	realShapeRejects(t, r, foreign.blocker(t))
+	ids := []agents.Identity{placed.id}
+	base := listedSweep{r}.unblockAll()
+	if !base.r.Clear() {
+		t.Fatalf("the sweep %s with its blockers taken away does not clear, so the control has no base", r)
+	}
+	built := func(l listedSweep) agents.SweepResult {
+		if err := realShape(l.r); err != nil {
+			t.Fatalf("a counterfeit is a shape the real sweep cannot return: %v (%s)", err, l.r)
+		}
+		return l.r
+	}
+	if err := refusedByOthers(built(base), dir, ids); !errors.Is(err, errSweepCleared) {
 		t.Fatalf("a sweep that cleared is read as %v, want %v", err, errSweepCleared)
 	}
-	blocked := func(change func(*agents.SweepResult)) agents.SweepResult {
-		m := base
-		m.Ended = slices.Clone(base.Ended)
-		m.UnreadableBlocking = []agents.Blocker{foreign.blocker(t)}
-		change(&m)
-		if err := realShape(m); err != nil {
-			t.Fatalf("a counterfeit is a shape the real sweep cannot return: %v (%s)", err, m)
-		}
-		return m
-	}
-	if err := refusedByOthers(blocked(func(*agents.SweepResult) {}), dir, ids); err != nil {
+	blocked := base.block(foreign.blocker(t))
+	if err := refusedByOthers(built(blocked), dir, ids); err != nil {
 		t.Fatalf("a sweep blocked only by a process outside the copy is read as the copy's: %v", err)
 	}
 	for _, c := range []struct {
-		name   string
-		change func(*agents.SweepResult)
-		want   error
+		name string
+		l    listedSweep
+		want error
 	}{
-		{"of another copy", func(m *agents.SweepResult) { m.Dir += "-other" }, errSweepOtherDir},
-		{"the placed process survived", func(m *agents.SweepResult) { m.Ended, m.Survived = nil, ids }, errSweepSurvivor},
-		{"the placed process undecided", func(m *agents.SweepResult) { m.Ended, m.Unverified = nil, []int{placed.id.PID} }, errSweepUnverified},
-		{"another process under the copy", func(m *agents.SweepResult) { m.Exited = []agents.Identity{other.id} }, errSweepFoundOther},
-		{"the placed process blocked", func(m *agents.SweepResult) {
-			m.Ended, m.UnreadableBlocking = nil, []agents.Blocker{placed.blocker(t)}
-		}, errSweepPlacedHeld},
-		{"the placed process not ended", func(m *agents.SweepResult) { m.Ended = nil }, errSweepPlacedLeft},
-		{"another process ended", func(m *agents.SweepResult) { m.Ended = append(m.Ended, other.id) }, errSweepPlacedLeft},
+		{"of another copy", blocked.of(dir + "-other"), errSweepOtherDir},
+		{"the placed process survived", blocked.unlist(placed.id).survived(placed.id), errSweepSurvivor},
+		{"the placed process undecided", blocked.unlist(placed.id).undecided(placed.id.PID), errSweepUnverified},
+		{"another process under the copy", blocked.exited(other.id), errSweepFoundOther},
+		{"the placed process blocked", base.unlist(placed.id).block(placed.blocker(t)), errSweepPlacedHeld},
+		{"the placed process not ended", blocked.unlist(placed.id), errSweepPlacedLeft},
+		{"another process ended", blocked.ended(other.id), errSweepPlacedLeft},
 	} {
-		if err := refusedByOthers(blocked(c.change), dir, ids); !errors.Is(err, c.want) {
+		if err := refusedByOthers(built(c.l), dir, ids); !errors.Is(err, c.want) {
 			t.Errorf("the counterfeit %q is read as %v, want %v", c.name, err, c.want)
 		}
 	}
 }
 
-// realShape is nil when r has the shape both platform listings give a
-// result, and otherwise names what breaks it. No process identifier is in
-// two of r's sets of processes: each process is classified once, through
-// either its readable working directory or its refused one, and a listed
-// process then lands in exactly one of Ended, Exited, Replaced, Survived
-// and Unverified. And every blocker carries user identifiers, because the
-// classification lists a refused process blocking only after they were
-// read and reports it unverified when they were not, and either a name or
-// why the name could not be read, because the name read always records one
-// of the two.
+// listedSweep is a sweep result changed only the way agents' listing
+// (listUnderReading on each platform, addRead and addRefused) and its
+// ending step (endListed) change one, so a result built through its
+// methods from a real one keeps every invariant realShape checks. Each
+// method returns a changed copy and leaves its receiver as it was.
+type listedSweep struct{ r agents.SweepResult }
+
+// copied is l with every slice its own, so a change to the copy reaches
+// nothing l shares.
+func (l listedSweep) copied() listedSweep {
+	c := l.r
+	c.Ended, c.Exited, c.Replaced, c.Survived = slices.Clone(c.Ended), slices.Clone(c.Exited), slices.Clone(c.Replaced), slices.Clone(c.Survived)
+	c.Unverified, c.UnreadableBlocking = slices.Clone(c.Unverified), slices.Clone(c.UnreadableBlocking)
+	return listedSweep{c}
+}
+
+// block is addRefused listing a process blocking: it is counted
+// unreadable and its blocker appended.
+func (l listedSweep) block(b agents.Blocker) listedSweep {
+	c := l.copied()
+	c.r.Unreadable++
+	c.r.UnreadableBlocking = append(c.r.UnreadableBlocking, b)
+	return c
+}
+
+// unblockAll is the same listing on a host where the blocking processes
+// were not running: each leaves the unreadable count with its blocker.
+func (l listedSweep) unblockAll() listedSweep {
+	c := l.copied()
+	c.r.Unreadable -= len(c.r.UnreadableBlocking)
+	c.r.UnreadableBlocking = nil
+	return c
+}
+
+// unlist is the same listing with id not under the directory: a readable
+// process outside it, which nothing counts, so id leaves whichever of the
+// ending step's sets holds it.
+func (l listedSweep) unlist(id agents.Identity) listedSweep {
+	c := l.copied()
+	drop := func(ids []agents.Identity) []agents.Identity {
+		return slices.DeleteFunc(ids, func(x agents.Identity) bool { return x == id })
+	}
+	c.r.Ended, c.r.Exited, c.r.Replaced, c.r.Survived = drop(c.r.Ended), drop(c.r.Exited), drop(c.r.Replaced), drop(c.r.Survived)
+	return c
+}
+
+// ended, exited and survived are addRead listing id under the directory
+// and the ending step then finding it gone after a signal, gone before
+// one, or still running after the forceful one.
+func (l listedSweep) ended(id agents.Identity) listedSweep {
+	c := l.copied()
+	c.r.Ended = append(c.r.Ended, id)
+	return c
+}
+
+func (l listedSweep) exited(id agents.Identity) listedSweep {
+	c := l.copied()
+	c.r.Exited = append(c.r.Exited, id)
+	return c
+}
+
+func (l listedSweep) survived(id agents.Identity) listedSweep {
+	c := l.copied()
+	c.r.Survived = append(c.r.Survived, id)
+	return c
+}
+
+// undecided is the ending step failing to read the presence of a process
+// addRead listed under the directory, which reports it unverified and
+// counts nothing unreadable, since its working directory was read.
+func (l listedSweep) undecided(pid int) listedSweep {
+	c := l.copied()
+	c.r.Unverified = append(c.r.Unverified, pid)
+	return c
+}
+
+// of is the same listing of another directory.
+func (l listedSweep) of(dir string) listedSweep {
+	c := l.copied()
+	c.r.Dir = dir
+	return c
+}
+
+// The invariants realShape checks, one error each. Every one is read off
+// agents' listing code, which this file states rather than imports, so a
+// change there that breaks one shows up here as a real sweep failing the
+// check at the top of refusalRuleHolds.
+var (
+	// errShapeUnlisted: a result with no error was listed, and Sweep sets
+	// Dir on every listed result.
+	errShapeUnlisted = errors.New("the result names no directory, which every listed sweep does")
+	// errShapeIdentifier: both listings skip an identifier of zero or less
+	// and this process's own.
+	errShapeIdentifier = errors.New("the result lists an identifier the listing skips")
+	// errShapeTwoSets: each process is classified once, readable or
+	// refused, and a listed one lands in exactly one of the ending step's
+	// sets, so no identifier is in two of Ended, Exited, Replaced,
+	// Survived, Unverified and UnreadableBlocking.
+	errShapeTwoSets = errors.New("one process is in two of the result's sets")
+	// errShapeCount: addRefused counts a process unreadable before it lists
+	// it blocking, and also counts the refused ones it sets aside or
+	// reports unverified, so Unreadable is at least len(UnreadableBlocking)
+	// and never negative.
+	errShapeCount = errors.New("the unreadable count is below the blockers it must include")
+	// errShapeUIDs: readRefused fails, and addRefused reports the process
+	// unverified, when its user identifiers cannot be read, so a blocker
+	// always carries them.
+	errShapeUIDs = errors.New("a blocker carries no user identifiers")
+	// errShapeName: blockerOf records a name or why the name could not be
+	// read.
+	errShapeName = errors.New("a blocker carries neither a name nor why it could not be read")
+)
+
+// realShape is nil when r keeps every invariant above, and otherwise wraps
+// the first one r breaks.
 func realShape(r agents.SweepResult) error {
+	if r.Dir == "" {
+		return errShapeUnlisted
+	}
+	if r.Unreadable < len(r.UnreadableBlocking) {
+		return fmt.Errorf("%w: %d unreadable, %d blocking", errShapeCount, r.Unreadable, len(r.UnreadableBlocking))
+	}
 	seen := map[int]string{}
 	note := func(set string, pid int) error {
+		if pid <= 0 || pid == os.Getpid() {
+			return fmt.Errorf("%w: %d in %s", errShapeIdentifier, pid, set)
+		}
 		if was, ok := seen[pid]; ok {
-			return fmt.Errorf("process %d is in both %s and %s", pid, was, set)
+			return fmt.Errorf("%w: process %d is in both %s and %s", errShapeTwoSets, pid, was, set)
 		}
 		seen[pid] = set
 		return nil
 	}
-	for set, ids := range map[string][]agents.Identity{"Ended": r.Ended, "Exited": r.Exited, "Replaced": r.Replaced, "Survived": r.Survived} {
-		for _, id := range ids {
-			if err := note(set, id.PID); err != nil {
+	for _, s := range []struct {
+		name string
+		ids  []agents.Identity
+	}{{"Ended", r.Ended}, {"Exited", r.Exited}, {"Replaced", r.Replaced}, {"Survived", r.Survived}} {
+		for _, id := range s.ids {
+			if err := note(s.name, id.PID); err != nil {
 				return err
 			}
 		}
@@ -336,13 +450,52 @@ func realShape(r agents.SweepResult) error {
 			return err
 		}
 		if len(b.UIDs) == 0 {
-			return fmt.Errorf("blocker %s carries no user identifiers", b)
+			return fmt.Errorf("%w: %s", errShapeUIDs, b)
 		}
 		if b.Name == "" && b.NameErr == nil {
-			return fmt.Errorf("blocker %s carries neither a name nor why it could not be read", b)
+			return fmt.Errorf("%w: %s", errShapeName, b)
 		}
 	}
 	return nil
+}
+
+// realShapeRejects is realShape's own positive control: from the real
+// sweep r and a real blocker b of a process outside every copy, one shape
+// per invariant that breaks it and nothing else, each written by hand on
+// purpose since no listing step produces it, and each must be rejected
+// for that invariant. The first is the counterfeit #450's review found: a
+// blocker added beside an unreadable count of zero.
+func realShapeRejects(t *testing.T, r agents.SweepResult, b agents.Blocker) {
+	t.Helper()
+	clean := listedSweep{r}.unblockAll().r
+	for _, c := range []struct {
+		name  string
+		shape func(s *agents.SweepResult)
+		want  error
+	}{
+		{"a blocker beside an unreadable count of zero", func(s *agents.SweepResult) {
+			s.Unreadable, s.UnreadableBlocking = 0, []agents.Blocker{b}
+		}, errShapeCount},
+		{"a negative unreadable count", func(s *agents.SweepResult) { s.Unreadable = -1 }, errShapeCount},
+		{"no directory", func(s *agents.SweepResult) { s.Dir = "" }, errShapeUnlisted},
+		{"this process listed", func(s *agents.SweepResult) { s.Exited = []agents.Identity{{PID: os.Getpid(), Start: 1}} }, errShapeIdentifier},
+		{"an identifier of zero", func(s *agents.SweepResult) { s.Unverified = []int{0} }, errShapeIdentifier},
+		{"one process blocking and exited", func(s *agents.SweepResult) {
+			s.Unreadable, s.UnreadableBlocking, s.Exited = s.Unreadable+1, []agents.Blocker{b}, []agents.Identity{b.Identity}
+		}, errShapeTwoSets},
+		{"a blocker with no user identifiers", func(s *agents.SweepResult) {
+			s.Unreadable, s.UnreadableBlocking = s.Unreadable+1, []agents.Blocker{{Identity: b.Identity, Name: b.Name}}
+		}, errShapeUIDs},
+		{"a blocker with neither name nor reason", func(s *agents.SweepResult) {
+			s.Unreadable, s.UnreadableBlocking = s.Unreadable+1, []agents.Blocker{{Identity: b.Identity, UIDs: b.UIDs}}
+		}, errShapeName},
+	} {
+		s := listedSweep{clean}.copied().r
+		c.shape(&s)
+		if err := realShape(s); !errors.Is(err, c.want) {
+			t.Errorf("the impossible shape %q is read as %v, want %v", c.name, err, c.want)
+		}
+	}
 }
 
 // recordsSweep fails the test unless got is what sweepFinished records, on
