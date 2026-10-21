@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
@@ -182,13 +184,19 @@ func TestKeptWorkRefusingAWorkerHandoffRaisesNoFallbackHold(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
 	ctx := t.Context()
-	backup := standin.New(t, standin.Script{Worker: &standin.WorkerScript{Greeting: "worker ready"}})
+	// The backup answers the instructions file's line, "work", on the
+	// stream the Claude adapter reads, so a worker that started shows
+	// its answer in the capture and one that did not shows nothing.
+	backup := standin.New(t, standin.Script{Worker: &standin.WorkerScript{
+		Exchanges: []standin.Exchange{{Contains: "work", Reply: backupAnswer}},
+	}})
 	subject := newLaunchSubject(t, backup)
 	s := subject.service
 	role := config.Role{Agent: "cursor", Fallback: &config.Role{Agent: "claude"}}
 	s.cfg.Roles = config.Roles{config.RoleWorker: role}
 	s.terminals = heldTerminals{s}
-	s.stopCtx = ctx
+	s.stopCtx, s.stopCancel = context.WithCancel(ctx)
+	t.Cleanup(func() { s.stopCancel(); s.stopWork(); s.work.Wait() })
 	// The seam runs in every dispatch between its read and its claim; the
 	// first is the task's own dispatch, and the second the handoff's, which
 	// is where the kept work is recorded.
@@ -232,9 +240,31 @@ func TestKeptWorkRefusingAWorkerHandoffRaisesNoFallbackHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.dispatchDue(ctx)
-	s.work.Wait()
-	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
-	if err != nil || len(attempts) != 2 || !attempts[1].SessionRef.IsKnown() || attempts[1].Adapter.Or("") != "claude" {
-		t.Fatalf("after the answer the task has attempts %+v, %v; want attempt 2 started on the backup", attempts, err)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		attempts, err := subject.records.TaskAttempts(ctx, subject.task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(attempts) == 2 && attempts[1].SessionRef.IsKnown() {
+			if attempts[1].Adapter.Or("") != "claude" {
+				t.Fatalf("attempt 2 was started on %s, want the backup, claude", attempts[1].Adapter.Or(""))
+			}
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("after the answer the task has attempts %+v; want attempt 2 started on the backup", attempts)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
+	// The backup started and read the work: its answer is in the capture,
+	// which a worker that exited before reading never writes.
+	host, worker, ok := s.sessionOf(subject.task)
+	if !ok {
+		t.Fatal("the service holds no session for the task after the answer")
+	}
+	waitCaptured(t, host, worker, backupAnswer)
 }
+
+// backupAnswer is what the backup worker answers the work line with.
+const backupAnswer = "the backup is on the work"
