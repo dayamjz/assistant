@@ -40,6 +40,24 @@ type ran struct {
 	status         int
 }
 
+// needsTerminal skips t when this host cannot place a peer at a terminal,
+// the skip runAtTerminal would otherwise take, and a test that places one
+// calls it first, before it builds anything. Skipping is runtime.Goexit,
+// and a Goexit or panic that unwinds through a frame holding a dead
+// address-taken stack object over 128 bytes, such as a fixture body's
+// launched argument, while a deferred call allocates, can make the
+// collector mark an object it already freed (golang/go#82394, which lists
+// the versions and platforms; seen here on go1.26.9 darwin/amd64). As #425
+// it crashed the whole race-built binary from the skip inside
+// TestALocalApprovalRefusesAPeerOffATerminalAndTheWorker's body on a host
+// without tmux. Skipping from the test's own frame keeps a skip off that
+// path; a t.Fatal inside such a body can still reach it, which this does
+// not cover.
+func needsTerminal(t *testing.T) {
+	t.Helper()
+	standin.Tmux(t)
+}
+
 // runAtTerminal runs argv from a shell in the foreground of a terminal and
 // returns what it came to. The terminal is a tmux server of the test's own,
 // started for this one command and killed after it; the shell's output goes
