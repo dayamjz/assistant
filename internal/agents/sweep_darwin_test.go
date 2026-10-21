@@ -285,8 +285,9 @@ func TestASweepWhoseLsofNeverExitsEndsItAtTheDeadlineAndProvesNothing(t *testing
 // TestALsofRunEndsWhatItLeftInItsGroupInsideTheDeadline is review's case
 // against the whole run's bound: a program standing where lsof is leaves a
 // descendant in its group that ignores SIGTERM and holds none of its output,
-// and then exits on its own, once before lsof's share of the deadline is
-// spent and once after. Either way the sweep answers within the deadline,
+// and then exits: in one row when the test releases it, before lsof's share
+// of the deadline is spent, and in the other on its own, after that share.
+// Either way the sweep answers within the deadline,
 // the descendant is gone by identifier, and the answer is a failure beside
 // the zero result: the listing's own refusal of output that does not report
 // this process when the program exited in time, and agents.ErrSweepTimedOut
