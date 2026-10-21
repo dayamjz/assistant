@@ -12,16 +12,28 @@ import (
 	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
-// standInMode makes this test binary exit at once when it is the program a
-// test runs, so a test has a real program to start without depending on one
-// being installed.
-const standInMode = "PROCGROUP_TEST_STAND_IN"
+// standInMode makes this test binary a stand-in program when a test runs it,
+// so a test has a real program to start without depending on one being
+// installed. Its value says what the stand-in does: standInHang waits a
+// minute, which a test's deadline ends first, standInPrint writes a line to
+// standard output and exits, and anything else exits 0 at once.
+const (
+	standInMode  = "PROCGROUP_TEST_STAND_IN"
+	standInHang  = "hang"
+	standInPrint = "print"
+)
 
 func TestMain(m *testing.M) {
-	if os.Getenv(standInMode) != "" {
-		os.Exit(0)
+	switch os.Getenv(standInMode) {
+	case "":
+		os.Exit(m.Run())
+	case standInHang:
+		time.Sleep(time.Minute)
+		os.Exit(3)
+	case standInPrint:
+		_, _ = os.Stdout.WriteString("stand-in output\n")
 	}
-	os.Exit(m.Run())
+	os.Exit(0)
 }
 
 // standIn returns a command that runs this test binary as a program that

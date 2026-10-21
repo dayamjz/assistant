@@ -19,21 +19,37 @@ import (
 // before the leader is reaped, so a descendant still in the group cannot go
 // on holding the call's output pipes or running once the call returned. When
 // ctx ends first, the group is sent SIGKILL at once, and once more after the
-// leader exits for a descendant forked meanwhile. The leader is reaped by
-// cmd.Wait with WaitDelay set to grace, which bounds the wait for a pipe a
-// descendant outside the group still holds; past it Wait reports
-// exec.ErrWaitDelay. After ctx ends Run returns within about twice grace:
-// one grace for the leader to exit after SIGKILL, ErrAbandoned past it, and
-// one for the pipes.
+// leader exits for a descendant forked meanwhile.
+//
+// A stream that is neither nil nor an *os.File is copied by Run rather than
+// by os/exec, through a pipe whose child end is the only thing the child
+// holds, so no wait here is a wait on the caller's reader or writer. Once
+// the leader is reaped, the input pipe is closed, and the output pipes are
+// waited on for one grace, which a descendant outside the group holding a
+// write end can use up; past it they are closed and their copiers waited on
+// for one grace more, which only a copier blocked in the caller's writer can
+// use up, and either expiry is exec.ErrWaitDelay.
+//
+// So Run returns within one grace of the leader's reap plus one grace more,
+// whatever the caller's reader and writers do, and within one grace of ctx
+// ending plus those two once the leader exits after SIGKILL; a leader that
+// has not exited one grace after SIGKILL is ErrAbandoned, answered after one
+// grace more for the copiers. What it leaves running when it returns is at
+// most: a goroutine blocked reading the caller's reader, for as long as that
+// read does not return, whose next write then fails on the closed pipe; an
+// output copier blocked in the caller's writer, which writes nothing past
+// that one write; and, for ErrAbandoned, a goroutine that reaps the leader
+// once it exits.
 //
 // cmd.Process is nil exactly when nothing was started, and the error is then
 // ErrMisconfigured when Run refused cmd, ctx's error when ctx had already
-// ended, or cmd.Start's. Once the program started, the error is ErrAbandoned
-// as above, or what cmd.Wait reported, joined with the failure to observe
-// the leader's exit when that observation failed, in which case the group was
-// still ended before the reap. Run does not put ctx's error in place of what
-// a started program's wait reported: the caller reads ctx.Err() to tell an
-// expiry from an answer.
+// ended, or cmd.Start's or a pipe's. Once the program started, the error is
+// ErrAbandoned as above, or cmd.Wait's when it reports one, such as the
+// *exec.ExitError of a failing status, and otherwise what the copying
+// reported; the failure to observe the leader's exit is joined to it when
+// that observation failed, in which case the group was still ended before
+// the reap. Run does not put ctx's error in place of any of these: the
+// caller reads ctx.Err() to tell an expiry from an answer.
 func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 	if err := check(cmd, grace); err != nil {
 		return err
@@ -41,11 +57,16 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.WaitDelay = grace
-	if err := cmd.Start(); err != nil {
+	s, err := plumb(cmd)
+	if err != nil {
 		return err
 	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		s.abandon()
+		return err
+	}
+	s.started()
 	pgid := cmd.Process.Pid
 	exited := make(chan error, 1)
 	go func() { exited <- AwaitExit(pgid) }()
@@ -70,10 +91,17 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 				endGroup(pgid)
 				_ = cmd.Wait()
 			}()
+			_ = s.cut(grace)
 			return ErrAbandoned
 		}
 	}
+	// Every stream the child holds is a file or nil, so os/exec starts no
+	// copying goroutine and this returns once the leader is reaped.
 	waitErr := cmd.Wait()
+	copyErr := s.finish(grace)
+	if waitErr == nil {
+		waitErr = copyErr
+	}
 	if observeErr != nil {
 		return errors.Join(fmt.Errorf("procgroup: observing the exit of %d: %w", pgid, observeErr), waitErr)
 	}

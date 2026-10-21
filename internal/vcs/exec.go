@@ -105,13 +105,14 @@ const defaultMaxOutput = 64 << 20
 // stage's log.
 const maxStderr = 8 << 10
 
-// killGrace is the grace procgroup.Run is given, which bounds two waits.
+// killGrace is the grace procgroup.Run is given; procgroup.Run says each wait
+// it bounds.
 //
 // After a context ends and git's process group has been sent SIGKILL, it is
 // how long git gets to exit before the call answers without it.
 //
-// It is also given to cmd.WaitDelay, which bounds the wait for git's pipes to
-// close once git has exited. The group is ended before that wait, so what can
+// It also bounds the wait for git's pipes to close once git has exited. The
+// group is ended before that wait, so what can
 // still hold a pipe open then is a descendant that left the group, and that
 // case has a cost worth stating rather than implying away: a git that exits
 // successfully while such a descendant still holds its standard output or

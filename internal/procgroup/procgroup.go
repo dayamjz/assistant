@@ -23,9 +23,14 @@
 // # Residual gaps
 //
 //   - A descendant that left the group, by setsid or setpgid of its own, is
-//     reached by no signal here. The grace given to cmd.WaitDelay bounds how
-//     long it can keep the call waiting on an output pipe, and nothing ends
-//     it.
+//     reached by no signal here. The grace bounds how long it can keep the
+//     call waiting on an output pipe, and nothing ends it.
+//   - A caller's reader or writer that blocks cannot be interrupted, so Run
+//     returns without the goroutine blocked in it: one reading the caller's
+//     reader stays until that read returns, and one writing to the caller's
+//     writer until that write returns. Neither touches the child, and
+//     neither does anything past the call it is blocked in, since the pipe
+//     it would use next is closed; Run's doc says when each can happen.
 //   - A descendant that stays in the group is ended when the leader exits,
 //     including one a program started on purpose to outlive the call. What
 //     that costs is whatever that descendant was for.
@@ -38,8 +43,8 @@
 //     process, would undo the unreaped guarantee. Nothing in this module
 //     does.
 //   - Only linux and darwin group a call. Everywhere else, Windows included,
-//     Run starts the program as os/exec does, ends only the program itself
-//     when the context ends, and reaches no descendant at all.
+//     Run ends only the program itself when the context ends, reaches no
+//     descendant at all, and does not bound the wait for a killed program.
 package procgroup
 
 import (
@@ -57,7 +62,7 @@ var ErrAbandoned = errors.New("procgroup: the program did not exit within the gr
 // terms: one built with exec.CommandContext, whose own cancellation would end
 // the leader alone on a schedule Run does not own; one whose SysProcAttr is
 // already set, which Run would have to overwrite to start the group; or a
-// grace of zero or less, which cmd.WaitDelay reads as no bound at all.
+// grace of zero or less, which would bound nothing.
 // Nothing is started.
 var ErrMisconfigured = errors.New("procgroup: the command cannot be run as a group of its own")
 
