@@ -219,8 +219,9 @@ func claimedPlaces(dir string) (int, error) {
 
 // record writes the call beside the place it claimed through writeWhole, so
 // nothing partial is ever visible under the name a reader looks for, and a
-// file a failed write leaves behind ends in writeWhole's ".partial-" suffix
-// rather than recordSuffix, so it is never read as a call.
+// file a failed write leaves behind has ".partial-" and a random part after
+// recordSuffix, so it does not end in recordSuffix and is never read as a
+// call.
 func record(dir string, c Call) error {
 	encoded, err := json.Marshal(c)
 	if err != nil {

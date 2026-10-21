@@ -133,8 +133,8 @@ func atTerminalMain() {
 		os.Exit(1)
 	}
 	record := fmt.Sprintf("%d %d", os.Getpid(), child.Process.Pid)
-	// Whole or not at all, since the test polling for it takes the first file
-	// it finds as the record (#459).
+	// Whole or not at all, since the test polls this one path and parses the
+	// first content it reads there as the record (#459).
 	if err := writeWhole(filepath.Join(dir, atTerminalPIDs), []byte(record)); err != nil {
 		fmt.Fprintln(os.Stderr, "recording the binary run again:", err)
 		os.Exit(1)
