@@ -1,0 +1,246 @@
+//go:build linux || darwin
+
+package agents_test
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/principles"
+)
+
+// wedgedTmux is a tmux that answers like the real one, the wrapper
+// standin.Tmux resolved, for every command but one: the first whose
+// arguments name the subcommand written into arm. That client instead
+// ignores SIGTERM, starts a descendant in its own process group that ignores
+// it too, appends both identifiers to pids, and waits for ever, which is a
+// client of a wedged server as far as its invoker can tell. Arming is taken
+// once, so the client the call makes next, the one that ends the server
+// among them, is the real one again.
+type wedgedTmux struct {
+	tmux, arm, pids string
+}
+
+func newWedgedTmux(t *testing.T) wedgedTmux {
+	t.Helper()
+	real := standin.Tmux(t)
+	dir := t.TempDir()
+	w := wedgedTmux{tmux: filepath.Join(dir, "tmux"), arm: filepath.Join(dir, "arm"), pids: filepath.Join(dir, "pids")}
+	script := "#!/bin/sh\n" +
+		"armed=$(cat '" + w.arm + "' 2>/dev/null)\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ -n \"$armed\" ] && [ \"$a\" = \"$armed\" ] && mv '" + w.arm + "' '" + w.arm + ".taken' 2>/dev/null; then\n" +
+		"    trap '' TERM\n" +
+		"    /bin/sleep 3600 &\n" +
+		"    echo $$ $! >> '" + w.pids + "'\n" +
+		"    while :; do wait; done\n" +
+		"  fi\n" +
+		"done\n" +
+		"exec '" + real + "' \"$@\"\n"
+	if err := os.WriteFile(w.tmux, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+// wedge arms the next client naming subcommand.
+func (w wedgedTmux) wedge(t *testing.T, subcommand string) {
+	t.Helper()
+	if err := os.WriteFile(w.arm, []byte(subcommand+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// wedgedClient is the identities of the wedged client and its descendant,
+// read while they run, so whether they are gone afterwards is asked of the
+// processes they were and never of a bare identifier.
+func (w wedgedTmux) wedgedClient(t *testing.T, returned <-chan struct{}) []agents.Identity {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		data, _ := os.ReadFile(w.pids)
+		if fields := strings.Fields(string(data)); len(fields) == 2 {
+			var ids []agents.Identity
+			for _, f := range fields {
+				pid, err := strconv.Atoi(f)
+				if err != nil {
+					t.Fatalf("the wedged tmux wrote %q, want two identifiers", data)
+				}
+				id, present, err := agents.Identify(pid)
+				if err != nil || !present {
+					t.Fatalf("process %d the wedged tmux started was not running when looked for (%v): the call ended it before its bound", pid, err)
+				}
+				t.Cleanup(func() {
+					if presence, err := id.Presence(); err == nil && presence == agents.PresencePresent {
+						_ = syscall.Kill(id.PID, syscall.SIGKILL)
+					}
+				})
+				ids = append(ids, id)
+			}
+			return ids
+		}
+		select {
+		case <-returned:
+			t.Fatalf("the call returned before the wedged tmux client ran (it wrote %q)", data)
+		default:
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the wedged tmux client never started (it wrote %q)", data)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// requireGone fails the test unless every process in ids reads absent.
+func requireGone(t *testing.T, ids []agents.Identity) {
+	t.Helper()
+	for _, id := range ids {
+		gone := time.Now().Add(5 * time.Second)
+		for {
+			presence, err := id.Presence()
+			if err == nil && presence != agents.PresencePresent {
+				break
+			}
+			if !time.Now().Before(gone) {
+				t.Fatalf("process %d of the wedged tmux client's group reads present (%v) after the call returned: its group was not ended", id.PID, err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+// TestEachKindOfTmuxClientEndsAtItsBound holds P15 for the tmux clients a
+// terminal worker runs: for each kind, a client that never answers, beside
+// a descendant in its group, both ignoring SIGTERM, is ended with its whole
+// group at that kind's bound, under a context that never ends, as
+// internal/service hands a worker's start and its sends. The start and a
+// send answer agents.ErrTerminalClientTimedOut, and never the caller's own
+// deadline, a Capture answers the last capture the handle took, and a Close
+// returns with the server ended by the next client, and in every case
+// neither process is running afterwards, asked by identity. Without the
+// bound, the start and the send block for as long as the client runs, and
+// a capture or a close bounded by a context alone leaves the descendant
+// running.
+func TestEachKindOfTmuxClientEndsAtItsBound(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	requiresIdentityRead(t)
+	never := context.WithoutCancel(t.Context())
+	open := func(t *testing.T, w wedgedTmux) (agents.TerminalWorker, *standin.Agent, agents.Terminal, error) {
+		term := agents.Terminal{Tmux: w.tmux, Socket: filepath.Join(standin.SocketDir(t), "s")}
+		agent := standin.NewWorker(t, standin.Script{Worker: &standin.WorkerScript{
+			Exchanges: []standin.Exchange{{Contains: "hello", Reply: "hi"}},
+		}}, agents.WithTerminationGrace(300*time.Millisecond))
+		worker, err := agents.OpenTerminalWorker(never, agent.Runner(), term, workerSpec(t))
+		if err == nil {
+			t.Cleanup(worker.Close)
+		}
+		return worker, agent, term, err
+	}
+	for _, c := range []struct {
+		name, subcommand string
+		bound            time.Duration
+		before           bool
+		call             func(t *testing.T, worker agents.TerminalWorker, term agents.Terminal, err error) func() error
+	}{
+		{"the start", "new-session", agents.TmuxStartBound, true, func(t *testing.T, _ agents.TerminalWorker, _ agents.Terminal, err error) func() error {
+			return func() error { return err }
+		}},
+		{"a send", "load-buffer", agents.TmuxTypeBound, false, func(t *testing.T, worker agents.TerminalWorker, _ agents.Terminal, _ error) func() error {
+			return func() error { return worker.Send(never, "hello") }
+		}},
+		{"a capture", "capture-pane", agents.TmuxReadBound, false, func(t *testing.T, worker agents.TerminalWorker, _ agents.Terminal, _ error) func() error {
+			last := worker.Capture()
+			return func() error {
+				if got := worker.Capture(); got != last {
+					return errors.New("the capture answered " + strconv.Quote(got.Text) + ", not the last capture " + strconv.Quote(last.Text))
+				}
+				return nil
+			}
+		}},
+		{"a close", "kill-server", agents.TmuxEndBound, false, func(t *testing.T, worker agents.TerminalWorker, term agents.Terminal, _ error) func() error {
+			return func() error {
+				worker.Close()
+				if _, err := os.Lstat(term.Socket); !errors.Is(err, os.ErrNotExist) {
+					return errors.New("the socket outlived the close")
+				}
+				return nil
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			w := newWedgedTmux(t)
+			var (
+				worker agents.TerminalWorker
+				term   agents.Terminal
+				err    error
+				start  time.Time
+			)
+			type answer struct {
+				err     error
+				elapsed time.Duration
+			}
+			done := make(chan answer, 1)
+			returned := make(chan struct{})
+			if c.before {
+				w.wedge(t, c.subcommand)
+				go func() {
+					start = time.Now()
+					worker, _, term, err = open(t, w)
+					done <- answer{err, time.Since(start)}
+					close(returned)
+				}()
+			} else {
+				worker, _, term, err = open(t, w)
+				if err != nil {
+					t.Fatalf("starting the terminal worker: %v", err)
+				}
+				if err := worker.Send(t.Context(), "hello"); err != nil {
+					t.Fatalf("a send before anything was wedged: %v", err)
+				}
+				call := c.call(t, worker, term, nil)
+				w.wedge(t, c.subcommand)
+				go func() {
+					start := time.Now()
+					err := call()
+					done <- answer{err, time.Since(start)}
+					close(returned)
+				}()
+			}
+			ids := w.wedgedClient(t, returned)
+			within := c.bound + 3*agents.TmuxClientGrace + 2*time.Second
+			var got answer
+			select {
+			case got = <-done:
+			case <-time.After(within):
+				t.Fatalf("%s was still blocked on a tmux client that never answers %s after it started, past its bound of %s", c.name, within, c.bound)
+			}
+			if c.before {
+				got.err = c.call(t, worker, term, got.err)()
+			}
+			if got.elapsed < c.bound {
+				t.Fatalf("%s answered %v after %s, before its bound of %s: something other than the bound ended it", c.name, got.err, got.elapsed, c.bound)
+			}
+			switch c.subcommand {
+			case "new-session", "load-buffer":
+				if !errors.Is(got.err, agents.ErrTerminalClientTimedOut) || errors.Is(got.err, context.DeadlineExceeded) {
+					t.Fatalf("%s answered %v, want agents.ErrTerminalClientTimedOut and not a caller's deadline", c.name, got.err)
+				}
+			default:
+				if got.err != nil {
+					t.Fatalf("%s: %v", c.name, got.err)
+				}
+			}
+			requireGone(t, ids)
+		})
+	}
+}
