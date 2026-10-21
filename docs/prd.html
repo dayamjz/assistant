@@ -1180,12 +1180,8 @@ stateDiagram-v2
     <li><b>discard</b>: you name the copy, the program shows exactly what will be lost, and it removes the copy only on that answer, recording who discarded what.</li>
   </ul>
   <p class="mb-4 opacity-90">
-    A kept-work entry is answered as a hold, with section 9's hold answer and no verb of its own:
-    <code>assistant --task ID --answer land|carry-on|discard --hold ENTRY</code>, and
-    <code>--run ID</code> in place of <code>--task</code> for an entry a person's push left. Discard
-    is answered twice. <code>--answer discard</code> alone shows exactly what would be lost, with a
-    short digest of it, and removes nothing; repeating it with <code>--confirm DIGEST</code> removes
-    the copy only if the copy still holds exactly what was shown.
+    A kept-work entry is answered as a hold, with section 9's hold answer and no verb of its own;
+    section 9 says how, including how a discard is shown before it is confirmed.
   </p>
   <p class="mb-8 opacity-90">
     A reported investigation keeps its worker for <code>promotion_window</code> after the report is
@@ -2277,10 +2273,12 @@ flowchart TB
     clearing every report hold. Without <code>--run</code>, a task's own hold still comes first.
     A kept-work entry (section 6) is answered the same way: <code>--answer</code> is
     <code>land</code>, <code>carry-on</code> or <code>discard</code>, <code>--hold</code> names the
-    entry, and <code>--task</code> names the task whose copy it is, or <code>--run</code> the run, for
-    an entry a person's push left. <code>--confirm</code> takes the digest a
-    <code>discard</code> answer showed: <code>discard</code> without it removes nothing and shows
-    what would be lost, and with it removes the copy only if the copy still holds exactly what that
+    entry, and <code>--task</code> names the task whose copy it is, or, for an entry a person's push
+    left, <code>--run=RUN</code> names the run. That is an optional value on the same flag, the way
+    <code>--cancel=RUN</code> takes one, and bare <code>--run</code> keeps the meaning above.
+    Discard is answered twice: <code>--answer discard</code> alone shows exactly what would be
+    lost, with a short digest of it, and removes nothing; repeating it with
+    <code>--confirm DIGEST</code> removes the copy only if the copy still holds exactly what that
     digest names.
     No verb is added for it.
   </p>
