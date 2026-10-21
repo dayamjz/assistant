@@ -14,3 +14,18 @@ func WithChecksClock(d StageDeps, now func() time.Time, pause func(context.Conte
 	d.clock = checksClock{nowFunc: now, pauseFunc: pause}
 	return d
 }
+
+// CommandSlots is a set of command slots a test can share between the
+// dependencies of two runs.
+type CommandSlots = commandSlots
+
+// NewCommandSlots returns n slots on newCommandSlots' terms.
+func NewCommandSlots(n int) CommandSlots { return newCommandSlots(n) }
+
+// WithCommandSlots returns these dependencies with their stage commands
+// drawing from s rather than hostCommandSlots. It exists only in this
+// package's tests: the product shares the one set the host is given.
+func WithCommandSlots(d StageDeps, s CommandSlots) StageDeps {
+	d.slots = s
+	return d
+}

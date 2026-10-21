@@ -78,6 +78,10 @@ type Config struct {
 	// up its home before the process groups it registered are ended by force
 	// and it exits. KeyStopGrace says who may set it and what it bounds.
 	StopGrace time.Duration
+	// CommandTimeout is how long one configured stage command may run before
+	// it is ended with its process group. KeyCommandTimeout says who may set
+	// it and what ending it does to the stage.
+	CommandTimeout time.Duration
 	// DecisionModel is the mode of the decision-model checks PRD section 5
 	// describes. Whether a request is sent at all also needs the provider's
 	// key in the operator's environment, which this package never reads.
@@ -254,6 +258,12 @@ const (
 	DefaultRelaunchAttempts = 2
 	// DefaultStopGrace is PRD section 10's default for stop_grace.
 	DefaultStopGrace = 30 * time.Second
+	// DefaultCommandTimeout is how long a stage command may run when the
+	// operator's file sets no command_timeout. Chosen, not measured: PRD
+	// section 10 makes commands.test a targeted check rather than a full
+	// suite, and half an hour is well past what a targeted check or a lint
+	// pass takes while still ending a hung one within a sitting.
+	DefaultCommandTimeout = 30 * time.Minute
 	// DefaultDecisionModel is the decision-model mode a run gets when the
 	// operator's file sets none: the checks run where the key is present and
 	// what they find is a note.
@@ -454,6 +464,14 @@ const (
 	// shutdown holds keeps the home from its next service for longer than
 	// an operator waits before reaching for SIGKILL. Chosen, not measured.
 	MaxStopGrace = 10 * time.Minute
+	// MinCommandTimeout is the shortest command timeout. Below it an
+	// ordinary lint or test command is ended before it can answer. Chosen,
+	// not measured.
+	MinCommandTimeout = time.Minute
+	// MaxCommandTimeout is the longest command timeout. Above it a hung
+	// command holds a run, and the host's cores, for more than a day before
+	// anyone hears. Chosen, not measured.
+	MaxCommandTimeout = 24 * time.Hour
 	// MinSupervisionBeaconInterval is the shortest beacon interval. Below it
 	// the loop would spend its passes rewriting the beacon. Chosen, not
 	// measured.

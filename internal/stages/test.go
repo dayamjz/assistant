@@ -152,9 +152,11 @@ const testProjectionBytes = 8 << 10
 // shell against it; a build that judges that needs an agent, and this one does
 // not have that stage.
 //
-// A command that leaves a process behind leaves it running, and nothing bounds
-// how long the command itself runs. commandGrace says what that bounds and
-// what it does not.
+// The command runs on StageDeps.stageCommand's terms: it waits for a command
+// slot, runs at most command_timeout, after which the stage holds on a check
+// that answered nothing, and on unix its process group is ended when it
+// returns, so only a process that left the group is left behind.
+// commandGrace says what is still not bounded.
 //
 // Redaction is whatever shapes internal/redact recognizes at this persistence
 // boundary; that package's doc owns the list, the residual gaps, and every
@@ -221,14 +223,7 @@ func runTargetedCheck(ctx context.Context, deps StageDeps, in pipeline.Input) (p
 	// letting a later one replace an earlier one.
 	record := openTestEvidence(deps.Home.EvidenceLog(runID, in.Stage.String()), deps.redact)
 	record.header(command, commit, copied.Path())
-	result := runCommand(ctx, commandSpec{
-		command:    command,
-		dir:        copied.Path(),
-		record:     record,
-		projection: testProjectionBytes,
-		grace:      commandGrace,
-		redact:     deps.redact,
-	})
+	result := runCommand(ctx, deps.stageCommand(command, copied.Path(), record, testProjectionBytes))
 	record.footer(result)
 	record.cutShort(result.short)
 	record.close()

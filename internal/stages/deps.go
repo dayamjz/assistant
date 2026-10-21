@@ -3,6 +3,7 @@ package stages
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -217,6 +218,38 @@ type StageDeps struct {
 	// pushed one. Its zero value composes nothing, so an unwired StageDeps
 	// tells a reviewer no knowledge rather than a guess at it.
 	knowledge knowledge.Knowledge
+	// slots is the set of command slots a stage's command takes one of
+	// before it starts. Nil is hostCommandSlots, the one set every run in
+	// this process shares, so an unwired StageDeps is bounded like a wired
+	// one; only this package's tests set another.
+	slots commandSlots
+}
+
+// stageCommand is the commandSpec every stage body runs its configured
+// command with, so the three bodies that run one cannot differ in its
+// bounds: a slot from d.slots or hostCommandSlots, the run's
+// config.Config.CommandTimeout, or config.DefaultCommandTimeout where a
+// hand-built Config left it zero so that no value leaves a command
+// unbounded, commandGrace, and the wiring's redactor.
+func (d StageDeps) stageCommand(command, dir string, record io.Writer, projection int) commandSpec {
+	timeout := d.Config.CommandTimeout
+	if timeout <= 0 {
+		timeout = config.DefaultCommandTimeout
+	}
+	slots := d.slots
+	if slots == nil {
+		slots = hostCommandSlots
+	}
+	return commandSpec{
+		command:    command,
+		dir:        dir,
+		record:     record,
+		projection: projection,
+		grace:      commandGrace,
+		timeout:    timeout,
+		slots:      slots,
+		redact:     d.redact,
+	}
 }
 
 // WithKnowledge returns these dependencies with the repository's curated

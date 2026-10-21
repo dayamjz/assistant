@@ -4,13 +4,67 @@ package stages
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/redact"
 )
+
+// detachEnv names the file a test asks this binary, re-executed as a
+// command, to write the identifier of the process it leaves behind to.
+const detachEnv = "STAGES_TEST_DETACH"
+
+// init answers for this binary re-executed by detachedHolder's command line:
+// it starts a sleep in a session of its own, so outside the process group of
+// the command that ran it, holding its standard output, records the sleep's
+// identifier and exits without waiting for it. That is the descendant that
+// left the group, the one shape runCommand's group end cannot reach.
+func init() {
+	pidFile := os.Getenv(detachEnv)
+	if pidFile == "" {
+		return
+	}
+	cmd := exec.Command("sleep", "30")
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, "starting the detached sleep:", err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "recording the detached sleep:", err)
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
+// detachedHolder returns a command line that leaves a sleep holding the
+// output pipe outside the command's process group, and ends that sleep by
+// its recorded identifier when the test does.
+func detachedHolder(t *testing.T) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating the test binary: %v", err)
+	}
+	pidFile := filepath.Join(t.TempDir(), "detached")
+	t.Cleanup(func() {
+		if b, err := os.ReadFile(pidFile); err == nil {
+			if pid, err := strconv.Atoi(string(b)); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+	return fmt.Sprintf("%s='%s' '%s'", detachEnv, pidFile, exe)
+}
 
 // A command something else ended reports no exit status of its own, which is
 // what the stage turns into a hold rather than into a verdict. Telling that
@@ -46,8 +100,8 @@ func TestACommandEndedBySomethingElseReportsNoStatus(t *testing.T) {
 	}
 }
 
-// A command that leaves a descendant holding its output pipe is one whose
-// output never reaches its end: the command has gone, the pipe is still open,
+// A command that leaves a descendant outside its process group holding its
+// output pipe is one whose output never reaches its end: the command has gone, the pipe is still open,
 // and whatever is still unread stays unread. The read is given the grace and
 // then abandoned, and the result says so - whatever exit status the command
 // reported.
@@ -60,8 +114,10 @@ func TestACommandEndedBySomethingElseReportsNoStatus(t *testing.T) {
 // old guard could not fire. Reading the pipe here makes the fact the same on
 // both.
 //
-// It is unix-only because leaving a background descendant holding a pipe is
-// written here as shell job control and no portable equivalent is available;
+// The descendant leaves the group (detachedHolder) because one that stayed in
+// it is ended with the command and no longer holds the pipe, which
+// TestAForkingStageCommandsChildEndsWithIt establishes. It is unix-only
+// because leaving a session has no portable spelling;
 // what that leaves is that the other platform's answer to an abandoned read is
 // not checked anywhere. The grace is short so the give-up path is reached in
 // milliseconds rather than in the stage's five seconds, and every value comes
@@ -69,21 +125,22 @@ func TestACommandEndedBySomethingElseReportsNoStatus(t *testing.T) {
 func TestOutputStillHeldAfterTheCommandEndsIsNotOfferedAsWhole(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		name    string
-		command string
-		code    int
+		name   string
+		suffix string
+		code   int
 	}{
-		{"exiting zero", "sleep 30 & echo started", 0},
-		{"exiting non-zero", "sleep 30 & echo started; exit 3", 3},
+		{"exiting zero", "; echo started", 0},
+		{"exiting non-zero", "; echo started; exit 3", 3},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
+			command := detachedHolder(t) + c.suffix
 			record := openTestEvidence(scratchEvidencePath(t), redact.New())
 			if !record.recorded() {
 				t.Fatalf("opening the record: %v", record.err)
 			}
 			result := runCommand(t.Context(), commandSpec{
-				command:    c.command,
+				command:    command,
 				dir:        t.TempDir(),
 				record:     record,
 				projection: testProjectionBytes,
@@ -112,7 +169,7 @@ func TestOutputStillHeldAfterTheCommandEndsIsNotOfferedAsWhole(t *testing.T) {
 				t.Fatal("the record reports itself whole after the read of the output was abandoned")
 			}
 
-			report := testReport(redact.New(), c.command, "0123456789abcdef", record, result).Normalize()
+			report := testReport(redact.New(), command, "0123456789abcdef", record, result).Normalize()
 			if err := report.Validate(); err != nil {
 				t.Fatalf("the report is one the pipeline refuses: %v", err)
 			}
@@ -165,5 +222,33 @@ func TestOutputThatReachesItsEndIsReportedWhole(t *testing.T) {
 	}
 	if whole.String() != "first\nsecond\n" {
 		t.Fatalf("the record holds %q, and the command wrote %q", whole.String(), "first\nsecond\n")
+	}
+}
+
+// A command ended by something other than its time limit is not reported as
+// having run past it, even when a descendant outside its group holds the
+// output until after the limit would have passed: whether the limit ended the
+// command is read when the command ended, not once its output was waited for.
+// The shell signals itself well inside the limit, and the detached holder
+// keeps the pipe open for the whole grace, which reaches past the limit.
+func TestACommandEndedBeforeItsLimitIsNotReportedAsTimedOut(t *testing.T) {
+	t.Parallel()
+	var whole strings.Builder
+	result := runCommand(t.Context(), commandSpec{
+		command:    detachedHolder(t) + "; sleep 0.5; kill -TERM $$",
+		dir:        t.TempDir(),
+		record:     &whole,
+		projection: testProjectionBytes,
+		grace:      5 * time.Second,
+		timeout:    3 * time.Second,
+	})
+	if result.exited {
+		t.Fatalf("a command ended by a signal reported exit status %d as its own", result.code)
+	}
+	if result.short == nil {
+		t.Fatal("the detached holder did not hold the output through the grace, so this reached nothing")
+	}
+	if errors.Is(result.err, errCommandTimedOut) {
+		t.Fatalf("a command ended by SIGTERM inside its limit was reported as %v", result.err)
 	}
 }
