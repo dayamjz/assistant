@@ -416,6 +416,14 @@ func TestTheAnchorTheRebaseStageRecordsIsTheOneThePushStageDecidesOn(t *testing.
 // anchor it wrote.
 func (r *pushRun) anchorFromRebaseStage(t *testing.T) string {
 	t.Helper()
+	anchor, _ := r.rebase(t).Writes[pipeline.KeyPushAnchor].Text()
+	return anchor
+}
+
+// rebase runs the rebase stage over this run, moves the run's head where the
+// stage wrote it, and returns what the stage reported and wrote.
+func (r *pushRun) rebase(t *testing.T) pipeline.Output {
+	t.Helper()
 	impl := stages.Rebase(r.deps)
 	allowed := make(map[pipeline.Key]bool, len(impl.Reads))
 	for _, key := range impl.Reads {
@@ -428,7 +436,7 @@ func (r *pushRun) anchorFromRebaseStage(t *testing.T) string {
 			pipeline.KeyRun:        graph.TextValue(r.runID),
 			pipeline.KeyBranch:     graph.TextValue("topic"),
 			pipeline.KeyBase:       graph.TextValue("main"),
-			pipeline.KeySubmitted:  graph.TextValue(r.head),
+			pipeline.KeySubmitted:  graph.TextValue(r.submitted),
 			pipeline.KeyHead:       graph.TextValue(r.head),
 		}},
 	})
@@ -442,8 +450,7 @@ func (r *pushRun) anchorFromRebaseStage(t *testing.T) string {
 			r.head = text
 		}
 	}
-	anchor, _ := out.Writes[pipeline.KeyPushAnchor].Text()
-	return anchor
+	return out
 }
 
 // pushRun is one run of the push stage against a real upstream.

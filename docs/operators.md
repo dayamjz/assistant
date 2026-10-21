@@ -233,12 +233,37 @@ push, pull request, and checks holds do not offer a fix round: push forwards a
 commit, so a round there would be pushed before you saw it, and a round after
 push would leave a commit nothing pushes.
 
+When the branch already holds commits the commit you submitted does not
+contain, somebody else pushed them, and the rebase stage replays the run's
+own commits onto the branch as it observed it rather than onto the base, so
+the push is a fast-forward and their commits survive it. It does that on its
+own only when their commits and your change touch different files. A
+colleague's edit to a file your change also changed always holds the rebase
+stage for you, as `rebase-branch-overlap`, naming those files, before anything
+is replayed. That is the price of never placing one side's edit by matching the
+other's lines, which a merge, a merge driver or a patch offset can each get
+wrong without a conflict. The remedy is to bring their commits into your
+change yourself and push again.
+
+Three other cases hold too. `rebase-branch-replay-unverified` means the
+replayed result is not exactly their branch with your files' versions in it,
+at the paths the hold names, for example because git left one of your
+commits out as already applied or dropped a mode change. `rebase-branch-conflict`
+means a replay over different files still stopped on a conflict. In both, no
+replay is carried on and the run's head is the one you submitted.
+`rebase-branch-behind-base` means the branch does not contain the current
+base, and bringing the base in would rewrite their commits: approving carries
+the run on from the branch without the base's newest commits. Approving past
+`rebase-branch-overlap`, `rebase-branch-conflict` or
+`rebase-branch-replay-unverified` reaches the push stage's refusal below.
+
 A push hold whose finding is `push-refused` with reason `would-discard` means
 the branch holds commits the run's commit does not contain and that the run
 would lose by pushing. Either the branch moved after the run observed it, or
-it already held them when the run began: somebody else pushed to it, and the
-commit you submitted neither contains their work nor stands on it, including
-a commit that is behind the branch. A run only replaces commits that were in
+it already held them when the run began and the run was carried past the
+rebase stage's hold without them: somebody else pushed to it, and the commit
+you submitted neither contains their work nor stands on it, including a
+commit that is behind the branch. A run only replaces commits that were in
 the commit you submitted, or in what it pushed earlier itself, which is what
 its own rebase rewrites. The finding names the commits it would lose,
 counting rather than listing any past a fixed bound, and states the remedy:
