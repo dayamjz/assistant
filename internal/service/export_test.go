@@ -26,6 +26,13 @@ func (s *Service) SetBeforeRefusalEndForTest(f func()) {
 	s.beforeRefusalEnd = f
 }
 
+// SetAfterConsentRegisteredForTest installs afterConsentRegistered for this
+// package's external tests. It exists only in the tests, on that field's
+// terms in service.go.
+func (s *Service) SetAfterConsentRegisteredForTest(f func()) {
+	s.afterConsentRegistered = f
+}
+
 // SubordinateSessionOf exposes to this package's external tests the
 // terminal session the service started for a domain's subordinate
 // coordinator, with the host that holds it, on SessionOf's terms.
