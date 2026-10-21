@@ -212,19 +212,22 @@
 // what the installed CLI was observed to do with one (#320).
 //
 // In any of the three modes an exchange may Run what the line carries as a
-// shell command, which is how a test has a worker do something rather than say
-// something: push to a gate, or call the service. The command runs where a
-// command the Claude Code CLI's Bash tool runs was observed to, in a process
-// group the worker does not lead, so whatever reaches the service from it
-// arrives from outside the worker's group, as a real worker's push does; a
-// rule placing a worker's descendants by the worker's group alone cannot pass
-// a test that drives the worker this way. runCommand says what of the CLI it
-// does not model, and bashCheck the one refusal it does: a here-document
-// carrying braces and quotes, which #267 saw the CLI refuse. An exchange may
-// instead Write what the line carries as a file in the worker's directory,
-// which is how a test has a worker use the CLI's file editing tool, and a
-// path outside that directory is refused, which #267 saw needed an approval
-// nobody was there to give.
+// shell command, which is how a test has a worker do something rather than
+// say something: push to a gate, or call the service. The command runs where
+// a command the Claude Code CLI's Bash tool runs was observed to, in a
+// process group the worker does not lead, so whatever reaches the service
+// from it arrives from outside the worker's group, as a real worker's push
+// does; a rule placing a worker's descendants by the worker's group alone
+// cannot pass a test that drives the worker this way. The stand-in ends that
+// group when the command returns and at HangFor, which is its own bound under
+// P15 and not something observed of the CLI, so a child a command leaves in
+// the background in that group is gone before the worker answers for it.
+// runCommand says what of the CLI it does not model, and bashCheck the one
+// refusal it does: a here-document carrying braces and quotes, which #267 saw
+// the CLI refuse. An exchange may instead Write what the line carries as a
+// file in the worker's directory, which is how a test has a worker use the
+// CLI's file editing tool, and a path outside that directory is refused,
+// which #267 saw needed an approval nobody was there to give.
 //
 // A worker's Call is the exception to "complete or absent": it is written
 // when the worker starts and rewritten whole, under the same number, as each

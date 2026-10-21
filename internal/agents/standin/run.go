@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // answer is the line a worker prints for a line this exchange took: Reply,
@@ -111,33 +113,43 @@ func (e Exchange) valid() error {
 // shell started where no process group can be made, or where there is no
 // /bin/sh, reports that in the Ran rather than running in this process's
 // group, so a test reading Ran.Group is told which shape it got.
+//
+// What ends the group is this stand-in's own bound and no observation of the
+// CLI's: the shell runs through internal/procgroup, so the group is ended
+// when the shell exits and before the worker answers, and at HangFor with
+// the shell, which is PRD section 8's group the invoker ends when the call
+// returns or times out. A child the command left in the background is
+// therefore gone by the time its Ran is printed, unless it left the group,
+// and procgroup's package comment owns what it does not reach. A shell that
+// HangFor ended answers status -1 and says so on its standard error.
 func runCommand(command string) Ran {
 	if refused := bashCheck(command); refused != "" {
 		return Ran{Command: command, Exit: -1, Refused: refused}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), HangFor)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	// A process the command left running in the background may hold its
-	// output open after the shell exits; the worker stops waiting for it
-	// after this rather than when it exits.
-	cmd.WaitDelay = time.Second
 	ran := Ran{Command: command, Exit: -1}
-	if err := ownGroup(cmd); err != nil {
+	if err := groupRefusal(); err != nil {
 		ran.Stderr = err.Error()
 		return ran
 	}
-	if err := cmd.Start(); err != nil {
-		ran.Stderr = "standin: starting the command: " + err.Error()
+	ctx, cancel := context.WithTimeout(context.Background(), HangFor)
+	defer cancel()
+	cmd := exec.Command("/bin/sh", "-c", command)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	// The group is read once the shell has started and before it is reaped,
+	// so a shell that has already exited still reports the group it led
+	// (#360).
+	err := procgroup.RunStarted(ctx, cmd, runGrace, func(pid int) { ran.Group = groupOf(pid) })
+	ran.Stdout, ran.Stderr = stdout.String(), stderr.String()
+	if cmd.Process == nil {
+		ran.Stderr += "standin: starting the command: " + err.Error() + "\n"
 		return ran
 	}
-	ran.Group = groupOf(cmd.Process.Pid)
-	err := cmd.Wait()
-	ran.Stdout, ran.Stderr = stdout.String(), stderr.String()
 	if cmd.ProcessState != nil {
 		ran.Exit = cmd.ProcessState.ExitCode()
+	}
+	if ctx.Err() != nil {
+		ran.Stderr += "standin: the command ran past " + HangFor.String() + " and was ended with its group\n"
 	}
 	var exit *exec.ExitError
 	if err != nil && !errors.As(err, &exit) {
@@ -145,6 +157,13 @@ func runCommand(command string) Ran {
 	}
 	return ran
 }
+
+// runGrace is the grace procgroup.Run is given for a Run exchange's command:
+// how long a process that left the command's group may hold its output open
+// after the shell exits before the worker stops waiting for it, and how long
+// the shell is given to exit once its group was killed. procgroup.Run says
+// each wait it bounds.
+const runGrace = time.Second
 
 // bashCheck is the one refusal of the Claude Code CLI's Bash tool the
 // stand-in models, and it is modelled on one observation and no more: #267

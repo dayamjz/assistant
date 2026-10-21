@@ -4,14 +4,17 @@ package standin
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // runScript is a worker that runs whatever follows "run: " on a line.
@@ -179,5 +182,56 @@ func TestARunExchangeRefusesAHereDocumentCarryingJSON(t *testing.T) {
 		case !c.refused && (ran.Refused != "" || ran.Exit != 0 || statErr != nil):
 			t.Errorf("%q answered %+v (%v), want it run", c.command, ran, statErr)
 		}
+	}
+}
+
+// PRD principle P15 for a Run exchange: the command runs in a process group
+// the worker ends when the command returns, so a command that starts a
+// child in the background and exits leaves nothing running once the worker
+// has answered for it, in both worker modes. The child sends its output
+// elsewhere, so nothing holds the command's pipes and only ending the group
+// ends it; the worker stays open throughout, so its own ending is not what
+// ended the child.
+func TestARunExchangeEndsWhatItsCommandLeftInItsGroup(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	for _, mode := range []struct {
+		name  string
+		build func(testing.TB, Script, ...agents.ClaudeOption) *Agent
+	}{
+		{"line mode", NewWorker},
+		{"stream mode", New},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			t.Parallel()
+			agent := mode.build(t, runScript(), agents.WithTerminationGrace(300*time.Millisecond))
+			worker, err := agents.OpenWorker(t.Context(), agent.Runner(), agents.WorkerSpec{Dir: t.TempDir(), Instructions: "work"})
+			if err != nil {
+				t.Fatalf("starting the worker: %v", err)
+			}
+			defer worker.Close()
+
+			const command = "sleep 300 >/dev/null 2>&1 & echo $!"
+			if err := worker.Send(t.Context(), "run: "+command); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+			ran := waitRan(t, worker, command)
+			child, err := strconv.Atoi(strings.TrimSpace(ran.Stdout))
+			if ran.Exit != 0 || err != nil || child <= 0 {
+				t.Fatalf("the command ended %+v, want status 0 and the child's identifier", ran)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				err := syscall.Kill(child, 0)
+				if errors.Is(err, syscall.ESRCH) {
+					return
+				}
+				if !time.Now().Before(deadline) {
+					_ = syscall.Kill(child, syscall.SIGKILL)
+					t.Fatalf("the child %d the command left in the background is still running after the worker answered (%v)", child, err)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		})
 	}
 }

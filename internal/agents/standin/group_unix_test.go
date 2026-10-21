@@ -5,6 +5,7 @@ package standin
 import (
 	"io"
 	"os/exec"
+	"syscall"
 	"testing"
 )
 
@@ -21,9 +22,7 @@ func TestGroupOfReadsAnExitingChildBeforeItIsReaped(t *testing.T) {
 	t.Parallel()
 	for range 50 {
 		cmd := exec.Command("/bin/sh", "-c", "exit 0")
-		if err := ownGroup(cmd); err != nil {
-			t.Fatal(err)
-		}
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		out, err := cmd.StdoutPipe()
 		if err != nil {
 			t.Fatal(err)
