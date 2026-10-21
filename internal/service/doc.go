@@ -482,13 +482,17 @@
 // the fresh proof and the task's instructions file, and records the
 // session's reference on the attempt dispatch claimed, through
 // store.SetAttemptSession, which is the one record of which terminal an
-// attempt runs in. The provider is this service's, built in driverFor over
-// the agent as resolved and before containRunner wraps it, because the
-// wrapper carries no worker arm: a session.Pipe by default, or a
-// session.Tmux when the operator's file sets config.KeySessionProvider to
-// tmux, which terminals.go's sessionHost decides; the sessions it creates are
-// held per task, one per attempt, and Close ends exactly those and no
-// worker an earlier service of this home started.
+// attempt runs in. Each launch builds its own session.Host, through
+// terminals.go's sessionHost, over the adapter agents.Route selected for that
+// worker, which may differ from the run agent, and never over the runner
+// containRunner wraps, because the wrapper carries no worker arm: a
+// session.Pipe by default, or a session.Tmux when the operator's file sets
+// config.KeySessionProvider to tmux. driverFor builds one more the same way
+// over the resolved agent, which starts a subordinate coordinator's session
+// and answers a reference no launch of this service holds by identity
+// alone, on terminals.go's terms. The sessions a launch creates are held per
+// task, one per attempt, and Close ends exactly those and no worker an
+// earlier service of this home started.
 //
 // Four things about the launch are stated rather than implied, and launch.go
 // owns each. Nothing here writes an event to say Running, and the task
@@ -649,19 +653,17 @@
 // Subscribers learn that a run moved from runs.go's publishRunState, that a
 // worker appended to its history from workers.go's publishTaskEvent, that a
 // task's resolved state moved from the supervisor loop's pass, and that a
-// hold opened or closed from the four sites that write one, and all four
-// draw their revision from the one counter on this service, so a consumer
-// orders them against each other. publish.go owns the second and third and
-// says why the pass is the one reader that publishes a task: a task's state
-// is resolved and never stored, so a change is a comparison between two
-// resolutions, and the pass resolves every task anyway. The comparison is
-// taskstate.Basis equality, kept per task in this service's memory, so a
-// change is published once and not on every pass, within one beacon interval
-// of being made, and a restart publishes every task again to subscribers who
-// all attached fresh. A hold is published as the store returned it, at
-// storeTaskReport for the holds a report registers, after the checks-hold
-// closure for the one the program resolves, and at taskholds.go's
-// registration of the two relaunch holds and its answer to a task's hold. What travels is the record, a
+// hold opened or closed from every site that writes one, and all four draw
+// their revision from the one counter on this service, so a consumer orders
+// them against each other. publish.go owns the third and fourth, lists the
+// sites a hold is published from, and says why the pass is the one reader
+// that publishes a task: a task's state is resolved and never stored, so a
+// change is a comparison between two resolutions, and the pass resolves
+// every task anyway. The comparison is taskstate.Basis equality, kept per
+// task in this service's memory, so a change is published once and not on
+// every pass, within one beacon interval of being made, and a restart
+// publishes every task again to subscribers who all attached fresh. A hold
+// is published as the store returned it. What travels is the record, a
 // store.Hold, which store.Resolver's design keeps from carrying who resolved
 // it: the wire understates the resolver, as that package says the record
 // itself does. The task payload is machine.Task, composed through taskView

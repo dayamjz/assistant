@@ -36,11 +36,13 @@ import (
 // internal/store holds for it, classifies through supervisor.Classify, and
 // either advances the markers or appends each surfaced wake with the markers
 // in one transaction. Nothing here decides a verdict: decide composes the
-// inputs and Classify answers. A write that fails for any reason but the
-// fence leaves the markers where they were, so the next pass makes the same
-// detections again and nothing is dropped; the failure is logged and carried
-// on the pass report, and the one failure the loop acts on is
-// ErrStaleIncarnation, on which the incarnation returns.
+// inputs and Classify answers. The verdict's level is not recorded on the
+// wake row, which holds the kind and the marker but not the level. A write
+// that fails for any reason but the fence leaves the markers where they
+// were, so the next pass makes the same detections again and nothing is
+// dropped; the failure is logged and carried on the pass report, and the
+// one failure the loop acts on is ErrStaleIncarnation, on which the
+// incarnation returns.
 //
 // Which tasks a pass watches is supervisor.StateInFlight's table plus the
 // tasks with a queued wake, which is the set PRD section 5's "work is in
@@ -210,9 +212,10 @@ type Terminals interface {
 // capture failed because the provider as a whole could not answer, rather
 // than because this terminal could not be read. The loop surfaces it once
 // per pass rather than once per terminal, and marks the wake provider-wide,
-// so a provider restart does not read as every worker dying at once. Its one
-// producer is heldTerminals' Capture on a service whose provider cannot be
-// built, which terminals.go states the reach of.
+// so a provider restart does not read as every worker dying at once. Its
+// producers are heldTerminals' Capture and peek.go's capture for task.peek,
+// each on a service whose provider cannot be built, which terminals.go states
+// the reach of.
 var ErrTerminalsUnavailable = errors.New("service: the terminal provider is unavailable")
 
 // ErrSupervisionAbandoned reports that the supervisor loop or its watchdog

@@ -28,7 +28,7 @@ const rowName = `the PRD's outcome row (<tr id="outcome-set"> in <section id="su
 // internal/machine's outcome set say the same thing.
 //
 // Its scope is the set and what the row says about the set. It says nothing
-// about whether the six are the right six, and nothing about whether an
+// about whether the set is the right set, and nothing about whether an
 // outcome means on the wire what the row says it means. Both sides naming
 // checks-passed in the group that says a run is finished with is all this
 // establishes about checks-passed.

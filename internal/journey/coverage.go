@@ -24,14 +24,14 @@ const (
 	// body reads the supplied intent and launches nothing, the review body
 	// launches the agent this harness resolves - which the default journey
 	// scripts to answer nothing, so a taken review stops at an ask recording
-	// that no review happened - and the pull request body fails because the
-	// run's record names no repository on the code host, so every walk here
-	// asks to skip those two stages, and the test body holds wherever the
-	// run's resolved configuration names no command, which is every walk but
-	// the P7 branch one. The run a task's worker starts by pushing cannot ask
-	// for a skip; it takes the review stage with the stand-in scripted clean
-	// and holds at the first stage its configuration holds at, before the
-	// pull request stage.
+	// that no review happened - so every walk that does not reach the push
+	// stage asks to skip the review stage, most naming the pull request stage
+	// beside it, which a local upstream's no_code_host skips after push
+	// anyway; the test body holds wherever the run's resolved configuration
+	// names no command, which is every walk but the P7 branch one. The run a
+	// task's worker starts by pushing cannot ask for a skip; it takes the
+	// review stage with the stand-in scripted clean and holds at the first
+	// stage its configuration holds at, before the pull request stage.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable

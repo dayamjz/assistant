@@ -4,7 +4,7 @@
 // What that proves is narrow, and the narrowness is the first thing to say
 // about it. It proves that both sides declare the same values, in the same
 // order, in the same two groups, and that every value the build declares
-// carries a next action. It does not prove that the six are the right six,
+// carries a next action. It does not prove that the set is the right set,
 // that an outcome means on the wire what the row's sentence about it says, or
 // that any run ever reaches the outcome it should. Whatever is written on top
 // of this package may say the two lists agree. None of it may say the machine
@@ -35,7 +35,7 @@
 // outcome once. The row and not the section is what is read for the same
 // reason one step further out, and because that row says it is where the set
 // is stated: a marker anywhere else in the document is a refusal rather than a
-// seventh outcome, so the sentence in the row stays true of the mechanism. The
+// further outcome, so the sentence in the row stays true of the mechanism. The
 // rule is one a reader can apply by eye, and it is not tied to the classes on
 // the element, which are styling.
 //
