@@ -404,3 +404,64 @@ func TestASweepDoesNotEndAStaleIdentity(t *testing.T) {
 	}
 	waitEnded(t, d, "the process behind the real identity")
 }
+
+// TestASweepOfACopyWithASpaceInItsPathEndsWhatRunsThereAndThenClears holds
+// the sweep to a copy whose path holds a space (#415), which is an ordinary
+// path: a home under a directory with a space in its name, and a process
+// whose working directory is a directory with a space in its name below
+// that home's task copy. While the process runs there the sweep does not
+// clear past it: the listing finds it and the sweep reports it ended, the
+// stubborn process making the forceful step the one that ends it. Once it
+// is gone the copy sweeps clear. The working directory is compared as a
+// whole path: a process beside the copy in a directory whose name is the
+// copy's with " x" appended, which a comparison of the text up to a space
+// or without a path separator would take for one under it, is neither
+// listed nor mentioned and is left running.
+//
+// That the sweep clears is asserted only where an empty copy's sweep
+// clears; elsewhere hostLimit records it as the one thing not established.
+func TestASweepOfACopyWithASpaceInItsPathEndsWhatRunsThereAndThenClears(t *testing.T) {
+	requiresSweep(t)
+	blockers := hostBlockers(t)
+	ctx := t.Context()
+	h, _ := sweepHome(t, sweepBase(t), "with space")
+	target := makeTaskCopy(t, h)
+	below := filepath.Join(target, "build dir")
+	beside := target + " x"
+	for _, dir := range []string{below, beside} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inTarget := startDetached(t, below, true)
+	inBeside := startDetached(t, beside, false)
+
+	listed, err := agents.ListUnder(ctx, target)
+	if err != nil {
+		t.Fatalf("listing under %s: %v", target, err)
+	}
+	if !slices.Equal(listed, []agents.Identity{inTarget.id}) {
+		t.Fatalf("the listing under %s found %v, want exactly %s, the process running in %s", target, listed, inTarget.id, below)
+	}
+
+	r, err := agents.NewSweeper(h, sweepGrace, nil).Sweep(ctx, target)
+	if err != nil {
+		t.Fatalf("sweeping %s: %v", target, err)
+	}
+	if len(r.Ended) != 1 || r.Ended[0] != inTarget.id || r.Dir != target {
+		t.Fatalf("the sweep of %s did %s (%+v), want a sweep that ended %s", target, r, r, inTarget.id)
+	}
+	requireClearUnlessHostBlocks(t, r, blockers, "the sweep of "+target)
+	waitEnded(t, inTarget, "the process under the swept copy was reported ended")
+	if mentions(r, inBeside.id) {
+		t.Fatalf("the sweep of %s mentions %s, which runs in %s beside it: %+v", target, inBeside.id, beside, r)
+	}
+	requirePresent(t, inBeside, "a process beside the swept copy")
+
+	again, err := agents.NewSweeper(h, sweepGrace, nil).Sweep(ctx, target)
+	if err != nil || len(again.Ended) != 0 {
+		t.Fatalf("a second sweep of %s did %s, %v, want nothing ended", target, again, err)
+	}
+	requireClearUnlessHostBlocks(t, again, blockers, "a second sweep of "+target)
+	hostLimit(t, blockers, "that a sweep of a copy with a space in its path clears once nothing runs there")
+}

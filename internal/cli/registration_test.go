@@ -447,15 +447,18 @@ func TestInitReadsTheDefaultBranchsCopyBeforeOffering(t *testing.T) {
 }
 
 // plantTripwire writes an executable that records each time it is run by
-// appending a line to fired, and returns both paths. The script path is
-// absolute, so a recipe naming it fires wherever make is started.
+// appending a line to fired, and returns the script as one shell word with
+// the record's path. The script path is absolute, so a recipe naming it
+// fires wherever make is started, and quoted, so it fires whatever the
+// temporary directory is called (#415).
 func plantTripwire(t *testing.T, dir string) (script, fired string) {
 	t.Helper()
 	fired = filepath.Join(dir, "registration-tripwire-fired")
-	script = filepath.Join(dir, "registration-tripwire")
+	path := filepath.Join(dir, "registration-tripwire")
+	script = "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 	quoted := "'" + strings.ReplaceAll(fired, "'", `'\''`) + "'"
 	body := "#!/bin/sh\nprintf 'fired\\n' >> " + quoted + "\n"
-	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("planting the tripwire: %v", err)
 	}
 	return script, fired
