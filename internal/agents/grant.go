@@ -31,11 +31,11 @@ package agents
 //
 // What a grant buys is the command line an adapter writes for it, and an
 // adapter states its translation beside its argument builder. Claude Code,
-// Cursor, and Grok each write one; the openai adapter writes none, so what
-// that agent may do is still its own defaults and settings, and a fix round
-// there edits only where those allow it. Enforcing that command line is the
-// agent's own permission system and not this package's, so a grant is only as
-// strong as the agent's reading of the flags it was given.
+// Codex, Cursor, and Grok each write one; the openai adapter writes none, so
+// what that agent may do is still its own defaults and settings, and a fix
+// round there edits only where those allow it. Enforcing that command line is
+// the agent's own permission system and not this package's, so a grant is
+// only as strong as the agent's reading of the flags it was given.
 // config.ReservedAgentFlags refuses an entry naming the flags a grant is
 // written with, the permission-mode and tool-list flags, so a configured
 // entry cannot contradict them. That is all it refuses: an entry may still

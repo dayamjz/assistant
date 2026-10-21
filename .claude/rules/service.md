@@ -74,7 +74,8 @@ paths: ["internal/service/**"]
 - Terminals: every task reader is built through `reader`, probing through
   the service's `Terminals`, the one seam a terminal is observed through;
   liveness has one producer, the provider's probe, and nothing writes an
-  event to say Running. Which provider `driverFor` builds is
+  event to say Running. Which provider a launch builds over the adapter
+  `agents.Route` selected, and `driverFor` over the resolved agent, is
   `terminals.go`'s `sessionHost`, from the global layer only.
 - Reconciliation and relaunch: a launched task is never dispatched again;
   what a restart does about it is `reconcile.go`'s. `relaunch.go`'s
@@ -86,7 +87,6 @@ paths: ["internal/service/**"]
   registered by force and the caller exits. Its header owns which groups and
   the gaps.
 - Supervisor loop: PRD section 5's supervisor loop lives in `supervise.go`;
-  read its header before changing it, and for the residual gaps. One gap it
-  does not state: the verdict's level is not recorded on the wake row.
+  read its header before changing it, and for the residual gaps.
 
 Read `doc.go` before changing any of that, and for the residual gaps.

@@ -10,8 +10,10 @@ paths: ["internal/session/**"]
 - `Pipe` and `Tmux` both embed one held set (`held.go`), so Probe's rule, the
   reference and the worker set have one implementation.
 - Its one creating caller is `internal/service`'s `launch.go`; `Create`
-  itself re-derives nothing. Its one observing caller is that package's
-  `terminals.go`, which probes through `Probe` and captures through
+  itself re-derives nothing. Its observers are in that package too:
+  `terminals.go`'s seam, which every task reader probes through, and the
+  sites that ask a host they hold directly (`peek.go`, `taskholds.go`,
+  `workerfallback.go`). Each probes through `Probe` or captures through
   `CaptureReference` out of the same held set `Probe` answers `Live` from, so
   the reference to handle lookup has one owner.
 - Three things are mechanism rather than rule:

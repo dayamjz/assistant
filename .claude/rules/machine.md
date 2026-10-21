@@ -14,7 +14,8 @@ paths: ["internal/machine/**"]
 - `OutcomePassed` has one producer: a passed record beside PRD section 8's
   merge record, `store.MergeRecord`, which only `internal/runs`' two pull
   request moves and its `RecordMergeAfterPass` (the read after an autonomy
-  merge) write, once, and which `Standing` carries as the end read off it.
+  merge, or `internal/service`'s `mergeread.go` read of a person's merge)
+  write, once, and which `Standing` carries as the end read off it.
 
 Read `doc.go` before changing any of that; `phrases.go` holds the P13 phrase
 table and `outcome.go` says why the constant block's order is the PRD outcome

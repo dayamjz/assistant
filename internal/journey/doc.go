@@ -32,17 +32,18 @@
 // scripts to answer nothing, so every walk but those asks to skip that stage
 // rather than stopping at an ask recording a review that never happened; the
 // pushed run cannot ask, and its test and the ceiling walk script the
-// reviewer clean instead. The pull request body opens a
-// provider for the repository the run's record names on the code host, and no
-// record here names one, so a run that reaches it fails rather than reaching
-// a code host; every run this harness drives to the end therefore asks to
-// skip that stage too, which is the per-run surface a person would use. A run
-// therefore holds at the stages this harness declares a run stops at - among
-// them the test stage, which holds for the command nobody configures in the
-// walked scenario - and large parts of this product stay unreachable from
-// such a walk: no agent is launched, no reference is moved, and no code host
-// is asked anything. Two walks reach further on purpose: every run reads the
-// repository configuration document's two copies now, so the P7 branch test
+// reviewer clean instead. The fixture's upstream is a local repository, so a
+// run's begin sets no_code_host and the pull request and checks stages skip
+// after push without being asked, and no run reaches a code host; most walks
+// still name the pull request stage in their skip, the per-run surface a
+// person would use, to stay explicit about not taking that body, as
+// walkableRun in helpers_test.go says. A run therefore holds at the stages
+// this harness declares a run stops at - among them the test stage, which
+// holds for the command nobody configures in the walked scenario - and large
+// parts of this product stay unreachable from such a walk: no agent is
+// launched, no reference is moved, and no code host is asked anything. Two
+// walks reach further on purpose: every run reads the repository
+// configuration document's two copies now, so the P7 branch test
 // executes a trusted command and takes a scripted fix round, and the trusted
 // document that cannot be parsed refuses a run through the binary.
 //

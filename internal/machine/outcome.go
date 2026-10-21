@@ -493,7 +493,7 @@ const (
 // whether anything is advancing it. advancing is machine.Run.Advancing, and
 // that field's contract is what it means.
 //
-// It differs from NextAction for one outcome. Five of the six describe a run
+// It differs from NextAction for one outcome. Six of the seven describe a run
 // whose position nothing is moving either way, so knowing that nothing is
 // moving it adds nothing to what to do about it. OutcomeExecuting is the one
 // that covers both a run in flight and a run standing still, and its two

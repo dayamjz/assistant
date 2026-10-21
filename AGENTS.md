@@ -42,7 +42,7 @@ independently reviewed, tested, documented, and linted. Package rules are in
 
 ## What review keeps catching
 
-A reading lens beside `P1`-`P14`, not a replacement; each item has cost this
+A reading lens beside `P1`-`P15`, not a replacement; each item has cost this
 repository more than one round of review.
 
 - **Claim only what a reader can verify from this repository.** A doc comment is

@@ -178,8 +178,8 @@
 // missing a declared key, unless the key's row marks it late, which passes
 // internal/graph's Key.Late through: the run resumes reading the key's zero
 // value. A row may be late only when that zero value is how a run without the
-// key behaved. KeySubmittedSubject is the one late row, so a checkpoint
-// lacking any other key is still refused.
+// key behaved. Only the rows key.go's table marks late pass that way, so a
+// checkpoint lacking any other key is still refused.
 //
 // The topology does depend on it. This package adds exactly one edge, the back
 // edge from a stage's fix node to that stage's node, for each stage whose fix
