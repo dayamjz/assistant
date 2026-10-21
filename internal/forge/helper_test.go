@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -36,9 +37,12 @@ const (
 )
 
 // fakeGHHoldFor is how long a descendant of the stand-in provider holds the
-// output pipes it inherited. It only has to outlast the grace period a test
-// gives the adapter, and it is short so that nothing lingers after the run.
-const fakeGHHoldFor = 5 * time.Second
+// output pipes it inherited unless its test releases it first, which every
+// test does at cleanup. It has to outlast the grace period a test gives the
+// adapter, and it is longer than releaseAtCleanup's five-second wait, so a
+// descendant that ignored its release fails that wait rather than ending on
+// its own inside it.
+const fakeGHHoldFor = 30 * time.Second
 
 // ghResponse is one scripted answer from the stand-in provider.
 type ghResponse struct {
@@ -55,7 +59,24 @@ type ghResponse struct {
 	// normally, so what keeps the invocation waiting afterwards is the
 	// descendant holding pipes nobody is going to close.
 	HoldPipes bool `json:"hold_pipes"`
+	// Detach has the descendant HoldPipes leaves behind start a process
+	// group of its own, the one way it gets out of reach of the group the
+	// invocation was started in.
+	Detach bool `json:"detach"`
+	// Hang leaves the descendant behind and then never exits, the shape of
+	// a provider wedged on a connection. Like the descendant, it waits for
+	// the test's release rather than for a signal.
+	Hang bool `json:"hang"`
 }
+
+// The files in the stand-in's directory through which a test sees and ends
+// what the stand-in started: each stand-in that hangs and each descendant
+// appends its identifier to fakeGHPIDs, and each returns once fakeGHRelease
+// exists. trackStandIns writes the release at cleanup.
+const (
+	fakeGHPIDs    = "pids"
+	fakeGHRelease = "release"
+)
 
 // ghScript maps a call key to the answers the stand-in gives for it, in order.
 // The last entry answers every call past the ones listed, so a test states a
@@ -192,7 +213,7 @@ func fakeGHMain(dir string) int {
 		// The descendant of a stand-in asked to leave its pipes behind. It
 		// reads no script and prints nothing; holding the standard output and
 		// error it inherited is the whole of what it does.
-		time.Sleep(fakeGHHoldFor)
+		awaitRelease(dir, fakeGHHoldFor)
 		return 0
 	}
 
@@ -266,8 +287,15 @@ func fakeGHMain(dir string) int {
 	if seen < len(answers) {
 		answer = answers[seen]
 	}
-	if answer.HoldPipes && !startPipeHolder() {
+	if answer.Hang {
+		recordPID(dir, os.Getpid())
+	}
+	if (answer.HoldPipes || answer.Hang) && !startPipeHolder(dir, answer.Detach) {
 		os.Stderr.WriteString("stand-in provider: could not leave a descendant holding the pipes\n")
+		return fakeGHNoScript
+	}
+	if answer.Hang {
+		awaitRelease(dir, time.Hour)
 		return fakeGHNoScript
 	}
 	if answer.SleepMs > 0 {
@@ -284,14 +312,72 @@ func fakeGHMain(dir string) int {
 // startPipeHolder starts a descendant that inherits this process's standard
 // output and error and outlives it, and reports whether it started. Its
 // working directory is deliberately not this one, so a test's temporary
-// directory can be removed while it is still running.
-func startPipeHolder() bool {
+// directory can be removed while it is still running. With detach it leaves
+// this process's group. Its identifier is recorded here rather than by the
+// descendant, so the record exists before this process can exit and have its
+// group ended.
+func startPipeHolder(dir string, detach bool) bool {
 	child := exec.Command(os.Args[0])
 	child.Dir = os.TempDir()
 	child.Env = append(os.Environ(), fakeGHHold+"=1")
 	child.Stdout = os.Stdout
 	child.Stderr = os.Stderr
-	return child.Start() == nil
+	if detach {
+		leaveGroup(child)
+	}
+	if child.Start() != nil {
+		return false
+	}
+	recordPID(dir, child.Process.Pid)
+	return true
+}
+
+// recordPID appends pid to the stand-in directory's fakeGHPIDs file, so a
+// test can tell whether that process is still running.
+func recordPID(dir string, pid int) {
+	f, err := os.OpenFile(filepath.Join(dir, fakeGHPIDs), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	_, _ = f.WriteString(strconv.Itoa(pid) + "\n")
+	_ = f.Close()
+}
+
+// releaseAtCleanup writes the stand-in directory's fakeGHRelease file when
+// the test ends, so whatever a stand-in left waiting returns then, and waits
+// for every process the stand-ins recorded to exit, failing the test for one
+// that has not. It is registered after the directory was made, so it runs
+// before the directory is removed, and the release file outlives every
+// process that polls for it.
+func releaseAtCleanup(t *testing.T, dir string) {
+	t.Cleanup(func() {
+		_ = os.WriteFile(filepath.Join(dir, fakeGHRelease), nil, 0o600)
+		awaitStandIns(t, readPIDs(dir))
+	})
+}
+
+// readPIDs returns the identifiers the stand-ins recorded in dir.
+func readPIDs(dir string) []int {
+	data, _ := os.ReadFile(filepath.Join(dir, fakeGHPIDs))
+	var out []int
+	for _, line := range strings.Fields(string(data)) {
+		if n, err := strconv.Atoi(line); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// awaitRelease returns once the stand-in directory's fakeGHRelease file
+// exists, or after limit, whichever is first.
+func awaitRelease(dir string, limit time.Duration) {
+	end := time.Now().Add(limit)
+	for time.Now().Before(end) {
+		if _, err := os.Stat(filepath.Join(dir, fakeGHRelease)); err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func readCalls(dir string) []ghCall {
@@ -351,6 +437,7 @@ func newHarness(t *testing.T, script ghScript, opts ...forge.Option) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	writeScript(t, dir, script)
+	releaseAtCleanup(t, dir)
 	base := append([]forge.Option{
 		forge.WithBinary(os.Args[0]),
 		forge.WithBaseEnvironment([]string{fakeGHDir + "=" + dir}),
@@ -372,6 +459,7 @@ func newHarnessWithEnv(t *testing.T, script ghScript, extra ...string) *harness 
 	t.Helper()
 	dir := t.TempDir()
 	writeScript(t, dir, script)
+	releaseAtCleanup(t, dir)
 	gh, err := forge.NewGitHub(testRedactor,
 		forge.WithBinary(os.Args[0]),
 		forge.WithBaseEnvironment(append([]string{fakeGHDir + "=" + dir}, extra...)),
