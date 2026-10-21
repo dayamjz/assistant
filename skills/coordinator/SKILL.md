@@ -286,9 +286,12 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   copy's HEAD as a push would; `--answer carry-on` creates a new task of
   the same project and branch in the kept copy, with a note, and names it
   in the answer (`task`), so the old task stays as it ended; a run's copy
-  cannot be carried on; `--answer discard` is the person's and not yours:
-  it shows what would be lost with a digest and removes the copy only on
-  `--confirm DIGEST`, and you are refused it. Promoting an investigation
+  cannot be carried on; `--answer discard` shows what would be lost with a
+  digest, which you may read, and removes the copy only on
+  `--confirm DIGEST` given by a person at a terminal: the command surface
+  refuses a confirmation under `--json` or from a process with no
+  terminal, so from where you run you cannot confirm one; tell the person
+  the digest and leave it to them. Promoting an investigation
   whose copy has an entry answers that entry carry on by itself. While the
   project has an open entry, a task you create in it is recorded and not
   started: it reads `dispatched` and its answer (`task.get`) names the

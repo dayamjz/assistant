@@ -572,12 +572,17 @@ worker ended with its copy kept) answers that entry carry on itself, in the
 promotion's own write, since the promoted worker continues in that copy;
 the entry closes with the promotion and never without it.
 
-Discard is yours alone: a task's worker and a subordinate coordinator are
-refused it, and nothing in the program discards on its own. What the
-record says about who discarded is what this surface witnesses, which is
-the machine interface and not a person: a coordinator agent and you reach
-the service the same way, so the answer is recorded as the machine
-interface's and never claims a person decided (section 8's resolver rule).
+Discard is yours alone. A confirmation is taken only from you at a
+terminal: `--confirm` under `--json`, or from a process whose input and
+error are not one terminal (a coordinator agent, a script, a cron job), is
+refused before it reaches the service and removes nothing; a task's worker
+and a subordinate coordinator are refused it there too, and nothing in the
+program discards on its own. The preview is not restricted. What the record
+says about who discarded is what the service witnesses, which is the
+machine interface and not a person: an agent you run in a terminal's
+foreground can confirm as you would, so the answer is recorded as the
+machine interface's and never claims a person decided (section 8's
+resolver rule).
 
 ## Waiting on a fleet
 

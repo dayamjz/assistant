@@ -11,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // PRD section 6's "your own push is never held by it: a run your push
@@ -143,9 +144,13 @@ func TestKeptWorkIsAnsweredLandFromTheCommandLine(t *testing.T) {
 // PRD section 9's discard through the command line: --answer discard alone
 // answers with what would be lost and the digest, in the structured answer,
 // and reads out as the shown row; given again with --confirm and that
-// digest it removes the copy and reads out as the discarded row; both rows
-// are held to the vocabulary. --confirm beside any other answer, or with no
-// digest, is incorrect usage before anything is asked.
+// digest by a person at a terminal it removes the copy and reads out as the
+// discarded row; the rows are held to the vocabulary. --confirm beside any
+// other answer, or with no digest, is incorrect usage before anything is
+// asked. A confirmation under --json, and one from a process not at a
+// terminal, is refused with the row saying so before anything reaches the
+// service: nothing is recorded and the copy stands. Without the terminal
+// check the confirmation from nowhere removes the copy.
 func TestKeptWorkIsDiscardedFromTheCommandLine(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -193,16 +198,36 @@ func TestKeptWorkIsDiscardedFromTheCommandLine(t *testing.T) {
 	if _, err := os.Stat(entry.CopyPath); err != nil {
 		t.Fatalf("showing the discard removed the copy: %v", err)
 	}
-	done := run(t, h, subject, "--json", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest)
-	var discarded machine.KeptWorkAnswered
-	if done.code != machine.ExitOK || json.Unmarshal([]byte(done.stdout), &discarded) != nil || discarded.Effect != machine.KeptWorkDiscarded {
-		t.Fatalf("the confirmed discard exited %s with %+v:\n%s%s", done.code, discarded, done.stdout, done.stderr)
+	needsTerminal := machine.PhraseDiscardNeedsTerminal.String()
+	vocabtest.Assert(t, needsTerminal)
+	for _, refused := range []invocation{
+		run(t, h, subject, "--json", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest),
+		run(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest),
+		atTerminal(t, h, subject, "", "--json", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest),
+	} {
+		if refused.code != machine.ExitFailure || !strings.Contains(refused.stdout+refused.stderr, needsTerminal) {
+			t.Fatalf("a confirmation from no terminal, or under --json, exited %s:\n%s%s\nwant the row %q", refused.code, refused.stdout, refused.stderr, needsTerminal)
+		}
+	}
+	if _, err := os.Stat(entry.CopyPath); err != nil {
+		t.Fatalf("a refused confirmation removed the copy: %v", err)
+	}
+	if still, err := openStore(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() {
+		t.Fatalf("after the refused confirmations the entry reads %+v, %v; want it open", still, err)
+	}
+
+	done := atTerminal(t, h, subject, "", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest)
+	doneRow := machine.KeptWorkAnsweredPhrase(machine.KeptWorkAnswered{Effect: machine.KeptWorkDiscarded}).String()
+	if done.code != machine.ExitOK || !strings.Contains(done.stdout, doneRow) {
+		t.Fatalf("the confirmed discard at a terminal exited %s:\n%s%s\nwant the row %q", done.code, done.stdout, done.stderr, doneRow)
 	}
 	if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the discarded copy still stands: %v", err)
 	}
-	doneRow := machine.KeptWorkAnsweredPhrase(discarded).String()
-	again := run(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest)
+	if gone, err := openStore(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || gone.Answer.Or("") != store.KeptDiscard || !gone.DiscardedAt.IsKnown() {
+		t.Fatalf("after the discard the entry reads %+v, %v; want it answered discard and discarded", gone, err)
+	}
+	again := atTerminal(t, h, subject, "", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest)
 	if again.code != machine.ExitOK || !strings.Contains(again.stdout, doneRow) {
 		t.Fatalf("the discard again reads out as:\n%s%s\nwant the row %q", again.stdout, again.stderr, doneRow)
 	}

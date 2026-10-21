@@ -891,6 +891,15 @@ func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any,
 	case len(f.others) > 0:
 		return nil, usagef("an answer to kept work reads --answer, --hold, --task or --run=RUN, and --confirm with discard, and not --%s", f.others[0])
 	}
+	// A discard is confirmed only by a person at a terminal, PRD section
+	// 6's "you discard it yourself" as the owner decided it on #411: a
+	// confirmation under --json, or from a process not at one, is refused
+	// here, before anything reaches the service, with the row that says so.
+	// What that buys and does not is keptdiscard.go's header in
+	// internal/service.
+	if f.confirmSet && (in.json || !in.env.Interactive) {
+		return nil, discardNeedsTerminal{}
+	}
 	in.progressf("answering kept work %s with %q", f.hold, f.answer)
 	var answered machine.KeptWorkAnswered
 	err := in.callService(ctx, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
@@ -913,3 +922,10 @@ func (in *invocation) flagsBeside() []string {
 	})
 	return out
 }
+
+// discardNeedsTerminal is the refusal of a discard confirmation given where
+// no person is at a terminal. Its text is the row a person reads.
+type discardNeedsTerminal struct{}
+
+// Error is the row, which says all there is.
+func (discardNeedsTerminal) Error() string { return machine.PhraseDiscardNeedsTerminal.String() }

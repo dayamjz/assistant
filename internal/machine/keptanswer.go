@@ -121,6 +121,18 @@ var phraseKeptWorkDiscarded = Phrase{
 	Decision:    "Nothing to decide.",
 }
 
+// PhraseDiscardNeedsTerminal is the row for a discard confirmation given
+// where no person is at a terminal: under --json, or from a process whose
+// standard input and standard error are not one terminal. The command
+// surface refuses it before anything is asked of the service, which is
+// the owner's decision on #411 for keeping discard the person's: a headless
+// agent cannot confirm one. The copy and the entry are as they were.
+var PhraseDiscardNeedsTerminal = Phrase{
+	Outcome:     "Nothing was removed, because a discard is confirmed only by you at a terminal, and this was asked from somewhere else.",
+	Consequence: "The copy stays, with everything it holds, and nothing was recorded.",
+	Decision:    "Run the same command yourself at a terminal, without --json, to remove it.",
+}
+
 // KeptWorkAnsweredPhrase is the line a person reads for an answered kept
 // work entry: one row per effect.
 func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
@@ -137,5 +149,5 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 
 // keptAnswerRows is this file's rows for TablePhrases.
 func keptAnswerRows() []Phrase {
-	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, phraseKeptWorkDiscarded}
+	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, phraseKeptWorkDiscarded, PhraseDiscardNeedsTerminal}
 }

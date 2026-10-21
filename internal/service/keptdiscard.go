@@ -46,20 +46,25 @@ import (
 // by the program and is named in the service log at each start; the
 // answer stands, so it cannot be shown and confirmed again.
 //
-// # What "person-only" is enforced by here, and what it is not
+// # What "person-only" is enforced by, and what it is not
 //
 // PRD section 6 has discard as the person's answer alone. What this file
 // enforces: a task's worker is refused (refuseWorker, from the socket's
 // credentials and the caller's lineage), a subordinate coordinator is
 // refused (refuseDecision), and nothing in the program discards on its own,
 // since the one producer of a discard answer is this method and its one
-// caller is the command surface. What it does not enforce, on
-// internal/store's Resolver terms: a person at the command line and a
-// coordinator agent reach this method over the same socket as the same
-// user, and nothing here witnesses which it was, so the answer is recorded
-// as the machine interface's (ipc.Request.HoldResolver) and never as a
-// person's. The record understates who decided rather than overstating
-// it; a surface that witnesses the person would record more.
+// caller is the command surface. What the command surface enforces, by the
+// owner's decision on #411: a confirmation is taken only from a person at
+// a terminal (internal/cli's Environment.Interactive, never under --json),
+// so a headless coordinator agent, which reaches the service over the
+// socket from no terminal, cannot confirm one, while the preview stays
+// scriptable. What neither enforces, on internal/store's Resolver terms: a
+// person running an agent in a terminal's foreground can have it confirm,
+// and a confirmation that reaches this method over the socket from such a
+// process is indistinguishable here from the person's own, so the answer
+// is recorded as the machine interface's (ipc.Request.HoldResolver) and
+// never as a person's. The terminal check narrows who can confirm; it does
+// not witness a person, and the record never claims one.
 
 // discardKeptWork is the discard answer, on this file's terms.
 func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry store.KeptWork, confirm string) (machine.KeptWorkAnswered, error) {
