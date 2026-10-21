@@ -23,7 +23,16 @@ paths: ["internal/tasks/**"]
   inconclusive proof is a `ProofAttempt` on the `*CleanupRefusal`, never a
   proof, and no remedy names a flag.
 - It is also the one writer of the kept work record: `Keep` reads what a
-  kept copy holds from the copy and records the entry, and
+  kept copy holds from the copy (the entry's identity), reads what of it
+  the default branch, fresh and fetched by identifier, lacks (`lacking` in
+  `kept.go`; a stash is uncommitted state and not compared; an unreadable
+  branch is recorded as unestablished, never guessed, and established by a
+  later `Keep` of the unchanged copy while the entry is open), reads the
+  entry already standing for the copy state before deciding anything, and
+  records the entry or `NothingKept`, which sees what `vcs.Inventory` sees
+  and so not an ignored file; an entry established with nothing lacking
+  stays open until answered or until a cleanup removes the copy on a
+  proof. And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
   refusals are a copy kept for its work; `kept_test.go` places every reason.
 

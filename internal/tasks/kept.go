@@ -2,8 +2,10 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
@@ -19,10 +21,15 @@ import (
 // work.
 //
 // What the entry says the copy holds is read from the copy by Keep, not
-// taken from the caller: the commits its references and HEAD reach for a
-// task's clone, and the commit HEAD stands on for a run's worktree, the same
-// sets the cleanup decision examines. So an entry about a copy that is not
-// standing is refused rather than written from what a caller remembered.
+// taken from the caller: the commits its references and HEAD stand on for a
+// task's clone, and the commit HEAD stands on for a run's worktree (whose
+// references are the gate's), which is the copy's state and the entry's
+// identity. What of that the default branch lacks, the PRD row's wording,
+// is read from the default branch's tip, fresh, by lacking, and is the
+// entry's basis: an entry about a copy that is not standing is refused
+// rather than written from what a caller remembered, and one whose default
+// branch could not be read says so rather than listing a guess, and is
+// filled in by a later Keep of the unchanged copy that can read it.
 
 // KeptPromotionWindow is the reason an investigation's copy is kept once its
 // worker is ended at the end of promotion_window, PRD section 6's "when the
@@ -78,29 +85,66 @@ func KeptOf(r *CleanupRefusal) (Kept, bool) {
 }
 
 // KeptEntry is what Keep did: the entry as it stands, and whether this call
-// wrote it.
+// wrote it or established it, or that the copy holds nothing to keep.
 type KeptEntry struct {
-	// Entry is the kept work entry.
+	// Entry is the kept work entry, and the zero value when NothingKept.
 	Entry store.KeptWork
 	// Recorded is whether this call wrote it; false is an entry already
-	// recorded for the copy and the commits it holds.
+	// recorded for the copy state, or nothing kept.
 	Recorded bool
+	// Established is whether this call filled in the basis of an entry
+	// already recorded unestablished, through store.EstablishKeptWork.
+	Established bool
+	// NothingKept is a copy that holds nothing the default branch at
+	// Against lacks as far as vcs.Inventory sees: no commit the tip does
+	// not reach, and no tracked change, untracked file or stash. A file
+	// git is configured to ignore is invisible to that inventory, as it
+	// is to the cleanup decision, so a copy whose only unique content is
+	// ignored reads NothingKept too; doc.go lists the gap. No entry is
+	// written for it, and none stands for it: a copy in this state that
+	// an entry already records is that entry, established with nothing
+	// lacking, and not NothingKept.
+	NothingKept bool
+	// Against is the default branch tip NothingKept was read against.
+	Against string
 }
 
 // Keep records the kept work entry for a kept copy and reports whether this
-// call wrote it: a copy holding the commits an entry already records is that
-// entry, on store.RecordKeptWork's terms, so asking again of an unchanged
-// copy writes nothing. It reads what the copy holds from the copy, and
-// refuses with ErrCleanupRecord a request naming no owner or both, a task
-// whose reserved copy is not where this home puts it, and a copy that is not
-// standing.
+// call wrote it: a copy in the state an entry already records is that entry,
+// on store.RecordKeptWork's terms, so asking again of an unchanged copy
+// writes no second entry whatever the default branch read as either time.
+// It reads what the copy holds from the copy, and what of that the default
+// branch lacks from the default branch, read now and fetched by identifier
+// (lacking): the entry lists exactly those commits as Lacks, with the tip
+// they were computed against, or, when that cannot be computed, states so
+// with the account and lists nothing as lacking. An entry already standing
+// for the copy state is read first, before anything is decided, so what it
+// becomes is decided on it: an open one recorded unestablished is
+// established by this call when it can compute the set, once, which
+// Established reports, whatever the set holds; an answered or closed one is
+// returned as it stands. Only a copy no entry records, for which the set is
+// established and empty and whose tree holds nothing the inventory sees as
+// uncommitted, is NothingKept, and no entry is written: the same
+// computation that lists a copy's work says there is none, so the scratch
+// case is not a second rule. An entry established with nothing lacking
+// stays open until a person answers it or the cleanup decision removes
+// the copy on a proof, which closes it in the removal's transaction: those
+// are the record's two closings, this call removes nothing, and the next
+// cleanup of the copy is what the sites in internal/service ask.
+//
+// It refuses with ErrCleanupRecord a request naming no owner or both, a
+// task whose reserved copy is not where this home puts it, and a copy that
+// is not standing.
 func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 	if (k.Task == "") == (k.Run == "") {
 		return KeptEntry{}, fmt.Errorf("%w: a kept copy names exactly one owner, a task or a run", ErrCleanupRecord)
 	}
 	var path string
+	var task store.Task
+	var run store.Run
+	var err error
 	if k.Task != "" {
-		task, err := c.store.Task(ctx, k.Task)
+		task, err = c.store.Task(ctx, k.Task)
 		if err != nil {
 			return KeptEntry{}, err
 		}
@@ -112,7 +156,7 @@ func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 				ErrCleanupRecord, task.ID, task.WorktreePath, path)
 		}
 	} else {
-		run, err := c.store.Run(ctx, k.Run)
+		run, err = c.store.Run(ctx, k.Run)
 		if err != nil {
 			return KeptEntry{}, err
 		}
@@ -133,15 +177,124 @@ func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 	if err != nil {
 		return KeptEntry{}, fmt.Errorf("tasks: reading the kept copy at %s: %w", path, err)
 	}
-	holds := inventoryCommits(inv)
-	if k.Run != "" {
-		holds = []string{inv.Head.Commit}
+	holds, reaches := inventoryCommits(inv), committedTips(inv)
+	var l landing
+	if k.Task != "" {
+		l, err = c.taskLanding(ctx, task, copied, nil)
+	} else {
+		holds, reaches = []string{inv.Head.Commit}, []string{inv.Head.Commit}
+		l, err = c.runLanding(ctx, run, copied, nil)
+	}
+	if err != nil {
+		return KeptEntry{}, err
+	}
+	held := lacking(ctx, l, reaches)
+	recorded, err := c.store.KeptWorkOf(ctx, path, holds)
+	switch {
+	case err == nil:
+		return c.establish(ctx, recorded, held)
+	case !errors.Is(err, store.ErrNotFound):
+		return KeptEntry{}, err
+	}
+	if held.established() && len(held.lacks) == 0 && !inv.Dirty && !inv.Untracked && !inv.Stash {
+		return KeptEntry{NothingKept: true, Against: held.against}, nil
 	}
 	entry, wrote, err := c.store.RecordKeptWork(ctx, store.KeptCopy{
-		TaskID: k.Task, RunID: k.Run, CopyPath: path, Holds: holds, Reason: k.Reason, Detail: k.Detail,
+		TaskID: k.Task, RunID: k.Run, CopyPath: path, Holds: holds, Lacks: held.lacks, Against: held.against,
+		Unestablished: held.unestablished, Reason: k.Reason, Detail: k.Detail,
 	})
 	if err != nil {
 		return KeptEntry{}, err
 	}
-	return KeptEntry{Entry: entry, Recorded: wrote}, nil
+	if wrote {
+		return KeptEntry{Entry: entry, Recorded: true}, nil
+	}
+	// Another writer recorded the copy state between the read and the
+	// write; what the entry becomes is decided on it the same way.
+	return c.establish(ctx, entry, held)
+}
+
+// establish is what Keep does with an entry already standing for the copy
+// state: fills in its basis when it is open, unestablished and the set is
+// now established, and otherwise returns it as it stands.
+func (c *Cleaner) establish(ctx context.Context, entry store.KeptWork, held held) (KeptEntry, error) {
+	if entry.Established() || !entry.Open() || !held.established() {
+		return KeptEntry{Entry: entry}, nil
+	}
+	entry, err := c.store.EstablishKeptWork(ctx, entry.ID, held.against, held.lacks)
+	if err != nil {
+		return KeptEntry{}, err
+	}
+	return KeptEntry{Entry: entry, Established: true}, nil
+}
+
+// committedTips is the tips a task copy's committed work is reached from:
+// inventoryCommits without refs/stash, because a stash is uncommitted state,
+// reported by the inventory's Stash indicator and kept for as such, and not
+// a commit the default branch could lack.
+func committedTips(inv vcs.Inventory) []string {
+	stash := vcs.Inventory{Head: inv.Head}
+	for _, ref := range inv.Refs {
+		if ref.Name != "refs/stash" {
+			stash.Refs = append(stash.Refs, ref)
+		}
+	}
+	return inventoryCommits(stash)
+}
+
+// keptDefaultRef is the name, under a landing's namespace, the default
+// branch tip a kept copy is compared against is fetched under.
+const keptDefaultRef = "kept-default-branch"
+
+// held is what a kept copy holds that the default branch lacks, or why that
+// could not be established.
+type held struct {
+	// lacks is, when against is set, every commit the copy reaches that
+	// against does not, each once, in the order of the references that
+	// reach them and most recent first within each; and nil otherwise.
+	lacks []string
+	// against is the default branch tip lacks was computed against.
+	against string
+	// unestablished is why it could not be, when against is empty.
+	unestablished string
+}
+
+func (h held) established() bool { return h.against != "" }
+
+// lacking computes what the copy holds that the default branch lacks, the
+// set PRD section 8's kept work row names: the default branch tip is read
+// now, as the proofs read it (the upstream's, confirmed by its HEAD, or a
+// local task's working copy's), fetched into the copy by identifier, and
+// every commit reached from one of reaches and not from that tip is listed.
+// Any step that fails leaves the set unestablished with that step's
+// account and lists nothing, never a guess at the difference (PRD
+// principle P6: refuse and report). The fetched reference is deleted
+// afterwards, best effort, on landing.forget's terms.
+func lacking(ctx context.Context, l landing, reaches []string) held {
+	defer l.forget(ctx)
+	unestablished := func(detail string) held { return held{unestablished: detail} }
+	if l.upstream == "" {
+		return unestablished("the record names no repository, so there is no default branch to read")
+	}
+	tip, detail := l.defaultTip(ctx)
+	if detail != "" {
+		return unestablished(detail)
+	}
+	if detail := l.fetch(ctx, tip, keptDefaultRef); detail != "" {
+		return unestablished(detail)
+	}
+	lacks := []string{}
+	for _, reach := range reaches {
+		lacked, err := l.repo.CommitsNotIn(ctx, reach, tip)
+		if err != nil {
+			return unestablished("which commits " + reach + " reaches that the default branch at " + tip +
+				" lacks could not be read: " + err.Error())
+		}
+		for _, c := range lacked {
+			if !slices.Contains(lacks, c) {
+				lacks = append(lacks, c)
+			}
+		}
+	}
+	return held{lacks: lacks, against: tip}
 }

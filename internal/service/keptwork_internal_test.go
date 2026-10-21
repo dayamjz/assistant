@@ -99,6 +99,11 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 		!slices.Contains(entry.Holds, head) || entry.CopyPath != copyPath || entry.Answered() {
 		t.Fatalf("the entry = %+v, want task %s's unanswered copy at %s, unproven, holding %s", entry, id, copyPath, head)
 	}
+	// The task names no repository, so there is no default branch to say
+	// what of that the copy alone holds, and the entry says so.
+	if entry.Established() || !entry.Unestablished.IsKnown() {
+		t.Fatalf("the entry = %+v, want it to say what it holds is not established against a default branch", entry)
+	}
 	if redact.New().Redact(entry.Detail) != entry.Detail || entry.Detail == "" {
 		t.Fatalf("the entry's detail %q is not the redacted account of the refusal", entry.Detail)
 	}

@@ -279,22 +279,7 @@ func (c *Cleaner) defaultBranch(ctx context.Context, l landing) (Removal, string
 // stands.
 func (c *Cleaner) localDefault(ctx context.Context, l landing) (Removal, string) {
 	proof := store.CleanupProofDefaultBranch
-	read := func() (string, string) {
-		if l.defaultBranch == "" {
-			return "", "the repository record names no default branch"
-		}
-		refs, err := l.repo.RemoteRefs(ctx, l.upstream, "refs/heads/"+l.defaultBranch)
-		if err != nil {
-			return "", "the working copy could not be read: " + err.Error()
-		}
-		for _, ref := range refs {
-			if ref.Name == "refs/heads/"+l.defaultBranch {
-				return ref.Commit, ""
-			}
-		}
-		return "", "the working copy has no branch " + l.defaultBranch
-	}
-	tip, detail := read()
+	tip, detail := l.localTip(ctx)
 	if detail != "" {
 		return Removal{proof: proof}, detail
 	}
@@ -309,12 +294,40 @@ func (c *Cleaner) localDefault(ctx context.Context, l landing) (Removal, string)
 		return Removal{proof: proof}, "integrating " + strings.Join(result.Commits(), ", ") + " into the local " +
 			l.defaultBranch + " at " + result.Into() + " would change it"
 	}
-	if again, detail := read(); detail != "" {
+	if again, detail := l.localTip(ctx); detail != "" {
 		return Removal{proof: proof}, detail
 	} else if again != tip {
 		return Removal{proof: proof}, "the local " + l.defaultBranch + " moved from " + tip + " to " + again + " during the check"
 	}
 	return Removal{proof: proof, examined: append(result.Commits(), result.Into()), proven: true}, ""
+}
+
+// localTip reads, now, the tip the repository's working copy holds for its
+// default branch, which is where a local task's work lands.
+func (l landing) localTip(ctx context.Context) (string, string) {
+	if l.defaultBranch == "" {
+		return "", "the repository record names no default branch"
+	}
+	refs, err := l.repo.RemoteRefs(ctx, l.upstream, "refs/heads/"+l.defaultBranch)
+	if err != nil {
+		return "", "the working copy could not be read: " + err.Error()
+	}
+	for _, ref := range refs {
+		if ref.Name == "refs/heads/"+l.defaultBranch {
+			return ref.Commit, ""
+		}
+	}
+	return "", "the working copy has no branch " + l.defaultBranch
+}
+
+// defaultTip is the default branch tip work is compared against, read now:
+// the working copy's for a local task, through localTip, and otherwise the
+// upstream's, through freshDefault.
+func (l landing) defaultTip(ctx context.Context) (string, string) {
+	if l.local {
+		return l.localTip(ctx)
+	}
+	return l.freshDefault(ctx)
 }
 
 // freshDefault reads the upstream's default branch tip now, and confirms
@@ -374,7 +387,7 @@ func (l landing) forget(ctx context.Context) {
 	if l.repo == nil {
 		return
 	}
-	for _, name := range []string{"remote-branch", "pull-request-head", "default-branch", "local-default-branch"} {
+	for _, name := range []string{"remote-branch", "pull-request-head", "default-branch", "local-default-branch", keptDefaultRef} {
 		_ = l.repo.DeleteRef(ctx, l.namespace+"/"+name)
 	}
 }
