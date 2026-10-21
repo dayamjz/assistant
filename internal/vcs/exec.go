@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // Option configures a repository handle. Options are supplied when the handle
@@ -62,6 +64,29 @@ func WithMaxOutput(n int64) Option {
 	}
 }
 
+// WithInvocationDeadline sets the deadline one invocation runs under when the
+// context it was called with carries none, which is what a context derived
+// through context.WithoutCancel carries. A caller's own deadline is never
+// shortened by it. A value of zero or less leaves defaultInvocationDeadline
+// in place, because no deadline at all is what this setting exists to rule
+// out.
+func WithInvocationDeadline(d time.Duration) Option {
+	return func(s *settings) {
+		if d > 0 {
+			s.deadline = d
+		}
+	}
+}
+
+// defaultInvocationDeadline is the deadline an invocation gets when its
+// caller's context has none. The longest invocations this package makes are a
+// clone, a fetch and a push, whose size the repository decides, so the bound
+// is generous for those and is still a bound: a git still running at ten
+// minutes is taken as wedged and ended with its group. It is a fixed value of
+// this package rather than a configuration key; whether an operator should be
+// able to change it is an open question for the owner (#430).
+const defaultInvocationDeadline = 10 * time.Minute
+
 // defaultSSHCommand is the ssh command an invocation uses when a caller names
 // none. It is what a plain git installation would reach for, and naming it
 // here rather than taking it from the environment is what makes the ssh
@@ -80,18 +105,18 @@ const defaultMaxOutput = 64 << 20
 // stage's log.
 const maxStderr = 8 << 10
 
-// killGrace is the deadline given to cmd.WaitDelay, which bounds two waits the
-// standard library folds into one setting.
+// killGrace is the grace procgroup.Run is given, which bounds two waits.
 //
-// After a context is cancelled it is how long the child gets to exit before
-// its pipes are abandoned, so a grandchild holding them open cannot keep a
-// cancelled call waiting.
+// After a context ends and git's process group has been sent SIGKILL, it is
+// how long git gets to exit before the call answers without it.
 //
-// It also bounds the wait for those pipes to close after a child exits on its
-// own, and that case has a cost worth stating rather than implying away: a git
-// that exits successfully while something else still holds its standard output
-// or error open past this deadline is reported as a failure, carrying the
-// status git exited with and exec.ErrWaitDelay as the cause. The output
+// It is also given to cmd.WaitDelay, which bounds the wait for git's pipes to
+// close once git has exited. The group is ended before that wait, so what can
+// still hold a pipe open then is a descendant that left the group, and that
+// case has a cost worth stating rather than implying away: a git that exits
+// successfully while such a descendant still holds its standard output or
+// error open past this deadline is reported as a failure, carrying the status
+// git exited with and exec.ErrWaitDelay as the cause. The output
 // collected in that case may be missing bytes git wrote, so reporting it as a
 // result would be worse, and waiting forever instead would be worse still.
 const killGrace = 2 * time.Second
@@ -101,10 +126,11 @@ type settings struct {
 	ssh       string
 	redactor  Redactor
 	maxOutput int64
+	deadline  time.Duration
 }
 
 func newSettings(opts []Option) settings {
-	s := settings{git: "git", ssh: defaultSSHCommand, redactor: defaultRedactor{}, maxOutput: defaultMaxOutput}
+	s := settings{git: "git", ssh: defaultSSHCommand, redactor: defaultRedactor{}, maxOutput: defaultMaxOutput, deadline: defaultInvocationDeadline}
 	for _, o := range opts {
 		if o != nil {
 			o(&s)
@@ -321,20 +347,26 @@ var globalArgs = []string{
 // run invokes git for op with the given subcommand arguments and returns its
 // standard output. The repository addressing and the global options are added
 // here, so a caller passes only the subcommand and its arguments.
+//
+// git runs through procgroup.Run, as the leader of a process group of its
+// own that is ended when git exits and when the context ends, under the
+// handle's invocation deadline when ctx carries none; the package comment
+// says what that bounds and what it does not.
 func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte, error) {
+	ctx, cancel := procgroup.Bound(ctx, r.set.deadline)
+	defer cancel()
 	addr := r.addressing()
 	full := make([]string, 0, len(addr)+len(globalArgs)+len(args))
 	full = append(full, addr...)
 	full = append(full, globalArgs...)
 	full = append(full, args...)
 
-	cmd := exec.CommandContext(ctx, r.set.git, full...)
+	cmd := exec.Command(r.set.git, full...)
 	cmd.Dir = r.path
 	cmd.Env = envFor(os.Environ(), r.set.ssh)
 	// A nil Stdin is os.DevNull, so anything git reads from standard input
 	// sees EOF rather than waiting for a person.
 	cmd.Stdin = nil
-	cmd.WaitDelay = killGrace
 
 	stdout := &capWriter{limit: r.set.maxOutput}
 	// Standard error is diagnostic text rather than a result, so it is kept up
@@ -344,7 +376,7 @@ func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
-	runErr := cmd.Run()
+	runErr := procgroup.Run(ctx, cmd, killGrace)
 	code := exitStatus(cmd)
 	cause := invocationCause(runErr, code, ctx.Err())
 	if stdout.over {

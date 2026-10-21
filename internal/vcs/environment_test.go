@@ -379,8 +379,10 @@ func TestGitThatLeavesItsPipesOpenReportsTheStatusItExitedWith(t *testing.T) {
 	gitEnvironment(t)
 	_, exe := useFakeGit(t)
 	// Only the diff invocation leaves its pipes behind, so the probes an open
-	// needs still answer.
+	// needs still answer. The grandchild leaves git's process group, which
+	// is the one holder ending the group does not reach.
 	t.Setenv(fakeGitHoldOn, "diff")
+	t.Setenv(fakeGitDetach, "1")
 
 	repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe))
 	if err != nil {
@@ -528,8 +530,10 @@ func TestOverLimitOutputKeepsTheProcessErrorThatEndedTheCall(t *testing.T) {
 	_, exe := useFakeGit(t)
 	fakeGitOutput(t, strings.Repeat("worktree /somewhere\x00\x00", 40))
 	// The listing invocation writes past the limit and then leaves its pipes
-	// to a grandchild, so both failures land on the same call.
+	// to a grandchild outside its process group, so both failures land on
+	// the same call.
 	t.Setenv(fakeGitHoldOn, "list")
+	t.Setenv(fakeGitDetach, "1")
 
 	repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(100))
 	if err != nil {
