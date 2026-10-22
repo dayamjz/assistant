@@ -375,7 +375,7 @@ func (r *Repository) runWith(ctx context.Context, op string, extra []string, arg
 	full = append(full, globalArgs...)
 	full = append(full, args...)
 
-	cmd := exec.Command(r.set.git, full...)
+	cmd := procgroup.Command(r.set.git, full...)
 	cmd.Dir = r.path
 	cmd.Env = append(envFor(os.Environ(), r.set.ssh), extra...)
 	// A nil Stdin is os.DevNull, so anything git reads from standard input

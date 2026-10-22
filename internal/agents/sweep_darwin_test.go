@@ -360,7 +360,7 @@ func TestASweepWhoseLsofExitsInTimeStillClears(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sweeping an empty copy with the real lsof under the production deadline: %v", err)
 	}
-	requireClearUnlessHostBlocks(t, r, blockers, "the sweep of an empty copy")
+	requireClearUnlessHostBlocks(t, r, &blockers, "the sweep of an empty copy")
 	hostLimit(t, blockers, "that a timely lsof run clears the sweep")
 }
 
