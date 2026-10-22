@@ -643,7 +643,7 @@ func TestADiscardDigestCoversEverythingTheRemovalDeletes(t *testing.T) {
 		rawGit(t, tk.copy, "stash", "--quiet")
 		rawGit(t, tk.copy, "stash", "store", "--quiet", "-m", "stored back", saved)
 	})
-	l = moves("a commit reset away", l, func() {
+	moves("a commit reset away", l, func() {
 		// The files the commit and the reset write beside the reflogs are
 		// put back as they were, so the reflogs alone carry the change.
 		gitDir := filepath.Join(tk.copy, ".git")
