@@ -1076,15 +1076,16 @@ func (s *Store) KeptWorkLandingsOwed(ctx context.Context) ([]KeptWork, error) {
 }
 
 // ErrKeptWorkNotCarryOn is returned by MarkKeptWorkCarriedOn for an entry
-// that holds no carry-on claim.
-var ErrKeptWorkNotCarryOn = errors.New("store: the kept work entry holds no carry-on claim")
+// that holds no carry-on claim naming the task it is given.
+var ErrKeptWorkNotCarryOn = errors.New("store: the kept work entry holds no carry-on claim naming that task")
 
 // ErrKeptWorkCarriedOn is returned by MarkKeptWorkCarriedOn for an entry
 // already carried on.
 var ErrKeptWorkCarriedOn = errors.New("store: the kept work entry is already carried on")
 
-// MarkKeptWorkCarriedOn records that the task a carry-on claim names owns
-// the copy, the carry on's second fact, once: the entry is answered
+// MarkKeptWorkCarriedOn records that task, the task the entry's carry-on
+// claim names, owns the copy, the carry on's second fact, once: the entry
+// is answered
 // carry-on, by who asked and as of when, with the instant, in one write
 // that also answers and marks every other open entry of the same copy kept
 // by the time of the claim and holding no claim or confirmation of its
@@ -1093,10 +1094,12 @@ var ErrKeptWorkCarriedOn = errors.New("store: the kept work entry is already car
 // what it carried on, and is left open. The task's row must exist; one
 // that does not is ErrNotFound. An entry already marked is
 // ErrKeptWorkCarriedOn, one answered otherwise ErrKeptWorkAnswered, one
-// closed on a proof ErrKeptWorkClosed, one with no claim
-// ErrKeptWorkNotCarryOn, and an unknown identifier ErrNotFound. It records
-// and moves nothing else; the adoption is the caller's, made before this.
-func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64) (KeptWork, error) {
+// closed on a proof ErrKeptWorkClosed, one with no claim naming task
+// ErrKeptWorkNotCarryOn, so a caller carrying out a claim since withdrawn
+// and claimed again for another task marks nothing, and an unknown
+// identifier ErrNotFound. It records and moves nothing else; the adoption
+// is the caller's, made before this.
+func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64, task string) (KeptWork, error) {
 	var out KeptWork
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
@@ -1112,10 +1115,12 @@ func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64) (KeptWork, 
 			return ErrKeptWorkClosed
 		case !k.CarriedOnTask.IsKnown():
 			return ErrKeptWorkNotCarryOn
+		case k.CarriedOnTask.Or("") != task:
+			return fmt.Errorf("%w: the claim names task %s, not %s", ErrKeptWorkNotCarryOn, k.CarriedOnTask.Or(""), task)
 		}
-		var task, copied, by, claimed string
-		if err := tx.QueryRowContext(ctx, `SELECT carried_on_task, carried_on_copy, carry_on_by, carry_on_claimed_at FROM kept_work WHERE id = ?`,
-			id).Scan(&task, &copied, &by, &claimed); err != nil {
+		var copied, by, claimed string
+		if err := tx.QueryRowContext(ctx, `SELECT carried_on_copy, carry_on_by, carry_on_claimed_at FROM kept_work WHERE id = ?`,
+			id).Scan(&copied, &by, &claimed); err != nil {
 			return err
 		}
 		var stands int

@@ -99,6 +99,13 @@ import (
 // created nothing and moved nothing, so the claim is withdrawn
 // (store.WithdrawKeptWorkCarryOn, refused by the store once the task's row
 // exists) and the answer is refused naming why, with the entry open as it was.
+// The completion carries out the claim the entry holds, read again under the
+// task's dispatch slot, never one the answer read before it: a claim another
+// call withdrew, and a retry claimed again for another task in between, is
+// the retry's to carry out, and the mark takes the task it carries out for
+// and refuses another (store.MarkKeptWorkCarriedOn). Only a call holding a
+// task's slot withdraws its claim, so a claim that names the task under the
+// slot stands until that call marks or withdraws it.
 // Every step after the claim is idempotent on what it finds (the row stands,
 // the instructions file stands, the copy stands at the new path, the note is in
 // the file), so a service that stops anywhere in it is completed by the next
@@ -167,6 +174,11 @@ func (s *Service) carryOnKeptWork(ctx context.Context, req ipc.Request, entry st
 			return machine.KeptWorkAnswered{}, err
 		default:
 			entry = claimed
+		}
+	}
+	if s.betweenCarryOnClaimAndCompletion != nil {
+		if err := s.betweenCarryOnClaimAndCompletion(); err != nil {
+			return machine.KeptWorkAnswered{}, err
 		}
 	}
 	return s.completeCarryOn(ctx, entry)
@@ -349,33 +361,33 @@ func (s *Service) assertReshaped(ctx context.Context, entry store.KeptWork, id, 
 	return nil
 }
 
-// completeCarryOn carries out a carry-on answer already recorded on the
-// entry, on this file's terms, from whatever an earlier call left.
+// completeCarryOn carries out the carry-on claim the entry holds, on this
+// file's terms, from whatever an earlier call left. The claim is the one
+// the entry holds now, read under the task's dispatch slot, never one the
+// caller read before: a claim withdrawn and claimed again since names
+// another task, and carrying the old one out would create a task and move
+// the copy for a claim that no longer stands.
 func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
+	// Read first: another call may have withdrawn the claim the caller read
+	// and a later one claimed another task, or another entry of the same copy
+	// completed may have marked this one.
+	entry, err := s.store.KeptWorkEntry(ctx, entry.ID)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
 	id, ok := entry.CarriedOnTask.Get()
-	if !ok {
-		return machine.KeptWorkAnswered{}, fmt.Errorf("service: kept work entry %d holds no carry-on claim and names no task", entry.ID)
+	switch {
+	case ok && entry.CarriedOnAt.IsKnown():
+		return machine.KeptWorkAnswered{Entry: entry, Effect: machine.KeptWorkCarriedOn, Task: id}, nil
+	case entry.Answered() || entry.Closure.IsKnown():
+		return machine.KeptWorkAnswered{}, refusedAnswered(entry)
+	case !entry.CarryOnClaimed():
+		// Withdrawn by another call in between.
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: the carry on of kept work entry %d was withdrawn; the entry is open",
+			ipc.ErrRefused, entry.ID)
 	}
 	done := func(k store.KeptWork) machine.KeptWorkAnswered {
 		return machine.KeptWorkAnswered{Entry: k, Effect: machine.KeptWorkCarriedOn, Task: id}
-	}
-	// Read again: another entry of the same copy completed may have marked
-	// this one with it.
-	if again, err := s.store.KeptWorkEntry(ctx, entry.ID); err == nil {
-		entry = again
-	} else {
-		return machine.KeptWorkAnswered{}, err
-	}
-	if entry.CarriedOnAt.IsKnown() {
-		return done(entry), nil
-	}
-	if !entry.CarryOnClaimed() {
-		// Withdrawn, or answered otherwise, by another call in between.
-		if entry.Answered() || entry.Closure.IsKnown() {
-			return machine.KeptWorkAnswered{}, refusedAnswered(entry)
-		}
-		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: the carry on of kept work entry %d by task %s was withdrawn; the entry is open",
-			ipc.ErrRefused, entry.ID, id)
 	}
 	settle, err := s.claimDispatch(id)
 	if err != nil {
@@ -389,6 +401,19 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 		s.mu.Unlock()
 		s.dispatchInBackground()
 	}()
+	// Read again under the slot: only a call holding this task's slot
+	// withdraws its claim, so a claim that still names the task here stands
+	// until this call marks or withdraws it.
+	if entry, err = s.store.KeptWorkEntry(ctx, entry.ID); err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	if entry.CarriedOnAt.IsKnown() && entry.CarriedOnTask.Or("") == id {
+		return done(entry), nil
+	}
+	if !entry.CarryOnClaimed() || entry.CarriedOnTask.Or("") != id {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: the carry on of kept work entry %d by task %s no longer stands; answer again",
+			ipc.ErrRefused, entry.ID, id)
+	}
 	plan, err := s.carryOnOf(ctx, entry)
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
@@ -465,7 +490,7 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	if err := appendOnce(instructions, carryOnHeading, carryOnNote(entry, plan.old)); err != nil {
 		return machine.KeptWorkAnswered{}, fmt.Errorf("service: writing the carry-on note into the instructions of task %s: %w", id, err)
 	}
-	marked, err := s.store.MarkKeptWorkCarriedOn(ctx, entry.ID)
+	marked, err := s.store.MarkKeptWorkCarriedOn(ctx, entry.ID, id)
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}

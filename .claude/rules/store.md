@@ -76,8 +76,8 @@ paths: ["internal/store/**"]
   `ClaimKeptWorkCarryOn`, which leaves it open and listed, and withdrawn
   whole by `WithdrawKeptWorkCarryOn` only while the task's row does not
   exist; and the answer, written only with `carried_on_at` by
-  `MarkKeptWorkCarriedOn` once the task exists and owns the copy, which
-  the triggers enforce; migration 56 records a
+  `MarkKeptWorkCarriedOn`, given the task the claim names, once that task
+  exists and owns the copy, which the triggers enforce; migration 56 records a
   discard as two facts: the person's confirmation (`discard_digest`, what
   it was shown, with the commits, who and when), written whole on an open
   entry by `ConfirmKeptWorkDiscard`, which leaves it open and listed, and

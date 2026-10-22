@@ -1,11 +1,13 @@
 package service_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -531,6 +533,90 @@ func TestACarryOnWhoseIntakeIsRefusedLeavesTheEntryOpen(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(entry.CopyPath, "finding.txt")); err != nil {
 			t.Fatalf("the kept copy is not where it was: %v", err)
+		}
+	})
+}
+
+// A carry-on answer completes the claim the entry holds when it completes,
+// never one it read before, the reviewer's sequence: the answer claims task A
+// and, before its completion reads the entry, another answer's intake was
+// refused and withdrew A and a retry claimed task B (the store writes both,
+// through the seam, as those answers write them). The answer then carries on
+// with B or refuses; it never creates A or moves the copy to A's path. Without
+// that, it created A and moved the kept copy into A's directory, the mark
+// refused because the entry names B, and B could never be completed because
+// the copy was gone from the path the entry records.
+func TestACarryOnCompletesTheClaimTheEntryHoldsNotOneItReadBefore(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	var first, second string
+	var once sync.Once
+	o, _ := workerOptions(t, h)
+	o = service.WithCarryOnClaimInterruptForTest(t, o, func() error {
+		var err error
+		once.Do(func() {
+			ctx := context.Background()
+			records, openErr := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
+			if openErr != nil {
+				err = openErr
+				return
+			}
+			defer func() { _ = records.Close() }()
+			claimed, readErr := records.KeptWorkEntry(ctx, entry.ID)
+			if readErr != nil {
+				err = readErr
+				return
+			}
+			first = claimed.CarriedOnTask.Or("")
+			if _, err = records.WithdrawKeptWorkCarryOn(ctx, entry.ID, first); err != nil {
+				return
+			}
+			if second, err = home.NewTaskID(); err != nil {
+				return
+			}
+			_, err = records.ClaimKeptWorkCarryOn(ctx, entry.ID, second, claimed.CarriedOnCopy.Or(""), store.ResolvedByMachineInterface())
+		})
+		return err
+	})
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		callErr := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		if first == "" || second == "" {
+			t.Fatalf("the seam did not run (%q, %q): %+v, %v", first, second, out, callErr)
+		}
+		if _, err := recordsOf(t, h).Task(ctx, first); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("task %s, of the withdrawn claim, reads %v; want it never created (the answer read %+v, %v)", first, err, out, callErr)
+		}
+		firstPath, err := h.TaskCopy(first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(firstPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("something stands at %s, the withdrawn claim's task's path: %v", firstPath, err)
+		}
+		// The answer again completes the claim standing, whatever the first
+		// call did with it.
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err != nil {
+			t.Fatalf("carrying the entry on again: %v", err)
+		}
+		done := waitCarriedOn(t, h, entry.ID)
+		if done.CarriedOnTask.Or("") != second || out.Task != second {
+			t.Fatalf("the entry was carried on by %s (answer named %s); want the standing claim's %s", done.CarriedOnTask.Or(""), out.Task, second)
+		}
+		secondPath, err := h.TaskCopy(second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(secondPath, "finding.txt")); err != nil {
+			t.Fatalf("the kept copy is not task %s's copy: %v", second, err)
 		}
 	})
 }

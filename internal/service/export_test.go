@@ -61,6 +61,16 @@ func WithCarryOnInterruptForTest(tb testing.TB, o Options, f func() error) Optio
 	return o
 }
 
+// WithCarryOnClaimInterruptForTest returns o with a carry-on answer's seam
+// between its read or write of the entry's claim and the completion's read
+// of the entry set to f, for this package's external tests: what f writes
+// to the store in between is what another answer could have written while
+// this one ran, and an error f returns ends the answer there.
+func WithCarryOnClaimInterruptForTest(tb testing.TB, o Options, f func() error) Options {
+	o.carryOnTest, o.interruptCarryOnClaim = tb, f
+	return o
+}
+
 // WithDiscardInterruptForTest returns o with a discard's seam between the
 // record of the person's confirmation and the copy's removal set to f, for
 // this package's external tests: a discard whose f returns an error ends

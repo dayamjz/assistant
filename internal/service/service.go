@@ -216,6 +216,11 @@ type Options struct {
 	// never does.
 	carryOnTest      testing.TB
 	interruptCarryOn func() error
+	// interruptCarryOnClaim is a carry on's seam between the answer's read
+	// or write of the claim and its completion, which export_test.go's
+	// WithCarryOnClaimInterruptForTest sets, with carryOnTest, and the
+	// product never does.
+	interruptCarryOnClaim func() error
 	// discardTest and interruptDiscard are a discard's seam between the
 	// record of the person's confirmation and the copy's removal, which
 	// export_test.go's WithDiscardInterruptForTest sets and the product
@@ -438,6 +443,11 @@ type Service struct {
 	// leaves it. It is nil in production and set only through
 	// WithCarryOnInterruptForTest.
 	betweenCarryOnMoveAndMark func() error
+	// betweenCarryOnClaimAndCompletion runs in a carry-on answer after it
+	// read or wrote the entry's claim and before the completion reads the
+	// entry, and an error it returns ends the answer there. It is nil in
+	// production and set only through WithCarryOnClaimInterruptForTest.
+	betweenCarryOnClaimAndCompletion func() error
 	// betweenDiscardRecordAndRemoval runs in a discard after the person's
 	// confirmation was recorded, once the call carrying it out holds the
 	// copy's discard slot, and before the copy is read for its removal;
@@ -797,6 +807,12 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 			return errors.New("service: the carry-on interrupt is a test's seam and takes the test")
 		}
 		s.betweenCarryOnMoveAndMark = o.interruptCarryOn
+	}
+	if o.interruptCarryOnClaim != nil {
+		if o.carryOnTest == nil {
+			return errors.New("service: the carry-on claim interrupt is a test's seam and takes the test")
+		}
+		s.betweenCarryOnClaimAndCompletion = o.interruptCarryOnClaim
 	}
 	if o.interruptDiscard != nil {
 		if o.discardTest == nil {
