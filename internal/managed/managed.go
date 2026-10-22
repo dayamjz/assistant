@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -387,7 +386,7 @@ func (m *Manager) run(ctx context.Context, args ...string) error {
 	bounded, cancel := context.WithTimeout(ctx, m.bound)
 	defer cancel()
 	var out bytes.Buffer
-	cmd := exec.Command(bin, args...)
+	cmd := procgroup.Command(bin, args...)
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := procgroup.Run(bounded, cmd, managerGrace); err != nil {

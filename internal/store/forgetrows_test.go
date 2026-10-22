@@ -164,6 +164,10 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 	if _, err := s.RecordRunCopySweep(ctx, RunCopySweep{Run: run.ID, Outcome: SweepNothingStanding, Occasion: SweptAtFinish}); err != nil {
 		t.Fatalf("RecordRunCopySweep: %v", err)
 	}
+	if _, err := s.RecordRunRebase(ctx, RunRebase{Run: run.ID, Submitted: run.SubmittedHead, Before: run.SubmittedHead,
+		Onto: "bbbb", After: "cccc"}); err != nil {
+		t.Fatalf("RecordRunRebase: %v", err)
+	}
 	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run.ID, Proof: Known(CleanupProofDefaultBranch), Examined: []string{"aaaa"}}); err != nil {
 		t.Fatalf("RecordRunCleanup: %v", err)
 	}

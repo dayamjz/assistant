@@ -11,7 +11,6 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/safety"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -184,7 +183,7 @@ func (s *Service) offerLocal(ctx context.Context, task store.Task, update gate.R
 	if err != nil {
 		return ignored("the change could not be offered for approval: " + err.Error())
 	}
-	target, primary, err := localTarget(ctx, repository)
+	target, primary, err := s.localTarget(ctx, repository)
 	if err != nil {
 		return ignored("the change could not be offered for approval: " + err.Error())
 	}
@@ -214,11 +213,11 @@ func (s *Service) offerLocal(ctx context.Context, task store.Task, update gate.R
 
 // localTarget is the reference a local landing moves - the repository's
 // default branch in its working copy - and that working copy, opened.
-func localTarget(ctx context.Context, repository store.Repository) (safety.Target, *vcs.Repository, error) {
+func (s *Service) localTarget(ctx context.Context, repository store.Repository) (safety.Target, *vcs.Repository, error) {
 	if repository.DefaultBranch == "" {
 		return safety.Target{}, nil, fmt.Errorf("the repository record of %s names no default branch", repository.ID)
 	}
-	primary, err := vcs.OpenWorktree(ctx, repository.WorkingPath, vcs.WithRedactor(redact.New()))
+	primary, err := vcs.OpenWorktree(ctx, repository.WorkingPath, s.git()...)
 	if err != nil {
 		return safety.Target{}, nil, err
 	}
@@ -245,7 +244,7 @@ func (s *Service) landLocally(ctx context.Context, req ipc.Request, task store.T
 	if err != nil {
 		return store.LocalLanding{}, err
 	}
-	target, primary, err := localTarget(ctx, repository)
+	target, primary, err := s.localTarget(ctx, repository)
 	if err != nil {
 		return store.LocalLanding{}, err
 	}

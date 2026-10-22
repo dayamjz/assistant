@@ -13,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 const (
@@ -107,6 +108,7 @@ func newFixture(t *testing.T) *fixture {
 			f.postureAsked.Add(1)
 			return f.posture, f.postureErr
 		},
+		GitDeadline: vcs.DefaultInvocationDeadline,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

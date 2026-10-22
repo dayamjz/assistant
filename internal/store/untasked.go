@@ -8,7 +8,7 @@ import (
 )
 
 // untaskedShape is one of the queue's shapes about no task: migration 48's
-// domain_wake and migration 54's kept_work_wake. Both are the wake table's
+// domain_wake and migration 55's kept_work_wake. Both are the wake table's
 // columns with the task replaced by their owner, both are the first
 // coordinator's alone, and both are offered, handed out and acknowledged on
 // the same terms, so one implementation serves both and neither can drift

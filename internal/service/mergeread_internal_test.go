@@ -12,6 +12,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/checkpoints"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/graph"
@@ -77,11 +78,12 @@ func newMergeReadFixture(t *testing.T, script forgetest.Script) mergeReadFixture
 		starting:    make(map[branchKey]*branchGate),
 		advancing:   make(map[string]*slot),
 		stopCtx:     stopCtx, stopCancel: stop,
+		cfg: config.Config{GitDeadline: config.DefaultGitDeadline},
 	}
 	if s.queue, err = s.newQueue(); err != nil {
 		t.Fatalf("building the queue: %v", err)
 	}
-	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records, Forge: s.forge}); err != nil {
+	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records, Forge: s.forge, GitDeadline: config.DefaultGitDeadline}); err != nil {
 		t.Fatalf("building the cleaner: %v", err)
 	}
 	resolution, err := agents.Resolve(ctx, []string{agents.AutoEntry},

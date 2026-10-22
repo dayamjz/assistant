@@ -2,7 +2,9 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -22,6 +24,35 @@ import (
 // remote-tracking reference that proves only that something was once
 // pushed. The upstream is the repository record's, never the gate: a
 // reference in the gate is a push the gate admitted and not a landing.
+//
+// # A landing the gate rebased
+//
+// The gate's rebase stage gives the commits it replays new identifiers and
+// publishes those, so a task copy still holding what its worker pushed holds
+// commits no upstream reaches under their own identifiers, however surely
+// they landed. The first two proofs therefore ask of each commit of the work
+// whether it is reachable from the tip they read, or else whether a run
+// rebase record of one of the task's own runs (store.RunRebase) carries it
+// there: the commit is in the history of the commit that run was submitted,
+// read in the copy, the head that run's rebase left, which is the identifier
+// the run published, is reachable from the tip, and integrating the commit
+// into that head would change nothing, by internal/safety's Incorporation.
+// The record is a fact the program observed when it made the rewrite, and it
+// says which published commit to look at; it never stands in for looking. A
+// rebase can return without a conflict and still leave work out, and the
+// stage refuses to record one its own content check catches, but this proof
+// makes the same check again over the copy's own commit rather than trust
+// that, because the copy is what a removal would destroy. What the content
+// check costs: a chain of rebases with a fix round between them whose commit
+// rewrote the worker's own lines does not hold the worker's commit as it
+// stood, so such a landing is not followed and its copy is kept unless
+// another proof holds. The record is
+// internal/stages' to write and to state the limits of, in rebaserecord.go;
+// what this adds to them is that only the runs internal/store attributes to
+// the task are read (TaskSnapshot.Runs), so a rebase recorded by a run the
+// snapshot no longer attributes, one of an earlier attempt's, is not followed
+// and its copy is kept unless another proof holds. A run copy's work is the
+// head the run itself left, so its landing follows no record.
 //
 // No transaction is claimed around any of this. A fetch lands objects and
 // a reference under refs/assistant/cleanup/ in the repository the check
@@ -46,6 +77,11 @@ type landing struct {
 	branch string
 	// work is the commits that must have landed.
 	work []string
+	// carried is the run rebase records of the task's runs, which the first
+	// two proofs may follow from a commit of the work to the commit the gate
+	// published for it; empty for a run's copy and for a task none of whose
+	// runs recorded one.
+	carried []store.RunRebase
 	// pullRequest is the merged pull request the record names, when a merge
 	// record names one.
 	pullRequest *pullRequestFact
@@ -87,6 +123,13 @@ func (c *Cleaner) taskLanding(ctx context.Context, task store.Task, copied *vcs.
 	snap, err := c.store.TaskSnapshot(ctx, task.ID)
 	if err != nil {
 		return landing{}, err
+	}
+	for _, run := range snap.Runs {
+		rebases, err := c.store.RunRebases(ctx, run.ID)
+		if err != nil {
+			return landing{}, fmt.Errorf("tasks: reading the rebases run %s of task %s recorded: %w", run.ID, task.ID, err)
+		}
+		l.carried = append(l.carried, rebases...)
 	}
 	resolved := taskstate.Resolve(taskstate.Inputs{Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds,
 		Events: snap.Events, MergeRecords: snap.MergeRecords, Cleanup: snap.Cleanup, LocalLanding: snap.LocalLanding})
@@ -154,7 +197,7 @@ func (c *Cleaner) prove(ctx context.Context, l landing) (Removal, []ProofAttempt
 
 // remoteBranch is the first proof: every commit of the work is reachable
 // from the tip the upstream advertises for the branch, read now and fetched
-// by identifier.
+// by identifier, itself or through a rebase the task's runs recorded.
 func (c *Cleaner) remoteBranch(ctx context.Context, l landing) (Removal, string) {
 	proof := store.CleanupProofRemoteBranch
 	if l.branch == "" {
@@ -176,22 +219,20 @@ func (c *Cleaner) remoteBranch(ctx context.Context, l landing) (Removal, string)
 	if detail := l.fetch(ctx, tip, "remote-branch"); detail != "" {
 		return Removal{proof: proof}, detail
 	}
-	for _, w := range l.work {
-		reachable, err := l.repo.IsAncestor(ctx, w, tip)
-		if err != nil {
-			return Removal{proof: proof}, "whether " + w + " is reachable from " + tip + " could not be established: " + err.Error()
-		}
-		if !reachable {
-			return Removal{proof: proof}, "commit " + w + " is not reachable from the upstream's " + l.branch + " at " + tip
-		}
+	examined, detail := l.allReached(ctx, tip, "the upstream's "+l.branch+" at "+tip, func(w string) string {
+		return "commit " + w + " is not reachable from the upstream's " + l.branch + " at " + tip
+	})
+	if detail != "" {
+		return Removal{proof: proof}, detail
 	}
-	return Removal{proof: proof, examined: append(append([]string(nil), l.work...), tip), proven: true}, ""
+	return Removal{proof: proof, examined: append(examined, tip), proven: true}, ""
 }
 
 // mergedPullRequest is the second proof: the pull request the merge record
 // names reads merged on the code host, into the default branch the upstream
 // confirms fresh, at the head the merge was recorded at, and that head,
-// fetched by identifier, contains every commit of the work.
+// fetched by identifier, contains every commit of the work, itself or
+// through a rebase the task's runs recorded.
 func (c *Cleaner) mergedPullRequest(ctx context.Context, l landing) (Removal, string) {
 	proof := store.CleanupProofMergedPullRequest
 	if l.pullRequest == nil {
@@ -226,16 +267,123 @@ func (c *Cleaner) mergedPullRequest(ctx context.Context, l landing) (Removal, st
 	if detail := l.fetch(ctx, got.HeadCommit, "pull-request-head"); detail != "" {
 		return Removal{proof: proof}, detail
 	}
+	examined, detail := l.allReached(ctx, got.HeadCommit, "the merged head "+got.HeadCommit, func(w string) string {
+		return "commit " + w + " is not in the merged head " + got.HeadCommit
+	})
+	if detail != "" {
+		return Removal{proof: proof}, detail
+	}
+	return Removal{proof: proof, examined: append(examined, got.HeadCommit), proven: true}, ""
+}
+
+// allReached asks reached of every commit of the work against tip, which the
+// caller has fetched and names as where for a detail and states a commit not
+// reached in with absent, and returns the commits
+// the answers rest on, each once: every commit of the work in order, and the
+// submitted commit and published head of each rebase record an answer
+// followed. A detail is the first commit not reached, or the first answer
+// that could not be established.
+func (l landing) allReached(ctx context.Context, tip, where string, absent func(string) string) ([]string, string) {
+	var examined []string
 	for _, w := range l.work {
-		contained, err := l.repo.IsAncestor(ctx, w, got.HeadCommit)
-		if err != nil {
-			return Removal{proof: proof}, "whether " + w + " is in the merged head " + got.HeadCommit + " could not be established: " + err.Error()
+		via, detail := l.reached(ctx, w, tip, where, absent)
+		if detail != "" {
+			return nil, detail
 		}
-		if !contained {
-			return Removal{proof: proof}, "commit " + w + " is not in the merged head " + got.HeadCommit
+		for _, c := range append([]string{w}, via...) {
+			if !slices.Contains(examined, c) {
+				examined = append(examined, c)
+			}
 		}
 	}
-	return Removal{proof: proof, examined: append(append([]string(nil), l.work...), got.HeadCommit), proven: true}, ""
+	return examined, ""
+}
+
+// reached answers whether commit w is reached from tip: reachable itself, or
+// carried through a rebase record of the task's runs, in record order, on
+// follows' terms, which include a content check of w against the record's
+// published head and not ancestry alone. It returns the record's submitted
+// commit and published head when it followed one, and nothing when w is
+// reachable itself. A commit a record names that the copy does not hold is
+// not a way there, since the tip's history is in the copy once it is
+// fetched; any other failure is a detail and never an answer. A commit not
+// reached is stated with absent, followed by how many records were looked
+// through.
+func (l landing) reached(ctx context.Context, w, tip, where string, absent func(string) string) ([]string, string) {
+	direct, err := l.repo.IsAncestor(ctx, w, tip)
+	if err != nil {
+		return nil, "whether " + w + " is reachable from " + where + " could not be established: " + err.Error()
+	}
+	if direct {
+		return nil, ""
+	}
+	var lacking []string
+	for _, r := range l.carried {
+		followed, lacks, detail := l.follows(ctx, r, w, tip)
+		if detail != "" {
+			return nil, detail
+		}
+		if followed {
+			return []string{r.Submitted, r.After}, ""
+		}
+		if lacks != "" {
+			lacking = append(lacking, lacks)
+		}
+	}
+	detail := absent(w) + ", itself or through " + recordedRebases(len(l.carried))
+	if len(lacking) > 0 {
+		detail += ": " + strings.Join(lacking, "; ")
+	}
+	return nil, detail
+}
+
+// follows reports whether rebase record r carries w to tip: w is in the
+// history of r's submitted commit, r's published head is reachable from tip,
+// and integrating w into that published head would change nothing, checked
+// here through internal/safety's Incorporation rather than taken from the
+// record, so a removal never rests on the writer's word that the rewrite
+// kept the work. A commit the copy does not hold answers false. A published
+// head that does not hold w's content, or whose comparison with it could not
+// be made, answers false with what was found, for the detail of a commit no
+// record carried. Any other failure is a detail.
+func (l landing) follows(ctx context.Context, r store.RunRebase, w, tip string) (bool, string, string) {
+	for _, step := range [][2]string{{w, r.Submitted}, {r.After, tip}} {
+		ok, err := l.repo.IsAncestor(ctx, step[0], step[1])
+		switch {
+		case errors.Is(err, vcs.ErrRefNotFound):
+			return false, "", ""
+		case err != nil:
+			return false, "", "whether " + step[0] + " is reachable from " + step[1] + ", which run " + r.Run +
+				"'s recorded rebase rests on, could not be established: " + err.Error()
+		case !ok:
+			return false, "", ""
+		}
+	}
+	result, err := safety.New(l.repo).Incorporation(ctx, []string{w}, r.After)
+	switch {
+	case errors.Is(err, safety.ErrNotEstablished):
+		return false, "whether " + r.After + ", the head run " + r.Run + "'s recorded rebase left, holds " + w +
+			" was not established: " + err.Error(), ""
+	case err != nil:
+		return false, "", "whether " + r.After + ", the head run " + r.Run + "'s recorded rebase left, holds " + w +
+			" could not be established: " + err.Error()
+	case !result.Incorporated():
+		return false, "integrating " + w + " into " + r.After + ", the head run " + r.Run +
+			"'s recorded rebase left, would change it", ""
+	}
+	return true, "", ""
+}
+
+// recordedRebases names how many rebase records the task's runs left, for a
+// detail saying none of them carried a commit where it was looked for.
+func recordedRebases(n int) string {
+	switch n {
+	case 0:
+		return "a rebase, since none of the task's runs recorded one"
+	case 1:
+		return "the one rebase the task's runs recorded"
+	}
+	return "any of the " + strconv.Itoa(n) + " rebases the task's runs recorded"
 }
 
 // defaultBranch is the third proof: the work is already present, by

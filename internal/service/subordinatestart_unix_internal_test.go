@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -69,7 +70,10 @@ func shellCall(t *testing.T, socket, dir string, method ipc.Method, params strin
 }
 
 // shellAnswer waits for a shellCall's exit status and returns it with the
-// wire code it wrote.
+// wire code it wrote. A refusal, status 1, is the wire error callMain
+// writes as JSON, and its message, the refusal's reason, is logged at the
+// caller's line; it fails the test when it is not one. Any other status
+// returns no code and logs what the call wrote to standard error.
 func shellAnswer(t *testing.T, dir string) (int, ipc.Code) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
@@ -78,7 +82,16 @@ func shellAnswer(t *testing.T, dir string) (int, ipc.Code) {
 		if err == nil {
 			status, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
 			stderr, _ := os.ReadFile(filepath.Join(dir, "err"))
-			return status, ipc.Code(strings.TrimSpace(string(stderr)))
+			if status != 1 {
+				t.Logf("the subordinate's call exited %d, writing %q to standard error", status, stderr)
+				return status, ""
+			}
+			var wire ipc.Error
+			if err := json.Unmarshal(stderr, &wire); err != nil || wire.Code == "" {
+				t.Fatalf("the subordinate's call exited as refused and its standard error is not a wire error with a code (%v): %q", err, stderr)
+			}
+			t.Logf("the subordinate's call was refused with %q: %s", wire.Code, wire.Message)
+			return status, wire.Code
 		}
 		if !time.Now().Before(deadline) {
 			t.Fatal("the subordinate's call never finished")

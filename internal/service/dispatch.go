@@ -11,7 +11,6 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/machine"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -537,7 +536,7 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 
 	// The observation and the proof.
 	env := agents.WorkerEnvironment(os.Environ(), nil)
-	obs, err := vcs.Observe(ctx, copyPath, vcs.WithRedactor(redact.New()))
+	obs, err := vcs.Observe(ctx, copyPath, s.git()...)
 	if err != nil {
 		if errors.Is(err, vcs.ErrNotARepository) {
 			return dispatched{}, s.refuseIsolation(ctx, id, attempt.Sequence, resolved.State.Basis.EventSequence,
@@ -559,7 +558,7 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	}
 
 	// The copy's snapshot, then the line the worker is told to run.
-	snapshot, err := copySnapshot(ctx, proof.Copy)
+	snapshot, err := s.copySnapshot(ctx, proof.Copy)
 	if err != nil {
 		return dispatched{}, fmt.Errorf("service: reading the references of the copy of task %s: %w", id, err)
 	}
@@ -653,7 +652,7 @@ func (s *Service) gatePathOf(ctx context.Context, repository store.Repository) (
 // which is the base a task's copy starts from. A primary with no local
 // default branch is refused: the base would otherwise be invented.
 func (s *Service) recordPrimary(ctx context.Context, id string, attempt int64, repository store.Repository) (string, error) {
-	primary, err := vcs.OpenWorktree(ctx, repository.WorkingPath, vcs.WithRedactor(redact.New()))
+	primary, err := vcs.OpenWorktree(ctx, repository.WorkingPath, s.git()...)
 	if err != nil {
 		return "", fmt.Errorf("service: opening the primary checkout of task %s: %w", id, err)
 	}
@@ -699,7 +698,7 @@ func (s *Service) cutTaskCopy(ctx context.Context, record store.Task, primary, c
 	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
 		return fmt.Errorf("service: creating the directory of task %s: %w", record.ID, err)
 	}
-	cloned, err := vcs.Clone(ctx, primary, copyPath, "", vcs.WithRedactor(redact.New()))
+	cloned, err := vcs.Clone(ctx, primary, copyPath, "", s.git()...)
 	if err != nil {
 		return fmt.Errorf("service: cloning the primary checkout for task %s: %w", record.ID, err)
 	}
@@ -767,8 +766,8 @@ const isolationRefusedKind = "isolation-refused"
 
 // copySnapshot reads what the proven copy holds: HEAD, the branch it is on,
 // and every reference, through internal/vcs's read-only operations.
-func copySnapshot(ctx context.Context, copyPath string) (store.CopySnapshot, error) {
-	copied, err := vcs.OpenWorktree(ctx, copyPath, vcs.WithRedactor(redact.New()))
+func (s *Service) copySnapshot(ctx context.Context, copyPath string) (store.CopySnapshot, error) {
+	copied, err := vcs.OpenWorktree(ctx, copyPath, s.git()...)
 	if err != nil {
 		return store.CopySnapshot{}, err
 	}

@@ -554,6 +554,20 @@ func DefaultUsage() agents.Usage {
 	}
 }
 
+// session is the session identifier the envelope reports to c: the one it
+// states, else the one c resumed, else a fresh one derived from c's arrival
+// order, on Envelope.Session's terms.
+func (e Envelope) session(c Call) string {
+	switch {
+	case e.Session != nil:
+		return *e.Session
+	case c.Session() != "":
+		return c.Session()
+	default:
+		return fmt.Sprintf("standin-session-%d", c.Seq)
+	}
+}
+
 // SessionID returns an Envelope.Session reporting exactly id.
 func SessionID(id string) *string { return &id }
 
@@ -578,15 +592,6 @@ func (e Envelope) wire(c Call) ([]byte, error) {
 			subtype = "error_during_execution"
 		}
 	}
-	session := ""
-	switch {
-	case e.Session != nil:
-		session = *e.Session
-	case c.Session() != "":
-		session = c.Session()
-	default:
-		session = fmt.Sprintf("standin-session-%d", c.Seq)
-	}
 	model := e.Model
 	if model == "" {
 		model = c.Model()
@@ -599,7 +604,7 @@ func (e Envelope) wire(c Call) ([]byte, error) {
 		"subtype":    subtype,
 		"is_error":   e.IsError,
 		"result":     e.Result,
-		"session_id": session,
+		"session_id": e.session(c),
 		"model":      model,
 		"num_turns":  e.Usage.Turns,
 		"usage": map[string]any{

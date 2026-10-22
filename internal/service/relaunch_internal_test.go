@@ -903,7 +903,8 @@ func TestUnobservedNeverRelaunchesOrDeletesTheStandingCopy(t *testing.T) {
 
 	cleaner, err := tasks.NewCleaner(tasks.CleanupDeps{
 		Home: sub.service.home, Store: sub.records,
-		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))),
+		Forge:       forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))),
+		GitDeadline: config.DefaultGitDeadline,
 	})
 	if err != nil {
 		t.Fatal(err)
