@@ -351,3 +351,62 @@ func TestAnInvocationRecordsTheRoleItWasAskedFor(t *testing.T) {
 		t.Fatalf("the earlier row reads its role attribution as %+v, want unknown", old)
 	}
 }
+
+// A named context window, a window the launch did not name, and a row written
+// before the column are three facts, and each reads back as itself: the
+// window, known and empty, and unknown.
+func TestAnInvocationRecordsTheContextWindowItWasAskedFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	started := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	var added migration
+	for _, m := range schema {
+		if m.name == invocationContextWindowMigration {
+			added = m
+		}
+	}
+	if added.version == 0 {
+		t.Fatalf("the shipped schema has no migration named %q", invocationContextWindowMigration)
+	}
+	if _, err := s.write.ExecContext(ctx, `ALTER TABLE agent_invocation DROP COLUMN context_window`); err != nil {
+		t.Fatalf("rolling the schema back: %v", err)
+	}
+	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version = ?`, added.version); err != nil {
+		t.Fatalf("forgetting the migration: %v", err)
+	}
+	if _, err := s.write.ExecContext(ctx, `
+		INSERT INTO agent_invocation (purpose, agent, model, session_use, started, duration_ns, failure, effort)
+		VALUES ('lint', 'claude', '', 'none', ?, 1, '', 'high')`, encodeTime(started)); err != nil {
+		t.Fatalf("writing a row the old way: %v", err)
+	}
+	if err := migrate(ctx, s.write, schema); err != nil {
+		t.Fatalf("applying the shipped migration over the old row: %v", err)
+	}
+	for _, window := range []string{"1m", ""} {
+		if _, err := s.AppendAgentInvocation(ctx, AgentInvocation{Purpose: "review", Agent: "claude", SessionUse: "none",
+			Started: started, Effort: Known("high"), ContextWindow: Known(window)}); err != nil {
+			t.Fatalf("AppendAgentInvocation: %v", err)
+		}
+	}
+
+	rows, err := s.AgentInvocations(ctx)
+	if err != nil {
+		t.Fatalf("AgentInvocations: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("read %d rows, want 3", len(rows))
+	}
+	if rows[0].ContextWindow.IsKnown() {
+		t.Errorf("the earlier row reads its window as %v, want unknown", rows[0].ContextWindow)
+	}
+	if rows[0].Effort.String() != "high" {
+		t.Errorf("the earlier row lost its effort: %v", rows[0].Effort)
+	}
+	if window, ok := rows[1].ContextWindow.Get(); !ok || window != "1m" {
+		t.Errorf("the named window reads back as %v, want 1m", rows[1].ContextWindow)
+	}
+	if window, ok := rows[2].ContextWindow.Get(); !ok || window != "" {
+		t.Errorf("the unnamed window reads back as %v, want known and empty", rows[2].ContextWindow)
+	}
+}

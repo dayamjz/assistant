@@ -126,7 +126,7 @@ type Config struct {
 	// KeyRunUsageBudgetOutputTokens says which count, who may set it, and how
 	// it differs from UsageCeiling.
 	RunUsageBudget int64
-	// Roles says which agent, model, and effort each role runs. A Config from
+	// Roles says which agent, model, effort, and context window each role runs. A Config from
 	// Resolve names the fixer as cursor unless the winning document named the
 	// fix role. A role that names no agent uses Agent. KeyRoles says which
 	// names the program assigns and which a task may name.
