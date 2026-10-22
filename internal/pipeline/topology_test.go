@@ -165,8 +165,13 @@ func TestEveryStageHasAHaltPointItStopsBefore(t *testing.T) {
 
 // TestEveryCycleEdgeCarriesTheStagesRoundLimit reads the bounds off the built
 // topology. It is what says the fix loop cannot be built unbounded, since the
-// graph refuses a back edge with no bound and this asserts the number is the
-// stage's own limit rather than some other number that would also build.
+// graph refuses a back edge with no bound and this asserts each number is the
+// one its edge owes rather than some other number that would also build. A
+// stage taking rounds has three: the edge a fix-eligible outcome takes into
+// the fixer, bounded by the stage's own limit; rerunEntry, the edge a round
+// the usage ceiling refused is taken again by, bounded by RetryRounds; and the
+// fixer's way back, bounded by their sum, since every return follows an entry
+// one of the two counted.
 func TestEveryCycleEdgeCarriesTheStagesRoundLimit(t *testing.T) {
 	limits := config.FixRounds{Rebase: 2, Review: 1, Test: 4, Lint: 3, Checks: 5}
 	p := build(t, Options{
@@ -176,24 +181,49 @@ func TestEveryCycleEdgeCarriesTheStagesRoundLimit(t *testing.T) {
 		Budget: 100,
 	})
 	want := map[Stage]int{StageRebase: 2, StageReview: 1, StageTest: 4, StageLint: 3, StageCI: 5}
-	seen := map[Stage]int{}
-	for i, e := range p.Graph().Edges() {
-		for stage, limit := range want {
-			if e.To != stage.FixNode() && e.From != stage.FixNode() {
-				continue
-			}
-			if e.Rounds != limit {
-				t.Errorf("edge %q -> %q bounds %d rounds, want %d", e.From, e.To, e.Rounds, limit)
-			}
-			seen[stage]++
-			if e.From == stage.FixNode() && !p.Graph().IsBackEdge(i) {
-				t.Errorf("edge %q -> %q is not the back edge the loop closes with", e.From, e.To)
-			}
-		}
+	type role struct {
+		name  string
+		bound func(limit int) int
+		match func(e graph.Edge, stage Stage) bool
+	}
+	roles := []role{
+		{"the round-limit entry", func(limit int) int { return limit }, func(e graph.Edge, stage Stage) bool {
+			return e.From == stage.Node() && e.To == stage.FixNode() && guardsOutcome(e, OutcomeFixable)
+		}},
+		{"the rerun entry", func(int) int { return RetryRounds }, func(e graph.Edge, stage Stage) bool {
+			return e.From == stage.Node() && e.To == stage.FixNode() && guardsOutcome(e, OutcomeRerun)
+		}},
+		{"the return", func(limit int) int { return limit + RetryRounds }, func(e graph.Edge, stage Stage) bool {
+			return e.From == stage.FixNode() && e.To == stage.Node()
+		}},
 	}
 	for stage, limit := range want {
-		if seen[stage] != 2 {
-			t.Errorf("%s (limit %d) has %d bounded cycle edges, want 2", stage, limit, seen[stage])
+		cycle := 0
+		for _, e := range p.Graph().Edges() {
+			if e.To == stage.FixNode() || e.From == stage.FixNode() {
+				cycle++
+			}
+		}
+		if cycle != len(roles) {
+			t.Errorf("%s (limit %d) has %d edges into or out of its fixer, want %d", stage, limit, cycle, len(roles))
+		}
+		for _, r := range roles {
+			found := 0
+			for i, e := range p.Graph().Edges() {
+				if !r.match(e, stage) {
+					continue
+				}
+				found++
+				if e.Rounds != r.bound(limit) {
+					t.Errorf("%s's %s %q -> %q bounds %d rounds, want %d", stage, r.name, e.From, e.To, e.Rounds, r.bound(limit))
+				}
+				if e.From == stage.FixNode() && !p.Graph().IsBackEdge(i) {
+					t.Errorf("edge %q -> %q is not the back edge the loop closes with", e.From, e.To)
+				}
+			}
+			if found != 1 {
+				t.Errorf("%s has %d edges that are %s, want one", stage, found, r.name)
+			}
 		}
 	}
 }

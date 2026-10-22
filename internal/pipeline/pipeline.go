@@ -181,7 +181,7 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 	if err := checkDeclared("stage "+stage.String(), "writes", impl.Writes, declaredStageWrites); err != nil {
 		return err
 	}
-	b.Node(stageNode(stage, impl, rounds > 0 || requests, repairing))
+	b.Node(stageNode(stage, impl, rounds > 0 || requests, rounds > 0, repairing))
 	b.Node(holdNode(stage, requests))
 	if requests {
 		// PRD section 5's Fix action at a hold: the stage's fixer runs one
@@ -230,15 +230,16 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 	}
 
 	// PRD section 5's Retry: the stage runs again from the top, through the
-	// retry node, which runs an automatic round the ceiling refused again
-	// and otherwise drops the stale holds a refused round left. Every
+	// retry node, which drops the stale holds a refused round left; a fix
+	// round the ceiling refused is taken again after the stage, over
+	// rerunEntry below. Every
 	// stage has it, because the usage ceiling can refuse a call at any stage
 	// whose body or fix round makes one, and RetryOffered decides which holds
 	// offer it. It is a second cycle through the stage, bounded by
 	// RetryRounds on both edges; retry.go says why the edge back is answered.
 	// Its edges sit with the request cycle's, ahead of the hold's other exits
 	// and the stage's own edges, for the reason those do.
-	b.Node(retryNode(stage, fixer, rounds > 0))
+	b.Node(retryNode(stage))
 	for _, e := range retryEdges(stage) {
 		b.Edge(e)
 	}
@@ -285,17 +286,27 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 		fixes = stage.FixNode()
 		b.Node(fixNode(stage, fixer))
 		// The back edge, which closes the stage's fix cycle. The graph
-		// requires a bound on it and the stage's round limit is that bound. It
-		// is the same limit the edge into the fixer carries below, and it
-		// cannot be the first to reach its round bound, because every return
-		// through here follows an entry that edge already counted, so that
-		// edge reaches the bound first. That once failed across a resume under
-		// changed fix round limits, where the two edges could inherit counts
-		// from different edges; internal/graph now refuses such a resume,
-		// which the counter-misattribution paragraphs in doc.go trace.
-		b.Edge(graph.Edge{From: stage.FixNode(), To: stage.Node(), Rounds: rounds})
+		// requires a bound on it, and it is the sum of the bounds on the two
+		// edges into the fixer below, the stage's round limit and
+		// RetryRounds. It cannot be the first to reach its round bound,
+		// because every return through here follows an entry one of those
+		// edges already counted, so one of them reaches its bound first.
+		// That once failed across a resume under changed fix round limits,
+		// where the two edges could inherit counts from different edges;
+		// internal/graph now refuses such a resume, which the
+		// counter-misattribution paragraphs in doc.go trace.
+		//
+		// The fix node is entered from the stage alone, so internal/graph
+		// starts this edge's convergence measure afresh when a person's
+		// retry or requested round sends the run back into the stage over
+		// an answered edge: a round the ceiling refuses again after a retry
+		// repeats the round refused before it, and compared with that round
+		// it would park the run on the second retry with no room, which
+		// retry.go's edges say a retry never does.
+		b.Edge(graph.Edge{From: stage.FixNode(), To: stage.Node(), Rounds: rounds + RetryRounds})
 	}
 	b.Edge(guarded(stage.Node(), stage, OutcomeHeld, stage.HoldNode()))
+	b.Edge(rerunEntry(stage, fixes))
 	// The edge a round is decided on, and the one the round limit stops a run
 	// at: a stage still reporting fix-eligible findings after its last round
 	// parks in front of the fixer rather than taking a round nothing would

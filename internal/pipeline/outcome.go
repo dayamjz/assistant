@@ -25,6 +25,14 @@ const (
 	// to the hold when it does not, which is what a fix round limit of zero
 	// means: every finding goes to the person.
 	OutcomeFixable Outcome = "fixable"
+	// OutcomeRerun is OutcomeFixable at a stage whose last automatic fix
+	// round the usage ceiling refused, which RerunKey records: the round
+	// never started, so the fixer takes it now as that round, over the edge
+	// rerunEntry builds, and the stage's round limit is not charged for it a
+	// second time. It stands only while that round runs, and it is the
+	// outcome a parked run shows for the stage when that edge's bound parks
+	// it.
+	OutcomeRerun Outcome = "rerun"
 	// OutcomeHeld means the stage found something a person has to decide, so
 	// the run halts before the hold node runs.
 	OutcomeHeld Outcome = "held"

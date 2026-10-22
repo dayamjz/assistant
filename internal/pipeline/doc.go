@@ -255,25 +255,29 @@
 // second is a back edge at a stage on a path back from the checks stage; the
 // path back to rebase, at the stage that takes it; the path back to review, at
 // the stage that takes it when its round limit is above zero; the fix node's
-// return when the stage's round limit is above zero; and the stage's own three
-// edges. Which of these a stage has, apart from the path back to review and
+// return when the stage's round limit is above zero; and the stage's own four
+// edges, the second of which is rerunEntry, built at every stage whatever its
+// limit. Which of these a stage has, apart from the path back to review and
 // the fix return, is the stage table's and not the configuration's, so a
-// block has a fixed part, seven edges plus two at a requestable stage given a
+// block has a fixed part, eight edges plus two at a requestable stage given a
 // fixer and one at the stage that rebases after push, and a configured part,
 // the fix return and, at the stage that repairs after push, the path back to
 // review. A block starts at the sum of the earlier stages' fixed parts plus
-// the number of earlier stages taking rounds, at most four, because the one
-// stage with a configured part of two is ci and nothing comes after ci.
+// the number of earlier stages taking rounds, at most four, because five
+// stages take rounds and the one stage with a configured part of two is ci,
+// which nothing comes after.
 //
 // A stage's back edges sit at least one edge into its block, and its last one
-// is its fix return, three edges before the block ends, or for a stage taking
-// no rounds an edge sitting at least four before. So a stage's last back edge
-// stays below the sum of the fixed parts up to and including it, plus one,
-// whenever fewer than four earlier stages take rounds or the stage takes none,
-// and that sum plus one is the earliest the next stage's first back edge can
-// sit. The one stage that can take rounds with four stages before it taking
-// them too is ci, and nothing comes after ci. Either way the ranges two stages
-// draw from are disjoint, whatever pair of round limits they come from.
+// is its fix return, four edges before the block ends, or for a stage taking
+// no rounds an edge sitting at least five before. So a stage's last back edge
+// sits at most the number of earlier stages taking rounds, plus its own
+// configured part, minus four, past the sum of the fixed parts up to and
+// including it, and that sum plus one is the earliest the next stage's first
+// back edge can sit. At most four earlier stages take rounds, and every
+// stage's configured part but ci's is at most one, so every stage but ci keeps
+// its last back edge below that; ci's can reach it, and nothing comes after
+// ci. So the ranges two stages draw from are disjoint, whatever pair of round
+// limits they come from.
 //
 // A pipeline with a fixer and one without differ in their fixed parts, so
 // their indices do not line up and nothing above says they do. They differ in
@@ -281,7 +285,7 @@
 // carried from one to the other, which is the paragraph after next.
 //
 // The emission order settles the formula and not the conclusion so long as
-// every back edge stays ahead of its stage's own three edges: a constant added
+// every back edge stays ahead of its stage's own four edges: a constant added
 // to every index leaves index-to-stage injective. It is the uniqueness that
 // TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations pins, over every
 // combination of which stages take rounds, and not the order; what would break
@@ -581,8 +585,9 @@
 // refuses it elsewhere with CheckRetry before anything is recorded, and the
 // retry node refuses it again. It is a cycle of its own, from the hold
 // through the stage's retry node back to the stage, bounded by RetryRounds on
-// both edges, and retry.go owns it, including why an automatic round the
-// ceiling refused is run by the retry node rather than the fix node. The stage table's requestable column
+// both edges, and retry.go owns it, with rerunEntry, the edge by which a fix
+// round the ceiling refused is taken again once the stage has run. The stage
+// table's requestable column
 // owns the fix line, and the reason is the promise the round makes: the stage
 // re-runs and holds again so the person sees the result. Push is the stage
 // that forwards a commit, so re-running it would push the round's commit

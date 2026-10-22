@@ -66,16 +66,27 @@ func documentSetting(t *testing.T, key config.Key, value int) []byte {
 	return out
 }
 
-// entryBound is the round bound on the edge from a stage into its fixer.
+// entryBound is the round bound on the edge from a stage into its fixer that
+// a fix-eligible outcome takes, the one the stage's round limit bounds. The
+// stage's other way into its fixer, rerunEntry, is bounded by RetryRounds.
 func entryBound(t *testing.T, g *graph.Graph, stage Stage) int {
 	t.Helper()
 	for _, e := range g.Edges() {
-		if e.From == stage.Node() && e.To == stage.FixNode() {
+		if e.From == stage.Node() && e.To == stage.FixNode() && guardsOutcome(e, OutcomeFixable) {
 			return e.Rounds
 		}
 	}
-	t.Fatalf("the graph has no edge from %s into its fixer", stage)
+	t.Fatalf("the graph has no edge from %s into its fixer on a fix-eligible outcome", stage)
 	return 0
+}
+
+// guardsOutcome reports whether e is taken on the stage outcome o.
+func guardsOutcome(e graph.Edge, o Outcome) bool {
+	if e.Guard == nil {
+		return false
+	}
+	text, ok := e.Guard.Value.Text()
+	return ok && text == string(o)
 }
 
 // Every node a stage builds belongs to that stage, and a park is attributed to
