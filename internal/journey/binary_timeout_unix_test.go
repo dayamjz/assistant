@@ -92,6 +92,67 @@ func TestTheBuildGroupEndsWhenThePipeCloses(t *testing.T) {
 	}
 }
 
+// TestTheHarnessCompileDoesNotOutliveTheProcess is the compile the alarm
+// harness starts. An unbounded exec.Command of go survives the testing
+// alarm: with the package's owner watch running, a hanging go that becomes
+// /bin/sleep was still alive under PID 1 twelve seconds later, because the
+// sweep cannot read that program's environment. RunHeld is what the harness
+// uses, and this process exiting closes its pipe. P15: when the owner ends,
+// the process it started ends with it.
+func TestTheHarnessCompileDoesNotOutliveTheProcess(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	root, err := ModuleRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(t.TempDir(), "compilehold.test")
+	if out, err := RunHeld(root, nil, "go", "test", "-c", "-o", bin, "./internal/journey/compilehold"); err != nil {
+		t.Fatalf("compiling the owner-watch harness: %v\n%s", err, out)
+	}
+	hangDir := t.TempDir()
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	script := "#!/bin/sh\necho $$ > \"$HANG_PID\"\nexec /bin/sleep 300\n"
+	if err := os.WriteFile(filepath.Join(hangDir, "go"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, runErr := RunHeld(root, compileHoldEnv(hangDir, pidFile, root), bin, "-test.timeout=1s", "-test.run=^TestCompile$", "-test.count=1", "-test.v")
+	t.Cleanup(func() {
+		if pid, err := readPID(pidFile); err == nil {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	pid, err := readPID(pidFile)
+	if err != nil {
+		t.Fatalf("the hanging compile never started (harness: %v)\n%s", runErr, out)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("compile pid %d still alive after the harness exited (parent %d); harness: %v\n%s", pid, parentOf(pid), runErr, out)
+}
+
+func compileHoldEnv(hangDir, pidFile, root string) []string {
+	env := make([]string, 0, len(os.Environ())+4)
+	for _, e := range os.Environ() {
+		if strings.HasPrefix(e, "PATH=") || strings.HasPrefix(e, "GOMAXPROCS=") {
+			continue
+		}
+		env = append(env, e)
+	}
+	return append(env,
+		"GOMAXPROCS=1",
+		"PATH="+hangDir,
+		"HANG_PID="+pidFile,
+		"JOURNEY_COMPILE_HOLD=1",
+		"ROOT="+root,
+		"OUT="+filepath.Join(hangDir, "unused.test"),
+	)
+}
+
 // TestATimedOutBuildDoesNotOutliveTheHarness is the review's reproduction:
 // journey.Binary under a real testing alarm, GOMAXPROCS=1, a one-second
 // timeout, and a go on PATH that never exits. The alarm can exit that
@@ -105,9 +166,7 @@ func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 	helper := filepath.Join(t.TempDir(), "hang.test")
-	compile := exec.Command("go", "test", "-c", "-o", helper, "./internal/journey/hangbuild")
-	compile.Dir = root
-	if out, err := compile.CombinedOutput(); err != nil {
+	if out, err := RunHeld(root, nil, "go", "test", "-c", "-o", helper, "./internal/journey/hangbuild"); err != nil {
 		t.Fatalf("compiling the alarm harness: %v\n%s", err, out)
 	}
 	hangDir := t.TempDir()
@@ -116,10 +175,7 @@ func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(hangDir, "go"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(helper, "-test.timeout=1s", "-test.run=^TestHang$", "-test.count=1", "-test.v")
-	cmd.Dir = root
-	cmd.Env = hangEnv(hangDir, pidFile)
-	out, runErr := cmd.CombinedOutput()
+	out, runErr := RunHeld(root, hangEnv(hangDir, pidFile), helper, "-test.timeout=1s", "-test.run=^TestHang$", "-test.count=1", "-test.v")
 	t.Cleanup(func() {
 		if pid, err := readPID(pidFile); err == nil {
 			_ = syscall.Kill(pid, syscall.SIGKILL)

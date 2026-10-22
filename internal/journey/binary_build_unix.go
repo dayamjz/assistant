@@ -3,6 +3,8 @@
 package journey
 
 import (
+	"bytes"
+	"context"
 	"io"
 	"os"
 	"os/exec"
@@ -42,17 +44,45 @@ wait "$watcher" 2>/dev/null
 exit "$status"
 `
 
-// buildCommand is the product-binary build. The closer holds the pipe the
-// build's group is reading. This process exiting closes that pipe and the
-// watcher kills the group. The command's directory and output are the caller's.
-func buildCommand(built string) (*exec.Cmd, io.Closer, error) {
+// holdCommand starts args under buildScript. The closer holds the pipe the
+// group is reading. This process exiting closes that pipe and the watcher
+// kills the group. The command's directory, environment, and output are the
+// caller's.
+func holdCommand(args ...string) (*exec.Cmd, io.Closer, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, nil, err
 	}
-	cmd := procgroup.Command("/bin/sh", "-c", buildScript, "_", "go", "build", "-o", built, "./cmd/assistant")
+	cmd := procgroup.Command("/bin/sh", append([]string{"-c", buildScript, "_"}, args...)...)
 	cmd.Stdin = r
 	return cmd, &pipeLife{r: r, w: w}, nil
+}
+
+// buildCommand is the product-binary build. It is holdCommand, so this
+// process exiting ends the build's group.
+func buildCommand(built string) (*exec.Cmd, io.Closer, error) {
+	return holdCommand("go", "build", "-o", built, "./cmd/assistant")
+}
+
+// RunHeld runs args in dir and returns what they wrote. env replaces the
+// environment when it is not nil. The command is holdCommand's shell, so
+// its group ends when this process exits, including when the testing alarm
+// exits it before Run handles cancellation. A descendant that leaves the
+// group is not reached.
+func RunHeld(dir string, env []string, args ...string) ([]byte, error) {
+	cmd, life, err := holdCommand(args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = life.Close() }()
+	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = env
+	}
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	err = procgroup.Run(context.Background(), cmd, buildGrace)
+	return out.Bytes(), err
 }
 
 // pipeLife closes both ends of the pipe this process holds. The child
