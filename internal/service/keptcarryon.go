@@ -33,11 +33,24 @@ import (
 //
 // The copy is asserted with tasks.AssertIsolated under the worker's
 // environment before anything is written into it, against the expectation
-// of the task it outlived, on promotion's terms: a refusal on the remote set
-// or HEAD is tolerated, because those two are what the reshape below writes,
-// and any other refusal, a copy that is not a clone of its own, one that is
-// the primary or inside it, among them, refuses the carry on with nothing
-// recorded. A copy that is gone refuses it too.
+// of the task it outlived. A refusal on the remote set or HEAD is tolerated
+// only as far as the reshape below repairs it, each read on its own: for a
+// delivery copy, a missing gate remote or one whose one URL is elsewhere,
+// which it points at the gate, and HEAD off the task's branch while no
+// branch of that name stands, which it creates at HEAD; for an
+// investigation, an attached HEAD, which it detaches. Anything else on
+// either, an investigation's remote, a delivery copy's second remote, a
+// push URL or a second URL, or the task's branch standing away from HEAD,
+// refuses the carry on with nothing recorded (unreshapeableRemotes,
+// unreshapeableHead): the reshape removes no remote and moves no branch,
+// since either can leave a commit with no name, and P6 has the program
+// refuse rather than risk that, so the person repairs the copy or answers
+// otherwise. So does any other refusal, a copy that is not a clone of its
+// own, one that is the primary or inside it, among them. A copy that is
+// gone refuses it too. After the reshape the copy is asserted again at its
+// new path on the new task's expectation, as dispatch will assert it, and
+// a refusal there leaves the entry owed rather than marked
+// (assertReshaped).
 //
 // A run's copy is refused before that: it is a linked worktree of the gate,
 // which a task's copy cannot be, and a person's branch, which intake's branch
@@ -209,6 +222,98 @@ func (s *Service) assertKeptCopy(ctx context.Context, entry store.KeptWork, plan
 		if refused.Comparison != tasks.ComparisonRemotes && refused.Comparison != tasks.ComparisonHead {
 			return refuse(fmt.Sprintf("its copy is not one a task's worker may be started in (%s): %s", refused.Comparison, refused.Detail))
 		}
+		// The remote set and HEAD are what the reshape writes, so each is
+		// read on its own here: the assertion stops at the first.
+		if why := unreshapeableRemotes(obs, plan); why != "" {
+			return refuse(fmt.Sprintf("its copy is not one a task's worker may be started in (%s): %s", tasks.ComparisonRemotes, why))
+		}
+		if why, err := unreshapeableHead(ctx, entry.CopyPath, obs, plan); err != nil {
+			return fmt.Errorf("service: reading the branches of the kept copy at %s: %w", entry.CopyPath, err)
+		} else if why != "" {
+			return refuse(fmt.Sprintf("its copy is not one a task's worker may be started in (%s): %s", tasks.ComparisonHead, why))
+		}
+	}
+	return nil
+}
+
+// unreshapeableRemotes is why reshapeAdoptedCopy cannot leave the copy's
+// remote set as dispatch asserts it, or "" when it can: it points the
+// gate's remote at the gate, adding it when it is missing and setting its
+// one URL when it stands, and removes no remote, so for a delivery copy
+// any other remote, a push URL or a second URL stays, and for an
+// investigation, which has none, every remote does. Removing one would
+// delete its remote-tracking references, which can be the only name a
+// commit in the copy has, so the person removes it or answers otherwise.
+func unreshapeableRemotes(obs vcs.Observation, plan carryOn) string {
+	if len(obs.Remotes) == 0 {
+		return ""
+	}
+	names := make([]string, len(obs.Remotes))
+	for i, r := range obs.Remotes {
+		names[i] = r.Name
+	}
+	remove := "; carrying on removes no remote, since that deletes its remote-tracking references, so remove it from the copy " +
+		"yourself and answer again, or land or discard the copy"
+	if plan.old.Shape == store.TaskInvestigation {
+		return "an investigation's copy has no remote, and this one has " + strings.Join(names, ", ") + remove
+	}
+	only := obs.Remotes[0]
+	if len(obs.Remotes) == 1 && only.Name == gate.RemoteName && len(only.URLs) == 1 && len(only.PushURLs) == 0 {
+		return ""
+	}
+	return "a delivery copy has the one remote " + gate.RemoteName + " with one URL and no push URL, and this one has " +
+		strings.Join(names, ", ") + remove
+}
+
+// unreshapeableHead is why reshapeAdoptedCopy cannot leave the copy's HEAD
+// as dispatch asserts it, or "" when it can: an investigation's is
+// detached wherever it stands, and a delivery copy's HEAD off the task's
+// branch is put on it by creating the branch at HEAD, which a branch of
+// that name already standing refuses, since moving it would leave behind
+// whatever it holds.
+func unreshapeableHead(ctx context.Context, path string, obs vcs.Observation, plan carryOn) (string, error) {
+	if plan.old.Shape != store.TaskDelivery || (!obs.Detached && obs.Branch == plan.branch) {
+		return "", nil
+	}
+	copied, err := vcs.OpenWorktree(ctx, path, vcs.WithRedactor(redact.New()))
+	if err != nil {
+		return "", err
+	}
+	refs, err := copied.ListRefs(ctx, "refs/heads/"+plan.branch)
+	if err != nil {
+		return "", err
+	}
+	for _, ref := range refs {
+		if ref.Name == "refs/heads/"+plan.branch {
+			return "HEAD is not on the task's branch " + plan.branch + ", which stands at " + ref.Commit + ", and carrying on " +
+				"moves no branch; put HEAD on it yourself and answer again, or land or discard the copy", nil
+		}
+	}
+	return "", nil
+}
+
+// assertReshaped asserts the adopted copy where it now stands, at the new
+// task's path, on the new task's expectation, as dispatch will before it
+// launches the worker, so a carry on is never marked over a copy dispatch
+// would refuse: a refusal is returned with ipc.ErrRefused, and the entry
+// stays owed and the task held on it.
+func (s *Service) assertReshaped(ctx context.Context, entry store.KeptWork, id, path string, plan carryOn) error {
+	want, _, err := tasks.Expect(s.home, id, plan.old.Shape, plan.gatePath, plan.repository.WorkingPath, plan.branch)
+	if err != nil {
+		return err
+	}
+	obs, err := vcs.Observe(ctx, path, vcs.WithRedactor(redact.New()))
+	if err != nil {
+		return fmt.Errorf("%w: kept work entry %d was not carried on: the copy at %s cannot be read as a repository: %w",
+			ipc.ErrRefused, entry.ID, path, err)
+	}
+	if _, err := tasks.AssertIsolated(obs, agents.WorkerEnvironment(os.Environ(), nil), want); err != nil {
+		var refused *tasks.IsolationError
+		if !errors.As(err, &refused) {
+			return fmt.Errorf("service: asserting the carried-on copy at %s: %w", path, err)
+		}
+		return fmt.Errorf("%w: kept work entry %d was not carried on: once shaped, its copy at %s is not one task %s's worker "+
+			"may be started in (%s): %s", ipc.ErrRefused, entry.ID, path, id, refused.Comparison, refused.Detail)
 	}
 	return nil
 }
@@ -299,6 +404,9 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 		return machine.KeptWorkAnswered{}, err
 	}
 	if err := s.reshapeAdoptedCopy(ctx, newPath, plan); err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	if err := s.assertReshaped(ctx, entry, id, newPath, plan); err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
 	instructions, err := s.home.TaskInstructions(id)

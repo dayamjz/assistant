@@ -550,7 +550,12 @@ the new task's own place and asserted the way every task's copy is before
 anything is written into it; the task the copy outlived keeps its record,
 the new task's instructions are the old intake text with a note saying
 what is already there, and the task dispatches into the copy as any task
-does. A run's copy is not carried on in this build (it is a worktree of the
+does. Carrying on points the gate's remote at the gate and puts HEAD where
+the task's shape has it, and removes no remote and moves no branch, since
+either can leave a commit with nothing naming it: a copy with any other
+remote (any remote at all, for an investigation's copy), or a delivery
+copy whose task branch stands somewhere other than HEAD, is refused with
+nothing recorded and the refusal says what to change. A run's copy is not carried on in this build (it is a worktree of the
 gate on a branch of yours, which a task's copy cannot be): land it, push
 its commit yourself, or discard it.
 
