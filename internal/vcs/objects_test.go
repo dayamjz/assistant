@@ -147,14 +147,18 @@ func TestNotReachedFromListsWhatOnlyTheNamesHold(t *testing.T) {
 	}
 }
 
-// NotReachedFrom walks from git's own sets of names, read when it walks: a
-// commit a reset left recorded only as the previous value of the one entry
-// left in HEAD's reflog, which git log --walk-reflogs names nowhere, is
-// listed with the reflogs and not without them; and narrowed to this working copy, a commit another worktree's
-// HEAD reflog alone records is not listed, while it is without the
-// narrowing. RootRefs lists ORIG_HEAD, which the reset wrote naming that
-// commit, and HEAD, and no reference under refs/.
-func TestNotReachedFromWalksGitsOwnSets(t *testing.T) {
+// ReflogValues reads every value of every reflog, previous values and
+// values of any type among them: a commit a reset left recorded only as the
+// previous value of the one entry left in HEAD's reflog, which git log
+// --walk-reflogs names nowhere, and a blob a notes reference's reflog
+// records only as the value it moved from are both read, and NotReachedFrom
+// given them lists the commit as not reached and the blob among the others.
+// Narrowed to this working copy, a commit another worktree's HEAD reflog
+// alone records is not read, while it is without the narrowing, and the
+// other worktree's narrowed read includes the logs of references every
+// worktree shares, the notes reference's among them. RootRefs lists ORIG_HEAD, which the reset wrote naming
+// the commit, and HEAD, and no reference under refs/.
+func TestReflogValuesReadEveryValueOfEveryLog(t *testing.T) {
 	gitEnvironment(t)
 	dir := filepath.Join(t.TempDir(), "main")
 	rawGit(t, filepath.Dir(dir), "init", "--quiet", dir)
@@ -168,8 +172,18 @@ func TestNotReachedFromWalksGitsOwnSets(t *testing.T) {
 	for range strings.Count(rawGit(t, dir, "log", "--walk-reflogs", "--format=%H", "HEAD"), "\n") - 1 {
 		rawGit(t, dir, "reflog", "delete", "HEAD@{1}")
 	}
-	if entries := rawGit(t, dir, "log", "--walk-reflogs", "--format=%H", "HEAD"); strings.Contains(entries, reset) {
-		t.Fatalf("HEAD's reflog still names %s as an entry's new value:\n%s", reset, entries)
+	// The branch's own log: @{0} the reset, @{1} the commit reset away.
+	branch := strings.TrimSpace(rawGit(t, dir, "symbolic-ref", "HEAD"))
+	rawGit(t, dir, "reflog", "delete", branch+"@{1}")
+	loose := filepath.Join(t.TempDir(), "loose.txt")
+	writeFile(t, loose, "a blob only a previous value records\n")
+	blob := strings.TrimSpace(rawGit(t, dir, "hash-object", "-w", loose))
+	rawGit(t, dir, "update-ref", "--create-reflog", "refs/notes/aside", kept)
+	rawGit(t, dir, "update-ref", "refs/notes/aside", blob)
+	rawGit(t, dir, "update-ref", "refs/notes/aside", kept)
+	rawGit(t, dir, "reflog", "delete", "refs/notes/aside@{1}")
+	if entries := rawGit(t, dir, "log", "--walk-reflogs", "--format=%H", "--all"); strings.Contains(entries, reset) || strings.Contains(entries, blob) {
+		t.Fatalf("a reflog still names %s or %s as an entry's new value:\n%s", reset, blob, entries)
 	}
 	other := filepath.Join(filepath.Dir(dir), "other")
 	rawGit(t, dir, "worktree", "add", "--quiet", "--detach", other, kept)
@@ -180,18 +194,25 @@ func TestNotReachedFromWalksGitsOwnSets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	otherRepo, err := vcs.OpenWorktree(ctx(t), other)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	commits, others, err := repo.NotReachedFrom(ctx(t), vcs.Reach{Refs: true, Reflogs: true}, kept)
-	if err != nil || !slices.Contains(commits, reset) || !slices.Contains(commits, elsewhere) || len(others) != 0 {
-		t.Errorf("with every reference and reflog = %v, %v, %v; want %s and %s among the commits and no other",
-			commits, others, err, reset, elsewhere)
+	all, err := repo.ReflogValues(ctx(t), false)
+	if err != nil || !slices.Contains(all, reset) || !slices.Contains(all, blob) || !slices.Contains(all, elsewhere) {
+		t.Fatalf("every reflog's values = %v, %v; want %s, %s and %s among them", all, err, reset, blob, elsewhere)
 	}
-	if commits, _, err := repo.NotReachedFrom(ctx(t), vcs.Reach{Objects: []string{kept}, Refs: true}, kept); err != nil || slices.Contains(commits, reset) {
-		t.Errorf("without the reflogs = %v, %v; want %s, which only a reflog records, not listed", commits, err, reset)
+	commits, others, err := repo.NotReachedFrom(ctx(t), vcs.Reach{Objects: all}, kept)
+	if err != nil || !slices.Contains(commits, reset) || !slices.Contains(others, blob) {
+		t.Errorf("NotReachedFrom of every reflog value = %v, %v, %v; want %s among the commits and %s among the others",
+			commits, others, err, reset, blob)
 	}
-	commits, _, err = repo.NotReachedFrom(ctx(t), vcs.Reach{Reflogs: true, ThisWorktree: true}, kept)
-	if err != nil || !slices.Contains(commits, reset) || slices.Contains(commits, elsewhere) {
-		t.Errorf("narrowed to this working copy = %v, %v; want %s listed and %s, another worktree's, not", commits, err, reset, elsewhere)
+	if mine, err := repo.ReflogValues(ctx(t), true); err != nil || !slices.Contains(mine, reset) || slices.Contains(mine, elsewhere) {
+		t.Errorf("this working copy's reflog values = %v, %v; want %s and not %s, another worktree's", mine, err, reset, elsewhere)
+	}
+	if theirs, err := otherRepo.ReflogValues(ctx(t), true); err != nil || !slices.Contains(theirs, elsewhere) || !slices.Contains(theirs, blob) {
+		t.Errorf("the other worktree's reflog values = %v, %v; want its own %s and the shared notes log's %s", theirs, err, elsewhere, blob)
 	}
 	roots, err := repo.RootRefs(ctx(t))
 	if err != nil {

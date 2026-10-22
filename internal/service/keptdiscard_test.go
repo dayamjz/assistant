@@ -667,6 +667,126 @@ func TestADiscardShowsACommitOnlyAReflogsPreviousValueRecords(t *testing.T) {
 	})
 }
 
+// A discard shows, and seals, an object only a reflog entry's previous
+// value records whatever its type, the reviewer's sequence on e484e92: the
+// discard of a kept clone is shown, then a notes reference keeping a reflog
+// is moved from the worker's commit to a blob nothing else holds and back,
+// and the entry recording the blob as its new value is deleted, so the
+// blob is the previous value of the entry left alone. The removal destroys
+// it, so the digest shown before is refused, and the copy shown again lists
+// it. Without every reflog value in the names, the blob is listed nowhere,
+// the digest stands, and the confirmation destroys it unshown.
+func TestADiscardShowsAnObjectOnlyAReflogsPreviousValueRecords(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		blob := hashObject(t, entry.CopyPath, "content nothing else holds\n")
+		git(t, entry.CopyPath, "update-ref", "--create-reflog", "refs/notes/aside", "HEAD")
+		git(t, entry.CopyPath, "update-ref", "refs/notes/aside", blob)
+		git(t, entry.CopyPath, "update-ref", "refs/notes/aside", "HEAD")
+		git(t, entry.CopyPath, "reflog", "delete", "refs/notes/aside@{1}")
+		if values := git(t, entry.CopyPath, "log", "--walk-reflogs", "--format=%H", "--all"); strings.Contains(values, blob) {
+			t.Fatalf("a reflog still names %s as an entry's new value:\n%s", blob, values)
+		}
+		confirm := request
+		confirm.Confirm = shown.Loss.Digest
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, confirm, &out); !errors.Is(err, ipc.ErrRefused) {
+			t.Fatalf("the confirmation shown before the blob = %+v, %v; want it refused", out, err)
+		}
+		if _, err := os.Stat(entry.CopyPath); err != nil {
+			t.Fatalf("the refused discard removed the copy: %v", err)
+		}
+		var again machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &again); err != nil || again.Loss == nil ||
+			!slices.ContainsFunc(again.Loss.Objects, func(o machine.KeptWorkLostObject) bool { return o.Object == blob && o.Type == "blob" }) {
+			t.Fatalf("the discard shown again = %+v, %v; want the blob %s among the objects lost", again, err, blob)
+		}
+	})
+}
+
+// hashObject writes content into dir's repository as a blob and returns it.
+func hashObject(t *testing.T, dir, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "blob")
+	if err := writeFile(path, content); err != nil {
+		t.Fatal(err)
+	}
+	return git(t, dir, "hash-object", "-w", path)
+}
+
+// A run's discard counts only what removing its worktree destroys, the
+// reviewer's sequence on e484e92: the discard of a kept run's worktree is
+// shown, then a branch keeping a reflog is made in the gate the worktree
+// belongs to, at a commit the default branch lacks, and an edit is stashed
+// in the worktree, which stores it in the gate's stash. The branch, the
+// stash and their reflogs are the gate's, which the removal leaves
+// standing, so the copy shown again lists neither commit nor a stash and
+// digests as shown, and the confirmation shown before removes the worktree,
+// leaving both. Without the names scoped to the
+// worktree, the shared reflog is read as the worktree's, the commit is
+// listed as lost and the confirmation is refused.
+func TestARunsDiscardCountsOnlyWhatItsRemovalDestroys(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	entry := keptEntryOf(t, h, subject)
+	gate := git(t, entry.CopyPath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &shown); err != nil || shown.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		head := git(t, entry.CopyPath, "rev-parse", "HEAD")
+		side := git(t, gate, "commit-tree", "-p", head, "-m", "a branch of the gate's own", head+"^{tree}")
+		git(t, gate, "update-ref", "--create-reflog", "refs/heads/gate-side", side)
+		// A stash made in the worktree is the gate's too.
+		tracked := strings.Fields(git(t, entry.CopyPath, "ls-files"))[0]
+		if err := writeFile(filepath.Join(entry.CopyPath, tracked), "stashed in the run's worktree\n"); err != nil {
+			t.Fatal(err)
+		}
+		git(t, entry.CopyPath, "stash", "--quiet")
+		stashed := git(t, gate, "rev-parse", "refs/stash")
+		var again machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &again); err != nil || again.Loss == nil ||
+			slices.Contains(again.Loss.Lacks, side) || slices.Contains(again.Loss.Lacks, stashed) || again.Loss.Stash ||
+			again.Loss.Digest != shown.Loss.Digest {
+			t.Fatalf("the discard shown again = %+v, %v; want %s and the stash %s, the gate's own, not lost and the digest %s as shown",
+				again, err, side, stashed, shown.Loss.Digest)
+		}
+		var done machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, shown.Loss.Digest), &done); err != nil ||
+			done.Effect != machine.KeptWorkDiscarded {
+			t.Fatalf("the confirmed discard = %+v, %v; want it discarded", done, err)
+		}
+		if at := git(t, gate, "rev-parse", "refs/heads/gate-side"); at != side {
+			t.Fatalf("the gate's branch reads %s after the discard; want it standing at %s", at, side)
+		}
+		if at := git(t, gate, "rev-parse", "refs/stash"); at != stashed {
+			t.Fatalf("the gate's stash reads %s after the discard; want it standing at %s", at, stashed)
+		}
+	})
+}
+
 // A discard answers every entry of its copy that the removal's own read of
 // the copy covers, not only the ones kept before the confirmation: the
 // discard is confirmed and the service stops before the removal; then the

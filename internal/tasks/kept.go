@@ -316,7 +316,8 @@ func keptDefaultTip(ctx context.Context, l landing) (string, string) {
 // from the references Keep reads: the commits any of it reaches that the
 // default branch does not, a commit only a reflog entry's previous value, a
 // root reference such as ORIG_HEAD or the stash records among them, and
-// every object reach names that is not a commit (vcs.NotReachedFrom). The
+// every object reach names that is not a commit, a reflog's value of any
+// type among them (vcs.NotReachedFrom). The
 // default branch is read on lacking's terms, and any step that fails leaves
 // it unestablished. gone is, of shown, the commits a discard was shown as
 // lost that are neither among them now nor held by the default branch: a

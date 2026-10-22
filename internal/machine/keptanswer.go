@@ -42,7 +42,10 @@ type KeptWorkLoss struct {
 	// lacks: every commit HEAD, a reference, a root reference such as
 	// ORIG_HEAD or a reflog entry of the copy, by the value it moved to or
 	// the one it moved from, reaches that the default branch does not, a
-	// commit reset away or a stash under the newest among them.
+	// commit reset away or a stash under the newest among them. For a
+	// run's worktree only what its removal destroys counts: never a commit
+	// the gate's own references or their reflogs, the stash among them,
+	// still record.
 	Lacks []string `json:"lacks"`
 	// Objects is every object a name the removal destroys points at that
 	// is not a commit, an annotated tag, a tree or a blob, with its type
@@ -62,8 +65,9 @@ type KeptWorkLoss struct {
 	Files []KeptWorkLostPath `json:"files"`
 	// Dirty, Untracked and Stash say whether git reports the copy holding
 	// a tracked change, a file no commit records that git does not ignore,
-	// and a stash; Files names every path these speak of, and the ignored
-	// ones they do not.
+	// and a stash, Stash never for a run's worktree, whose stash is the
+	// gate's and stands after the discard; Files names every path these
+	// speak of, and the ignored ones they do not.
 	Dirty     bool `json:"dirty"`
 	Untracked bool `json:"untracked"`
 	Stash     bool `json:"stash"`
@@ -76,7 +80,8 @@ type KeptWorkLoss struct {
 // KeptWorkLostObject is one object a discard destroys a name of that is
 // not a commit, and every name of it the discard destroys: HEAD, a
 // reference's full name, a root reference's name such as AUTO_MERGE, or a
-// reflog entry as ref@{n}
+// reflog entry as ref@{n}; none for an object only a reflog entry's
+// previous value records
 // (KeptWorkLoss.Objects).
 type KeptWorkLostObject struct {
 	Object string   `json:"object"`

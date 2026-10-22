@@ -39,8 +39,10 @@ paths: ["internal/tasks/**"]
   reads what removing the copy would lose, the commits the default branch
   lacks that anything the removal destroys names reaches (HEAD, a
   reference, a root reference such as ORIG_HEAD, a reflog entry by either
-  of its values, through `vcs.Reach`) and every other object such a name
-  points at, read from the copy now (`lostFrom`), every path whose content or deletion nothing
+  of its values, `vcs.ReflogValues`; for a run's worktree only its own,
+  never the gate's shared references, stash or their reflogs, which the
+  removal leaves) and every other object such a name or value records,
+  read from the copy now (`lostFrom`), every path whose content or deletion nothing
   else holds (`kept_lost.go`, decided from the copy against HEAD's tree, the
   index and what git writes into a new repository, ignored files and
   deletions included) and the

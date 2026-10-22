@@ -115,38 +115,20 @@ func objectHash(format string) (hash.Hash, error) {
 }
 
 // Reach is what NotReachedFrom walks from: objects named by identifier, and
-// the sets of names git itself walks from, each read by git at the moment
-// of the walk rather than listed by the caller first.
+// the references git itself walks from, read by git at the moment of the
+// walk rather than listed by the caller first.
 type Reach struct {
 	// Objects is object identifiers, each walked once however often named.
 	Objects []string
 	// Refs is every reference and every worktree's HEAD (git's --all).
 	Refs bool
-	// Reflogs is every object any reflog entry records, the value it moved
-	// from as well as the value it moved to (git's --reflog), so a commit
-	// only an entry's previous value records is reached: one git keeps
-	// recoverable as ref@{n} when older entries are gone, or one an entry
-	// expired from the middle of a log leaves recorded only there.
-	Reflogs bool
-	// ThisWorktree narrows Refs and Reflogs to this working copy: its own
-	// HEAD and per-worktree references and their reflogs, with every
-	// reference shared by all worktrees and the reflog each keeps, and no
-	// other worktree's HEAD (git's --single-worktree).
-	ThisWorktree bool
 }
 
-// args is reach as rev-list's arguments, the sets first: --single-worktree
-// narrows only the sets named after it.
+// args is reach as rev-list's arguments.
 func (reach Reach) args() ([]string, error) {
 	var args []string
-	if reach.ThisWorktree {
-		args = append(args, "--single-worktree")
-	}
 	if reach.Refs {
 		args = append(args, "--all")
-	}
-	if reach.Reflogs {
-		args = append(args, "--reflog")
 	}
 	args = append(args, "--end-of-options")
 	var unique []string
@@ -161,26 +143,52 @@ func (reach Reach) args() ([]string, error) {
 	return append(args, unique...), nil
 }
 
+// ReflogValues returns every object the reflogs record, by the value each
+// entry moved from as well as the one it moved to, whatever its type, as
+// git's own walk of the reflogs lists them (git rev-list --objects --no-walk
+// --filter=tree:0 --reflog), each once, in that listing's order. It is the
+// one read of a reflog entry's previous value: git log --walk-reflogs names
+// each entry by the value it moved to alone, and no ref@{n} resolves to a
+// previous value an entry expired from the middle of a log left.
+//
+// thisWorktree narrows it to the logs git reads for this working copy
+// alone (git's --single-worktree): its own HEAD's and its own references',
+// with the logs of every reference shared by all the repository's
+// worktrees; without it, every worktree's HEAD's are read too. The filter
+// leaves out a tree or blob that a commit or tree in the same listing
+// holds; what holds it is listed. A repository whose reflogs record nothing
+// returns nothing.
+func (r *Repository) ReflogValues(ctx context.Context, thisWorktree bool) ([]string, error) {
+	args := []string{"rev-list", "--objects", "--no-walk", "--filter=tree:0"}
+	if thisWorktree {
+		args = append(args, "--single-worktree")
+	}
+	out, err := r.run(ctx, "reflog-values", append(args, "--reflog")...)
+	if err != nil {
+		return nil, err
+	}
+	var values []string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if object, _, _ := strings.Cut(line, " "); object != "" && !slices.Contains(values, object) {
+			values = append(values, object)
+		}
+	}
+	return values, nil
+}
+
 // NotReachedFrom returns what reach holds that incorporated does not,
 // decided by git from this repository's own objects: the commits reach
-// reaches that incorporated does not, from Objects and from every set it
-// asks for, as git rev-list lists them, most recent first, a tag followed to
-// the commit it points at; and every object in Objects that is not a
-// commit, an annotated tag, a tree or a blob, in Objects' order, whatever
-// incorporated holds, so a tree or blob named is listed even when a commit
-// of incorporated holds the same one: the answer fails toward listing.
-// incorporated is anything that names a commit. It is git rev-list <reach>
-// ^incorporated for the commits and git rev-list --no-walk <Objects> for
-// which of Objects are commits.
-//
-// The sets reach commits only: an object that is not a commit and that a
-// set alone names, a reflog entry's previous value that is a tree, a blob
-// or a tag, is in neither answer. git refuses to point HEAD or a branch at
-// anything but a commit, so such an entry is written only by pointing
-// another reference that keeps a reflog at one, a remote-tracking or notes
-// reference by git update-ref among them, and then moving it on. An object
-// named that the repository does not hold is an error, never an empty
-// answer.
+// reaches that incorporated does not, as git rev-list lists them, most
+// recent first, a tag followed to the commit it points at; and every object
+// in Objects that is not a commit, an annotated tag, a tree or a blob, in
+// Objects' order, whatever incorporated holds, so a tree or blob named is
+// listed even when a commit of incorporated holds the same one: the answer
+// fails toward listing. incorporated is anything that names a commit. It is
+// git rev-list <reach> ^incorporated for the commits and git rev-list
+// --no-walk <Objects> for which of Objects are commits. Refs reaches
+// commits alone: a reference pointing at anything else is named in Objects
+// to be listed. An object named that the repository does not hold is an
+// error, never an empty answer.
 func (r *Repository) NotReachedFrom(ctx context.Context, reach Reach, incorporated string) (commits, others []string, err error) {
 	i, err := r.ResolveCommit(ctx, incorporated)
 	if err != nil {
@@ -190,7 +198,7 @@ func (r *Repository) NotReachedFrom(ctx context.Context, reach Reach, incorporat
 	if err != nil {
 		return nil, nil, err
 	}
-	if !reach.Refs && !reach.Reflogs && len(reach.Objects) == 0 {
+	if !reach.Refs && len(reach.Objects) == 0 {
 		return nil, nil, nil
 	}
 	out, err := r.run(ctx, "commits-not-reached", append(append([]string{"rev-list"}, from...), "^"+i)...)
