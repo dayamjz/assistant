@@ -73,7 +73,7 @@ func TestATaskCopyWhoseLandingTheGateRebasedIsRemovedOnTheRecordedRebase(t *test
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rebasedLanding(t, tc.branch, tc.deleteBranch, func(w launched, host forge.Host, worker, published string) {
+			rebasedLanding(t, tc.branch, tc.deleteBranch, false, func(w launched, host forge.Host, worker, published string) {
 				got := waitLandedCleanup(t, w, host)
 				if got.Source != taskstate.SourceRecord || got.State != taskstate.Complete || !removed(t, w) {
 					t.Fatalf("the task reads %+v and the copy removed is %v, want Complete with the copy gone", got, removed(t, w))
@@ -95,10 +95,59 @@ func TestATaskCopyWhoseLandingTheGateRebasedIsRemovedOnTheRecordedRebase(t *test
 	}
 }
 
+// mergeOnlyFile is the file the merge-only walk's merge adds and neither of
+// its parents holds.
+const mergeOnlyFile = "important.txt"
+
+// PRD principles P6 and P12, over the same walk with one difference: the
+// worker's head is a merge whose result adds a file neither parent holds.
+// The gate's rebase replays the merge's parents and not the merge, without a
+// conflict, so the commit it publishes lacks the file, and that is what is
+// merged. The copy is the one place the file still is. Asserted: the
+// cleanup refuses, the copy stands with the file in it, and no cleanup
+// record is written, because no rebase record may say the replay carried a
+// head whose content the published commit does not hold.
+func TestATaskCopyWhoseRebasedLandingDroppedContentIsKept(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P12)
+	requiresIdentifiedPeer(t)
+	rebasedLanding(t, "task/merge-only", false, true, func(w launched, _ forge.Host, worker, published string) {
+		if _, err := tryGitIn(t, w.gateRepo, "cat-file", "-e", published+":"+mergeOnlyFile); err == nil {
+			t.Fatalf("the published %s holds %s, so the replay dropped nothing and the walk is not exercised", published, mergeOnlyFile)
+		}
+		deadline := time.Now().Add(60 * time.Second)
+		for unprovenLines(t, w) == 0 {
+			if removed(t, w) {
+				log, _ := os.ReadFile(w.home.ServiceLog())
+				t.Fatalf("the copy was removed with %s in it, which the published %s does not hold\nthe service log:\n%s",
+					mergeOnlyFile, published, log)
+			}
+			if !time.Now().Before(deadline) {
+				log, _ := os.ReadFile(w.home.ServiceLog())
+				t.Fatalf("the cleanup was never refused; the task reads %+v and the copy removed is %v\nthe service log:\n%s",
+					listedTask(t, w.running.client, w.task), removed(t, w), log)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		copyPath := resolvedCopy(t, w.home, w.task)
+		if content, err := os.ReadFile(filepath.Join(copyPath, mergeOnlyFile)); err != nil || string(content) != "written only in the merge\n" {
+			t.Fatalf("the copy's %s reads %q (%v), want the worker's content kept", mergeOnlyFile, content, err)
+		}
+		if _, err := recordsOf(t, w.home).TaskCleanup(t.Context(), w.task); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("a cleanup record was written for a copy holding content no upstream has: %v", err)
+		}
+		if got := git(t, copyPath, "rev-parse", "HEAD"); got != worker {
+			t.Fatalf("the copy's head is %s, want the worker's %s", got, worker)
+		}
+	})
+}
+
 // rebasedLanding builds the walk TestATaskCopyWhoseLandingTheGateRebasedIsRemovedOnTheRecordedRebase
 // describes up to the merge read, and hands body the worker's commit and the
 // commit the gate published for it once the read has asked the cleanup.
-func rebasedLanding(t *testing.T, branch string, deleteBranch bool, body func(w launched, host forge.Host, worker, published string)) {
+func rebasedLanding(t *testing.T, branch string, deleteBranch, mergeOnly bool,
+	body func(w launched, host forge.Host, worker, published string)) {
 	t.Helper()
 	h := newHome(t)
 	subject := newSubject(t)
@@ -169,6 +218,25 @@ func rebasedLanding(t *testing.T, branch string, deleteBranch bool, body func(w 
 		}
 		mustGitAs(t, w, copyPath, "add", "-A")
 		mustGitAs(t, w, copyPath, "commit", "--quiet", "-m", "write the line")
+		if mergeOnly {
+			// The worker's head is a merge of a side branch whose result adds a
+			// file neither parent holds, which a replay that linearizes the
+			// history does not carry.
+			mustGitAs(t, w, copyPath, "switch", "--quiet", "-c", "side", "HEAD~1")
+			if err := os.WriteFile(filepath.Join(copyPath, "side.txt"), []byte("a side branch\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			mustGitAs(t, w, copyPath, "add", "-A")
+			mustGitAs(t, w, copyPath, "commit", "--quiet", "-m", "a side branch")
+			mustGitAs(t, w, copyPath, "switch", "--quiet", branch)
+			mustGitAs(t, w, copyPath, "merge", "--quiet", "--no-ff", "--no-commit", "side")
+			if err := os.WriteFile(filepath.Join(copyPath, mergeOnlyFile), []byte("written only in the merge\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			mustGitAs(t, w, copyPath, "add", "-A")
+			mustGitAs(t, w, copyPath, "commit", "--quiet", "-m", "merge the side branch")
+			mustGitAs(t, w, copyPath, "branch", "--quiet", "-D", "side")
+		}
 		worker := mustGitAs(t, w, copyPath, "rev-parse", "HEAD")
 		if out, err := gitAs(t, w, copyPath, "push", gate.RemoteName, branch); err != nil {
 			t.Fatalf("the worker's push of its own branch was refused:\n%s", out)

@@ -34,17 +34,27 @@ func (s *cleanupSubject) rebaseInGate(t *testing.T, branch string) rebasedLandin
 	worker := commit(t, tk.copy, "f.txt", strings.Replace(twelveLines, "one\nsame\n", "one\nchanged\n", 1), "edit line two")
 	onto := s.advanceMain(t, strings.Replace(twelveLines, "twelve\n", "TWELVE\n", 1), "edit line twelve")
 
+	published := s.replayInGate(t, tk, branch, worker, onto)
+	return rebasedLanding{tk: tk, worker: worker, onto: onto, published: published}
+}
+
+// replayInGate does what the gate's rebase stage does with a worker's push of
+// branch at head: in a repository of its own, replays head onto onto with
+// git's own rebase and publishes the result to the upstream's branch, which it
+// returns.
+func (s *cleanupSubject) replayInGate(t *testing.T, tk task, branch, head, onto string) string {
+	t.Helper()
 	gateCopy := filepath.Join(t.TempDir(), "gate")
 	rawGit(t, filepath.Dir(gateCopy), "clone", "-q", s.upstream, gateCopy)
 	rawGit(t, gateCopy, "fetch", "-q", tk.copy, branch)
-	rawGit(t, gateCopy, "switch", "-q", "--detach", worker)
+	rawGit(t, gateCopy, "switch", "-q", "--detach", head)
 	rawGit(t, gateCopy, "rebase", "-q", onto)
 	published := rawGit(t, gateCopy, "rev-parse", "HEAD")
 	rawGit(t, gateCopy, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
-	if published == worker {
-		t.Fatalf("the replay published %s, the worker's own commit", worker)
+	if published == head {
+		t.Fatalf("the replay published %s, the worker's own commit", head)
 	}
-	return rebasedLanding{tk: tk, worker: worker, onto: onto, published: published}
+	return published
 }
 
 // advanceMain commits content as f.txt on the upstream's main from a clone
@@ -220,6 +230,56 @@ func TestATaskCopyWhoseLandingTheGateRebasedIsRemovedOnlyOnTheRecord(t *testing.
 		_, err := s.cleanUp(t, l.tk.id)
 		refusedWith(t, err, ReasonUnproven)
 		stillStands(t, l.tk)
+	})
+
+	t.Run("a record of a replay that dropped a merge's own content keeps the copy", func(t *testing.T) {
+		s := newCleanupSubject(t, nil)
+		tk := s.deliveryTask(t, "topic")
+		commit(t, tk.copy, "f.txt", strings.Replace(twelveLines, "one\nsame\n", "one\nchanged\n", 1), "edit line two")
+		rawGit(t, tk.copy, "switch", "-q", "-c", "side", "main")
+		commit(t, tk.copy, "side.txt", "a side branch\n", "a side branch")
+		rawGit(t, tk.copy, "switch", "-q", "topic")
+		rawGit(t, tk.copy, "merge", "-q", "--no-ff", "--no-commit", "side")
+		merged := commit(t, tk.copy, "important.txt", "written only in the merge\n", "merge the side branch")
+		rawGit(t, tk.copy, "branch", "-q", "-D", "side")
+		onto := s.advanceMain(t, strings.Replace(twelveLines, "twelve\n", "TWELVE\n", 1), "edit line twelve")
+		published := s.replayInGate(t, tk, "topic", merged, onto)
+		if _, err := tryRawGit(s.upstream, "cat-file", "-e", published+":important.txt"); err == nil {
+			t.Fatalf("the replay %s kept important.txt, so the case is not exercised", published)
+		}
+		s.forge.Rescript(t, mergedAt(7, published))
+		s.rebasedRun(t, "run-topic", "topic", 7, merged, published)
+		s.recordRebase(t, "run-topic", merged, onto, published)
+
+		_, err := s.cleanUp(t, tk.id)
+		refusal := refusedWith(t, err, ReasonUnproven)
+		stillStands(t, tk)
+		if detail := attemptFor(t, refusal, store.CleanupProofRemoteBranch); !strings.Contains(detail, "would change it") {
+			t.Errorf("the remote-branch attempt says %q, want it to say the recorded head lacks the commit's content", detail)
+		}
+	})
+
+	t.Run("a record of a replay that skipped a reverted patch keeps the copy", func(t *testing.T) {
+		s := newCleanupSubject(t, nil)
+		tk := s.deliveryTask(t, "topic")
+		edited := strings.Replace(twelveLines, "one\nsame\n", "one\nchanged\n", 1)
+		commit(t, tk.copy, "f.txt", edited, "edit line two")
+		head := commit(t, tk.copy, "g.txt", "a second file\n", "add a second file")
+		// The base applies the worker's first patch and then reverts it, so
+		// git's rebase finds that patch already upstream and skips it.
+		s.advanceMain(t, edited, "edit line two upstream")
+		onto := s.advanceMain(t, twelveLines, "revert the edit of line two")
+		published := s.replayInGate(t, tk, "topic", head, onto)
+		if out := rawGit(t, s.upstream, "show", published+":f.txt"); strings.Contains(out, "changed") {
+			t.Fatalf("the replay %s kept the first patch, so the case is not exercised", published)
+		}
+		s.forge.Rescript(t, mergedAt(7, published))
+		s.rebasedRun(t, "run-topic", "topic", 7, head, published)
+		s.recordRebase(t, "run-topic", head, onto, published)
+
+		_, err := s.cleanUp(t, tk.id)
+		refusedWith(t, err, ReasonUnproven)
+		stillStands(t, tk)
 	})
 
 	t.Run("a record of a run not attributed to the task keeps the copy", func(t *testing.T) {
