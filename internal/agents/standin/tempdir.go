@@ -14,8 +14,11 @@ import (
 // Temp tags are the namespaces a test binary sweeps. Each names the package
 // whose TestMain passes it to SweepTempDirs, and a directory is stamped with
 // the tag of the binary that made it so that binary's next start reclaims it.
-// A new tag is one of these constants. Which test binary uses which letter is
-// read from the calls to TempDir and SweepTempDirs.
+// A new tag is one of these constants. The test reads every TempDir,
+// SweepTempDirs, and RegisterTempTag call. A variable counts as the letter
+// assigned to it, a value from RegisteredTempTag counts as the letter that
+// binary registered, and a call in a non-test file counts for every test
+// binary that imports its package.
 const (
 	// TempTagStandin is the namespace internal/agents/standin's tests sweep.
 	TempTagStandin = "a"
