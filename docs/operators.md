@@ -494,10 +494,18 @@ read, but it never reaches the private channel or the coordinator until
 #458 lands.
 
 If the copy's work later turns up somewhere safe, for example once you push
-its commit to the upstream branch, the next cleanup of it (for a run's copy,
-the next service start) removes the copy on that proof and closes the entry
-as removed on a proof, recorded as the program's and never as a discard; a
-closed entry is no longer listed. Nothing else removes a kept copy. A
+its commit to the upstream branch, the next cleanup of it removes the copy on
+that proof and closes the entry as removed on a proof, recorded as the
+program's and never as a discard; a closed entry is no longer listed. For a
+run's copy the next cleanup is the next service start. For a task's copy
+whose worker has stopped, the service asks again every five minutes, at most
+six times for that stopped worker, and again when the coordinator stops the
+task or the service starts. A delivery whose commits the gate rebased before publishing them is
+followed through the gate's own record of that rebase, so the copy, which
+still holds the commits under their old identifiers, is removed once the
+published ones are on the task's upstream branch or in the merged pull
+request. When the copy is kept instead, the service log names each check and
+what it found. Nothing else removes a kept copy. A
 service that stops between removing the copy and marking it removed leaves
 the entry open; the next start completes the mark from the recorded proof
 and closes it. An entry whose copy is gone with no proof recorded, a copy

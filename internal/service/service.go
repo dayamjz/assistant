@@ -199,6 +199,10 @@ type Options struct {
 	// hands them to internal/tasks' InterruptBeforeMarkForTest.
 	cleanupTest          testing.TB
 	interruptCleanupMark func() error
+	// cleanupAskSpacing replaces landedAskSpacing for this service, which
+	// export_test.go's WithCleanupAskSpacingForTest sets and the product
+	// never does; zero is landedAskSpacing.
+	cleanupAskSpacing time.Duration
 	// beforeStaleRemovalRelease runs in recovery between reading a removal
 	// reservation whose owner is gone and releasing it; export_test.go's
 	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
@@ -438,11 +442,15 @@ type Service struct {
 	// head, and a run that recorded no observed head. It is memory and
 	// nothing durable, guarded by mu; mergeread.go owns it.
 	mergeReadsSettled map[string]bool
-	// landedTried holds, per landed task, the session reference whose Dead
-	// terminal the cleanup decision was last asked under, so the supervisor
-	// pass asks once per reference rather than at every interval. It is
-	// memory and nothing durable, guarded by mu; landed.go owns it.
-	landedTried map[string]string
+	// landedTried holds, per task, how often and when the cleanup decision
+	// was asked under the session reference whose terminal it last read
+	// Dead, so the supervisor pass asks again on landed.go's spacing and
+	// bound rather than at every interval or never. It is memory and
+	// nothing durable, guarded by mu; landed.go owns it.
+	landedTried map[string]landedAsk
+	// landedSpacing is landedAskSpacing, or the spacing a test set through
+	// Options; landed.go reads it.
+	landedSpacing time.Duration
 
 	revision atomic.Uint64
 	// published is the basis of the last task.state this service sent per
@@ -626,6 +634,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		topologies:                make(map[string]*topology),
 		advancing:                 make(map[string]*slot),
 		beforeStaleRemovalRelease: o.beforeStaleRemovalRelease,
+		landedSpacing:             landedSpacingOf(o.cleanupAskSpacing),
 		afterIntakeBranchRelease:  o.afterIntakeBranchRelease,
 		isolated:                  make(map[string]tasks.Isolation),
 		claiming:                  make(map[string]bool),

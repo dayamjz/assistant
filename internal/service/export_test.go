@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -32,6 +33,19 @@ func WithCleanupInterruptForTest(tb testing.TB, o Options, f func() error) Optio
 	o.cleanupTest, o.interruptCleanupMark = tb, f
 	return o
 }
+
+// WithCleanupAskSpacingForTest returns o with the spacing the supervisor
+// pass leaves between two asks of one landed task's cleanup set to d, for
+// this package's external tests, which cannot wait landedAskSpacing.
+func WithCleanupAskSpacingForTest(o Options, d time.Duration) Options {
+	o.cleanupAskSpacing = d
+	return o
+}
+
+// LandedCleanupAsks is landedAsks, the most times the cleanup decision is
+// asked for one landed task under one Dead terminal in a service's life, for
+// this package's external tests to count against.
+const LandedCleanupAsks = landedAsks
 
 // WithBeforeStaleRemovalReleaseForTest returns o with recovery's seam between
 // reading a dead eject's removal reservation and releasing it set to f, for
