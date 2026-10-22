@@ -694,7 +694,10 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 // deadline where a caller's context carries none, PRD section 8's process
 // model. internal/vcs reads no configuration, so this is the route that
 // bound takes to a git this service starts; internal/tasks is given the same
-// value through its GitDeadline, and the stage and fix seams get gitWith.
+// value through its GitDeadline, internal/gate these options through
+// gate.WithGitOptions, and the stage and fix seams get gitWith. A handle
+// internal/vcs derives from one of these, a worktree AddWorktree creates,
+// carries the same options.
 func (s *Service) git() []vcs.Option {
 	return s.gitWith(redact.New())
 }

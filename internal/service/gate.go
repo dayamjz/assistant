@@ -34,7 +34,7 @@ type subject struct {
 // one. What this adds is the repository record, because a run needs one and a
 // gate is not one, which is the pairing assistant init writes.
 func (s *Service) gateSubject(ctx context.Context, id string) (subject, error) {
-	workingPath, err := gate.WorkingCopyFor(ctx, s.home.Root(), id, gate.WithIndex(s.store))
+	workingPath, err := gate.WorkingCopyFor(ctx, s.home.Root(), id, gate.WithIndex(s.store), gate.WithGitOptions(s.git()...))
 	if err != nil {
 		return subject{}, err
 	}
