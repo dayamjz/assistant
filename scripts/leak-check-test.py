@@ -244,18 +244,32 @@ import (
 	"testing"
 )
 
-// With LEAK set, it leaves a detached sleep running and passes.
+// With LEAK set, it leaves a detached sleep running and passes. The sleep
+// holds an exclusive flock on the file LOCK names until it exits, and its
+// pid is written to RECORD once it holds it.
 func TestMaybeLeavesADetachedProcess(t *testing.T) {
 	if os.Getenv("LEAK") == "" {
 		return
 	}
+	lock, err := os.OpenFile(os.Getenv("LOCK"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command("sleep", "2")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.ExtraFiles = []*os.File{lock}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	pid := []byte(strconv.Itoa(cmd.Process.Pid))
-	if err := os.WriteFile(os.Getenv("RECORD"), pid, 0o600); err != nil {
+	if err := os.WriteFile(os.Getenv("RECORD")+".new", pid, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(os.Getenv("RECORD")+".new", os.Getenv("RECORD")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -264,13 +278,37 @@ func TestMaybeLeavesADetachedProcess(t *testing.T) {
 LATE_TEST = """package b
 
 import (
+	"os"
+	"syscall"
 	"testing"
 	"time"
 )
 
-// It runs long after package a has ended, and past a's sleep.
-func TestOutlastsTheEarlyPackage(t *testing.T) {
-	time.Sleep(5 * time.Second)
+// With LEAK set, it ends only once package a's sleep has exited: it waits
+// for a to record the sleep, then for the sleep's lock. So the sleep
+// outlives a and has exited before go test ends.
+func TestOutlastsTheEarlyPackagesProcess(t *testing.T) {
+	if os.Getenv("LEAK") == "" {
+		return
+	}
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		if _, err := os.Stat(os.Getenv("RECORD")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("package a never recorded its sleep")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	lock, err := os.Open(os.Getenv("LOCK"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
 }
 """
 
@@ -286,12 +324,13 @@ def running(pid):
 
 class PerPackageTest(unittest.TestCase):
     """The per-package check, run by go test -exec over a real two-package
-    module: package a leaves a detached sleep 2 and passes, and package b runs
-    for five seconds, so the sleep outlives a and has exited before go test
-    ends, where a comparison at the end of the run cannot see it."""
+    module: package a leaves a detached sleep 2 and passes, and package b
+    ends only once that sleep has exited, so the sleep outlives a and has
+    exited before go test ends, where a comparison at the end of the run
+    cannot see it."""
 
     def go_test(self, module, record, leak, wrapped):
-        env = dict(os.environ, RECORD=str(record))
+        env = dict(os.environ, RECORD=str(record), LOCK=str(record) + ".lock")
         env.pop("LEAK", None)
         if leak:
             env["LEAK"] = "1"
@@ -350,7 +389,7 @@ class PerPackageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             record = Path(folder) / "pid"
             result = subprocess.run(
-                [sys.executable, "-c", EXIT_BEFORE_READ, str(SCRIPT), str(record), "--",
+                [sys.executable, "-B", "-c", EXIT_BEFORE_READ, str(SCRIPT), str(record), "--",
                  sys.executable, "-c", PLANT_DETACHED, str(record)],
                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 check=False, timeout=60)
@@ -368,7 +407,7 @@ class PerPackageTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             parent, child = Path(folder) / "parent", Path(folder) / "child"
             result = subprocess.run(
-                [sys.executable, "-c", EXIT_BEFORE_MARK, str(SCRIPT), str(parent), str(child),
+                [sys.executable, "-B", "-c", EXIT_BEFORE_MARK, str(SCRIPT), str(parent), str(child),
                  "--", sys.executable, "-c", FORK_ON_SIGNAL, str(parent), str(child)],
                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 check=False, timeout=60)
