@@ -175,12 +175,12 @@ func (reach Reach) args() ([]string, error) {
 //
 // The sets reach commits only: an object that is not a commit and that a
 // set alone names, a reflog entry's previous value that is a tree, a blob
-// or a tag, is in neither answer. git writes a reflog for HEAD, branches,
-// remote-tracking references, notes and the stash, none of which it lets
-// point at anything but a commit, so such an entry is one a reference git
-// was told to keep a reflog of wrote (core.logAllRefUpdates=always, or
-// update-ref --create-reflog). An object named that the repository does not
-// hold is an error, never an empty answer.
+// or a tag, is in neither answer. git refuses to point HEAD or a branch at
+// anything but a commit, so such an entry is written only by pointing
+// another reference that keeps a reflog at one, a remote-tracking or notes
+// reference by git update-ref among them, and then moving it on. An object
+// named that the repository does not hold is an error, never an empty
+// answer.
 func (r *Repository) NotReachedFrom(ctx context.Context, reach Reach, incorporated string) (commits, others []string, err error) {
 	i, err := r.ResolveCommit(ctx, incorporated)
 	if err != nil {
