@@ -90,6 +90,11 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: make lint-guard-test
 
+      # The leftover guard's own tests. The Test step then proves the guard
+      # fails on planted leftovers before it trusts the real comparison.
+      - name: Leak guard tests
+        run: python3 scripts/leak-check-test.py -v
+
       # The race detector is the point of this job, so it is not optional.
       # The timeout is explicit because internal/service has run past go
       # test's ten-minute default on a macOS runner, which fails the package
@@ -130,9 +135,29 @@ jobs:
               bash -c 'setpriv --reuid=65534 --regid=65534 --clear-groups sleep infinity &
                 uid=$1 gid=$2; shift 2
                 exec setpriv --reuid="$uid" --regid="$gid" --init-groups "$@"' bash "$(id -u)" "$(id -g)")
+          else
+            # macOS's own agents and xcrun write into the per-user temp dir
+            # whatever TMPDIR says. With the tests' TMPDIR elsewhere, the
+            # guard can set those Apple entries aside there without any
+            # chance of covering a test's; it still watches both.
+            TMPDIR=$(mktemp -d "$RUNNER_TEMP/tmp.XXXXXX")
+            export TMPDIR
           fi
-          "${run[@]}" go test -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
-          grep -E '^(ok|FAIL|--- FAIL|panic:|\?)[[:space:]]' test.log || true
+          # P15: go test runs inside scripts/leak-check.py, which fails naming
+          # every runner-user process and temp entry that is new when go test
+          # ends. Both snapshots are taken inside the namespace: a second one
+          # on the host after tini exits would miss what its teardown killed.
+          # The self-test first plants a detached process and a directory and
+          # must see this same guard, in this same wrapper, reject both, so a
+          # guard that cannot see processes here fails the step instead of
+          # passing. Existing processes are matched by pid and start time, not
+          # by name; Go's build cache lives outside the watched temp roots.
+          # The only things set aside are macOS's own launchd Apple jobs and
+          # Apple temp entries, each printed; the script's header says which.
+          "${run[@]}" python3 scripts/leak-check.py self-test
+          "${run[@]}" python3 scripts/leak-check.py run -- \
+            go test -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
+          grep -E '^(ok|FAIL|--- FAIL|panic:|\?|LEAK|leak-check:)[[:space:]]' test.log || true
           if [ -n "${status:-}" ]; then
             echo "::group::full test output"
             cat test.log
