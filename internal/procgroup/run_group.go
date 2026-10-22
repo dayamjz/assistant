@@ -98,10 +98,11 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 		case <-timer.C:
 			// The reap goes through cmd.Process rather than cmd.Wait,
 			// which would write cmd.ProcessState after Run returned and
-			// race every caller reading it. check refused a context and
-			// os/exec's own pipes, and every stream the child holds is a
-			// file or nil, so cmd.Wait would have nothing else to finish:
-			// no copier, no pipe end to close, no context.
+			// race every caller reading it. check refused a command built
+			// with a context, including one whose Cancel was set back to
+			// nil, and os/exec's own pipes, and every stream the child
+			// holds is a file or nil, so cmd.Wait would have nothing else
+			// to finish: no copier, no pipe end to close, no watchCtx.
 			go func() {
 				<-exited
 				endGroup(pgid)

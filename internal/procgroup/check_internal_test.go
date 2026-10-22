@@ -1,10 +1,12 @@
 package procgroup
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // The pipe refusal reads os/exec's record of the pipes it opened, so it is
@@ -35,6 +37,52 @@ func TestThePipeCountIsReadFromARealCommand(t *testing.T) {
 	})
 	if n, known := closersIn(reflect.ValueOf(cmd).Elem(), "parentIOPipes"); !known || n != 3 {
 		t.Fatalf("a command with three os/exec pipes holds %d (known %v), want 3 and known", n, known)
+	}
+}
+
+// The context refusal reads the field CommandContext assigns, so it is asked
+// of a real exec.Cmd: unset for a plain command, set for one built with a
+// context whose Cancel was then cleared and whose WaitDelay was set above
+// zero. That is the positive control: a toolchain that renamed ctx, or
+// stopped storing the context there, fails here rather than letting the
+// refusal look at nothing.
+func TestTheContextIsReadFromARealCommand(t *testing.T) {
+	plain := exec.Command("true")
+	if set, known := contextOf(reflect.ValueOf(plain).Elem()); !known || set {
+		t.Fatalf("a plain command reads as context set %v known %v, want unset and known", set, known)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "true")
+	cmd.Cancel = nil
+	cmd.WaitDelay = time.Millisecond
+	if set, known := contextOf(reflect.ValueOf(cmd).Elem()); !known || !set {
+		t.Fatalf("a CommandContext with Cancel cleared reads as context set %v known %v, want set and known", set, known)
+	}
+}
+
+// A context that cannot be read refuses the command as if it had one, so a
+// renamed field fails every Run loudly instead of letting one through; only
+// a context known to be absent runs.
+func TestAnUnreadableContextRefuses(t *testing.T) {
+	if _, known := contextOf(reflect.ValueOf(struct{ other any }{})); known {
+		t.Fatal("a struct without ctx reads as known")
+	}
+	if _, known := contextOf(reflect.ValueOf(struct{ ctx int }{})); known {
+		t.Fatal("a ctx that is not an interface reads as known")
+	}
+	for _, tc := range []struct {
+		set   bool
+		known bool
+		want  error
+	}{
+		{false, false, ErrMisconfigured},
+		{true, true, ErrMisconfigured},
+		{false, true, nil},
+	} {
+		if err := contextRefusal(tc.set, tc.known); !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
+			t.Errorf("contextRefusal(%v, %v) = %v; want %v", tc.set, tc.known, err, tc.want)
+		}
 	}
 }
 
