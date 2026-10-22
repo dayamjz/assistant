@@ -143,46 +143,40 @@ jobs:
             TMPDIR=$(mktemp -d "$RUNNER_TEMP/tmp.XXXXXX")
             export TMPDIR
           fi
-          # P15 per package, on Linux: go test runs each package's test
-          # binary through `leak-check.py package` (-exec), which makes itself
-          # the binary's child subreaper, so every process the package starts
-          # stays in its tree whatever session it moves to, and fails that
-          # package naming each one still running once the binary exits, then
-          # ends them. macOS has no subreaper; whether its lane enforces P15
-          # per package is open (see #492), so there only the comparison
-          # below runs.
+          # P15 per package: go test runs each package's test binary through
+          # `leak-check.py package` (-exec), which fails that package naming
+          # each process the binary started that is still running once it
+          # exits, then ends them, with other packages running beside it.
+          # Linux keeps a package's processes in its tree with the child
+          # subreaper, macOS by running the binary in a sandbox profile of
+          # its own that they all inherit; the script says what neither sees.
           # Around the whole run, scripts/leak-check.py also fails naming
           # every runner-user process and temp entry that is new when go test
           # ends. Both snapshots are taken inside the namespace: a second one
           # on the host after tini exits would miss what its teardown killed.
           # The self-test first plants a detached process and a directory and
           # must see this same guard, in this same wrapper, reject both, and
-          # on Linux the per-package check fail, name and end a planted
-          # process, so a guard that cannot see processes here fails the step
-          # instead of passing. Existing processes are matched by pid and
-          # start time, not by name; Go's build cache lives outside the
-          # watched temp roots. The only things set aside are macOS's own
-          # Apple launchd jobs, XPC services and temp entries, each printed;
-          # the script says which.
+          # the per-package check fail, name and end a planted process and
+          # leave one outside the package alone, so a guard that cannot see
+          # processes here fails the step instead of passing. Existing
+          # processes are matched by pid and start time, not by name; Go's
+          # build cache lives outside the watched temp roots. The only things
+          # set aside are macOS's own Apple launchd jobs, XPC services and
+          # temp entries, each printed; the script says which.
           # Each package the check runs is recorded, and every package go test
           # reports ok must be among them, so a lost -exec fails the step.
-          per_package=()
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            per_package=(-exec "python3 $PWD/scripts/leak-check.py package --")
-            export LEAK_CHECK_RECORD="$RUNNER_TEMP/per-package-checked.txt"
-          fi
+          per_package=(-exec "python3 $PWD/scripts/leak-check.py package --")
+          export LEAK_CHECK_RECORD="$RUNNER_TEMP/per-package-checked.txt"
           "${run[@]}" python3 scripts/leak-check.py self-test
-          if [ -n "${LEAK_CHECK_RECORD:-}" ]; then : > "$LEAK_CHECK_RECORD"; fi
+          : > "$LEAK_CHECK_RECORD"
           "${run[@]}" python3 scripts/leak-check.py run -- \
             go test "${per_package[@]}" -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            passed=$(grep -cE '^ok[[:space:]]' test.log || true)
-            checked=$(wc -l < "$LEAK_CHECK_RECORD")
-            echo "leak-check: $checked package(s) ran through the per-package check; go test reported $passed ok"
-            if [ "$checked" -lt "$passed" ] || [ "$passed" -eq 0 ]; then
-              echo "::error::fewer packages ran through the per-package check than passed"
-              status=${status:-1}
-            fi
+          passed=$(grep -cE '^ok[[:space:]]' test.log || true)
+          checked=$(wc -l < "$LEAK_CHECK_RECORD")
+          echo "leak-check: $checked package(s) ran through the per-package check; go test reported $passed ok"
+          if [ "$checked" -lt "$passed" ] || [ "$passed" -eq 0 ]; then
+            echo "::error::fewer packages ran through the per-package check than passed"
+            status=${status:-1}
           fi
           grep -E '^(ok|FAIL|--- FAIL|panic:|\?|LEAK|leak-check:)[[:space:]]' test.log || true
           if [ -n "${status:-}" ]; then

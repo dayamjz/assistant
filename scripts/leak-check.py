@@ -3,7 +3,7 @@
 a Go package for every process it leaves running.
 
 Run locally: python3 scripts/leak-check.py run -- go test -race -p 2 ./...
-Per package, on Linux:
+Per package as well:
   python3 scripts/leak-check.py run -- \
     go test -exec "python3 $PWD/scripts/leak-check.py package --" ./...
 Prove both reject planted leftovers: python3 scripts/leak-check.py self-test
@@ -16,12 +16,11 @@ go test ends is not there, and neither is a temp entry removed by then.
 
 package is P15's per-package check (CI fails when any process a test started
 outlives its package): go test runs each package's test binary through it,
-and it fails that package for every process the binary's tree still has
-running once the binary exits (package_run says how, and what it misses).
-It needs Linux's child subreaper and refuses anywhere else, so on macOS
-nothing checks per package but standin.RunOwned's own check, in the packages
-whose TestMain uses it, which sees only processes of that package's binary
-and processes carrying its owner identity.
+and it fails that package for every process the binary started that is
+still running once the binary exits, with other packages running beside it.
+Linux ties a process to its package with the child subreaper, macOS with a
+sandbox profile the package's processes inherit; package_run says how, and
+what neither sees.
 
 The only things set aside are macOS's own, each listed below with why: launchd
 jobs labelled com.apple.*, Apple XPC services launchd started from /System, and
@@ -37,6 +36,7 @@ import os
 from pathlib import Path
 import signal
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -341,14 +341,14 @@ pathlib.Path(sys.argv[2]).mkdir()
             if pid is not None:
                 os.kill(pid, 9)
         print("leak-check self-test: expected failure observed; planted leaks removed")
-    if sys.platform == "linux":
-        package_self_test()
+    package_self_test()
     return 0
 
 
 def package_self_test():
-    """The per-package check's positive control: package_run must fail a
-    command that leaves a detached process behind, name it, and end it."""
+    """The per-package check's controls: package_run must fail a command that
+    leaves a detached process behind, name it and end it, and must neither
+    name nor end a process started outside the command."""
     code = """
 import subprocess
 p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
@@ -356,25 +356,35 @@ p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
                      start_new_session=True)
 print(f'planted {p.pid}', flush=True)
 """
-    result = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "package", "--",
-         sys.executable, "-c", code],
-        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        check=False, timeout=60,
-    )
-    print(result.stdout, end="", flush=True)
-    planted = [line.split()[1] for line in result.stdout.splitlines()
-               if line.startswith("planted ")]
-    if not planted:
-        raise RuntimeError("the per-package self-test planted nothing")
-    pid = int(planted[0])
-    named = f"LEAK package={os.getcwd()} process pid={pid} " in result.stdout
-    running = process_start(pid) is not None
-    if running:
-        os.kill(pid, 9)
-    if result.returncode != 1 or not named or running:
-        raise RuntimeError("per-package self-test did not fail, name and end the planted process")
-    print("leak-check self-test: per-package check failed, named and ended its planted process")
+    bystander = subprocess.Popen(["sleep", "300"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+    try:
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "package", "--",
+             sys.executable, "-c", code],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            check=False, timeout=60,
+        )
+        print(result.stdout, end="", flush=True)
+        planted = [line.split()[1] for line in result.stdout.splitlines()
+                   if line.startswith("planted ")]
+        if not planted:
+            raise RuntimeError("the per-package self-test planted nothing")
+        pid = int(planted[0])
+        named = f"LEAK package={os.getcwd()} process pid={pid} " in result.stdout
+        running = process_start(pid) is not None
+        if running:
+            os.kill(pid, 9)
+        if result.returncode != 1 or not named or running:
+            raise RuntimeError("per-package self-test did not fail, name and end the planted process")
+        if f"pid={bystander.pid} " in result.stdout or bystander.poll() is not None:
+            raise RuntimeError("per-package self-test named or ended a process outside the package")
+    finally:
+        bystander.kill()
+        bystander.wait()
+    print("leak-check self-test: per-package check failed, named and ended its planted process, "
+          "and left a process outside the package alone")
 
 
 PR_SET_CHILD_SUBREAPER = 36  # from linux/prctl.h
@@ -429,71 +439,37 @@ def children_running():
             return True
 
 
-def package_run(command):
-    """Run one package's test binary and fail it for every process it left.
+def linux_leftovers(package):
+    """The Linux half of package_run, once the binary has exited and been
+    reaped: report and end every process the package left, and return how
+    many rounds found one running.
 
-    go test runs this as -exec, once per package, in that package's
-    directory. It makes this process Linux's child subreaper for its
-    descendants first, so a process the binary or anything under it starts
-    is reparented here, never to init, when its parent exits, whatever
-    session, group or environment it runs in. While the binary runs, it reaps
-    every such process that exits. Once the binary has exited, any child
-    still running is a process the package started that outlived it (P15):
-    each of them and everything under it is printed as a LEAK line naming the
-    package, and the package fails. That question is asked of the kernel's
-    own record of this process's children (waitpid), so a process that
-    starts another and exits while this looks still leaves a child here.
-    Each generation is then killed: only this process's own unreaped
-    children are signalled, so no pid can have been reused, and what each
-    leaves is reparented here for the next round, until no child remains.
-
-    When LEAK_CHECK_RECORD names a file, the package's directory is appended
-    to it before the binary starts, so a caller can tell every package went
-    through this check rather than trusting the -exec flag reached go test.
-
-    The binary's exit status is passed on, or 1 when it was 0 and something
-    was left; a binary ended by a signal ends this process with the same
-    signal. A process the package had started through a service manager or
-    another process outside its tree (launchd, systemd, a running daemon) is
-    not its descendant and is not seen here; the comparison around the whole
-    run (run) still covers this user's processes and the temp roots. Only
-    Linux has the subreaper, and elsewhere this refuses rather than pass.
+    This process is the subreaper of everything the binary started, so a
+    process of the package's still running is this process's child, or a
+    descendant of one. Each round asks waitpid whether a child is running;
+    once one is, the package has failed, whatever the reads after it find.
+    The round then prints a LEAK line for each descendant /proc still shows
+    running, or, when it shows none because they exited after waitpid
+    answered, one line saying so. It kills this process's own children: only
+    unreaped children are signalled, so no pid can have been reused. What
+    they leave is reparented here for the next round, until no child remains.
+    A process that exits between the binary's exit and the first round's
+    waitpid is reaped there and is not seen.
     """
-    if sys.platform != "linux":
-        raise RuntimeError("the per-package check needs Linux's child subreaper "
-                           f"(prctl PR_SET_CHILD_SUBREAPER), and this is {sys.platform}")
-    libc = ctypes.CDLL(None, use_errno=True)
-    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
-        code = ctypes.get_errno()
-        raise OSError(code, "prctl(PR_SET_CHILD_SUBREAPER)")
-    record = os.environ.get("LEAK_CHECK_RECORD")
-    if record:
-        with open(record, "a", encoding="utf-8") as out:
-            out.write(os.getcwd() + "\n")
-    child = os.posix_spawnp(command[0], command, os.environ)
-
-    def forward(signum, _frame):
-        try:
-            os.kill(child, signum)
-        except ProcessLookupError:
-            pass
-
-    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
-        signal.signal(signum, forward)
-    while True:
-        pid, status = os.waitpid(-1, 0)
-        if pid == child:
-            break
-    package, me = os.getcwd(), os.getpid()
-    named = set()
+    me, named, rounds = os.getpid(), set(), 0
     while children_running():
+        rounds += 1
         table = linux_processes()
-        for pid in descendants(table, me):
-            parent, start, line = table[pid]
+        seen = descendants(table, me)
+        for pid in seen:
+            _, start, line = table[pid]
             if (pid, start) not in named:
                 named.add((pid, start))
                 print(f"LEAK package={package} process pid={pid} start={start} command={line}",
                       flush=True)
+        if not seen:
+            print(f"LEAK package={package} a process was running after the binary exited "
+                  "and exited before the check read it", flush=True)
         for pid, (parent, _, _) in table.items():
             if parent == me:
                 try:
@@ -504,13 +480,258 @@ def package_run(command):
             os.waitpid(-1, 0)
         except ChildProcessError:
             break
-    if named:
-        print(f"leak-check: package {package} left {len(named)} process(es) running", flush=True)
+    return rounds
+
+
+KINFO_PROC_SIZE = 648  # sizeof(struct kinfo_proc) from sys/sysctl.h, 64-bit
+SZOMB = 5  # extern_proc.p_stat of a process that has exited, from sys/proc.h
+SANDBOX_FILTER_PATH = 1  # sandbox_check's filter for a path argument
+SANDBOX_CHECK_NO_REPORT = 0x40000000  # sandbox_check: do not log a denial
+SETTLE_READINGS = 64
+
+
+def darwin_records(mib):
+    """The kinfo_proc records sysctl returns for mib, as (pid, start, zombie):
+    start is the kernel's start time in the form process_start uses."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    name = (ctypes.c_int * len(mib))(*mib)
+    for _ in range(SETTLE_READINGS):
+        size = ctypes.c_size_t(0)
+        if libc.sysctl(name, len(mib), None, ctypes.byref(size), None, 0) != 0:
+            raise OSError(ctypes.get_errno(), f"sysctl {mib} size")
+        size.value += size.value // 4 + KINFO_PROC_SIZE
+        buffer = ctypes.create_string_buffer(size.value)
+        if libc.sysctl(name, len(mib), buffer, ctypes.byref(size), None, 0) == 0:
+            break
+        code = ctypes.get_errno()
+        if code != errno.ENOMEM:  # ENOMEM: the table grew past the buffer
+            raise OSError(code, f"sysctl {mib}")
+    else:
+        raise RuntimeError(f"sysctl {mib} outgrew its buffer {SETTLE_READINGS} times")
+    if size.value % KINFO_PROC_SIZE:
+        raise RuntimeError(f"sysctl {mib} returned {size.value} bytes, "
+                           f"not whole {KINFO_PROC_SIZE}-byte records")
+    records = []
+    for offset in range(0, size.value, KINFO_PROC_SIZE):
+        # extern_proc: p_starttime at 0, p_stat at 36, p_pid at 40.
+        sec, usec = struct.unpack_from("<qi", buffer.raw, offset)
+        pid, = struct.unpack_from("<i", buffer.raw, offset + 40)
+        records.append((pid, f"{sec}.{usec:06d}", buffer.raw[offset + 36] == SZOMB))
+    return records
+
+
+def darwin_table():
+    """Map (pid, start) to whether it has exited, for every process in the
+    kernel's table (sysctl kern.proc.all), whatever its user."""
+    return {(pid, start): zombie for pid, start, zombie in darwin_records((1, 14, 0))}
+
+
+def darwin_process(pid):
+    """(start, exited) for the process pid now is, or None once it is gone
+    (sysctl kern.proc.pid)."""
+    records = darwin_records((1, 14, 1, pid))
+    return (records[0][1], records[0][2]) if records else None
+
+
+class Sandbox:
+    """A sandbox profile that marks a package's processes, and the reads that
+    tell them apart.
+
+    The profile allows everything except reading one file, inside, so a
+    process in it denies inside and allows outside, two empty files in a
+    directory of their own. A process outside it allows both, and one in
+    another sandbox that denies both is not marked either. macOS gives a
+    process's sandbox to every process it starts, across sessions, reparenting
+    and exec, and refuses to apply a second sandbox inside one, so nothing the
+    package starts leaves the mark. sandbox_check reads it for any pid; for a
+    pid that is gone it answers denied for both files, which is not the mark.
+    """
+
+    def __init__(self):
+        self.folder = Path(tempfile.mkdtemp(prefix="leak-check-package-")).resolve()
+        self.inside = self.folder / "inside"
+        self.outside = self.folder / "outside"
+        self.inside.touch()
+        self.outside.touch()
+        if '"' in str(self.inside) or "\\" in str(self.inside):
+            raise RuntimeError(f"cannot quote {self.inside} in a sandbox profile")
+        self.profile = f'(version 1)(allow default)(deny file-read-data (literal "{self.inside}"))'
+        self.check = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True).sandbox_check
+        self.check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+        self.check.restype = ctypes.c_int
+
+    def denies(self, pid, path):
+        return self.check(pid, b"file-read-data",
+                          SANDBOX_FILTER_PATH | SANDBOX_CHECK_NO_REPORT, str(path).encode())
+
+    def marks(self, pid):
+        """True when pid is in this sandbox, False when it is not or is gone,
+        None when sandbox_check failed."""
+        inside, outside = self.denies(pid, self.inside), self.denies(pid, self.outside)
+        if inside < 0 or outside < 0:
+            return None
+        return inside == 1 and outside == 0
+
+    def remove(self):
+        for path in (self.inside, self.outside):
+            path.unlink(missing_ok=True)
+        self.folder.rmdir()
+
+
+def darwin_marked(sandbox):
+    """Every (pid, start) a settled reading finds running in sandbox.
+
+    A reading lists the kernel's table and, for each process running in it
+    that it has not settled, reads the mark and then the process again. A
+    process still the same and running at that second read was running when
+    its mark was read, so the mark settles it either way; a marked one is
+    found even if it has exited by then. One that has exited by the second
+    read and is not marked may have been read after it was gone, and may have
+    started a process before it went that the listing could not hold, so the
+    table is listed again, and only a listing in which every process settled
+    ends the reading. A process that exits before its mark is read, and
+    started nothing, is not found. Every SETTLE_READINGS listing without
+    settling is an error.
+    """
+    found, settled = set(), set()
+    for _ in range(SETTLE_READINGS):
+        unsettled = False
+        # Newest first: a process the package left is among the last started.
+        table = darwin_table()
+        for key in sorted(table, key=lambda k: tuple(map(int, k[1].split("."))), reverse=True):
+            if table[key] or key in settled:
+                continue
+            mark = sandbox.marks(key[0])
+            running = darwin_process(key[0]) == (key[1], False)
+            if mark:
+                found.add(key)
+            if mark or (running and mark is not None):
+                settled.add(key)
+            if not running or mark is None:
+                unsettled = True
+        if not unsettled:
+            return found
+    raise RuntimeError(f"no reading of the process table settled in {SETTLE_READINGS} listings")
+
+
+def darwin_command(pid):
+    result = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], text=True,
+                            errors="replace", capture_output=True, check=False)
+    return result.stdout.strip()
+
+
+def darwin_leftovers(package, sandbox):
+    """The macOS half of package_run, once the binary has exited and been
+    reaped: report and end every process in the package's sandbox, and return
+    how many readings found one.
+
+    The binary ran in sandbox, so every process the package started is in it
+    and nothing else is (Sandbox). Each settled reading (darwin_marked) that
+    finds a process fails the package, prints a LEAK line for each process
+    not already named, and kills each that is still the same process when
+    read again just before the signal; a process that exited and whose pid
+    was reused in that moment would be signalled instead. Readings repeat
+    until one finds nothing, SETTLE_READINGS at most, after which this is an
+    error.
+    """
+    named, rounds = set(), 0
+    for _ in range(SETTLE_READINGS):
+        found = darwin_marked(sandbox)
+        if not found:
+            return rounds
+        rounds += 1
+        for pid, start in sorted(found - named):
+            print(f"LEAK package={package} process pid={pid} start={start} "
+                  f"command={darwin_command(pid)}", flush=True)
+        named |= found
+        for pid, start in found:
+            if darwin_process(pid) == (start, False):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+    raise RuntimeError(f"processes in the package's sandbox still ran after "
+                       f"{SETTLE_READINGS} rounds of ending them")
+
+
+def package_run(command):
+    """Run one package's test binary and fail it for every process it left.
+
+    This is P15's per-package check (CI fails when any process a test started
+    outlives its package). go test runs this as -exec, once per package, in
+    that package's directory, and other packages run beside it. Once the
+    binary has exited, a process the package started that is still running
+    fails the package: it is printed as a LEAK line naming the package, and
+    ended. How a process is tied to its package:
+
+    - Linux: this process makes itself the child subreaper of its
+      descendants, so a process anything under the binary starts is
+      reparented here, never to init, when its parent exits, whatever
+      session, group or environment it runs in (linux_leftovers).
+    - macOS: the binary runs under sandbox-exec with a profile of this run's
+      own, which every process it starts inherits (Sandbox, darwin_leftovers).
+
+    Neither sees a process the package had started through a service manager
+    or another process outside its tree (launchd, systemd, a running daemon),
+    since that process is not its descendant, nor one that exits between the
+    binary's exit and the check's first read of it. The comparison around the
+    whole run (run) still covers this user's processes and the temp roots at
+    the end.
+
+    When LEAK_CHECK_RECORD names a file, the package's directory is appended
+    to it before the binary starts, so a caller can tell every package went
+    through this check rather than trusting the -exec flag reached go test.
+
+    The binary's exit status is passed on, or 1 when it was 0 and something
+    was left; a binary ended by a signal ends this process with the same
+    signal. Anywhere else this refuses rather than pass.
+    """
+    sandbox = None
+    if sys.platform == "linux":
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+            code = ctypes.get_errno()
+            raise OSError(code, "prctl(PR_SET_CHILD_SUBREAPER)")
+    elif sys.platform == "darwin":
+        sandbox = Sandbox()
+        command = ["/usr/bin/sandbox-exec", "-p", sandbox.profile] + command
+    else:
+        raise RuntimeError("the per-package check runs on Linux and macOS, "
+                           f"and this is {sys.platform}")
+    try:
+        record = os.environ.get("LEAK_CHECK_RECORD")
+        if record:
+            with open(record, "a", encoding="utf-8") as out:
+                out.write(os.getcwd() + "\n")
+        child = os.posix_spawnp(command[0], command, os.environ)
+
+        def forward(signum, _frame):
+            try:
+                os.kill(child, signum)
+            except ProcessLookupError:
+                pass
+
+        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+            signal.signal(signum, forward)
+        while True:
+            pid, status = os.waitpid(-1 if sandbox is None else child, 0)
+            if pid == child:
+                break
+        package = os.getcwd()
+        if sandbox is None:
+            left = linux_leftovers(package)
+        else:
+            left = darwin_leftovers(package, sandbox)
+    finally:
+        if sandbox is not None:
+            sandbox.remove()
+    if left:
+        print(f"leak-check: package {package} left processes running", flush=True)
     if os.WIFSIGNALED(status):
         signal.signal(os.WTERMSIG(status), signal.SIG_DFL)
-        os.kill(me, os.WTERMSIG(status))
+        os.kill(os.getpid(), os.WTERMSIG(status))
     code = os.waitstatus_to_exitcode(status)
-    return 1 if code == 0 and named else code
+    return 1 if code == 0 and left else code
 
 
 def main():

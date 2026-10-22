@@ -276,12 +276,12 @@ func TestOutlastsTheEarlyPackage(t *testing.T) {
 
 
 def running(pid):
-    """Whether pid is a running process, an unreaped exited one counting as gone."""
-    try:
-        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
-    except (FileNotFoundError, ProcessLookupError):
-        return False
-    return state not in ("Z", "X")
+    """Whether pid is a running process, an unreaped exited one counting as
+    gone. Read with ps, not with the guard's own reads."""
+    result = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], text=True,
+                            capture_output=True, check=False)
+    state = result.stdout.strip()
+    return result.returncode == 0 and state != "" and not state.startswith("Z")
 
 
 class PerPackageTest(unittest.TestCase):
@@ -303,7 +303,7 @@ class PerPackageTest(unittest.TestCase):
                               check=False, timeout=300)
 
     def module(self, folder):
-        module = Path(folder) / "module"
+        module = Path(folder).resolve() / "module"
         (module / "a").mkdir(parents=True)
         (module / "b").mkdir()
         (module / "go.mod").write_text("module example.com/leaks\n\ngo 1.21\n")
@@ -311,7 +311,6 @@ class PerPackageTest(unittest.TestCase):
         (module / "b" / "b_test.go").write_text(LATE_TEST)
         return module
 
-    @unittest.skipUnless(sys.platform == "linux", "the per-package check runs on Linux")
     def test_an_early_packages_detached_process_fails_that_package(self):
         with tempfile.TemporaryDirectory() as folder:
             module, record = self.module(folder), Path(folder) / "pid"
@@ -342,12 +341,178 @@ class PerPackageTest(unittest.TestCase):
             self.assertEqual(clean.returncode, 0, clean.stdout)
             self.assertNotIn("LEAK", clean.stdout)
 
-    @unittest.skipIf(sys.platform == "linux", "Linux runs the per-package check")
-    def test_the_per_package_check_refuses_off_linux(self):
+    @unittest.skipUnless(sys.platform == "linux", "the subreaper is Linux's")
+    def test_a_child_that_exits_before_it_is_read_still_fails_the_package(self):
+        # The real check, with the one leftover's exit ordered between the
+        # check seeing a child running and its read of the process table:
+        # the leftover is killed and waited for, unreaped, as that read
+        # starts. Before, nothing was named and the package passed.
+        with tempfile.TemporaryDirectory() as folder:
+            record = Path(folder) / "pid"
+            result = subprocess.run(
+                [sys.executable, "-c", EXIT_BEFORE_READ, str(SCRIPT), str(record), "--",
+                 sys.executable, "-c", PLANT_DETACHED, str(record)],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                check=False, timeout=60)
+            self.assertIn("exited before the read", result.stdout,
+                          "the leftover's exit never fell between the two, so this shows nothing")
+            self.assertEqual(result.returncode, 1, result.stdout)
+            self.assertIn(f"LEAK package={os.getcwd()} ", result.stdout)
+
+    @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
+    def test_a_process_started_as_its_parent_exits_mid_reading_is_found(self):
+        # The real check, with a process in the package's sandbox made to
+        # start a detached sleep and exit after the reading listed it and
+        # before its mark is read: the sleep is in no listing so far, and the
+        # parent reads as unmarked once gone. Only listing again finds it.
+        with tempfile.TemporaryDirectory() as folder:
+            parent, child = Path(folder) / "parent", Path(folder) / "child"
+            result = subprocess.run(
+                [sys.executable, "-c", EXIT_BEFORE_MARK, str(SCRIPT), str(parent), str(child),
+                 "--", sys.executable, "-c", FORK_ON_SIGNAL, str(parent), str(child)],
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                check=False, timeout=60)
+            self.assertTrue(child.exists(), result.stdout)
+            pid = int(child.read_text())
+            try:
+                self.assertIn("exited before its mark was read", result.stdout,
+                              "the parent's exit never fell inside the reading, so this shows nothing")
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(f"LEAK package={os.getcwd()} process pid={pid} ", result.stdout)
+                self.assertFalse(running(pid), "the check left the sleep running")
+            finally:
+                if running(pid):
+                    os.kill(pid, 9)
+
+    @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
+    def test_only_the_packages_own_sandbox_marks_a_process(self):
+        # Real processes: one in the package's sandbox is marked; one outside
+        # any sandbox, one in a sandbox that denies both files, and a pid
+        # that is gone are not.
+        sandbox = check.Sandbox()
+        started = []
+        try:
+            def sleep(*prefix):
+                started.append(subprocess.Popen([*prefix, "sleep", "300"]))
+                return started[-1]
+            inside = sleep("/usr/bin/sandbox-exec", "-p", sandbox.profile)
+            outside = sleep()
+            both = sleep("/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)"
+                         f'(deny file-read-data (subpath "{sandbox.folder}"))')
+            gone = subprocess.Popen(["true"])
+            gone.wait()
+            # sandbox-exec applies the profile before it execs sleep, so a
+            # process read as sleep is in its sandbox.
+            for process in (inside, both):
+                while check.darwin_command(process.pid).split()[:1] != ["sleep"]:
+                    pass
+            self.assertIs(sandbox.marks(inside.pid), True)
+            self.assertIs(sandbox.marks(outside.pid), False)
+            self.assertIs(sandbox.marks(both.pid), False)
+            self.assertIs(sandbox.marks(gone.pid), False)
+        finally:
+            for process in started:
+                process.kill()
+                process.wait()
+            sandbox.remove()
+
+    @unittest.skipIf(sys.platform in ("linux", "darwin"), "the per-package check runs here")
+    def test_the_per_package_check_refuses_elsewhere(self):
         result = subprocess.run([sys.executable, str(SCRIPT), "package", "--", "true"],
                                 text=True, capture_output=True, check=False)
         self.assertEqual(result.returncode, 2, result)
         self.assertIn("per-package", result.stderr)
+
+
+# Starts a detached sleep, records its pid in argv[1], and exits.
+PLANT_DETACHED = """
+import pathlib, subprocess, sys
+p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+pathlib.Path(sys.argv[1]).write_text(str(p.pid))
+"""
+
+# Runs the real package_run over the command after "--", with its read of
+# the process table preceded, once, by killing the process recorded in
+# argv[2] and waiting, without reaping it, until it has exited. It is this
+# process's child by then: the subreaper adopted it when its parent exited.
+EXIT_BEFORE_READ = """
+import importlib.util, os, signal, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("leak_check", sys.argv[1])
+check = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(check)
+record, command = Path(sys.argv[2]), sys.argv[sys.argv.index("--") + 1:]
+read = check.linux_processes
+fired = []
+
+def exit_first():
+    if not fired:
+        fired.append(True)
+        pid = int(record.read_text())
+        os.kill(pid, signal.SIGKILL)
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+        print(f"process {pid} exited before the read", flush=True)
+    return read()
+
+check.linux_processes = exit_first
+sys.exit(check.package_run(command))
+"""
+
+# Leaves a detached process that, on SIGUSR1, starts a detached sleep,
+# records its pid in argv[2], and exits; records that process's pid in
+# argv[1] once it is ready for the signal, and exits.
+FORK_ON_SIGNAL = """
+import os, pathlib, signal, subprocess, sys
+ready, told = os.pipe()
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    def start(*_):
+        p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        pathlib.Path(sys.argv[2]).write_text(str(p.pid))
+        os._exit(0)
+    signal.signal(signal.SIGUSR1, start)
+    os.write(told, b"r")
+    while True:
+        signal.pause()
+os.read(ready, 1)
+pathlib.Path(sys.argv[1]).write_text(str(pid))
+"""
+
+# Runs the real package_run over the command after "--", with the first read
+# of the mark of the process recorded in argv[2] preceded by signalling it to
+# start its sleep and exit, and waiting for that exit.
+EXIT_BEFORE_MARK = """
+import importlib.util, os, select, signal, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("leak_check", sys.argv[1])
+check = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(check)
+parent, child = Path(sys.argv[2]), Path(sys.argv[3])
+command = sys.argv[sys.argv.index("--") + 1:]
+read = check.Sandbox.marks
+fired = []
+
+def exit_first(self, pid):
+    if not fired and pid == int(parent.read_text()):
+        fired.append(True)
+        queue = select.kqueue()
+        queue.control([select.kevent(pid, select.KQ_FILTER_PROC,
+                                     select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                                     select.KQ_NOTE_EXIT)], 0)
+        os.kill(pid, signal.SIGUSR1)
+        queue.control(None, 1)
+        print(f"process {pid} started {child.read_text()} and exited before its mark was read",
+              flush=True)
+    return read(self, pid)
+
+check.Sandbox.marks = exit_first
+sys.exit(check.package_run(command))
+"""
 
 
 if __name__ == "__main__":
