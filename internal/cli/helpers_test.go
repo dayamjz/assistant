@@ -51,6 +51,14 @@ func TestMain(m *testing.M) {
 	// of its own; a test's push is a person's, and the gate places one by
 	// a terminal's foreground on the pushing chain.
 	standin.AtTerminal()
+	if err := standin.RegisterTempTag(standin.TempTagCLI); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(standin.TempTagCLI); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	os.Exit(standin.RunOwned(func() int { return runQuietly(m) }))
 }
 
@@ -70,7 +78,7 @@ func TestMain(m *testing.M) {
 // subject is the global configuration still names its own with t.Setenv and
 // runs serially, before any parallel test resumes.
 func runQuietly(m *testing.M) int {
-	dir, err := os.MkdirTemp("", "gitconfig")
+	dir, err := standin.TempDir(standin.TempTagCLI, "gitconfig")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "making the quiet git configuration:", err)
 		return 1
@@ -204,11 +212,11 @@ func newHome(t *testing.T) *home.Home {
 	return newHomeNamed(t, "h")
 }
 
-// newHomeNamed is newHome with the root named by os.MkdirTemp's pattern,
-// for a test whose subject is what the root's name holds.
+// newHomeNamed is newHome with pattern kept in the directory name, for a
+// test whose subject is what the root's name holds.
 func newHomeNamed(t *testing.T, pattern string) *home.Home {
 	t.Helper()
-	root, err := os.MkdirTemp("", pattern)
+	root, err := standin.TempDir(standin.TempTagCLI, pattern)
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}
@@ -246,7 +254,7 @@ func git(t *testing.T, dir string, args ...string) string {
 // empty-diff short circuit.
 func newSubject(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "s")
+	dir, err := standin.TempDir(standin.TempTagCLI, "s")
 	if err != nil {
 		t.Fatalf("making a subject repository: %v", err)
 	}
@@ -263,7 +271,7 @@ func newSubject(t *testing.T) string {
 	// tests drive would be watching a network failure rather than the command
 	// surface they are about. It is local so that nothing here reaches the
 	// network.
-	upstream, err := os.MkdirTemp("", "u")
+	upstream, err := standin.TempDir(standin.TempTagCLI, "u")
 	if err != nil {
 		t.Fatalf("making an upstream repository: %v", err)
 	}
@@ -459,7 +467,7 @@ func openStore(t *testing.T, h *home.Home) *store.Store {
 // state an init cannot complete from unless the caller names the upstream.
 func newSubjectWithoutOrigin(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "s")
+	dir, err := standin.TempDir(standin.TempTagCLI, "s")
 	if err != nil {
 		t.Fatalf("making a subject repository: %v", err)
 	}

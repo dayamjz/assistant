@@ -185,7 +185,14 @@ func ownProcesses() error {
 	real, path := realTmux(os.Getenv("PATH"))
 	var wrapper, wrapperDir string
 	if real != "" {
-		wrapperDir, err = os.MkdirTemp("", "standin-tmux")
+		// The wrapper's directory carries the tag the running tests registered,
+		// so their next start reclaims it when this process and the sweeper
+		// that removes it below are both gone.
+		tag, tagErr := RegisteredTempTag()
+		if tagErr != nil {
+			return tagErr
+		}
+		wrapperDir, err = TempDir(tag, "tmux-")
 		if err != nil {
 			return fmt.Errorf("standin: making a directory for the tmux tests find: %w", err)
 		}

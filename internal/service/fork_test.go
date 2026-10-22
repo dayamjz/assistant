@@ -35,7 +35,7 @@ func forkedSubject(t *testing.T, h *home.Home, fork string) (subject, forkPath s
 	subject = newSubject(t)
 	quietMaintenance(t, subject)
 	local := git(t, subject, "remote", "get-url", "origin")
-	forkPath, err := os.MkdirTemp("", "f")
+	forkPath, err := standin.TempDir(standin.TempTagService, "f")
 	if err != nil {
 		t.Fatalf("making a fork repository: %v", err)
 	}

@@ -1,7 +1,6 @@
 package agents
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -27,11 +26,10 @@ func TestTheTerminalAnswerIsTwoProcessIdentifiers(t *testing.T) {
 // builds, so a near-limit prompt cannot pass measurement and fail at start.
 func TestTmuxStartCommandSizeMatchesTmuxNewSessionArgs(t *testing.T) {
 	t.Parallel()
-	root, err := os.MkdirTemp("/tmp", "tm")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	// Validate refuses a socket past the platform limit. A fixed short path
+	// keeps the measurement under that limit; the directory is never created,
+	// because both sides only count the same arguments.
+	root := "/tmp/tm"
 	term := Terminal{Tmux: "/usr/bin/tmux", Socket: filepath.Join(root, "s")}
 	bin := "/bin/echo"
 	workerArgs := []string{"--model", "m", "hello"}

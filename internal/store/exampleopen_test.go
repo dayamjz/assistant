@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -13,7 +14,7 @@ import (
 // homeDir stands in for the one root PRD section 8 puts everything under. The
 // examples create a temporary one so they can run.
 func homeDir() (string, error) {
-	return os.MkdirTemp("", "assistant-example-")
+	return standin.TempDir(standin.TempTagStore, "example")
 }
 
 // openForExample returns a store and the func that closes it and removes the

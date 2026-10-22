@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -14,5 +15,13 @@ import (
 // running.
 func TestMain(m *testing.M) {
 	standin.Main()
+	if err := standin.RegisterTempTag(standin.TempTagSession); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(standin.TempTagSession); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	os.Exit(standin.RunOwned(m.Run))
 }

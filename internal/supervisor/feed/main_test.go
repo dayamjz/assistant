@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/home"
 )
 
@@ -23,6 +24,10 @@ const holdLockVar = "FEED_TEST_HOLD_LOCK"
 func TestMain(m *testing.M) {
 	if root := os.Getenv(holdLockVar); root != "" {
 		os.Exit(holdLock(root))
+	}
+	if err := standin.SweepTempDirs(standin.TempTagFeed); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	os.Exit(m.Run())
 }

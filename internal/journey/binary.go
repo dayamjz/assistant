@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+
+	"github.com/dayamjz/assistant/internal/agents/standin"
 )
 
 // BinaryVariable names the environment variable that points this harness at a
@@ -73,7 +75,7 @@ func resolveBinary() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir, err := os.MkdirTemp("", "assistant-binary")
+	dir, err := standin.TempDir(standin.TempTagJourney, "bin")
 	if err != nil {
 		return "", fmt.Errorf("journey: making a directory to build the binary into: %w", err)
 	}

@@ -58,6 +58,16 @@
 // it is safe to call unconditionally and nothing else in TestMain has to know
 // about it.
 //
+// A package whose tests make a temporary directory does so with TempDir and
+// its tag from tempdir.go. In TestMain, after every mode that makes this
+// binary another process and before the tests run, it calls RegisterTempTag
+// and SweepTempDirs with that same tag. SweepTempDirs removes a directory
+// whose recorded owner is gone and leaves a live owner and a name it cannot
+// parse. SocketDir, the tmux wrapper RunOwned installs, and a library a test
+// calls (storetest's database template) stamp the tag RegisterTempTag
+// recorded, which is how a directory made for the running package is
+// reclaimed at that package's next start.
+//
 // A package that forgets it would otherwise read the resulting agent failures
 // as the code under test misbehaving. The first New in a process refuses
 // instead: it puts one handshake invocation through the adapter, and a binary

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/dayamjz/assistant/internal/agents/standin"
 )
 
 // The names this harness stands on a PATH, and the environment variable each
@@ -114,7 +116,7 @@ func installShims() (string, error) {
 		return "", fmt.Errorf("journey: locating this test binary, which is what stands in for the "+
 			"executables this product resolves off PATH: %w", err)
 	}
-	dir, err := os.MkdirTemp("", "assistant-shims")
+	dir, err := standin.TempDir(standin.TempTagJourney, "shim")
 	if err != nil {
 		return "", fmt.Errorf("journey: making a directory for the shims: %w", err)
 	}

@@ -136,6 +136,12 @@ repository more than one round of review.
   out to git. Only `internal/agents` starts an agent process. Only
   `internal/findings` parses, normalizes, validates, or refuses a report; there
   is never a second parser.
+- A temporary directory a test makes with `os.MkdirTemp` is
+  `standin.TempDir`'s. The tag constants in `internal/agents/standin/tempdir.go`
+  are the one list; the package's `TestMain` registers its tag and sweeps
+  before tests. A live owner, and a name that does not parse, are left. Go's
+  `t.TempDir` and `go-build*` directories, and a scratch directory the product
+  makes for itself, are not this.
 - Only `internal/home` spells a path under the home root, except
   `<home>/repos/<id>.git`, which `internal/gate` composes itself. Only
   `internal/managed` writes a service definition or invokes `launchctl`

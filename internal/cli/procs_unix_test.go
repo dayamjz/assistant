@@ -134,7 +134,7 @@ func TestTheCheckReportsALiveProcessOfABinaryWhosePathHasASpace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, err := os.MkdirTemp("", "b s")
+	dir, err := standin.TempDir(standin.TempTagCLI, "b s")
 	if err != nil {
 		t.Fatal(err)
 	}

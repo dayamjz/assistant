@@ -90,7 +90,7 @@ var probes = []probe{{
 		// asserted here; that it is a live process in a group of its own
 		// that stays driveable across what it is sent is the whole of what
 		// the declaration claims.
-		dir, err := os.MkdirTemp("", "conform-worker-")
+		dir, err := standin.TempDir(standin.TempTagAgents, "worker")
 		if err != nil {
 			t.Fatalf("making a directory for the worker: %v", err)
 		}
@@ -150,7 +150,7 @@ var probes = []probe{{
 			t.Errorf("%s has not declared %s and carries the mechanism anyway",
 				r.Name(), agents.CapabilityWorkerSessions)
 		}
-		dir, err := os.MkdirTemp("", "conform-worker-")
+		dir, err := standin.TempDir(standin.TempTagAgents, "worker")
 		if err != nil {
 			t.Fatalf("making a directory for the worker: %v", err)
 		}
@@ -182,7 +182,7 @@ var probes = []probe{{
 		// while still running, and Close ends it. Without tmux it is not
 		// asked at all, and standin.Tmux says so rather than this passing.
 		term := agents.Terminal{Tmux: standin.Tmux(t), Socket: filepath.Join(standin.SocketDir(t), "c")}
-		dir, err := os.MkdirTemp("", "conform-terminal-")
+		dir, err := standin.TempDir(standin.TempTagAgents, "term")
 		if err != nil {
 			t.Fatalf("making a directory for the worker: %v", err)
 		}

@@ -3,12 +3,12 @@ package journey
 import (
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/fixture"
 )
 
@@ -31,7 +31,7 @@ var built struct {
 // subject a run is pointed at is not part of what ships.
 func Subject() (*fixture.Fixture, error) {
 	built.once.Do(func() {
-		built.root, built.err = os.MkdirTemp("", "assistant-fixture")
+		built.root, built.err = standin.TempDir(standin.TempTagJourney, "fix")
 		if built.err != nil {
 			built.err = fmt.Errorf("journey: making a directory to build the fixture into: %w", built.err)
 			return

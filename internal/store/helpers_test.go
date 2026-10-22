@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -81,7 +83,7 @@ var databaseTemplate struct {
 // templateDatabase returns the template's path, making it on first use.
 func templateDatabase() (string, error) {
 	databaseTemplate.once.Do(func() {
-		dir, err := os.MkdirTemp("", "storetemplate")
+		dir, err := standin.TempDir(standin.TempTagStore, "storetemplate")
 		if err != nil {
 			databaseTemplate.err = err
 			return
@@ -129,8 +131,13 @@ func seedDatabase(t *testing.T, path string) {
 	}
 }
 
-// TestMain removes the template once every test has run.
+// TestMain reclaims a template a killed run left, then removes the one this
+// run made once every test has returned.
 func TestMain(m *testing.M) {
+	if err := standin.SweepTempDirs(standin.TempTagStore); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	code := m.Run()
 	if databaseTemplate.dir != "" {
 		_ = os.RemoveAll(databaseTemplate.dir)
