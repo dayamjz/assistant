@@ -91,6 +91,43 @@ const (
 	// ready, each with ErrTerminalNotReady. A CLI that draws the same text
 	// and reads its input differently is not caught that way.
 	CapabilityTerminalWorkers Capability = "terminal_workers"
+
+	// CapabilityReportsInputTokens is an adapter that reads the input token
+	// count of PRD section 8's agent invocation record off what its agent
+	// prints. It is the first of four token-count capabilities, one per record
+	// count, and what follows holds for each of them. They are a claim about
+	// the adapter's reader and the output it reads, never about one call: a
+	// call by an adapter that declares a count can still leave it unreported,
+	// and its record says so. A count an adapter does not declare is one it
+	// declares it does not report: its reader reads nothing for it, so the
+	// record of its call leaves it unreported.
+	//
+	// internal/machine's usage ceiling reads them: a ceiling on a count does
+	// not hold a call to it when the call's agent does not declare it, while a
+	// call that left it unreported by an agent that declares it, or by an
+	// agent this build holds no declaration for, still refuses (PRD section
+	// 10's usage_ceiling.window row, decision 24). The turn count has no
+	// capability, because no ceiling is set on it.
+	//
+	// Nothing in a runner's type shows which counts it reads, so Resolve
+	// takes these at their word. The conformance suite holds each one, in
+	// both directions, to what the adapter reads off the stand-in printing
+	// every count its model of that agent's output carries: for Claude Code,
+	// Cursor and Codex that model is held to a recording of the CLI, and for
+	// Grok Build and OpenAI no recording exists, which the stand-in's
+	// documentation states.
+	CapabilityReportsInputTokens Capability = "reports_input_tokens"
+	// CapabilityReportsOutputTokens is an adapter that reads the output token
+	// count off what its agent prints, on CapabilityReportsInputTokens' terms.
+	CapabilityReportsOutputTokens Capability = "reports_output_tokens"
+	// CapabilityReportsCacheReadTokens is an adapter that reads the cache
+	// read token count off what its agent prints, on
+	// CapabilityReportsInputTokens' terms.
+	CapabilityReportsCacheReadTokens Capability = "reports_cache_read_tokens"
+	// CapabilityReportsCacheCreationTokens is an adapter that reads the cache
+	// creation token count off what its agent prints, on
+	// CapabilityReportsInputTokens' terms.
+	CapabilityReportsCacheCreationTokens Capability = "reports_cache_creation_tokens"
 )
 
 // capabilitySpec is one row of the capability table: the capability, and how
@@ -103,6 +140,9 @@ type capabilitySpec struct {
 	// whose mechanism is not, and a nil row is what makes a declaration of
 	// that capability something this package takes at its word.
 	carried func(r Runner) bool
+	// count is the record count a token-count capability names, read out of
+	// a call's Usage. It is nil for every other capability.
+	count func(u Usage) Count
 }
 
 // capabilityTable is the closed set, in the order List and AllCapabilities
@@ -111,16 +151,20 @@ var capabilityTable = []capabilitySpec{
 	{CapabilityResumableSessions, func(r Runner) bool {
 		_, ok := r.(SessionRunner)
 		return ok
-	}},
-	{CapabilitySuppressProjectInstructions, nil},
+	}, nil},
+	{CapabilitySuppressProjectInstructions, nil, nil},
 	{CapabilityWorkerSessions, func(r Runner) bool {
 		_, ok := r.(WorkerRunner)
 		return ok
-	}},
+	}, nil},
 	{CapabilityTerminalWorkers, func(r Runner) bool {
 		_, ok := r.(TerminalWorkerRunner)
 		return ok
-	}},
+	}, nil},
+	{CapabilityReportsInputTokens, nil, func(u Usage) Count { return u.InputTokens }},
+	{CapabilityReportsOutputTokens, nil, func(u Usage) Count { return u.OutputTokens }},
+	{CapabilityReportsCacheReadTokens, nil, func(u Usage) Count { return u.CacheReadTokens }},
+	{CapabilityReportsCacheCreationTokens, nil, func(u Usage) Count { return u.CacheCreationTokens }},
 }
 
 // spec returns the capability's row, and false when c names none.
@@ -151,6 +195,28 @@ func AllCapabilities() []Capability {
 		out[i] = row.capability
 	}
 	return out
+}
+
+// CountCapabilities returns the token-count capabilities in table order: the
+// ones Counted reads a count for.
+func CountCapabilities() []Capability {
+	var out []Capability
+	for _, row := range capabilityTable {
+		if row.count != nil {
+			out = append(out, row.capability)
+		}
+	}
+	return out
+}
+
+// Counted returns the count of u that c names, and false when c is not a
+// token-count capability.
+func (c Capability) Counted(u Usage) (Count, bool) {
+	row, ok := c.spec()
+	if !ok || row.count == nil {
+		return Count{}, false
+	}
+	return row.count(u), true
 }
 
 // Capabilities is what one adapter declares it supports. The zero value
@@ -208,6 +274,12 @@ func (c Capabilities) List() []Capability {
 	return append(out, unrecognized...)
 }
 
+// Equal reports whether c and other declare the same capabilities,
+// unrecognized ones included.
+func (c Capabilities) Equal(other Capabilities) bool {
+	return slices.Equal(c.List(), other.List())
+}
+
 // String renders the declaration for a diagnostic. An adapter that declared
 // nothing renders as "none" rather than as an empty string, so a message
 // quoting it does not read as a missing value.
@@ -240,10 +312,21 @@ func (c Capabilities) String() string {
 // mechanism sat there working, which is the case a reader would spend the
 // longest on.
 //
+// It also holds the runner to its factory's Declares, which is the
+// declaration read for an agent nothing has built, such as the agent a
+// recorded call names, so that what a built runner says and what is said for
+// it unbuilt are one declaration and not two.
+//
 // A capability whose row carries no probe is taken at its word here. That is a
 // residual gap and doc.go names it.
-func verifyDeclaration(name string, r Runner) (Capabilities, error) {
+func verifyDeclaration(name string, f Factory, r Runner) (Capabilities, error) {
 	declared := r.Capabilities()
+	if unbuilt := f.Declares(); !declared.Equal(unbuilt) {
+		return Capabilities{}, &AdapterError{
+			Agent:  name,
+			Reason: "declares " + declared.String() + " when built and " + unbuilt.String() + " unbuilt",
+		}
+	}
 	for _, capability := range declared.List() {
 		if !capability.Recognized() {
 			return Capabilities{}, &AdapterError{

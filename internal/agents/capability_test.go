@@ -37,7 +37,7 @@ type probe struct {
 	undeclared func(t testing.TB, r agents.Runner)
 }
 
-var probes = []probe{{
+var probes = append([]probe{{
 	capability: agents.CapabilityResumableSessions,
 	declared: func(t testing.TB, r agents.Runner) {
 		t.Helper()
@@ -255,7 +255,81 @@ var probes = []probe{{
 				refusal.Capability, refusal.Agent, agents.CapabilityTerminalWorkers, r.Name())
 		}
 	},
-}}
+}}, countProbes()...)
+
+// countProbePrompt is what the count probe asks an adapter, and the landmark
+// countProbeStep answers it by.
+const countProbePrompt = "conformance: which token counts does this adapter read"
+
+// countProbeStep is the step a stand-in the suite runs an adapter over
+// answers the count probe with: a well-formed envelope reporting
+// standin.DefaultUsage, whose counts are all reported and all distinct,
+// written in the wire shape of the adapter that asked. That shape carries
+// every count the stand-in's model of that agent's output carries, so a
+// count it leaves out is one that agent's output, as modelled, never has.
+// Every stand-in the suite runs an adapter over carries it.
+var countProbeStep = standin.Step{
+	Match: standin.Match{PromptContains: countProbePrompt},
+	Times: standin.Always,
+	Reply: standin.Text("the counts are in the envelope"),
+}
+
+// countProbes is one probe per token-count capability. Each runs the count
+// probe through the adapter, over the wire to the stand-in, and reads the
+// count back out of the record the adapter made of the call. Declared, the
+// adapter must have read exactly what the stand-in printed; undeclared, it
+// must have read nothing for that count, so an adapter that reads a count it
+// does not declare fails as surely as one that declares a count it does not
+// read. An adapter that cannot answer the probe fails either way, because
+// neither direction can be checked without a record.
+func countProbes() []probe {
+	var out []probe
+	for _, capability := range agents.CountCapabilities() {
+		printed, _ := capability.Counted(standin.DefaultUsage())
+		want, _ := printed.Value()
+		out = append(out, probe{
+			capability: capability,
+			declared: func(t testing.TB, r agents.Runner) {
+				t.Helper()
+				read, _ := capability.Counted(countsRead(t, r))
+				if got, ok := read.Value(); !ok || got != want {
+					t.Errorf("%s declares %s and read %s off an agent that printed %d",
+						r.Name(), capability, read, want)
+				}
+			},
+			undeclared: func(t testing.TB, r agents.Runner) {
+				t.Helper()
+				read, _ := capability.Counted(countsRead(t, r))
+				if got, ok := read.Value(); ok {
+					t.Errorf("%s has not declared %s and read %d of it off the agent",
+						r.Name(), capability, got)
+				}
+			},
+		})
+	}
+	return out
+}
+
+// countsRead runs the count probe through r and returns the usage the
+// record of that call carries. A call that produced no record fails t,
+// since no count can be checked against nothing.
+func countsRead(t testing.TB, r agents.Runner) agents.Usage {
+	t.Helper()
+	dir, err := standin.TempDir("counts")
+	if err != nil {
+		t.Fatalf("making a directory for the count probe: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	ctx, cancel := bounded(t.Context())
+	defer cancel()
+	res, err := r.Run(ctx, agents.PurposeReview, agents.Invocation{
+		Prompt: countProbePrompt, Shape: agents.ShapeText, Dir: dir,
+	})
+	if err != nil {
+		t.Fatalf("%s did not answer the count probe, so no count it reads can be checked: %v", r.Name(), err)
+	}
+	return res.Record.Usage
+}
 
 // written is how many bytes a worker has written so far, counting what its
 // Capture let go, so it only grows.
@@ -385,6 +459,8 @@ type recordingTB struct {
 	testing.TB
 	failed  bool
 	message string
+	// messages is every failure recorded, in order; message is the last.
+	messages []string
 }
 
 // Fatalf records the failure and ends the goroutine, which is what the real
@@ -392,6 +468,7 @@ type recordingTB struct {
 func (r *recordingTB) Fatalf(format string, args ...any) {
 	r.failed = true
 	r.message = fmt.Sprintf(format, args...)
+	r.messages = append(r.messages, r.message)
 	runtime.Goexit()
 }
 
@@ -399,6 +476,7 @@ func (r *recordingTB) Fatalf(format string, args ...any) {
 func (r *recordingTB) Errorf(format string, args ...any) {
 	r.failed = true
 	r.message = fmt.Sprintf(format, args...)
+	r.messages = append(r.messages, r.message)
 }
 
 // onItsOwnGoroutine calls fn on a goroutine of its own and waits for it, so a
@@ -413,15 +491,18 @@ func onItsOwnGoroutine(fn func()) {
 }
 
 // The suite's refusal of a declaration nothing probes is what the rule above
-// rests on, and no adapter this build ships makes it fire: the shipped adapter
-// declares only resumable sessions, which has a probe, and the sessionless
-// stub declares nothing. So the refusal is exercised here against an adapter
-// that declares instruction suppression, whose table row carries no probe,
-// which is the shape the first adapter to claim suppression would have.
+// rests on, and no adapter this build ships makes it fire: every capability a
+// shipped adapter declares has a probe. So the refusal is exercised here
+// against an adapter that declares instruction suppression, whose table row
+// carries no probe, which is the shape the first adapter to claim
+// suppression would have.
 //
 // Such an adapter is legal to build, which is why the suite is the only thing
 // that catches it: internal/agents skips a row with no probe when it holds an
-// adapter to its declaration, so Resolve hands this one back.
+// adapter to its declaration, so Resolve hands this one back. The suite is
+// run on the OpenAI adapter over the stand-in with suppression added to what
+// it declares, so every other probe passes and the one refusal is the
+// suppression's.
 func TestTheSuiteRefusesADeclarationNothingProbes(t *testing.T) {
 	factory := &stubFactory{
 		name:      "claims-suppression",
@@ -432,12 +513,15 @@ func TestTheSuiteRefusesADeclarationNothingProbes(t *testing.T) {
 		t.Fatalf("resolving an adapter that declares a capability with no probe: %v", err)
 	}
 
+	openai := openaiOverTheWire(t)
+	claims := redeclared{Runner: openai, declared: agents.Declare(
+		append(openai.Capabilities().List(), agents.CapabilitySuppressProjectInstructions)...)}
 	recorder := &recordingTB{TB: t}
-	onItsOwnGoroutine(func() { conform(recorder, factory.runner()) })
+	onItsOwnGoroutine(func() { conform(recorder, claims) })
 
-	if !recorder.failed {
-		t.Fatalf("the suite accepted %s declaring %s, which nothing here checks",
-			factory.name, agents.CapabilitySuppressProjectInstructions)
+	if len(recorder.messages) != 1 {
+		t.Fatalf("the suite refused %q, want the one refusal of %s",
+			recorder.messages, agents.CapabilitySuppressProjectInstructions)
 	}
 	if !strings.Contains(recorder.message, string(agents.CapabilitySuppressProjectInstructions)) {
 		t.Errorf("the suite refused with %q, want it to name %s",
@@ -445,23 +529,141 @@ func TestTheSuiteRefusesADeclarationNothingProbes(t *testing.T) {
 	}
 }
 
-// TestTheShippedAdapterConformsToItsDeclaration runs the suite against the
-// production Claude Code adapter, built over the scripted stand-in so what it
-// proves is a property of this package rather than of whatever is installed.
-// The adapter declares worker sessions, so this is where the worker probe
+// redeclared is an adapter whose declaration is replaced and whose
+// mechanisms are not: it runs what the adapter it wraps runs, over the same
+// wire, and carries none of that adapter's other interfaces. It suits an
+// adapter that carries no mechanism a probe looks for in its type, which the
+// OpenAI adapter is, so a test can give the suite a declaration that is
+// wrong about exactly one capability.
+type redeclared struct {
+	agents.Runner
+	declared agents.Capabilities
+}
+
+func (r redeclared) Capabilities() agents.Capabilities { return r.declared }
+
+// The count probes' positive control. A probe that read nothing back would
+// pass every adapter that declares no count and fail every one that does,
+// and one that compared nothing would pass all of them, so the suite is
+// given the OpenAI adapter over the stand-in with its declaration wrong in
+// each direction, and must refuse each one naming the count it is wrong
+// about. Declaring cache reads is a count the adapter does not read off its
+// agent's output; leaving output tokens out is a count it reads and does not
+// declare, which would exempt from a ceiling a count the record carries. The
+// adapter's own declaration, unchanged and wrapped the same way, is refused
+// nothing, so the refusals are the declarations' and not the wrapping's.
+func TestTheCountProbesRefuseADeclarationTheWireDoesNotBear(t *testing.T) {
+	openai := openaiOverTheWire(t)
+	for _, c := range []struct {
+		name     string
+		declared []agents.Capability
+		wrong    agents.Capability
+	}{
+		{"declares a count it does not read", []agents.Capability{agents.CapabilityReportsInputTokens,
+			agents.CapabilityReportsOutputTokens, agents.CapabilityReportsCacheReadTokens}, agents.CapabilityReportsCacheReadTokens},
+		{"reads a count it does not declare", []agents.Capability{agents.CapabilityReportsInputTokens},
+			agents.CapabilityReportsOutputTokens},
+		{"its own declaration", openai.Capabilities().List(), ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			recorder := &recordingTB{TB: t}
+			onItsOwnGoroutine(func() { conform(recorder, redeclared{Runner: openai, declared: agents.Declare(c.declared...)}) })
+			if c.wrong == "" {
+				if recorder.failed {
+					t.Fatalf("the suite refused the adapter's own declaration: %q", recorder.messages)
+				}
+				return
+			}
+			if len(recorder.messages) != 1 || !strings.Contains(recorder.message, string(c.wrong)) {
+				t.Fatalf("the suite refused %q, want the one refusal naming %s", recorder.messages, c.wrong)
+			}
+		})
+	}
+}
+
+// TestEveryShippedAdapterConformsToItsDeclaration runs the suite against
+// every adapter this build ships, each the production adapter built over the
+// scripted stand-in so what it proves is a property of this package rather
+// than of whatever is installed, and each answering over the wire. An adapter
+// the default catalog holds and overTheWire cannot build fails here, so no
+// shipped declaration goes unchecked; a declaration checked only against a
+// stub would check a double's typed values rather than what the adapter
+// reads.
+//
+// The count probes run against every one of them, so each adapter's token
+// counts are held, in both directions, to the stand-in's model of its
+// agent's output: recorded for Claude Code, Cursor and Codex, and the
+// reader's own model for Grok Build and OpenAI, the one adapter that
+// declares it does not report the cache counts.
+//
+// Claude Code declares worker sessions, so this is where the worker probe
 // runs against the stream-json framing the adapter writes, read by the
 // stand-in's stream mode, which ends on a line it cannot read. It declares
 // terminal workers too, so the terminal probe runs here against the
 // stand-in's interactive mode, which opens on a first-run screen and never
 // draws its interface unless the configuration the adapter seeded answers
-// every question that screen asks. The base environment carries a key
-// because a terminal worker is refused without one, and the key is
-// stand-in text, which the stand-in reads only to check its approval.
-func TestTheShippedAdapterConformsToItsDeclaration(t *testing.T) {
-	conform(t, standin.New(t, standin.Script{},
-		agents.WithTerminationGrace(300*time.Millisecond),
-		agents.WithBaseEnvironment(withStandinKey(os.Environ())),
-	).Runner())
+// every question that screen asks. Cursor's worker probe runs over ACP and
+// Codex's over the app-server protocol.
+func TestEveryShippedAdapterConformsToItsDeclaration(t *testing.T) {
+	for _, name := range agents.DefaultCatalog().Names() {
+		t.Run(name, func(t *testing.T) {
+			build, ok := overTheWire[name]
+			if !ok {
+				t.Fatalf("this build ships %s and the suite cannot build it over the stand-in, so its declaration is checked by nothing", name)
+			}
+			r := build(t)
+			if r.Name() != name {
+				t.Fatalf("the builder for %s built %s", name, r.Name())
+			}
+			if declared, _ := agents.DefaultCatalog().Declared(name); !declared.Equal(r.Capabilities()) {
+				t.Fatalf("%s declares %s built and %s in the catalog", name, r.Capabilities(), declared)
+			}
+			conform(t, r)
+		})
+	}
+}
+
+// overTheWire builds each adapter this build ships over the stand-in, with
+// countProbeStep in its script. The Claude Code adapter's base environment
+// carries a key because a terminal worker is refused without one, and the
+// key is stand-in text, which the stand-in reads only to check its approval.
+// Grok Build and OpenAI are built from their factories over New's
+// arguments, which is the stand-in's command line; Main tells their one-shot
+// command lines apart.
+var overTheWire = map[string]func(t *testing.T) agents.Runner{
+	agents.ClaudeName: func(t *testing.T) agents.Runner {
+		return standin.New(t, standin.Script{Steps: []standin.Step{countProbeStep}},
+			agents.WithTerminationGrace(300*time.Millisecond),
+			agents.WithBaseEnvironment(withStandinKey(os.Environ())),
+		).Runner()
+	},
+	agents.CursorName: func(t *testing.T) agents.Runner {
+		return standin.NewCursor(t, standin.Script{Steps: []standin.Step{countProbeStep}}).Runner()
+	},
+	agents.CodexName: func(t *testing.T) agents.Runner {
+		return standin.NewCodex(t, standin.Script{Steps: []standin.Step{countProbeStep}}).Runner()
+	},
+	agents.OpenAIName: func(t *testing.T) agents.Runner { return openaiOverTheWire(t) },
+	agents.GrokName: func(t *testing.T) agents.Runner {
+		agent := standin.New(t, standin.Script{Steps: []standin.Step{countProbeStep}})
+		r, err := agents.GrokFactory(agents.WithGrokBinary(helperBinary(t))).New(t.Context(), agent.Arguments())
+		if err != nil {
+			t.Fatalf("building the grok adapter over the stand-in: %v", err)
+		}
+		return r
+	},
+}
+
+// openaiOverTheWire is the OpenAI adapter over the stand-in, answering the
+// count probe.
+func openaiOverTheWire(t *testing.T) agents.Runner {
+	t.Helper()
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{countProbeStep}})
+	r, err := agents.OpenAIFactory(agents.WithOpenAIBinary(helperBinary(t))).New(t.Context(), agent.Arguments())
+	if err != nil {
+		t.Fatalf("building the openai adapter over the stand-in: %v", err)
+	}
+	return r
 }
 
 // standinKey is the value the stand-in's terminal workers are given as
@@ -498,11 +700,12 @@ func TestTheWorkerProbeRefusesAWorkerThatEndsOnWhatItIsSent(t *testing.T) {
 		t.Fatalf("building the misframing runner: %v", err)
 	}
 
+	p, _ := probeFor(agents.CapabilityWorkerSessions)
 	recorder := &recordingTB{TB: t}
-	onItsOwnGoroutine(func() { conform(recorder, misframed) })
+	onItsOwnGoroutine(func() { p.declared(recorder, misframed) })
 
 	if !recorder.failed {
-		t.Fatal("the suite accepted a worker that ends on every line it is sent")
+		t.Fatal("the worker probe accepted a worker that ends on every line it is sent")
 	}
 	if !strings.Contains(recorder.message, misframed.Name()) {
 		t.Errorf("the suite refused with %q, want it to name the adapter", recorder.message)
@@ -532,10 +735,16 @@ func TestTheTerminalProbeRefusesAWorkerThatEndsOnWhatItIsTyped(t *testing.T) {
 }
 
 // TestAnAdapterWithoutSessionsConformsToItsDeclaration runs the same suite
-// against a second adapter that declares nothing, which is the case the
-// declaration exists for and the one this build has no real example of.
+// against an adapter that declares no mechanism at all, which is the case the
+// declaration exists for: the OpenAI adapter, over the stand-in, which
+// declares two token counts and nothing else.
 func TestAnAdapterWithoutSessionsConformsToItsDeclaration(t *testing.T) {
-	conform(t, (&stubFactory{name: "sessionless", available: true}).runner())
+	r := openaiOverTheWire(t)
+	want := []agents.Capability{agents.CapabilityReportsInputTokens, agents.CapabilityReportsOutputTokens}
+	if got := r.Capabilities().List(); !slices.Equal(got, want) {
+		t.Fatalf("the openai adapter declares %v, want exactly %v", got, want)
+	}
+	conform(t, r)
 }
 
 // TestTheScriptedAdapterConformsToItsDeclaration runs the suite against the
@@ -543,16 +752,18 @@ func TestAnAdapterWithoutSessionsConformsToItsDeclaration(t *testing.T) {
 // stand-in's line mode, so the worker probe is exercised against both
 // framings this package writes.
 func TestTheScriptedAdapterConformsToItsDeclaration(t *testing.T) {
-	conform(t, newWorkerRunner(t))
+	conform(t, standin.NewWorker(t, standin.Script{Steps: []standin.Step{countProbeStep}},
+		agents.WithTerminationGrace(300*time.Millisecond)).Runner())
 }
 
 // What the scripted adapter declares is a fact about it too: the three
-// mechanisms it carries, and not suppression. The second half holds for the reason the shipped
-// adapter's does.
+// mechanisms it carries and the four token counts the Claude Code envelope it
+// reads carries, and not suppression. The last holds for the reason the
+// shipped adapter's does.
 func TestWhatTheScriptedAdapterDeclares(t *testing.T) {
 	declared := newWorkerRunner(t).Capabilities()
-	want := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions,
-		agents.CapabilityTerminalWorkers}
+	want := append([]agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions,
+		agents.CapabilityTerminalWorkers}, agents.CountCapabilities()...)
 	if got := declared.List(); !slices.Equal(got, want) {
 		t.Errorf("the scripted adapter declares %v, want exactly %v", got, want)
 	}
@@ -566,9 +777,10 @@ func TestWhatTheScriptedAdapterDeclares(t *testing.T) {
 
 // What the shipped adapter declares is a fact about it, so it is asserted
 // rather than derived. Claude Code has resumable sessions, worker sessions
-// and terminal workers, and it has no instruction-suppression mechanism, so a run
-// configured to suppress a repository's own instructions is refused against
-// it.
+// and terminal workers, and reads all four token counts, and it has no
+// instruction-suppression mechanism, so a run configured to suppress a
+// repository's own instructions is refused against it. Of the others, only
+// OpenAI declares it does not report a count: it reads no cache count.
 //
 // The second half is the one worth spelling out. It is not an accident of the
 // list: internal/agents implements no suppression mechanism at all, so a
@@ -577,8 +789,9 @@ func TestWhatTheScriptedAdapterDeclares(t *testing.T) {
 func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 	claude := newRunner(t)
 	claudeDeclared := claude.Capabilities()
-	wantClaude := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions,
-		agents.CapabilityTerminalWorkers}
+	counts := agents.CountCapabilities()
+	wantClaude := append([]agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions,
+		agents.CapabilityTerminalWorkers}, counts...)
 	if got := claudeDeclared.List(); !slices.Equal(got, wantClaude) {
 		t.Errorf("the claude adapter declares %v, want exactly %v", got, wantClaude)
 	}
@@ -601,7 +814,7 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 		t.Fatalf("cursor factory failed: %v", err)
 	}
 	cursorDeclared := cursor.Capabilities()
-	wantCursor := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}
+	wantCursor := append([]agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}, counts...)
 	if got := cursorDeclared.List(); !slices.Equal(got, wantCursor) {
 		t.Errorf("the cursor adapter declares %v, want exactly %v", got, wantCursor)
 	}
@@ -614,30 +827,32 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 		t.Fatalf("codex factory failed: %v", err)
 	}
 	codexDeclared := codex.Capabilities()
-	wantCodex := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}
+	wantCodex := append([]agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}, counts...)
 	if got := codexDeclared.List(); !slices.Equal(got, wantCodex) {
 		t.Errorf("the codex adapter declares %v, want exactly %v", got, wantCodex)
 	}
 
-	// Verify OpenAI declares no capabilities
+	// Verify OpenAI declares no mechanism and the two counts it reads, and
+	// not the cache counts.
 	openaiFactory := agents.OpenAIFactory(agents.WithOpenAIBinary(helperBinary(t)))
 	openai, err := openaiFactory.New(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("openai factory failed: %v", err)
 	}
 	openaiDeclared := openai.Capabilities()
-	if got := openaiDeclared.List(); len(got) != 0 {
-		t.Errorf("the openai adapter declares %v, want no capabilities", got)
+	wantOpenAI := []agents.Capability{agents.CapabilityReportsInputTokens, agents.CapabilityReportsOutputTokens}
+	if got := openaiDeclared.List(); !slices.Equal(got, wantOpenAI) {
+		t.Errorf("the openai adapter declares %v, want exactly %v", got, wantOpenAI)
 	}
 
-	// Verify Grok declares no capabilities
+	// Verify Grok declares resumable sessions and every count
 	grokFactory := agents.GrokFactory(agents.WithGrokBinary(helperBinary(t)))
 	grok, err := grokFactory.New(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("grok factory failed: %v", err)
 	}
 	grokDeclared := grok.Capabilities()
-	wantGrok := []agents.Capability{agents.CapabilityResumableSessions}
+	wantGrok := append([]agents.Capability{agents.CapabilityResumableSessions}, counts...)
 	if got := grokDeclared.List(); !slices.Equal(got, wantGrok) {
 		t.Errorf("the grok adapter declares %v, want exactly %v", got, wantGrok)
 	}
@@ -707,6 +922,18 @@ func TestResolveRefusesAnAdapterWhoseDeclarationDoesNotMatchWhatItIs(t *testing.
 			declares:  []agents.Capability{"time_travel"},
 		},
 		want: "not a capability this build defines",
+	}, {
+		// The declaration read for an agent nothing built, which is what a
+		// recorded call is weighed against, must be the one its runners
+		// make, or a ceiling would exempt a count the runner says it reads.
+		name: "declares one thing built and another unbuilt",
+		factory: &stubFactory{
+			name:      "two-faced",
+			available: true,
+			declares:  []agents.Capability{agents.CapabilityReportsInputTokens},
+			unbuilt:   []agents.Capability{},
+		},
+		want: "when built and none unbuilt",
 	}}
 
 	for _, c := range cases {
@@ -733,6 +960,59 @@ func TestResolveRefusesAnAdapterWhoseDeclarationDoesNotMatchWhatItIs(t *testing.
 				t.Errorf("the refusal reads %q, want it to say %q", defect.Error(), c.want)
 			}
 		})
+	}
+}
+
+// A catalog says what an adapter declares without building it, so a record
+// naming an agent this machine cannot run is still read against that
+// agent's declaration, and a name the catalog does not hold has none.
+func TestTheCatalogSaysWhatAnAdapterDeclaresWithoutBuildingIt(t *testing.T) {
+	catalog := agents.DefaultCatalog(agents.WithCatalogRecorder(&recorder{}))
+	for _, name := range catalog.Names() {
+		declared, ok := catalog.Declared(name)
+		if !ok {
+			t.Errorf("the catalog holds %s and has no declaration for it", name)
+		}
+		if len(declared.List()) == 0 {
+			t.Errorf("the catalog reads %s as declaring nothing", name)
+		}
+	}
+	missing := agents.NewCatalog(agents.OpenAIFactory(agents.WithOpenAIBinary(filepath.Join(t.TempDir(), "absent"))))
+	if _, err := agents.Resolve(t.Context(), []string{agents.OpenAIName}, missing); err == nil {
+		t.Fatal("an adapter whose binary is absent resolved")
+	}
+	declared, ok := missing.Declared(agents.OpenAIName)
+	if !ok || !declared.Has(agents.CapabilityReportsOutputTokens) || declared.Has(agents.CapabilityReportsCacheReadTokens) {
+		t.Errorf("an adapter that cannot run here reads as %v (%v), want its own declaration", declared, ok)
+	}
+	if declared, ok := missing.Declared("retired"); ok || len(declared.List()) != 0 {
+		t.Errorf("a name the catalog does not hold reads as %v (%v), want no declaration", declared, ok)
+	}
+}
+
+// Each token-count capability reads its own count and no other, and every
+// other capability reads none, which is what lets the probe and the ceiling
+// name a count by its capability.
+func TestEachCountCapabilityReadsItsOwnCount(t *testing.T) {
+	usage := standin.DefaultUsage()
+	want := map[agents.Capability]agents.Count{
+		agents.CapabilityReportsInputTokens:         usage.InputTokens,
+		agents.CapabilityReportsOutputTokens:        usage.OutputTokens,
+		agents.CapabilityReportsCacheReadTokens:     usage.CacheReadTokens,
+		agents.CapabilityReportsCacheCreationTokens: usage.CacheCreationTokens,
+	}
+	if got := agents.CountCapabilities(); len(got) != len(want) {
+		t.Fatalf("the count capabilities are %v, want the four token counts", got)
+	}
+	for _, capability := range agents.AllCapabilities() {
+		got, ok := capability.Counted(usage)
+		w, counts := want[capability]
+		if ok != counts || got != w {
+			t.Errorf("%s reads %s (%v), want %s (%v)", capability, got, ok, w, counts)
+		}
+	}
+	if _, ok := agents.Capability("time_travel").Counted(usage); ok {
+		t.Error("an unrecognized capability reads a count")
 	}
 }
 
@@ -872,14 +1152,4 @@ func TestListIsStableWhateverOrderWasDeclared(t *testing.T) {
 	if !slices.Equal(forwards.List(), table) {
 		t.Errorf("List returned %v, want the table order %v", forwards.List(), table)
 	}
-}
-
-func TestCursorWorkerCapabilityConformsThroughACP(t *testing.T) {
-	agent := standin.NewCursor(t, standin.Script{})
-	conform(t, agent.Runner())
-}
-
-func TestCodexWorkerCapabilityConformsThroughAppServer(t *testing.T) {
-	agent := standin.NewCodex(t, standin.Script{})
-	conform(t, agent.Runner())
 }
