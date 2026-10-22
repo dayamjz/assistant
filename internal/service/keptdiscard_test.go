@@ -605,6 +605,67 @@ func TestADiscardShowsACommitOnlyAReflogNames(t *testing.T) {
 	})
 }
 
+// A discard shows a commit only a reflog entry's previous value records,
+// the reviewer's sequence on fdf1659: the worker commits once more and
+// resets the commit away, and every older entry of HEAD's reflog is
+// expired, so the reset's own entry is the one left and the commit is its
+// previous value alone, recoverable as HEAD@{1} and named by no reference,
+// ORIG_HEAD removed, and by no entry's new value. An untracked note keeps the copy kept. The
+// commit is lost with the copy, so it is among the commits shown as lacking.
+// Without the reflogs' previous values read, the preview lacked nothing
+// and confirming its digest destroyed the commit unshown.
+func TestADiscardShowsACommitOnlyAReflogsPreviousValueRecords(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	if err := writeFile(filepath.Join(entry.CopyPath, "second.txt"), "a second finding\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "add", "second.txt")
+	git(t, entry.CopyPath, "commit", "--quiet", "-m", "the worker's second commit")
+	reset := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	git(t, entry.CopyPath, "reset", "--quiet", "--hard", "HEAD~1")
+	for range strings.Count(git(t, entry.CopyPath, "log", "--walk-reflogs", "--format=%H", "HEAD"), "\n") {
+		git(t, entry.CopyPath, "reflog", "delete", "HEAD@{1}")
+	}
+	// The reset also left ORIG_HEAD naming the commit; it goes, so the
+	// reflog entry's previous value is the one thing that records it.
+	git(t, entry.CopyPath, "update-ref", "-d", "ORIG_HEAD")
+	if got := git(t, entry.CopyPath, "log", "--walk-reflogs", "--format=%H", "HEAD"); strings.Contains(got, reset) {
+		t.Fatalf("HEAD's reflog still names %s as an entry's new value:\n%s", reset, got)
+	}
+	if got := git(t, entry.CopyPath, "rev-parse", "HEAD@{1}"); got != reset {
+		t.Fatalf("HEAD@{1} = %s; want the reset commit %s, the reset entry's previous value", got, reset)
+	}
+	if err := writeFile(filepath.Join(entry.CopyPath, "note.txt"), "an untracked note\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		if !slices.Contains(shown.Loss.Lacks, reset) {
+			t.Fatalf("the discard shown = %+v; want %s, the commit only a reflog entry's previous value records, among the "+
+				"commits lacking", *shown.Loss, reset)
+		}
+		request.Confirm = shown.Loss.Digest
+		var done machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &done); err != nil || done.Effect != machine.KeptWorkDiscarded {
+			t.Fatalf("the confirmed discard = %+v, %v", done, err)
+		}
+	})
+}
+
 // A discard a stopped service confirmed and did not carry out, over a copy
 // that changed before the next start, is never silent, the reviewer's
 // sequence: the discard is shown and confirmed, and the service stops

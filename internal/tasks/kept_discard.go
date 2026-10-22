@@ -35,11 +35,12 @@ import (
 //
 // Loss is what the copy holds that is nowhere safe as far as this program
 // can see, read from the copy as it stands when it is shown: the commits
-// that any name the removal destroys reaches, HEAD, a reference or a reflog
-// entry, a commit reset away and every stash among them, and that the
-// default branch, read fresh as Keep reads it, lacks, with every object such
-// a name points at that is not a commit (lostFrom), all decided by git from
-// the copy's own objects; every path the removal destroys whose content or
+// that anything the removal destroys names reaches, HEAD, a reference, a
+// root reference such as ORIG_HEAD, or a reflog entry by the value it moved
+// to or the one it moved from, a commit reset away and every stash among
+// them, and that the default branch, read fresh as Keep reads it, lacks,
+// with every object such a name points at that is not a commit (lostFrom),
+// all decided by git from the copy's own objects; every path the removal destroys whose content or
 // deletion nothing else holds, a file git ignores and a deletion git has not
 // staged among them, decided from what the copy holds on lostPaths' terms
 // (kept_lost.go); and the three indicators vcs.Inventory reads as git
@@ -89,7 +90,13 @@ import (
 // reference, reflog entry or index entry, is not sealed: one written since
 // the discard was shown leaves the digest as it was, and a stash dropped
 // before it and not yet pruned, which only git fsck finds, is destroyed
-// with the copy and named by neither the digest nor the list. A tree, a
+// with the copy and named by neither the digest nor the list. What git
+// keeps outside its references names commits the list does not walk from:
+// FETCH_HEAD and MERGE_HEAD, which git lists as no reference, and the state
+// of an operation in progress (a rebase's or a sequencer's directory); each
+// is shown as a repository path, its file and not the commits it names. A
+// reflog entry whose previous value is a tree, a blob or a tag is not
+// listed by that value (vcs.NotReachedFrom says when git writes one). A tree, a
 // blob or an annotated tag a name points at is listed whatever else holds
 // it, which fails toward showing. A run's
 // worktree's stash is the gate's, which the removal leaves standing; it is
@@ -122,13 +129,15 @@ import (
 type Loss struct {
 	// Head is the commit the copy's HEAD stands on.
 	Head string
-	// Lacks is the commits the default branch lacks that any name the
-	// removal destroys reaches (lostFrom), read from the copy as it
+	// Lacks is the commits the default branch lacks that anything the
+	// removal destroys names reaches (lostFrom), read from the copy as it
 	// stands, never the entry's record of it when it was kept: for a
-	// task's clone HEAD, every reference and every reflog entry, the stash
-	// list whole among them; for a run's worktree HEAD, its own references
-	// and their reflogs and HEAD's. It is wider than what Keep records,
-	// which leaves the stash and the reflogs out.
+	// task's clone HEAD, every reference, every worktree's HEAD, its root
+	// references and every reflog entry by both its values, the stash list
+	// whole among them; for a run's worktree HEAD, its own references and
+	// root references, and the reflogs of HEAD, of those and of the stash.
+	// It is wider than what Keep records, which leaves the stash and the
+	// reflogs out.
 	Lacks []string
 	// Dirty, Untracked and Stash are the inventory's indicators of the copy
 	// as it stands now, as git reports them: a tracked change, a file no
@@ -165,7 +174,8 @@ type LostPath struct {
 // LostObject is an object a name the removal destroys points at that is
 // not a commit: its identifier, its type as git records it (tag, tree or
 // blob), and every name the removal destroys that points at it, HEAD, a
-// reference's full name, or a reflog entry as ref@{n}. It is listed
+// reference's full name, a root reference's name such as AUTO_MERGE, or a
+// reflog entry as ref@{n}. It is listed
 // whatever else holds it, failing toward showing: an annotated tag the
 // upstream holds under its own name too is listed all the same.
 type LostObject struct {
@@ -269,7 +279,12 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 		return Loss{}, err
 	}
 	named := namesOf(inv.Head.Commit, refs, logs)
-	held, others := lostFrom(ctx, l, named.objects)
+	// Besides every name read, git's own sets, read as it walks: for a
+	// task's clone, removed whole, every reference and every worktree's
+	// HEAD; and every reflog entry's previous value as well as its new one,
+	// for a run's worktree its own and the stash's alone.
+	reach := vcs.Reach{Objects: named.objects, Refs: entry.TaskID.IsKnown(), Reflogs: true, ThisWorktree: !entry.TaskID.IsKnown()}
+	held, others := lostFrom(ctx, l, reach)
 	if !held.established() {
 		return Loss{}, fmt.Errorf("%w: %s", ErrLossUnestablished, held.unestablished)
 	}
@@ -288,14 +303,24 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	return loss, nil
 }
 
-// copyNames is every name the removal destroys, read from the copy: for a
-// task's clone, removed whole, every reference in it, the program's own
-// included, and every reflog it keeps; for a run's worktree, its own
-// references (runWorktreeRefs) and the reflogs of HEAD and of those.
+// copyNames is every name the removal destroys that git lists, read from
+// the copy: for a task's clone, removed whole, every reference in it, the
+// program's own included, its root references (vcs.RootRefs: ORIG_HEAD and
+// the others an operation writes, HEAD aside, which Loss reads from the
+// inventory), and every reflog it keeps; for a run's worktree, its own
+// references (runWorktreeRefs), its own root references, and the reflogs of
+// HEAD and of its references. A reflog entry's previous value is not among
+// them, since no read here lists it; lostFrom reaches it through git's own
+// walk of the reflogs.
 func copyNames(ctx context.Context, entry store.KeptWork, copied *vcs.Repository) ([]vcs.Ref, []vcs.ReflogEntry, error) {
 	var refs []vcs.Ref
 	var logs []vcs.ReflogEntry
 	var err error
+	roots, err := copied.RootRefs(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tasks: reading the root references of the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	roots = slices.DeleteFunc(roots, func(ref vcs.Ref) bool { return ref.Name == "HEAD" })
 	if entry.TaskID.IsKnown() {
 		if refs, err = copied.ListRefs(ctx); err != nil {
 			return nil, nil, fmt.Errorf("tasks: reading the references of the kept copy at %s: %w", entry.CopyPath, err)
@@ -303,7 +328,7 @@ func copyNames(ctx context.Context, entry store.KeptWork, copied *vcs.Repository
 		if logs, err = copied.AllReflogs(ctx); err != nil {
 			return nil, nil, fmt.Errorf("tasks: reading the reflogs of the kept copy at %s: %w", entry.CopyPath, err)
 		}
-		return refs, logs, nil
+		return append(roots, refs...), logs, nil
 	}
 	if refs, err = copied.ListRefs(ctx, runWorktreeRefs...); err != nil {
 		return nil, nil, fmt.Errorf("tasks: reading the references of the kept copy at %s: %w", entry.CopyPath, err)
@@ -315,7 +340,7 @@ func copyNames(ctx context.Context, entry store.KeptWork, copied *vcs.Repository
 	if logs, err = copied.Reflogs(ctx, names...); err != nil {
 		return nil, nil, fmt.Errorf("tasks: reading the reflogs of the kept copy at %s: %w", entry.CopyPath, err)
 	}
-	return refs, logs, nil
+	return append(roots, refs...), logs, nil
 }
 
 // names is every object a name the removal destroys points at directly, in

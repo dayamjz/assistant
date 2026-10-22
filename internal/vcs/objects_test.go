@@ -120,7 +120,7 @@ func TestNotReachedFromListsWhatOnlyTheNamesHold(t *testing.T) {
 	}
 
 	names := []string{kept, past, past, keptTree, pastTree, blob, loose, onKept, onPast}
-	commits, others, err := repo.NotReachedFrom(ctx(t), names, kept)
+	commits, others, err := repo.NotReachedFrom(ctx(t), vcs.Reach{Objects: names}, kept)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,11 +130,11 @@ func TestNotReachedFromListsWhatOnlyTheNamesHold(t *testing.T) {
 	if want := []string{keptTree, pastTree, blob, loose, onKept, onPast}; !slices.Equal(others, want) {
 		t.Errorf("others = %v; want %v, every named object that is not a commit", others, want)
 	}
-	if commits, others, err := repo.NotReachedFrom(ctx(t), []string{kept}, kept); err != nil || len(commits) != 0 || len(others) != 0 {
+	if commits, others, err := repo.NotReachedFrom(ctx(t), vcs.Reach{Objects: []string{kept}}, kept); err != nil || len(commits) != 0 || len(others) != 0 {
 		t.Errorf("NotReachedFrom of the kept commit alone = %v, %v, %v; want nothing", commits, others, err)
 	}
 	missing := strings.Repeat("1", len(kept))
-	if _, _, err := repo.NotReachedFrom(ctx(t), []string{missing}, kept); err == nil {
+	if _, _, err := repo.NotReachedFrom(ctx(t), vcs.Reach{Objects: []string{missing}}, kept); err == nil {
 		t.Error("NotReachedFrom of an object the repository does not hold succeeded; want an error")
 	}
 	for object, want := range map[string]string{past: "commit", pastTree: "tree", loose: "blob", onPast: "tag"} {
@@ -144,5 +144,67 @@ func TestNotReachedFromListsWhatOnlyTheNamesHold(t *testing.T) {
 	}
 	if _, err := repo.ObjectType(ctx(t), missing); err == nil {
 		t.Error("ObjectType of an object the repository does not hold succeeded; want an error")
+	}
+}
+
+// NotReachedFrom walks from git's own sets of names, read when it walks: a
+// commit a reset left recorded only as the previous value of the one entry
+// left in HEAD's reflog, which git log --walk-reflogs names nowhere, is
+// listed with the reflogs and not without them; and narrowed to this working copy, a commit another worktree's
+// HEAD reflog alone records is not listed, while it is without the
+// narrowing. RootRefs lists ORIG_HEAD, which the reset wrote naming that
+// commit, and HEAD, and no reference under refs/.
+func TestNotReachedFromWalksGitsOwnSets(t *testing.T) {
+	gitEnvironment(t)
+	dir := filepath.Join(t.TempDir(), "main")
+	rawGit(t, filepath.Dir(dir), "init", "--quiet", dir)
+	writeFile(t, filepath.Join(dir, "kept.txt"), "kept\n")
+	rawGit(t, dir, "add", "-A")
+	rawGit(t, dir, "commit", "--quiet", "-m", "kept")
+	kept := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD"))
+	rawGit(t, dir, "commit", "--quiet", "--allow-empty", "-m", "reset away")
+	reset := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD"))
+	rawGit(t, dir, "reset", "--quiet", "--hard", kept)
+	for range strings.Count(rawGit(t, dir, "log", "--walk-reflogs", "--format=%H", "HEAD"), "\n") - 1 {
+		rawGit(t, dir, "reflog", "delete", "HEAD@{1}")
+	}
+	if entries := rawGit(t, dir, "log", "--walk-reflogs", "--format=%H", "HEAD"); strings.Contains(entries, reset) {
+		t.Fatalf("HEAD's reflog still names %s as an entry's new value:\n%s", reset, entries)
+	}
+	other := filepath.Join(filepath.Dir(dir), "other")
+	rawGit(t, dir, "worktree", "add", "--quiet", "--detach", other, kept)
+	rawGit(t, other, "commit", "--quiet", "--allow-empty", "-m", "the other worktree's")
+	elsewhere := strings.TrimSpace(rawGit(t, other, "rev-parse", "HEAD"))
+	rawGit(t, other, "reset", "--quiet", "--hard", kept)
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	commits, others, err := repo.NotReachedFrom(ctx(t), vcs.Reach{Refs: true, Reflogs: true}, kept)
+	if err != nil || !slices.Contains(commits, reset) || !slices.Contains(commits, elsewhere) || len(others) != 0 {
+		t.Errorf("with every reference and reflog = %v, %v, %v; want %s and %s among the commits and no other",
+			commits, others, err, reset, elsewhere)
+	}
+	if commits, _, err := repo.NotReachedFrom(ctx(t), vcs.Reach{Objects: []string{kept}, Refs: true}, kept); err != nil || slices.Contains(commits, reset) {
+		t.Errorf("without the reflogs = %v, %v; want %s, which only a reflog records, not listed", commits, err, reset)
+	}
+	commits, _, err = repo.NotReachedFrom(ctx(t), vcs.Reach{Reflogs: true, ThisWorktree: true}, kept)
+	if err != nil || !slices.Contains(commits, reset) || slices.Contains(commits, elsewhere) {
+		t.Errorf("narrowed to this working copy = %v, %v; want %s listed and %s, another worktree's, not", commits, err, reset, elsewhere)
+	}
+	roots, err := repo.RootRefs(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]string{}
+	for _, ref := range roots {
+		if strings.HasPrefix(ref.Name, "refs/") {
+			t.Errorf("RootRefs listed %s, a reference under refs/", ref.Name)
+		}
+		byName[ref.Name] = ref.Object
+	}
+	if byName["ORIG_HEAD"] != reset || byName["HEAD"] != kept {
+		t.Errorf("RootRefs = %+v; want ORIG_HEAD at %s and HEAD at %s", roots, reset, kept)
 	}
 }

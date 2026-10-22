@@ -941,3 +941,63 @@ func TestALossListsWhatOnlyAReflogOrANameHolds(t *testing.T) {
 		t.Fatalf("the discarded clone still stands: %v", err)
 	}
 }
+
+// Loss lists a commit that only a reflog entry's previous value records,
+// and one only a root reference names: in a kept clone a commit is made and
+// reset away, then another is made and reset away, and the entries
+// recording the first as their new value are deleted from the middle of
+// HEAD's reflog and the branch's, so the first is recorded only as the
+// previous value of the reset after it, which no ref@{n} resolves to and
+// no other commit reaches; and a commit made with commit-tree, which writes no reflog,
+// is named by ORIG_HEAD alone. Both are among the commits lost, and the
+// digest shown removes the clone. Without git's walk of the reflogs the
+// first is destroyed unshown, and without the root references the second.
+func TestALossListsWhatOnlyAPreviousValueOrARootReferenceHolds(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/previous")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	head := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "HEAD"))
+	commit(t, tk.copy, "gap.txt", "recorded mid-log\n", "a commit only a previous value records")
+	gap := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "HEAD"))
+	rawGit(t, tk.copy, "reset", "--quiet", "--hard", head)
+	commit(t, tk.copy, "next.txt", "beside it\n", "a commit made after it on the task's own")
+	rawGit(t, tk.copy, "reset", "--quiet", "--hard", head)
+	// In HEAD's reflog and the branch's alike, @{0} is the last reset, @{1}
+	// the commit beside, @{2} the first reset, whose previous value is the
+	// gap's commit, and @{3} the gap's commit, which goes.
+	branch := strings.TrimSpace(rawGit(t, tk.copy, "symbolic-ref", "HEAD"))
+	rawGit(t, tk.copy, "reflog", "delete", "HEAD@{3}")
+	rawGit(t, tk.copy, "reflog", "delete", branch+"@{3}")
+	if entries := rawGit(t, tk.copy, "log", "--walk-reflogs", "--format=%H", "--all"); strings.Contains(entries, gap) {
+		t.Fatalf("a reflog still names %s as an entry's new value:\n%s", gap, entries)
+	}
+	orig := strings.TrimSpace(rawGit(t, tk.copy, "commit-tree", "-p", head, "-m", "only ORIG_HEAD names it", "HEAD^{tree}"))
+	rawGit(t, tk.copy, "update-ref", "--no-deref", "ORIG_HEAD", orig)
+
+	l, err := s.cleaner.Loss(ctx, got.Entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{gap, orig} {
+		if !slices.Contains(l.Lacks, c) {
+			t.Errorf("Loss lists the commits lost as %v; want %s among them", l.Lacks, c)
+		}
+	}
+	if _, err := s.cleaner.Discard(ctx, got.Entry, l.Digest, l.Lacks, ""); err != nil {
+		t.Fatalf("Discard on the digest shown: %v", err)
+	}
+	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the discarded clone still stands: %v", err)
+	}
+}

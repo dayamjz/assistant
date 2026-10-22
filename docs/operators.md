@@ -573,8 +573,9 @@ or discard it.
 Discard, `--answer discard` with the same flags, is given twice. Alone it
 shows exactly what removing the copy would lose, in the structured answer
 (`--json`): the commits the default branch lacks that anything in the
-copy names, a commit reset away and every stash included, and any tag,
-tree or blob a reference or a reflog entry points at directly; every file
+copy names, a commit reset away, one only `ORIG_HEAD` or an old reflog
+entry still records, and every stash included, and any tag, tree or blob
+a reference or a reflog entry points at directly; every file
 removing the copy destroys whose content or deletion nothing else holds,
 files git ignores included, each with why (`changed`, `new`, `staged`, `deleted` for
 a file the copy deleted, staged or not, or `repository` for a

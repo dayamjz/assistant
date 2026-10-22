@@ -311,20 +311,21 @@ func keptDefaultTip(ctx context.Context, l landing) (string, string) {
 }
 
 // lostFrom is what a discard of the copy loses that the default branch
-// lacks, decided from the copy's own objects and every name the removal
-// destroys (names: HEAD, the references and every reflog entry, as
-// copyNames reads them) rather than from the references Keep reads: the
-// commits any of them reaches that the default branch does not, a commit
-// only a reflog or the stash names among them, and every named object
-// that is not a commit (vcs.NotReachedFrom). The default branch is read on
-// lacking's terms, and any step that fails leaves it unestablished.
-func lostFrom(ctx context.Context, l landing, names []string) (held, []string) {
+// lacks, decided from the copy's own objects and from everything that names
+// one in what the removal destroys (reach, as Loss composes it) rather than
+// from the references Keep reads: the commits any of it reaches that the
+// default branch does not, a commit only a reflog entry's previous value, a
+// root reference such as ORIG_HEAD or the stash records among them, and
+// every object reach names that is not a commit (vcs.NotReachedFrom). The
+// default branch is read on lacking's terms, and any step that fails leaves
+// it unestablished.
+func lostFrom(ctx context.Context, l landing, reach vcs.Reach) (held, []string) {
 	defer l.forget(ctx)
 	tip, detail := keptDefaultTip(ctx, l)
 	if detail != "" {
 		return held{unestablished: detail}, nil
 	}
-	commits, others, err := l.repo.NotReachedFrom(ctx, names, tip)
+	commits, others, err := l.repo.NotReachedFrom(ctx, reach, tip)
 	if err != nil {
 		return held{unestablished: "which commits and objects the copy's names hold that the default branch at " + tip +
 			" lacks could not be read: " + err.Error()}, nil

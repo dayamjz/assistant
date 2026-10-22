@@ -39,9 +39,10 @@ type KeptWorkLoss struct {
 	// Head is the commit the copy's HEAD stands on.
 	Head string `json:"head"`
 	// Lacks is the commits the removal destroys that the default branch
-	// lacks: every commit HEAD, a reference or a reflog entry of the copy
-	// reaches that the default branch does not, a commit reset away or a
-	// stash under the newest among them.
+	// lacks: every commit HEAD, a reference, a root reference such as
+	// ORIG_HEAD or a reflog entry of the copy, by the value it moved to or
+	// the one it moved from, reaches that the default branch does not, a
+	// commit reset away or a stash under the newest among them.
 	Lacks []string `json:"lacks"`
 	// Objects is every object a name the removal destroys points at that
 	// is not a commit, an annotated tag, a tree or a blob, with its type
@@ -73,7 +74,8 @@ type KeptWorkLoss struct {
 
 // KeptWorkLostObject is one object a discard destroys a name of that is
 // not a commit, and every name of it the discard destroys: HEAD, a
-// reference's full name, or a reflog entry as ref@{n}
+// reference's full name, a root reference's name such as AUTO_MERGE, or a
+// reflog entry as ref@{n}
 // (KeptWorkLoss.Objects).
 type KeptWorkLostObject struct {
 	Object string   `json:"object"`
