@@ -180,7 +180,7 @@ func New(key string, opts ...Option) *Client {
 		key:      strings.TrimSpace(key),
 		endpoint: Endpoint,
 		timeout:  DefaultTimeout,
-		http:     &http.Client{},
+		http:     &http.Client{Transport: ownTransport()},
 		redactor: redact.New(),
 		maxPiece: maxPieceBytes,
 
@@ -191,6 +191,21 @@ func New(key string, opts ...Option) *Client {
 		opt(c)
 	}
 	return c
+}
+
+// ownTransport is a connection pool for one client: http.DefaultTransport's
+// settings in a pool nothing else holds. The shared pool's idle connections
+// can be closed by any code in the process, as httptest.Server.Close does,
+// and #470 was such a close landing while the client waited on a reply with
+// no body, which then read as a transport failure rather than an unreadable
+// answer. Nothing outside this package holds this pool, so nothing outside it
+// closes this client's connections that way;
+// TestAnotherProviderStoppingDoesNotReachAClient is the evidence.
+//
+// It panics if http.DefaultTransport has been replaced by something other
+// than an *http.Transport, which nothing in this build does.
+func ownTransport() *http.Transport {
+	return http.DefaultTransport.(*http.Transport).Clone()
 }
 
 // FromEnvironment returns a client whose key is KeyVariable as lookup reports
