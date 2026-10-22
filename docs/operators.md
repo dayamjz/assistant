@@ -492,10 +492,10 @@ attributed to a task, and otherwise about the entry itself, for an entry
 about a run no task names, such as the run your own push started. The
 second is a wake of its own shape: the notify command's line names the
 entry in `kept_work` and its `project` and `branch` rather than a
-`task_id`, `assistant coordinator wakes` lists it under the branch, and
-the coordinator acknowledges it as `kNUMBER`, a number of its own.
-Acknowledging the wake answers nothing: the entry is listed until it is
-answered or closed.
+`task_id`, `assistant coordinator wakes` lists it under the project and
+then the branch, and the coordinator acknowledges it as `kNUMBER`, a
+number of its own. Acknowledging the wake answers nothing: the entry is
+listed until it is answered or closed.
 
 If the copy's work later turns up somewhere safe, for example once you push
 its commit to the upstream branch, the next cleanup of it (for a run's copy,
