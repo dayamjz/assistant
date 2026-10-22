@@ -491,7 +491,6 @@ SZOMB = 5  # extern_proc.p_stat of a process that has exited, from sys/proc.h
 SANDBOX_FILTER_PATH = 1  # sandbox_check's filter for a path argument
 SANDBOX_CHECK_NO_REPORT = 0x40000000  # sandbox_check: do not log a denial
 SETTLE_READINGS = 64
-SETUID_OUTSIDE = "/bin/ps"  # the set-user-ID program Sandbox lets run outside it
 
 
 def darwin_records(mib):
@@ -550,12 +549,11 @@ class Sandbox:
     so a process the package starts cannot leave the mark that way; the
     guard's tests check each of these on the machine they run on.
 
-    A sandboxed process cannot exec a set-user-ID program, so a test that
-    runs one would fail here and not elsewhere. The one such program this
-    module's tests run, /bin/ps (SETUID_OUTSIDE), is let run outside the
-    sandbox instead: a ps the package leaves running is not marked and not
-    seen. Any other set-user-ID program fails to start with EPERM under the
-    check, which a package must answer by naming it here or not running it.
+    A sandboxed process cannot exec a set-user-ID program (/bin/ps and sudo
+    among them): the start fails with EPERM. The profile lets none run
+    outside it, since what it started there would carry no mark, so a test
+    that runs one fails under this check rather than leaving a process it
+    cannot see.
     sandbox_check reads the mark of any pid; for a pid that is gone it
     answers denied for both files, which is not the mark.
     """
@@ -569,8 +567,7 @@ class Sandbox:
         if '"' in str(self.inside) or "\\" in str(self.inside):
             raise RuntimeError(f"cannot quote {self.inside} in a sandbox profile")
         self.profile = ("(version 1)(allow default)"
-                        f'(deny file-read-data (literal "{self.inside}"))'
-                        f'(allow process-exec (literal "{SETUID_OUTSIDE}") (with no-sandbox))')
+                        f'(deny file-read-data (literal "{self.inside}"))')
         self.check = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True).sandbox_check
         self.check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
         self.check.restype = ctypes.c_int
@@ -689,10 +686,10 @@ def package_run(command):
     Neither sees a process the package had started through a service manager
     or another process outside its tree (launchd, systemd, a running daemon),
     since that process is not its descendant, nor one that exits between the
-    binary's exit and the check's first read of it, nor, on macOS, a /bin/ps
-    (Sandbox says why). The comparison around the
-    whole run (run) still covers this user's processes and the temp roots at
-    the end.
+    binary's exit and the check's first read of it. On macOS a package
+    cannot start a set-user-ID program under the check (Sandbox). The
+    comparison around the whole run (run) still covers this user's processes
+    and the temp roots at the end.
 
     When LEAK_CHECK_RECORD names a file, the package's directory is appended
     to it before the binary starts, so a caller can tell every package went

@@ -7,6 +7,7 @@ import io
 import os
 from pathlib import Path
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -316,6 +317,38 @@ func TestOutlastsTheEarlyPackagesProcess(t *testing.T) {
 """
 
 
+PS_TEST = """package a
+
+import (
+	"os"
+	"os/exec"
+	"strconv"
+	"syscall"
+	"testing"
+)
+
+// It starts ps writing more than a pipe holds into the FIFO FIFO names,
+// writes ps's pid to RECORD and passes, leaving ps blocked on that write
+// for as long as nobody reads the FIFO.
+func TestLeavesPsBlockedOnItsOutput(t *testing.T) {
+	out, err := os.OpenFile(os.Getenv("FIFO"), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	cmd := exec.Command("/bin/ps", "-A", "-ww", "-E", "-o", "args=", "-o", "args=",
+		"-o", "args=", "-o", "args=", "-o", "args=", "-o", "args=", "-o", "args=", "-o", "args=")
+	cmd.Stdout = out
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting ps: %v", err)
+	}
+	if err := os.WriteFile(os.Getenv("RECORD"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+"""
+
 def running(pid):
     """Whether pid is a running process, an unreaped exited one counting as
     gone. Read with ps, not with the guard's own reads."""
@@ -460,24 +493,70 @@ class PerPackageTest(unittest.TestCase):
                 capture_output=True, text=True, check=False, timeout=30)
             self.assertNotEqual(nested.returncode, 0, nested)
             self.assertIn("sandbox_apply", nested.stderr)
-            # A sandboxed process cannot exec a set-user-ID program. /bin/ps,
-            # which a test lists processes with, runs outside the sandbox;
-            # every other one, such as sudo, is refused.
-            ps = subprocess.run(["/usr/bin/sandbox-exec", "-p", sandbox.profile, "/bin/sh", "-c",
-                                 "ps -o pid= -p $$"], capture_output=True, text=True,
-                                check=False, timeout=30)
-            self.assertEqual(ps.returncode, 0, ps)
-            self.assertTrue(ps.stdout.strip().isdigit(), ps)
-            sudo = subprocess.run(["/usr/bin/sandbox-exec", "-p", sandbox.profile,
-                                   "/usr/bin/sudo", "-n", "true"], capture_output=True,
-                                  text=True, check=False, timeout=30)
-            self.assertNotEqual(sudo.returncode, 0, sudo)
-            self.assertIn("Operation not permitted", sudo.stderr)
+            # A sandboxed process cannot exec a set-user-ID program, and the
+            # profile lets none run outside it, where it would carry no mark.
+            for program in ("/bin/ps", "/usr/bin/sudo"):
+                self.assertTrue(os.stat(program).st_mode & stat.S_ISUID,
+                                f"{program} is not set-user-ID here, so this shows nothing")
+                refused = subprocess.run(["/usr/bin/sandbox-exec", "-p", sandbox.profile,
+                                          program, "-n" if "sudo" in program else "-p1"],
+                                         capture_output=True, text=True, check=False,
+                                         timeout=30)
+                self.assertNotEqual(refused.returncode, 0, refused)
+                self.assertIn("Operation not permitted", refused.stderr)
         finally:
             for process in started:
                 process.kill()
                 process.wait()
             sandbox.remove()
+
+    @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
+    def test_a_ps_a_package_leaves_blocked_on_its_output_cannot_pass(self):
+        # A real package starts /bin/ps writing into a pipe nobody drains
+        # (a FIFO this test holds open and never reads), records its pid and
+        # passes, leaving ps blocked. ps is set-user-ID here, so the
+        # package's sandbox refuses to start it. Before, the profile let it
+        # run outside the sandbox, unmarked, and the package passed with it
+        # still running.
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder).resolve()
+            module, record, fifo = folder / "module", folder / "pid", folder / "fifo"
+            (module / "a").mkdir(parents=True)
+            (module / "go.mod").write_text("module example.com/leaks\n\ngo 1.21\n")
+            (module / "a" / "a_test.go").write_text(PS_TEST)
+            os.mkfifo(fifo)
+            reader = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+            env = dict(os.environ, RECORD=str(record), FIFO=str(fifo))
+
+            def go_test(*wrap):
+                return subprocess.run(["go", "test", "-count=1", *wrap, "./..."], cwd=module,
+                                      env=env, text=True, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, check=False, timeout=300)
+
+            def end(pid):
+                if running(pid):
+                    os.kill(pid, 9)
+            try:
+                # Control: unwrapped, the package passes with ps still
+                # running, blocked on the undrained pipe.
+                plain = go_test()
+                self.assertEqual(plain.returncode, 0, plain.stdout)
+                pid = int(record.read_text())
+                try:
+                    self.assertTrue(running(pid), "ps finished, so this shows nothing")
+                finally:
+                    end(pid)
+                record.unlink()
+
+                wrapped = go_test("-exec", f"{sys.executable} {SCRIPT} package --")
+                if record.exists():
+                    end(int(record.read_text()))
+                self.assertRegex(wrapped.stdout, r"(?m)^FAIL\texample.com/leaks/a\b")
+                self.assertIn("starting ps: fork/exec /bin/ps: operation not permitted",
+                              wrapped.stdout)
+                self.assertFalse(record.exists(), "ps started under the check")
+            finally:
+                os.close(reader)
 
     @unittest.skipIf(sys.platform in ("linux", "darwin"), "the per-package check runs here")
     def test_the_per_package_check_refuses_elsewhere(self):
