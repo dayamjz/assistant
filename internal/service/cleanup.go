@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
@@ -340,11 +341,26 @@ func (s *Service) logCleanup(ctx context.Context, done tasks.Cleanup, err error)
 	case err == nil:
 		s.log.Printf("the isolated copy of task %s: %s on %s", done.Task, done.Result, done.Proof)
 	case errors.As(err, &refused):
-		s.log.Printf("the isolated copy of task %s is left standing (%s): %s", refused.Task, refused.Reason, refused.Detail)
+		s.log.Printf("the isolated copy of task %s is left standing (%s): %s", refused.Task, refused.Reason, refusalAccount(refused))
 		if kept, ok := tasks.KeptOf(refused); ok {
 			s.keepWork(ctx, kept)
 		}
 	default:
 		s.log.Printf("the isolated copy of task %s was not cleaned up: %v", done.Task, err)
 	}
+}
+
+// refusalAccount is what the log says about a refused task cleanup after its
+// reason. A refusal no proof was attempted for says its own detail; one the
+// proofs answered is machine.CopyUnprovenPhrase over every attempt, so the
+// log says which proof found what rather than only that none held.
+func refusalAccount(r *tasks.CleanupRefusal) string {
+	if len(r.Attempts) == 0 {
+		return r.Detail
+	}
+	found := make([]machine.ProofFinding, 0, len(r.Attempts))
+	for _, a := range r.Attempts {
+		found = append(found, machine.ProofFinding{Proof: a.Proof, Found: a.Detail})
+	}
+	return machine.CopyUnprovenPhrase(found).String()
 }

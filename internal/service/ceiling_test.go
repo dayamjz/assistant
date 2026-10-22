@@ -105,6 +105,69 @@ func TestARunAfterTheUsageCeilingIsReachedHoldsForAPerson(t *testing.T) {
 	})
 }
 
+// TestACeilingIsWeighedAgainstWhatCursorReports is #510 on the path a run
+// takes: the production Cursor adapter as the reviewer, over the stand-in's
+// model of what cursor-agent prints (camelCase usage keys, recorded in
+// internal/agents/testdata), and an operator ceiling on input tokens well
+// above one review's reported cost. The first review runs under an empty
+// window. Its counts reach the record, so the second run's review starts and
+// passes too, and the usage view totals both reviews' input tokens with none
+// unreported. Before the adapter read the keys the CLI writes, every Cursor
+// call was recorded with no count at all, so the second run held at review
+// on the ceiling's ask while the record held two hundred tokens against a
+// ceiling of ten thousand.
+func TestACeilingIsWeighedAgainstWhatCursorReports(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	writeOperatorConfig(t, h.ConfigFile(), "usage_ceiling:\n  window: 24h\n  input_tokens: 10000\n")
+
+	recorder := &service.LateRecorder{}
+	agent := standin.NewCursor(t, standin.Script{Steps: []standin.Step{{
+		Match: standin.MatchReview(),
+		Times: standin.Always,
+		Reply: standin.Reviewed("the change reads cleanly"),
+	}}}, agents.WithCursorRecorder(recorder))
+	opts := options(t, h)
+	opts.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()})
+
+	withServiceOptions(t, opts, func(running serviceUnderTest) {
+		recorder.Bind(running.service)
+
+		first := startRun(t, running.client, subject)
+		if review := stageView(t, first, pipeline.StageReview); review.Outcome != pipeline.OutcomePassed || !review.Ran {
+			t.Fatalf("the first review came back %s (ran %v), want it run and passed", review.Outcome, review.Ran)
+		}
+
+		commitOn(t, subject, "after-the-first-review", "after.txt")
+		second := startRun(t, running.client, subject)
+		if second.Decision != nil && second.Decision.Stage == pipeline.StageReview.String() {
+			t.Fatalf("the second run holds at review on %+v, want its review run under the ceiling", second.Decision.Findings)
+		}
+		if review := stageView(t, second, pipeline.StageReview); review.Outcome != pipeline.OutcomePassed || !review.Ran {
+			t.Fatalf("the second review came back %s (ran %v), want it run and passed", review.Outcome, review.Ran)
+		}
+		if got := len(agent.Calls()); got != 2 {
+			t.Fatalf("the stand-in was asked %d times, want both reviews", got)
+		}
+
+		var usage machine.Usage
+		if err := running.client.Call(t.Context(), ipc.MethodUsageRead, machine.UsageRequest{Window: "1d"}, &usage); err != nil {
+			t.Fatalf("usage.read: %v", err)
+		}
+		cost, _ := standin.DefaultUsage().InputTokens.Value()
+		input := usage.Total.InputTokens
+		if n, ok := input.Total.Get(); !ok || n != 2*cost || input.Unreported != 0 {
+			t.Fatalf("the usage view totals input tokens as %+v, want both reviews' %d with none unreported", input, 2*cost)
+		}
+		if usage.Ceiling.Standing != machine.CeilingUnder {
+			t.Fatalf("the usage view weighs the ceiling as %s (%s), want under", usage.Ceiling.Standing, usage.Ceiling.Figures())
+		}
+	})
+}
+
 // TestATrustedCopyNamingTheUsageCeilingStopsTheRunBeforeLaunch is P7 for the
 // ceiling at the read a run actually takes: a repository whose default
 // branch carries a document naming a usage ceiling key is refused at the

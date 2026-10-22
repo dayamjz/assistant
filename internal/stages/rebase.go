@@ -148,8 +148,10 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	if err != nil {
 		return pipeline.Output{}, err
 	}
+	recorder := recorderOf(deps, copied, runID, submitted)
 	if pushed != "" {
-		return rebaseAfterPush(ctx, copied, afterPush{branch: branch, base: base, head: head, pushed: pushed, fork: fork})
+		return rebaseAfterPush(ctx, copied, afterPush{branch: branch, base: base, head: head, pushed: pushed, fork: fork,
+			recorder: recorder})
 	}
 
 	// The anchor is taken here, before this stage brings the change up to date
@@ -231,7 +233,7 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	// what this pass does: incorporateBranch says why the base cannot be
 	// rebased onto past it.
 	incorporated, handled, err := incorporateBranch(ctx, copied, incorporating{
-		branch: branch, base: onto, submitted: submitted, anchor: anchor, baseCommit: baseCommit,
+		branch: branch, base: onto, submitted: submitted, anchor: anchor, baseCommit: baseCommit, recorder: recorder,
 	})
 	if err != nil {
 		return pipeline.Output{}, err
@@ -286,6 +288,9 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	newHead, err := copied.ResolveCommit(ctx, "HEAD")
 	if err != nil {
 		return pipeline.Output{}, fmt.Errorf("stages: resolving HEAD after rebase: %w", err)
+	}
+	if err := recorder.record(ctx, currentHead, targetCommit, newHead); err != nil {
+		return pipeline.Output{}, err
 	}
 
 	// Check if diff is empty after rebase

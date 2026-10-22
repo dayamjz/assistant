@@ -139,15 +139,15 @@ func callArgs(t *testing.T, socket string, method ipc.Method, params any) []stri
 }
 
 // callOutcome reads callMain's protocol out of what a call came to: the
-// answer on success, the wire code on a refusal, and a failure for
-// anything else.
+// answer on success, the wire code on a refusal, read by refusedWith, and a
+// failure for anything else.
 func callOutcome(t *testing.T, method ipc.Method, how string, got ran) (json.RawMessage, ipc.Code) {
 	t.Helper()
 	switch got.status {
 	case 0:
 		return json.RawMessage(got.stdout), ""
 	case 1:
-		return nil, ipc.Code(strings.TrimSpace(got.stderr))
+		return nil, refusedWith(t, method, got.stderr)
 	}
 	t.Fatalf("calling %s %s exited %d: %s", method, how, got.status, got.stderr)
 	return nil, ""
