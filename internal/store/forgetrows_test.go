@@ -175,8 +175,13 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 		t.Fatalf("RecordKeptWork: %v", err)
 	}
 	// The open entry is raised as a kept-work wake and offered to the
-	// notify command before it closes, so both go with it.
-	keptWorkWakeAndNotification(t, s, entry.ID)
+	// notify command before it closes, and the wake is acknowledged, so
+	// both go with it: a queued one would refuse the forgetting, which
+	// TestARepositoryIsNotForgottenWhileAKeptWorkWakeIsQueued holds.
+	wake := keptWorkWakeAndNotification(t, s, entry.ID)
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{wake}, AcknowledgedByCoordinator()); err != nil {
+		t.Fatalf("acknowledging the kept-work wake: %v", err)
+	}
 	if err := s.MarkRunCleanupRemoved(ctx, run.ID, now); err != nil {
 		t.Fatalf("MarkRunCleanupRemoved: %v", err)
 	}
@@ -375,8 +380,9 @@ func TestWrittenOnceRunRecordsAreNotDeletedWhileTheirRunStands(t *testing.T) {
 }
 
 // keptWorkWakeAndNotification raises an open kept work entry as a kept-work
-// wake and claims that wake's notification, so a test holds a row in both.
-func keptWorkWakeAndNotification(t *testing.T, s *Store, entry int64) {
+// wake and claims that wake's notification, so a test holds a row in both,
+// and returns the wake's identifier.
+func keptWorkWakeAndNotification(t *testing.T, s *Store, entry int64) int64 {
 	t.Helper()
 	ctx := context.Background()
 	inc, err := s.BeginIncarnation(ctx)
@@ -390,4 +396,5 @@ func keptWorkWakeAndNotification(t *testing.T, s *Store, entry int64) {
 	if _, err := s.ClaimKeptWorkNotification(ctx, appended.Wake.ID); err != nil {
 		t.Fatalf("ClaimKeptWorkNotification: %v", err)
 	}
+	return appended.Wake.ID
 }

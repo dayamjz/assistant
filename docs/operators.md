@@ -516,6 +516,14 @@ commits are on the upstream branch or in the default branch, the next
 service start removes the copy on that proof and closes the entry. Part 2's
 discard will be your other way.
 
+Eject is also refused, before the gate is touched, while a `kept-work` wake
+about one of the repository's entries is still unacknowledged, even once
+the entry is closed, because the wake stays actionable until the coordinator
+acknowledges it, and forgetting the repository would delete it. The refusal
+names the wake by its number; once the coordinator acknowledges it as
+`kNUMBER`, eject removes the closed entry, its wake and the wake's
+notification record with the run.
+
 Eject is also refused while any run copy of the repository still stands on
 disk, whether its run's cleanup has not decided it yet or kept it, and the
 refusal names each copy: a run's copy is cut from the gate, so removing the

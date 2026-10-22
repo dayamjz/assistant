@@ -241,6 +241,11 @@ func scanRepository(sc scanner) (Repository, error) {
 // never recorded, and the record is the only thing a later recovery reaps it
 // from.
 //
+// It refuses with *KeptWorkOpenError while a kept work entry of the
+// repository is open, and with ErrKeptWorkWakeQueued while a kept-work wake
+// raised about one is unacknowledged, closed entry or not, because the wake
+// is actionable until the coordinator acknowledges it.
+//
 // Every refusal is decided before anything is removed, and the removal is one
 // transaction, so a forget either takes the whole repository or changes
 // nothing. It removes records and nothing on disk: a run cleanup record that
@@ -365,7 +370,8 @@ var runRecords = []runRecord{
 	// delete's own filter and the table's seal hold the same line again.
 	// The kept-work wake raised about such an entry, and its notification,
 	// go with it and before it, on the same filter, which their seals hold
-	// too.
+	// too, and only once the wake is acknowledged: refuseUnlessForgettable
+	// refuses a repository with one still queued.
 	{table: "kept_work_notification", remove: `DELETE FROM kept_work_notification WHERE kept_work_wake_id IN (
 		SELECT w.id FROM kept_work_wake w JOIN kept_work k ON k.id = w.kept_work
 		WHERE k.run_id = ? AND (k.answer IS NOT NULL OR k.closure IS NOT NULL))`, afterRun: true},
@@ -389,9 +395,9 @@ var refusedRunRecords = map[string]error{
 }
 
 // RepositoryRemovable reports what would stop ForgetRepository, and removes
-// nothing. It returns the same ErrRepositoryInUse, ErrRunActive and
-// ErrRunProcessRecorded refusals,
-// against the same rows, so a caller with something of its own to destroy can
+// nothing. It returns the same ErrRepositoryInUse, ErrRunActive,
+// ErrRunProcessRecorded, *KeptWorkOpenError and ErrKeptWorkWakeQueued
+// refusals, against the same rows, so a caller with something of its own to destroy can
 // find out first rather than destroy it and then be refused.
 //
 // It is a question and not a reservation. Nothing is held between the answer
@@ -532,6 +538,9 @@ func refuseUnlessForgettable(ctx context.Context, tx *sql.Tx, id string, runIDs 
 	if err := refuseIfKeptWorkIsOpen(ctx, tx, id); err != nil {
 		return err
 	}
+	if err := refuseIfAKeptWorkWakeIsQueued(ctx, tx, id); err != nil {
+		return err
+	}
 	for _, runID := range runIDs {
 		if err := refuseIfRunIsHeldByATask(ctx, tx, id, runID); err != nil {
 			return err
@@ -544,6 +553,28 @@ func refuseUnlessForgettable(ctx context.Context, tx *sql.Tx, id string, runIDs 
 		}
 	}
 	return nil
+}
+
+// refuseIfAKeptWorkWakeIsQueued stops a removal that would delete an
+// unacknowledged kept-work wake, and its notification, about a kept work
+// entry of the repository: one whose project is the repository or whose run
+// is one of its runs. The entry may be closed, its work landed, while the
+// wake about it has not been acted on, and PRD section 8 keeps the wake
+// actionable until it is acknowledged.
+func refuseIfAKeptWorkWakeIsQueued(ctx context.Context, tx *sql.Tx, repositoryID string) error {
+	var wake, entry int64
+	err := tx.QueryRowContext(ctx, `SELECT w.id, k.id FROM kept_work_wake w JOIN kept_work k ON k.id = w.kept_work
+		WHERE w.handled_at IS NULL AND (k.repository_id = ? OR k.run_id IN (SELECT id FROM run WHERE repository_id = ?))
+		ORDER BY w.id LIMIT 1`, repositoryID, repositoryID).Scan(&wake, &entry)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store: checking the kept-work wakes of repository %s: %w", repositoryID, err)
+	}
+	return fmt.Errorf("%w: kept-work wake %d, raised about kept work entry %d of repository %s, is still queued; "+
+		"once the coordinator acknowledges it, the repository's records can be removed",
+		ErrKeptWorkWakeQueued, wake, entry, repositoryID)
 }
 
 // repositoryRunIDs returns the identifiers of every run of one repository.

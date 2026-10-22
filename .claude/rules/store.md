@@ -54,8 +54,10 @@ paths: ["internal/store/**"]
   and `MarkRunCleanupRemoved` in the removal's transaction, never a discard.
   `surfaced_at` is the one other column that moves, only forward. `ForgetRepository` and
   `RepositoryRemovable` refuse a repository with an open entry
-  (`*KeptWorkOpenError`), and a run's entry goes with its run only once it
-  is answered or closed. Eject's preflight is `ReserveRepositoryRemoval`,
+  (`*KeptWorkOpenError`) or an unacknowledged kept-work wake about one
+  (`ErrKeptWorkWakeQueued`), and a run's entry, its wake and the wake's
+  notification go with its run only once it is answered or closed and the
+  wake acknowledged. Eject's preflight is `ReserveRepositoryRemoval`,
   which writes `repository_removal`, naming the eject's process, in the
   transaction that found the repository forgettable; `CreateRun` refuses a
   run of a reserved repository (`ErrRepositoryBeingRemoved`), and nothing

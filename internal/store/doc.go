@@ -346,7 +346,8 @@
 // count and the acknowledgement for the two shapes about no task, and
 // DrainAll and AcknowledgeAll take all three shapes in one transaction. A
 // kept-work wake and its notification go only with a closed run entry
-// whose run is gone, which only ForgetRepository removes.
+// whose run is gone, which only ForgetRepository removes, and it refuses
+// while the wake is unacknowledged (ErrKeptWorkWakeQueued).
 //
 // A wake's recipient is decided at the drain and stored on no row (P14):
 // DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain

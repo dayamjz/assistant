@@ -2231,7 +2231,8 @@ var schema = []migration{
 			// raised once, which the unique key holds. A row is not
 			// deleted while its entry may not be, on kept_work's own terms:
 			// it goes only with a closed run entry whose run is gone, which
-			// only ForgetRepository removes. Because a row can go, its
+			// only ForgetRepository removes, and that refuses while the row
+			// is unacknowledged. Because a row can go, its
 			// identifier is AUTOINCREMENT, so a removed row's number is never
 			// handed to a later wake, and an acknowledgement naming it is
 			// refused rather than closing another wake.

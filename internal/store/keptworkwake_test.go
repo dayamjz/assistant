@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -178,8 +179,8 @@ func TestAKeptWorkWakesIdentifierIsNotReusedAfterItsRepositoryIsForgotten(t *tes
 		t.Fatal(err)
 	}
 	// The copy's work lands, the removal on its proof closes the entry, the
-	// run ends, and the repository is forgotten with the closed entry and
-	// its wake.
+	// run ends, the wake is acknowledged, and the repository is forgotten
+	// with the closed entry and its wake.
 	run := first.RunID.Or("")
 	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run, Proof: Known(CleanupProofDefaultBranch), Examined: []string{"aaaa"}}); err != nil {
 		t.Fatal(err)
@@ -188,6 +189,9 @@ func TestAKeptWorkWakesIdentifierIsNotReusedAfterItsRepositoryIsForgotten(t *tes
 		t.Fatal(err)
 	}
 	if _, err := s.TransitionRun(ctx, run, []RunStatus{RunRunning}, RunFailed); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{old.Wake.ID}, AcknowledgedByCoordinator()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ForgetRepository(ctx, first.RepositoryID.Or("")); err != nil {
@@ -206,6 +210,68 @@ func TestAKeptWorkWakesIdentifierIsNotReusedAfterItsRepositoryIsForgotten(t *tes
 	}
 	if queued, err := s.QueuedKeptWorkWakes(ctx, 10); err != nil || len(queued) != 1 || queued[0].ID != again.Wake.ID {
 		t.Fatalf("the queued kept-work wakes are %+v, %v; want the new one, still queued", queued, err)
+	}
+}
+
+// PRD section 8 keeps a wake actionable until it is acknowledged, so a
+// repository with an unacknowledged kept-work wake about its kept work is
+// not forgotten, even once the entry is closed. The wake is drained and not
+// acknowledged, and its entry then closes on a proof that the work landed
+// and its run is finished, which is everything forgetting asked before:
+// the removal, the question and the reservation are each refused with
+// ErrKeptWorkWakeQueued naming the wake, and nothing is removed, so the
+// wake is still queued, its notification is still there, and it is
+// acknowledged as usual. The acknowledgement is the control: the same
+// removal then completes and takes the closed entry, its wake and the
+// notification with the run.
+func TestARepositoryIsNotForgottenWhileAKeptWorkWakeIsQueued(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	entry := keptRunEntry(t, s, "/worktrees/run")
+	wake := keptWorkWakeAndNotification(t, s, entry.ID)
+	if _, err := s.DrainAll(ctx, 10, WakeHandout{To: AcknowledgedByCoordinator(), Under: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	run := entry.RunID.Or("")
+	repository := entry.RepositoryID.Or("")
+	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run, Proof: Known(CleanupProofDefaultBranch), Examined: []string{"aaaa"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkRunCleanupRemoved(ctx, run, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TransitionRun(ctx, run, []RunStatus{RunRunning}, RunFailed); err != nil {
+		t.Fatal(err)
+	}
+	for name, ask := range map[string]func() error{
+		"ForgetRepository":         func() error { _, err := s.ForgetRepository(ctx, repository); return err },
+		"RepositoryRemovable":      func() error { return s.RepositoryRemovable(ctx, repository) },
+		"ReserveRepositoryRemoval": func() error { return s.ReserveRepositoryRemoval(ctx, repository, RemovalOwner{PID: 4242, Start: 99}) },
+	} {
+		if err := ask(); !errors.Is(err, ErrKeptWorkWakeQueued) || !strings.Contains(err.Error(), "kept-work wake "+strconv.FormatInt(wake, 10)+",") {
+			t.Fatalf("%s = %v, want ErrKeptWorkWakeQueued naming wake %d", name, err, wake)
+		}
+	}
+	if _, err := s.Run(ctx, run); err != nil {
+		t.Fatalf("the refused removal took the run: %v", err)
+	}
+	if n, err := s.UnacknowledgedKeptWorkWakes(ctx); err != nil || n != 1 {
+		t.Fatalf("UnacknowledgedKeptWorkWakes after the refusal = %d, %v; want 1", n, err)
+	}
+	if n := tableRows(t, s, "kept_work_notification"); n != 1 {
+		t.Fatalf("the refused removal left %d notification rows, want 1", n)
+	}
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{wake}, AcknowledgedByCoordinator()); err != nil {
+		t.Fatalf("acknowledging the wake after the refusal: %v", err)
+	}
+	if _, err := s.ForgetRepository(ctx, repository); err != nil {
+		t.Fatalf("ForgetRepository once the wake was acknowledged: %v", err)
+	}
+	for _, table := range []string{"kept_work", "kept_work_wake", "kept_work_notification", "run"} {
+		if n := tableRows(t, s, table); n != 0 {
+			t.Fatalf("forgetting the repository left %d rows in %s", n, table)
+		}
 	}
 }
 
