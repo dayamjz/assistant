@@ -543,9 +543,12 @@ only, so it is refused, recording nothing, when the copy holds a path no
 commit records (a changed, new, staged or deleted file, one git ignores
 included, each named), a stash, or anything HEAD does not carry that the
 default branch lacks: a commit on another branch, one only a reflog
-records (an amended or rebased-away commit among them), or a tag. Put that
-work on the branch, or remove it (`git reflog expire` for a reflog's
-record), and answer again. It is refused for an investigation's copy too,
+records (an amended or rebased-away commit among them), or a tag the
+upstream does not have. What the upstream already holds (its tags and
+branches, cloned or fetched into the copy) is not refused, and neither is
+a file git reports clean because only its line endings or filters differ.
+Put that work on the branch, or remove it (`git reflog expire` for a
+reflog's record), and answer again. It is refused for an investigation's copy too,
 whose delivery is a promotion. The entry stays open and listed until the
 run has started, and only then is it answered land; if the run cannot be
 started, the answer is refused naming why and the entry stays open for
@@ -578,14 +581,19 @@ or discard it.
 
 Discard, `--answer discard` with the same flags, is given twice. Alone it
 shows exactly what removing the copy would lose, in the structured answer
-(`--json`): the commits the default branch lacks that anything in the
-copy names, a commit reset away, one only `ORIG_HEAD` or an old reflog
-entry still records, and every stash included, and any tag, tree or blob
-a reference or a reflog entry points at directly (for a run's copy, only
-what removing its worktree destroys: the gate's branches, its stash and
-their reflogs stay, so they are not listed); every file
+(`--json`): what exists nowhere removing it leaves intact. That is the
+commits anything in the copy names that neither the default branch nor
+the upstream holds, a commit reset away, one only `ORIG_HEAD` or an old
+reflog entry still records, and every stash included, and any tag, tree
+or blob a reference or a reflog entry points at directly that the
+upstream does not have; what the upstream advertises, and what the copy's
+remote-tracking branches name, is held and not listed (for a run's copy,
+only what removing its worktree destroys: the gate's branches and their
+reflogs stay, so they are not listed, but the stash entries made in that
+worktree are); every file
 removing the copy destroys whose content or deletion nothing else holds,
-files git ignores included, each with why (`changed`, `new`, `staged`, `deleted` for
+as git would store it, so a file git reports clean is not listed though
+its line endings differ, and files git ignores included, each with why (`changed`, `new`, `staged`, `deleted` for
 a file the copy deleted, staged or not, or `repository` for a
 file of the copy's repository directory, a hook or its configuration
 among them, that differs from what git writes into every new repository),

@@ -33,18 +33,25 @@ import (
 //
 // # What would be lost
 //
-// Loss is what the copy holds that is nowhere safe as far as this program
-// can see, read from the copy as it stands when it is shown. Only what the
-// removal destroys counts: a task's clone is removed whole, while a run's
-// worktree is removed from a gate that stands after it, with every
-// reference the worktree shares with the gate, the stash among them, and
-// every reflog those keep. So it is the commits that anything the removal
-// destroys names reaches, HEAD, a reference, a root reference such as
-// ORIG_HEAD, or a reflog entry by the value it moved to or the one it moved
-// from (reflogValues), a commit reset away and a task's clone's every stash
-// among them, and that the default branch, read fresh as Keep reads it,
-// lacks, with every object such a name or value records that is not a
-// commit (lostFrom), all decided by git from the copy's own objects; every
+// Loss is what the copy holds that exists nowhere its removal leaves
+// intact, as far as this program can see, read from the copy as it stands
+// when it is shown. Only what the removal destroys counts: a task's clone
+// is removed whole, while a run's worktree is removed from a gate that
+// stands after it, with every reference the worktree shares with the gate
+// and every reflog those keep; the stash it shares is the gate's too, but
+// the entries the worktree made in it are its work, which nothing will
+// name once it is gone, so those count (ownStash). So it is the commits
+// that anything the removal destroys names reaches, HEAD, a reference, a
+// root reference such as ORIG_HEAD, or a reflog entry by the value it moved
+// to or the one it moved from (reflogValues), a commit reset away and a
+// stash among them, that nothing held reaches, with every object such a
+// name or value records that is not a commit and is not itself held
+// (lostFrom), all decided by git from the copy's own objects. Held is the
+// default branch, read fresh as Keep reads it; every object the copy names
+// that the upstream advertises now, compared by identifier, a tag cloned
+// with the copy and a branch the upstream also has among them; and every
+// remote-tracking reference the copy holds, which records a remote's own
+// branches. And every
 // path the removal destroys whose content or deletion nothing else holds, a
 // file git ignores and a deletion git has not staged among them, decided
 // from what the copy holds on lostPaths' terms (kept_lost.go); and the
@@ -91,8 +98,10 @@ import (
 // FETCH_HEAD and MERGE_HEAD, which git lists as no reference, and the state
 // of an operation in progress (a rebase's or a sequencer's directory); each
 // is shown as a repository path, its file and not the commits it names. A
-// tree, a blob or an annotated tag a name or a reflog value records is
-// listed whatever else holds it, which fails toward showing; one git's walk
+// tree or a blob a name or a reflog value records is listed whatever else
+// holds it unless the upstream advertises it, and so is an annotated tag
+// the upstream does not advertise, the person's checkout's own tags cloned
+// with the copy among them, which fails toward showing; one git's walk
 // of the reflogs leaves out because a commit or tree it lists holds it is
 // held by that commit or tree, which is listed or which the default branch
 // holds (vcs.ReflogValues). Every value is passed to
@@ -101,7 +110,18 @@ import (
 // rather than showing less. And git's own
 // maintenance, which a fetch may start, can expire the one reflog entry
 // that keeps a commit shown in the copy, which refuses the confirmation the
-// same way: each of these fails toward keeping.
+// same way: each of these fails toward keeping. What is held is taken as
+// held without asking more of it: a remote-tracking reference is the
+// copy's record of the remote at its last fetch, so a branch the remote
+// has since deleted or moved, or a reference written there by hand, holds
+// what it names though nothing outside the copy may; and a commit shown
+// as lost that the upstream took up afterwards through a name the copy no
+// longer holds reads as gone, which refuses the confirmation. A stash entry
+// records no worktree, so a run's own entries are the ones made on its
+// HEAD or on a commit its own reflogs record: one another worktree made on
+// the same commit is shown as this one's, and one this worktree made on a
+// commit its reflogs no longer record is not shown, nor destroyed, since
+// the gate's stash stands.
 //
 // # The removal
 //
@@ -127,23 +147,25 @@ type Loss struct {
 	// Head is the commit the copy's HEAD stands on.
 	Head string
 	// Lacks is the commits the default branch lacks that anything the
-	// removal destroys names reaches (lostFrom), read from the copy as it
-	// stands, never the entry's record of it when it was kept: for a
+	// removal destroys names reaches and nothing held reaches (lostFrom),
+	// read from the copy as it stands, never the entry's record of it when
+	// it was kept: for a
 	// task's clone HEAD, every reference, every worktree's HEAD, its root
 	// references and every reflog entry by both its values, the stash list
 	// whole among them; for a run's worktree HEAD, its own references and
 	// root references, and the values of the reflogs git reads for it alone
 	// less the ones the gate's own reflogs record, which stand after the
-	// removal, so never the gate's stash. It is wider than what Keep
-	// records, which leaves the stash and the reflogs out.
+	// removal, and the stash entries it made (ownStash), never another
+	// worktree's. It is wider than what Keep records, which leaves the
+	// stash and the reflogs out.
 	Lacks []string
 	// Dirty, Untracked and Stash are the inventory's indicators of the copy
 	// as it stands now, as git reports them: a tracked change, a file no
 	// commit records that git does not ignore, and a stash, none of which a
-	// commit the default branch could lack records. Stash is never set for
-	// a run's worktree, whose stash is the gate's and stands after the
-	// removal. Files names every path they speak of, and the ignored ones
-	// they do not.
+	// commit the default branch could lack records. For a run's worktree,
+	// whose stash is the gate's, Stash is whether it made an entry of it
+	// (ownStash). Files names every path they speak of, and the ignored
+	// ones they do not.
 	Dirty, Untracked, Stash bool
 	// Files is every path the removal destroys whose content or deletion
 	// nothing else holds, decided from what the copy holds (lostPaths), in
@@ -176,9 +198,9 @@ type LostPath struct {
 // not a commit: its identifier, its type as git records it (tag, tree or
 // blob), and every name the removal destroys that points at it, HEAD, a
 // reference's full name, a root reference's name such as AUTO_MERGE, or a
-// reflog entry as ref@{n}. It is listed
-// whatever else holds it, failing toward showing: an annotated tag the
-// upstream holds under its own name too is listed all the same.
+// reflog entry as ref@{n}. One the upstream advertises, or a
+// remote-tracking reference names, is held and not listed; any other is
+// listed whatever else holds it, failing toward showing.
 type LostObject struct {
 	Object string
 	Type   string
@@ -292,17 +314,37 @@ func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, shown []string
 	if err != nil {
 		return Loss{}, nil, err
 	}
+	// A task's clone's stash is its own and goes with it, as its reflog
+	// values and its indicator. A run's worktree shares the gate's, which
+	// stands after the removal, so only the entries the worktree made
+	// count: those are its work, and nothing else will ever name them.
+	stash := inv.Stash
+	if !entry.TaskID.IsKnown() {
+		own, err := ownStash(ctx, entry, copied, inv.Head.Commit, values)
+		if err != nil {
+			return Loss{}, nil, err
+		}
+		for _, e := range own {
+			named.add(e.Object, e.Ref+"@{"+strconv.Itoa(e.Index)+"}")
+		}
+		stash = len(own) > 0
+	}
+	var remotes []string
+	for _, ref := range refs {
+		if strings.HasPrefix(ref.Name, "refs/remotes/") {
+			remotes = append(remotes, ref.Object)
+		}
+	}
 	// Besides every name read, every value a reflog the removal destroys
 	// records, and for a task's clone, removed whole, every reference and
 	// every worktree's HEAD as git walks them.
-	reach := vcs.Reach{Objects: append(named.objects, values...), Refs: entry.TaskID.IsKnown()}
-	held, others, gone := lostFrom(ctx, l, reach, shown)
+	objects := append(slices.Clone(named.objects), values...)
+	reach := vcs.Reach{Objects: objects, Refs: entry.TaskID.IsKnown()}
+	held, others, gone := lostFrom(ctx, l, reach, objects, remotes, shown)
 	if !held.established() {
 		return Loss{}, nil, fmt.Errorf("%w: %s", ErrLossUnestablished, held.unestablished)
 	}
-	// A run's worktree's stash is the gate's, which its removal leaves
-	// standing, so it is not shown.
-	loss := Loss{Head: inv.Head.Commit, Lacks: held.lacks, Dirty: inv.Dirty, Untracked: inv.Untracked, Stash: inv.Stash && entry.TaskID.IsKnown()}
+	loss := Loss{Head: inv.Head.Commit, Lacks: held.lacks, Dirty: inv.Dirty, Untracked: inv.Untracked, Stash: stash}
 	for _, object := range others {
 		kind, err := copied.ObjectType(ctx, object)
 		if err != nil {
@@ -371,20 +413,58 @@ type names struct {
 
 func namesOf(head string, refs []vcs.Ref, logs []vcs.ReflogEntry) names {
 	n := names{names: map[string][]string{}}
-	add := func(object, name string) {
-		if _, ok := n.names[object]; !ok {
-			n.objects = append(n.objects, object)
-		}
-		n.names[object] = append(n.names[object], name)
-	}
-	add(head, "HEAD")
+	n.add(head, "HEAD")
 	for _, ref := range refs {
-		add(ref.Object, ref.Name)
+		n.add(ref.Object, ref.Name)
 	}
 	for _, l := range logs {
-		add(l.Object, l.Ref+"@{"+strconv.Itoa(l.Index)+"}")
+		n.add(l.Object, l.Ref+"@{"+strconv.Itoa(l.Index)+"}")
 	}
 	return n
+}
+
+// add names object, once among the objects, with name among its names.
+func (n *names) add(object, name string) {
+	if _, ok := n.names[object]; !ok {
+		n.objects = append(n.objects, object)
+	}
+	n.names[object] = append(n.names[object], name)
+}
+
+// ownStash is, for a run's worktree, the entries of the stash it shares
+// with the gate that it made: each whose base, the commit the stash was
+// made on (its first parent), is the worktree's HEAD or a value its own
+// reflogs record (mine, reflogValues' for a run). git records no worktree
+// on a stash entry, so this is the closest the stash says: an entry another
+// worktree made on the same commit is taken for this one's, which fails
+// toward showing, and one this worktree made on a commit its reflogs no
+// longer record is not.
+func ownStash(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, head string, mine []string) ([]vcs.ReflogEntry, error) {
+	fail := func(err error) ([]vcs.ReflogEntry, error) {
+		return nil, fmt.Errorf("tasks: reading the stash the kept copy at %s shares: %w", entry.CopyPath, err)
+	}
+	standing, err := copied.ListRefs(ctx, "refs/stash")
+	if err != nil {
+		return fail(err)
+	}
+	if !slices.ContainsFunc(standing, func(ref vcs.Ref) bool { return ref.Name == "refs/stash" }) {
+		return nil, nil
+	}
+	entries, err := copied.Reflogs(ctx, "refs/stash")
+	if err != nil {
+		return fail(err)
+	}
+	var own []vcs.ReflogEntry
+	for _, e := range entries {
+		base, err := copied.ResolveCommit(ctx, e.Object+"^1")
+		if err != nil {
+			return fail(err)
+		}
+		if base == head || slices.Contains(mine, base) {
+			own = append(own, e)
+		}
+	}
+	return own, nil
 }
 
 // gitDirShownAsObjects is the entries of a repository directory that
@@ -403,7 +483,8 @@ var gitDirShownAsObjects = []string{"objects", "refs", "packed-refs", "logs", "r
 // runWorktreeRefs is the references a run's worktree holds of its own,
 // which the discard's removal of the worktree takes with it. Everything
 // else a run's worktree reads is the gate's, shared with every other run
-// and left standing by the removal, a stash made there among it.
+// and left standing by the removal, the stash among it, whose entries the
+// worktree made are read on their own (ownStash).
 var runWorktreeRefs = []string{"refs/worktree/", "refs/bisect/", "refs/rewritten/"}
 
 // reflogValues is every value a reflog the removal destroys records, by
@@ -485,6 +566,9 @@ func copyFiles(ctx context.Context, entry store.KeptWork, copied *vcs.Repository
 	}
 	if err := walkTree(obs.GitDir, shownAsObjects, lost.repository(fresh)); err != nil {
 		return nil, fmt.Errorf("tasks: reading the repository directory of the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	if err := lost.stored(ctx); err != nil {
+		return nil, fmt.Errorf("tasks: reading what git would store for the files of the kept copy at %s: %w", entry.CopyPath, err)
 	}
 	return lost.list(), nil
 }

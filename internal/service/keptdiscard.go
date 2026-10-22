@@ -21,14 +21,17 @@ import (
 //
 // # What is shown, and what is confirmed
 //
-// internal/tasks' Loss reads what would be lost from the copy now: the
-// commits the default branch, read fresh, lacks that anything the removal
-// destroys names (a reference, a root reference such as ORIG_HEAD, a
-// reflog entry by either of its values, or HEAD; for a run's worktree never
-// the gate's shared references, stash or reflogs, which stand after it),
-// with every tag, tree or blob such a name or value records, every path whose content or deletion nothing else holds,
-// ignored files and deletions included, and the three indicators git
-// reports, with a digest over exactly what is shown, each path by what it
+// internal/tasks' Loss reads what would be lost from the copy now, what
+// exists nowhere the removal leaves intact: the commits that anything the
+// removal destroys names reaches (a reference, a root reference such as
+// ORIG_HEAD, a reflog entry by either of its values, or HEAD; for a run's
+// worktree never the gate's shared references or reflogs, which stand
+// after it, but the stash entries it made) and that neither the default
+// branch, read fresh, nor what the upstream advertises, nor a
+// remote-tracking reference reaches, with every tag, tree or blob such a
+// name or value records that none of those is, every path whose content
+// or deletion nothing else holds, as git would store it, ignored files and
+// deletions included, and the three indicators git reports, with a digest over exactly what is shown, each path by what it
 // holds. A default branch that cannot be read now is refused rather than
 // shown a list that may overstate or understate, naming why. A discard
 // given a digest is compared against that read again: a copy in which

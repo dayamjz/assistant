@@ -310,28 +310,39 @@ func keptDefaultTip(ctx context.Context, l landing) (string, string) {
 	return tip, ""
 }
 
-// lostFrom is what a discard of the copy loses that the default branch
-// lacks, decided from the copy's own objects and from everything that names
-// one in what the removal destroys (reach, as Loss composes it) rather than
-// from the references Keep reads: the commits any of it reaches that the
-// default branch does not, a commit only a reflog entry's previous value, a
-// root reference such as ORIG_HEAD or the stash records among them, and
-// every object reach names that is not a commit, a reflog's value of any
-// type among them (vcs.NotReachedFrom). The
-// default branch is read on lacking's terms, and any step that fails leaves
-// it unestablished. gone is, of shown, the commits a discard was shown as
-// lost that are neither among them now nor held by the default branch: a
-// commit the copy no longer holds, which is a change to what was shown.
-func lostFrom(ctx context.Context, l landing, reach vcs.Reach, shown []string) (lost held, others, gone []string) {
+// lostFrom is what a discard of the copy loses: what exists nowhere the
+// removal leaves intact as far as this program can see, decided from the
+// copy's own objects and from everything that names one in what the
+// removal destroys (reach, as Loss composes it) rather than from the
+// references Keep reads. It is the commits any of it reaches that neither
+// the default branch nor anything the upstream holds reaches, a commit
+// only a reflog entry's previous value, a root reference such as
+// ORIG_HEAD or the stash records among them, and every object reach names
+// that is not a commit and is not itself held, a reflog's value of any
+// type among them (vcs.NotReachedFrom). The default branch is read on
+// lacking's terms. What the upstream holds is held (upstreamHeld): every
+// object named, of names, that the upstream advertises now, by identity,
+// an annotated tag cloned with the copy and a branch the upstream also
+// has among them, with everything it reaches; and every object remotes
+// names, the copy's remote-tracking references, which record the
+// upstream's own branches. Any read that fails leaves it unestablished.
+// gone is, of shown, the commits a discard was shown as lost that are
+// neither among them now nor held: a commit the copy no longer holds,
+// which is a change to what was shown.
+func lostFrom(ctx context.Context, l landing, reach vcs.Reach, names, remotes, shown []string) (lost held, others, gone []string) {
 	defer l.forget(ctx)
 	tip, detail := keptDefaultTip(ctx, l)
 	if detail != "" {
 		return held{unestablished: detail}, nil, nil
 	}
-	commits, others, err := l.repo.NotReachedFrom(ctx, reach, tip)
+	holding, detail := upstreamHeld(ctx, l, names, remotes)
+	if detail != "" {
+		return held{unestablished: detail}, nil, nil
+	}
+	commits, others, err := l.repo.NotReachedFrom(ctx, reach, tip, holding...)
 	if err != nil {
 		return held{unestablished: "which commits and objects the copy's names hold that the default branch at " + tip +
-			" lacks could not be read: " + err.Error()}, nil, nil
+			" and the upstream lack could not be read: " + err.Error()}, nil, nil
 	}
 	if commits == nil {
 		commits = []string{}
@@ -344,12 +355,55 @@ func lostFrom(ctx context.Context, l landing, reach vcs.Reach, shown []string) (
 		switch {
 		case errors.Is(err, vcs.ErrRefNotFound):
 			gone = append(gone, c)
+			continue
 		case err != nil:
 			return held{unestablished: "whether the default branch at " + tip + " holds " + c + ", shown as lost, could not be read: " +
 				err.Error()}, nil, nil
-		case !taken:
+		case taken:
+			continue
+		}
+		left, _, err := l.repo.NotReachedFrom(ctx, vcs.Reach{Objects: []string{c}}, tip, holding...)
+		if err != nil {
+			return held{unestablished: "whether the upstream holds " + c + ", shown as lost, could not be read: " + err.Error()}, nil, nil
+		}
+		if slices.Contains(left, c) {
 			gone = append(gone, c)
 		}
 	}
 	return held{lacks: commits, against: tip}, others, gone
+}
+
+// upstreamHeld is what lostFrom takes as held beside the default branch:
+// every object of names the upstream advertises now, as an object a
+// reference points at or as the commit an annotated tag it advertises
+// peels to, compared by identifier, so a tag or a branch the copy holds
+// that the upstream holds too, unchanged, is held and one the upstream
+// does not hold or holds at another object is not; and every object of
+// remotes, each once. names is objects the copy holds, so every one
+// returned is one the copy's walk can exclude. Or why the upstream could
+// not be read.
+func upstreamHeld(ctx context.Context, l landing, names, remotes []string) ([]string, string) {
+	advertised, err := l.repo.RemoteRefs(ctx, l.upstream)
+	if err != nil {
+		return nil, "the references the upstream holds could not be read: " + err.Error()
+	}
+	upstream := map[string]bool{}
+	for _, ref := range advertised {
+		upstream[ref.Object], upstream[ref.Commit] = true, true
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, object := range remotes {
+		if !seen[object] {
+			seen[object] = true
+			out = append(out, object)
+		}
+	}
+	for _, object := range names {
+		if upstream[object] && !seen[object] {
+			seen[object] = true
+			out = append(out, object)
+		}
+	}
+	return out, ""
 }

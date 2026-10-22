@@ -176,20 +176,23 @@ func (r *Repository) ReflogValues(ctx context.Context, thisWorktree bool) ([]str
 	return values, nil
 }
 
-// NotReachedFrom returns what reach holds that incorporated does not,
-// decided by git from this repository's own objects: the commits reach
-// reaches that incorporated does not, as git rev-list lists them, most
-// recent first, a tag followed to the commit it points at; and every object
-// in Objects that is not a commit, an annotated tag, a tree or a blob, in
-// Objects' order, whatever incorporated holds, so a tree or blob named is
-// listed even when a commit of incorporated holds the same one: the answer
-// fails toward listing. incorporated is anything that names a commit. It is
-// git rev-list <reach> ^incorporated for the commits and git rev-list
-// --no-walk <Objects> for which of Objects are commits. Refs reaches
-// commits alone: a reference pointing at anything else is named in Objects
-// to be listed. An object named that the repository does not hold is an
-// error, never an empty answer.
-func (r *Repository) NotReachedFrom(ctx context.Context, reach Reach, incorporated string) (commits, others []string, err error) {
+// NotReachedFrom returns what reach holds that incorporated and held do
+// not, decided by git from this repository's own objects: the commits reach
+// reaches that neither incorporated nor any of held reaches, as git
+// rev-list lists them, most recent first, a tag followed to the commit it
+// points at; and every object in Objects that is not a commit, an annotated
+// tag, a tree or a blob, in Objects' order, that is not itself one of held,
+// whatever else holds it, so a tree or blob named is listed even when a
+// commit of incorporated holds the same one: the answer fails toward
+// listing. incorporated is anything that names a commit; held is object
+// identifiers this repository holds, of any type, and one that is not a
+// commit and does not peel to one holds nothing but itself. It is git
+// rev-list <reach> ^incorporated ^<each of held> for the commits and git
+// rev-list --no-walk <Objects> for which of Objects are commits. Refs
+// reaches commits alone: a reference pointing at anything else is named in
+// Objects to be listed. An object named, in reach or in held, that the
+// repository does not hold is an error, never an empty answer.
+func (r *Repository) NotReachedFrom(ctx context.Context, reach Reach, incorporated string, held ...string) (commits, others []string, err error) {
 	i, err := r.ResolveCommit(ctx, incorporated)
 	if err != nil {
 		return nil, nil, err
@@ -198,10 +201,19 @@ func (r *Repository) NotReachedFrom(ctx context.Context, reach Reach, incorporat
 	if err != nil {
 		return nil, nil, err
 	}
+	for _, object := range held {
+		if err := checkArg("object", object); err != nil {
+			return nil, nil, err
+		}
+	}
 	if !reach.Refs && len(reach.Objects) == 0 {
 		return nil, nil, nil
 	}
-	out, err := r.run(ctx, "commits-not-reached", append(append([]string{"rev-list"}, from...), "^"+i)...)
+	walk := append(append([]string{"rev-list"}, from...), "^"+i)
+	for _, object := range held {
+		walk = append(walk, "^"+object)
+	}
+	out, err := r.run(ctx, "commits-not-reached", walk...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -217,11 +229,47 @@ func (r *Repository) NotReachedFrom(ctx context.Context, reach Reach, incorporat
 	}
 	areCommits := strings.Fields(string(out))
 	for _, object := range reach.Objects {
-		if !slices.Contains(areCommits, object) && !slices.Contains(others, object) {
+		if !slices.Contains(areCommits, object) && !slices.Contains(held, object) && !slices.Contains(others, object) {
 			others = append(others, object)
 		}
 	}
 	return commits, others, nil
+}
+
+// StoredObjects returns, for each of paths in this working copy, relative
+// to its root, the identifier of the blob git would store for the file
+// there now, in paths' order: its content as git hash-object computes it
+// without writing, with the clean filters, the line-ending conversion and
+// the working-tree encoding its attributes and configuration name applied,
+// so a file git checked out converted reads as the blob it was checked out
+// from. That runs any clean filter a configuration names, as git status
+// does when it rehashes a file. A path holding no regular file, and one
+// whose filter fails, is an error. The paths go to git on its command
+// line, a bounded number at a time.
+func (r *Repository) StoredObjects(ctx context.Context, paths []string) ([]string, error) {
+	if r.kind != KindWorktree {
+		return nil, &openError{path: r.path, kind: KindWorktree}
+	}
+	const batch = 256
+	var objects []string
+	for start := 0; start < len(paths); start += batch {
+		chunk := paths[start:min(start+batch, len(paths))]
+		for _, path := range chunk {
+			if path == "" || strings.ContainsAny(path, "\x00\n") {
+				return nil, &argumentError{what: "path", value: path, reason: "must be non-empty and hold no NUL byte or newline"}
+			}
+		}
+		out, err := r.run(ctx, "stored-objects", append([]string{"hash-object", "--"}, chunk...)...)
+		if err != nil {
+			return nil, err
+		}
+		got := strings.Fields(string(out))
+		if len(got) != len(chunk) {
+			return nil, &outputError{op: "stored-objects", detail: fmt.Sprintf("%d identifiers for %d paths", len(got), len(chunk))}
+		}
+		objects = append(objects, got...)
+	}
+	return objects, nil
 }
 
 // NotHeldBy returns, of objects, each once and in their order, the ones the

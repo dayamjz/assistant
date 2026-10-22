@@ -51,15 +51,19 @@ import (
 // ignores among them, since a push carries commits and nothing else and
 // committing a person's uncommitted work is not this answer's to decide;
 // when it shows one of git's indicators, a tracked change, an untracked
-// file or a task's clone's stash; and when it shows a commit the default
-// branch lacks that HEAD does not reach, or another object HEAD's history
-// does not hold (leftBehind): a commit on another reference, in a stash
-// or recorded only by a reflog entry's either value, a commit amended or
-// rebased away among them, and an annotated tag, which a landing never
-// carries. A default branch that cannot be read now refuses it as not
-// established. A run's worktree is read as a discard reads it, so the
-// gate's references, reflogs and stash, which stand after it, refuse
-// nothing.
+// file or a stash, a run's own entries of the gate's; and when it shows a
+// commit lost that HEAD does not reach, or another object lost that HEAD's
+// history does not hold (leftBehind): a commit on another reference, in a
+// stash or recorded only by a reflog entry's either value, a commit amended
+// or rebased away among them, and an annotated tag only the copy holds,
+// which a landing never carries. Nothing Loss takes as held refuses it, so
+// what the upstream holds, a tag or a branch cloned with the copy among
+// it, and what a remote-tracking reference names, is not left behind; nor
+// is a file git reports clean whose bytes its line-ending conversion or
+// filters changed. A default branch or an upstream that cannot be read now
+// refuses it as not established. A run's worktree is read as a discard
+// reads it, so the gate's references and reflogs, and another worktree's
+// stash entries, which stand after it, refuse nothing.
 //
 // What the check does not cover, and what that costs. The entries of the
 // repository directory Loss shows (LostRepository: the configuration, a
@@ -67,13 +71,11 @@ import (
 // every clone holds some that differ from a new repository's and a
 // landing would then refuse every copy; a hook or a configuration of the
 // person's own is not carried and is not named. Loss lists what fails
-// toward showing, so the refusal does too: an annotated tag or a commit
-// the copy holds through a name the upstream also advertises, a release
-// tag cloned from the person's checkout among them, refuses a landing as
-// work left behind although the upstream holds it, and so does a commit
-// only a reflog records though the copy's own branch carries what
-// replaced it; the person expires the record or removes the name and
-// answers again, or lands by hand. And the moment between the check and
+// toward showing, so the refusal does too: a commit only a reflog records
+// refuses a landing though the copy's own branch carries what replaced
+// it, and so does a tag of the person's checkout the upstream does not
+// have, cloned with the copy; the person expires the record or removes
+// the name and answers again, or lands by hand. And the moment between the check and
 // the fetch of HEAD's commit is not closed: what the copy gains in it is
 // neither carried nor named, and the landing carries the commit the check
 // read, by its identifier, whatever HEAD names by then.

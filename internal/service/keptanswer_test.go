@@ -664,6 +664,187 @@ func TestALandingRefusesAFileGitIgnores(t *testing.T) {
 	})
 }
 
+// onUpstreamMain commits a file on the subject's main and pushes it, so
+// the upstream's default branch holds it, leaving the subject on work.
+func onUpstreamMain(t *testing.T, subject string, setup func()) {
+	t.Helper()
+	git(t, subject, "checkout", "--quiet", "main")
+	setup()
+	git(t, subject, "push", "--quiet", "origin", "main")
+	git(t, subject, "checkout", "--quiet", "work")
+}
+
+// landsAt fails unless landing the entry starts a run at commit.
+func landsAt(t *testing.T, h *home.Home, task string, entry store.KeptWork, commit string) {
+	t.Helper()
+	withService(t, h, func(under serviceUnderTest) {
+		out, err := landTask(under, t, task, entry)
+		if err != nil || out.Run == "" {
+			t.Fatalf("landing the copy = %+v, %v; want a run", out, err)
+		}
+		if run, err := recordsOf(t, h).Run(t.Context(), out.Run); err != nil || run.SubmittedHead != commit {
+			t.Fatalf("the landing's run reads %+v, %v; want it at %s", run, err, commit)
+		}
+	})
+}
+
+// Anything the upstream holds is held, the reviewer's first sequence: the
+// upstream's default branch carries an annotated tag, v1, which a delivery
+// task's clone takes with it, and the clone holds nothing else but the
+// task's own commit on its branch. The landing is not refused for the tag:
+// the upstream holds that very tag object, so it exists where the copy's
+// removal leaves it, and a push of the branch carries everything else. A
+// tag only the copy holds is still refused
+// (TestALandingRefusesWorkTheCopyGainedSinceItWasKept). Without the
+// upstream's tags read as held every clone of a tagged repository is
+// refused naming them.
+func TestALandingTakesATagTheUpstreamHoldsAsHeld(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	onUpstreamMain(t, subject, func() { git(t, subject, "tag", "--annotate", "--message", "release one", "v1") })
+	git(t, subject, "push", "--quiet", "origin", "v1")
+	id, copyPath, own, entry := plantKeptDelivery(t, h, repository, "task/kept")
+	if tag := git(t, copyPath, "cat-file", "-t", "v1"); tag != "tag" {
+		t.Fatalf("the clone's v1 is a %s; want the upstream's annotated tag", tag)
+	}
+	landsAt(t, h, id, entry, own)
+}
+
+// Commits only the upstream's other branches reach are the upstream's, the
+// reviewer's second sequence: the upstream has main and feature, feature
+// one commit past main, and a delivery task's clone of it holds feature as
+// a remote-tracking reference beside its own commit on its branch, with
+// nothing uncommitted. The landing is not refused for feature's commit,
+// which the upstream holds. A side commit only the copy holds is still
+// refused (TestALandingRefusesWorkTheCopyGainedSinceItWasKept). Without
+// the remote-tracking references read as held the landing is refused
+// naming feature's commit.
+func TestALandingTakesTheUpstreamsOtherBranchesAsHeld(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	git(t, subject, "checkout", "--quiet", "-b", "feature", "main")
+	if err := writeFile(filepath.Join(subject, "feature.txt"), "the upstream's other work\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, subject, "add", "-A")
+	git(t, subject, "commit", "--quiet", "-m", "the upstream's other branch")
+	feature := git(t, subject, "rev-parse", "HEAD")
+	git(t, subject, "push", "--quiet", "origin", "feature")
+	git(t, subject, "checkout", "--quiet", "work")
+	id, copyPath, own, entry := plantKeptDelivery(t, h, repository, "task/kept")
+	if at := git(t, copyPath, "rev-parse", "refs/remotes/origin/feature"); at != feature {
+		t.Fatalf("the clone's origin/feature is at %s; want %s", at, feature)
+	}
+	landsAt(t, h, id, entry, own)
+}
+
+// A path is clean or changed as git stores it, the reviewer's third
+// sequence: the upstream's default branch holds a.bat under a
+// .gitattributes that checks it out with CRLF line endings, so the clone's
+// bytes differ from the stored blob while git reports the copy clean. The
+// landing is not refused for a.bat, whose content as git would store it is
+// HEAD's. An edit to a.bat is still refused, naming it, and with the edit
+// checked out again the copy lands. Without the comparison through git's
+// conversion the clean file is refused as changed, for good, since every
+// checkout writes the converted bytes again.
+func TestALandingTakesAFileGitStoresAsHEADsAsClean(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	onUpstreamMain(t, subject, func() {
+		if err := writeFile(filepath.Join(subject, ".gitattributes"), "*.bat text eol=crlf\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeFile(filepath.Join(subject, "a.bat"), "echo one\necho two\n"); err != nil {
+			t.Fatal(err)
+		}
+		git(t, subject, "add", "-A")
+		git(t, subject, "commit", "--quiet", "-m", "a script checked out with CRLF")
+	})
+	id, copyPath, own, entry := plantKeptDelivery(t, h, repository, "task/kept")
+	raw, err := os.ReadFile(filepath.Join(copyPath, "a.bat"))
+	if err != nil || !strings.Contains(string(raw), "\r\n") {
+		t.Fatalf("the clone's a.bat reads %q, %v; want it checked out with CRLF", raw, err)
+	}
+	if status := git(t, copyPath, "status", "--porcelain"); status != "" {
+		t.Fatalf("git reports %q in the copy; want it clean", status)
+	}
+
+	if err := writeFile(filepath.Join(copyPath, "a.bat"), "echo one\r\necho changed\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	withService(t, h, func(under serviceUnderTest) {
+		if out, err := landTask(under, t, id, entry); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "changed a.bat") {
+			t.Fatalf("landing a copy whose a.bat was edited = %+v, %v; want it refused naming a.bat", out, err)
+		}
+	})
+	git(t, copyPath, "checkout", "--", "a.bat")
+	landsAt(t, h, id, entry, own)
+}
+
+// A run's own stash is lost with its worktree and never carried, the
+// reviewer's fourth sequence: a run's kept worktree has an edit stashed in
+// it, so the worktree is clean and the stash is the gate's shared one. The
+// landing is refused naming the stash and records nothing; with the entry
+// dropped the copy lands. Without the run's own stash entries read the
+// landing starts at HEAD and the stashed edit never reaches validation.
+func TestALandingRefusesARunsOwnStash(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	submitted := git(t, subject, "rev-parse", "HEAD")
+	entry := keptEntryOf(t, h, subject)
+	if err := writeFile(filepath.Join(entry.CopyPath, "file.txt"), "an edit stashed in the run's worktree\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "stash", "push", "--quiet", "-m", "the run's own edit")
+	if status := git(t, entry.CopyPath, "status", "--porcelain"); status != "" {
+		t.Fatalf("git reports %q in the worktree; want it clean, the edit stashed", status)
+	}
+	land := func(under serviceUnderTest) (machine.KeptWorkAnswered, error) {
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+			Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptLand)}, &out)
+		return out, err
+	}
+	withService(t, h, func(under serviceUnderTest) {
+		if out, err := land(under); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "stash") {
+			t.Fatalf("landing a run's copy with its edit stashed = %+v, %v; want it refused naming the stash", out, err)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() || still.LandingClaimed() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open and unclaimed", still, err)
+		}
+	})
+	git(t, entry.CopyPath, "stash", "drop", "--quiet")
+	withService(t, h, func(under serviceUnderTest) {
+		out, err := land(under)
+		if err != nil || out.Run == "" {
+			t.Fatalf("landing the run's copy with the stash dropped = %+v, %v; want a run", out, err)
+		}
+		if run, err := recordsOf(t, h).Run(t.Context(), out.Run); err != nil || run.SubmittedHead != submitted {
+			t.Fatalf("the landing's run reads %+v, %v; want it at %s", run, err, submitted)
+		}
+	})
+}
+
 // Two land answers to one entry start one run between them: both are made
 // at once, each ends as the run named or as refused while the other was
 // landing, the entry names exactly one run, the repository has exactly one

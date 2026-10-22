@@ -728,17 +728,21 @@ func hashObject(t *testing.T, dir, content string) string {
 	return git(t, dir, "hash-object", "-w", path)
 }
 
-// A run's discard counts only what removing its worktree destroys, the
-// reviewer's sequence on e484e92: the discard of a kept run's worktree is
-// shown, then a branch keeping a reflog is made in the gate the worktree
-// belongs to, at a commit the default branch lacks, and an edit is stashed
-// in the worktree, which stores it in the gate's stash. The branch, the
-// stash and their reflogs are the gate's, which the removal leaves
-// standing, so the copy shown again lists neither commit nor a stash and
-// digests as shown, and the confirmation shown before removes the worktree,
-// leaving both. Without the names scoped to the
-// worktree, the shared reflog is read as the worktree's, the commit is
-// listed as lost and the confirmation is refused.
+// A run's discard counts only what removing its worktree destroys, and its
+// own stash, the reviewers' sequences on e484e92 and 5e99360: the discard
+// of a kept run's worktree is shown, then a branch keeping a reflog is
+// made in the gate the worktree belongs to, at a commit the default branch
+// lacks, and an edit is stashed in a second worktree of the gate standing
+// on that commit, which stores it in the gate's shared stash. Those are
+// the gate's, which the removal leaves standing, so the copy shown again
+// lists neither commit nor a stash and digests as shown. An edit stashed
+// in the run's own worktree is its work, which nothing will name once the
+// worktree is gone, so the copy shown then lists that stash commit, reads
+// Stash, and refuses the first confirmation as changed; with it dropped,
+// the first confirmation removes the worktree and leaves the gate's branch
+// and the other worktree's stash standing. Without the names scoped to the
+// worktree the gate's commit is listed and the confirmation refused;
+// without the run's own stash read, the stashed edit is destroyed unshown.
 func TestARunsDiscardCountsOnlyWhatItsRemovalDestroys(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -759,19 +763,48 @@ func TestARunsDiscardCountsOnlyWhatItsRemovalDestroys(t *testing.T) {
 		head := git(t, entry.CopyPath, "rev-parse", "HEAD")
 		side := git(t, gate, "commit-tree", "-p", head, "-m", "a branch of the gate's own", head+"^{tree}")
 		git(t, gate, "update-ref", "--create-reflog", "refs/heads/gate-side", side)
-		// A stash made in the worktree is the gate's too.
+		// A stash made in another worktree of the gate, on the gate's own
+		// commit, is the gate's.
+		other := filepath.Join(t.TempDir(), "other")
+		git(t, gate, "worktree", "add", "--quiet", "--detach", other, side)
 		tracked := strings.Fields(git(t, entry.CopyPath, "ls-files"))[0]
+		if err := writeFile(filepath.Join(other, tracked), "stashed in another worktree\n"); err != nil {
+			t.Fatal(err)
+		}
+		git(t, other, "stash", "push", "--quiet", "-m", "another worktree's")
+		theirs := git(t, gate, "rev-parse", "refs/stash")
+		show := func() machine.KeptWorkLoss {
+			t.Helper()
+			var out machine.KeptWorkAnswered
+			if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &out); err != nil || out.Loss == nil {
+				t.Fatalf("the discard shown again = %+v, %v", out, err)
+			}
+			return *out.Loss
+		}
+		if again := show(); slices.Contains(again.Lacks, side) || slices.Contains(again.Lacks, theirs) || again.Stash ||
+			again.Digest != shown.Loss.Digest {
+			t.Fatalf("the discard shown again = %+v; want %s and the stash %s, the gate's own, not lost and the digest %s as shown",
+				again, side, theirs, shown.Loss.Digest)
+		}
+		// A stash made in the run's own worktree is its work.
 		if err := writeFile(filepath.Join(entry.CopyPath, tracked), "stashed in the run's worktree\n"); err != nil {
 			t.Fatal(err)
 		}
-		git(t, entry.CopyPath, "stash", "--quiet")
+		git(t, entry.CopyPath, "stash", "push", "--quiet", "-m", "the run's own")
+		mine := git(t, gate, "rev-parse", "refs/stash")
+		if again := show(); !slices.Contains(again.Lacks, mine) || slices.Contains(again.Lacks, theirs) || !again.Stash ||
+			again.Digest == shown.Loss.Digest {
+			t.Fatalf("the discard shown with the run's own stash = %+v; want %s lost, %s not, Stash read and the digest moved",
+				again, mine, theirs)
+		}
+		var refused machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, shown.Loss.Digest), &refused); !errors.Is(err, ipc.ErrRefused) {
+			t.Fatalf("confirming the first digest over the run's own stash = %+v, %v; want it refused", refused, err)
+		}
+		git(t, entry.CopyPath, "stash", "drop", "--quiet")
 		stashed := git(t, gate, "rev-parse", "refs/stash")
-		var again machine.KeptWorkAnswered
-		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &again); err != nil || again.Loss == nil ||
-			slices.Contains(again.Loss.Lacks, side) || slices.Contains(again.Loss.Lacks, stashed) || again.Loss.Stash ||
-			again.Loss.Digest != shown.Loss.Digest {
-			t.Fatalf("the discard shown again = %+v, %v; want %s and the stash %s, the gate's own, not lost and the digest %s as shown",
-				again, err, side, stashed, shown.Loss.Digest)
+		if stashed != theirs {
+			t.Fatalf("the gate's stash reads %s after the drop; want the other worktree's %s", stashed, theirs)
 		}
 		var done machine.KeptWorkAnswered
 		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, shown.Loss.Digest), &done); err != nil ||

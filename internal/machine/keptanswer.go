@@ -38,18 +38,22 @@ type KeptWorkAnswerRequest struct {
 type KeptWorkLoss struct {
 	// Head is the commit the copy's HEAD stands on.
 	Head string `json:"head"`
-	// Lacks is the commits the removal destroys that the default branch
-	// lacks: every commit HEAD, a reference, a root reference such as
-	// ORIG_HEAD or a reflog entry of the copy, by the value it moved to or
-	// the one it moved from, reaches that the default branch does not, a
-	// commit reset away or a stash under the newest among them. For a
-	// run's worktree only what its removal destroys counts: never a commit
-	// the gate's own references or their reflogs, the stash among them,
-	// still record.
+	// Lacks is the commits the removal destroys that exist nowhere it
+	// leaves intact: every commit HEAD, a reference, a root reference such
+	// as ORIG_HEAD or a reflog entry of the copy, by the value it moved to
+	// or the one it moved from, reaches that neither the default branch,
+	// nor anything the copy names that the upstream advertises now, nor a
+	// remote-tracking reference reaches, a commit reset away or a stash
+	// under the newest among them. For a run's worktree only what its
+	// removal destroys counts, and the stash entries it made: never a
+	// commit the gate's own references or their reflogs, or another
+	// worktree's stash entries, still record.
 	Lacks []string `json:"lacks"`
 	// Objects is every object a name the removal destroys points at that
 	// is not a commit, an annotated tag, a tree or a blob, with its type
-	// and the names that point at it, listed whatever else holds it.
+	// and the names that point at it, unless the upstream advertises it or
+	// a remote-tracking reference names it, and otherwise listed whatever
+	// else holds it.
 	Objects []KeptWorkLostObject `json:"objects"`
 	// Files is every path the removal destroys whose content or deletion
 	// nothing else holds, decided from what the copy holds and not from
@@ -65,9 +69,9 @@ type KeptWorkLoss struct {
 	Files []KeptWorkLostPath `json:"files"`
 	// Dirty, Untracked and Stash say whether git reports the copy holding
 	// a tracked change, a file no commit records that git does not ignore,
-	// and a stash, Stash never for a run's worktree, whose stash is the
-	// gate's and stands after the discard; Files names every path these
-	// speak of, and the ignored ones they do not.
+	// and a stash, for a run's worktree, whose stash is the gate's, only
+	// an entry it made; Files names every path these speak of, and the
+	// ignored ones they do not.
 	Dirty     bool `json:"dirty"`
 	Untracked bool `json:"untracked"`
 	Stash     bool `json:"stash"`

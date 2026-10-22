@@ -22,9 +22,12 @@ import (
 //
 //   - a working-tree entry against HEAD's tree, whose commit the default
 //     branch holds or the list of commits lacking names: a file holding
-//     what HEAD's file at its path holds, by git's identity of its content
-//     with no filter applied (vcs.BlobObject) and git's mode, is not lost,
-//     and any other is (LostChanged where HEAD holds a file there, LostNew
+//     what HEAD's file at its path holds, with git's mode, is not lost,
+//     and any other is: its bytes by git's identity of them with no filter
+//     applied (vcs.BlobObject), and a regular file whose bytes are not
+//     HEAD's blob by the blob git would store for it now, its clean
+//     filters and line-ending conversion applied (stored), so a file git
+//     checked out converted is HEAD's; the rest are named (LostChanged where HEAD holds a file there, LostNew
 //     where it holds nothing, or a directory or a submodule); a directory
 //     HEAD's tree does not hold is named once, whole, and nothing under it
 //     is named again;
@@ -52,13 +55,20 @@ import (
 // every lost entry at the path; and a deletion's entry of HEAD's tree, its
 // type, mode and object.
 //
+// Asking git for the stored blob runs the clean filters the copy's
+// attributes and configuration name, as git status does when it rehashes
+// a file; a filter that fails, and a converted file whose path holds a
+// newline, fail the read, which refuses the preview rather than showing
+// less.
+//
 // What it names more than is lost, failing toward showing: a file whose
-// content a commit other than HEAD's holds, one a filter or line-ending
-// conversion would store as HEAD's content, a submodule's working tree,
+// content a commit other than HEAD's holds, a mode git is configured to
+// ignore (core.fileMode), a submodule's working tree,
 // whose commits are another repository's, and a path a sparse checkout
 // leaves out of the working tree, which reads as deleted, are named all
 // the same.
 type lostPaths struct {
+	repo    *vcs.Repository
 	format  string
 	head    map[string]vcs.TreeEntry
 	index   []vcs.IndexEntry
@@ -71,6 +81,20 @@ type lostPaths struct {
 	found map[LostKind][]string
 	// held is what each path found is lost holding, written as it is found.
 	held map[LostPath]*digest
+	// converted is every regular working-tree file at a path HEAD's tree
+	// or the index holds whose bytes are not the blob there, which is
+	// decided once git says what it would store for it (stored).
+	converted []convertedFile
+}
+
+// convertedFile is a working-tree file the walk read whose bytes differ
+// from what HEAD's tree or the index holds at its path, with what the walk
+// read of it.
+type convertedFile struct {
+	rel  string
+	info os.FileInfo
+	held string
+	mode string
 }
 
 // lostFile is a path a discard destroys and what it is lost holding, as
@@ -92,7 +116,7 @@ func newLostPaths(ctx context.Context, copied *vcs.Repository, head string, inde
 	if err != nil {
 		return nil, err
 	}
-	l := &lostPaths{format: format, head: tree, index: index, indexed: map[string]bool{}, working: map[string]string{},
+	l := &lostPaths{repo: copied, format: format, head: tree, index: index, indexed: map[string]bool{}, working: map[string]string{},
 		seen: map[string]bool{}, found: map[LostKind][]string{}, held: map[LostPath]*digest{}}
 	for _, e := range index {
 		l.indexed[e.Path] = true
@@ -122,6 +146,12 @@ func (l *lostPaths) worktree(root string) treeVisit {
 				return err
 			}
 			l.working[rel] = mode + " " + object
+			// A file HEAD's tree holds is set aside below; one only the
+			// index holds is, when its bytes are not the index's blob.
+			inHeadBlob := inHead && e.Type == "blob"
+			if !inHeadBlob && info.Mode().IsRegular() && !l.indexHolds(rel, mode+" "+object) {
+				l.converted = append(l.converted, convertedFile{rel: rel, info: info, held: held, mode: mode})
+			}
 		}
 		if whole != "" && strings.HasPrefix(rel, whole) {
 			holding(under, rel, info, held)
@@ -137,7 +167,12 @@ func (l *lostPaths) worktree(root string) treeVisit {
 			under = l.add(LostNew, whole)
 			holding(under, rel, info, held)
 		case inHead && e.Type == "blob":
-			if mode == "" || mode != e.Mode || object != e.Object {
+			switch {
+			case object == e.Object && mode == e.Mode:
+			case info.Mode().IsRegular() && object != e.Object:
+				// Decided once git says what it would store (stored).
+				l.converted = append(l.converted, convertedFile{rel: rel, info: info, held: held, mode: mode})
+			default:
 				holding(l.add(LostChanged, rel), rel, info, held)
 			}
 		default:
@@ -176,6 +211,39 @@ func (l *lostPaths) repository(fresh map[string]freshEntry) treeVisit {
 		}
 		return nil
 	}
+}
+
+// indexHolds reports whether an index entry at rel holds the mode and
+// object given as "mode object".
+func (l *lostPaths) indexHolds(rel, working string) bool {
+	return slices.ContainsFunc(l.index, func(e vcs.IndexEntry) bool { return e.Path == rel && e.Mode+" "+e.Object == working })
+}
+
+// stored decides every file the walk set aside as converted, by the blob
+// git would store for it now (vcs.StoredObjects: its clean filters and
+// line-ending conversion applied), never by what git reports changed, so
+// neither an index flag nor a stale stat keeps a change off the list: one
+// whose stored blob and mode are HEAD's at its path is not lost, and any
+// other at a path HEAD's tree holds is LostChanged, with what its bytes
+// hold. Every one is taken as the working tree's content at its path for
+// the index entries list decides.
+func (l *lostPaths) stored(ctx context.Context) error {
+	paths := make([]string, len(l.converted))
+	for i, f := range l.converted {
+		paths[i] = f.rel
+	}
+	objects, err := l.repo.StoredObjects(ctx, paths)
+	if err != nil {
+		return err
+	}
+	for i, f := range l.converted {
+		l.working[f.rel] = f.mode + " " + objects[i]
+		if e, ok := l.head[f.rel]; ok && e.Type == "blob" && (f.mode != e.Mode || objects[i] != e.Object) {
+			holding(l.add(LostChanged, f.rel), f.rel, f.info, f.held)
+		}
+	}
+	l.converted = nil
+	return nil
 }
 
 // list is every path found with what it is lost holding, the index and

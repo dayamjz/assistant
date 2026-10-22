@@ -1186,3 +1186,116 @@ func TestADiscardSealsTheIndicatorsItShows(t *testing.T) {
 		t.Fatalf("a discard on the digest shown dirty = %v; want ErrLossChanged", err)
 	}
 }
+
+// Something is lost only if it exists nowhere the copy's removal leaves
+// intact, as far as Loss can see: a delivery task's clone of an upstream
+// whose main carries an annotated tag v1 and a file checked out with CRLF
+// line endings, and whose feature branch is a commit past main, which the
+// clone holds as a remote-tracking reference. Loss lists the task's own
+// commit and nothing the upstream holds: not v1, which the upstream
+// advertises as that very tag object, not feature's commit, and not a.bat,
+// which git would store as HEAD's blob though its bytes differ. An
+// annotated tag only the copy holds, on the task's commit or on main, is
+// listed, and so is an edit to a.bat. Without the upstream read as held,
+// v1 and feature's commit are listed; without git's stored blob, a.bat is.
+func TestALossTakesWhatTheUpstreamHoldsAsHeld(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	seed := filepath.Join(t.TempDir(), "seed")
+	rawGit(t, filepath.Dir(seed), "clone", "-q", s.upstream, seed)
+	commit(t, seed, ".gitattributes", "*.bat text eol=crlf\n", "check scripts out with CRLF")
+	commit(t, seed, "a.bat", "echo one\necho two\n", "a script checked out with CRLF")
+	rawGit(t, seed, "tag", "--annotate", "--message", "release one", "v1")
+	rawGit(t, seed, "push", "-q", "origin", "main", "v1")
+	rawGit(t, seed, "switch", "-q", "-c", "feature")
+	feature := strings.TrimSpace(commit(t, seed, "feature.txt", "the upstream's other work\n", "the upstream's other branch"))
+	rawGit(t, seed, "push", "-q", "origin", "feature")
+	v1 := strings.TrimSpace(rawGit(t, seed, "rev-parse", "v1"))
+
+	tk := s.deliveryTask(t, "task/held")
+	rawGit(t, tk.copy, "fetch", "-q", s.upstream, "+refs/heads/*:refs/remotes/upstream/*")
+	own := strings.TrimSpace(commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit"))
+	if raw, err := os.ReadFile(filepath.Join(tk.copy, "a.bat")); err != nil || !strings.Contains(string(raw), "\r\n") {
+		t.Fatalf("the clone's a.bat reads %q, %v; want CRLF", raw, err)
+	}
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	rawGit(t, tk.copy, "tag", "--annotate", "--message", "the copy's own", "mine", own)
+	rawGit(t, tk.copy, "tag", "--annotate", "--message", "the copy's own on main", "copy-on-main", "main")
+	mine := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "mine"))
+	onMain := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "copy-on-main"))
+
+	l, err := s.cleaner.Loss(ctx, got.Entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(l.Lacks, []string{own}) {
+		t.Errorf("Loss lacks %v; want the task's own commit %s alone, not feature's %s", l.Lacks, own, feature)
+	}
+	var objects []string
+	for _, o := range l.Objects {
+		objects = append(objects, o.Object)
+	}
+	if !slices.Contains(objects, mine) || !slices.Contains(objects, onMain) || slices.Contains(objects, v1) {
+		t.Errorf("Loss lists the objects %+v; want the copy's own tags %s and %s and not the upstream's v1 %s", l.Objects, mine, onMain, v1)
+	}
+	for _, f := range l.Files {
+		if f.Kind != LostRepository {
+			t.Errorf("Loss names %+v; want no path of the clean working tree", f)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(tk.copy, "a.bat"), []byte("echo one\r\necho changed\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if l, err := s.cleaner.Loss(ctx, got.Entry); err != nil || !slices.Contains(l.Files, LostPath{LostChanged, "a.bat"}) {
+		t.Errorf("Loss of the edited a.bat names %+v, %v; want a.bat changed", l.Files, err)
+	}
+	rawGit(t, tk.copy, "checkout", "--", "a.bat")
+
+	// A new file staged as it stands is new, and its staged content is the
+	// working tree's as git would store it, so it is not staged apart.
+	if err := os.WriteFile(filepath.Join(tk.copy, "b.bat"), []byte("echo new\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "add", "b.bat")
+	if l, err := s.cleaner.Loss(ctx, got.Entry); err != nil || !slices.Contains(l.Files, LostPath{LostNew, "b.bat"}) ||
+		slices.Contains(l.Files, LostPath{LostStaged, "b.bat"}) {
+		t.Errorf("Loss of a new file staged as it stands names %+v, %v; want b.bat new and not staged", l.Files, err)
+	}
+	rawGit(t, tk.copy, "rm", "-q", "-f", "b.bat")
+
+	// A remote-tracking reference records a remote's branch, as a delivery
+	// copy's records the gate's, which the removal leaves: a commit only
+	// one names is held, though the upstream does not advertise it.
+	tracked := strings.TrimSpace(rawGit(t, tk.copy, "commit-tree", "-p", own, "-m", "on the gate alone", own+"^{tree}"))
+	rawGit(t, tk.copy, "update-ref", "refs/remotes/gate-copy/side", tracked)
+	if l, err := s.cleaner.Loss(ctx, got.Entry); err != nil || slices.Contains(l.Lacks, tracked) {
+		t.Errorf("Loss lacks %v, %v; want %s, which a remote-tracking reference names, held", l.Lacks, err, tracked)
+	}
+
+	// A commit shown as lost that the upstream takes up before the
+	// confirmation is held then, not gone, so the confirmation removes
+	// the copy.
+	rawGit(t, tk.copy, "switch", "-q", "-c", "side")
+	side := strings.TrimSpace(commit(t, tk.copy, "side.txt", "work on a side branch\n", "a side commit"))
+	rawGit(t, tk.copy, "switch", "-q", "task/held")
+	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	if err != nil || !slices.Contains(shown.Lacks, side) {
+		t.Fatalf("Loss lacks %v, %v; want the side commit %s", shown.Lacks, err, side)
+	}
+	s.push(t, tk.copy, "side")
+	if _, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, ""); err != nil {
+		t.Fatalf("confirming what was shown once the upstream holds %s = %v; want the copy removed", side, err)
+	}
+	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the copy still stands after the confirmed discard: %v", err)
+	}
+}

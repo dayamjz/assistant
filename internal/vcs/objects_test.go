@@ -130,6 +130,22 @@ func TestNotReachedFromListsWhatOnlyTheNamesHold(t *testing.T) {
 	if want := []string{keptTree, pastTree, blob, loose, onKept, onPast}; !slices.Equal(others, want) {
 		t.Errorf("others = %v; want %v, every named object that is not a commit", others, want)
 	}
+	// Held: the tag on the past commit holds that commit, through the tag,
+	// and itself; the loose blob holds itself; the kept tree, held by
+	// nothing but a commit of incorporated, is listed still.
+	commits, others, err = repo.NotReachedFrom(ctx(t), vcs.Reach{Objects: names}, kept, onPast, loose)
+	if err != nil || len(commits) != 0 {
+		t.Errorf("commits with the tag on the past commit held = %v, %v; want none", commits, err)
+	}
+	if want := []string{keptTree, pastTree, blob, onKept}; !slices.Equal(others, want) {
+		t.Errorf("others with the tag and the loose blob held = %v; want %v", others, want)
+	}
+	if commits, _, err := repo.NotReachedFrom(ctx(t), vcs.Reach{Objects: names}, kept, past); err != nil || len(commits) != 0 {
+		t.Errorf("commits with the past commit held = %v, %v; want none", commits, err)
+	}
+	if _, _, err := repo.NotReachedFrom(ctx(t), vcs.Reach{Objects: names}, kept, strings.Repeat("1", len(kept))); err == nil {
+		t.Error("NotReachedFrom holding an object the repository does not hold succeeded; want an error")
+	}
 	if commits, others, err := repo.NotReachedFrom(ctx(t), vcs.Reach{Objects: []string{kept}}, kept); err != nil || len(commits) != 0 || len(others) != 0 {
 		t.Errorf("NotReachedFrom of the kept commit alone = %v, %v, %v; want nothing", commits, others, err)
 	}
@@ -283,5 +299,46 @@ func TestReflogValuesReadEveryValueOfEveryLog(t *testing.T) {
 	}
 	if byName["ORIG_HEAD"] != reset || byName["HEAD"] != kept {
 		t.Errorf("RootRefs = %+v; want ORIG_HEAD at %s and HEAD at %s", roots, reset, kept)
+	}
+}
+
+// StoredObjects is the blob git would store for each file: a file checked
+// out with CRLF under its attributes reads as the LF blob it was checked out
+// from, though its bytes differ, a file with no conversion as its bytes, in
+// the order asked; a directory, and a path holding a newline, are errors.
+func TestStoredObjectsAreWhatGitWouldStore(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", ".")
+	writeFile(t, filepath.Join(dir, ".gitattributes"), "*.bat text eol=crlf\n")
+	writeFile(t, filepath.Join(dir, "a.bat"), "echo one\necho two\n")
+	writeFile(t, filepath.Join(dir, "plain.txt"), "plain\n")
+	rawGit(t, dir, "add", "-A")
+	rawGit(t, dir, "commit", "--quiet", "-m", "converted")
+	if err := os.Remove(filepath.Join(dir, "a.bat")); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, dir, "checkout", "--", "a.bat")
+	stored := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD:a.bat"))
+	plain := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD:plain.txt"))
+	raw, err := vcs.BlobObject("sha1", filepath.Join(dir, "a.bat"))
+	if err != nil || raw == stored {
+		t.Fatalf("the checked-out a.bat's bytes hash to %s, %v; want them to differ from the stored %s", raw, err, stored)
+	}
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repo.StoredObjects(ctx(t), []string{"plain.txt", "a.bat"}); err != nil || !slices.Equal(got, []string{plain, stored}) {
+		t.Errorf("StoredObjects = %v, %v; want %s and %s", got, err, plain, stored)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.StoredObjects(ctx(t), []string{"sub"}); err == nil {
+		t.Error("StoredObjects of a directory succeeded; want an error")
+	}
+	if _, err := repo.StoredObjects(ctx(t), []string{"a\nb"}); err == nil {
+		t.Error("StoredObjects of a path holding a newline succeeded; want an error")
 	}
 }
