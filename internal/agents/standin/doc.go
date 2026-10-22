@@ -200,6 +200,15 @@
 // record of a directory trusted earlier, so every directory is untrusted to
 // it, which is what a run's fresh copy is to the CLI.
 //
+// The OpenAI adapter's one-shot invocations carry --output-format and
+// neither --print nor --prompt-file, and take the prompt on standard input.
+// A runner built from agents.OpenAIFactory over New's Arguments reaches this
+// mode, and a scripted envelope is written as the result object that
+// adapter's reader decodes, two token counts under prompt_tokens and
+// completion_tokens, on the terms openaiWire states. No CLI's output backs
+// that shape: it is the reader's model, so a test over it holds the adapter
+// to its own reading and to nothing a real CLI printed.
+//
 // Where a CLI's output was recorded, internal/agents/testdata holds it, and
 // TestTheModelledUsageKeysAreTheRecordedOnes holds each one-shot wire's usage
 // keys here to the keys that recording carries, so a key the model drops or

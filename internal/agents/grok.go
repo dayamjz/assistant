@@ -131,6 +131,10 @@ func (f *grokFactory) Name() string { return GrokName }
 // Code, so this one resolves only when an entry names it.
 func (f *grokFactory) AutoEligible() bool { return false }
 
+// Declares is what every runner this factory builds declares, which
+// grokRunner's Capabilities states and explains.
+func (f *grokFactory) Declares() Capabilities { return grokDeclaration }
+
 // New reports whether Grok can be run here, and returns a Runner when it can.
 //
 // What availability means here is exactly one thing: the named executable
@@ -172,6 +176,11 @@ func (r *grokRunner) Name() string { return GrokName }
 // reported, which arguments and invoke build, and the Fixer method below is
 // what makes that reachable.
 //
+// All four token counts are declared because the envelope this reader
+// decodes names all four, under Claude Code's keys. No output of the Grok
+// Build CLI was recorded, so that is the reader's model of the CLI and not
+// an observation of it.
+//
 // Instruction suppression is not declared, because nothing here implements it.
 // This adapter carries a configured entry's own flags and the flags the run
 // manages, and none of those tells Grok to ignore a repository's instruction
@@ -179,9 +188,12 @@ func (r *grokRunner) Name() string { return GrokName }
 // that it did, which is the substitution PRD section 8 refuses. Leaving it
 // undeclared is what lets internal/pipeline refuse a run that asks for
 // suppression against this adapter before it launches one.
-func (r *grokRunner) Capabilities() Capabilities {
-	return Declare(CapabilityResumableSessions)
-}
+func (r *grokRunner) Capabilities() Capabilities { return grokDeclaration }
+
+// grokDeclaration is what Capabilities and the factory's Declares both return.
+var grokDeclaration = Declare(CapabilityResumableSessions,
+	CapabilityReportsInputTokens, CapabilityReportsOutputTokens,
+	CapabilityReportsCacheReadTokens, CapabilityReportsCacheCreationTokens)
 
 // Run executes one invocation with no session. It resumes nothing, and the
 // session the agent opens for itself is not kept, so a record it produces
