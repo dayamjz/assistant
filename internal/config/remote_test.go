@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"os/exec"
 	"reflect"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // remoteHost is one valid remote_hosts entry, which the tests below edit one
@@ -275,18 +278,28 @@ func TestRemoteAndPlacementValuesWithinTheirBoundsAreAccepted(t *testing.T) {
 // lists for darwin and linux, so the closed set placement.arch is held to
 // names every architecture a supported machine can report and nothing else.
 // A toolchain that adds or drops one fails here.
+//
+// The listing runs as a process group of its own under a deadline that ends
+// before the test binary's, as P15 asks of every process: a go that stalls is ended by this test,
+// while this process is alive to end it, rather than outliving a binary the
+// test deadline kills. Before it, a go blocked reading its GOENV file
+// survived the binary's timeout with no parent.
 func TestArchitecturesAreTheToolchainsDarwinAndLinuxTargets(t *testing.T) {
 	t.Parallel()
 	goTool, err := exec.LookPath("go")
 	if err != nil {
 		t.Fatalf("no go on PATH to list the toolchain's targets: %v", err)
 	}
-	out, err := exec.Command(goTool, "tool", "dist", "list").Output()
-	if err != nil {
-		t.Fatalf("go tool dist list: %v", err)
+	ctx, cancel := context.WithTimeout(t.Context(), listingDeadline(t))
+	defer cancel()
+	var out, stderr bytes.Buffer
+	cmd := procgroup.Command(goTool, "tool", "dist", "list")
+	cmd.Stdout, cmd.Stderr = &out, &stderr
+	if err := procgroup.Run(ctx, cmd, time.Second); err != nil {
+		t.Fatalf("go tool dist list: %v (context: %v)\n%s", err, ctx.Err(), stderr.String())
 	}
 	var want []string
-	for _, target := range strings.Fields(string(out)) {
+	for _, target := range strings.Fields(out.String()) {
 		goos, goarch, _ := strings.Cut(target, "/")
 		if (goos == "darwin" || goos == "linux") && !slices.Contains(want, goarch) {
 			want = append(want, goarch)
@@ -296,4 +309,16 @@ func TestArchitecturesAreTheToolchainsDarwinAndLinuxTargets(t *testing.T) {
 	if got := Architectures(); !slices.Equal(got, want) {
 		t.Errorf("Architectures() = %v, want the toolchain's %v", got, want)
 	}
+}
+
+// listingDeadline is how long the toolchain listing may take: a minute, or
+// half of what is left before the test binary's own deadline when that is
+// sooner, so the listing's group is ended and reaped while there is still
+// time to report why.
+func listingDeadline(t *testing.T) time.Duration {
+	d := time.Minute
+	if end, ok := t.Deadline(); ok {
+		d = min(d, time.Until(end)/2)
+	}
+	return d
 }
