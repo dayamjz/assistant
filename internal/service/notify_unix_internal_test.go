@@ -656,3 +656,67 @@ func TestADomainWakeIsSentOnceToTheOperatorsCommand(t *testing.T) {
 		}
 	}
 }
+
+// A kept-work wake's line names the entry's project and branch, which are
+// a person's text and not closed words, so a credential in either never
+// reaches the command: a person's run kept on a branch whose name carries a
+// token shape internal/redact recognizes is offered to the command once,
+// as a bare kept-work wake row whose branch reads with the token removed
+// and the rest of the name kept. The entry itself, the control, still
+// names the branch as it was pushed.
+func TestACredentialInAKeptWorkWakesBranchNeverReachesTheCommand(t *testing.T) {
+	t.Parallel()
+	h, records := loopHome(t)
+	out := filepath.Join(t.TempDir(), "sent")
+	configureNotify(t, h.ConfigFile(), "cat >> '"+out+"'")
+	token := "ghp_" + strings.Repeat("A", 36)
+	if redact.New().Redact(token) == token {
+		t.Fatalf("internal/redact does not recognize %q, so this test would check nothing", token)
+	}
+	branch := "feature/" + token
+	entry := plantKeptRun(t, records, "run-a-token-branch", branch)
+	if entry.Branch != store.Known(branch) {
+		t.Fatalf("the entry names branch %v, want %s as pushed", entry.Branch, branch)
+	}
+	inc, err := records.BeginIncarnation(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	appended, err := records.AppendKeptWorkWake(t.Context(), inc, store.KeptWorkWakeRequest{KeptWork: entry.ID, Kind: string(supervisor.KindKeptWork), Marker: keptWorkMarker(entry.ID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := openLoop(t, h, records, nil, nil)
+	defer func() { _ = l.service.Close() }()
+
+	deadline := time.Now().Add(loopWait)
+	for {
+		n, err := l.records(t).KeptWorkNotification(t.Context(), appended.Wake.ID)
+		if err == nil && n.Settled() {
+			if n.Outcome != store.Known(store.NotificationSent) {
+				t.Fatalf("the notification is %+v, want sent", n)
+			}
+			break
+		}
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			t.Fatal(err)
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the kept-work wake's notification was never settled (%+v, %v)", n, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent store.KeptWorkWake
+	strict := json.NewDecoder(bytes.NewReader(raw))
+	strict.DisallowUnknownFields()
+	if err := strict.Decode(&sent); err != nil || sent.ID != appended.Wake.ID {
+		t.Fatalf("the command read %q, which does not read as the kept-work wake row: %v", raw, err)
+	}
+	if strings.Contains(string(raw), token) || !strings.HasPrefix(sent.Branch.Or(""), "feature/") {
+		t.Fatalf("the command read %q, want the branch without its token", raw)
+	}
+}

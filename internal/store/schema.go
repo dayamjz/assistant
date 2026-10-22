@@ -2216,9 +2216,12 @@ var schema = []migration{
 			// raised once, which the unique key holds. A row is not
 			// deleted while its entry may not be, on kept_work's own terms:
 			// it goes only with a closed run entry whose run is gone, which
-			// only ForgetRepository removes.
+			// only ForgetRepository removes. Because a row can go, its
+			// identifier is AUTOINCREMENT, so a removed row's number is never
+			// handed to a later wake, and an acknowledgement naming it is
+			// refused rather than closing another wake.
 			`CREATE TABLE kept_work_wake (
-				id               INTEGER PRIMARY KEY,
+				id               INTEGER PRIMARY KEY AUTOINCREMENT,
 				kept_work        INTEGER NOT NULL REFERENCES kept_work(id),
 				kind             TEXT NOT NULL,
 				marker           TEXT NOT NULL,

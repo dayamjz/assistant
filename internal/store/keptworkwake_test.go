@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/principles"
 )
@@ -155,5 +156,55 @@ func TestAKeptWorkWakeReachesTheFirstCoordinatorAloneAndClosesOnce(t *testing.T)
 		if _, err := s.write.ExecContext(ctx, statement, id); err == nil || !strings.Contains(err.Error(), "kept work wake") {
 			t.Fatalf("%s = %v, want the seal's refusal", what, err)
 		}
+	}
+}
+
+// A kept-work wake's identifier is never handed to another wake, even once
+// forgetting a repository has removed the row that held it: an
+// acknowledgement names a wake by identifier, so a coordinator acknowledging
+// a wake it was handed before the repository went must be refused rather
+// than close an unrelated one that took the same number.
+func TestAKeptWorkWakesIdentifierIsNotReusedAfterItsRepositoryIsForgotten(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	first := keptRunEntry(t, s, "/worktrees/run")
+	inc := incarnationOf(t, s)
+	old, err := s.AppendKeptWorkWake(ctx, inc, KeptWorkWakeRequest{KeptWork: first.ID, Kind: "kept-work", Marker: "kept-work:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DrainAll(ctx, 10, WakeHandout{To: AcknowledgedByCoordinator(), Under: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	// The copy's work lands, the removal on its proof closes the entry, the
+	// run ends, and the repository is forgotten with the closed entry and
+	// its wake.
+	run := first.RunID.Or("")
+	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run, Proof: Known(CleanupProofDefaultBranch), Examined: []string{"aaaa"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkRunCleanupRemoved(ctx, run, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TransitionRun(ctx, run, []RunStatus{RunRunning}, RunFailed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ForgetRepository(ctx, first.RepositoryID.Or("")); err != nil {
+		t.Fatalf("ForgetRepository: %v", err)
+	}
+	second := keptRunEntry(t, s, "/worktrees/run-again")
+	again, err := s.AppendKeptWorkWake(ctx, inc, KeptWorkWakeRequest{KeptWork: second.ID, Kind: "kept-work", Marker: "kept-work:2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Wake.ID == old.Wake.ID {
+		t.Fatalf("the new entry's wake took identifier %d, which the forgotten wake held", again.Wake.ID)
+	}
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{old.Wake.ID}, AcknowledgedByCoordinator()); !errors.Is(err, ErrWakeUnknown) {
+		t.Fatalf("acknowledging the forgotten wake's identifier = %v, want ErrWakeUnknown", err)
+	}
+	if queued, err := s.QueuedKeptWorkWakes(ctx, 10); err != nil || len(queued) != 1 || queued[0].ID != again.Wake.ID {
+		t.Fatalf("the queued kept-work wakes are %+v, %v; want the new one, still queued", queued, err)
 	}
 }
