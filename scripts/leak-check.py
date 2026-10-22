@@ -109,38 +109,79 @@ SF_RESTRICTED = 0x00080000  # sys/stat.h: System Integrity Protection's restrict
 SF_NOUNLINK = 0x00100000  # sys/stat.h: no rename or removal, even by root
 
 
+MAX_SYMLINKS = 32  # links only_root_changes follows before refusing, as MAXSYMLINKS
+
+
 def only_root_changes(path):
     """Whether no user but root can have put path where it is, or changed it.
 
-    path, resolved, must exist, and must be unchangeable: on a read-only
-    volume, or flagged immutable or restricted, or owned by root and writable
-    by neither its group nor others. Each entry from it up to / must also be
-    irreplaceable: its directory unchangeable in the same sense, or the entry
-    itself flagged so that it cannot be renamed or removed. Mode bits alone
-    do not decide it: System Integrity Protection refuses this user writes in
+    path must be absolute and is resolved one entry at a time from /, never
+    in one step, since a link this user can replace makes the entry it names
+    theirs whatever it points at. Each entry on the way must be
+    irreplaceable: its directory unchangeable, or the entry flagged so that
+    it cannot be renamed or removed. A symbolic link is followed only once it
+    has passed that, and what it names is then held to the same. The entry
+    reached last must also be unchangeable itself. Unchangeable is on a
+    read-only volume, or flagged immutable or restricted, or owned by root and
+    writable by neither its group nor others. Mode bits alone do not decide
+    it: System Integrity Protection refuses this user writes in
     /System/Volumes/Preboot/Cryptexes, which is mode 777, and the entry
     below it there is flagged against removal.
     """
-    try:
-        target = Path(os.path.realpath(path))
-        chain = [target, *target.parents]
-        infos = {node: os.lstat(node) for node in chain}
-        volumes = {node: os.statvfs(node) for node in chain}
-    except OSError:
+    path = str(path)
+    if not os.path.isabs(path):
         return False
 
-    def unchangeable(node):
-        info = infos[node]
-        return bool(volumes[node].f_flag & os.ST_RDONLY
+    def unchangeable(node, info):
+        try:
+            readonly = os.statvfs(node).f_flag & os.ST_RDONLY
+        except OSError:
+            return False
+        return bool(readonly
                     or getattr(info, "st_flags", 0) & (SF_IMMUTABLE | SF_RESTRICTED)
                     or (info.st_uid == 0 and not info.st_mode & 0o022))
 
-    def irreplaceable(node):
-        flags = getattr(infos[node], "st_flags", 0)
-        return (node == node.parent or unchangeable(node.parent)
-                or bool(flags & (SF_IMMUTABLE | SF_RESTRICTED | SF_NOUNLINK)))
-
-    return unchangeable(target) and all(irreplaceable(node) for node in chain)
+    current = Path("/")
+    try:
+        current_info = os.lstat(current)
+    except OSError:
+        return False
+    remaining = [part for part in path.split("/") if part]
+    followed = 0
+    while remaining:
+        name = remaining.pop(0)
+        if name == ".":
+            continue
+        if name == "..":
+            current = current.parent
+            try:
+                current_info = os.lstat(current)
+            except OSError:
+                return False
+            continue
+        node = current / name
+        try:
+            info = os.lstat(node)
+        except OSError:
+            return False
+        flags = getattr(info, "st_flags", 0)
+        if not (unchangeable(current, current_info)
+                or flags & (SF_IMMUTABLE | SF_RESTRICTED | SF_NOUNLINK)):
+            return False
+        if stat.S_ISLNK(info.st_mode):
+            followed += 1
+            if followed > MAX_SYMLINKS:
+                return False
+            try:
+                target = os.readlink(node)
+            except OSError:
+                return False
+            if os.path.isabs(target):
+                current, current_info = Path("/"), os.lstat("/")
+            remaining = [part for part in target.split("/") if part] + remaining
+            continue
+        current, current_info = node, info
+    return unchangeable(current, current_info)
 
 
 def apple_launchd_jobs(new_pids):
@@ -161,7 +202,9 @@ def apple_launchd_jobs(new_pids):
     still runs as that pid and the definition launchd recorded for it, a plist
     or an XPC bundle, is one only root can have put there (only_root_changes).
     A submitted job records none, and one a test bootstraps from a plist of
-    its own records that plist. A test that asks launchd to start one of
+    its own records that plist, which stays the test's if it is then swapped
+    for a link to one of Apple's, since the path is resolved one entry at a
+    time and the link is an entry the test can replace. A test that asks launchd to start one of
     Apple's own jobs from its own definition is not reported; stopping it is
     launchd's.
     """

@@ -126,6 +126,29 @@ class LeakCheckTest(unittest.TestCase):
             self.assertEqual(check.apple_owned({pid}), {})
         finally:
             subprocess.run(["launchctl", "remove", label], check=False)
+        # A job a test bootstraps under an Apple label from a plist of its
+        # own, which it then swaps for a link to one of Apple's: launchd
+        # still records the test's path, and the link there is the test's.
+        # The plist is directly in /tmp, so the link is the one entry this
+        # user can replace on the way to it.
+        label = f"com.apple.leak-check-test-linked-{os.getpid()}"
+        plist = Path("/tmp").resolve() / f"{label}.plist"
+        plist.write_text(LAUNCHD_SLEEP.format(label=label))
+        domain = f"gui/{os.getuid()}"
+        try:
+            subprocess.run(["launchctl", "bootstrap", domain, str(plist)], check=True)
+            try:
+                pid = None
+                while pid is None:
+                    pid = next((p for p, l in listed().items() if l == label), None)
+                plist.unlink()
+                plist.symlink_to("/System/Library/LaunchAgents/com.apple.Finder.plist")
+                self.assertEqual(check.launchd_definition(label, pid), str(plist))
+                self.assertNotIn(pid, check.apple_launchd_jobs({pid}))
+            finally:
+                subprocess.run(["launchctl", "bootout", f"{domain}/{label}"], check=False)
+        finally:
+            plist.unlink(missing_ok=True)
         # An orphan is no job at all.
         with subprocess.Popen(["sleep", "300"], start_new_session=True) as child:
             try:
@@ -146,6 +169,19 @@ class LeakCheckTest(unittest.TestCase):
             mine.write_text("")
             self.assertFalse(check.only_root_changes(mine))
             self.assertFalse(check.only_root_changes(Path(folder) / "absent.plist"))
+            # A link of this user's to a file only root can change, directly
+            # in /tmp, which root owns and everyone can write: every entry
+            # above the link is root's, and the link can be replaced, so
+            # what it names now proves nothing.
+            link = Path("/tmp") / f"com.apple.leak-check-test-{os.getpid()}.plist"
+            link.symlink_to(owned)
+            try:
+                self.assertFalse(check.only_root_changes(link))
+            finally:
+                link.unlink()
+            # A link only root can replace is followed: /etc is one at / on
+            # macOS, and on Linux /etc/hosts is the file itself.
+            self.assertTrue(check.only_root_changes("/etc/hosts"))
             if sys.platform == "darwin":
                 # A root-owned file this user cannot change, linked into a
                 # directory this user can: it could be swapped for another.
@@ -401,6 +437,16 @@ func TestOutlastsTheEarlyPackagesProcess(t *testing.T) {
 }
 """
 
+
+# A launchd job definition running sleep, for a label of the test's own.
+LAUNCHD_SLEEP = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>{label}</string>
+<key>ProgramArguments</key><array><string>/bin/sleep</string><string>300</string></array>
+<key>RunAtLoad</key><true/>
+</dict></plist>
+"""
 
 USER_TEMP_TEST = """package a
 
