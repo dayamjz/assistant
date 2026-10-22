@@ -550,7 +550,11 @@ the new task's own place and asserted the way every task's copy is before
 anything is written into it; the task the copy outlived keeps its record,
 the new task's instructions are the old intake text with a note saying
 what is already there, and the task dispatches into the copy as any task
-does. Carrying on points the gate's remote at the gate and puts HEAD where
+does. The entry stays open and listed until the new task owns the copy,
+and only then is it answered carry on; if the new task cannot be created
+(its role is no longer configured, say), nothing is moved, the answer is
+refused naming why, and the entry stays open for another answer.
+Carrying on points the gate's remote at the gate and puts HEAD where
 the task's shape has it, and removes no remote and moves or renames no
 branch, since any of that can leave a commit with nothing naming it: a
 copy with any other remote (any remote at all, for an investigation's
@@ -567,9 +571,9 @@ Discard, `--answer discard` with the same flags, is given twice. Alone it
 shows exactly what removing the copy would lose, in the structured answer
 (`--json`): the commits the default branch lacks that anything in the
 copy names, a commit reset away and every stash included, and any tag,
-tree or blob a reference or a reflog entry points at directly; every file removing the
-copy destroys whose content or deletion nothing else holds, files git
-ignores included, each with why (`changed`, `new`, `staged`, `deleted` for
+tree or blob a reference or a reflog entry points at directly; every file
+removing the copy destroys whose content or deletion nothing else holds,
+files git ignores included, each with why (`changed`, `new`, `staged`, `deleted` for
 a file the copy deleted, staged or not, or `repository` for a
 file of the copy's repository directory, a hook or its configuration
 among them, that differs from what git writes into every new repository),

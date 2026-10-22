@@ -63,24 +63,30 @@ paths: ["internal/store/**"]
   `BeginTaskAttempt`, the relaunch claim, is never held. Migration 53's `landed_run` is the run a
   land answer started, written once by `RecordKeptWorkLanding` and only on
   an entry answered land; `KeptWork.Key` and `ParseKeptWorkKey` are the one
-  spelling of `--hold kept-work/N`. Migration 55's `carried_on_task` is
-  named with the carry-on answer (`AnswerKeptWorkCarryOn`) and
-  `carried_on_at` once the task owns the copy; migration 56 records a
+  spelling of `--hold kept-work/N`. Migration 55 records a carry on as two
+  facts: the claim (`carried_on_task`, the task's reserved identifier, with
+  the copy's identity, who and when), written whole on an open entry by
+  `ClaimKeptWorkCarryOn`, which leaves it open and listed, and withdrawn
+  whole by `WithdrawKeptWorkCarryOn` only while the task's row does not
+  exist; and the answer, written only with `carried_on_at` by
+  `MarkKeptWorkCarriedOn` once the task exists and owns the copy, which
+  the triggers enforce; migration 56 records a
   discard as two facts: the person's confirmation (`discard_digest`, what
   it was shown, with the commits, who and when), written whole on an open
   entry by `ConfirmKeptWorkDiscard`, which leaves it open and listed, and
   withdrawn whole by `WithdrawKeptWorkDiscard`; and the answer, written
   only with `discarded_at` by `MarkKeptWorkDiscarded` once the copy is
   gone, which the triggers enforce. Carry on and discard each move or
-  remove the whole copy, so carry on answers every other open entry of the
-  copy in its write and the discard's mark answers and marks every one kept
-  by the confirmation; and no answer or confirmation is written while an
-  entry of the copy holds one not yet carried out, a discard confirmation
-  on the entry itself included (`ErrKeptWorkCopyOwed`), and
+  remove the whole copy, so each mark answers and marks every other open
+  entry of the copy kept by its claim or confirmation; and no answer, claim
+  or confirmation is written while an entry of the copy holds one not yet
+  carried out, a claim or confirmation on the entry itself included
+  (`ErrKeptWorkCopyOwed`), and
   `TransitionTaskShape` refuses a promotion over one. Each
   answer's record is its own accessor, and `AnswerKeptWork` takes land
   alone. `TransitionTaskShape` answers the promoted task's own copy's open
-  entries carry-on, naming that task, in the flip's transaction, as PRD
+  entries carry-on, naming that task, claim, answer and adoption in one
+  write in the flip's transaction, as PRD
   section 6's promotion paragraph says; it takes the promoter's `Resolver`
   for that.
 - A schema change is a new migration appended to `schema.go`, never an edit to

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // An entry's key round-trips through ParseKeptWorkKey and nothing else
@@ -101,12 +102,19 @@ func TestALandingRunIsRecordedOnceOnAnEntryAnsweredLand(t *testing.T) {
 	}
 }
 
-// A carry-on answer names the task carrying the entry on in the same write,
-// refusing an identifier the home would refuse and the generic answer
-// without one; the task comes to own the copy once, only for that entry,
-// and the owed listing drops the entry when it does; and the schema seals
-// both against a direct rewrite.
-func TestACarryOnAnswerNamesItsTaskOnceAndIsCarriedOutOnce(t *testing.T) {
+// A carry on is two facts. The claim names the task that will carry the
+// entry on and the copy it adopts, refusing an identifier the home would
+// refuse, an empty copy and the generic answer, and leaves the entry open,
+// listed and owed: no second claim and no other answer is taken on it. It
+// can be withdrawn only while the task it names does not exist, which
+// leaves the entry open with none. The answer is written only with the
+// adoption's mark, from the claim, once, and only once the task exists;
+// and the schema refuses an entry answered carry-on without the adoption,
+// a claim written in part, withdrawn under an answer or written on an
+// answered entry, and a rewrite of either fact. Another entry of the copy
+// takes no answer while the claim stands; the mark answers it with the
+// claim when it was kept before the claim, and leaves one kept after open.
+func TestACarryOnIsClaimedAndThenAnsweredWithItsAdoption(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
@@ -118,28 +126,100 @@ func TestACarryOnAnswerNamesItsTaskOnceAndIsCarriedOutOnce(t *testing.T) {
 	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptCarryOn, ResolvedByMachineInterface()); err == nil {
 		t.Fatal("a carry-on answer naming no task was recorded")
 	}
-	if _, err := s.AnswerKeptWorkCarryOn(ctx, entry.ID, "not-a-task", "planted-copy", ResolvedByMachineInterface()); err == nil {
-		t.Fatal("a carry-on answer naming an invalid task was recorded")
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, entry.ID, "not-a-task", "planted-copy", ResolvedByMachineInterface()); err == nil {
+		t.Fatal("a carry-on claim naming an invalid task was recorded")
+	}
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, entry.ID, "taskcarrying", " ", ResolvedByMachineInterface()); err == nil {
+		t.Fatal("a carry-on claim naming no copy was recorded")
 	}
 	if _, err := s.MarkKeptWorkCarriedOn(ctx, entry.ID); !errors.Is(err, ErrKeptWorkNotCarryOn) {
 		t.Fatalf("marking an open entry carried on = %v; want ErrKeptWorkNotCarryOn", err)
 	}
-	answered, err := s.AnswerKeptWorkCarryOn(ctx, entry.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface())
-	if err != nil || answered.Answer.Or("") != KeptCarryOn || answered.CarriedOnTask.Or("") != "taskcarrying" || answered.CarriedOnAt.IsKnown() {
-		t.Fatalf("the carry-on answer = %+v, %v; want carry-on naming taskcarrying, not yet carried on", answered, err)
+	sibling, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/c", Holds: []string{"c222"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := s.ClaimKeptWorkCarryOn(ctx, entry.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface())
+	if err != nil || !claimed.Open() || !claimed.CarryOnClaimed() || claimed.CarriedOnTask.Or("") != "taskcarrying" ||
+		claimed.CarryOnBy.Or(Resolver{}) != ResolvedByMachineInterface() || !claimed.CarryOnClaimedAt.IsKnown() || claimed.CarriedOnAt.IsKnown() {
+		t.Fatalf("the carry-on claim = %+v, %v; want it open, claimed by taskcarrying, not yet carried on", claimed, err)
+	}
+	if open, err := s.OpenKeptWork(ctx); err != nil || !slices.ContainsFunc(open, func(k KeptWork) bool { return k.ID == entry.ID }) {
+		t.Fatalf("OpenKeptWork = %+v, %v; want the claimed entry listed", open, err)
 	}
 	if owed, err := s.KeptWorkCarryOnsOwed(ctx); err != nil || len(owed) != 1 || owed[0].ID != entry.ID {
 		t.Fatalf("KeptWorkCarryOnsOwed = %+v, %v; want the entry", owed, err)
 	}
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, entry.ID, "taskanothers", "planted-copy", ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) ||
+		!errors.Is(err, ErrKeptWorkCarryOnClaimed) {
+		t.Fatalf("a second claim = %v; want ErrKeptWorkCopyOwed and ErrKeptWorkCarryOnClaimed", err)
+	}
+	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a land on a claimed entry = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	if _, err := s.AnswerKeptWork(ctx, sibling.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a land on another entry of the claimed copy = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a discard on a claimed entry = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	if _, err := s.MarkKeptWorkCarriedOn(ctx, entry.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("marking a claim whose task does not exist = %v; want ErrNotFound", err)
+	}
+	if _, err := s.WithdrawKeptWorkCarryOn(ctx, entry.ID, "taskanothers"); !errors.Is(err, ErrKeptWorkNotClaimed) {
+		t.Fatalf("withdrawing a claim of another task = %v; want ErrKeptWorkNotClaimed", err)
+	}
+	withdrawn, err := s.WithdrawKeptWorkCarryOn(ctx, entry.ID, "taskcarrying")
+	if err != nil || !withdrawn.Open() || withdrawn.CarryOnClaimed() || withdrawn.CarriedOnCopy.IsKnown() || withdrawn.CarryOnBy.IsKnown() {
+		t.Fatalf("the withdrawal = %+v, %v; want the entry open with no claim", withdrawn, err)
+	}
+
+	reclaimed, err := s.ClaimKeptWorkCarryOn(ctx, entry.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedTask(t, s, "taskcarrying")
+	late, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/c", Holds: []string{"c333"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !late.KeptAt.After(reclaimed.CarryOnClaimedAt.Or(time.Time{})) {
+		t.Fatalf("the late entry was kept at %v, not after the claim at %v", late.KeptAt, reclaimed.CarryOnClaimedAt)
+	}
+	if _, err := s.WithdrawKeptWorkCarryOn(ctx, entry.ID, "taskcarrying"); !errors.Is(err, ErrCarryOnTaskStands) {
+		t.Fatalf("withdrawing a claim whose task exists = %v; want ErrCarryOnTaskStands", err)
+	}
+	for name, statement := range map[string]string{
+		"answered carry-on without the adoption": `UPDATE kept_work SET answer = 'carry-on', answered_by = carry_on_by, answered_at = carry_on_claimed_at WHERE id = ?`,
+		"the claim withdrawn in part":            `UPDATE kept_work SET carried_on_task = NULL WHERE id = ?`,
+		"the claim rewritten":                    `UPDATE kept_work SET carried_on_task = 'taskother000' WHERE id = ?`,
+		"carried on with no answer":              `UPDATE kept_work SET carried_on_at = '2020-01-01T00:00:00Z' WHERE id = ?`,
+	} {
+		if _, err := s.write.ExecContext(ctx, statement, entry.ID); err == nil {
+			t.Errorf("the schema let %s be written", name)
+		}
+	}
 	done, err := s.MarkKeptWorkCarriedOn(ctx, entry.ID)
-	if err != nil || !done.CarriedOnAt.IsKnown() {
-		t.Fatalf("marking the entry carried on = %+v, %v", done, err)
+	if err != nil || done.Answer.Or("") != KeptCarryOn || done.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() ||
+		!done.AnsweredAt.Or(time.Time{}).Equal(reclaimed.CarryOnClaimedAt.Or(time.Time{})) || !done.CarriedOnAt.IsKnown() ||
+		done.CarriedOnTask.Or("") != "taskcarrying" {
+		t.Fatalf("marking the entry carried on = %+v, %v; want it answered carry-on from the claim, and carried on", done, err)
 	}
 	if _, err := s.MarkKeptWorkCarriedOn(ctx, entry.ID); !errors.Is(err, ErrKeptWorkCarriedOn) {
 		t.Fatalf("marking it again = %v; want ErrKeptWorkCarriedOn", err)
 	}
+	if got, err := s.KeptWorkEntry(ctx, sibling.ID); err != nil || got.Answer.Or("") != KeptCarryOn || got.CarriedOnTask.Or("") != "taskcarrying" ||
+		!got.CarriedOnAt.IsKnown() {
+		t.Fatalf("the copy's entry kept before the claim reads %+v, %v; want it carried on with the claim", got, err)
+	}
+	if got, err := s.KeptWorkEntry(ctx, late.ID); err != nil || !got.Open() || got.CarriedOnTask.IsKnown() {
+		t.Fatalf("the copy's entry kept after the claim reads %+v, %v; want it open, not taken by a carry on it was not part of", got, err)
+	}
 	if owed, err := s.KeptWorkCarryOnsOwed(ctx); err != nil || len(owed) != 0 {
 		t.Fatalf("KeptWorkCarryOnsOwed = %+v, %v; want none once carried on", owed, err)
+	}
+	if _, err := s.WithdrawKeptWorkCarryOn(ctx, entry.ID, "taskcarrying"); !errors.Is(err, ErrKeptWorkAnswered) {
+		t.Fatalf("withdrawing an answered carry on = %v; want ErrKeptWorkAnswered", err)
 	}
 	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET carried_on_task = 'taskother000' WHERE id = ?`, entry.ID); err == nil {
 		t.Fatal("the schema let the carry-on task be rewritten")
@@ -154,8 +234,9 @@ func TestACarryOnAnswerNamesItsTaskOnceAndIsCarriedOutOnce(t *testing.T) {
 	if _, err := s.AnswerKeptWork(ctx, land.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET carried_on_task = 'taskother000' WHERE id = ?`, land.ID); err == nil {
-		t.Fatal("the schema let a carry-on task be written on an entry answered land")
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET carried_on_task = 'taskother000', carried_on_copy = 'c', carry_on_by = 'machine',
+		carry_on_claimed_at = '2020-01-01T00:00:00Z' WHERE id = ?`, land.ID); err == nil {
+		t.Fatal("the schema let a carry-on claim be written on an entry answered land")
 	}
 }
 
@@ -332,7 +413,7 @@ func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) 
 	if _, err := s.ConfirmKeptWorkDiscard(ctx, second.ID, "shown", []string{"g222"}, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
 		t.Fatalf("a discard while a land of the copy is owed = %v; want ErrKeptWorkCopyOwed", err)
 	}
-	if _, err := s.AnswerKeptWorkCarryOn(ctx, third.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, third.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
 		t.Fatalf("a carry on while a land of the copy is owed = %v; want ErrKeptWorkCopyOwed", err)
 	}
 	if got := read(second); !got.Open() || got.DiscardConfirmed() || !read(third).Open() {
@@ -351,7 +432,7 @@ func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) 
 	if got := read(third); !got.Open() || got.DiscardConfirmed() {
 		t.Fatalf("the copy's other entry reads %+v; want it open and unconfirmed until the mark", got)
 	}
-	if _, err := s.AnswerKeptWorkCarryOn(ctx, third.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, third.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
 		t.Fatalf("a carry on while a discard of the copy is confirmed = %v; want ErrKeptWorkCopyOwed", err)
 	}
 	if _, err := s.ConfirmKeptWorkDiscard(ctx, third.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {

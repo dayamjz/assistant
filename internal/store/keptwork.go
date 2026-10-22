@@ -163,19 +163,24 @@ type KeptWork struct {
 	// or claimed by a landing that stopped before it recorded its run.
 	LandingClaimedAt Optional[time.Time] `json:"landing_claimed_at"`
 	LandedRun        Optional[string]    `json:"landed_run"`
-	// CarriedOnTask is the task a carry on answer creates, named with the
-	// answer by AnswerKeptWorkCarryOn before its row is written, and
-	// CarriedOnAt is when that task came to own the copy, written by
-	// MarkKeptWorkCarriedOn. An entry answered carry-on with a task and no
-	// instant is a carry on not yet carried out.
-	CarriedOnTask Optional[string] `json:"carried_on_task"`
-	// CarriedOnCopy is the kept copy's own identity as the carry-on answer
-	// read it, written with the answer by AnswerKeptWorkCarryOn and opaque
-	// here: internal/tasks' CopyIdentity says what it is. It is unknown for
-	// an entry not answered carry-on, and for one a promotion answered,
-	// whose copy never moves.
-	CarriedOnCopy Optional[string]    `json:"carried_on_copy"`
-	CarriedOnAt   Optional[time.Time] `json:"carried_on_at"`
+	// CarriedOnTask is the task a carry on creates, CarriedOnCopy the kept
+	// copy's own identity as the carry on read it (opaque here:
+	// internal/tasks' CopyIdentity says what it is), CarryOnBy who asked
+	// and CarryOnClaimedAt when: the claim, written together on an open
+	// entry by ClaimKeptWorkCarryOn before the task's row is written, which
+	// leaves it open, and withdrawn together by WithdrawKeptWorkCarryOn
+	// while it is unanswered and the task does not exist. CarriedOnAt is
+	// when the task came to own the copy, written by MarkKeptWorkCarriedOn
+	// in the one write that answers the entry carry-on from its claim, so
+	// an entry answered carry-on is one whose task owns the copy, and an
+	// open entry with a claim is a carry on under way or one a stopped
+	// service left (CarryOnClaimed). A promotion names the promoted task
+	// and no copy, since the copy never moves.
+	CarriedOnTask    Optional[string]    `json:"carried_on_task"`
+	CarriedOnCopy    Optional[string]    `json:"carried_on_copy"`
+	CarryOnBy        Optional[Resolver]  `json:"-"`
+	CarryOnClaimedAt Optional[time.Time] `json:"carry_on_claimed_at"`
+	CarriedOnAt      Optional[time.Time] `json:"carried_on_at"`
 	// DiscardDigest is a person's confirmation of a discard, the digest of
 	// what they were shown, with DiscardLacks the commits it was shown as
 	// lost (nil for an entry with no confirmation), DiscardBy who confirmed
@@ -233,6 +238,11 @@ func (k KeptWork) Open() bool { return !k.Answer.IsKnown() && !k.Closure.IsKnown
 // which is carried out or withdrawn, and until then holds the entry open.
 func (k KeptWork) DiscardConfirmed() bool { return k.Open() && k.DiscardDigest.IsKnown() }
 
+// CarryOnClaimed reports whether the entry is open with a carry-on claim on
+// it: a carry on recorded and not yet carried out, which is carried out or
+// withdrawn, and until then holds the entry open.
+func (k KeptWork) CarryOnClaimed() bool { return k.Open() && k.CarriedOnTask.IsKnown() }
+
 // KeptCopy is what a caller states when a copy is kept: whose it is, where
 // it stands, what it was read to hold, and why it was kept. The project and
 // the branch are not stated, because the owner's row is their owner and
@@ -267,11 +277,11 @@ var ErrKeptWorkAnswered = errors.New("store: the kept work entry is already answ
 // Nothing is written.
 var ErrKeptWorkClosed = errors.New("store: the kept work entry was closed when its copy was removed on a proof")
 
-// ErrKeptWorkCopyOwed is returned by AnswerKeptWork, AnswerKeptWorkCarryOn,
+// ErrKeptWorkCopyOwed is returned by AnswerKeptWork, ClaimKeptWorkCarryOn,
 // ConfirmKeptWorkDiscard and TransitionTaskShape for an entry of a copy
 // that holds an answer not yet carried out: another entry's land whose run
-// is not named or carry on not marked, or a discard confirmation on any
-// entry of the copy, this one included. Each of those still needs the copy
+// is not named, or a carry-on claim or a discard confirmation on any entry
+// of the copy, this one included. Each of those still needs the copy
 // where it stands, and a second answer could move it, remove it, or land
 // it twice. Nothing is written; the owed answer is completed or withdrawn
 // by its own next call or the next start, and the entry can be answered
@@ -283,6 +293,12 @@ var ErrKeptWorkCopyOwed = errors.New("store: another kept work entry of the same
 // already holds a discard confirmation: it stands until it is carried out
 // or withdrawn, and nothing is written.
 var ErrKeptWorkDiscardConfirmed = errors.New("store: the kept work entry already holds a discard confirmation")
+
+// ErrKeptWorkCarryOnClaimed is returned, matching ErrKeptWorkCopyOwed too,
+// by every answer and by ConfirmKeptWorkDiscard for an entry that already
+// holds a carry-on claim: it stands until it is carried out or withdrawn,
+// and nothing is written.
+var ErrKeptWorkCarryOnClaimed = errors.New("store: the kept work entry already holds a carry-on claim")
 
 // ErrRepositoryBeingRemoved is returned by CreateRun for a run of a
 // repository whose removal ReserveRepositoryRemoval reserved: an eject that
@@ -596,12 +612,13 @@ func (s *Store) MarkKeptWorkSurfaced(ctx context.Context, id int64, at time.Time
 func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver) (KeptWork, error) {
 	switch a {
 	case KeptCarryOn:
-		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a carry-on answer names the task carrying it on, through AnswerKeptWorkCarryOn", id)
+		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a carry on is claimed through ClaimKeptWorkCarryOn and "+
+			"answered with its adoption through MarkKeptWorkCarriedOn", id)
 	case KeptDiscard:
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a discard is confirmed through ConfirmKeptWorkDiscard and "+
 			"answered with its removal through MarkKeptWorkDiscarded", id)
 	}
-	return s.answerKeptWork(ctx, id, a, by, "", "")
+	return s.answerKeptWork(ctx, id, a, by)
 }
 
 // ConfirmKeptWorkDiscard records a person's confirmation of a discard on
@@ -689,30 +706,107 @@ func (s *Store) WithdrawKeptWorkDiscard(ctx context.Context, id int64, digest st
 	return out, nil
 }
 
-// AnswerKeptWorkCarryOn is AnswerKeptWork for the carry-on answer, which
-// names the task that carries the entry on in the same write, and answers
-// every other open entry of the same copy the same way in that write, since
-// carrying on moves the whole copy: the task's
-// identifier is reserved by the caller and its row may not exist yet, which
-// is what lets a stop between this write and the task's creation be
-// completed from the entry (P6). copyIdentity is the kept copy's own
-// identity as the caller read it, recorded opaque so the task adopts that
-// copy and no other; an empty one is refused, as is a task identifier
-// home.ValidTaskID refuses.
-func (s *Store) AnswerKeptWorkCarryOn(ctx context.Context, id int64, task, copyIdentity string, by Resolver) (KeptWork, error) {
+// ClaimKeptWorkCarryOn records a carry on of an open entry, the first of
+// the carry on's two facts: task, the task that will carry it on, whose
+// identifier the caller reserves and whose row does not exist yet, which
+// is what lets a stop before its creation be completed from the entry
+// (P6); copyIdentity, the kept copy's own identity as the caller read it,
+// so the task adopts that copy and no other; and by, who asked, with the
+// instant. The entry stays open, so it is listed and holds the project's
+// dispatch as before, until MarkKeptWorkCarriedOn answers it with the
+// adoption or WithdrawKeptWorkCarryOn takes the claim back. An entry
+// answered is ErrKeptWorkAnswered, one closed ErrKeptWorkClosed, one
+// holding a claim or a confirmation already, or of a copy another entry of
+// which holds an answer not yet carried out, ErrKeptWorkCopyOwed; a task
+// identifier home.ValidTaskID refuses, an empty copy identity and the zero
+// Resolver are refused. Nothing is written on a refusal.
+func (s *Store) ClaimKeptWorkCarryOn(ctx context.Context, id int64, task, copyIdentity string, by Resolver) (KeptWork, error) {
 	if err := home.ValidTaskID(task); err != nil {
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: the task carrying it on: %w", id, err)
 	}
 	if strings.TrimSpace(copyIdentity) == "" {
-		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a carry-on answer records which copy it carries on, and was given none", id)
+		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a carry on records which copy it carries on, and was given none", id)
 	}
-	return s.answerKeptWork(ctx, id, KeptCarryOn, by, task, copyIdentity)
+	who, err := resolverText(by)
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: claiming a carry on of kept work entry %d: %w", id, err)
+	}
+	var out KeptWork
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		if err != nil {
+			return errNoRows(err)
+		}
+		if err := refuseUnlessAnswerable(ctx, tx, k); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET carried_on_task = ?, carried_on_copy = ?, carry_on_by = ?, carry_on_claimed_at = ?
+			WHERE id = ?`, task, copyIdentity, who, encodeTime(nowUTC()), id); err != nil {
+			return err
+		}
+		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		return err
+	})
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: claiming a carry on of kept work entry %d: %w", id, err)
+	}
+	return out, nil
 }
 
-// answerKeptWork is the one write of a land or carry-on answer, with the
-// carry-on task beside a carry-on answer and nothing beside land; a
-// discard's answer is MarkKeptWorkDiscarded's, written with its removal.
-func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver, task, copyIdentity string) (KeptWork, error) {
+// ErrKeptWorkNotClaimed is returned by WithdrawKeptWorkCarryOn for an entry
+// that holds no carry-on claim naming that task.
+var ErrKeptWorkNotClaimed = errors.New("store: the kept work entry holds no carry-on claim naming that task")
+
+// ErrCarryOnTaskStands is returned by WithdrawKeptWorkCarryOn when the task
+// the claim names exists: the claim is being carried out, and is completed
+// rather than withdrawn.
+var ErrCarryOnTaskStands = errors.New("store: the task the carry-on claim names exists, so the claim is completed rather than withdrawn")
+
+// WithdrawKeptWorkCarryOn takes back the carry-on claim naming task from an
+// entry still unanswered, which the caller does when the task could not be
+// created: the entry is open again with no claim, to be answered afresh.
+// It is refused while the task's row exists (ErrCarryOnTaskStands), checked
+// in the same transaction, so a withdrawal never leaves a task created for
+// a carry on that no longer names it. An entry answered is
+// ErrKeptWorkAnswered, and one with no claim naming task
+// ErrKeptWorkNotClaimed. It moves nothing.
+func (s *Store) WithdrawKeptWorkCarryOn(ctx context.Context, id int64, task string) (KeptWork, error) {
+	var out KeptWork
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		if err != nil {
+			return errNoRows(err)
+		}
+		if k.Answered() {
+			return ErrKeptWorkAnswered
+		}
+		if k.CarriedOnTask.Or("") != task || task == "" {
+			return ErrKeptWorkNotClaimed
+		}
+		var stands int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task WHERE id = ?`, task).Scan(&stands); err != nil {
+			return err
+		}
+		if stands > 0 {
+			return ErrCarryOnTaskStands
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET carried_on_task = NULL, carried_on_copy = NULL, carry_on_by = NULL,
+			carry_on_claimed_at = NULL WHERE id = ?`, id); err != nil {
+			return err
+		}
+		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		return err
+	})
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: withdrawing the carry-on claim of kept work entry %d: %w", id, err)
+	}
+	return out, nil
+}
+
+// answerKeptWork is the one write of a land answer; a carry on's answer is
+// MarkKeptWorkCarriedOn's, written with its adoption, and a discard's
+// MarkKeptWorkDiscarded's, written with its removal.
+func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver) (KeptWork, error) {
 	if !a.Recognized() {
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: %w: %q", id, ErrUnknownKeptAnswer, a)
 	}
@@ -729,21 +823,9 @@ func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 		if err := refuseUnlessAnswerable(ctx, tx, k); err != nil {
 			return err
 		}
-		at := encodeTime(nowUTC())
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?, carried_on_copy = ?
-			WHERE id = ?`, string(a), who, at, optionalText(task), optionalText(copyIdentity), id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ? WHERE id = ?`,
+			string(a), who, encodeTime(nowUTC()), id); err != nil {
 			return err
-		}
-		if a == KeptCarryOn {
-			// Carrying on moves the whole copy, so every other open entry
-			// of the same copy, the copy kept again at another state, is
-			// carried on by the same task in this same write; none is left
-			// holding the project's dispatch with its copy gone.
-			if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?, carried_on_copy = ?
-				WHERE copy_path = ? AND id <> ? AND answer IS NULL AND closure IS NULL`,
-				string(a), who, at, task, copyIdentity, k.CopyPath, id); err != nil {
-				return err
-			}
 		}
 		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
 		return err
@@ -769,9 +851,13 @@ func refuseUnlessAnswerable(ctx context.Context, tx *sql.Tx, k KeptWork) error {
 	if k.DiscardDigest.IsKnown() {
 		return fmt.Errorf("%w: %w", ErrKeptWorkCopyOwed, ErrKeptWorkDiscardConfirmed)
 	}
+	if k.CarriedOnTask.IsKnown() {
+		return fmt.Errorf("%w: %w", ErrKeptWorkCopyOwed, ErrKeptWorkCarryOnClaimed)
+	}
 	var owed int64
 	var what string
-	switch err := tx.QueryRowContext(ctx, `SELECT id, CASE WHEN answer IS NULL THEN 'confirmed discard' ELSE 'answered ' || answer END
+	switch err := tx.QueryRowContext(ctx, `SELECT id, CASE WHEN answer IS NULL AND discard_digest IS NOT NULL THEN 'confirmed discard'
+		WHEN answer IS NULL THEN 'claimed carry on by task ' || carried_on_task ELSE 'answered ' || answer END
 		FROM kept_work WHERE copy_path = ? AND id <> ? AND (`+owedOnCopy+`) ORDER BY id LIMIT 1`, k.CopyPath, k.ID).Scan(&owed, &what); {
 	case err == nil:
 		return fmt.Errorf("%w: entry %d is %s", ErrKeptWorkCopyOwed, owed, what)
@@ -783,24 +869,25 @@ func refuseUnlessAnswerable(ctx context.Context, tx *sql.Tx, k KeptWork) error {
 
 // owedOnCopy is the condition of an entry holding an answer not yet
 // carried out, which ErrKeptWorkCopyOwed names: a land whose run is not
-// named, a carry on not marked, and a discard confirmed on an entry
-// neither answered nor closed.
-const owedOnCopy = `(answer = 'land' AND landed_run IS NULL) OR (answer = 'carry-on' AND carried_on_at IS NULL) OR
-	(answer IS NULL AND closure IS NULL AND discard_digest IS NOT NULL)`
+// named, and a carry on claimed or a discard confirmed on an entry neither
+// answered nor closed.
+const owedOnCopy = `(answer = 'land' AND landed_run IS NULL) OR
+	(answer IS NULL AND closure IS NULL AND (carried_on_task IS NOT NULL OR discard_digest IS NOT NULL))`
 
 const keptWorkColumns = `SELECT id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
 	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, lacks, against, unestablished,
-	landing_claimed_at, landed_run, carried_on_task, carried_on_copy, carried_on_at, discard_digest, discard_lacks, discard_by,
-	discard_confirmed_at, discarded_at`
+	landing_claimed_at, landed_run, carried_on_task, carried_on_copy, carry_on_by, carry_on_claimed_at, carried_on_at, discard_digest,
+	discard_lacks, discard_by, discard_confirmed_at, discarded_at`
 
 func scanKeptWork(sc scanner) (KeptWork, error) {
 	var k KeptWork
 	var holds, kept string
-	var surfaced, answer, by, answered, closure, proof, closed, lacks, landingClaimed, carriedOn, discardLacks, discardBy, confirmed,
-		discarded Optional[string]
+	var surfaced, answer, by, answered, closure, proof, closed, lacks, landingClaimed, carryOnBy, carryOnClaimed, carriedOn, discardLacks,
+		discardBy, confirmed, discarded Optional[string]
 	if err := sc.Scan(&k.ID, &k.TaskID, &k.RunID, &k.RepositoryID, &k.Branch, &k.CopyPath, &holds, &k.Reason, &k.Detail,
 		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &lacks, &k.Against, &k.Unestablished,
-		&landingClaimed, &k.LandedRun, &k.CarriedOnTask, &k.CarriedOnCopy, &carriedOn, &k.DiscardDigest, &discardLacks, &discardBy, &confirmed, &discarded); err != nil {
+		&landingClaimed, &k.LandedRun, &k.CarriedOnTask, &k.CarriedOnCopy, &carryOnBy, &carryOnClaimed, &carriedOn, &k.DiscardDigest,
+		&discardLacks, &discardBy, &confirmed, &discarded); err != nil {
 		return KeptWork{}, err
 	}
 	if err := json.Unmarshal([]byte(holds), &k.Holds); err != nil {
@@ -854,6 +941,12 @@ func scanKeptWork(sc scanner) (KeptWork, error) {
 		return KeptWork{}, err
 	}
 	if k.LandingClaimedAt, err = optionalTimeValue(landingClaimed, "landing_claimed_at"); err != nil {
+		return KeptWork{}, err
+	}
+	if k.CarryOnBy, err = resolverValue(carryOnBy, "carry_on_by"); err != nil {
+		return KeptWork{}, err
+	}
+	if k.CarryOnClaimedAt, err = optionalTimeValue(carryOnClaimed, "carry_on_claimed_at"); err != nil {
 		return KeptWork{}, err
 	}
 	if k.CarriedOnAt, err = optionalTimeValue(carriedOn, "carried_on_at"); err != nil {
@@ -978,17 +1071,26 @@ func (s *Store) KeptWorkLandingsOwed(ctx context.Context) ([]KeptWork, error) {
 }
 
 // ErrKeptWorkNotCarryOn is returned by MarkKeptWorkCarriedOn for an entry
-// not answered carry-on.
-var ErrKeptWorkNotCarryOn = errors.New("store: the kept work entry is not answered carry-on")
+// that holds no carry-on claim.
+var ErrKeptWorkNotCarryOn = errors.New("store: the kept work entry holds no carry-on claim")
 
 // ErrKeptWorkCarriedOn is returned by MarkKeptWorkCarriedOn for an entry
 // already carried on.
 var ErrKeptWorkCarriedOn = errors.New("store: the kept work entry is already carried on")
 
-// MarkKeptWorkCarriedOn records that the task a carry-on answer named owns
-// the copy, once, on the entry and every other entry that task carries on: an entry not answered carry-on is ErrKeptWorkNotCarryOn,
-// one already marked is ErrKeptWorkCarriedOn, and an unknown identifier is
-// ErrNotFound. It records and moves nothing.
+// MarkKeptWorkCarriedOn records that the task a carry-on claim names owns
+// the copy, the carry on's second fact, once: the entry is answered
+// carry-on, by who asked and as of when, with the instant, in one write
+// that also answers and marks every other open entry of the same copy kept
+// by the time of the claim and holding no claim or confirmation of its
+// own, the copy kept again at another state, with the same claim, since
+// the copy moved for all of them. An entry kept after the claim was not
+// what it carried on, and is left open. The task's row must exist; one
+// that does not is ErrNotFound. An entry already marked is
+// ErrKeptWorkCarriedOn, one answered otherwise ErrKeptWorkAnswered, one
+// closed on a proof ErrKeptWorkClosed, one with no claim
+// ErrKeptWorkNotCarryOn, and an unknown identifier ErrNotFound. It records
+// and moves nothing else; the adoption is the caller's, made before this.
 func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64) (KeptWork, error) {
 	var out KeptWork
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
@@ -996,16 +1098,33 @@ func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64) (KeptWork, 
 		if err != nil {
 			return errNoRows(err)
 		}
-		if k.Answer.Or("") != KeptCarryOn || !k.CarriedOnTask.IsKnown() {
+		switch {
+		case k.CarriedOnAt.IsKnown():
+			return ErrKeptWorkCarriedOn
+		case k.Answered():
+			return ErrKeptWorkAnswered
+		case k.Closure.IsKnown():
+			return ErrKeptWorkClosed
+		case !k.CarriedOnTask.IsKnown():
 			return ErrKeptWorkNotCarryOn
 		}
-		if k.CarriedOnAt.IsKnown() {
-			return ErrKeptWorkCarriedOn
+		var task, copied, by, claimed string
+		if err := tx.QueryRowContext(ctx, `SELECT carried_on_task, carried_on_copy, carry_on_by, carry_on_claimed_at FROM kept_work WHERE id = ?`,
+			id).Scan(&task, &copied, &by, &claimed); err != nil {
+			return err
 		}
-		// Every entry the same task carries on, the copy's other entries the
-		// answer took with it, is carried on with it.
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET carried_on_at = ? WHERE carried_on_task = ? AND carried_on_at IS NULL`,
-			encodeTime(nowUTC()), k.CarriedOnTask.Or("")); err != nil {
+		var stands int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task WHERE id = ?`, task).Scan(&stands); err != nil {
+			return err
+		}
+		if stands == 0 {
+			return fmt.Errorf("the task %s the claim names: %w", task, ErrNotFound)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = 'carry-on', answered_by = ?, answered_at = ?, carried_on_task = ?,
+			carried_on_copy = ?, carry_on_by = ?, carry_on_claimed_at = ?, carried_on_at = ?
+			WHERE id = ? OR (copy_path = ? AND answer IS NULL AND closure IS NULL AND discard_digest IS NULL AND carried_on_task IS NULL
+				AND kept_at <= ?)`,
+			by, claimed, task, copied, by, claimed, encodeTime(nowUTC()), id, k.CopyPath, claimed); err != nil {
 			return err
 		}
 		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
@@ -1017,14 +1136,15 @@ func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64) (KeptWork, 
 	return out, nil
 }
 
-// KeptWorkCarryOnsOwed returns every entry answered carry-on whose task does
-// not yet own the copy, oldest first: a carry on a stopped service recorded
-// and did not carry out, which the next start completes.
+// KeptWorkCarryOnsOwed returns every entry holding a carry-on claim not yet
+// carried out, open and oldest first: a carry on a stopped service claimed
+// and did not carry out, which the next start completes or withdraws.
 func (s *Store) KeptWorkCarryOnsOwed(ctx context.Context) ([]KeptWork, error) {
 	if err := s.live(); err != nil {
 		return nil, err
 	}
-	rows, err := s.read.QueryContext(ctx, keptWorkColumns+` FROM kept_work WHERE answer = 'carry-on' AND carried_on_at IS NULL ORDER BY id`)
+	rows, err := s.read.QueryContext(ctx, keptWorkColumns+` FROM kept_work
+		WHERE carried_on_task IS NOT NULL AND answer IS NULL AND closure IS NULL ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading the kept work carry-ons owed: %w", err)
 	}

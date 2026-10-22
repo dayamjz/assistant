@@ -136,7 +136,7 @@ func TestAKeptEntryIsEstablishedOnceFromUnestablished(t *testing.T) {
 			t.Errorf("%s was not refused by the seal: %v", name, err)
 		}
 	}
-	if _, err := s.AnswerKeptWorkCarryOn(ctx, open.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface()); err != nil {
+	if _, err := s.AnswerKeptWork(ctx, open.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.EstablishKeptWork(ctx, open.ID, "dddd", []string{"cccc"}); !errors.Is(err, ErrKeptWorkAnswered) {

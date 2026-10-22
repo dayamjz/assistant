@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -27,6 +28,14 @@ import (
 // task and the entry.
 func plantKeptInvestigation(t *testing.T, h *home.Home, subject, repositoryID string) (string, store.KeptWork) {
 	t.Helper()
+	return plantKeptInvestigationAs(t, h, subject, repositoryID, "")
+}
+
+// plantKeptInvestigationAs is plantKeptInvestigation for a task that ran
+// under the named role, which the record keeps whether or not the role is
+// configured now.
+func plantKeptInvestigationAs(t *testing.T, h *home.Home, subject, repositoryID, role string) (string, store.KeptWork) {
+	t.Helper()
 	ctx := t.Context()
 	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
@@ -43,7 +52,7 @@ func plantKeptInvestigation(t *testing.T, h *home.Home, subject, repositoryID st
 	}
 	if _, err := records.CreateTask(ctx, store.Task{
 		ID: id, Shape: store.TaskInvestigation, Project: "the parser", Mode: "headless", WorktreePath: copyPath,
-		RepositoryID: store.Known(repositoryID),
+		RepositoryID: store.Known(repositoryID), Role: role,
 	}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
@@ -234,10 +243,10 @@ func TestAKeptCopyThatFailsTheAssertionIsNotCarriedOn(t *testing.T) {
 	}
 }
 
-// A carry-on answer recorded by a service that stopped before it created
-// the task is completed by the next start: the entry answered carry-on
-// naming a task with no row, written as the stopped service left it, is
-// found at open, the task created with that identifier through intake, the
+// A carry-on claim recorded by a service that stopped before it created
+// the task is completed by the next start: the open entry claimed by a
+// task with no row, written as the stopped service left it, is found at
+// open, the task created with that identifier through intake, the
 // copy moved and the note written, and the entry marked carried on; the
 // task then dispatches into the copy. Without the completion at open the
 // entry stays owed and no task exists.
@@ -263,7 +272,7 @@ func TestACarryOnAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.AnswerKeptWorkCarryOn(t.Context(), entry.ID, reserved, kept.String(), store.ResolvedByMachineInterface()); err != nil {
+	if _, err := records.ClaimKeptWorkCarryOn(t.Context(), entry.ID, reserved, kept.String(), store.ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	_ = records.Close()
@@ -315,7 +324,8 @@ func waitLaunched(t *testing.T, h *home.Home, task string) {
 // A carry on stopped inside the task's intake, after its row and before its
 // instructions file, is completed by the next start in intake's own order:
 // the first service's intake is stopped at that point through the seam, so
-// the answer is recorded, the row stands and no file does; the next start
+// the claim is recorded, the row stands and no file does, so the claim is
+// not withdrawn and the entry stays open and claimed; the next start
 // finds the row, has intake write the file, moves the copy, writes the
 // note, marks the entry, and the task dispatches into the copy. Without
 // intake's second step at completion the row is taken as a finished intake,
@@ -341,8 +351,8 @@ func TestACarryOnStoppedInsideIntakeIsCompletedAtTheNextStart(t *testing.T) {
 		}
 	})
 	answered, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
-	if err != nil || answered.Answer.Or("") != store.KeptCarryOn || answered.CarriedOnAt.IsKnown() {
-		t.Fatalf("after the stop the entry reads %+v, %v; want it answered carry-on and not carried on", answered, err)
+	if err != nil || !answered.CarryOnClaimed() || answered.CarriedOnAt.IsKnown() {
+		t.Fatalf("after the stop the entry reads %+v, %v; want it open with its carry-on claim standing, since the task's row stands", answered, err)
 	}
 	reserved := answered.CarriedOnTask.Or("")
 	if _, err := recordsOf(t, h).Task(t.Context(), reserved); err != nil {
@@ -370,10 +380,11 @@ func TestACarryOnStoppedInsideIntakeIsCompletedAtTheNextStart(t *testing.T) {
 	})
 }
 
-// A carry on whose adoption fails leaves the answer owed and the new task
-// undispatched, and a copy standing at the new task's path is not taken as
-// the kept one by its path. The old task's directory is made to refuse the
-// rename, so the answer is recorded and the task created, the copy stays
+// A carry on whose adoption fails leaves the claim owed, the entry open,
+// and the new task undispatched, and a copy standing at the new task's
+// path is not taken as the kept one by its path. The old task's directory
+// is made to refuse the rename, so the claim is recorded and the task
+// created, the copy stays
 // where it was, and a dispatch pass dispatches nothing: the task is held on
 // the entry it carries on. A fresh clone of the upstream is then put at the
 // new task's path while the kept copy still stands, and the answer again is
@@ -408,8 +419,8 @@ func TestAFailedAdoptionHoldsTheTaskAndAFreshCloneIsNotTakenForTheCopy(t *testin
 			t.Fatalf("the carry on completed past a rename the directory refuses: %+v", out)
 		}
 		answered, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
-		if err != nil || answered.Answer.Or("") != store.KeptCarryOn || answered.CarriedOnAt.IsKnown() {
-			t.Fatalf("after the failed adoption the entry reads %+v, %v; want it answered carry-on and owed", answered, err)
+		if err != nil || !answered.CarryOnClaimed() || answered.CarriedOnAt.IsKnown() {
+			t.Fatalf("after the failed adoption the entry reads %+v, %v; want it open with its carry-on claim owed", answered, err)
 		}
 		reserved = answered.CarriedOnTask.Or("")
 		if _, err := recordsOf(t, h).Task(ctx, reserved); err != nil {
@@ -475,6 +486,55 @@ func TestAFailedAdoptionHoldsTheTaskAndAFreshCloneIsNotTakenForTheCopy(t *testin
 	})
 }
 
+// A carry on whose intake is refused leaves the entry open and listed, the
+// reviewer's sequence on #475: the kept investigation ran under a role the
+// configuration no longer has, so intake refuses the task that would carry
+// it on. The answer is refused naming why, no task is created, and the
+// entry is still open, still read by the open-entry listing and status,
+// and still holds the project's new tasks; the copy stands where it was.
+// Without the answer kept apart from its outcome, the entry reads answered
+// carry-on naming a task that never exists, is listed nowhere, and the
+// project's tasks dispatch past kept work nobody decided.
+func TestACarryOnWhoseIntakeIsRefusedLeavesTheEntryOpen(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigationAs(t, h, subject, repository.ID, "removed-since")
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		if err == nil || !strings.Contains(err.Error(), "removed-since") {
+			t.Fatalf("the carry on under a role no longer configured = %+v, %v; want it refused naming the role", out, err)
+		}
+		after, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !after.Open() || after.CarriedOnTask.IsKnown() {
+			t.Fatalf("after the refused intake the entry reads %+v, %v; want it open and naming no task", after, err)
+		}
+		open, err := recordsOf(t, h).OpenKeptWork(ctx)
+		if err != nil || !slices.ContainsFunc(open, func(k store.KeptWork) bool { return k.ID == entry.ID }) {
+			t.Fatalf("the open kept work reads %+v, %v; want entry %d", open, err, entry.ID)
+		}
+		if status := statusOf(t, under.client, subject); !slices.ContainsFunc(status.KeptWork, func(k store.KeptWork) bool { return k.ID == entry.ID }) {
+			t.Fatalf("status lists kept work %+v; want entry %d", status.KeptWork, entry.ID)
+		}
+		next := recordDispatchedTaskUnder(t, h, repository, store.TaskInvestigation, "", store.Optional[config.Delivery]{})
+		records := openRecords(t, h)
+		defer func() { _ = records.Close() }()
+		if holding, err := records.KeptWorkHolding(ctx, next); err != nil || len(holding) == 0 {
+			t.Fatalf("a new task of the project is held by %+v, %v; want entry %d holding it", holding, err, entry.ID)
+		}
+		if _, err := os.Stat(filepath.Join(entry.CopyPath, "finding.txt")); err != nil {
+			t.Fatalf("the kept copy is not where it was: %v", err)
+		}
+	})
+}
+
 // Carrying on moves the whole copy, so it answers every open entry of that
 // copy: the copy is kept at the worker's commit, then the worker commits
 // again and the copy is kept again, both through the real Keep, so two
@@ -523,7 +583,7 @@ func TestCarryingOnAnswersEveryEntryOfTheCopy(t *testing.T) {
 // start though the copy went on past what it was kept at, the reviewer's
 // sequence: a detached investigation's copy is kept at the worker's commit
 // A, the worker then commits B on it with no second Keep, so A is B's
-// ancestor and no longer a tip, and the carry on is answered and stopped
+// ancestor and no longer a tip, and the carry on is claimed and stopped
 // through the seam right after the move. The next start takes the copy at
 // the new task's path as the kept one, since it still contains A, marks
 // the entry, and the task's worker starts. Without reading containment

@@ -60,47 +60,59 @@ import (
 //
 // # A failed adoption, and every entry of the copy
 //
-// The answer names the new task, and until the task owns the copy it is
-// held on the entries it carries on, by internal/store's hold predicate: an
-// adoption that fails, a rename the old task's directory refuses among the
-// ways, leaves the answer owed and the task undispatched, so no dispatch
-// cuts it a fresh clone without the kept work. Completion takes a copy that
+// The claim names the new task, and until the task owns the copy the entry
+// stays open, listed and holding its project's dispatch, the new task's
+// among it, by internal/store's hold predicate: an adoption that fails, a
+// rename the old task's directory refuses among the ways, leaves the claim
+// owed and the task undispatched, so no dispatch cuts it a fresh clone
+// without the kept work. Completion takes a copy that
 // already stands at the new task's path only when it is the kept one
 // (verifyAdopted): the copy the answer was given for by its file identity,
 // tasks.CopyIdentity, which the answer records, with the old path gone and
 // every commit the entry recorded still contained in it. Containment alone
 // is not identity: a fresh clone of an upstream that took the recorded
 // commits up contains them all and lacks the copy's own work. The kept
-// copy is checked to be that copy before it is moved, too. Carrying on moves the whole
-// copy, so the answer carries on every open entry of the same copy, the copy
-// kept again at another state, in the same write, and the mark marks them
-// all; and it is refused while another entry of the copy holds an answer
-// not yet carried out, as every answer is (keptdiscard.go's "Every entry of
-// the copy").
+// copy is checked to be that copy before it is moved, too. Carrying on
+// moves the whole copy, so the mark answers and marks every open entry of
+// the same copy kept by the time of the claim, the copy kept again at
+// another state, in its one write; and a claim is refused while another
+// entry of the copy holds an answer not yet carried out, as every answer
+// is (keptdiscard.go's "Every entry of the copy").
 //
 // # The order, and what a stop leaves
 //
-// The identifier is minted first and the answer recorded with it,
-// store.AnswerKeptWorkCarryOn, which closes the entry, so the new task is
-// not held by it. completeCarryOn then takes the task's dispatch slot for
-// that identifier before anything else, so no dispatch pass cuts a fresh
-// clone at the path the copy is about to stand at; between the answer and
-// the slot no task row exists yet, so no pass can find the task to
-// dispatch. Then, in the order intake keeps, the task is created with that
-// identifier, the copy is moved to the task's own path and reshaped as
-// dispatch shapes a fresh clone, the note is appended to the instructions
-// file, and the entry is marked carried on. Every step after the answer is
-// idempotent on what it finds (the row stands, the instructions file
-// stands, the copy stands at the new path, the note is in the file), so a
-// service that stops anywhere in it is completed by the next call or the
-// next start from the entry alone, which names the task:
-// completeCarryOnsAtOpen reads every carry-on not marked. A stop before the
-// task's row is written leaves an entry naming a task that does not exist
-// yet, which the completion creates; a stop between the row and the
-// instructions file, inside intake, leaves a row with no file, which
-// intake's own CompleteIntake writes before the copy is moved; a stop after
-// the move leaves the copy at the new path, which it finds. What is not
-// recovered: a copy gone from both paths, which is reported and left.
+// A carry on is recorded as two facts, so the entry is never answered before
+// the task it names owns the copy. The identifier is minted first and claimed
+// on the entry with the copy's identity and who asked
+// (store.ClaimKeptWorkCarryOn), which leaves the entry open: status, the
+// catch-up read and the supervisor loop list it, and the project's new tasks,
+// the one it names among them, still wait on it. completeCarryOn then takes the
+// task's dispatch slot for that identifier before anything else, so no dispatch
+// pass cuts a fresh clone at the path the copy is about to stand at; between
+// the claim and the slot no task row exists yet, so no pass can find the task
+// to dispatch. Then, in the order intake keeps, the task is created with that
+// identifier, the copy is moved to the task's own path and reshaped as dispatch
+// shapes a fresh clone, the note is appended to the instructions file, and the
+// entry is answered carry-on and marked in one write
+// (store.MarkKeptWorkCarriedOn), which is when it closes. An intake that
+// refuses the task, a role the configuration no longer has among the ways, has
+// created nothing and moved nothing, so the claim is withdrawn
+// (store.WithdrawKeptWorkCarryOn, refused by the store once the task's row
+// exists) and the answer is refused naming why, with the entry open as it was.
+// Every step after the claim is idempotent on what it finds (the row stands,
+// the instructions file stands, the copy stands at the new path, the note is in
+// the file), so a service that stops anywhere in it is completed by the next
+// call or the next start from the entry alone, which names the task:
+// completeCarryOnsAtOpen reads every claim not marked. A stop before the task's
+// row is written leaves an open entry naming a task that does not exist yet,
+// which the completion creates, or withdraws if intake refuses it; a stop
+// between the row and the instructions file, inside intake, leaves a row with
+// no file, which intake's own CompleteIntake writes before the copy is moved; a
+// stop after the move leaves the copy at the new path, which it finds. What is
+// not recovered: a copy gone from both paths, which is reported and left; and a
+// claim whose task was created and whose copy then cannot be adopted, which
+// stays owed, the entry open and listed and no other answer taken on the copy,
+// until a later call or start adopts it.
 //
 // Once the slot is given back a dispatch pass is asked for, and the task
 // dispatches over its standing copy on dispatch.go's terms: swept, asserted
@@ -117,7 +129,9 @@ func (s *Service) carryOnKeptWork(ctx context.Context, req ipc.Request, entry st
 	if !entry.Open() && entry.Answer.Or("") != store.KeptCarryOn {
 		return machine.KeptWorkAnswered{}, refusedAnswered(entry)
 	}
-	if entry.Open() {
+	// A claim this answer finds standing, one a stopped service or a failed
+	// adoption left, is completed rather than claimed again.
+	if entry.Open() && !entry.CarryOnClaimed() {
 		plan, err := s.carryOnOf(ctx, entry)
 		if err != nil {
 			return machine.KeptWorkAnswered{}, err
@@ -133,14 +147,17 @@ func (s *Service) carryOnKeptWork(ctx context.Context, req ipc.Request, entry st
 		if err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
-		answered, err := s.store.AnswerKeptWorkCarryOn(ctx, entry.ID, id, kept.String(), req.HoldResolver())
+		claimed, err := s.store.ClaimKeptWorkCarryOn(ctx, entry.ID, id, kept.String(), req.HoldResolver())
 		switch {
-		case errors.Is(err, store.ErrKeptWorkAnswered) || errors.Is(err, store.ErrKeptWorkClosed):
+		case errors.Is(err, store.ErrKeptWorkAnswered) || errors.Is(err, store.ErrKeptWorkClosed) ||
+			errors.Is(err, store.ErrKeptWorkCarryOnClaimed):
+			// Answered, closed or claimed by another call in between: a
+			// carry on it reads is completed, anything else refused.
 			again, readErr := s.store.KeptWorkEntry(ctx, entry.ID)
 			if readErr != nil {
 				return machine.KeptWorkAnswered{}, readErr
 			}
-			if again.Answer.Or("") != store.KeptCarryOn {
+			if again.Answer.Or("") != store.KeptCarryOn && !again.CarryOnClaimed() {
 				return machine.KeptWorkAnswered{}, refusedAnswered(again)
 			}
 			entry = again
@@ -149,7 +166,7 @@ func (s *Service) carryOnKeptWork(ctx context.Context, req ipc.Request, entry st
 		case err != nil:
 			return machine.KeptWorkAnswered{}, err
 		default:
-			entry = answered
+			entry = claimed
 		}
 	}
 	return s.completeCarryOn(ctx, entry)
@@ -337,7 +354,7 @@ func (s *Service) assertReshaped(ctx context.Context, entry store.KeptWork, id, 
 func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
 	id, ok := entry.CarriedOnTask.Get()
 	if !ok {
-		return machine.KeptWorkAnswered{}, fmt.Errorf("service: kept work entry %d is answered carry-on and names no task", entry.ID)
+		return machine.KeptWorkAnswered{}, fmt.Errorf("service: kept work entry %d holds no carry-on claim and names no task", entry.ID)
 	}
 	done := func(k store.KeptWork) machine.KeptWorkAnswered {
 		return machine.KeptWorkAnswered{Entry: k, Effect: machine.KeptWorkCarriedOn, Task: id}
@@ -351,6 +368,14 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	}
 	if entry.CarriedOnAt.IsKnown() {
 		return done(entry), nil
+	}
+	if !entry.CarryOnClaimed() {
+		// Withdrawn, or answered otherwise, by another call in between.
+		if entry.Answered() || entry.Closure.IsKnown() {
+			return machine.KeptWorkAnswered{}, refusedAnswered(entry)
+		}
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: the carry on of kept work entry %d by task %s was withdrawn; the entry is open",
+			ipc.ErrRefused, entry.ID, id)
 	}
 	settle, err := s.claimDispatch(id)
 	if err != nil {
@@ -379,7 +404,17 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 			Domain: plan.old.Domain, Repository: plan.repository.ID, Branch: plan.branch,
 			Instructions: instructionsText,
 		}); err != nil {
-			return machine.KeptWorkAnswered{}, refusalOf(err)
+			// The task could not be created, so nothing was moved: the
+			// claim is withdrawn and the entry is open again, listed and
+			// holding its project's dispatch as before. The store refuses
+			// the withdrawal if a row was written all the same, which
+			// leaves the claim standing for the next call to complete.
+			if _, withdrawErr := s.store.WithdrawKeptWorkCarryOn(ctx, entry.ID, id); withdrawErr != nil {
+				return machine.KeptWorkAnswered{}, fmt.Errorf("%w; the carry on of kept work entry %d stands, owed: %w",
+					refusalOf(err), entry.ID, withdrawErr)
+			}
+			s.log.Printf("kept work entry %d was not carried on: task %s could not be created (%v); the claim was withdrawn", entry.ID, id, err)
+			return machine.KeptWorkAnswered{}, fmt.Errorf("%w; kept work entry %d was not carried on, and is open again", refusalOf(err), entry.ID)
 		}
 		s.log.Printf("task %s was created to carry kept work entry %d on from task %s", id, entry.ID, plan.old.ID)
 	} else if err != nil {
@@ -624,7 +659,7 @@ func (s *Service) completeCarryOnsAtOpen(ctx context.Context) {
 	}
 	for _, entry := range owed {
 		if _, err := s.completeCarryOn(ctx, entry); err != nil {
-			s.log.Printf("kept work entry %d was answered carry-on and its carry on could not be completed: %v", entry.ID, err)
+			s.log.Printf("kept work entry %d holds a carry-on claim that could not be completed: %v", entry.ID, err)
 		}
 	}
 }

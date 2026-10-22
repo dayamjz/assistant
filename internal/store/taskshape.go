@@ -135,12 +135,16 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 			return &TaskMovedError{Task: id, Anchor: AnchoredEvent, Expected: anchor, Stands: tip}
 		}
 		// A discard confirmed on the copy's entry and not yet carried out
-		// is removing the copy the promotion would continue in.
+		// is removing the copy the promotion would continue in, and a carry
+		// on claimed is moving it to another task.
 		var confirmed int64
-		switch err := tx.QueryRowContext(ctx, `SELECT id FROM kept_work
-			WHERE task_id = ? AND answer IS NULL AND closure IS NULL AND discard_digest IS NOT NULL ORDER BY id LIMIT 1`, id).Scan(&confirmed); {
+		var what string
+		switch err := tx.QueryRowContext(ctx, `SELECT id, CASE WHEN discard_digest IS NOT NULL THEN 'confirmed discard'
+				ELSE 'claimed carry on by task ' || carried_on_task END FROM kept_work
+			WHERE task_id = ? AND answer IS NULL AND closure IS NULL AND (discard_digest IS NOT NULL OR carried_on_task IS NOT NULL)
+			ORDER BY id LIMIT 1`, id).Scan(&confirmed, &what); {
 		case err == nil:
-			return fmt.Errorf("%w: entry %d of its copy is confirmed discard", ErrKeptWorkCopyOwed, confirmed)
+			return fmt.Errorf("%w: entry %d of its copy is %s", ErrKeptWorkCopyOwed, confirmed, what)
 		case !errors.Is(err, sql.ErrNoRows):
 			return err
 		}
@@ -160,15 +164,13 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 		// promoted task itself as the one carrying it on, since the worker
 		// continues in that same copy, and the entry closes with the
 		// promotion and never without it. An entry on another copy is not
-		// touched. The task is named with the answer and the copy's
-		// ownership marked after, as the carry-on seals have it.
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?
+		// touched. The claim, the answer and the copy's ownership are one
+		// write, since the promoted task owns the copy already.
+		at := encodeTime(now)
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?,
+			carry_on_by = ?, carry_on_claimed_at = ?, carried_on_at = ?
 			WHERE task_id = ? AND answer IS NULL AND closure IS NULL`,
-			string(KeptCarryOn), who, encodeTime(now), id, id); err != nil {
-			return fmt.Errorf("recording the copy's kept work as carried on by the promotion: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET carried_on_at = ?
-			WHERE task_id = ? AND carried_on_task = ? AND carried_on_at IS NULL`, encodeTime(now), id, id); err != nil {
+			string(KeptCarryOn), who, at, id, who, at, at, id); err != nil {
 			return fmt.Errorf("recording the copy's kept work as carried on by the promotion: %w", err)
 		}
 		return nil

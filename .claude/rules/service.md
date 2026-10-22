@@ -63,9 +63,11 @@ paths: ["internal/service/**"]
   `keptanswer.go` is the answer (`keptwork.answer`, reached by section 9's
   hold answer with `--hold kept-work/N`): land, recorded once on the row,
   claimed once (`ClaimKeptWorkLanding`) and carried out through
-  `startPushedBranch`; carry on (`keptcarryon.go`), which creates a new task
-  through `queue.Create` with the identifier the answer named and adopts
-  the kept copy; and discard (`keptdiscard.go`), shown with a digest and
+  `startPushedBranch`; carry on (`keptcarryon.go`), claimed first with the
+  entry left open, which creates a new task through `queue.Create` with
+  the identifier the claim named and adopts the kept copy, the answer
+  written only with the adoption and the claim withdrawn when intake
+  refuses the task; and discard (`keptdiscard.go`), shown with a digest and
   removed only on it through `internal/tasks`' `Loss` and `Discard`, the
   person's confirmation recorded first with the entry left open and the
   answer written only with the removal (two facts, so an entry is never

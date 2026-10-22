@@ -189,13 +189,14 @@ func TestTheShapeTransitionAndTheCleanupClaimExcludeEachOther(t *testing.T) {
 	})
 }
 
-// A promotion of a task whose copy holds a discard confirmation not yet
-// carried out is refused with ErrKeptWorkCopyOwed and writes nothing: the
-// discard is removing the copy the promotion would continue in. Once the
-// confirmation is withdrawn, the promotion answers the entry carry on,
-// naming the promoted task, as PRD section 6 has it. Without the refusal
-// the promotion answers the confirmed entry carry on while its copy is
-// being removed.
+// A promotion of a task whose copy holds a discard confirmation or a
+// carry-on claim not yet carried out is refused with ErrKeptWorkCopyOwed
+// and writes nothing: the discard is removing the copy the promotion would
+// continue in, and the carry on moving it to another task. Once each is
+// withdrawn, the promotion answers the entry carry on, naming the promoted
+// task, claimed, answered and carried on in its one write, as PRD section
+// 6 has it. Without the refusal the promotion answers the entry carry on
+// while its copy is being removed or moved.
 func TestAPromotionWaitsOnADiscardOfItsCopy(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
@@ -230,10 +231,23 @@ func TestAPromotionWaitsOnADiscardOfItsCopy(t *testing.T) {
 	if _, err := s.WithdrawKeptWorkDiscard(ctx, entry.ID, "shown"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, entry.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if err := promote(); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a promotion over a claimed carry on of its copy = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || !got.CarryOnClaimed() || got.CarriedOnTask.Or("") != "taskcarrying" {
+		t.Fatalf("the refused promotion left the entry %+v, %v; want its claim standing", got, err)
+	}
+	if _, err := s.WithdrawKeptWorkCarryOn(ctx, entry.ID, "taskcarrying"); err != nil {
+		t.Fatal(err)
+	}
 	if err := promote(); err != nil {
 		t.Fatalf("the promotion once the confirmation is withdrawn: %v", err)
 	}
-	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || got.Answer.Or("") != KeptCarryOn || got.CarriedOnTask.Or("") != task.ID {
+	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || got.Answer.Or("") != KeptCarryOn || got.CarriedOnTask.Or("") != task.ID ||
+		!got.CarriedOnAt.IsKnown() || got.CarryOnBy.Or(Resolver{}) != ResolvedByMachineInterface() || got.CarriedOnCopy.IsKnown() {
 		t.Fatalf("after the promotion the entry reads %+v, %v; want it carried on by the promoted task", got, err)
 	}
 }

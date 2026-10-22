@@ -2271,34 +2271,57 @@ var schema = []migration{
 		version: 55,
 		name:    keptWorkCarryOnMigration,
 		statements: []string{
-			// The task a carry on answer creates, PRD section 6's "a worker
-			// is relaunched in that same copy": a new task of the same
-			// project and branch whose copy is the kept copy. The task is
-			// named with the answer, by AnswerKeptWorkCarryOn, before its
-			// row is written, so a stop between the two leaves an entry that
-			// names the task the next start is to create. carried_on_at is
-			// written once the task owns the copy, by MarkKeptWorkCarriedOn,
-			// and an entry answered carry-on with none is a carry on not yet
-			// carried out. Neither holds a foreign key: the task row may not
-			// exist yet when the entry names it. carried_on_copy is what
-			// only the kept copy itself has, read by the caller when it
-			// answers and opaque here, written in the same write, so the
-			// task adopts that copy and no other.
+			// The task a carry on creates, PRD section 6's "a worker is
+			// relaunched in that same copy": a new task of the same project
+			// and branch whose copy is the kept copy, recorded as two facts.
+			// The claim is carried_on_task, the task's identifier, reserved
+			// before its row is written, carried_on_copy, what only the kept
+			// copy itself has (read by the caller and opaque here, so the
+			// task adopts that copy and no other), carry_on_by and
+			// carry_on_claimed_at, written together by ClaimKeptWorkCarryOn
+			// on an entry neither answered nor closed, which stays open, and
+			// withdrawn together by WithdrawKeptWorkCarryOn, while it is
+			// unanswered, when the task could not be created. The answer is
+			// the adoption's outcome: answer carry-on, from the claim, with
+			// carried_on_at, when the task came to own the copy, in one
+			// write by MarkKeptWorkCarriedOn, so no entry is ever answered
+			// carry-on before its task owns the copy. A promotion writes the
+			// claim, the answer and carried_on_at in its one write, naming
+			// the promoted task and no copy, since the copy never moves.
+			// Neither the task nor the copy holds a foreign key: the task
+			// row does not exist yet when the claim names it.
 			`ALTER TABLE kept_work ADD COLUMN carried_on_task TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN carried_on_copy TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carry_on_by TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carry_on_claimed_at TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN carried_on_at TEXT`,
-			`CREATE TRIGGER kept_work_carries_on_once
-				BEFORE UPDATE OF carried_on_task, carried_on_copy ON kept_work
-				WHEN (NEW.carried_on_task IS NOT OLD.carried_on_task OR NEW.carried_on_copy IS NOT OLD.carried_on_copy)
-					AND (OLD.carried_on_task IS NOT NULL OR OLD.carried_on_copy IS NOT NULL OR NEW.answer IS NOT 'carry-on')
+			`CREATE TRIGGER kept_work_carry_on_is_claimed_whole
+				BEFORE UPDATE OF carried_on_task, carried_on_copy, carry_on_by, carry_on_claimed_at ON kept_work
+				WHEN (NEW.carried_on_task IS NOT OLD.carried_on_task OR NEW.carried_on_copy IS NOT OLD.carried_on_copy
+						OR NEW.carry_on_by IS NOT OLD.carry_on_by OR NEW.carry_on_claimed_at IS NOT OLD.carry_on_claimed_at)
+					AND NOT (OLD.answer IS NULL AND OLD.closure IS NULL AND (
+						(OLD.carried_on_task IS NULL AND OLD.carried_on_copy IS NULL AND OLD.carry_on_by IS NULL
+							AND OLD.carry_on_claimed_at IS NULL
+							AND NEW.carried_on_task IS NOT NULL AND NEW.carry_on_by IS NOT NULL AND NEW.carry_on_claimed_at IS NOT NULL
+							AND (NEW.carried_on_copy IS NOT NULL OR (NEW.answer = 'carry-on' AND NEW.carried_on_at IS NOT NULL)))
+						OR (NEW.answer IS NULL
+							AND OLD.carried_on_task IS NOT NULL AND OLD.carry_on_by IS NOT NULL AND OLD.carry_on_claimed_at IS NOT NULL
+							AND NEW.carried_on_task IS NULL AND NEW.carried_on_copy IS NULL AND NEW.carry_on_by IS NULL
+							AND NEW.carry_on_claimed_at IS NULL)))
 				BEGIN
-					SELECT RAISE(ABORT, 'store: a kept work entry names the task carrying it on once, with its carry-on answer');
+					SELECT RAISE(ABORT, 'store: a kept work entry''s carry-on claim is written whole on an open entry and withdrawn whole while it is unanswered');
+				END`,
+			`CREATE TRIGGER kept_work_carry_on_answer_is_its_adoption
+				BEFORE UPDATE OF answer ON kept_work
+				WHEN NEW.answer = 'carry-on' AND (NEW.carried_on_at IS NULL OR NEW.carried_on_task IS NULL)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is answered carry-on only once its task owns the copy');
 				END`,
 			`CREATE TRIGGER kept_work_carried_on_once
 				BEFORE UPDATE OF carried_on_at ON kept_work
-				WHEN OLD.carried_on_at IS NOT NULL OR OLD.carried_on_task IS NULL OR NEW.carried_on_at IS NULL
+				WHEN OLD.carried_on_at IS NOT NULL OR NEW.carried_on_at IS NULL OR NEW.carried_on_task IS NULL OR NEW.answer IS NOT 'carry-on'
 				BEGIN
-					SELECT RAISE(ABORT, 'store: a kept work entry is carried on once, and only by the task it names');
+					SELECT RAISE(ABORT, 'store: a kept work entry is carried on once, with its carry-on answer, by the task its claim names');
 				END`,
 		},
 	},

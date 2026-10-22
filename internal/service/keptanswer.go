@@ -186,7 +186,8 @@ func (s *Service) landKeptWork(ctx context.Context, req ipc.Request, entry store
 // an answer not yet carried out, store.ErrKeptWorkCopyOwed.
 func refusedOwed(k store.KeptWork, err error) error {
 	return fmt.Errorf("%w: kept work entry %d was not answered: %w; that answer is carried out, or a discard confirmed on a "+
-		"copy that changed is withdrawn, by its own next call or the next start, and this entry can be answered after",
+		"copy that changed or a carry on whose task cannot be created is withdrawn, by its own next call or the next start, "+
+		"and this entry can be answered after",
 		ipc.ErrRefused, k.ID, err)
 }
 

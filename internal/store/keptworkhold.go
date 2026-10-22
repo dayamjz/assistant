@@ -15,7 +15,7 @@ import (
 // BeginDispatchAttempt's claim, so the wait a surface shows and the refusal a
 // dispatch meets cannot disagree about what holds it.
 //
-// A task a carry-on answer named is held, first, by the entries it carries
+// A task a carry-on claim names is held, first, by the entries it carries
 // on until it owns their copy. Otherwise a task is held when all three are
 // true in one read: it names a project
 // (its repository), no attempt of it has recorded a terminal session, and an
@@ -182,7 +182,7 @@ func keptWorkHoldingTx(ctx context.Context, tx *sql.Tx, taskID string) ([]KeptWo
 		return nil, "", fmt.Errorf("task %s: %w", taskID, errNoRows(err))
 	}
 	project, ok := repository.Get()
-	// A task a carry-on answer named is held by the entries it carries on
+	// A task a carry-on claim names is held by the entries it carries on
 	// until it owns their copy (MarkKeptWorkCarriedOn): a carry on whose
 	// adoption failed leaves the task held on them, so no dispatch cuts it
 	// a fresh clone without the kept work.
