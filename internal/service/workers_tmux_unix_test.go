@@ -95,7 +95,7 @@ func callFromWindow(t *testing.T, w launched, method ipc.Method, params any) (js
 			case 0:
 				return stdout, ""
 			case 1:
-				return nil, ipc.Code(strings.TrimSpace(string(stderr)))
+				return nil, refusedWith(t, method, string(stderr))
 			default:
 				t.Fatalf("calling %s from a window of the worker's server exited %d: %s", method, status, stderr)
 			}

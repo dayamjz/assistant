@@ -147,6 +147,33 @@ func FatalUnlessSweepsStoppedClearing(t *testing.T, unestablished, format string
 	fatalUnlessSweepsStoppedClearing(t, unestablished, format, args...)
 }
 
+// SweepsAsked is sweepsAsked for this package's external tests: every sweep
+// a service asks of a copy, each answered by the real sweep.
+type SweepsAsked struct{ asked *sweepsAsked }
+
+// WithSweepsRecordedForTest returns o with every sweep the service asks of a
+// copy answered by an agents.Sweeper over o.Home with reapGrace, which is
+// the sweep the product asks, and recorded in the SweepsAsked it returns. It
+// is set on the options because recovery sweeps inside Open, before a test
+// holds the Service.
+func WithSweepsRecordedForTest(o Options) (Options, *SweepsAsked) {
+	asked := &sweepsAsked{sweeper: agents.NewSweeper(o.Home, reapGrace, nil)}
+	o.sweepCopy = asked.sweep
+	return o, &SweepsAsked{asked: asked}
+}
+
+// Of counts the sweeps the service has asked of dir.
+func (s *SweepsAsked) Of(dir string) int { return s.asked.of(dir) }
+
+// UntilClear is untilClear over the latest sweep asked of dir, for a test
+// that left nothing of its own running in dir and holds nothing of each
+// sweep beyond untilClear's own checks. again must make the service ask
+// exactly one more sweep of dir.
+func (s *SweepsAsked) UntilClear(t *testing.T, unestablished, dir string, again func()) {
+	t.Helper()
+	s.asked.untilClear(t, unestablished, dir, nil, func(agents.SweepResult) {}, again)
+}
+
 // SeedDatabase is seedDatabase for this package's external tests.
 func SeedDatabase(tb testing.TB, path string) {
 	tb.Helper()
