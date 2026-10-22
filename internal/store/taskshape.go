@@ -80,7 +80,10 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // answered carry-on as (PRD section 6: "the promotion records the entry's
 // answer as carry on, which closes it"), naming the promoted task as the
 // task carrying them on, in this same transaction; a zero Resolver is
-// ErrNoResolver and nothing is written.
+// ErrNoResolver and nothing is written. A copy one of whose entries holds a
+// discard confirmation not yet carried out is refused with
+// ErrKeptWorkCopyOwed, wrapped, and nothing is written: that discard is
+// removing the copy, and is carried out or withdrawn first.
 func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to TaskShape, repository, branch string,
 	delivery config.Delivery, intent string, anchor int64, detail string, by Resolver) (Task, TaskEvent, error) {
 	if strings.TrimSpace(id) == "" {
@@ -130,6 +133,16 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 		}
 		if tip != anchor {
 			return &TaskMovedError{Task: id, Anchor: AnchoredEvent, Expected: anchor, Stands: tip}
+		}
+		// A discard confirmed on the copy's entry and not yet carried out
+		// is removing the copy the promotion would continue in.
+		var confirmed int64
+		switch err := tx.QueryRowContext(ctx, `SELECT id FROM kept_work
+			WHERE task_id = ? AND answer IS NULL AND closure IS NULL AND discard_digest IS NOT NULL ORDER BY id LIMIT 1`, id).Scan(&confirmed); {
+		case err == nil:
+			return fmt.Errorf("%w: entry %d of its copy is confirmed discard", ErrKeptWorkCopyOwed, confirmed)
+		case !errors.Is(err, sql.ErrNoRows):
+			return err
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE task SET shape = ?, repository_id = ?, branch = ?, delivery = ?, delivery_intent = ? WHERE id = ?`,

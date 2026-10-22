@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -45,7 +46,10 @@ func TestALandingRunIsRecordedOnceOnAnEntryAnsweredLand(t *testing.T) {
 	if _, err := s.RecordKeptWorkLanding(ctx, land.ID, run.ID); !errors.Is(err, ErrKeptWorkNotLand) {
 		t.Fatalf("a landing on an open entry = %v; want ErrKeptWorkNotLand", err)
 	}
-	if _, err := s.AnswerKeptWorkDiscard(ctx, other.ID, "shown", nil, ResolvedByMachineInterface()); err != nil {
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, other.ID, "shown", nil, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkKeptWorkDiscarded(ctx, other.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.RecordKeptWorkLanding(ctx, other.ID, run.ID); !errors.Is(err, ErrKeptWorkNotLand) {
@@ -155,11 +159,16 @@ func TestACarryOnAnswerNamesItsTaskOnceAndIsCarriedOutOnce(t *testing.T) {
 	}
 }
 
-// A discard answer records what it was shown in the same write, refusing an
-// empty digest and the generic answer; the copy's going is marked once,
-// only on an entry answered discard; the owed listing drops the entry when
-// it is; and the schema seals both against a direct rewrite.
-func TestADiscardAnswerRecordsWhatItWasShownOnceAndIsCarriedOutOnce(t *testing.T) {
+// A discard is two facts. The confirmation records what it was shown, who
+// confirmed and when, refusing an empty digest, nobody and the generic
+// answer, and leaves the entry open, listed and owed: no second
+// confirmation and no other answer is taken on it, and it can be withdrawn
+// only with its own digest, which leaves the entry open with none. The
+// answer is written only with the removal's mark, from the confirmation,
+// once; and the schema refuses an entry answered discard without the
+// removal, a confirmation written in part or on an answered entry, and a
+// rewrite of either fact.
+func TestADiscardIsConfirmedAndThenAnsweredWithItsRemoval(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
@@ -168,69 +177,132 @@ func TestADiscardAnswerRecordsWhatItWasShownOnceAndIsCarriedOutOnce(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface()); err == nil {
-		t.Fatal("a discard answer shown nothing was recorded")
+	listed := func() bool {
+		t.Helper()
+		open, err := s.OpenKeptWork(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(open, func(k KeptWork) bool { return k.ID == entry.ID })
 	}
-	if _, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, " ", nil, ResolvedByMachineInterface()); err == nil {
-		t.Fatal("a discard answer with an empty digest was recorded")
+	owed := func() []KeptWork {
+		t.Helper()
+		got, err := s.KeptWorkDiscardsOwed(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface()); err == nil {
+		t.Fatal("a discard answer with no removal was recorded")
+	}
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, " ", nil, ResolvedByMachineInterface()); err == nil {
+		t.Fatal("a discard confirmation with an empty digest was recorded")
+	}
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, "abc123", nil, Resolver{}); !errors.Is(err, ErrNoResolver) {
+		t.Fatalf("a confirmation from nobody = %v; want ErrNoResolver", err)
 	}
 	if _, err := s.MarkKeptWorkDiscarded(ctx, entry.ID); !errors.Is(err, ErrKeptWorkNotDiscard) {
-		t.Fatalf("marking an open entry discarded = %v; want ErrKeptWorkNotDiscard", err)
+		t.Fatalf("marking an entry with no confirmation discarded = %v; want ErrKeptWorkNotDiscard", err)
 	}
-	answered, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, "abc123", []string{"eeee"}, ResolvedByMachineInterface())
-	if err != nil || answered.Answer.Or("") != KeptDiscard || answered.DiscardDigest.Or("") != "abc123" ||
-		!slices.Equal(answered.DiscardLacks, []string{"eeee"}) || answered.DiscardedAt.IsKnown() {
-		t.Fatalf("the discard answer = %+v, %v; want discard shown abc123 losing eeee, not yet discarded", answered, err)
+	if _, err := s.WithdrawKeptWorkDiscard(ctx, entry.ID, "abc123"); !errors.Is(err, ErrKeptWorkNotConfirmed) {
+		t.Fatalf("withdrawing a confirmation never made = %v; want ErrKeptWorkNotConfirmed", err)
 	}
-	if owed, err := s.KeptWorkDiscardsOwed(ctx); err != nil || len(owed) != 1 || owed[0].ID != entry.ID {
-		t.Fatalf("KeptWorkDiscardsOwed = %+v, %v; want the entry", owed, err)
+
+	confirmed, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, "abc123", []string{"eeee"}, ResolvedByMachineInterface())
+	if err != nil || !confirmed.Open() || !confirmed.DiscardConfirmed() || confirmed.DiscardDigest.Or("") != "abc123" ||
+		!slices.Equal(confirmed.DiscardLacks, []string{"eeee"}) || confirmed.DiscardBy.Or(Resolver{}) != ResolvedByMachineInterface() ||
+		!confirmed.DiscardConfirmedAt.IsKnown() || confirmed.Answered() || confirmed.DiscardedAt.IsKnown() {
+		t.Fatalf("the confirmation = %+v, %v; want it open, confirmed abc123 losing eeee by the machine interface, unanswered", confirmed, err)
+	}
+	if !listed() {
+		t.Fatal("a confirmed entry is not listed among the open kept work")
+	}
+	if got := owed(); len(got) != 1 || got[0].ID != entry.ID {
+		t.Fatalf("KeptWorkDiscardsOwed = %+v; want the entry", got)
+	}
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, "def456", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkDiscardConfirmed) {
+		t.Fatalf("a second confirmation = %v; want ErrKeptWorkDiscardConfirmed", err)
+	}
+	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a land over the confirmation = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	if _, err := s.WithdrawKeptWorkDiscard(ctx, entry.ID, "def456"); !errors.Is(err, ErrKeptWorkNotConfirmed) {
+		t.Fatalf("withdrawing another digest's confirmation = %v; want ErrKeptWorkNotConfirmed", err)
+	}
+	withdrawn, err := s.WithdrawKeptWorkDiscard(ctx, entry.ID, "abc123")
+	if err != nil || !withdrawn.Open() || withdrawn.DiscardConfirmed() || withdrawn.DiscardDigest.IsKnown() || withdrawn.DiscardLacks != nil ||
+		withdrawn.DiscardBy.IsKnown() || withdrawn.DiscardConfirmedAt.IsKnown() {
+		t.Fatalf("the withdrawal = %+v, %v; want the entry open with no confirmation", withdrawn, err)
+	}
+	if got := owed(); len(got) != 0 || !listed() {
+		t.Fatalf("after the withdrawal KeptWorkDiscardsOwed = %+v and listed = %v; want none owed and the entry listed", got, listed())
+	}
+
+	again, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, "def456", []string{"eeee"}, ResolvedByMachineInterface())
+	if err != nil {
+		t.Fatal(err)
 	}
 	done, err := s.MarkKeptWorkDiscarded(ctx, entry.ID)
-	if err != nil || !done.DiscardedAt.IsKnown() {
-		t.Fatalf("marking the entry discarded = %+v, %v", done, err)
+	if err != nil || done.Answer.Or("") != KeptDiscard || done.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() ||
+		done.AnsweredAt != again.DiscardConfirmedAt || done.DiscardDigest.Or("") != "def456" || !done.DiscardedAt.IsKnown() || done.Open() {
+		t.Fatalf("the mark = %+v, %v; want it answered discard as confirmed, def456, and marked", done, err)
 	}
 	if _, err := s.MarkKeptWorkDiscarded(ctx, entry.ID); !errors.Is(err, ErrKeptWorkDiscarded) {
 		t.Fatalf("marking it again = %v; want ErrKeptWorkDiscarded", err)
 	}
-	if owed, err := s.KeptWorkDiscardsOwed(ctx); err != nil || len(owed) != 0 {
-		t.Fatalf("KeptWorkDiscardsOwed = %+v, %v; want none once discarded", owed, err)
+	if _, err := s.WithdrawKeptWorkDiscard(ctx, entry.ID, "def456"); !errors.Is(err, ErrKeptWorkAnswered) {
+		t.Fatalf("withdrawing a confirmation carried out = %v; want ErrKeptWorkAnswered", err)
 	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discard_digest = 'other' WHERE id = ?`, entry.ID); err == nil {
-		t.Fatal("the schema let what the discard was shown be rewritten")
+	if got := owed(); len(got) != 0 || listed() {
+		t.Fatalf("once discarded KeptWorkDiscardsOwed = %+v and listed = %v; want neither", got, listed())
 	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discard_lacks = '[]' WHERE id = ?`, entry.ID); err == nil {
-		t.Fatal("the schema let the commits the discard was shown as lost be rewritten")
+
+	open, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/f", Holds: []string{"ffff"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discarded_at = '2020-01-01T00:00:00Z' WHERE id = ?`, entry.ID); err == nil {
-		t.Fatal("the schema let the discarded instant be rewritten")
-	}
-	land, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/f", Holds: []string{"ffff"}, Reason: "unproven", Against: "mmmm"})
+	land, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/l", Holds: []string{"llll"}, Reason: "unproven", Against: "mmmm"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AnswerKeptWork(ctx, land.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discard_digest = 'abc' WHERE id = ?`, land.ID); err == nil {
-		t.Fatal("the schema let a discard digest be written on an entry answered land")
-	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discard_lacks = '[]' WHERE id = ?`, land.ID); err == nil {
-		t.Fatal("the schema let the commits a discard was shown be written on an entry answered land")
+	for name, write := range map[string]struct {
+		statement string
+		id        int64
+	}{
+		"an answer with no removal": {`UPDATE kept_work SET answer = 'discard', answered_by = 'machine', answered_at = kept_at,
+			discard_digest = 'x', discard_lacks = '[]', discard_by = 'machine', discard_confirmed_at = kept_at WHERE id = ?`, open.ID},
+		"a confirmation in part":            {`UPDATE kept_work SET discard_digest = 'x' WHERE id = ?`, open.ID},
+		"a confirmation on an answered one": {`UPDATE kept_work SET discard_digest = 'x', discard_lacks = '[]', discard_by = 'machine', discard_confirmed_at = kept_at WHERE id = ?`, land.ID},
+		"a rewritten confirmation":          {`UPDATE kept_work SET discard_digest = 'other' WHERE id = ?`, entry.ID},
+		"a withdrawal once discarded": {`UPDATE kept_work SET discard_digest = NULL, discard_lacks = NULL, discard_by = NULL,
+			discard_confirmed_at = NULL WHERE id = ?`, entry.ID},
+		"a rewritten removal": {`UPDATE kept_work SET discarded_at = '2020-01-01T00:00:00.000000000Z' WHERE id = ?`, entry.ID},
+		"a removal with no answer": {`UPDATE kept_work SET discard_digest = 'x', discard_lacks = '[]', discard_by = 'machine',
+			discard_confirmed_at = kept_at, discarded_at = kept_at WHERE id = ?`, open.ID},
+	} {
+		if _, err := s.write.ExecContext(ctx, write.statement, write.id); err == nil || !strings.Contains(err.Error(), "kept work entry") {
+			t.Errorf("%s was not refused by the schema: %v", name, err)
+		}
 	}
 }
 
-// A discard answer settles every entry of its copy, and no entry is
-// answered while another of its copy holds an answer not yet carried out.
-// Three entries name one copy and a fourth another: with the first
-// answered land and its run not named, a discard and a carry on of the
-// others are refused with ErrKeptWorkCopyOwed and write nothing; once the
-// landing is recorded, a discard of the second answers the third discard
-// in the same write with the same digest, commits and resolver, and
-// leaves the land entry and the other copy's entry as they were; an entry
-// of the copy recorded after that is refused while the discard is owed;
-// and marking the second discarded marks the third with it and nothing
-// else, after which the late entry can be answered. Without the siblings
-// in the answer's write the third is left open over a copy that is gone.
+// A discard settles every entry of its copy kept by its confirmation, and
+// no entry is answered or confirmed while another of its copy holds an
+// answer not yet carried out. Three entries name one copy and a fourth
+// another: with the first answered land and its run not named, a discard
+// confirmation and a carry on of the others are refused with
+// ErrKeptWorkCopyOwed and write nothing; once the landing is recorded, the
+// second is confirmed, which leaves the third open and takes no answer or
+// confirmation on it, nor on an entry of the copy kept after; and the mark
+// of the second answers and marks the third with the same digest, commits
+// and resolver, leaves the land entry, the other copy's entry and the
+// entry kept after the confirmation as they were, after which that one
+// can be answered. Without the siblings in the mark the third is left
+// open over a copy that is gone.
 func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -257,14 +329,14 @@ func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) 
 	if _, err := s.AnswerKeptWork(ctx, land.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AnswerKeptWorkDiscard(ctx, second.ID, "shown", []string{"g222"}, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, second.ID, "shown", []string{"g222"}, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
 		t.Fatalf("a discard while a land of the copy is owed = %v; want ErrKeptWorkCopyOwed", err)
 	}
 	if _, err := s.AnswerKeptWorkCarryOn(ctx, third.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
 		t.Fatalf("a carry on while a land of the copy is owed = %v; want ErrKeptWorkCopyOwed", err)
 	}
-	if !read(second).Open() || !read(third).Open() {
-		t.Fatalf("the refused answers wrote: %+v, %+v", read(second), read(third))
+	if got := read(second); !got.Open() || got.DiscardConfirmed() || !read(third).Open() {
+		t.Fatalf("the refused answers wrote: %+v, %+v", got, read(third))
 	}
 	if _, err := s.ClaimKeptWorkLanding(ctx, land.ID); err != nil {
 		t.Fatal(err)
@@ -273,14 +345,30 @@ func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	answered, err := s.AnswerKeptWorkDiscard(ctx, second.ID, "shown", []string{"g222"}, ResolvedByMachineInterface())
-	if err != nil || answered.Answer.Or("") != KeptDiscard {
-		t.Fatalf("the discard once the landing is recorded = %+v, %v", answered, err)
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, second.ID, "shown", []string{"g222"}, ResolvedByMachineInterface()); err != nil {
+		t.Fatalf("the discard confirmed once the landing is recorded: %v", err)
+	}
+	if got := read(third); !got.Open() || got.DiscardConfirmed() {
+		t.Fatalf("the copy's other entry reads %+v; want it open and unconfirmed until the mark", got)
+	}
+	if _, err := s.AnswerKeptWorkCarryOn(ctx, third.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a carry on while a discard of the copy is confirmed = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, third.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a second confirmation of the copy = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	late := record("/worktrees/g", "g444")
+	if _, err := s.AnswerKeptWork(ctx, late.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a land while a discard of the copy is confirmed = %v; want ErrKeptWorkCopyOwed", err)
+	}
+
+	if _, err := s.MarkKeptWorkDiscarded(ctx, second.ID); err != nil {
+		t.Fatal(err)
 	}
 	sibling := read(third)
 	if sibling.Answer.Or("") != KeptDiscard || sibling.DiscardDigest.Or("") != "shown" || !slices.Equal(sibling.DiscardLacks, []string{"g222"}) ||
-		sibling.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || sibling.DiscardedAt.IsKnown() {
-		t.Fatalf("the copy's other open entry reads %+v; want it answered discard with what the discard was shown", sibling)
+		sibling.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || !sibling.DiscardedAt.IsKnown() {
+		t.Fatalf("the copy's other entry reads %+v; want it answered discard with what the discard was shown, and marked", sibling)
 	}
 	if got := read(land); got.Answer.Or("") != KeptLand || got.DiscardDigest.IsKnown() {
 		t.Fatalf("the land entry reads %+v; want it as it was", got)
@@ -288,16 +376,8 @@ func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) 
 	if !read(elsewhere).Open() {
 		t.Fatalf("another copy's entry reads %+v; want it open", read(elsewhere))
 	}
-
-	late := record("/worktrees/g", "g444")
-	if _, err := s.AnswerKeptWork(ctx, late.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
-		t.Fatalf("a land while a discard of the copy is owed = %v; want ErrKeptWorkCopyOwed", err)
-	}
-	if _, err := s.MarkKeptWorkDiscarded(ctx, second.ID); err != nil {
-		t.Fatal(err)
-	}
-	if !read(third).DiscardedAt.IsKnown() || read(land).DiscardedAt.IsKnown() || read(late).DiscardedAt.IsKnown() {
-		t.Fatalf("after the mark: %+v, %+v, %+v; want the sibling marked and nothing else", read(third), read(land), read(late))
+	if got := read(late); !got.Open() || got.DiscardDigest.IsKnown() {
+		t.Fatalf("the entry kept after the confirmation reads %+v; want it open, not taken by a discard it was not shown in", got)
 	}
 	if owed, err := s.KeptWorkDiscardsOwed(ctx); err != nil || len(owed) != 0 {
 		t.Fatalf("KeptWorkDiscardsOwed = %+v, %v; want none once the copy is marked gone", owed, err)

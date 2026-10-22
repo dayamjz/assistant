@@ -182,11 +182,12 @@ func (s *Service) landKeptWork(ctx context.Context, req ipc.Request, entry store
 
 // Carrying on is keptcarryon.go's.
 
-// refusedOwed is the refusal of an answer to an entry another entry of
-// whose copy holds an answer not yet carried out, store.ErrKeptWorkCopyOwed.
+// refusedOwed is the refusal of an answer to an entry of a copy that holds
+// an answer not yet carried out, store.ErrKeptWorkCopyOwed.
 func refusedOwed(k store.KeptWork, err error) error {
-	return fmt.Errorf("%w: kept work entry %d was not answered: %w; that answer is carried out by its own next call or the "+
-		"next start, and this entry can be answered after", ipc.ErrRefused, k.ID, err)
+	return fmt.Errorf("%w: kept work entry %d was not answered: %w; that answer is carried out, or a discard confirmed on a "+
+		"copy that changed is withdrawn, by its own next call or the next start, and this entry can be answered after",
+		ipc.ErrRefused, k.ID, err)
 }
 
 // refusedAnswered is the refusal of an answer to an entry already answered

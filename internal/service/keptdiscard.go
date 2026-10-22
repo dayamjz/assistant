@@ -21,10 +21,12 @@ import (
 // # What is shown, and what is confirmed
 //
 // internal/tasks' Loss reads what would be lost from the copy now: the
-// commits the default branch, read fresh, lacks, and the three indicators of
-// what no commit records, with a digest over the copy's state and those
-// commits. A default branch that cannot be read now is refused rather than
-// shown a list that may overstate or understate, naming why. A discard given a digest is
+// commits the default branch, read fresh, lacks, every path whose content
+// nothing else holds, ignored files included, and the three indicators git
+// reports, with a digest over the copy's state, those commits and those
+// paths. A default branch that cannot be read now is refused rather than
+// shown a list that may overstate or understate, naming why. A discard
+// given a digest is
 // compared against that read again: a copy that changed since, by a commit,
 // an edit, a file or a stash, digests differently and is refused, and the
 // person is told to look again. Nothing is recorded for a discard shown or
@@ -32,40 +34,50 @@ import (
 //
 // # The order, and what a stop leaves
 //
-// The answer is recorded first, with the digest it was shown and the
-// commits it was shown as lost (store.AnswerKeptWorkDiscard), which closes
-// the entry so the project's new tasks no longer wait on it; then
-// internal/tasks' Discard removes the copy, checking on the way that it
-// holds exactly what the digest sealed and that what the default branch
-// lacks of it now is among what was shown; then the entry is marked
-// discarded. A default branch that only moved since is no reason to
-// refuse. A service that stops between the answer and the mark leaves an
-// entry answered discard with a digest and no instant, which the next call
-// or the next start completes (completeDiscardsAtOpen): the copy is removed
-// if it still holds exactly what the digest was shown for, or is already
-// gone, and the entry is marked. What is not recovered: an answered
-// discard whose copy changed before it was removed, which is never removed
-// by the program and is named in the service log at each start; the
-// answer stands, so it cannot be shown and confirmed again.
+// A discard is recorded as two facts, so the entry is never answered over
+// a copy that stands. The confirmation is recorded first, with the digest
+// and the commits it was shown and who gave it
+// (store.ConfirmKeptWorkDiscard), and leaves the entry open: status, the
+// catch-up read and the supervisor loop list it, and the project's new
+// tasks still wait on it. Then internal/tasks' Discard removes the copy,
+// checking on the way that it holds exactly what the digest sealed and
+// that what the default branch lacks of it now is among what was shown; a
+// default branch that only moved since is no reason to refuse. Then the
+// entry is answered discard and marked in one write
+// (store.MarkKeptWorkDiscarded), which is when it closes and the project's
+// tasks dispatch. A copy that no longer holds what the confirmation was
+// shown has the confirmation withdrawn (store.WithdrawKeptWorkDiscard) and
+// is left standing, with the entry open to be shown and confirmed afresh
+// (discardWithdrawn). A service that stops between the confirmation and
+// the mark leaves an open entry with a confirmation, which the next call
+// on it or the next start carries out (completeDiscardsAtOpen): removed if
+// the copy still holds exactly what was shown or marked if it is already
+// gone, and withdrawn if it changed. Any other failure, an upstream that
+// cannot be read among them, leaves the confirmation standing and the
+// entry open and listed, and no other answer is taken on the copy until it
+// is carried out or withdrawn (store.ErrKeptWorkCopyOwed); a promotion of
+// the task is refused the same way. One call carries a copy's confirmation
+// out at a time in this service (claimDiscard); a second is refused while
+// it does.
 //
 // # Every entry of the copy
 //
 // A copy kept again at another state has an entry per state, and a
 // discard removes the copy whole, which is what was shown and confirmed.
-// So the answer is written on every open entry of the copy in the one write
-// (store.AnswerKeptWorkDiscard), none of them left holding the project's
-// new tasks over a copy that is gone, and the mark marks every entry of the
-// copy answered discard in the one write with the removal's record
-// (store.MarkKeptWorkDiscarded); completeDiscard reads its entry again
-// first, so the open-time completer meets a sibling already marked as done.
-// And no answer of any kind is written while another entry of the copy
+// So the mark answers and marks every open entry of the copy kept by the
+// time of the confirmation in its one write, none of them left holding the
+// project's new tasks over a copy that is gone; completeDiscard reads its
+// entry again first, so a call that finds it marked reports it discarded.
+// No answer and no confirmation is written while another entry of the copy
 // holds one not yet carried out, a land whose run is not named, a carry on
-// not marked or a discard not marked (store.ErrKeptWorkCopyOwed, refused
+// not marked or a discard confirmed (store.ErrKeptWorkCopyOwed, refused
 // with refusedOwed): each still needs the copy where it stands. What is
-// left: the copy is read and then removed, so an entry a cleanup records
-// for it between the two, which it can only do for a copy that changed in
-// that window, stays open over a copy that is gone.
-//
+// left: an entry a cleanup records for the copy after the confirmation,
+// which it can only do for a copy that changed since, so whose removal the
+// digest refuses unless the change lands in the moment between the
+// removal's last read and the removal, is left open over a copy that is
+// gone, and listed.
+
 // # What "person-only" is enforced by, and what it is not
 //
 // PRD section 6 has discard as the person's answer alone. What this file
@@ -105,50 +117,68 @@ import (
 
 // discardKeptWork is the discard answer, on this file's terms.
 func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry store.KeptWork, confirm string) (machine.KeptWorkAnswered, error) {
-	if !entry.Open() && entry.Answer.Or("") != store.KeptDiscard {
+	if entry.Answer.Or("") == store.KeptDiscard {
+		return machine.KeptWorkAnswered{Entry: entry, Effect: machine.KeptWorkDiscarded}, nil
+	}
+	if !entry.Open() {
 		return machine.KeptWorkAnswered{}, refusedAnswered(entry)
 	}
-	if entry.Open() {
-		loss, err := s.cleaner.Loss(ctx, entry)
-		if err != nil {
-			return machine.KeptWorkAnswered{}, refusedLoss(entry, err)
-		}
-		shown := lossOf(loss)
-		if confirm == "" {
-			return machine.KeptWorkAnswered{Entry: entry, Effect: machine.KeptWorkDiscardShown, Loss: &shown}, nil
-		}
-		if err := s.refuseOffTerminal(req); err != nil {
-			if errors.Is(err, ipc.ErrNotAtTerminal) {
-				return machine.KeptWorkAnswered{}, discardOffTerminal{cause: err}
-			}
-			return machine.KeptWorkAnswered{}, err
-		}
-		if confirm != loss.Digest {
-			return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d was not discarded: the digest given, %s, is not the "+
-				"copy's as it stands, %s, so either the copy changed since it was shown or the digest is another's; answer discard "+
-				"without a confirmation to see what it holds now", ipc.ErrRefused, entry.ID, confirm, loss.Digest)
-		}
-		answered, err := s.store.AnswerKeptWorkDiscard(ctx, entry.ID, confirm, loss.Lacks, req.HoldResolver())
+	if entry.DiscardConfirmed() {
+		// A confirmation this answer finds standing, one a stopped service
+		// left: it is carried out, or withdrawn and this answer taken
+		// afresh.
+		done, err := s.completeDiscard(ctx, entry)
+		var withdrawn *discardWithdrawn
 		switch {
-		case errors.Is(err, store.ErrKeptWorkAnswered) || errors.Is(err, store.ErrKeptWorkClosed):
-			again, readErr := s.store.KeptWorkEntry(ctx, entry.ID)
-			if readErr != nil {
-				return machine.KeptWorkAnswered{}, readErr
-			}
-			if again.Answer.Or("") != store.KeptDiscard {
-				return machine.KeptWorkAnswered{}, refusedAnswered(again)
-			}
-			entry = again
-		case errors.Is(err, store.ErrKeptWorkCopyOwed):
-			return machine.KeptWorkAnswered{}, refusedOwed(entry, err)
+		case errors.As(err, &withdrawn):
+			entry = withdrawn.entry
 		case err != nil:
 			return machine.KeptWorkAnswered{}, err
 		default:
-			entry = answered
-			s.dispatchInBackground()
+			return done, nil
 		}
 	}
-	return s.completeDiscard(ctx, entry)
+	loss, err := s.cleaner.Loss(ctx, entry)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, refusedLoss(entry, err)
+	}
+	shown := lossOf(loss)
+	if confirm == "" {
+		return machine.KeptWorkAnswered{Entry: entry, Effect: machine.KeptWorkDiscardShown, Loss: &shown}, nil
+	}
+	if err := s.refuseOffTerminal(req); err != nil {
+		if errors.Is(err, ipc.ErrNotAtTerminal) {
+			return machine.KeptWorkAnswered{}, discardOffTerminal{cause: err}
+		}
+		return machine.KeptWorkAnswered{}, err
+	}
+	if confirm != loss.Digest {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d was not discarded: the digest given, %s, is not the "+
+			"copy's as it stands, %s, so either the copy changed since it was shown or the digest is another's; answer discard "+
+			"without a confirmation to see what it holds now", ipc.ErrRefused, entry.ID, confirm, loss.Digest)
+	}
+	confirmed, err := s.store.ConfirmKeptWorkDiscard(ctx, entry.ID, confirm, loss.Lacks, req.HoldResolver())
+	switch {
+	case errors.Is(err, store.ErrKeptWorkAnswered) || errors.Is(err, store.ErrKeptWorkClosed):
+		again, readErr := s.store.KeptWorkEntry(ctx, entry.ID)
+		if readErr != nil {
+			return machine.KeptWorkAnswered{}, readErr
+		}
+		if again.Answer.Or("") == store.KeptDiscard {
+			return machine.KeptWorkAnswered{Entry: again, Effect: machine.KeptWorkDiscarded}, nil
+		}
+		return machine.KeptWorkAnswered{}, refusedAnswered(again)
+	case errors.Is(err, store.ErrKeptWorkCopyOwed):
+		return machine.KeptWorkAnswered{}, refusedOwed(entry, err)
+	case err != nil:
+		return machine.KeptWorkAnswered{}, err
+	}
+	done, err := s.completeDiscard(ctx, confirmed)
+	var withdrawn *discardWithdrawn
+	if errors.As(err, &withdrawn) {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d was not discarded: %w", ipc.ErrRefused, entry.ID, err)
+	}
+	return done, err
 }
 
 // discardOffTerminal is the refusal of a discard confirmation from a peer
@@ -189,24 +219,58 @@ func lossOf(l tasks.Loss) machine.KeptWorkLoss {
 		Digest: l.Digest}
 }
 
-// completeDiscard carries out a discard answer already recorded on the
+// discardWithdrawn is completeDiscard's account of a confirmation it took
+// back because the copy no longer holds what it was shown: entry is the
+// entry as the withdrawal left it, open with no confirmation.
+type discardWithdrawn struct {
+	entry store.KeptWork
+	cause error
+}
+
+func (e *discardWithdrawn) Error() string {
+	return fmt.Sprintf("the copy changed since the discard was confirmed (%v), so the confirmation was withdrawn, the copy left "+
+		"standing and the entry is open again; answer discard without a confirmation to see what it holds now", e.cause)
+}
+
+func (e *discardWithdrawn) Unwrap() error { return e.cause }
+
+// completeDiscard carries out the discard confirmation standing on the
 // entry, on this file's terms: the copy is removed while it still holds
-// exactly what the answer was shown, and the entry is marked.
+// exactly what the confirmation was shown, or is already gone, and the
+// entry is then answered discard and marked in one write; a copy that no
+// longer holds that has the confirmation withdrawn and is left standing,
+// with the entry open (*discardWithdrawn). Anything else leaves the
+// confirmation standing for the next call or the next start. One call
+// carries out a copy's confirmation at a time in this service; another is
+// refused while it does.
 func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
-	// Read again: another entry of the same copy completed may have marked
-	// this one with it.
+	if !s.claimDiscard(entry.CopyPath) {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d: a discard of its copy is being carried out now; "+
+			"answer again once it is done", ipc.ErrRefused, entry.ID)
+	}
+	defer s.releaseDiscard(entry.CopyPath)
+	// Read again: another call may have carried the confirmation out, or a
+	// sibling's mark answered this entry with it.
 	again, err := s.store.KeptWorkEntry(ctx, entry.ID)
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
 	entry = again
-	digest, ok := entry.DiscardDigest.Get()
-	if !ok {
-		return machine.KeptWorkAnswered{}, fmt.Errorf("service: kept work entry %d is answered discard and records nothing it was shown", entry.ID)
-	}
-	if entry.DiscardedAt.IsKnown() {
+	if entry.Answer.Or("") == store.KeptDiscard {
 		return machine.KeptWorkAnswered{Entry: entry, Effect: machine.KeptWorkDiscarded}, nil
 	}
+	if !entry.DiscardConfirmed() {
+		if !entry.Open() {
+			return machine.KeptWorkAnswered{}, refusedAnswered(entry)
+		}
+		return machine.KeptWorkAnswered{}, &discardWithdrawn{entry: entry, cause: errors.New("another call withdrew it")}
+	}
+	if s.betweenDiscardRecordAndRemoval != nil {
+		if err := s.betweenDiscardRecordAndRemoval(); err != nil {
+			return machine.KeptWorkAnswered{}, err
+		}
+	}
+	digest := entry.DiscardDigest.Or("")
 	gatePath := ""
 	if runID, ok := entry.RunID.Get(); ok {
 		owner, err := s.store.Run(ctx, runID)
@@ -223,8 +287,14 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 	}
 	lost, err := s.cleaner.Discard(ctx, entry, digest, entry.DiscardLacks, gatePath)
 	if errors.Is(err, tasks.ErrLossChanged) {
-		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d is answered discard and its copy was not removed: %w",
-			ipc.ErrRefused, entry.ID, err)
+		open, werr := s.store.WithdrawKeptWorkDiscard(ctx, entry.ID, digest)
+		if werr != nil {
+			return machine.KeptWorkAnswered{}, fmt.Errorf("service: kept work entry %d: the copy changed since its discard was "+
+				"confirmed (%v), and the confirmation could not be withdrawn: %w", entry.ID, err, werr)
+		}
+		withdrawn := &discardWithdrawn{entry: open, cause: err}
+		s.log.Printf("kept work entry %d: %v", entry.ID, withdrawn)
+		return machine.KeptWorkAnswered{}, withdrawn
 	} else if err != nil {
 		return machine.KeptWorkAnswered{}, refusedLoss(entry, err)
 	}
@@ -233,13 +303,37 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 		return machine.KeptWorkAnswered{}, err
 	}
 	s.log.Printf("kept work entry %d was discarded: the copy at %s is gone", entry.ID, entry.CopyPath)
+	s.dispatchInBackground()
 	gone := lossOf(lost)
 	return machine.KeptWorkAnswered{Entry: marked, Effect: machine.KeptWorkDiscarded, Loss: &gone}, nil
 }
 
-// completeDiscardsAtOpen completes every discard answer a stopped service
-// recorded and did not carry out, on this file's terms, and logs what it
-// could not.
+// claimDiscard takes the copy's discard slot in this service, false when a
+// call holds it.
+func (s *Service) claimDiscard(copyPath string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.discards == nil {
+		s.discards = make(map[string]bool)
+	}
+	if s.discards[copyPath] {
+		return false
+	}
+	s.discards[copyPath] = true
+	return true
+}
+
+// releaseDiscard gives the copy's discard slot back.
+func (s *Service) releaseDiscard(copyPath string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.discards, copyPath)
+}
+
+// completeDiscardsAtOpen carries out or withdraws every discard
+// confirmation a stopped service recorded and did not carry out, on this
+// file's terms, and logs what it could not; a withdrawal is logged by
+// completeDiscard.
 func (s *Service) completeDiscardsAtOpen(ctx context.Context) {
 	owed, err := s.store.KeptWorkDiscardsOwed(ctx)
 	if err != nil {
@@ -247,8 +341,9 @@ func (s *Service) completeDiscardsAtOpen(ctx context.Context) {
 		return
 	}
 	for _, entry := range owed {
-		if _, err := s.completeDiscard(ctx, entry); err != nil {
-			s.log.Printf("kept work entry %d was answered discard and its discard could not be completed: %v", entry.ID, err)
+		var withdrawn *discardWithdrawn
+		if _, err := s.completeDiscard(ctx, entry); err != nil && !errors.As(err, &withdrawn) {
+			s.log.Printf("kept work entry %d holds a discard confirmation that could not be carried out, and stays open: %v", entry.ID, err)
 		}
 	}
 }

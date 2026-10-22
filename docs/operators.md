@@ -577,13 +577,20 @@ every reference and every reflog entry, so the whole stash list and a
 commit only a reflog still names are sealed though not listed. Given again with
 `--confirm DIGEST` it removes the copy only while the copy still holds
 exactly what that digest was shown for, so a commit, an edit, a file or a
-stash made since is refused and you are told to look again. The entry then records the answer, what it was
-shown and who gave it. A copy kept again at another state has an entry
-for each state; discarding the copy answers and closes all of them, as
+stash made since is refused and you are told to look again. Your
+confirmation is recorded first, with what it was shown and who gave it,
+and the entry stays open and listed until the copy is gone; only then is
+it answered discard. If the service stops in between, the next start
+removes the copy if it still holds what you were shown; if the copy
+changed meanwhile, your confirmation is withdrawn, the copy stays, and
+the entry is listed again for you to look at and answer afresh. A copy
+kept again at another state has an entry for each state; discarding the
+copy answers and closes all of them kept by the time you confirmed, as
 carrying it on does. While one entry of a copy has an answer still being
 carried out (a landing whose run is not started yet, a carry on or a
-discard not finished), the copy's other entries are not answered; the
-answer under way finishes on its own or at the next start. An entry whose "what the default branch lacks" is
+discard not finished), the copy's other entries are not answered, and the
+task is not promoted; the answer under way finishes on its own or at the
+next start. An entry whose "what the default branch lacks" is
 not established (the upstream could not be read when the copy was kept) is
 refused rather than shown a list that may be wrong; the next cleanup of the
 unchanged copy establishes it.

@@ -232,6 +232,12 @@ func (s *Service) settleKeptAtRecovery(ctx context.Context) {
 		return
 	}
 	for _, k := range open {
+		// A discard confirmed and not carried out was completed or
+		// withdrawn by completeDiscardsAtOpen before this, and what it
+		// could not do it logged.
+		if k.DiscardConfirmed() {
+			continue
+		}
 		if _, err := os.Lstat(k.CopyPath); !errors.Is(err, os.ErrNotExist) {
 			if err != nil {
 				s.log.Printf("kept work entry %d: the copy at %s could not be read: %v", k.ID, k.CopyPath, err)

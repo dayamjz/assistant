@@ -175,8 +175,10 @@
 // reports. The basis is the one thing an open unestablished entry may later
 // have filled in, once, through EstablishKeptWork, and the update trigger
 // holds it to that one direction and to an open row, so an answered or
-// closed row is sealed whole. Its one revision otherwise closes it, made once and only while
-// it is open: AnswerKeptWork with a person's answer and its Resolver, or the
+// closed row is sealed whole. A discard confirmation may be written on an
+// open row and withdrawn whole, which leaves it open (migration 56). Its
+// one revision otherwise closes it, made once and only while
+// it is open: a person's answer and its Resolver, or the
 // program's KeptRemovedOnProof, which only MarkCleanupRemoved and
 // MarkRunCleanupRemoved write, in the transaction that marks the owner's
 // copy removed on a proof, so the program never closes an entry by

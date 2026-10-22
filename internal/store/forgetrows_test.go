@@ -339,7 +339,7 @@ func TestWrittenOnceRunRecordsAreNotDeletedWhileTheirRunStands(t *testing.T) {
 	}
 	// An answered entry is refused deletion too while its run stands, so the
 	// seal is shown on the row forgetting would remove.
-	if _, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, "shown", nil, ResolvedByMachineInterface()); err != nil {
+	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
 		t.Fatalf("AnswerKeptWork: %v", err)
 	}
 	if _, err := s.TransitionRunOnPullRequest(ctx, run.ID, []RunStatus{RunRunning}, RunPassed,

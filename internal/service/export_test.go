@@ -61,6 +61,16 @@ func WithCarryOnInterruptForTest(tb testing.TB, o Options, f func() error) Optio
 	return o
 }
 
+// WithDiscardInterruptForTest returns o with a discard's seam between the
+// record of the person's confirmation and the copy's removal set to f, for
+// this package's external tests: a discard whose f returns an error ends
+// with the confirmation recorded and the copy standing, as a service that
+// stopped there leaves it.
+func WithDiscardInterruptForTest(tb testing.TB, o Options, f func() error) Options {
+	o.discardTest, o.interruptDiscard = tb, f
+	return o
+}
+
 // WithBeforeStaleRemovalReleaseForTest returns o with recovery's seam between
 // reading a dead eject's removal reservation and releasing it set to f, for
 // this package's external tests.

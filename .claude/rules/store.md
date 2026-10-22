@@ -65,13 +65,19 @@ paths: ["internal/store/**"]
   an entry answered land; `KeptWork.Key` and `ParseKeptWorkKey` are the one
   spelling of `--hold kept-work/N`. Migration 55's `carried_on_task` is
   named with the carry-on answer (`AnswerKeptWorkCarryOn`) and
-  `carried_on_at` once the task owns the copy; migration 56's
-  `discard_digest` is what the discard answer was shown
-  (`AnswerKeptWorkDiscard`) and `discarded_at` once the copy went. Carry
-  on and discard each move or remove the whole copy, so each answers every
-  other open entry of the same copy in its write and its mark marks them
-  all; and no answer is written while another entry of the copy holds one
-  not yet carried out (`ErrKeptWorkCopyOwed`). Each
+  `carried_on_at` once the task owns the copy; migration 56 records a
+  discard as two facts: the person's confirmation (`discard_digest`, what
+  it was shown, with the commits, who and when), written whole on an open
+  entry by `ConfirmKeptWorkDiscard`, which leaves it open and listed, and
+  withdrawn whole by `WithdrawKeptWorkDiscard`; and the answer, written
+  only with `discarded_at` by `MarkKeptWorkDiscarded` once the copy is
+  gone, which the triggers enforce. Carry on and discard each move or
+  remove the whole copy, so carry on answers every other open entry of the
+  copy in its write and the discard's mark answers and marks every one kept
+  by the confirmation; and no answer or confirmation is written while an
+  entry of the copy holds one not yet carried out, a discard confirmation
+  on the entry itself included (`ErrKeptWorkCopyOwed`), and
+  `TransitionTaskShape` refuses a promotion over one. Each
   answer's record is its own accessor, and `AnswerKeptWork` takes land
   alone. `TransitionTaskShape` answers the promoted task's own copy's open
   entries carry-on, naming that task, in the flip's transaction, as PRD

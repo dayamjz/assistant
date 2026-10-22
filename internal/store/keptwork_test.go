@@ -98,20 +98,20 @@ func TestKeptWorkIsAnsweredOnceAndOtherwiseSealed(t *testing.T) {
 	if _, err := s.AnswerKeptWork(ctx, entry.ID, "keep", ResolvedByMachineInterface()); !errors.Is(err, ErrUnknownKeptAnswer) {
 		t.Fatalf("an answer outside the set = %v; want ErrUnknownKeptAnswer", err)
 	}
-	if _, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, "shown", nil, Resolver{}); !errors.Is(err, ErrNoResolver) {
+	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, Resolver{}); !errors.Is(err, ErrNoResolver) {
 		t.Fatalf("an answer from nobody = %v; want ErrNoResolver", err)
 	}
-	answered, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, "shown", nil, ResolvedByMachineInterface())
+	answered, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, ResolvedByMachineInterface())
 	if err != nil {
 		t.Fatalf("AnswerKeptWork: %v", err)
 	}
-	if answered.Answer.Or("") != KeptDiscard || answered.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || !answered.AnsweredAt.IsKnown() {
-		t.Fatalf("answered = %+v; want discard by the machine interface, timed", answered)
+	if answered.Answer.Or("") != KeptLand || answered.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || !answered.AnsweredAt.IsKnown() {
+		t.Fatalf("answered = %+v; want land by the machine interface, timed", answered)
 	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkAnswered) {
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkAnswered) {
 		t.Fatalf("a second answer = %v; want ErrKeptWorkAnswered", err)
 	}
-	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || got.Answer.Or("") != KeptDiscard {
+	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || got.Answer.Or("") != KeptLand {
 		t.Fatalf("after a refused second answer the entry reads %+v, %v; want the first answer", got, err)
 	}
 	if unanswered, err := s.OpenKeptWork(ctx); err != nil || len(unanswered) != 0 {
@@ -172,7 +172,7 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 	if listed, err := s.OpenKeptWork(ctx); err != nil || len(listed) != 0 {
 		t.Fatalf("OpenKeptWork = %+v, %v; want none", listed, err)
 	}
-	if _, err := s.AnswerKeptWorkDiscard(ctx, open.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkClosed) {
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, open.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkClosed) {
 		t.Fatalf("answering a closed entry = %v; want ErrKeptWorkClosed", err)
 	}
 	for name, statement := range map[string]string{

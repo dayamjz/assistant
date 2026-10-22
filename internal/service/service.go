@@ -216,6 +216,12 @@ type Options struct {
 	// never does.
 	carryOnTest      testing.TB
 	interruptCarryOn func() error
+	// discardTest and interruptDiscard are a discard's seam between the
+	// record of the person's confirmation and the copy's removal, which
+	// export_test.go's WithDiscardInterruptForTest sets and the product
+	// never does.
+	discardTest      testing.TB
+	interruptDiscard func() error
 	// beforeStaleRemovalRelease runs in recovery between reading a removal
 	// reservation whose owner is gone and releasing it; export_test.go's
 	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
@@ -432,11 +438,23 @@ type Service struct {
 	// leaves it. It is nil in production and set only through
 	// WithCarryOnInterruptForTest.
 	betweenCarryOnMoveAndMark func() error
+	// betweenDiscardRecordAndRemoval runs in a discard after the person's
+	// confirmation was recorded, once the call carrying it out holds the
+	// copy's discard slot, and before the copy is read for its removal;
+	// an error it returns ends the discard there, as a service that
+	// stopped there leaves it. It is nil in production and set only
+	// through WithDiscardInterruptForTest.
+	betweenDiscardRecordAndRemoval func() error
 	// landings is the kept work entries a landing is carrying out in this
 	// service now, keyed by entry: the in-process half of the landing's
 	// exactly-once, on keptanswer.go's terms. It is read and written under
 	// mu.
 	landings map[int64]bool
+	// discards is the copies a discard confirmation is being carried out or
+	// withdrawn for in this service now, keyed by copy path: the in-process
+	// half of keptdiscard.go's one carrier of a confirmation. It is read
+	// and written under mu.
+	discards map[string]bool
 	// beforeRefusalEnd runs in endRefused, after begin refused a run and
 	// before the run is ended. It is nil in production and set only by this
 	// package's tests, which use it to hold the run pending while they
@@ -779,6 +797,12 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 			return errors.New("service: the carry-on interrupt is a test's seam and takes the test")
 		}
 		s.betweenCarryOnMoveAndMark = o.interruptCarryOn
+	}
+	if o.interruptDiscard != nil {
+		if o.discardTest == nil {
+			return errors.New("service: the discard interrupt is a test's seam and takes the test")
+		}
+		s.betweenDiscardRecordAndRemoval = o.interruptDiscard
 	}
 	if o.interruptIntake != nil {
 		if err := s.queue.InterruptAfterRecordForTest(o.intakeTest, o.interruptIntake); err != nil {

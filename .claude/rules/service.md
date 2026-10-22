@@ -66,8 +66,11 @@ paths: ["internal/service/**"]
   `startPushedBranch`; carry on (`keptcarryon.go`), which creates a new task
   through `queue.Create` with the identifier the answer named and adopts
   the kept copy; and discard (`keptdiscard.go`), shown with a digest and
-  removed only on it through `internal/tasks`' `Loss` and `Discard`, with
-  the answer recorded first and what "person-only" is and is not enforced
+  removed only on it through `internal/tasks`' `Loss` and `Discard`, the
+  person's confirmation recorded first with the entry left open and the
+  answer written only with the removal (two facts, so an entry is never
+  answered over a copy that stands; a copy that changed has the
+  confirmation withdrawn), and what "person-only" is and is not enforced
   by stated in its header, a confirmation held to `foreground.go`'s
   relation as the approval hold is; all three completed at open when a
   stopped service left them. A promotion answers its copy's entry carry on in the

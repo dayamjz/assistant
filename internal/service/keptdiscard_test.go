@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -152,15 +154,15 @@ func TestADiscardRefusesAnUnestablishedEntryAndRemovesATasksClone(t *testing.T) 
 	})
 }
 
-// A discard answer recorded by a service that stopped before it removed
-// the copy is completed by the next start, though the upstream moved in
-// between: the entry answered discard with the digest and the commits it
+// A discard confirmation recorded by a service that stopped before it
+// removed the copy is carried out by the next start, though the upstream
+// moved in between: the confirmation with the digest and the commits it
 // was shown, written as the stopped service left it, and then a commit the
 // copy does not hold lands on the default branch upstream; the next start
-// removes the copy, which still holds exactly what was shown, and marks the
-// entry discarded. Without the completion at open the copy stands and the
-// entry stays owed; with the default branch's tip sealed in the digest the
-// moved upstream refuses the removal for good.
+// removes the copy, which still holds exactly what was shown, and answers
+// the entry discard and marks it. Without the completion at open the copy
+// stands and the entry stays owed; with the default branch's tip sealed in
+// the digest the moved upstream withdraws the confirmation.
 func TestADiscardAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -183,7 +185,7 @@ func TestADiscardAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.AnswerKeptWorkDiscard(t.Context(), entry.ID, shown.Digest, shown.Lacks, store.ResolvedByMachineInterface()); err != nil {
+	if _, err := records.ConfirmKeptWorkDiscard(t.Context(), entry.ID, shown.Digest, shown.Lacks, store.ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	_ = records.Close()
@@ -379,13 +381,13 @@ func TestDiscardingACopySettlesEveryEntryOfIt(t *testing.T) {
 	})
 }
 
-// A discard of a copy with two entries that a stopped service recorded and
-// did not carry out is completed at the next start for both: the answer is
-// written as the stopped service left it, which answers the copy's other
-// entry with it, and the next start removes the copy once and marks both,
-// the second read again after the first's mark took it, so nothing is
-// logged as left undone. Without reading the entry again the second's mark
-// is refused as already discarded and logged as a discard not completed.
+// A discard of a copy with two entries that a stopped service confirmed
+// and did not carry out is completed at the next start for both: the
+// confirmation is written on the first as the stopped service left it, and
+// the next start removes the copy once and answers and marks both in the
+// mark's one write, so nothing is logged as left undone. Without the
+// copy's other open entries in the mark, the second stays open over a copy
+// that is gone.
 func TestADiscardOfTwoEntriesAStoppedServiceLeftIsCompletedOnceForBoth(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -415,7 +417,7 @@ func TestADiscardOfTwoEntriesAStoppedServiceLeftIsCompletedOnceForBoth(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.AnswerKeptWorkDiscard(t.Context(), first.ID, shown.Digest, shown.Lacks, store.ResolvedByMachineInterface()); err != nil {
+	if _, err := records.ConfirmKeptWorkDiscard(t.Context(), first.ID, shown.Digest, shown.Lacks, store.ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	_ = records.Close()
@@ -489,6 +491,153 @@ func TestADiscardShowsAnIgnoredFileItDestroys(t *testing.T) {
 		var done machine.KeptWorkAnswered
 		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &done); err != nil || done.Effect != machine.KeptWorkDiscarded {
 			t.Fatalf("the confirmed discard = %+v, %v", done, err)
+		}
+		if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the discarded copy still stands: %v", err)
+		}
+	})
+}
+
+// A discard a stopped service confirmed and did not carry out, over a copy
+// that changed before the next start, is never silent, the reviewer's
+// sequence: the discard is shown and confirmed, and the service stops
+// through the seam right after the confirmation is recorded; a file is then
+// written into the copy. The next start does not remove the changed copy,
+// and the entry is still listed by status, by the catch-up read and by the
+// supervisor loop's read of open kept work, so the project's new tasks
+// still wait on it; answered discard again, it is shown as it is now and
+// removed on the new digest, and the entry is answered discard with that
+// digest and marked discarded. Without the confirmation kept apart from
+// the answer, the entry reads answered and is listed nowhere while the copy
+// stands, and every answer to it is refused.
+func TestADiscardStoppedOverACopyThatChangedIsNeverSilent(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+	stopped := errors.New("the service stopped between the confirmation's record and the removal")
+	var first string
+	withServiceOptions(t, service.WithDiscardInterruptForTest(t, options(t, h), func() error { return stopped }), func(under serviceUnderTest) {
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		first = shown.Loss.Digest
+		confirm := request
+		confirm.Confirm = first
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, confirm, &out); err == nil || !strings.Contains(err.Error(), "stopped between") {
+			t.Fatalf("the confirmation past the stopped seam = %+v, %v; want the stop", out, err)
+		}
+	})
+	if err := writeFile(filepath.Join(entry.CopyPath, "after.txt"), "work written after the discard was confirmed\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		if _, err := os.Stat(filepath.Join(entry.CopyPath, "after.txt")); err != nil {
+			t.Fatalf("the start removed the copy that changed since the discard was shown: %v", err)
+		}
+		listed := func(entries []store.KeptWork) bool {
+			return slices.ContainsFunc(entries, func(k store.KeptWork) bool { return k.ID == entry.ID })
+		}
+		if status := statusOf(t, under.client, subject); !listed(status.KeptWork) {
+			t.Fatalf("status lists kept work %+v; want entry %d, whose copy stands", status.KeptWork, entry.ID)
+		}
+		var caught machine.CatchUp
+		if err := under.client.Call(ctx, ipc.MethodCatchUpRead, struct{}{}, &caught); err != nil || !listed(caught.Kept) {
+			t.Fatalf("the catch-up read lists kept work %+v, %v; want entry %d", caught.Kept, err, entry.ID)
+		}
+		if open, err := recordsOf(t, h).OpenKeptWork(ctx); err != nil || !listed(open) {
+			t.Fatalf("the open kept work the supervisor loop reads is %+v, %v; want entry %d", open, err, entry.ID)
+		}
+
+		var again machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &again); err != nil || again.Loss == nil || again.Loss.Digest == first {
+			t.Fatalf("the discard shown again = %+v, %v; want what the changed copy would lose, under a new digest", again, err)
+		}
+		confirm := request
+		confirm.Confirm = again.Loss.Digest
+		var done machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, confirm, &done); err != nil || done.Effect != machine.KeptWorkDiscarded {
+			t.Fatalf("the discard confirmed again = %+v, %v; want it discarded", done, err)
+		}
+		if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the discarded copy still stands: %v", err)
+		}
+		got, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || got.Answer.Or("") != store.KeptDiscard || got.DiscardDigest.Or("") != again.Loss.Digest || !got.DiscardedAt.IsKnown() {
+			t.Fatalf("the entry reads %+v, %v; want it answered discard with digest %s and marked discarded", got, err, again.Loss.Digest)
+		}
+	})
+}
+
+// One call carries out a discard confirmation at a time: the first
+// confirmation is held inside the seam, after it holds the copy's discard
+// slot and before the removal, and a second confirmation of the same
+// entry meanwhile is refused as under way and touches nothing; released,
+// the first removes the copy and answers the entry. Without the slot the
+// second carries the confirmation out beside the first, and either reads
+// the copy half removed and withdraws the confirmation the other then
+// cannot mark, or marks it first and the other fails on the mark.
+func TestOneCallCarriesOutADiscardConfirmationAtATime(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	hold := func() error {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return nil
+	}
+	withServiceOptions(t, service.WithDiscardInterruptForTest(t, options(t, h), hold), func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		request.Confirm = shown.Loss.Digest
+		type result struct {
+			out machine.KeptWorkAnswered
+			err error
+		}
+		first := make(chan result, 1)
+		go func() {
+			var out machine.KeptWorkAnswered
+			err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &out)
+			first <- result{out, err}
+		}()
+		<-entered
+		var second machine.KeptWorkAnswered
+		err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &second)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "being carried out") {
+			close(release)
+			t.Fatalf("a second confirmation while the first is carried out = %+v, %v; want it refused as under way", second, err)
+		}
+		if _, err := os.Stat(entry.CopyPath); err != nil {
+			close(release)
+			t.Fatalf("the refused second confirmation removed the copy: %v", err)
+		}
+		close(release)
+		done := <-first
+		if done.err != nil || done.out.Effect != machine.KeptWorkDiscarded {
+			t.Fatalf("the first confirmation = %+v, %v; want it discarded", done.out, done.err)
 		}
 		if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("the discarded copy still stands: %v", err)
