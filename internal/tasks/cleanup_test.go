@@ -15,6 +15,7 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // PRD principle P12: removing an isolated copy requires positive proof that
@@ -703,16 +704,23 @@ func routes(root reflect.Type, hit func(t reflect.Type, depth int) (string, bool
 }
 
 // NewCleaner refuses a missing dependency, so a cleaner with no code host
-// cannot be built to skip the merged-pull-request proof.
+// cannot be built to skip the merged-pull-request proof, and one with no git
+// deadline cannot be built to run git under a bound the operator did not
+// set. The control is the same dependencies whole, which it builds.
 func TestNewCleanerRefusesAMissingDependency(t *testing.T) {
 	s := newCleanupSubject(t, nil)
 	for name, deps := range map[string]CleanupDeps{
-		"no home":      {Store: s.store, Forge: s.forge.Host()},
-		"no store":     {Home: s.home, Forge: s.forge.Host()},
-		"no code host": {Home: s.home, Store: s.store},
+		"no home":         {Store: s.store, Forge: s.forge.Host(), GitDeadline: vcs.DefaultInvocationDeadline},
+		"no store":        {Home: s.home, Forge: s.forge.Host(), GitDeadline: vcs.DefaultInvocationDeadline},
+		"no code host":    {Home: s.home, Store: s.store, GitDeadline: vcs.DefaultInvocationDeadline},
+		"no git deadline": {Home: s.home, Store: s.store, Forge: s.forge.Host()},
 	} {
 		if _, err := NewCleaner(deps); !errors.Is(err, ErrIncomplete) {
 			t.Errorf("NewCleaner with %s = %v, want ErrIncomplete", name, err)
 		}
+	}
+	if _, err := NewCleaner(CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge.Host(),
+		GitDeadline: vcs.DefaultInvocationDeadline}); err != nil {
+		t.Errorf("NewCleaner with every dependency = %v", err)
 	}
 }

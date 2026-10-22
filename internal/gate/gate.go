@@ -86,8 +86,13 @@ func (g *Gate) Created() bool { return g.created }
 type Option func(*settings)
 
 type settings struct {
+	// open is the opener a caller supplied through WithOpener, or nil for
+	// the default, which opens with git.
 	open  Opener
 	index Index
+	// git are the options every handle this package opens through internal/vcs
+	// is opened with, from WithGitOptions.
+	git []vcs.Option
 }
 
 // WithOpener replaces how a working copy is opened. The default opens it with
@@ -99,6 +104,20 @@ func WithOpener(open Opener) Option {
 		if open != nil {
 			s.open = open
 		}
+	}
+}
+
+// WithGitOptions sets the options every repository handle an operation opens
+// through internal/vcs is opened with: the working copies the default opener
+// opens, and the gate repository Initialize creates. internal/service passes
+// its own, which carry its redactor and the operator's git_deadline, so a
+// git a gate's hook makes the service run is bounded the way the service's
+// own are. It does not reach an opener supplied through WithOpener, which
+// opens however it was written to, nor Receive, which takes no options and
+// is the command line's.
+func WithGitOptions(opts ...vcs.Option) Option {
+	return func(s *settings) {
+		s.git = append([]vcs.Option(nil), opts...)
 	}
 }
 
@@ -117,15 +136,27 @@ func WithIndex(index Index) Option {
 }
 
 func resolveSettings(opts []Option) settings {
-	s := settings{open: openWithVCS}
+	var s settings
 	for _, opt := range opts {
 		opt(&s)
+	}
+	if s.open == nil {
+		git := s.git
+		s.open = func(ctx context.Context, path string) (WorkingCopy, error) {
+			return openWithVCS(ctx, path, git)
+		}
 	}
 	return s
 }
 
-func openWithVCS(ctx context.Context, path string) (WorkingCopy, error) {
-	return vcs.OpenWorktree(ctx, path)
+// openWithVCS is the default opener: a working copy opened with internal/vcs
+// under the options WithGitOptions set.
+func openWithVCS(ctx context.Context, path string, git []vcs.Option) (WorkingCopy, error) {
+	repo, err := vcs.OpenWorktree(ctx, path, git...)
+	if err != nil {
+		return nil, err
+	}
+	return repo, nil
 }
 
 // Initialize creates the gate for a working copy, or repairs the one it
@@ -197,7 +228,7 @@ func (h *held) initialize(ctx context.Context, command string) (*Gate, error) {
 	if err := validateCommand(command); err != nil {
 		return nil, err
 	}
-	if err := ensureRepository(ctx, h.repository); err != nil {
+	if err := ensureRepository(ctx, h.repository, h.set.git); err != nil {
 		return nil, err
 	}
 	if err := installHooks(h.repository, h.home, h.id, command); err != nil {
@@ -491,7 +522,7 @@ func identifierAt(home, repo string) string {
 // until somebody happens to run another operation on that home, and it is
 // written down here as reasoned rather than counted among the guards that have
 // been watched to fail.
-func ensureRepository(ctx context.Context, repo string) error {
+func ensureRepository(ctx context.Context, repo string, git []vcs.Option) error {
 	parent := filepath.Dir(repo)
 	// The assistant home holds every gated project's whole history, alongside
 	// the lock, the socket, and the database PRD section 8 puts there, so the
@@ -504,7 +535,7 @@ func ensureRepository(ctx context.Context, repo string) error {
 	if err != nil {
 		return err
 	}
-	bare, err := vcs.InitBare(ctx, repo)
+	bare, err := vcs.InitBare(ctx, repo, git...)
 	if err != nil {
 		return fmt.Errorf("gate: creating the gate repository at %s: %w", repo, err)
 	}
