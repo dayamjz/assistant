@@ -5,6 +5,8 @@ package stages
 import (
 	"os"
 	"os/exec"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // shellCommand builds the process one configured command line runs as,
@@ -32,7 +34,7 @@ import (
 // past it would override that convention to buy a determinism property no PRD
 // section asks for; it is named here rather than defeated.
 func shellCommand(command, dir string) *exec.Cmd {
-	cmd := exec.Command(interpreter(), "/c", command)
+	cmd := procgroup.Command(interpreter(), "/c", command)
 	cmd.Dir = dir
 	return cmd
 }

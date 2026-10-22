@@ -4,6 +4,8 @@ package stages
 
 import (
 	"os/exec"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // shellPath is the interpreter a configured command line runs through on this
@@ -25,7 +27,7 @@ const shellPath = "/bin/sh"
 // commands.* value is a line of shell rather than an argument list, and a
 // splitting rule invented here would be a second, quieter one.
 func shellCommand(command, dir string) *exec.Cmd {
-	cmd := exec.Command(shellPath, "-c", command)
+	cmd := procgroup.Command(shellPath, "-c", command)
 	cmd.Dir = dir
 	return cmd
 }
