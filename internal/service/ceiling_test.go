@@ -2,7 +2,9 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -232,4 +234,108 @@ func writeOperatorConfig(t *testing.T, path, document string) {
 	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
 		t.Fatalf("writing the operator's configuration: %v", err)
 	}
+}
+
+// TestARunHeldOnTheUsageCeilingIsRetriedOnceThereIsRoom is PRD section 5's
+// Retry at the hold the usage ceiling raised, on the path a person takes:
+// the real executor, the review stage's own body, the production adapter
+// over the scripted stand-in, and this service's own invocation recorder.
+//
+// The first run's review reaches the operator's ceiling, so the second run
+// holds at review on the ceiling's ask. A retry while there is still no
+// room re-runs the stage, whose call the ceiling refuses again, and the run
+// holds on the same question with the stand-in still unasked: it does not
+// loop. The operator then raises the ceiling and restarts the service, and
+// a retry runs the review in the same run, which passes, so the run goes
+// on past review instead of being cancelled and started again.
+//
+// The first run's later hold is the control: it is not over a refused call,
+// so it does not list the retry, and a retry there is refused as the
+// caller's error with the decision still open.
+func TestARunHeldOnTheUsageCeilingIsRetriedOnceThereIsRoom(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	cost, _ := standin.DefaultUsage().InputTokens.Value()
+	writeOperatorConfig(t, h.ConfigFile(), "usage_ceiling:\n  window: 24h\n  input_tokens: "+strconv.FormatInt(cost, 10)+"\n")
+
+	recorder := &service.LateRecorder{}
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{{
+		Match: standin.MatchReview(),
+		Times: standin.Always,
+		Reply: standin.Reviewed("the change reads cleanly"),
+	}}}, agents.WithRecorder(recorder))
+	opts := options(t, h)
+	opts.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
+
+	var heldID string
+	withServiceOptions(t, opts, func(running serviceUnderTest) {
+		recorder.Bind(running.service)
+		retry := string(pipeline.OutcomeRetry)
+		control := startRun(t, running.client, subject)
+		if control.Decision == nil || control.Decision.Stage == pipeline.StageReview.String() {
+			t.Fatalf("the run under the ceiling holds at %+v, want a later stage", control.Decision)
+		}
+		if slices.Contains(control.Decision.Options, retry) {
+			t.Fatalf("the %s hold, over no refused call, lists %v", control.Decision.Stage, control.Decision.Options)
+		}
+		var refused machine.Run
+		err := running.client.Call(t.Context(), ipc.MethodRunRespond, machine.RespondRequest{Run: control.Record.ID, Answer: retry}, &refused)
+		if !errors.Is(err, ipc.ErrInvalidRequest) || !strings.Contains(err.Error(), "usage ceiling") {
+			t.Fatalf("a retry at the %s hold returned %v, want it refused as the caller's error", control.Decision.Stage, err)
+		}
+		var still machine.Run
+		if err := running.client.Call(t.Context(), ipc.MethodRunGet, machine.RunRequest{Run: control.Record.ID}, &still); err != nil {
+			t.Fatalf("reading the control run: %v", err)
+		}
+		if still.Decision == nil || still.Decision.Stage != control.Decision.Stage {
+			t.Fatalf("after the refused retry the run reports %+v, want its decision still open", still.Decision)
+		}
+
+		commitOn(t, subject, "past-the-ceiling", "past.txt")
+		held := startRun(t, running.client, subject)
+		if decision := holdingAt(t, held, pipeline.StageReview); !slices.Contains(decision.Options, retry) {
+			t.Fatalf("the ceiling's hold lists %v, want the retry", decision.Options)
+		}
+		heldID = held.Record.ID
+
+		again := answer(t, running.client, heldID, string(pipeline.OutcomeRetry))
+		decision := holdingAt(t, again, pipeline.StageReview)
+		if !carriesCeilingAsk(decision) {
+			t.Fatalf("the retry with no room holds on %+v, want the ceiling's ask again", decision.Findings)
+		}
+		if got := len(agent.Calls()); got != 1 {
+			t.Fatalf("the stand-in was asked %d times, want the retry with no room refused before it", got)
+		}
+	})
+
+	writeOperatorConfig(t, h.ConfigFile(), "usage_ceiling:\n  window: 24h\n  input_tokens: "+strconv.FormatInt(10*cost, 10)+"\n")
+	withServiceOptions(t, opts, func(running serviceUnderTest) {
+		recorder.Bind(running.service)
+		retried := answer(t, running.client, heldID, string(pipeline.OutcomeRetry))
+		if retried.Record.ID != heldID {
+			t.Fatalf("the retry answered run %s, want the held run %s", retried.Record.ID, heldID)
+		}
+		if review := stageView(t, retried, pipeline.StageReview); review.Outcome != pipeline.OutcomePassed || !review.Ran {
+			t.Fatalf("the retried review came back %s (ran %v), want it run and passed", review.Outcome, review.Ran)
+		}
+		if retried.Decision != nil && retried.Decision.Stage == pipeline.StageReview.String() {
+			t.Fatalf("the retried run still holds at review on %+v", retried.Decision.Findings)
+		}
+		if got := len(agent.Calls()); got != 2 {
+			t.Fatalf("the stand-in was asked %d times, want the retried review to have run", got)
+		}
+	})
+}
+
+// carriesCeilingAsk reports whether a decision holds on the ceiling's ask.
+func carriesCeilingAsk(d machine.Decision) bool {
+	for _, f := range d.Findings {
+		if f.ID == machine.UsageCeilingFindingID && f.Holds() && f.RemedyOutsideChange {
+			return true
+		}
+	}
+	return false
 }

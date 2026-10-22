@@ -62,8 +62,19 @@ import (
 //     effect on the next start of the service, as every global key does.
 //   - Approving the hold carries the run past a stage whose agent call did
 //     not run, as approving any hold of a stage that could not establish
-//     anything does; the row says so. The hold offers the stage's ordinary
-//     answers, and none of them retries the refused call in place.
+//     anything does; the row says so.
+//   - Retrying is the hold's answer for when there is room again, PRD
+//     section 5's Retry: the finding is marked as a call that never started,
+//     findings.Finding.NotStarted, which is what offers the retry, and
+//     internal/pipeline's retry.go owns the cycle and its bound. It runs the
+//     stage from the top, not the refused call in place: a stage body whose
+//     call was refused starts over, and a fix round the ceiling refused is
+//     not run by the answer, because the stage's next execution decides
+//     whether a round follows. That round was counted against the stage's
+//     round limit when it was refused, so a stage with no automatic round
+//     left parks there rather than taking it. checkRetry in runs.go takes no
+//     reading of its own: the re-run's call is admitted or refused here like
+//     any other, so a retry with no room holds on the same question again.
 //   - Only calls through containRunner are held to it. The decision-model
 //     checks reach their provider through internal/judge, not through an
 //     agent, and a task's worker is not wrapped here at all.

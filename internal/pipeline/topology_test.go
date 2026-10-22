@@ -199,7 +199,7 @@ func TestEveryCycleEdgeCarriesTheStagesRoundLimit(t *testing.T) {
 }
 
 // backEdgeOwners returns, for every edge index the built graph reports as a
-// back edge, the stage whose fix, request or hold node that edge leaves, or
+// back edge, the stage whose fix, request, retry or hold node that edge leaves, or
 // whose own node it leaves for the path back to rebase. The owner is read off
 // the topology - the node the edge starts at - rather than computed from any
 // formula, so what it reports is what the graph is rather than what a
@@ -214,7 +214,7 @@ func backEdgeOwners(t *testing.T, g *graph.Graph) map[int]Stage {
 		found := false
 		for _, stage := range Order() {
 			switch {
-			case e.From == stage.FixNode() || e.From == stage.RequestNode(),
+			case e.From == stage.FixNode() || e.From == stage.RequestNode() || e.From == stage.RetryNode(),
 				// The path back from the checks stage to rebase, and the hold
 				// exits the graph reads as back edges because that path exists;
 				// repush.go says why.
@@ -228,7 +228,7 @@ func backEdgeOwners(t *testing.T, g *graph.Graph) map[int]Stage {
 			}
 		}
 		if !found {
-			t.Fatalf("edge %d, %q -> %q, is a back edge leaving no stage's fix, request or hold node "+
+			t.Fatalf("edge %d, %q -> %q, is a back edge leaving no stage's fix, request, retry or hold node "+
 				"and not the path back to rebase", i, e.From, e.To)
 		}
 	}
@@ -284,11 +284,13 @@ func TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations(t *testing.T) {
 			Budget: 100,
 		})
 		owners := backEdgeOwners(t, p.Graph())
-		// One per stage taking automatic rounds, and one per requestable
-		// stage for the rounds a person may ask for at its hold, since a
-		// fixer was given.
-		requestable, rebasing := 0, 0
+		// One per stage taking automatic rounds, one per requestable stage
+		// for the rounds a person may ask for at its hold, since a fixer was
+		// given, and one per stage for the retry a person may answer its
+		// hold with.
+		requestable, rebasing, retrying := 0, 0, 0
 		for _, stage := range Order() {
+			retrying++
 			// The path back to review is one back edge, built only where the
 			// stage that repairs after the push takes rounds.
 			if stage.RepairsAfterPush() && slices.Contains(taking, stage.String()) {
@@ -306,7 +308,7 @@ func TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations(t *testing.T) {
 				rebasing++
 			}
 		}
-		if want := len(taking) + requestable + rebasing; len(owners) != want {
+		if want := len(taking) + requestable + rebasing + retrying; len(owners) != want {
 			t.Errorf("configuration %q has %d back edges, want %d", name, len(owners), want)
 		}
 		for i, stage := range owners {

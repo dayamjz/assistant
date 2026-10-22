@@ -237,7 +237,8 @@
 // reasoning is short enough to check rather than take on trust. internal/graph
 // writes and reads a fingerprint only on a back edge and skips the comparison
 // when the slot is empty. The back edges here are the fix nodes' returns, the
-// requested rounds' returns, the two paths back from the checks stage, to
+// requested rounds' returns, the retries' returns, the two paths back from the
+// checks stage, to
 // rebase and to review, and the hold exits on them, which internal/graph reads
 // as back edges for the reason repush.go gives. What the conclusion rests on is that an
 // index which is a back edge under two different configurations belongs to the
@@ -249,14 +250,15 @@
 // check is worth no more than no conclusion. Every stage is wired by wire,
 // which emits a stage's edges as one block, in this order: the two edges of
 // the requested-round cycle when the pipeline was given a fixer and the stage
-// is requestable, whose second is a back edge; the hold's two exits, whose
+// is requestable, whose second is a back edge; the two edges of the retry
+// cycle, whose second is a back edge; the hold's two exits, whose
 // second is a back edge at a stage on a path back from the checks stage; the
 // path back to rebase, at the stage that takes it; the path back to review, at
 // the stage that takes it when its round limit is above zero; the fix node's
 // return when the stage's round limit is above zero; and the stage's own three
 // edges. Which of these a stage has, apart from the path back to review and
 // the fix return, is the stage table's and not the configuration's, so a
-// block has a fixed part, five edges plus two at a requestable stage given a
+// block has a fixed part, seven edges plus two at a requestable stage given a
 // fixer and one at the stage that rebases after push, and a configured part,
 // the fix return and, at the stage that repairs after push, the path back to
 // review. A block starts at the sum of the earlier stages' fixed parts plus
@@ -570,10 +572,17 @@
 // budgets parked is moved onto new ones with graph.Executor.AdoptBudget, and a run a
 // round limit or convergence parked is taken further by forking it.
 //
-// PRD section 5's hold offers four actions, and all four are hold answers
-// here at a stage before push whenever the pipeline was given a fixer; the
-// holds of push, pr, and ci offer three. The stage table's requestable column
-// owns that line, and the reason is the promise the round makes: the stage
+// PRD section 5's hold offers up to five actions. Approve, skip, cancel, and
+// retry are hold answers at every stage, and fix is one at a stage before
+// push whenever the pipeline was given a fixer. Retry is OutcomeRetry, and
+// the graph declares it at every hold because a halt point's options are
+// fixed when it is built, while PRD section 5 offers it only at the usage
+// ceiling's hold: RetryOffered reads that off the stage's report, the surface
+// refuses it elsewhere with CheckRetry before anything is recorded, and the
+// retry node refuses it again. It is a cycle of its own, from the hold
+// through the stage's retry node back to the stage, bounded by RetryRounds on
+// both edges, and retry.go owns it. The stage table's requestable column
+// owns the fix line, and the reason is the promise the round makes: the stage
 // re-runs and holds again so the person sees the result. Push is the stage
 // that forwards a commit, so re-running it would push the round's commit
 // before anyone saw it, and pr and ci run after push, so a round's commit

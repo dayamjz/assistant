@@ -229,6 +229,19 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 		b.Edge(graph.Edge{From: stage.RequestNode(), To: stage.Node(), Rounds: RequestedFixRounds, Answered: true})
 	}
 
+	// PRD section 5's Retry: the stage runs again from the top, through the
+	// retry node, which drops the stale holds a refused round left. Every
+	// stage has it, because the usage ceiling can refuse a call at any stage
+	// whose body or fix round makes one, and RetryOffered decides which holds
+	// offer it. It is a second cycle through the stage, bounded by
+	// RetryRounds on both edges; retry.go says why the edge back is answered.
+	// Its edges sit with the request cycle's, ahead of the hold's other exits
+	// and the stage's own edges, for the reason those do.
+	b.Node(retryNode(stage))
+	for _, e := range retryEdges(stage) {
+		b.Edge(e)
+	}
+
 	// The hold's other two exits. They come before the stage's own edges
 	// rather than after them because the exit to the next stage is a back
 	// edge for a stage on a path back from the checks stage, and

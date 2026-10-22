@@ -200,6 +200,11 @@ func (s Stage) FixNode() string { return "fix:" + s.String() }
 // and not the configuration's.
 func (s Stage) RequestNode() string { return "request:" + s.String() }
 
+// RetryNode returns the name of the graph node a retry answered at this
+// stage's hold passes through on its way back to the stage, PRD section 5's
+// Retry. Every stage has one; retry.go says what it does.
+func (s Stage) RetryNode() string { return "retry:" + s.String() }
+
 // RoundsKey returns the configuration key that sets this stage's automatic
 // fix round limit, and false for a stage that takes no automatic fix round.
 // It is what a person changes when that limit parks a run.

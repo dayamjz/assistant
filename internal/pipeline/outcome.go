@@ -49,6 +49,13 @@ const (
 	// and holds again so the person sees the result. The answer carries what
 	// the round is to resolve as a FixRequest, in the hold's detail.
 	OutcomeFixRequested Outcome = "fix"
+	// OutcomeRetry means a person answered the stage's hold by running the
+	// stage again, PRD section 5's Retry. It is offered only at a hold whose
+	// report holds on work that never started, findings.Finding.NotStarted,
+	// which is the usage ceiling's hold: RetryOffered decides that. It stands
+	// only until the stage runs again and records what it found then, and
+	// the cycle it starts is bounded by RetryRounds; retry.go says how.
+	OutcomeRetry Outcome = "retry"
 	// OutcomeRebase means the stage found the pull request conflicting with
 	// its base after the push and sent the run back to the rebase stage, PRD
 	// section 14 decision 7's rebase of a conflicted pull request. Only a
@@ -80,19 +87,25 @@ const (
 // OutcomeFixRequested is offered only by a pipeline that was given a fixer,
 // because without one there is nothing the round could run on; holdAnswers
 // adds it there and nowhere else.
+//
+// OutcomeRetry is declared on every stage's hold, because which hold a stage
+// raises is known only once it has run, and a halt point's options are fixed
+// when the graph is built. Which holds offer it is RetryOffered's to say, over
+// the stage's recorded report; retry.go says who asks that and where.
 var holdOptions = []Outcome{OutcomeApproved, OutcomeSkipped, OutcomeCancelled}
 
 // holdAnswers renders the hold options as the graph's answer strings, with the
-// requested fix round last when the pipeline can run one.
+// requested fix round after them when the pipeline can run one, and the retry
+// last.
 func holdAnswers(requests bool) []string {
-	out := make([]string, 0, len(holdOptions)+1)
+	out := make([]string, 0, len(holdOptions)+2)
 	for _, o := range holdOptions {
 		out = append(out, string(o))
 	}
 	if requests {
 		out = append(out, string(OutcomeFixRequested))
 	}
-	return out
+	return append(out, string(OutcomeRetry))
 }
 
 // classify decides a stage's outcome from what it reported. It runs on a

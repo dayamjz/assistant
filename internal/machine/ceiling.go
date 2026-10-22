@@ -245,7 +245,9 @@ const UsageCeilingFindingID = "usage-ceiling"
 // CeilingHeldFinding is the finding that holds a stage whose agent call the
 // ceiling refused: an ask, because a person decides, and a remedy outside
 // the change, because no edit to the change raises a ceiling, so standing
-// consent leaves it for a person rather than spending a fix round on it. Its
+// consent leaves it for a person rather than spending a fix round on it. It
+// is marked as work that never started, findings.Finding.NotStarted, which
+// is what offers the stage's hold PRD section 5's retry once there is room. Its
 // summary is the hold row's outcome and its description is the whole row
 // followed by the comparison's figures, so the hold's detail and the usage
 // view carry one set of totals.
@@ -256,6 +258,7 @@ func CeilingHeldFinding(u UsageCeiling) findings.Finding {
 		Severity:            findings.SeverityError,
 		Action:              findings.ActionAsk,
 		RemedyOutsideChange: true,
+		NotStarted:          true,
 		Description:         phrase.String() + " " + capitalize(u.Figures()) + ".",
 	}
 }
