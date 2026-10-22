@@ -13,6 +13,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -895,7 +896,8 @@ func TestUnobservedNeverRelaunchesOrDeletesTheStandingCopy(t *testing.T) {
 
 	cleaner, err := tasks.NewCleaner(tasks.CleanupDeps{
 		Home: sub.service.home, Store: sub.records,
-		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))),
+		Forge:       forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))),
+		GitDeadline: config.DefaultGitDeadline,
 	})
 	if err != nil {
 		t.Fatal(err)

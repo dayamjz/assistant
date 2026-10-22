@@ -6,6 +6,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -95,6 +96,7 @@ func TestAPushThatCannotReplaceTheRunItDisplacedReleasesTheSuccessor(t *testing.
 		catalog:   agents.NewCatalog(),
 		starting:  make(map[branchKey]*branchGate),
 		advancing: make(map[string]*slot),
+		cfg:       config.Config{GitDeadline: config.DefaultGitDeadline},
 	}
 	if s.queue, err = s.newQueue(); err != nil {
 		t.Fatalf("building the queue: %v", err)

@@ -10,7 +10,6 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -486,7 +485,7 @@ func (s *Service) signalCancellation(runID string) {
 // repository holds the pushed commit for certain and does not hold the default
 // branch, so it is not the better source it looks like.
 func (s *Service) baseOfPushedCommit(ctx context.Context, found subject, head string) string {
-	working, err := vcs.OpenWorktree(ctx, found.workingPath, vcs.WithRedactor(redact.New()))
+	working, err := vcs.OpenWorktree(ctx, found.workingPath, s.git()...)
 	if err != nil {
 		return ""
 	}
