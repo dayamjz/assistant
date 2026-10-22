@@ -70,9 +70,12 @@ var ErrAbandoned = errors.New("procgroup: the program did not exit within the gr
 // ErrMisconfigured is Run's refusal of a command it cannot start on its own
 // terms: one built with exec.CommandContext, whose own cancellation would end
 // the leader alone on a schedule Run does not own; one whose SysProcAttr is
-// already set, which Run would have to overwrite to start the group; or a
-// grace of zero or less, which would bound nothing.
-// Nothing is started.
+// already set, which Run would have to overwrite to start the group; one
+// with a stream from its StdinPipe, StdoutPipe or StderrPipe, whose end in
+// this process only cmd.Wait closes, which the reap ErrAbandoned leaves does
+// not call; or a grace of zero or less, which would bound nothing.
+// Nothing is started, and Run closes no end of such a pipe: both ends are as
+// os/exec left them, which is open until the caller closes them.
 var ErrMisconfigured = errors.New("procgroup: the command cannot be run as a group of its own")
 
 // Bound returns ctx itself when it already carries a deadline, and otherwise

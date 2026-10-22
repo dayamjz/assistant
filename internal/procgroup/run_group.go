@@ -13,7 +13,9 @@ import (
 
 // Run starts cmd as the leader of a process group of its own and waits for
 // it. cmd is built with exec.Command and not yet started; its streams,
-// directory and environment are the caller's.
+// directory and environment are the caller's. A stream is a file, a reader
+// or writer, or nil, never a pipe from cmd's StdinPipe, StdoutPipe or
+// StderrPipe, which Run refuses.
 //
 // When the leader exits, by itself or otherwise, the group is sent SIGKILL
 // before the leader is reaped, so a descendant still in the group cannot go
@@ -94,9 +96,10 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 		case <-timer.C:
 			// The reap goes through cmd.Process rather than cmd.Wait,
 			// which would write cmd.ProcessState after Run returned and
-			// race every caller reading it. Every stream the child holds
-			// is a file or nil, so cmd.Wait would have nothing else to
-			// finish: no copier, no pipe of its own, no context.
+			// race every caller reading it. check refused a context and
+			// os/exec's own pipes, and every stream the child holds is a
+			// file or nil, so cmd.Wait would have nothing else to finish:
+			// no copier, no pipe end to close, no context.
 			go func() {
 				<-exited
 				endGroup(pgid)
