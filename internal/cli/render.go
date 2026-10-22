@@ -762,6 +762,24 @@ func readOutQueuedWakes(w io.Writer, q machine.QueuedWakes) {
 	for _, row := range q.DomainWakes {
 		writef(w, "%s: %s %s\n", printable(row.Domain), machine.QueuedDomainWakePhrase(row), machine.QueuedDomainWakeStanding(row))
 	}
+	// A notice about a kept work entry no task names is listed under the
+	// entry's project and then the branch it was kept on, PRD section 8's
+	// two, each the person's own text and escaped, so entries kept on
+	// branches of the same name in two projects read apart; an entry that
+	// names neither is listed by its row alone.
+	for _, row := range q.KeptWorkWakes {
+		var label []string
+		if project, ok := row.Project.Get(); ok {
+			label = append(label, printable(project))
+		}
+		if branch, ok := row.Branch.Get(); ok {
+			label = append(label, printable(branch))
+		}
+		if len(label) > 0 {
+			writef(w, "%s: ", strings.Join(label, " "))
+		}
+		writef(w, "%s %s\n", machine.QueuedKeptWorkWakePhrase(row), machine.QueuedKeptWorkWakeStanding(row))
+	}
 }
 
 // waitingLine is one decision waiting on the person: a run's branch and the
