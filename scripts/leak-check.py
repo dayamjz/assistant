@@ -3,8 +3,17 @@
 
 Run locally: python3 scripts/leak-check.py run -- go test -race -p 2 ./...
 Prove the guard rejects planted leftovers: python3 scripts/leak-check.py self-test
-Only Linux and macOS are supported. Inspection errors fail closed. This detects
-leftovers at command completion, not a process that exits between package ends.
+Only Linux and macOS are supported. Inspection errors fail closed.
+
+It compares one snapshot taken before the command with one taken after it, so
+it reports what is still there when the command ends. For go test that is the
+end of the whole run, not of each package: a process that outlives its package
+but exits before go test ends, or a temp entry removed by then, is not
+reported. So this is not P15's per-package criterion (CI fails when any process
+a test started outlives its package). The one check at each package's end is
+standin.RunOwned's, in the packages whose TestMain uses it, and it sees only
+processes of that package's binary and processes carrying its owner identity;
+beyond it, some tests check the processes they started themselves.
 
 The only things set aside are macOS's own, each listed below with why: launchd
 jobs labelled com.apple.*, Apple XPC services launchd started from /System, and
@@ -288,7 +297,7 @@ def guarded_run(command):
 
 
 def self_test():
-    """P15 positive control: the real CLI must reject and name both leaks."""
+    """The guard's positive control: the real CLI must reject and name both leaks."""
     with tempfile.TemporaryDirectory(prefix="leak-check-self-test-") as folder:
         root = Path(folder).resolve()
         pid_file = root / "pid"

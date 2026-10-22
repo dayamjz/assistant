@@ -143,10 +143,14 @@ jobs:
             TMPDIR=$(mktemp -d "$RUNNER_TEMP/tmp.XXXXXX")
             export TMPDIR
           fi
-          # P15: go test runs inside scripts/leak-check.py, which fails naming
-          # every runner-user process and temp entry that is new when go test
-          # ends. Both snapshots are taken inside the namespace: a second one
-          # on the host after tini exits would miss what its teardown killed.
+          # go test runs inside scripts/leak-check.py, which fails naming every
+          # runner-user process and temp entry that is new when go test ends.
+          # That is a check at the end of the whole run, not P15's per-package
+          # one: a process that outlives its package and exits before go test
+          # ends is not seen here (the script's docstring says what checks
+          # per package). Both snapshots are taken inside the namespace: a
+          # second one on the host after tini exits would miss what its
+          # teardown killed.
           # The self-test first plants a detached process and a directory and
           # must see this same guard, in this same wrapper, reject both, so a
           # guard that cannot see processes here fails the step instead of
