@@ -198,22 +198,6 @@ func writeRefusal(wire *ipc.Error) {
 	os.Exit(1)
 }
 
-// refusedWith reads what callMain wrote to standard error when it exited 1,
-// a refusal of method, and returns its wire code. The message the service
-// gave, which names the refusal's wrapped reason, is logged at the caller's
-// line, so a test that fails on an unexpected code shows why the service
-// refused and not the code alone (#503). Anything but a wire error with a
-// code fails the test rather than reading as some code.
-func refusedWith(t *testing.T, method ipc.Method, stderr string) ipc.Code {
-	t.Helper()
-	var wire ipc.Error
-	if err := json.Unmarshal([]byte(stderr), &wire); err != nil || wire.Code == "" {
-		t.Fatalf("%s exited as refused and its standard error is not a wire error with a code (%v): %q", method, err, stderr)
-	}
-	t.Logf("%s was refused with %q: %s", method, wire.Code, wire.Message)
-	return wire.Code
-}
-
 // listenVerb is the first argument that makes this binary hold the wake
 // stream and report the first wake it is pushed.
 const listenVerb = "ipc-listen"

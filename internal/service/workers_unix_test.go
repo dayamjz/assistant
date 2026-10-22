@@ -120,10 +120,10 @@ func gitAs(t *testing.T, w launched, dir string, args ...string) (string, error)
 
 // callAs has the worker make one call on the service's socket through
 // callMain, and returns the answer or the wire code the call was refused
-// with, read by refusedWith, which logs the refusal's reason. The parameters reach the command through a file rather than on the
-// line the worker reads, so a test counting the lines that carry a text
-// counts what the program wrote to the worker and not what it asked the
-// worker to run.
+// with, read by refusedWith, which logs the refusal's reason. The parameters
+// reach the command through a file rather than on the line the worker reads,
+// so a test counting the lines that carry a text counts what the program
+// wrote to the worker and not what it asked the worker to run.
 func callAs(t *testing.T, w launched, method ipc.Method, params any) (json.RawMessage, ipc.Code) {
 	t.Helper()
 	body, err := json.Marshal(params)
@@ -145,6 +145,23 @@ func callAs(t *testing.T, w launched, method ipc.Method, params any) (json.RawMe
 		t.Fatalf("calling %s from the worker: %+v", method, ran)
 		return nil, ""
 	}
+}
+
+// refusedWith reads what callMain wrote to standard error when it exited 1,
+// a refusal of method, and returns its wire code. The message the service
+// gave, which names the refusal's wrapped reason, is logged at the caller's
+// line, so a test that fails on an unexpected code shows why the service
+// refused and not the code alone (#503). Anything but a wire error with a
+// code fails the test rather than reading as some code. Every caller is a
+// unix test, so it is declared here, where Windows does not see it unused.
+func refusedWith(t *testing.T, method ipc.Method, stderr string) ipc.Code {
+	t.Helper()
+	var wire ipc.Error
+	if err := json.Unmarshal([]byte(stderr), &wire); err != nil || wire.Code == "" {
+		t.Fatalf("%s exited as refused and its standard error is not a wire error with a code (%v): %q", method, err, stderr)
+	}
+	t.Logf("%s was refused with %q: %s", method, wire.Code, wire.Message)
+	return wire.Code
 }
 
 // launchedWorker records and dispatches a delivery task on branch, serves a
