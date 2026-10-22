@@ -504,7 +504,9 @@ task or the service starts. A delivery whose commits the gate rebased before pub
 followed through the gate's own record of that rebase, so the copy, which
 still holds the commits under their old identifiers, is removed once the
 published ones are on the task's upstream branch or in the merged pull
-request. When the copy is kept instead, the service log names each check and
+request and hold everything the copy's commits held. A rebase that left
+something out, such as a file only a merge commit added, is not recorded,
+and its copy is kept. When the copy is kept instead, the service log names each check and
 what it found. Nothing else removes a kept copy. A
 service that stops between removing the copy and marking it removed leaves
 the entry open; the next start completes the mark from the recorded proof
