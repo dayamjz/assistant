@@ -99,6 +99,8 @@ func Main() {
 		os.Exit(serveCodexExec(control, args))
 	case cursorPrintArgs(args):
 		os.Exit(serveCursorPrint(control, args))
+	case openaiArgs(args):
+		os.Exit(serve(control, args, Envelope.openaiWire))
 	case interactiveArgs(args):
 		os.Exit(serveInteractiveWorker(control, args))
 	case !oneShotArgs(args):
@@ -106,7 +108,7 @@ func Main() {
 	case streamInput(args):
 		os.Exit(serveStreamWorker(control, args))
 	}
-	os.Exit(serve(control, args))
+	os.Exit(serve(control, args, Envelope.wire))
 }
 
 // printFlag is the flag the Claude Code and Cursor adapters put on every
@@ -118,7 +120,9 @@ func Main() {
 // marker, an interactive worker; otherwise without a one-shot marker, a
 // line-mode worker; with --print and streaming input, a stream-mode worker;
 // with a one-shot marker and nothing more, a one-shot invocation that reads
-// its prompt to the end.
+// its prompt to the end. Main tells the Codex, Cursor and OpenAI one-shot
+// command lines apart before any of that, by the words only those adapters
+// write.
 const (
 	printFlag      = "--print"
 	promptFileFlag = "--prompt-file"
@@ -154,7 +158,7 @@ func flagArg(args []string, name string) string {
 
 // readPrompt returns the invocation prompt: the contents of --prompt-file when
 // that flag is present (Grok Build), otherwise everything on standard input
-// (Claude Code). Codex and Cursor carry theirs on the command line, which
+// (Claude Code and OpenAI). Codex and Cursor carry theirs on the command line, which
 // serveCodexExec and serveCursorPrint read instead.
 func readPrompt(args []string) (string, error) {
 	if path := flagArg(args, promptFileFlag); path != "" {
@@ -188,8 +192,9 @@ func handshake(token string) int {
 }
 
 // serve answers one invocation: it reads the script, records what it was
-// asked, and does what the step that matched says.
-func serve(control string, args []string) int {
+// asked, and does what the step that matched says, writing an envelope in
+// the shape encode states.
+func serve(control string, args []string, encode func(Envelope, Call) ([]byte, error)) int {
 	script, err := readScript(control)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "standin: "+err.Error())
@@ -224,7 +229,7 @@ func serve(control string, args []string) int {
 		fmt.Fprintf(os.Stderr, "standin: no step of the script answers this invocation: %s\n", call)
 		return ExitUnscripted
 	}
-	return emit(script.Steps[step].Reply, call, Envelope.wire)
+	return emit(script.Steps[step].Reply, call, encode)
 }
 
 // serveWorker runs this process as a worker: it records itself, greets, then
@@ -374,6 +379,9 @@ func emit(reply Reply, call Call, encode func(Envelope, Call) ([]byte, error)) i
 			return exitNoDemand
 		}
 		reply.Envelope = Report(report).Envelope
+		if reply.Review.Usage != nil {
+			reply.Envelope.Usage = *reply.Review.Usage
+		}
 	}
 	if reply.Stderr != "" {
 		if _, err := io.WriteString(os.Stderr, reply.Stderr); err != nil {
