@@ -364,6 +364,7 @@ var runRecords = []runRecord{
 	{table: "agent_invocation", remove: `DELETE FROM agent_invocation WHERE run = ?`},
 	{table: "merge_record", remove: `DELETE FROM merge_record WHERE run = ?`, afterRun: true},
 	{table: "run_cleanup", remove: `DELETE FROM run_cleanup WHERE run = ?`, afterRun: true},
+	{table: "run_rebase", remove: `DELETE FROM run_rebase WHERE run = ?`, afterRun: true},
 	// A kept work entry about a run's copy goes with the run only once it is
 	// answered or closed on a proof: refuseUnlessForgettable refuses a
 	// repository with an open one before anything is removed, and the

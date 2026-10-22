@@ -370,8 +370,13 @@ func TestTheCoordinatorRelaunchesADeadTerminalThroughTheAnchoredRelaunch(t *test
 			time.Sleep(20 * time.Millisecond)
 		}
 
-		if err := running.client.Call(t.Context(), ipc.MethodTaskRelaunch, request, &relaunched); err != nil {
-			service.FatalUnlessSweepsStoppedClearing(t, unestablished, "task.relaunch of a dead terminal: %v", err)
+		var err error
+		askPastHostSweeps(t, w, unestablished, task, func() bool {
+			err = running.client.Call(t.Context(), ipc.MethodTaskRelaunch, request, &relaunched)
+			return errors.Is(err, ipc.ErrRefused)
+		})
+		if err != nil {
+			t.Fatalf("task.relaunch of a dead terminal: %v", err)
 		}
 		if relaunched.Task != task || relaunched.Attempt != 2 || relaunched.Superseded != superseded {
 			t.Fatalf("task.relaunch answered %+v, want attempt 2 of task %s superseding %s", relaunched, task, superseded)

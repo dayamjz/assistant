@@ -498,10 +498,21 @@ number of its own. Acknowledging the wake answers nothing: the entry is
 listed until it is answered or closed.
 
 If the copy's work later turns up somewhere safe, for example once you push
-its commit to the upstream branch, the next cleanup of it (for a run's copy,
-the next service start) removes the copy on that proof and closes the entry
-as removed on a proof, recorded as the program's and never as a discard; a
-closed entry is no longer listed. Nothing else removes a kept copy. A
+its commit to the upstream branch, the next cleanup of it removes the copy on
+that proof and closes the entry as removed on a proof, recorded as the
+program's and never as a discard; a closed entry is no longer listed. For a
+run's copy the next cleanup is the next service start. For a task's copy
+whose worker has stopped, the service asks again every five minutes, at most
+six times for that stopped worker, and again when the coordinator stops the
+task or the service starts. A delivery whose commits the gate rebased before publishing them is
+followed through the gate's own record of that rebase, so the copy, which
+still holds the commits under their old identifiers, is removed once the
+published ones are on the task's upstream branch or in the merged pull
+request and hold everything the copy's commits held. A rebase that left
+something out, such as a file only a merge commit added, is not recorded,
+and neither is a later rebase once a fix round took the delivered change
+out or rewrote its lines, so the copy is kept. When the copy is kept
+instead, the service log names each check and what it found. Nothing else removes a kept copy. A
 service that stops between removing the copy and marking it removed leaves
 the entry open; the next start completes the mark from the recorded proof
 and closes it. An entry whose copy is gone with no proof recorded, a copy
@@ -1200,6 +1211,36 @@ to each one:
   slot waits, and reads as running while it does. Nothing lowers a command's
   priority, so one command can still saturate the host by itself: keep the
   commands targeted.
+
+## Bounding git and gh
+
+Every git and `gh` the service runs is ended with its process group when it
+runs too long, so a wedged fetch or a hung code-host request cannot hold a run
+forever. Two keys in your own configuration file set those bounds:
+
+| Key | Default | Accepted | Bounds |
+| --- | --- | --- | --- |
+| `git_deadline` | `10m` | `1m` to `2h` | one git invocation: a clone, a fetch, a push, a read |
+| `gh_deadline` | `2m` | `10s` to `30m` | one `gh` invocation against GitHub |
+
+```yaml
+# config.yaml in the home
+git_deadline: 30m
+```
+
+- Raise `git_deadline` when a large repository's clone or fetch over a slow
+  link needs longer than ten minutes; lower either for a tighter bound.
+- A value outside its range refuses the whole file when the service starts,
+  naming the key. Both are global-only: a repository file naming either is
+  refused, so a branch cannot loosen a bound that protects your machine.
+- They apply where the code calling git or `gh` set no deadline of its own;
+  where it did, that deadline is kept instead.
+- Stage commands keep their own `command_timeout` (above), and no other
+  program's bound is configurable.
+- The command line's own git and `gh` (`assistant init`, `doctor`, a push's
+  receive into the gate) do not read your file and run under the defaults.
+- The GitLab adapter talks HTTP and starts no program, so `gh_deadline` does
+  not bound it.
 
 ## Repositories with no code host
 

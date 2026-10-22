@@ -208,7 +208,7 @@ func (l lsofRun) run(ctx context.Context) ([]byte, error) {
 	grace := lsofGrace(l.deadline)
 	bounded, cancel := context.WithTimeout(ctx, share)
 	defer cancel()
-	cmd := exec.Command(l.program, "-n", "-P", "-w", "-d", "cwd", "-F", "pfn")
+	cmd := procgroup.Command(l.program, "-n", "-P", "-w", "-d", "cwd", "-F", "pfn")
 	cmd.Env = []string{}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

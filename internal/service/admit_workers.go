@@ -7,7 +7,6 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -123,7 +122,7 @@ func (s *Service) admitWorkerPush(ctx context.Context, m session.Membership, req
 	if err != nil {
 		return fmt.Errorf("%w: locating gate %s: %w", ipc.ErrUnavailable, req.Gate, err)
 	}
-	bare, err := vcs.OpenBare(ctx, repositoryPath, vcs.WithRedactor(redact.New()))
+	bare, err := vcs.OpenBare(ctx, repositoryPath, s.git()...)
 	if err != nil {
 		return fmt.Errorf("%w: opening gate %s: %w", ipc.ErrUnavailable, req.Gate, err)
 	}
@@ -171,7 +170,7 @@ func (s *Service) admitWorkerUpdate(ctx context.Context, bare *vcs.Repository, t
 	if err != nil {
 		return fmt.Errorf("%w: locating the copy of task %s: %w", ipc.ErrUnavailable, task.ID, err)
 	}
-	working, err := vcs.OpenWorktree(ctx, copyPath, vcs.WithRedactor(redact.New()))
+	working, err := vcs.OpenWorktree(ctx, copyPath, s.git()...)
 	if err != nil {
 		return fmt.Errorf("%w: opening the copy of task %s: %w", ipc.ErrUnavailable, task.ID, err)
 	}

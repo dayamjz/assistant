@@ -23,6 +23,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
@@ -119,10 +120,10 @@ func gitAs(t *testing.T, w launched, dir string, args ...string) (string, error)
 
 // callAs has the worker make one call on the service's socket through
 // callMain, and returns the answer or the wire code the call was refused
-// with. The parameters reach the command through a file rather than on the
-// line the worker reads, so a test counting the lines that carry a text
-// counts what the program wrote to the worker and not what it asked the
-// worker to run.
+// with, read by refusedWith, which logs the refusal's reason. The parameters
+// reach the command through a file rather than on the line the worker reads,
+// so a test counting the lines that carry a text counts what the program
+// wrote to the worker and not what it asked the worker to run.
 func callAs(t *testing.T, w launched, method ipc.Method, params any) (json.RawMessage, ipc.Code) {
 	t.Helper()
 	body, err := json.Marshal(params)
@@ -139,11 +140,28 @@ func callAs(t *testing.T, w launched, method ipc.Method, params any) (json.RawMe
 	case 0:
 		return json.RawMessage(ran.Stdout), ""
 	case 1:
-		return nil, ipc.Code(ran.Stderr)
+		return nil, refusedWith(t, method, ran.Stderr)
 	default:
 		t.Fatalf("calling %s from the worker: %+v", method, ran)
 		return nil, ""
 	}
+}
+
+// refusedWith reads what callMain wrote to standard error when it exited 1,
+// a refusal of method, and returns its wire code. The message the service
+// gave, which names the refusal's wrapped reason, is logged at the caller's
+// line, so a test that fails on an unexpected code shows why the service
+// refused and not the code alone (#503). Anything but a wire error with a
+// code fails the test rather than reading as some code. Every caller is a
+// unix test, so it is declared here, where Windows does not see it unused.
+func refusedWith(t *testing.T, method ipc.Method, stderr string) ipc.Code {
+	t.Helper()
+	var wire ipc.Error
+	if err := json.Unmarshal([]byte(stderr), &wire); err != nil || wire.Code == "" {
+		t.Fatalf("%s exited as refused and its standard error is not a wire error with a code (%v): %q", method, err, stderr)
+	}
+	t.Logf("%s was refused with %q: %s", method, wire.Code, wire.Message)
+	return wire.Code
 }
 
 // launchedWorker records and dispatches a delivery task on branch, serves a
@@ -189,11 +207,12 @@ func launchedWorkerConfigured(t *testing.T, shape store.TaskShape, branch string
 	id := recordDispatchedTaskUnder(t, h, repository, shape, branch, posture)
 	gateRepo := gateRepositoryOf(t, h, subject)
 	o, _ := workerOptions(t, h)
+	o, sweeps := service.WithSweepsRecordedForTest(o)
 	withServiceOptions(t, o, func(running serviceUnderTest) {
 		provider, session := launchedSession(t, running.service, id)
 		waitCapture(t, provider, session, "worker ready")
 		body(launched{running: running, home: h, repository: repository, gateRepo: gateRepo, task: id, group: session.Reference().PID,
-			provider: provider, session: session})
+			provider: provider, session: session, sweeps: sweeps})
 	})
 }
 
@@ -201,7 +220,9 @@ func launchedWorkerConfigured(t *testing.T, shape store.TaskShape, branch string
 // home, the repository and gate it serves, the task, the process group the
 // task's worker leads, and the provider and session the service holds for
 // it, so a body can end the worker through the same handle the service
-// observes it through.
+// observes it through. sweeps is every sweep the service asked of a copy,
+// each answered by the real sweep, and is nil where the launch was not
+// launchedWorkerConfigured's.
 type launched struct {
 	running    serviceUnderTest
 	home       *home.Home
@@ -211,6 +232,35 @@ type launched struct {
 	group      int
 	provider   session.Provider
 	session    *session.Session
+	sweeps     *service.SweepsAsked
+}
+
+// askPastHostSweeps makes a request that sweeps task's copy before it acts,
+// a relaunch, through ask, which records the answer for the caller and
+// reports whether the service refused it. The sweep refuses to clear while
+// any process of this host that it cannot read, and which neither of
+// agents.Sweeper's carve-outs sets aside, is running, as P6 requires, and
+// such a process can start after service.RequireSweepClearsHere looked:
+// nothing a test does orders against the host's processes (#503). So a
+// refusal that asked a sweep of the copy is held to SweepsAsked.UntilClear,
+// which asks again only while that sweep's own answer puts the refusal on
+// processes the test did not place in the copy, and after sweepAttempts
+// such refusals in a row skips the test when an empty copy elsewhere is
+// refused too, or fails it where standin.RequireSweepClearVar is set or
+// when the host clears again. A refusal that asked no sweep of the copy is
+// left as ask recorded it, for the caller to fail on. It rests on the test
+// leaving nothing of its own running in the copy, which UntilClear checks
+// of each sweep's listing.
+func askPastHostSweeps(t *testing.T, w launched, unestablished, task string, ask func() (refused bool)) {
+	t.Helper()
+	copyPath, err := w.home.TaskCopy(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	swept := w.sweeps.Of(copyPath)
+	if ask() && w.sweeps.Of(copyPath) > swept {
+		w.sweeps.UntilClear(t, unestablished, copyPath, func() { ask() })
+	}
 }
 
 // A worker's push is admitted to its own branch and refused everywhere

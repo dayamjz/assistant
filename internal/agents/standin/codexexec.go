@@ -82,13 +82,13 @@ func serveCodexExec(control string, args []string) int {
 // thread.started carrying the thread and turn.started, then for a failure
 // an error event and a turn.failed carrying the message, and for a result
 // an item.completed agent_message and a turn.completed with its usage.
-// The opening and the failing half are what Codex CLI 0.163.0 printed,
-// recorded in internal/agents/testdata/codex-exec-*-0.163.0.jsonl; the
-// result half was not recorded here and is the shape the adapter's JSONL
-// reader decodes, the same that internal/agents' decoder test feeds it.
+// Every half is what Codex CLI 0.163.0 printed: the failing ones are
+// recorded in internal/agents/testdata/codex-exec-*-0.163.0.jsonl and the
+// result half in codex-exec-0.163.0.jsonl, whose turn.completed reports the
+// four token counts, cache creation among them as cache_write_input_tokens.
 // NoSession prints no thread.started. What these events do not carry is not
-// written: no model, no turn count and no cache-creation count, so those
-// are what the adapter reports as unnamed or unreported.
+// written: no model and no turn count, so those are what the adapter reports
+// as unnamed and unreported.
 func (e Envelope) codexWire(c Call) ([]byte, error) {
 	thread := ""
 	switch {
@@ -112,9 +112,10 @@ func (e Envelope) codexWire(c Call) ([]byte, error) {
 		events = append(events,
 			map[string]any{"type": "item.completed", "item": map[string]any{"id": "item_0", "type": "agent_message", "text": e.Result}},
 			map[string]any{"type": "turn.completed", "usage": map[string]any{
-				"input_tokens":        e.Usage.InputTokens,
-				"cached_input_tokens": e.Usage.CacheReadTokens,
-				"output_tokens":       e.Usage.OutputTokens,
+				"input_tokens":             e.Usage.InputTokens,
+				"cached_input_tokens":      e.Usage.CacheReadTokens,
+				"cache_write_input_tokens": e.Usage.CacheCreationTokens,
+				"output_tokens":            e.Usage.OutputTokens,
 			}})
 	}
 	var out bytes.Buffer

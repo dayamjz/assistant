@@ -383,6 +383,18 @@ func decodeCommandTimeout(k Key, v any) (any, error) {
 	return decodeBoundedDuration(k, v, "a command timeout", "30m", MinCommandTimeout, MaxCommandTimeout)
 }
 
+// decodeGitDeadline is decodeBoundedDuration between MinGitDeadline and
+// MaxGitDeadline.
+func decodeGitDeadline(k Key, v any) (any, error) {
+	return decodeBoundedDuration(k, v, "a git deadline", "10m", MinGitDeadline, MaxGitDeadline)
+}
+
+// decodeGHDeadline is decodeBoundedDuration between MinGHDeadline and
+// MaxGHDeadline.
+func decodeGHDeadline(k Key, v any) (any, error) {
+	return decodeBoundedDuration(k, v, "a gh deadline", "2m", MinGHDeadline, MaxGHDeadline)
+}
+
 // decodeRecheckWindow is decodeBoundedDuration between MinRecheckWindow and
 // MaxRecheckWindow.
 func decodeRecheckWindow(k Key, v any) (any, error) {

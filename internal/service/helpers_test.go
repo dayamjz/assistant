@@ -139,9 +139,10 @@ const callVerb = "ipc-call"
 // group: the credentials the service reads are then that process's, which
 // the kernel attributes and the test could not state. It takes the socket,
 // the method and the parameters as JSON, writes the answer to standard
-// output, and on a refusal writes the wire code to standard error and exits
-// non-zero. A streaming method is opened rather than called, and "{}" is
-// the answer that it opened. Nothing here decides anything: it is internal/ipc's client over
+// output, and on a refusal writes the wire error, its code and its message
+// both, to standard error as JSON and exits 1, which refusedWith reads. A
+// streaming method is opened rather than called, and "{}" is the answer that
+// it opened. Nothing here decides anything: it is internal/ipc's client over
 // the arguments it was given.
 func callMain() {
 	if len(os.Args) != 5 || os.Args[1] != callVerb {
@@ -159,14 +160,13 @@ func callMain() {
 	if spec, ok := ipc.Lookup(ipc.Method(method)); ok && spec.Kind == ipc.KindStream {
 		// A stream answers with events rather than a result, so what this
 		// reports is whether the service opened it: "{}" when it did, and
-		// the refusal's code when it did not, which is the half a test
+		// the refusal when it did not, which is the half a test
 		// placing this process in a worker's group asks about.
 		stream, err := client.SubscribeTo(ctx, ipc.Method(method), json.RawMessage(params))
 		if err != nil {
 			var wire *ipc.Error
 			if errors.As(err, &wire) {
-				fmt.Fprint(os.Stderr, string(wire.Code))
-				os.Exit(1)
+				writeRefusal(wire)
 			}
 			fmt.Fprintln(os.Stderr, "subscribe:", err)
 			os.Exit(2)
@@ -179,14 +179,23 @@ func callMain() {
 	if err := client.Call(ctx, ipc.Method(method), json.RawMessage(params), &answer); err != nil {
 		var wire *ipc.Error
 		if errors.As(err, &wire) {
-			fmt.Fprint(os.Stderr, string(wire.Code))
-			os.Exit(1)
+			writeRefusal(wire)
 		}
 		fmt.Fprintln(os.Stderr, "call:", err)
 		os.Exit(2)
 	}
 	fmt.Fprint(os.Stdout, string(answer))
 	os.Exit(0)
+}
+
+// writeRefusal is callMain's refusal: the wire error as JSON on standard
+// error, then exit status 1.
+func writeRefusal(wire *ipc.Error) {
+	if err := json.NewEncoder(os.Stderr).Encode(wire); err != nil {
+		fmt.Fprintln(os.Stderr, "encoding the refusal:", err)
+		os.Exit(2)
+	}
+	os.Exit(1)
 }
 
 // listenVerb is the first argument that makes this binary hold the wake
