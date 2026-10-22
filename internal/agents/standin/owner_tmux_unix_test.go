@@ -109,6 +109,7 @@ func tmuxOwnerMain() {
 	if slices.Contains(os.Args[1:], trapExitArg) {
 		os.Exit(trapExitMain())
 	}
+	forkOnSignalMain()
 	dir := os.Getenv(tmuxOwnerDirVar)
 	if dir == "" {
 		return
