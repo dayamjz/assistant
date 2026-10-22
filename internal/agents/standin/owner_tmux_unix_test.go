@@ -579,8 +579,15 @@ func tmuxServerEndsWithItsOwner(t *testing.T, mode string) {
 // same binary that no test started. The control is the same owner ending its
 // server first, which the check passes, so the failure above is the server's
 // doing and not the check's.
+//
+// It does not run in parallel. Its owners are this binary, so their checks
+// list every process of this binary but their ancestors and the sweeps, and
+// end each one still running: a parallel test's owner, pane or stand-in
+// running then would be ended by them, and that test would fail for it.
+// The other owners whose checks run are copies of this binary for that
+// reason; this one cannot be, since the same binary is what puts this test
+// binary's own sweep in the owners' view.
 func TestRunOwnedFailsAPackageThatLeavesATmuxServer(t *testing.T) {
-	t.Parallel()
 	left := startTmuxOwner(t, ownerLeaves)
 	if left.server.PID == 0 {
 		t.Fatal("the owner's tmux server was gone before its check ran")
