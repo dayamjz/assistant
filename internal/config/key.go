@@ -414,11 +414,11 @@ const (
 	// it; a trusted copy that sets it replaces the operator's list, as a
 	// repository layer replaces any list.
 	//
-	// Nothing in this build reads it. internal/service refuses a home whose
-	// own file sets it (its unhonored.go), but nothing refuses it in a
-	// repository's trusted copy: a task of a repository that sets it there
-	// runs on this machine whatever this machine's architecture is, until a
-	// dispatch places by it (PRD section 8's "Which machine a task runs on").
+	// Nothing in this build places by it, so internal/service refuses it
+	// wherever it reads a document that sets it, the home's own file and a
+	// repository's trusted copy, naming the key (its unhonored.go, which also
+	// owns what that refusal leaves uncovered), until a dispatch places by it
+	// (PRD section 8's "Which machine a task runs on").
 	KeyPlacementArch Key = "placement.arch"
 	// KeyRemoteDisconnectGrace is "remote_disconnect_grace": how long a
 	// bridge whose transport is gone keeps the workers it started before it

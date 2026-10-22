@@ -952,9 +952,13 @@ if you want Cursor for runs and Claude for attachable workers. See
 `remote_disconnect_grace`, PRD section 8) are parsed and validated, but this
 build does not act on them yet. The service refuses to start on a
 `config.yaml` that sets any of them, naming the key, rather than running
-workers some other way. A repository's `assistant.json` may carry
-`placement.arch` on its default branch, and nothing applies it yet: its tasks
-run on this machine whatever its architecture.
+workers some other way. A repository whose default branch's `assistant.json`
+sets `placement.arch` is refused the same way, naming the key, wherever the
+service reads that copy: a run, a delivery task's intake or promotion, and
+standing consent. An investigation task reads no trusted copy, so an
+investigation of such a repository still runs on this machine, and a delivery
+task taken before the key was added is not checked again when it is
+dispatched.
 
 Each launch records which adapter it chose on the task attempt in the home's
 database, once, as `adapter`, `route_reason` and `route_skipped`; no command
