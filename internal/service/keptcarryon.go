@@ -339,17 +339,19 @@ func (s *Service) isCarriedOnCopy(entry store.KeptWork, path string) error {
 }
 
 // verifyAdopted refuses to take a copy already standing at the new task's
-// path as the kept one unless it is: it is the copy the answer was given for
-// by its identity (isCarriedOnCopy), which a clone put there is not however
-// much history it shares; the kept copy's own path is gone, which a rename
-// of it leaves; and the copy at the new path still contains every
-// commit the entry recorded the kept copy's references and HEAD standing on,
-// each reachable from its HEAD or one of its references, which a clone cut
-// from elsewhere does not. Reachable and not a tip, since the kept copy may
-// have gone on to commits past those after it was kept, and its references
-// moving forward is the copy carrying on, not another copy. Either failing
-// is refused with ipc.ErrRefused, the entry stays owed and the task stays
-// held on it.
+// path as the kept one unless all three hold: it is the copy the answer was
+// given for by its identity (isCarriedOnCopy), which a clone put there is
+// not however much history it shares; the kept copy's own path is gone,
+// which a rename of it leaves; and the copy at the new path still contains
+// every commit the entry recorded the kept copy's references and HEAD
+// standing on, each reachable from its HEAD or one of its references.
+// Containment alone proves nothing about which copy this is: a fresh clone of
+// an upstream that has since received those commits contains them all and
+// still lacks the kept copy's own work, which is why identity is checked
+// first. Reachable and not a tip, since the kept copy may have gone on to
+// commits past those after it was kept, and its references moving forward is
+// the copy carrying on, not another copy. Any of the three failing is refused
+// with ipc.ErrRefused, the entry stays owed and the task stays held on it.
 func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPath string) error {
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: kept work entry %d was not carried on: %s", ipc.ErrRefused, entry.ID, why)
