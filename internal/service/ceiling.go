@@ -67,14 +67,20 @@ import (
 //     section 5's Retry: the finding is marked as a call that never started,
 //     findings.Finding.NotStarted, which is what offers the retry, and
 //     internal/pipeline's retry.go owns the cycle and its bound. It runs the
-//     stage from the top, not the refused call in place: a stage body whose
-//     call was refused starts over, and a fix round the ceiling refused is
-//     not run by the answer, because the stage's next execution decides
-//     whether a round follows. That round was counted against the stage's
-//     round limit when it was refused, so a stage with no automatic round
-//     left parks there rather than taking it. checkRetry in runs.go takes no
-//     reading of its own: the re-run's call is admitted or refused here like
-//     any other, so a retry with no room holds on the same question again.
+//     refused call again. A stage body whose call was refused starts over.
+//     An automatic fix round the ceiling refused is run by the retry itself,
+//     as the round the stage's round limit already counted, and the stage
+//     then runs from the top; a retry with no room therefore spends no round
+//     and does not trip convergence. Two cases are not run again. A fix
+//     round a person asked for is not, because a retry does not carry the
+//     request; the stage holds on that round's hold and they can ask again.
+//     And when the stage's own call was refused too after the refused round,
+//     the stage starts over with no round in front of it, so the refused
+//     round stays counted against the round limit, and a stage with no
+//     automatic round left parks in front of its fixer rather than taking
+//     one. checkRetry in runs.go takes no reading of its own: the retried
+//     call is admitted or refused here like any other, so a retry with no
+//     room holds on the same question again.
 //   - Only calls through containRunner are held to it. The decision-model
 //     checks reach their provider through internal/judge, not through an
 //     agent, and a task's worker is not wrapped here at all.

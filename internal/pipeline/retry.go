@@ -79,9 +79,12 @@ func CheckRetry(s graph.State, stage Stage) error {
 // The edge back is graph.Edge.Answered: every traversal follows an answer at
 // the hold, which internal/graph checks at build. That is what keeps a retry
 // while the ceiling still has no room from parking the run converged. Such a
-// retry re-runs the stage, whose call is refused again, and the run stands
-// at the hold in the state it stood in before, so a back edge held to the
-// convergence check would park the run on the second such retry. Exempt, it
+// retry runs the refused call again, which is refused again, and the run
+// stands at the hold in the state it stood in before, so a back edge held to
+// the convergence check would park the run on the second such retry; that
+// is also why a refused round is run again by the retry node rather than
+// returned through the stage's fix node, whose way back is held to it
+// (retryNode says how). Exempt, it
 // returns to the hold for the person, and RetryRounds and the run-wide budget
 // bound it. A retry an unattended answer gave would be held to convergence
 // again, on internal/graph's terms; standing consent never gives one, because
@@ -103,61 +106,112 @@ func retryEdges(stage Stage) []graph.Edge {
 }
 
 // retryNode builds the node a retry passes through on its way back to the
-// stage. It does no agent work: the stage runs from the top after it, and
-// whether that run's agent call starts is the usage ceiling's to decide, as
-// for any call, so a retry while there is still no room holds on the same
+// stage. Whether the call it retries starts is the usage ceiling's to decide,
+// as for any call, so a retry while there is still no room holds on the same
 // question again rather than looping.
 //
-// What it does is keep the stage's next execution from reporting a stale
-// hold. A fix round the ceiling refused leaves the ceiling's hold in the
-// stage's held key, which the stage adds to every report it makes until a
-// round writes the key again, so without this a retry with room would hold
-// again on the refusal it was answering. It drops every hold in that key
-// that stands in for work that never started, and keeps the rest: the hold a
-// requested round leaves so its result is seen is kept, so a retry never
-// carries a round a person asked for past them unseen.
+// Which call it retries is the one the ceiling refused. When that was the
+// stage's automatic fix round, which leaves only the ceiling's hold in the
+// stage's held key, the node runs that round again itself, through runRound,
+// over the fix-eligible findings of the stage's recorded report, and the
+// stage then runs from the top to see what the round did. The round runs
+// here rather than through the stage's fix node because the way into the fix
+// node is counted against the stage's round limit, which the refused round
+// already spent, and the way back from it is held to convergence, which a
+// retry with still no room would trip on its second refusal, because it leaves
+// the state where the first left it; either would park the run and take the
+// hold, and its answers, with it. The way back from here is the retry
+// cycle's answered edge. Otherwise the stage's own call is what was refused,
+// and the stage runs from the top with no round in front of it.
 //
-// It refuses with ErrRetryNotOffered when the stage's report does not offer
-// the retry, which only a caller answering the graph without CheckRetry can
-// reach.
-func retryNode(stage Stage) graph.Node {
+// In both cases the node keeps the stage's next execution from reporting a
+// stale hold. A fix round the ceiling refused leaves the ceiling's hold in
+// the stage's held key, which the stage adds to every report it makes until a
+// round writes the key again, so without this a retry with room would hold
+// again on the refusal it was answering. Where no round runs, it drops every
+// hold in that key that stands in for work that never started, and keeps the
+// rest: the hold a requested round leaves so its result is seen is kept, so
+// a retry never carries a round a person asked for past them unseen. A
+// requested round the ceiling refused is not run again, because its request
+// is not what a retry carries; the person sees the round's hold and can ask
+// for it again.
+//
+// automatic says the stage takes automatic fix rounds, so fixer is the one
+// its fix node runs. It refuses with ErrRetryNotOffered when the stage's
+// report does not offer the retry, which only a caller answering the graph
+// without CheckRetry can reach.
+func retryNode(stage Stage, fixer Fixer, automatic bool) graph.Node {
+	reads := []string{string(stage.ReportKey()), string(stage.HeldKey())}
+	writes := []string{string(stage.HeldKey())}
+	if automatic {
+		reads = union(fixer.Reads, stage.ReportKey(), stage.HeldKey(), stage.FixKey())
+		writes = union(fixer.Writes, stage.FixKey(), stage.HeldKey())
+	}
 	return graph.Node{
 		Name:   stage.RetryNode(),
-		Reads:  []string{string(stage.ReportKey()), string(stage.HeldKey())},
-		Writes: []string{string(stage.HeldKey())},
-		NewBody: graph.Stateless(func(ctx context.Context, r graph.Reader, w graph.Writer) error {
-			recorded, err := r.Get(string(stage.ReportKey()))
-			if err != nil {
-				return err
+		Reads:  reads,
+		Writes: writes,
+		NewBody: func() graph.Body {
+			var body FixBody
+			if automatic {
+				body = fixer.NewBody()
 			}
-			text, _ := recorded.Text()
-			report, err := decodeReport(text, stage)
-			if err != nil {
-				return err
-			}
-			if !report.HasHeldNotStarted() {
-				return fmt.Errorf("%w: the %s stage's recorded report holds on nothing that never started",
-					ErrRetryNotOffered, stage)
-			}
-			held, err := readHolds(r, stage)
-			if err != nil {
-				return err
-			}
-			kept := make([]findings.Finding, 0, len(held))
-			for _, f := range held {
-				if !f.NotStarted {
-					kept = append(kept, f)
-				}
-			}
-			encoded := ""
-			if len(kept) > 0 {
-				raw, err := json.Marshal(kept)
+			return func(ctx context.Context, r graph.Reader, w graph.Writer) error {
+				recorded, err := r.Get(string(stage.ReportKey()))
 				if err != nil {
-					return fmt.Errorf("pipeline: record the holds the %s stage keeps across a retry: %w", stage, err)
+					return err
 				}
-				encoded = string(raw)
+				text, _ := recorded.Text()
+				report, err := decodeReport(text, stage)
+				if err != nil {
+					return err
+				}
+				if !report.HasHeldNotStarted() {
+					return fmt.Errorf("%w: the %s stage's recorded report holds on nothing that never started",
+						ErrRetryNotOffered, stage)
+				}
+				held, err := readHolds(r, stage)
+				if err != nil {
+					return err
+				}
+				if automatic && refusedRound(held) && len(report.Fixable()) > 0 {
+					return runRound(ctx, r, w, stage, fixer, body, report)
+				}
+				kept := make([]findings.Finding, 0, len(held))
+				for _, f := range held {
+					if !f.NotStarted {
+						kept = append(kept, f)
+					}
+				}
+				encoded := ""
+				if len(kept) > 0 {
+					raw, err := json.Marshal(kept)
+					if err != nil {
+						return fmt.Errorf("pipeline: record the holds the %s stage keeps across a retry: %w", stage, err)
+					}
+					encoded = string(raw)
+				}
+				return w.Set(string(stage.HeldKey()), graph.TextValue(encoded))
 			}
-			return w.Set(string(stage.HeldKey()), graph.TextValue(encoded))
-		}),
+		},
 	}
+}
+
+// refusedRound reports whether held, the holds the stage's last fix round
+// left, are what an automatic round the ceiling refused leaves: one or more,
+// and every one standing in for work that never started. A requested round
+// always adds its own hold, which does not, and a round that ran leaves only
+// holds its fixer raised. The one finding this build marks so is the
+// ceiling's, machine.CeilingHeldFinding, and an agent cannot mark one,
+// because internal/findings clears the mark on every report it parses.
+func refusedRound(held []findings.Finding) bool {
+	if len(held) == 0 {
+		return false
+	}
+	for _, f := range held {
+		if !f.NotStarted {
+			return false
+		}
+	}
+	return true
 }

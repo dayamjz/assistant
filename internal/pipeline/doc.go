@@ -581,7 +581,8 @@
 // refuses it elsewhere with CheckRetry before anything is recorded, and the
 // retry node refuses it again. It is a cycle of its own, from the hold
 // through the stage's retry node back to the stage, bounded by RetryRounds on
-// both edges, and retry.go owns it. The stage table's requestable column
+// both edges, and retry.go owns it, including why an automatic round the
+// ceiling refused is run by the retry node rather than the fix node. The stage table's requestable column
 // owns the fix line, and the reason is the promise the round makes: the stage
 // re-runs and holds again so the person sees the result. Push is the stage
 // that forwards a commit, so re-running it would push the round's commit

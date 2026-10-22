@@ -256,14 +256,10 @@ func holdNode(stage Stage, requests bool) graph.Node {
 // and it writes the summary this round wrote; everything else it touches is
 // what the fixer declared.
 func fixNode(stage Stage, fixer Fixer) graph.Node {
-	reads := union(fixer.Reads, stage.ReportKey(), stage.FixKey())
-	writes := union(fixer.Writes, stage.FixKey(), stage.HeldKey())
-	declared := keySet(fixer.Reads)
-	permitted := keySet(fixer.Writes)
 	return graph.Node{
 		Name:   stage.FixNode(),
-		Reads:  reads,
-		Writes: writes,
+		Reads:  union(fixer.Reads, stage.ReportKey(), stage.FixKey()),
+		Writes: union(fixer.Writes, stage.FixKey(), stage.HeldKey()),
 		NewBody: func() graph.Body {
 			body := fixer.NewBody()
 			return func(ctx context.Context, r graph.Reader, w graph.Writer) error {
@@ -276,43 +272,54 @@ func fixNode(stage Stage, fixer Fixer) graph.Node {
 				if err != nil {
 					return err
 				}
-				previous, err := r.Get(string(stage.FixKey()))
-				if err != nil {
-					return err
-				}
-				summary, _ := previous.Text()
-				refused := &refusal{}
-				out, err := body(ctx, FixInput{
-					Stage:    stage,
-					Findings: report.Fixable(),
-					Previous: summary,
-					State: reader{
-						from:    r,
-						allowed: declared,
-						who:     "the fixer for " + stage.String(),
-						refused: refused,
-					},
-				})
-				if err == nil {
-					err = refused.err
-				}
-				if err != nil {
-					return err
-				}
-				held, err := encodeHolds(stage, out.Holds)
-				if err != nil {
-					return err
-				}
-				if err := w.Set(string(stage.FixKey()), graph.TextValue(redactedText(out.Summary))); err != nil {
-					return err
-				}
-				if err := w.Set(string(stage.HeldKey()), graph.TextValue(held)); err != nil {
-					return err
-				}
-				return applyWrites(w, permitted, "the fixer for "+stage.String(), out.Writes)
+				return runRound(ctx, r, w, stage, fixer, body, report)
 			}
 		},
 	}
+}
+
+// runRound runs one automatic fix round of stage over the fix-eligible
+// findings of report, the stage's recorded report, and records what it
+// wrote: the summary in the stage's fix key, the holds it raised in the
+// stage's held key, and the fixer's own writes. It is the one body of an
+// automatic round, which the fix node runs and the retry node runs again
+// when the round it answers was refused, so a retried round is the round
+// the fixer would have run.
+func runRound(ctx context.Context, r graph.Reader, w graph.Writer, stage Stage, fixer Fixer, body FixBody, report findings.Report) error {
+	previous, err := r.Get(string(stage.FixKey()))
+	if err != nil {
+		return err
+	}
+	summary, _ := previous.Text()
+	refused := &refusal{}
+	out, err := body(ctx, FixInput{
+		Stage:    stage,
+		Findings: report.Fixable(),
+		Previous: summary,
+		State: reader{
+			from:    r,
+			allowed: keySet(fixer.Reads),
+			who:     "the fixer for " + stage.String(),
+			refused: refused,
+		},
+	})
+	if err == nil {
+		err = refused.err
+	}
+	if err != nil {
+		return err
+	}
+	held, err := encodeHolds(stage, out.Holds)
+	if err != nil {
+		return err
+	}
+	if err := w.Set(string(stage.FixKey()), graph.TextValue(redactedText(out.Summary))); err != nil {
+		return err
+	}
+	if err := w.Set(string(stage.HeldKey()), graph.TextValue(held)); err != nil {
+		return err
+	}
+	return applyWrites(w, keySet(fixer.Writes), "the fixer for "+stage.String(), out.Writes)
 }
 
 // requestNode builds the node that runs a fix round a person asked for at the

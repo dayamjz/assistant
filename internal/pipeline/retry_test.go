@@ -197,44 +197,55 @@ func TestARetryWithNoRoomHoldsAgainUntilTheBound(t *testing.T) {
 	}
 }
 
-// TestARetryDropsTheHoldARefusedRoundLeft is the retry over a fix round the
-// ceiling refused. The round leaves the ceiling's hold for the stage's next
-// execution, which holds on it; the retry drops that hold before the stage
-// runs again, so with room the stage takes its round and passes, rather than
-// holding again on the refusal it was answering.
-func TestARetryDropsTheHoldARefusedRoundLeft(t *testing.T) {
+// TestARetryRunsTheRoundTheCeilingRefused is the retry over an automatic
+// fix round the ceiling refused. The round leaves the ceiling's hold for the
+// stage's next execution, which holds on it; the retry runs that round
+// itself, over the fix-eligible findings the stage recorded, and the stage
+// runs again to see what it did, so with room the run goes on rather than
+// holding again on the refusal it was answering. The round limit is one, the
+// round the refusal already counted, so a retry that took the stage's fix
+// node again would park rounds-exhausted in front of it.
+func TestARetryRunsTheRoundTheCeilingRefused(t *testing.T) {
 	c := newCalls()
 	all := recordingStages(c)
 	set(&all, StageReview, recording(c, nil, nil, func(_ Input, call int) (Output, error) {
-		if call >= 4 {
+		if call >= 3 {
 			return Output{Report: passing()}, nil
 		}
 		return Output{Report: reportWith(findings.ActionFix, "rename the helper")}, nil
 	}))
+	var retried []findings.Finding
 	p := build(t, Options{
 		Stages: all,
-		Fixer: recordingFixer(c, nil, nil, func(_ FixInput, call int) (FixOutput, error) {
+		Fixer: recordingFixer(c, nil, nil, func(in FixInput, call int) (FixOutput, error) {
 			if call == 1 {
 				return FixOutput{Summary: "no fix round ran", Holds: []findings.Finding{notStartedHold()}}, nil
 			}
+			retried = in.Findings
 			return FixOutput{Summary: "renamed it"}, nil
 		}),
-		Rounds: rounds(2),
+		Rounds: rounds(1),
 		Budget: 200,
 	})
 	exec, held := start(t, p, complete())
 	if held.Position != StageReview.HoldNode() || !recordedReport(t, held.State, StageReview).HasHeldNotStarted() {
 		t.Fatalf("the run stopped at %q, want the review stage's hold over the refused round", held.Position)
 	}
-	retried, err := exec.Answer(context.Background(), "run", string(OutcomeRetry))
+	done, err := exec.Answer(context.Background(), "run", string(OutcomeRetry))
 	if err != nil {
 		t.Fatalf("answering with a retry: %v", err)
 	}
-	if retried.Status != graph.StatusCompleted {
-		t.Fatalf("after the retry the run is %s at %q, want it completed", retried.Status, retried.Position)
+	if done.Status != graph.StatusCompleted {
+		t.Fatalf("after the retry the run is %s at %q (%s), want it completed", done.Status, done.Position, done.Reason)
 	}
 	if n := c.fixCount(StageReview); n != 2 {
-		t.Fatalf("the review stage's fixer ran %d times, want the refused round and one after the retry", n)
+		t.Fatalf("the review stage's fixer ran %d times, want the refused round and the retried one", n)
+	}
+	if len(retried) != 1 || retried[0].Description != "rename the helper" {
+		t.Fatalf("the retried round was given %+v, want the finding the stage recorded", retried)
+	}
+	if n := c.stageCount(StageReview); n != 3 {
+		t.Fatalf("the review stage ran %d times, want once, once after the refused round, once after the retried one", n)
 	}
 }
 
@@ -310,16 +321,21 @@ func TestARetryIsNotOfferedAtAnOrdinaryHold(t *testing.T) {
 	}
 }
 
-// TestARefusedRoundSpendsTheRoundARetryWouldTake is the gap
-// internal/service's ceiling.go states rather than closes: a fix round the
-// ceiling refused was entered, so it counts against the stage's automatic
-// round limit, and a stage whose limit it spent parks rounds-exhausted in
-// front of its fixer once a retry runs it again with fix-eligible findings,
-// rather than taking a round it no longer has.
-func TestARefusedRoundSpendsTheRoundARetryWouldTake(t *testing.T) {
+// TestARetryAfterTheStageWasRefusedTooRunsItFromTheTop is the gap
+// internal/service's ceiling.go states rather than closes. When the ceiling
+// refused a stage's automatic fix round and then the stage's own call when
+// it ran again, the stage recorded no finding a round could take, so the
+// retry runs the stage from the top rather than the round, and the refused
+// round, which was entered, still counts against the stage's round limit: a
+// stage whose limit it spent parks rounds-exhausted in front of its fixer
+// once its body reports fix-eligible findings again.
+func TestARetryAfterTheStageWasRefusedTooRunsItFromTheTop(t *testing.T) {
 	c := newCalls()
 	all := recordingStages(c)
-	set(&all, StageReview, recording(c, nil, nil, func(Input, int) (Output, error) {
+	set(&all, StageReview, recording(c, nil, nil, func(_ Input, call int) (Output, error) {
+		if call == 2 {
+			return Output{Report: refusedReport()}, nil
+		}
 		return Output{Report: reportWith(findings.ActionFix, "rename the helper")}, nil
 	}))
 	p := build(t, Options{
@@ -330,7 +346,10 @@ func TestARefusedRoundSpendsTheRoundARetryWouldTake(t *testing.T) {
 		Rounds: rounds(1),
 		Budget: 200,
 	})
-	exec, _ := start(t, p, complete())
+	exec, held := start(t, p, complete())
+	if held.Position != StageReview.HoldNode() {
+		t.Fatalf("the run stopped at %q, want the review stage's hold", held.Position)
+	}
 	retried, err := exec.Answer(context.Background(), "run", string(OutcomeRetry))
 	if err != nil {
 		t.Fatalf("answering with a retry: %v", err)
@@ -341,5 +360,113 @@ func TestARefusedRoundSpendsTheRoundARetryWouldTake(t *testing.T) {
 	}
 	if n := c.fixCount(StageReview); n != 1 {
 		t.Fatalf("the fixer ran %d times, want only the refused round", n)
+	}
+	if n := c.stageCount(StageReview); n != 3 {
+		t.Fatalf("the review stage ran %d times, want the retry to have run it from the top", n)
+	}
+}
+
+// TestARetryOverARefusedRoundHoldsUntilTheBound is the retry while the
+// ceiling still has no room for a stage's fixer rather than its body: the
+// lint stage runs a command, reports a fix-eligible finding every time, and
+// takes the default three automatic rounds, and every fix round's agent call
+// is refused. Each retry runs the refused round again, whose call is refused
+// again, and the run holds on the same question, as decision 25 says, rather
+// than parking converged on the round's way back or rounds-exhausted in front
+// of the fixer: neither is a loop nobody is driving, and either park would
+// take the hold, and approve, skip, and cancel with it. The retry past
+// RetryRounds is refused with the decision still open.
+func TestARetryOverARefusedRoundHoldsUntilTheBound(t *testing.T) {
+	c := newCalls()
+	all := recordingStages(c)
+	set(&all, StageLint, recording(c, nil, nil, func(Input, int) (Output, error) {
+		return Output{Report: reportWith(findings.ActionFix, "lint exits 1")}, nil
+	}))
+	p := build(t, Options{
+		Stages: all,
+		Fixer: recordingFixer(c, nil, nil, func(FixInput, int) (FixOutput, error) {
+			return FixOutput{Summary: "no fix round ran", Holds: []findings.Finding{notStartedHold()}}, nil
+		}),
+		Rounds: rounds(3),
+		Budget: 200,
+	})
+	exec, held := start(t, p, complete())
+	if held.Status != graph.StatusHalted || held.Position != StageLint.HoldNode() {
+		t.Fatalf("the run is %s at %q, want held at lint over the refused round", held.Status, held.Position)
+	}
+	for i := 1; i <= RetryRounds; i++ {
+		again, err := exec.Answer(context.Background(), "run", string(OutcomeRetry))
+		if err != nil {
+			t.Fatalf("retry %d: %v", i, err)
+		}
+		if again.Status != graph.StatusHalted || again.Position != StageLint.HoldNode() {
+			t.Fatalf("after retry %d the run is %s at %q (%s), want held at lint again",
+				i, again.Status, again.Position, again.Reason)
+		}
+		if !recordedReport(t, again.State, StageLint).HasHeldNotStarted() {
+			t.Fatalf("after retry %d the hold is not the ceiling's again", i)
+		}
+	}
+	if n := c.fixCount(StageLint); n != 1+RetryRounds {
+		t.Fatalf("the lint fixer was asked %d times, want once and once per retry", n)
+	}
+	if _, err := exec.Answer(context.Background(), "run", string(OutcomeRetry)); !errors.Is(err, graph.ErrRoundsSpent) {
+		t.Fatalf("the retry past the bound returned %v, want graph.ErrRoundsSpent", err)
+	}
+	approved, err := exec.Answer(context.Background(), "run", string(OutcomeApproved))
+	if err != nil || approved.Status != graph.StatusCompleted {
+		t.Fatalf("approving after the bound: %v, run %s", err, approved.Status)
+	}
+}
+
+// TestARetryDoesNotRunARefusedRequestedRoundAgain is the other refused round:
+// one a person asked for, which the ceiling refused. Its request is not what
+// a retry carries, so the retry runs no round; it drops the ceiling's hold
+// and keeps the hold the requested round left, and the stage holds on that,
+// so the person sees that their round did not run and can ask for it again.
+// The stage takes an automatic round and reports a fix-eligible finding
+// beside the ask every time, so this is decided by what the held key carries
+// and not by the stage having no fixer to run or nothing to run it over.
+func TestARetryDoesNotRunARefusedRequestedRoundAgain(t *testing.T) {
+	c := newCalls()
+	all := recordingStages(c)
+	set(&all, StageLint, recording(c, nil, nil, func(Input, int) (Output, error) {
+		return Output{Report: findings.Report{Summary: "an ask and a fix", Findings: []findings.Finding{
+			{ID: "decide", Severity: findings.SeverityError, Action: findings.ActionAsk, Description: "decide this"},
+			{ID: "rename", Severity: findings.SeverityError, Action: findings.ActionFix, Description: "rename the helper"},
+		}}}, nil
+	}))
+	p := build(t, Options{
+		Stages: all,
+		Fixer: recordingFixer(c, nil, nil, func(FixInput, int) (FixOutput, error) {
+			return FixOutput{Summary: "no fix round ran", Holds: []findings.Finding{notStartedHold()}}, nil
+		}),
+		Rounds: rounds(1),
+		Budget: 200,
+	})
+	exec, _ := start(t, p, complete())
+	refused, err := exec.AnswerWith(context.Background(), "run", string(OutcomeFixRequested),
+		encodedRequest(t, FixRequest{Selected: []string{"decide"}}))
+	if err != nil || refused.Position != StageLint.HoldNode() {
+		t.Fatalf("the refused requested round left the run at %q (%v), want the lint stage's hold", refused.Position, err)
+	}
+	if !recordedReport(t, refused.State, StageLint).HasHeldNotStarted() {
+		t.Fatalf("the refused requested round did not leave the ceiling's hold")
+	}
+	retried, err := exec.Answer(context.Background(), "run", string(OutcomeRetry))
+	if err != nil {
+		t.Fatalf("answering with a retry: %v", err)
+	}
+	if retried.Status != graph.StatusHalted || retried.Position != StageLint.HoldNode() {
+		t.Fatalf("after the retry the run is %s at %q, want held at lint for the requested round", retried.Status, retried.Position)
+	}
+	if n := c.fixCount(StageLint); n != 1 {
+		t.Fatalf("the lint fixer ran %d times, want only the refused requested round", n)
+	}
+	if recordedReport(t, retried.State, StageLint).HasHeldNotStarted() {
+		t.Fatalf("after the retry the lint report still holds on the ceiling")
+	}
+	if _, ok, err := FixReviewFinding(retried.State, StageLint); err != nil || !ok {
+		t.Fatalf("after the retry the lint report carries no hold for the requested round (%v)", err)
 	}
 }
