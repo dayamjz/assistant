@@ -234,5 +234,121 @@ class LeakCheckTest(unittest.TestCase):
         self.assertIn("expected failure observed", result.stdout)
 
 
+EARLY_TEST = """package a
+
+import (
+	"os"
+	"os/exec"
+	"strconv"
+	"syscall"
+	"testing"
+)
+
+// With LEAK set, it leaves a detached sleep running and passes.
+func TestMaybeLeavesADetachedProcess(t *testing.T) {
+	if os.Getenv("LEAK") == "" {
+		return
+	}
+	cmd := exec.Command("sleep", "2")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := []byte(strconv.Itoa(cmd.Process.Pid))
+	if err := os.WriteFile(os.Getenv("RECORD"), pid, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+"""
+
+LATE_TEST = """package b
+
+import (
+	"testing"
+	"time"
+)
+
+// It runs long after package a has ended, and past a's sleep.
+func TestOutlastsTheEarlyPackage(t *testing.T) {
+	time.Sleep(5 * time.Second)
+}
+"""
+
+
+def running(pid):
+    """Whether pid is a running process, an unreaped exited one counting as gone."""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    return state not in ("Z", "X")
+
+
+class PerPackageTest(unittest.TestCase):
+    """The per-package check, run by go test -exec over a real two-package
+    module: package a leaves a detached sleep 2 and passes, and package b runs
+    for five seconds, so the sleep outlives a and has exited before go test
+    ends, where a comparison at the end of the run cannot see it."""
+
+    def go_test(self, module, record, leak, wrapped):
+        env = dict(os.environ, RECORD=str(record))
+        env.pop("LEAK", None)
+        if leak:
+            env["LEAK"] = "1"
+        command = ["go", "test", "-count=1", "-p", "2"]
+        if wrapped:
+            command += ["-exec", f"{sys.executable} {SCRIPT} package --"]
+        return subprocess.run(command + ["./..."], cwd=module, env=env, text=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              check=False, timeout=300)
+
+    def module(self, folder):
+        module = Path(folder) / "module"
+        (module / "a").mkdir(parents=True)
+        (module / "b").mkdir()
+        (module / "go.mod").write_text("module example.com/leaks\n\ngo 1.21\n")
+        (module / "a" / "a_test.go").write_text(EARLY_TEST)
+        (module / "b" / "b_test.go").write_text(LATE_TEST)
+        return module
+
+    @unittest.skipUnless(sys.platform == "linux", "the per-package check runs on Linux")
+    def test_an_early_packages_detached_process_fails_that_package(self):
+        with tempfile.TemporaryDirectory() as folder:
+            module, record = self.module(folder), Path(folder) / "pid"
+            # Unwrapped, go test passes, and the sleep has exited by its end:
+            # the leak a suite-end comparison misses.
+            plain = self.go_test(module, record, leak=True, wrapped=False)
+            pid = int(record.read_text())
+            self.assertEqual(plain.returncode, 0, plain.stdout)
+            self.assertFalse(running(pid), "the sleep outlived go test, so this shows nothing")
+            record.unlink()
+
+            leaked = self.go_test(module, record, leak=True, wrapped=True)
+            self.assertTrue(record.exists(), f"package a never ran under the check:\n{leaked.stdout}")
+            pid = int(record.read_text())
+            try:
+                self.assertNotEqual(leaked.returncode, 0, leaked.stdout)
+                self.assertIn(f"LEAK package={module / 'a'} process pid={pid} ", leaked.stdout)
+                self.assertIn("command=sleep 2", leaked.stdout)
+                self.assertRegex(leaked.stdout, r"(?m)^FAIL\texample.com/leaks/a\b")
+                self.assertRegex(leaked.stdout, r"(?m)^ok  \texample.com/leaks/b\b")
+                self.assertFalse(running(pid), "the check left the leaked sleep running")
+            finally:
+                if running(pid):
+                    os.kill(pid, 9)
+
+            # Control: the same module leaving nothing passes the check.
+            clean = self.go_test(module, record, leak=False, wrapped=True)
+            self.assertEqual(clean.returncode, 0, clean.stdout)
+            self.assertNotIn("LEAK", clean.stdout)
+
+    @unittest.skipIf(sys.platform == "linux", "Linux runs the per-package check")
+    def test_the_per_package_check_refuses_off_linux(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), "package", "--", "true"],
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 2, result)
+        self.assertIn("per-package", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

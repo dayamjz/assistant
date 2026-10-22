@@ -143,24 +143,34 @@ jobs:
             TMPDIR=$(mktemp -d "$RUNNER_TEMP/tmp.XXXXXX")
             export TMPDIR
           fi
-          # go test runs inside scripts/leak-check.py, which fails naming every
-          # runner-user process and temp entry that is new when go test ends.
-          # That is a check at the end of the whole run, not P15's per-package
-          # one: a process that outlives its package and exits before go test
-          # ends is not seen here (the script's docstring says what checks
-          # per package). Both snapshots are taken inside the namespace: a
-          # second one on the host after tini exits would miss what its
-          # teardown killed.
+          # P15 per package, on Linux: go test runs each package's test
+          # binary through `leak-check.py package` (-exec), which makes itself
+          # the binary's child subreaper, so every process the package starts
+          # stays in its tree whatever session it moves to, and fails that
+          # package naming each one still running once the binary exits, then
+          # ends them. macOS has no subreaper; whether its lane enforces P15
+          # per package is open (see #492), so there only the comparison
+          # below runs.
+          # Around the whole run, scripts/leak-check.py also fails naming
+          # every runner-user process and temp entry that is new when go test
+          # ends. Both snapshots are taken inside the namespace: a second one
+          # on the host after tini exits would miss what its teardown killed.
           # The self-test first plants a detached process and a directory and
-          # must see this same guard, in this same wrapper, reject both, so a
-          # guard that cannot see processes here fails the step instead of
-          # passing. Existing processes are matched by pid and start time, not
-          # by name; Go's build cache lives outside the watched temp roots.
-          # The only things set aside are macOS's own Apple launchd jobs, XPC
-          # services and temp entries, each printed; the script says which.
+          # must see this same guard, in this same wrapper, reject both, and
+          # on Linux the per-package check fail, name and end a planted
+          # process, so a guard that cannot see processes here fails the step
+          # instead of passing. Existing processes are matched by pid and
+          # start time, not by name; Go's build cache lives outside the
+          # watched temp roots. The only things set aside are macOS's own
+          # Apple launchd jobs, XPC services and temp entries, each printed;
+          # the script says which.
+          per_package=()
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            per_package=(-exec "python3 $PWD/scripts/leak-check.py package --")
+          fi
           "${run[@]}" python3 scripts/leak-check.py self-test
           "${run[@]}" python3 scripts/leak-check.py run -- \
-            go test -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
+            go test "${per_package[@]}" -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
           grep -E '^(ok|FAIL|--- FAIL|panic:|\?|LEAK|leak-check:)[[:space:]]' test.log || true
           if [ -n "${status:-}" ]; then
             echo "::group::full test output"

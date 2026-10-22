@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""Compare runner-user processes and temp entries around a command.
+"""Compare runner-user processes and temp entries around a command, and fail
+a Go package for every process it leaves running.
 
 Run locally: python3 scripts/leak-check.py run -- go test -race -p 2 ./...
-Prove the guard rejects planted leftovers: python3 scripts/leak-check.py self-test
+Per package, on Linux:
+  python3 scripts/leak-check.py run -- \
+    go test -exec "python3 $PWD/scripts/leak-check.py package --" ./...
+Prove both reject planted leftovers: python3 scripts/leak-check.py self-test
 Only Linux and macOS are supported. Inspection errors fail closed.
 
-It compares one snapshot taken before the command with one taken after it, so
-it reports what is still there when the command ends. For go test that is the
-end of the whole run, not of each package: a process that outlives its package
-but exits before go test ends, or a temp entry removed by then, is not
-reported. So this is not P15's per-package criterion (CI fails when any process
-a test started outlives its package). The one check at each package's end is
-standin.RunOwned's, in the packages whose TestMain uses it, and it sees only
-processes of that package's binary and processes carrying its owner identity;
-beyond it, some tests check the processes they started themselves.
+run compares one snapshot taken before the command with one taken after it,
+so it reports what is still there when the command ends: for go test, the
+end of the whole run. A process that outlives its package but exits before
+go test ends is not there, and neither is a temp entry removed by then.
+
+package is P15's per-package check (CI fails when any process a test started
+outlives its package): go test runs each package's test binary through it,
+and it fails that package for every process the binary's tree still has
+running once the binary exits (package_run says how, and what it misses).
+It needs Linux's child subreaper and refuses anywhere else, so on macOS
+nothing checks per package but standin.RunOwned's own check, in the packages
+whose TestMain uses it, which sees only processes of that package's binary
+and processes carrying its owner identity.
 
 The only things set aside are macOS's own, each listed below with why: launchd
 jobs labelled com.apple.*, Apple XPC services launchd started from /System, and
@@ -27,6 +35,7 @@ import ctypes
 import errno
 import os
 from pathlib import Path
+import signal
 import stat
 import subprocess
 import sys
@@ -332,12 +341,173 @@ pathlib.Path(sys.argv[2]).mkdir()
             if pid is not None:
                 os.kill(pid, 9)
         print("leak-check self-test: expected failure observed; planted leaks removed")
+    if sys.platform == "linux":
+        package_self_test()
     return 0
+
+
+def package_self_test():
+    """The per-package check's positive control: package_run must fail a
+    command that leaves a detached process behind, name it, and end it."""
+    code = """
+import subprocess
+p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+print(f'planted {p.pid}', flush=True)
+"""
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "package", "--",
+         sys.executable, "-c", code],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        check=False, timeout=60,
+    )
+    print(result.stdout, end="", flush=True)
+    planted = [line.split()[1] for line in result.stdout.splitlines()
+               if line.startswith("planted ")]
+    if not planted:
+        raise RuntimeError("the per-package self-test planted nothing")
+    pid = int(planted[0])
+    named = f"LEAK package={os.getcwd()} process pid={pid} " in result.stdout
+    running = process_start(pid) is not None
+    if running:
+        os.kill(pid, 9)
+    if result.returncode != 1 or not named or running:
+        raise RuntimeError("per-package self-test did not fail, name and end the planted process")
+    print("leak-check self-test: per-package check failed, named and ended its planted process")
+
+
+PR_SET_CHILD_SUBREAPER = 36  # from linux/prctl.h
+
+
+def linux_processes():
+    """Map every running pid in /proc to (parent pid, start, command line).
+
+    A process in state Z or X has exited and is left out. A process that
+    exits during the walk is left out too; the caller decides from its own
+    children, not from this map.
+    """
+    found = {}
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
+            command = (entry / "cmdline").read_bytes()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if fields[0] in ("Z", "X"):
+            continue
+        found[int(entry.name)] = (int(fields[1]), fields[19],
+                                  command.rstrip(b"\0").replace(b"\0", b" ")
+                                  .decode(errors="replace"))
+    return found
+
+
+def descendants(table, root):
+    """Every pid in table whose chain of parents reaches root."""
+    children = {}
+    for pid, (parent, _, _) in table.items():
+        children.setdefault(parent, []).append(pid)
+    found, frontier = [], [root]
+    while frontier:
+        for child in children.get(frontier.pop(), []):
+            found.append(child)
+            frontier.append(child)
+    return sorted(found)
+
+
+def children_running():
+    """Reap every child of this process that has exited, and report whether
+    any child is still running. No child at all is False."""
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return False
+        if pid == 0:
+            return True
+
+
+def package_run(command):
+    """Run one package's test binary and fail it for every process it left.
+
+    go test runs this as -exec, once per package, in that package's
+    directory. It makes this process Linux's child subreaper for its
+    descendants first, so a process the binary or anything under it starts
+    is reparented here, never to init, when its parent exits, whatever
+    session, group or environment it runs in. While the binary runs, it reaps
+    every such process that exits. Once the binary has exited, any child
+    still running is a process the package started that outlived it (P15):
+    each of them and everything under it is printed as a LEAK line naming the
+    package, and the package fails. That question is asked of the kernel's
+    own record of this process's children (waitpid), so a process that
+    starts another and exits while this looks still leaves a child here.
+    Each generation is then killed: only this process's own unreaped
+    children are signalled, so no pid can have been reused, and what each
+    leaves is reparented here for the next round, until no child remains.
+
+    The binary's exit status is passed on, or 1 when it was 0 and something
+    was left; a binary ended by a signal ends this process with the same
+    signal. A process the package had started through a service manager or
+    another process outside its tree (launchd, systemd, a running daemon) is
+    not its descendant and is not seen here; the comparison around the whole
+    run (run) still covers this user's processes and the temp roots. Only
+    Linux has the subreaper, and elsewhere this refuses rather than pass.
+    """
+    if sys.platform != "linux":
+        raise RuntimeError("the per-package check needs Linux's child subreaper "
+                           f"(prctl PR_SET_CHILD_SUBREAPER), and this is {sys.platform}")
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, "prctl(PR_SET_CHILD_SUBREAPER)")
+    child = os.posix_spawnp(command[0], command, os.environ)
+
+    def forward(signum, _frame):
+        try:
+            os.kill(child, signum)
+        except ProcessLookupError:
+            pass
+
+    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+        signal.signal(signum, forward)
+    while True:
+        pid, status = os.waitpid(-1, 0)
+        if pid == child:
+            break
+    package, me = os.getcwd(), os.getpid()
+    named = set()
+    while children_running():
+        table = linux_processes()
+        for pid in descendants(table, me):
+            parent, start, line = table[pid]
+            if (pid, start) not in named:
+                named.add((pid, start))
+                print(f"LEAK package={package} process pid={pid} start={start} command={line}",
+                      flush=True)
+        for pid, (parent, _, _) in table.items():
+            if parent == me:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        try:
+            os.waitpid(-1, 0)
+        except ChildProcessError:
+            break
+    if named:
+        print(f"leak-check: package {package} left {len(named)} process(es) running", flush=True)
+    if os.WIFSIGNALED(status):
+        signal.signal(os.WTERMSIG(status), signal.SIG_DFL)
+        os.kill(me, os.WTERMSIG(status))
+    code = os.waitstatus_to_exitcode(status)
+    return 1 if code == 0 and named else code
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["run", "self-test"])
+    parser.add_argument("mode", choices=["run", "self-test", "package"])
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     try:
@@ -349,7 +519,9 @@ def main():
         if command[:1] == ["--"]:
             command = command[1:]
         if not command:
-            parser.error("run requires a command")
+            parser.error(f"{args.mode} requires a command")
+        if args.mode == "package":
+            return package_run(command)
         return guarded_run(command)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"leak-check: inspection failed: {error}", file=sys.stderr, flush=True)
