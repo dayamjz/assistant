@@ -82,6 +82,14 @@ type Config struct {
 	// it is ended with its process group. KeyCommandTimeout says who may set
 	// it and what ending it does to the stage.
 	CommandTimeout time.Duration
+	// GitDeadline is how long one git invocation the service makes may run
+	// when its caller set no deadline of its own. KeyGitDeadline says who may
+	// set it and what reads it.
+	GitDeadline time.Duration
+	// GHDeadline is how long one gh invocation the service makes may run when
+	// its caller set no deadline of its own. KeyGHDeadline says who may set it
+	// and what reads it.
+	GHDeadline time.Duration
 	// DecisionModel is the mode of the decision-model checks PRD section 5
 	// describes. Whether a request is sent at all also needs the provider's
 	// key in the operator's environment, which this package never reads.
@@ -126,7 +134,7 @@ type Config struct {
 	// KeyRunUsageBudgetOutputTokens says which count, who may set it, and how
 	// it differs from UsageCeiling.
 	RunUsageBudget int64
-	// Roles says which agent, model, and effort each role runs. A Config from
+	// Roles says which agent, model, effort, and context window each role runs. A Config from
 	// Resolve names the fixer as cursor unless the winning document named the
 	// fix role. A role that names no agent uses Agent. KeyRoles says which
 	// names the program assigns and which a task may name.
@@ -264,6 +272,14 @@ const (
 	// suite, and half an hour is well past what a targeted check or a lint
 	// pass takes while still ending a hung one within a sitting.
 	DefaultCommandTimeout = 30 * time.Minute
+	// DefaultGitDeadline is PRD section 10's default for git_deadline. It is
+	// the same value internal/vcs falls back to for a handle built without
+	// one, which is what the command line's own git runs under; a test holds
+	// the two equal.
+	DefaultGitDeadline = 10 * time.Minute
+	// DefaultGHDeadline is PRD section 10's default for gh_deadline. It is
+	// forge.DefaultInvocationDeadline's value, on DefaultGitDeadline's terms.
+	DefaultGHDeadline = 2 * time.Minute
 	// DefaultDecisionModel is the decision-model mode a run gets when the
 	// operator's file sets none: the checks run where the key is present and
 	// what they find is a note.
@@ -472,6 +488,21 @@ const (
 	// command holds a run, and the host's cores, for more than a day before
 	// anyone hears. Chosen, not measured.
 	MaxCommandTimeout = 24 * time.Hour
+	// MinGitDeadline is the shortest git deadline, PRD section 10's limits
+	// table. Below it an ordinary fetch of a large repository is ended before
+	// it can finish. Chosen, not measured.
+	MinGitDeadline = time.Minute
+	// MaxGitDeadline is the longest git deadline. Above it a wedged git holds
+	// a run for longer than a sitting before it is ended. Chosen, not
+	// measured.
+	MaxGitDeadline = 2 * time.Hour
+	// MinGHDeadline is the shortest gh deadline. Below it an ordinary request
+	// to the code host is ended before it can answer. Chosen, not measured.
+	MinGHDeadline = 10 * time.Second
+	// MaxGHDeadline is the longest gh deadline. Above it a wedged gh holds a
+	// run for half an hour, far past what a handful of requests takes.
+	// Chosen, not measured.
+	MaxGHDeadline = 30 * time.Minute
 	// MinSupervisionBeaconInterval is the shortest beacon interval. Below it
 	// the loop would spend its passes rewriting the beacon. Chosen, not
 	// measured.

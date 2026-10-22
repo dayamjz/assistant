@@ -1186,6 +1186,36 @@ to each one:
   priority, so one command can still saturate the host by itself: keep the
   commands targeted.
 
+## Bounding git and gh
+
+Every git and `gh` the service runs is ended with its process group when it
+runs too long, so a wedged fetch or a hung code-host request cannot hold a run
+forever. Two keys in your own configuration file set those bounds:
+
+| Key | Default | Accepted | Bounds |
+| --- | --- | --- | --- |
+| `git_deadline` | `10m` | `1m` to `2h` | one git invocation: a clone, a fetch, a push, a read |
+| `gh_deadline` | `2m` | `10s` to `30m` | one `gh` invocation against GitHub |
+
+```yaml
+# config.yaml in the home
+git_deadline: 30m
+```
+
+- Raise `git_deadline` when a large repository's clone or fetch over a slow
+  link needs longer than ten minutes; lower either for a tighter bound.
+- A value outside its range refuses the whole file when the service starts,
+  naming the key. Both are global-only: a repository file naming either is
+  refused, so a branch cannot loosen a bound that protects your machine.
+- They apply where the code calling git or `gh` set no deadline of its own;
+  where it did, that deadline is kept instead.
+- Stage commands keep their own `command_timeout` (above), and no other
+  program's bound is configurable.
+- The command line's own git and `gh` (`assistant init`, `doctor`, a push's
+  receive into the gate) do not read your file and run under the defaults.
+- The GitLab adapter talks HTTP and starts no program, so `gh_deadline` does
+  not bound it.
+
 ## Repositories with no code host
 
 A repository whose upstream is a local path or a `file://` remote has no code

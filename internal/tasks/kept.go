@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -169,7 +168,7 @@ func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 	if !standing {
 		return KeptEntry{}, fmt.Errorf("%w: nothing stands at %s, so no copy was kept there", ErrCleanupRecord, path)
 	}
-	copied, err := vcs.OpenWorktree(ctx, path, vcs.WithRedactor(redact.New()))
+	copied, err := vcs.OpenWorktree(ctx, path, c.git...)
 	if err != nil {
 		return KeptEntry{}, fmt.Errorf("tasks: opening the kept copy at %s: %w", path, err)
 	}

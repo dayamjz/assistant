@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/dayamjz/assistant/internal/gate"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
@@ -159,7 +158,7 @@ import (
 // went.
 func (s *Service) ensureCopy(ctx context.Context, record store.Run) error {
 	path := s.home.Worktree(record.RepositoryID, record.ID)
-	if standing, err := copyStanding(ctx, path); err != nil {
+	if standing, err := s.copyStanding(ctx, path); err != nil {
 		return err
 	} else if standing {
 		return nil
@@ -295,7 +294,7 @@ func (s *Service) gateRepositoryOf(ctx context.Context, repository store.Reposit
 	if err != nil {
 		return nil, fmt.Errorf("service: locating the gate repository run %s is cut from: %w", runID, err)
 	}
-	bare, err := vcs.OpenBare(ctx, repositoryPath, vcs.WithRedactor(redact.New()))
+	bare, err := vcs.OpenBare(ctx, repositoryPath, s.git()...)
 	if err != nil {
 		return nil, fmt.Errorf("service: opening the gate repository run %s is cut from: %w", runID, err)
 	}
@@ -326,13 +325,13 @@ const forkRemote = stages.ForkRemote
 // removed and rebuilt. This service put a directory there or nothing did, and
 // removing whatever else is there would be this code guessing about a
 // directory under the home it cannot account for.
-func copyStanding(ctx context.Context, path string) (bool, error) {
+func (s *Service) copyStanding(ctx context.Context, path string) (bool, error) {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	} else if err != nil {
 		return false, fmt.Errorf("service: reading the isolated copy at %s: %w", path, err)
 	}
-	if _, err := vcs.OpenWorktree(ctx, path, vcs.WithRedactor(redact.New())); err != nil {
+	if _, err := vcs.OpenWorktree(ctx, path, s.git()...); err != nil {
 		return false, fmt.Errorf("service: %s is where an isolated copy belongs and holds something "+
 			"that is not one, so a run cannot be given a copy there: %w", path, err)
 	}

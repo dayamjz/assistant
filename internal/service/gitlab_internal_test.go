@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/forge/labtest"
@@ -31,7 +32,7 @@ func newGitLabFixture(t *testing.T, script labtest.Script) (mergeReadFixture, *l
 	lab := labtest.New(t, script)
 	f.s.forge = forge.Hosts{GitHub: f.host.Host(), GitLab: lab.Host()}
 	var err error
-	if f.s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: f.home, Store: f.records, Forge: f.s.forge}); err != nil {
+	if f.s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: f.home, Store: f.records, Forge: f.s.forge, GitDeadline: config.DefaultGitDeadline}); err != nil {
 		t.Fatalf("building the cleaner: %v", err)
 	}
 	if _, err := f.records.UpsertRepository(t.Context(), store.Repository{

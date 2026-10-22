@@ -141,6 +141,13 @@ repository more than one round of review.
   `internal/managed` writes a service definition or invokes `launchctl`
   or `systemctl`. Only `internal/checkpoints` serializes a `graph.Checkpoint`
   outside `internal/graph`.
+- Only `internal/procgroup` names a starter, an entry of
+  `internal/procgroup/guard`'s `Starters` (os/exec's constructors and
+  starting methods, `os.StartProcess`, and the syscall and x/sys calls that
+  start a program): build a command with `procgroup.Command` and run it with
+  `procgroup.Run`. The functions that may do otherwise are the rows of the
+  guard's `Exceptions`, each with a typed reason; its test fails the build on
+  any other use in non-test code, and on a row that covers none.
 - Credential removal is `internal/redact`'s: a new shape is added there, never
   a second remover at a call site. A sentence a person reads is a row in
   `internal/machine`'s phrase table (`phrases.go`), never one at a renderer.

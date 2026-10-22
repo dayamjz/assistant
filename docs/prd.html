@@ -1137,7 +1137,7 @@ stateDiagram-v2
 
   <p class="mb-8 opacity-90">
     A task runs under a role, section 10's <code>roles</code>. Intake records the role name and
-    nothing about which agent, model provider, model type, model version, or effort that name meant: the role row is the one owner of
+    nothing about which agent, model provider, model type, model version, effort, or context window that name meant: the role row is the one owner of
     those, and a launch reads it then (P14). No role at intake is the <code>worker</code> role.
     Promotion and relaunch keep the name. The review and the fix of a run that the task's push
     starts are the <code>review</code> and <code>fix</code> roles, not the task's role.
@@ -1921,7 +1921,7 @@ flowchart TB
     <li>Pushes to the same branch serialize, and a new push supersedes the run in progress. Different branches run concurrently.</li>
     <li>Launch and readiness are different states. Publishing a process identifier is not proof of readiness; only a real health response is.</li>
     <li>Stopping is bounded. On a stop request or SIGTERM, the service stops admitting work, ends the process groups it registered, and exits within <code>stop_grace</code>; past the grace it ends them by force. A service that does not exit on SIGTERM is a defect, not a slow shutdown.</li>
-    <li>Every invocation of an external program carries a deadline. The program runs in a process group that the invoker ends when the call returns or times out, so a child cannot keep a pipe or a terminal open after its parent is gone.</li>
+    <li>Every invocation of an external program carries a deadline. The program runs in a process group that the invoker ends when the call returns or times out, so a child cannot keep a pipe or a terminal open after its parent is gone. Which deadline bounds which program is said here. git the service runs is bounded by <code>git_deadline</code>, <code>gh</code> the service runs by <code>gh_deadline</code>, and a stage command by <code>command_timeout</code>; each is the operator's alone to set, and none stands in for another. <code>git_deadline</code> and <code>gh_deadline</code> bound an invocation whose caller set no deadline of its own; a caller's own deadline is kept instead. git and <code>gh</code> the command line runs itself, rather than the service, are built without your settings and run under those two keys' defaults. No other program's deadline is a configuration key.</li>
     <li>macOS and Linux are the supported platforms. Windows is not supported: the build is vetted for it so it does not rot, and nothing is run or tested there. What this build cannot provide on Windows refuses rather than degrades: no socket peer is identified, so every request that drives a run is refused and no worker is placed, and the managed service's install is refused.</li>
   </ul>
 
@@ -2023,7 +2023,7 @@ flowchart TB
         <tr><td><b>delegation attempt</b></td><td>Authoritative, appended</td><td>One row per start of a domain's subordinate coordinator, with its session reference, sealed. A relaunch is a new row anchored to the attempt history it read, bounded by <code>relaunch_attempts</code> on section 11's terms.</td></tr>
         <tr><td><b>escalation</b></td><td>Authoritative, appended</td><td>One row per decision a subordinate coordinator hands up to the first coordinator, sealed. It is raised as a wake of its own kind, subordinate escalated, which section 6's flowchart surfaces always.</td></tr>
         <tr><td><b>seen mark</b></td><td>Authoritative, appended</td><td>One row per merge or cleanup record you were shown and marked seen, keyed the way that record is keyed. One per home. It is what section 9's catch-up reads to decide what landed since you last looked, and nothing else reads it.</td></tr>
-        <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, the model provider, model type, and model version the launch was asked for, the model identifier the adapter started, the role and the effort of the launch, timing, failure category, token usage, and the run and stage it served where it served one. Never prompts, outputs, diffs, or credentials. The run, the stage, the role, the provider, the type, the version, and the effort were added later, so a row written before one of them reads that one as unknown, never as a guess. A provider, a type, a version, or an effort that was not named is recorded as not named, and is never stored as one of the named values.</td></tr>
+        <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, the model provider, model type, and model version the launch was asked for, the model identifier the adapter started, the role, the effort, and the context window of the launch, timing, failure category, token usage, and the run and stage it served where it served one. Never prompts, outputs, diffs, or credentials. The run, the stage, the role, the provider, the type, the version, the effort, and the context window were added later, so a row written before one of them reads that one as unknown, never as a guess. A provider, a type, a version, an effort, or a context window that was not named is recorded as not named, and is never stored as one of the named values.</td></tr>
       </tbody>
     </table>
   </div>
@@ -2231,10 +2231,11 @@ flowchart TB
   </p>
   <p class="mb-4 opacity-90">
     The <b>usage view</b> is a flag on <code>assistant runs</code>, taking a window. It reads section
-    8's agent invocation record and totals it by agent, model provider, model type, model version, the model identifier the launch used, purpose, role, and effort, and by run and stage
+    8's agent invocation record and totals it by agent, model provider, model type, model version, the model identifier the launch used, purpose, role, effort, and context window, and by run and stage
     where a row names them: calls, failures by category, duration, and each token count. A count the
     agent did not report is shown as unreported and never summed as a zero. A provider, a type, a
-    version, or an effort recorded as not named is totaled on its own and never as one of the named values.
+    version, an effort, or a context window recorded as not named is totaled on its own and never as one of the named values,
+    and one a row predates is totaled as unknown, apart from both.
     It covers the calls a
     stage makes and says so: a worker's turns and any price are not in it. The local protocol
     carries the same read as one open method, so a driving agent gets the same model. It is a
@@ -2652,7 +2653,7 @@ flowchart TB
       <thead><tr><th class="w-52">Key</th><th class="w-28">Default</th><th>Meaning</th></tr></thead>
       <tbody>
         <tr><td><code>agent</code></td><td><code>auto</code></td><td>One agent or an ordered fallback list. Resolved against what is actually runnable at run start. If nothing resolves, the run fails before its first stage rather than reporting command-only validation as a pass. A role that names no agent uses this list. The default fixer names <code>cursor</code> and does not. A role that names its own agent does not consult this list.</td></tr>
-        <tr><td><code>roles</code></td><td><code>fix</code> names <code>cursor</code></td><td>Which agent, model provider, model type, model version, and effort each role runs. The default names <code>fix</code> as <code>cursor</code>, with no model and no effort, and names no other role, so review and worker use <code>agent</code>. A <code>roles</code> table you set replaces that default, except that a table which does not name <code>fix</code> keeps this fixer. A <code>fix</code> role that names no agent leaves the fixer on <code>agent</code>. The program assigns <code>review</code>, <code>fix</code>, and <code>worker</code>; any other name is a worker role a task may name. Same trust class as <code>agent</code>, so a pushed branch sets it only under <code>allow_pushed_commands</code>. The rules are the section below.</td></tr>
+        <tr><td><code>roles</code></td><td><code>fix</code> names <code>cursor</code></td><td>Which agent, model provider, model type, model version, effort, and context window each role runs. The default names <code>fix</code> as <code>cursor</code>, with no model, no effort, and no context window, and names no other role, so review and worker use <code>agent</code>. A <code>roles</code> table you set replaces that default, except that a table which does not name <code>fix</code> keeps this fixer. A <code>fix</code> role that names no agent leaves the fixer on <code>agent</code>. The program assigns <code>review</code>, <code>fix</code>, and <code>worker</code>; any other name is a worker role a task may name. Same trust class as <code>agent</code>, so a pushed branch sets it only under <code>allow_pushed_commands</code>. The rules are the section below.</td></tr>
         <tr><td><code>commands.test</code></td><td>empty</td><td>A targeted check for this change, not a full suite. Deliberately empty by default.</td></tr>
         <tr><td><code>commands.lint</code></td><td>empty</td><td>Static analysis. When empty, the document stage performs a combined pass and routes its lint findings to the lint stage.</td></tr>
         <tr><td><code>commands.format</code></td><td>empty</td><td>Run immediately before pushing.</td></tr>
@@ -2677,6 +2678,8 @@ flowchart TB
         <tr><td><code>stall_inspection_count</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">3</code></td><td>How many times the same unchanged screen may surface before the next surface demands a deeper inspection, section 11's repeated stall. It raises the level of what surfaces and bounds nothing. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>relaunch_attempts</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">2</code></td><td>How many times reconciliation relaunches a task that resolves Failed with its terminal gone, in place, counted from the task's attempt history. Past it the task holds for you, and you decide whether it is retried: nothing retries a task automatically without bound. Zero relaunches nothing and holds every such task. It is a bound on a task, not one of the three loop bounds, and stops no run. The default is chosen, not measured; the limits table bounds it, and the ceiling is chosen, not measured.</td></tr>
         <tr><td><code>stop_grace</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>30s</code></td><td>How long a stop or SIGTERM waits for the groups the service registered to end before ending them by force. The service has exited by then. It is accepted from <code>1s</code> to <code>10m</code>.</td></tr>
+        <tr><td><code>git_deadline</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>10m</code></td><td>How long one invocation of git the service makes may run before it is ended with its process group. A clone, a fetch and a push are the longest, and the repository decides their size, so an operator whose repository needs longer over a slow link raises it, and one who wants a tighter bound lowers it. It is global-only because it bounds a program on your machine, and a repository that could raise it could hold the machine as long as it liked: no repository copy, trusted or pushed, may set it, and a repository file naming it is refused at parse time (P7). Section 8's process model says which deadline bounds which program, and when a caller's own deadline applies instead. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
+        <tr><td><code>gh_deadline</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>2m</code></td><td>How long one invocation of <code>gh</code>, the GitHub command line the service runs to talk to the code host, may run before it is ended with its process group. Each invocation is a handful of requests with a bounded answer, so one still running at the default is taken as wedged rather than slow. It is global-only on <code>git_deadline</code>'s terms, and refused in any repository file on the same terms. The GitLab adapter starts no program, so this does not bound it. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>promotion_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>1h</code></td><td>How long a reported investigation's worker is kept for a promotion before it is ended. Its copy is kept either way.</td></tr>
         <tr><td><code>notify.command</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td>empty</td><td>The operator's private channel: a command line the service runs once for each wake, on the terms <code>commands.test</code> runs under, in the home with the service's environment. Its standard input is the wake object as one JSON line. Each wake is claimed before the command runs and settled once with how the command ended, and it is not offered again, whether the command failed or its end was never recorded; section 8's notification record holds both. What the command prints and how it exits are recorded and never read as an answer or an acknowledgement, and the wake stays waiting for the coordinator. Empty runs nothing. No repository copy, trusted or pushed, may set it; a repository file naming it is refused at parse time (P7).</td></tr>
         <tr><td><code>session_provider</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>pipe</code></td><td>Which terminal session provider the service starts every worker through: <code>pipe</code>, the reference provider, or <code>tmux</code>. It chooses which program starts every worker, and so which process starts with your credentials, and it is one choice for the whole service, so no repository copy, trusted or pushed, may set it (P7).</td></tr>
@@ -2701,14 +2704,14 @@ flowchart TB
 
   <h3 class="text-xl font-semibold mb-3">Roles</h3>
   <p class="mb-4 opacity-90">
-    You assign an agent, a model provider, a model type, a model version, and an effort to a role.
+    You assign an agent, a model provider, a model type, a model version, an effort, and a context window to a role.
     A task names a role. The review stage and the fixer name theirs. The program does not rank
     agents, providers, types, or versions by remaining quota or by price. That choice stays
     deferred, and section 9's usage view is the measurement it would start from.
   </p>
   <p class="mb-4 opacity-90">
-    The default configuration names <code>fix</code> as <code>cursor</code>, with no model and no effort,
-    and names no other role. Review and worker use <code>agent</code> until a document names them.
+    The default configuration names <code>fix</code> as <code>cursor</code>, with no model, no effort, and
+    no context window, and names no other role. Review and worker use <code>agent</code> until a document names them.
     A <code>roles</code> table that does not mention <code>fix</code> keeps that fixer. A <code>fix</code>
     role that names no agent uses <code>agent</code>.
   </p>
@@ -2721,7 +2724,7 @@ flowchart TB
     <code>review</code> or <code>fix</code> is refused at intake and is not created.
   </p>
   <p class="mb-4 opacity-90">
-    A role names one primary agent, with no arguments, and may name one <code>fallback</code> object with its own agent, optional complete model triple, and effort. A backup cannot contain another backup and must name a different agent. The agent is the process that
+    A role names one primary agent, with no arguments, and may name one <code>fallback</code> object with its own agent, optional complete model triple, effort, and context window. A backup does not inherit any of them from its primary. A backup cannot contain another backup and must name a different agent. The agent is the process that
     starts. The model provider is who serves the model, the model type is which of that provider's
     models runs, and the model version is which release of that type runs. Those are not the agent:
     one process can start another provider's model. The provider, the type, and the version are a
@@ -2730,7 +2733,10 @@ flowchart TB
     is two versions. The role does not name a model identifier. The adapter translates the triple
     into the identifier it starts, and that translation is the adapter's. Effort is one of
     <code>low</code>, <code>medium</code>, and <code>high</code>, and it is not a stand-in for the
-    type or the version.
+    type or the version. The context window, the role's <code>context</code>, is one of
+    <code>standard</code> and <code>1m</code>: which window of the named model the launch asks for.
+    It is not a stand-in for the type or the version either, so no version cell spells a window,
+    and nothing infers one from the model identifier.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
     <table class="table table-sm table-zebra">
@@ -2751,26 +2757,32 @@ flowchart TB
   <p class="mb-4 opacity-90">
     A provider, a type, or a version outside that table, a type on the wrong provider, or a version
     in the wrong type's cell, fails at parse time and names the role. Adding a provider, a type, or
-    a version is adding it to that table. A provider, a type, a version, or an effort on a role
+    a version is adding it to that table. A provider, a type, a version, an effort, or a context window on a role
     that names no agent is invalid, because each belongs to one process and means nothing across
-    the <code>agent</code> fallback list. Naming the provider, the type, or the version without the
+    the <code>agent</code> fallback list. A context window on a role that names no triple fails at
+    parse time and names the role: a window is a window of a model, the agent's own model is not
+    one the role names, and no adapter's declaration could be checked against it. Naming the provider, the type, or the version without the
     other two fails at parse time: part of a triple does not say which model runs. Omitting the
     triple means that agent's own model, and the launch records that the provider, the type, and
     the version were not named. Omitting the effort means that agent's own effort, recorded as not
-    named. Omitting the agent means the role uses <code>agent</code> as resolved for a run,
+    named. Omitting the context window means the window that agent starts the named model at
+    on its own, recorded as not named. Omitting the agent means the role uses <code>agent</code> as resolved for a run,
     including its fallback list, and then the role names neither a provider, nor a type, nor a
-    version, nor an effort.
+    version, nor an effort, nor a context window.
   </p>
   <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
     <li>A role name is lowercase letters, digits, and hyphens, starting with a letter. <code>review</code>, <code>fix</code>, and <code>worker</code> are the three the program assigns.</li>
     <li>An effort outside <code>low</code>, <code>medium</code>, and <code>high</code> fails at parse time and names the role.</li>
+    <li>A context window outside <code>standard</code> and <code>1m</code> fails at parse time and names the role. Adding a window is adding it to that set.</li>
     <li>Each adapter declares which version cells of the table it translates. A triple it has not declared is refused before it is launched, naming the role, the provider, the type, and the version. The program does not start a different provider, type, or version in its place, and it does not pick a different agent because that agent declared the triple.</li>
+    <li>Each adapter also declares, for each version cell it translates, which context windows it can start that cell at. A triple and window it has not declared is refused before it is launched, naming the role, the triple, and the window. It is never started at the standard window, or at the agent's own, in its place. Which windows an adapter declares, and how it spells one, are the adapter's, as its translation is. A declaration says what the adapter asks for: the program does not observe the window a started process has, and a declaration does not establish that the installed agent grants it.</li>
     <li>The limits table bounds how many roles there are and how long a name is. Those bounds are chosen, not measured. A provider, a type, and a version have no length of their own, because each is a cell of the table.</li>
   </ul>
   <p class="mb-4 opacity-90">
     A role is resolved when its work is about to start, from the trusted configuration, on
     <code>agent</code>'s terms (P7). A named agent that cannot run, a named effort the adapter
-    cannot express, a provider, type, and version the adapter has not declared, or an agent that
+    cannot express, a provider, type, and version the adapter has not declared, a context window
+    the adapter has not declared for that triple, or an agent that
     has not declared a capability that role's path requires, refuses that launch and names the
     role. Only an explicitly configured backup may replace an unavailable primary, on the terms below. A missing capability or an invalid configuration never selects a backup. A worker role whose agent has not
     declared worker sessions is that refusal, and the task resolves Failed from it. A review or a
@@ -2788,10 +2800,13 @@ flowchart TB
   </p>
   <p class="mb-8 opacity-90">
     A relaunch, and a run that resumes, reads the role again. It does not reuse an agent, a
-    provider, a type, a version, or an effort recorded on an earlier attempt, and it does not
+    provider, a type, a version, an effort, or a context window recorded on an earlier attempt, and it does not
     resume a session that belongs to a different agent than the role now names. The task keeps the
     role name. The invocation records the agent, the provider, the type, the version, the model
-    identifier the adapter started, and the effort the launch actually used.
+    identifier the adapter started, the effort the launch actually used, and the context window it
+    asked for. A change to a role, its context window included, applies from the next launch that
+    resolves the role: a process already started keeps what it was started with, and a session the
+    role resumes is resumed on the terms the role names at that launch.
   </p>
 
   <h3 class="text-xl font-semibold mb-3">Validation rules</h3>
@@ -2833,6 +2848,10 @@ flowchart TB
         <tr><td>Stall inspection count ceiling</td><td><code class="prd-num">100</code></td><td><code>stall_inspection_count</code>. Above this a stall surfaces more often than anyone would read before an inspection is demanded. Chosen, not measured.</td></tr>
         <tr><td>Merge authority entries</td><td><code class="prd-num">64</code></td><td>Elements of <code>autonomy.merge</code>. Chosen, not measured.</td></tr>
         <tr><td>Relaunch attempts ceiling</td><td><code class="prd-num">20</code></td><td><code>relaunch_attempts</code>. Above this a worker that fails the same way every time is restarted for days before you hear. The floor is zero, which is a value you may choose. Chosen, not measured.</td></tr>
+        <tr><td>git deadline floor</td><td><code>1m</code></td><td><code>git_deadline</code>. Below this an ordinary fetch of a large repository is ended before it can finish. Chosen, not measured.</td></tr>
+        <tr><td>git deadline ceiling</td><td><code>2h</code></td><td><code>git_deadline</code>. Above this a wedged git holds a run for longer than a sitting before it is ended. Chosen, not measured.</td></tr>
+        <tr><td>gh deadline floor</td><td><code>10s</code></td><td><code>gh_deadline</code>. Below this an ordinary request to the code host is ended before it can answer. Chosen, not measured.</td></tr>
+        <tr><td>gh deadline ceiling</td><td><code>30m</code></td><td><code>gh_deadline</code>. Above this a wedged <code>gh</code> holds a run for half an hour, far past what a handful of requests takes. Chosen, not measured.</td></tr>
         <tr><td>Usage ceiling window floor</td><td><code>1m</code></td><td><code>usage_ceiling.window</code>. Below this a ceiling bounds little more than the call in flight. Chosen, not measured.</td></tr>
         <tr><td>Usage ceiling window ceiling</td><td><code>8760h</code></td><td><code>usage_ceiling.window</code>. The same year <code>checks_timeout</code> is bounded by. Chosen, not measured.</td></tr>
       </tbody>
@@ -2971,7 +2990,7 @@ flowchart TB
           <li><b>Extra session providers.</b> One reference provider proves the abstraction, and tmux is now a provider beside it, chosen with <code>session_provider</code>. Claude Code workers run under tmux in the adapter's terminal mode, which section 1's Promise 1 and section 6's steering row describe. Further providers prove nothing new.</li>
           <li><b>Delegate coordinators in a home of their own.</b> The most complex feature in either source project, and it only earned its cost at a fleet size you had not reached, which is why it was deferred. It is no longer deferred in that form: section 2's subordinate coordinator, a named domain of tasks inside this one home, replaces it, on the terms section 14's decision 20 records.</li>
           <li><b>The direct delivery mode.</b> The gate is the thesis, and this is the one mode that shares unvalidated work. When it is promoted, the program forwards the worker's pushed commit from the gate with an anchored update and the worker gains no second remote, and the merge record is its landed record. The local mode is not deferred: it shares nothing, and section 6 specifies it.</li>
-          <li><b>Ranking agents by remaining quota.</b> Section 10's roles are how you name which agent, model provider, model type, model version, and effort each role runs. The program does not rank them by remaining quota or by price. Explicit failover after a recognized availability failure is section 10's separate rule. Ranking stays deferred, and section 9's usage view is the measurement it would start from.</li>
+          <li><b>Ranking agents by remaining quota.</b> Section 10's roles are how you name which agent, model provider, model type, model version, effort, and context window each role runs. The program does not rank them by remaining quota or by price. Explicit failover after a recognized availability failure is section 10's separate rule. Ranking stays deferred, and section 9's usage view is the measurement it would start from.</li>
           <li><b>Interrupting a worker's turn.</b> It needs proof the turn ended, which nothing reads yet. Stop and relaunch cover the need; an adapter offers interrupt once it declares it with a conformance probe for that proof.</li>
           <li><b>Transcript-based intent inference.</b> Supply intent explicitly first. Inference is a convenience over a mechanism that must already work.</li>
           <li><b>Away mode.</b> Requires the supervision loop to be trustworthy first.</li>
@@ -3046,6 +3065,7 @@ flowchart TB
         <tr><td><b>P13</b></td><td>A static test over every user-facing string: assert the required wording is present and assert the internal vocabulary is absent. Both directions, or it drifts.</td></tr>
         <tr><td><b>P14</b></td><td>A static test asserting each contract appears in its owner and does not appear anywhere else. The negative half is the one that actually holds the line.</td></tr>
         <tr><td><b>P15</b></td><td>Start a run, a worker, a delegation and a notify command. End each owner by its normal path, by a stop, and by killing the service outright. After each, no process this home started remains (checked by process group and by working directory), and a copy holding unlanded work does remain, with a kept-work entry that surfaces at once; a new task in that project does not dispatch until the entry is answered while a person's push still runs and names it, and a discard removes the copy only on the person's answer. A test that starts a service ends it with the test, and CI fails when any process a test started outlives its package.</td></tr>
+        <tr><td><b>Roles</b></td><td>A context window outside <code>standard</code> and <code>1m</code>, one on a role that names no agent, and one on a role that names no triple each fail at parse time and name the role; none is read as a window it did not name (P3's stance on an unrecognized value). A triple and window the adapter has not declared is refused before anything starts, and nothing is started at another window in its place. A branch that sets a role's context window in its own configuration has no effect (P7). The set of windows is spelled once, in the configuration's role table, and every adapter declaration is checked against it (P14). The invocation record keeps a named window, a window not named, and a row from before the column as three facts, and the usage view totals them apart. A relaunch reads the window from the role again.</td></tr>
         <tr><td><b>Judge paths</b></td><td>A fix round after review whose commit adds, changes, deletes, or renames a judge path holds with an <code>ask</code> naming it, including when the fixer's reply says it touched nothing; the same round with no judge path in its commit does not hold. A change that deletes a judge file, or moves one outside every pattern, holds at review; one that edits a judge file produces a <code>note</code>. A branch whose own configuration sets <code>judge_paths</code> has no effect on either.</td></tr>
         <tr><td><b>Graph</b></td><td>A topology with an unbounded back edge fails to build. Two nodes writing one key with no declared merge rule fails to build. A checkpoint restore re-emits the open decision.</td></tr>
         <tr><td><b>Decision model</b></td><td>Against a stand-in provider that answers over the wire, every answer from certain-yes to certain-no, plus an error, a timeout, and an unreadable answer, leaves the findings at least as strict as with the model off: nothing removed, nothing lowered, no stage passed that would have held. In <code>evaluate</code> no answer holds a run, and in every mode a failed call, an unreadable answer, or a missing key holds nothing and is reported. With the mode <code>off</code> or no key, no request leaves the machine. A repository layer that sets the key is rejected at parse time.</td></tr>
@@ -3193,6 +3213,11 @@ flowchart TB
           <td class="prd-num">21</td>
           <td><b>Nothing the program starts outlives its owner, and kept work is never silent</b>, a principle of its own.</td>
           <td>Decided 2026-10-20 after the leaks above. Every started resource has one recorded owner and a bounded end. Unlanded work is the one exception: it is kept, surfaced at once, and no new task starts in its project until a person lands it, carries it on, or discards it. A reported investigation's worker is kept for <code>promotion_window</code> (default 1h, chosen for the prompt cache). The principle binds the program, its tests and the tooling that builds it. It is a principle rather than a section 8 rule because it binds every package that starts anything.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">23</td>
+          <td>A role may name <b>a context window</b>, beside its effort, from a closed set.</td>
+          <td>Decided 2026-10-21 (AGE-418). This extends decision 14: a role still names one agent, one triple, and one effort, and may name one context window, <code>standard</code> or <code>1m</code>. Two alternatives were rejected: a version cell such as <code>5.5-1m</code>, which would make a window a release of the model and double every cell that has one, and a window a display infers from the model identifier, which nothing could check. The window needs a complete triple, because each adapter declares its windows per version cell, and a launch the adapter cannot express is refused rather than started at the standard window. Section 10 gains the field and the declaration, section 8's agent invocation record gains the window, older rows reading unknown, and section 9's usage view totals it. It exists because a fleet's workers ran at the long window only through a launcher outside the program, so the role table and what ran disagreed.</td>
         </tr>
       </tbody>
     </table>
