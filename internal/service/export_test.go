@@ -57,6 +57,14 @@ func (s *Service) DispatchDueForTest(ctx context.Context) {
 	s.dispatchDue(ctx)
 }
 
+// ReadPersonMergesForTest runs one pass of mergeread.go's read for merges a
+// person made, readPersonMerges, for this package's external tests, which
+// use it to read a merge they scripted the code host to report without
+// waiting mergeReadInterval for the next pass.
+func (s *Service) ReadPersonMergesForTest(ctx context.Context) {
+	s.readPersonMerges(ctx)
+}
+
 // SetBeforeRefusalEndForTest installs beforeRefusalEnd for this
 // package's external tests. It exists only in the tests, on that field's
 // terms in service.go.
