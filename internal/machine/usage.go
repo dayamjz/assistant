@@ -256,12 +256,13 @@ func RunSpendOf(run string, rows []store.AgentInvocation) UsageCount {
 }
 
 // UsageViewOf is the usage view as usage.read answers it: UsageOf over
-// window, with the operator's ceiling compared against the same rows by
-// CeilingOf. rows must reach back to the earlier of the two windows' starts,
-// which UsageViewSince says.
-func UsageViewOf(window UsageWindow, ceiling config.UsageCeiling, readAt time.Time, rows []store.AgentInvocation) Usage {
+// window, with the operator's ceiling compared against the same rows and the
+// same declarations by CeilingOf. rows must reach back to the earlier of the
+// two windows' starts, which UsageViewSince says.
+func UsageViewOf(window UsageWindow, ceiling config.UsageCeiling, readAt time.Time, rows []store.AgentInvocation,
+	declared Declarations) Usage {
 	usage := UsageOf(window, readAt, rows)
-	usage.Ceiling = CeilingOf(ceiling, readAt, rows)
+	usage.Ceiling = CeilingOf(ceiling, readAt, rows, declared)
 	return usage
 }
 
