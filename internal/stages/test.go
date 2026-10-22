@@ -154,8 +154,8 @@ const testProjectionBytes = 8 << 10
 //
 // The command runs on StageDeps.stageCommand's terms: it waits for a command
 // slot, runs at most command_timeout, after which the stage holds on a check
-// that answered nothing, and on unix its process group is ended when it
-// returns, so only a process that left the group is left behind.
+// that answered nothing, and on linux and darwin its process group is ended
+// when it returns, so only a process that left the group is left behind.
 // commandGrace says what is still not bounded.
 //
 // Redaction is whatever shapes internal/redact recognizes at this persistence

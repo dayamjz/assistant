@@ -495,14 +495,14 @@ func (r *Repository) ListWorktrees(ctx context.Context) ([]WorktreeInfo, error) 
 }
 
 // optionsForChild reproduces this handle's configuration for a handle derived
-// from it, so a worktree created from a repository runs git the same way.
+// from it, so a worktree created from a repository runs git the same way: the
+// binary, the ssh command, the redactor, the output bound and the invocation
+// deadline. It copies the settings whole rather than naming each one, so a
+// setting added later reaches a child without this having to be remembered;
+// naming them is how the deadline was once left behind.
 func (r *Repository) optionsForChild() []Option {
-	return []Option{
-		WithGitBinary(r.set.git),
-		WithSSHCommand(r.set.ssh),
-		WithRedactor(r.set.redactor),
-		WithMaxOutput(r.set.maxOutput),
-	}
+	parent := r.set
+	return []Option{func(s *settings) { *s = parent }}
 }
 
 // absolutePath rejects an empty path and one carrying a NUL byte, then makes

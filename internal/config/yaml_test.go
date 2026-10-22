@@ -45,6 +45,8 @@ stall_inspection_count: 5
 relaunch_attempts: 3
 stop_grace: 45s
 command_timeout: 45m
+git_deadline: 20m
+gh_deadline: 3m
 commit:
   fix_message: "fix(gate): {summary}"
 allow_pushed_commands: true
@@ -87,6 +89,8 @@ const wholeSchemaJSON = `{
 	"relaunch_attempts": 3,
 	"stop_grace": "45s",
 	"command_timeout": "45m",
+	"git_deadline": "20m",
+	"gh_deadline": "3m",
 	"commit": {"fix_message": "fix(gate): {summary}"},
 	"allow_pushed_commands": true,
 	"autonomy": {"merge": ["owner/name"]},

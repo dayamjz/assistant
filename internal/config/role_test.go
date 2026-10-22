@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 func TestRoleHasOneExplicitBackup(t *testing.T) {
@@ -165,5 +167,96 @@ func TestTheFixerDefaultsToCursor(t *testing.T) {
 	unpinned := resolve(t, mustParse(t, OriginGlobal, `{"roles":{"fix":{}}}`), Absent(OriginTrusted)).Config.Roles
 	if unpinned[RoleFix] != (Role{}) {
 		t.Fatalf("a fix role that names no agent resolved to %+v", unpinned[RoleFix])
+	}
+}
+
+// A role names a context window beside its effort, on a complete triple, and
+// a backup names its own: it inherits nothing from the primary.
+func TestARoleNamesAContextWindowBesideItsTriple(t *testing.T) {
+	doc := `{"roles": {
+		"long": {"agent": "claude", "provider": "anthropic", "type": "opus", "version": "5.5", "effort": "high", "context": "1m",
+			"fallback": {"agent": "codex", "provider": "openai", "type": "gpt", "version": "6-astra"}},
+		"short": {"agent": "claude", "provider": "anthropic", "type": "opus", "version": "5.5", "context": "standard"},
+		"unnamed": {"agent": "claude", "provider": "anthropic", "type": "opus", "version": "5.5"}
+	}}`
+	res, err := Resolve(mustParse(t, OriginGlobal, doc), Absent(OriginTrusted))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	roles := res.Config.Roles
+	if got := roles["long"]; got.ContextWindow != Context1M || got.Effort != "high" {
+		t.Fatalf("long resolved to %+v, want context 1m beside effort high", got)
+	}
+	if got := roles["long"].Fallback; got == nil || got.ContextWindow != "" {
+		t.Fatalf("the backup resolved to %+v, want its own unnamed context", got)
+	}
+	if got := roles["short"].ContextWindow; got != ContextStandard {
+		t.Fatalf("short resolved to context %q, want standard", got)
+	}
+	if got := roles["unnamed"].ContextWindow; got != "" {
+		t.Fatalf("a role naming no context resolved to %q, want not named", got)
+	}
+	other := res.Config.Roles["short"]
+	other.ContextWindow = Context1M
+	if (Roles{"short": other}).Equal(Roles{"short": roles["short"]}) {
+		t.Fatal("two roles differing only in their context compare equal")
+	}
+}
+
+// A context outside the closed set, one on a role that names no agent, and
+// one on a role that names no triple each fail at parse time and name the
+// role. None is read as a window it did not name, and the backup is held to
+// the same terms under its own name.
+func TestAContextWindowOutsideTheSetOrWithoutATripleFailsAtParse(t *testing.T) {
+	triple := `"provider": "anthropic", "type": "opus", "version": "5.5"`
+	for _, tc := range []struct{ doc, role string }{
+		{`{"roles": {"pages": {"agent": "claude", ` + triple + `, "context": "2m"}}}`, "pages"},
+		{`{"roles": {"pages": {"agent": "claude", ` + triple + `, "context": "1M"}}}`, "pages"},
+		{`{"roles": {"pages": {"agent": "claude", ` + triple + `, "context": "opus[1m]"}}}`, "pages"},
+		{`{"roles": {"pages": {"agent": "claude", ` + triple + `, "context": ""}}}`, "pages"},
+		{`{"roles": {"pages": {"agent": "claude", ` + triple + `, "context": 1}}}`, "pages"},
+		{`{"roles": {"pages": {"context": "1m"}}}`, "pages"},
+		{`{"roles": {"pages": {"agent": "claude", "context": "1m"}}}`, "pages"},
+		{`{"roles": {"pages": {"agent": "claude", "effort": "high", "context": "standard"}}}`, "pages"},
+		{`{"roles": {"pages": {"agent": "claude", "fallback": {"agent": "codex", "context": "1m"}}}}`, "pages fallback"},
+	} {
+		_, err := Parse(OriginGlobal, []byte(tc.doc))
+		if err == nil {
+			t.Errorf("Parse accepted %s", tc.doc)
+			continue
+		}
+		if !strings.Contains(err.Error(), quote(tc.role)) {
+			t.Errorf("Parse(%s) = %v, which does not name role %q", tc.doc, err, tc.role)
+		}
+	}
+}
+
+// ContextWindows is the one spelling of the set, and KnownContextWindow
+// answers from it: every member is known, and nothing near a member is.
+func TestTheContextWindowSetIsClosed(t *testing.T) {
+	if got := strings.Join(ContextWindows(), ","); got != "standard,1m" {
+		t.Fatalf("ContextWindows = %s, want the PRD's standard,1m", got)
+	}
+	for _, window := range ContextWindows() {
+		if !KnownContextWindow(window) {
+			t.Errorf("KnownContextWindow refuses its own member %q", window)
+		}
+	}
+	for _, window := range []string{"", "1M", "200k", "long", " 1m"} {
+		if KnownContextWindow(window) {
+			t.Errorf("KnownContextWindow accepts %q", window)
+		}
+	}
+}
+
+// A pushed branch that names a role's context window changes nothing that
+// runs: roles is in the agent's trust class, so the trusted role governs.
+func TestAPushedContextWindowHasNoEffect(t *testing.T) {
+	principles.Cite(t, principles.P7)
+	global := mustParse(t, OriginGlobal, `{"roles": {"review": {"agent": "claude", "provider": "anthropic", "type": "opus", "version": "5.5", "context": "standard"}}}`)
+	pushed := mustParse(t, OriginPushed, `{"roles": {"review": {"agent": "claude", "provider": "anthropic", "type": "opus", "version": "5.5", "context": "1m"}}}`)
+	res := resolve(t, global, pushed)
+	if got := res.Config.Roles[RoleReview].ContextWindow; got != ContextStandard {
+		t.Fatalf("review context = %q, want the trusted standard", got)
 	}
 }

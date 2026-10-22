@@ -116,11 +116,13 @@ func newPromotionSubject(t *testing.T) *promotionSubject {
 			ps.postureAsked.Add(1)
 			return ps.posture, ps.postureErr
 		},
+		GitDeadline: vcs.DefaultInvocationDeadline,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	ps.cleaner, err = NewCleaner(CleanupDeps{Home: h, Store: s, Forge: forgetest.New(t, nil).Host()})
+	ps.cleaner, err = NewCleaner(CleanupDeps{Home: h, Store: s, Forge: forgetest.New(t, nil).Host(),
+		GitDeadline: vcs.DefaultInvocationDeadline})
 	if err != nil {
 		t.Fatalf("NewCleaner: %v", err)
 	}
