@@ -832,6 +832,118 @@ func TestAKeptCopyWhoseBranchStandsAwayFromHEADIsNotCarriedOn(t *testing.T) {
 	})
 }
 
+// A delivery copy whose task branch cannot be created is not carried on,
+// though no branch of that exact name stands: a failed delivery task's
+// clone, shaped as dispatch shapes one, is kept through the real cleanup
+// and Keep, and then the task's branch task/kept is deleted and HEAD put
+// on a new branch task/kept/side, under the task's branch's name. The
+// answer is refused naming HEAD and the branch in the way, records nothing
+// and creates no task. With that branch renamed task, the name the task's
+// branch sits under, the answer is refused the same way; with it renamed
+// side, the same answer carries the copy on and the new task's worker
+// starts. Without the check on names under and above the task's branch the
+// answer is recorded, the copy moved, the branch's creation then fails,
+// and the task is held for good on an entry whose carry on cannot
+// complete, with land and discard no longer open to it.
+func TestAKeptCopyWhoseTaskBranchCannotBeCreatedIsNotCarriedOn(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	const branch = "task/kept"
+	id, err := home.NewTaskID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath, err := h.TaskCopy(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.CreateTask(t.Context(), store.Task{
+		ID: id, Shape: store.TaskDelivery, Project: "the parser", Mode: "headless", WorktreePath: copyPath,
+		RepositoryID: store.Known(repository.ID), Branch: store.Known(branch),
+	}, store.Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.BeginTaskAttempt(t.Context(), id, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone"); err != nil {
+		t.Fatal(err)
+	}
+	// The task ended, as a task whose copy is kept has, so it no longer
+	// holds its branch against the task carrying it on.
+	if _, err := records.AppendTaskEvent(t.Context(), id, "failed", "the worker gave up"); err != nil {
+		t.Fatal(err)
+	}
+	_ = records.Close()
+	instructions, err := h.TaskInstructions(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(instructions, "Fix the parser.\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, filepath.Dir(copyPath), "clone", "--quiet", repository.UpstreamURL, copyPath)
+	git(t, copyPath, "remote", "remove", "origin")
+	git(t, copyPath, "remote", "add", "assistant", gateRepositoryOf(t, h, subject))
+	git(t, copyPath, "checkout", "--quiet", "-b", branch)
+	if err := writeFile(filepath.Join(copyPath, "own.txt"), "the task's own work\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, copyPath, "add", "-A")
+	git(t, copyPath, "commit", "--quiet", "-m", "the task's own commit")
+	entry := keepTaskCopy(t, h, id)
+	git(t, copyPath, "checkout", "--quiet", "--detach")
+	git(t, copyPath, "branch", "--quiet", "-D", branch)
+	git(t, copyPath, "checkout", "--quiet", "-b", branch+"/side")
+	before := taskCount(t, h)
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		for _, inTheWay := range []string{branch + "/side", "task"} {
+			if inTheWay != branch+"/side" {
+				git(t, copyPath, "branch", "--quiet", "-m", inTheWay)
+			}
+			var out machine.KeptWorkAnswered
+			err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(id, entry), &out)
+			if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), string(tasks.ComparisonHead)) ||
+				!strings.Contains(err.Error(), "refs/heads/"+inTheWay) {
+				t.Fatalf("carrying on a copy whose branch %s stands in the way of %s = %+v, %v; want it refused naming %s and it",
+					inTheWay, branch, out, err, tasks.ComparisonHead)
+			}
+			if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
+				t.Fatalf("after the refusal over %s the entry reads %+v, %v; want it open", inTheWay, still, err)
+			}
+			if n := taskCount(t, h); n != before {
+				t.Fatalf("the refusal over %s created %d task(s)", inTheWay, n-before)
+			}
+			if _, err := os.Lstat(copyPath); err != nil {
+				t.Fatalf("the refusal over %s moved the copy: %v", inTheWay, err)
+			}
+		}
+
+		git(t, copyPath, "branch", "--quiet", "-m", "side")
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(id, entry), &out); err != nil {
+			t.Fatalf("carrying the copy on with nothing in the way of the task's branch: %v", err)
+		}
+		waitLaunched(t, h, out.Task)
+	})
+}
+
 // A carried-on copy is asserted at its new path once shaped, before the
 // entry is marked, as dispatch will assert it: the carry on is stopped
 // through the seam right after the move, and a remote named upstream is

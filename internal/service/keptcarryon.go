@@ -37,19 +37,20 @@ import (
 // only as far as the reshape below repairs it, each read on its own: for a
 // delivery copy, a missing gate remote or one whose one URL is elsewhere,
 // which it points at the gate, and HEAD off the task's branch while no
-// branch of that name stands, which it creates at HEAD; for an
-// investigation, an attached HEAD, which it detaches. Anything else on
-// either, an investigation's remote, a delivery copy's second remote, a
-// push URL or a second URL, or the task's branch standing away from HEAD,
+// branch the copy holds has that name, is under it or is a name it sits
+// under, which it creates at HEAD; for an investigation, an attached HEAD,
+// which it detaches. Anything else on either, an investigation's remote, a
+// delivery copy's second remote, a push URL or a second URL, the task's
+// branch standing away from HEAD, or a branch in the way of its name,
 // refuses the carry on with nothing recorded (unreshapeableRemotes,
-// unreshapeableHead): the reshape removes no remote and moves no branch,
-// since either can leave a commit with no name, and P6 has the program
-// refuse rather than risk that, so the person repairs the copy or answers
-// otherwise. So does any other refusal, a copy that is not a clone of its
-// own, one that is the primary or inside it, among them. A copy that is
-// gone refuses it too. After the reshape the copy is asserted again at its
-// new path on the new task's expectation, as dispatch will assert it, and
-// a refusal there leaves the entry owed rather than marked
+// unreshapeableHead): the reshape removes no remote and moves or renames
+// no branch, since any of that can leave a commit with no name, and P6 has
+// the program refuse rather than risk that, so the person repairs the copy
+// or answers otherwise. So does any other refusal, a copy that is not a
+// clone of its own, one that is the primary or inside it, among them. A
+// copy that is gone refuses it too. After the reshape the copy is asserted
+// again at its new path on the new task's expectation, as dispatch will
+// assert it, and a refusal there leaves the entry owed rather than marked
 // (assertReshaped).
 //
 // A run's copy is refused before that: it is a linked worktree of the gate,
@@ -272,9 +273,12 @@ func unreshapeableRemotes(obs vcs.Observation, plan carryOn) string {
 // unreshapeableHead is why reshapeAdoptedCopy cannot leave the copy's HEAD
 // as dispatch asserts it, or "" when it can: an investigation's is
 // detached wherever it stands, and a delivery copy's HEAD off the task's
-// branch is put on it by creating the branch at HEAD, which a branch of
-// that name already standing refuses, since moving it would leave behind
-// whatever it holds.
+// branch is put on it by creating the branch at HEAD. It is decided from
+// every branch the copy holds: one of that name already standing refuses
+// it, since moving it would leave behind whatever it holds, and so does
+// one under that name or one that name sits under (task/kept/side or task
+// beside task/kept), beside which the branch cannot be created, since
+// carrying on renames no branch.
 func unreshapeableHead(ctx context.Context, path string, obs vcs.Observation, plan carryOn) (string, error) {
 	if plan.old.Shape != store.TaskDelivery || (!obs.Detached && obs.Branch == plan.branch) {
 		return "", nil
@@ -283,14 +287,20 @@ func unreshapeableHead(ctx context.Context, path string, obs vcs.Observation, pl
 	if err != nil {
 		return "", err
 	}
-	refs, err := copied.ListRefs(ctx, "refs/heads/"+plan.branch)
+	refs, err := copied.ListRefs(ctx, "refs/heads/")
 	if err != nil {
 		return "", err
 	}
+	name := "refs/heads/" + plan.branch
 	for _, ref := range refs {
-		if ref.Name == "refs/heads/"+plan.branch {
+		switch {
+		case ref.Name == name:
 			return "HEAD is not on the task's branch " + plan.branch + ", which stands at " + ref.Commit + ", and carrying on " +
 				"moves no branch; put HEAD on it yourself and answer again, or land or discard the copy", nil
+		case strings.HasPrefix(ref.Name, name+"/") || strings.HasPrefix(name, ref.Name+"/"):
+			return "HEAD is not on the task's branch " + plan.branch + ", which carrying on creates at HEAD, and the copy's " +
+				ref.Name + " stands in the way of that name, and carrying on renames no branch; rename it yourself and answer " +
+				"again, or land or discard the copy", nil
 		}
 	}
 	return "", nil

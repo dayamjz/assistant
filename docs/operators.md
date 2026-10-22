@@ -551,13 +551,17 @@ anything is written into it; the task the copy outlived keeps its record,
 the new task's instructions are the old intake text with a note saying
 what is already there, and the task dispatches into the copy as any task
 does. Carrying on points the gate's remote at the gate and puts HEAD where
-the task's shape has it, and removes no remote and moves no branch, since
-either can leave a commit with nothing naming it: a copy with any other
-remote (any remote at all, for an investigation's copy), or a delivery
-copy whose task branch stands somewhere other than HEAD, is refused with
-nothing recorded and the refusal says what to change. A run's copy is not carried on in this build (it is a worktree of the
-gate on a branch of yours, which a task's copy cannot be): land it, push
-its commit yourself, or discard it.
+the task's shape has it, and removes no remote and moves or renames no
+branch, since any of that can leave a commit with nothing naming it: a
+copy with any other remote (any remote at all, for an investigation's
+copy), or a delivery copy whose task branch stands somewhere other than
+HEAD, or whose task branch cannot be created at HEAD because a branch of
+the copy's is in the way of its name (a branch `topic/side` beside the
+task branch `topic`, or `topic` beside `topic/x`), is refused with
+nothing recorded and the refusal says what to change. A run's copy is not
+carried on in this build (it is a worktree of the gate on a branch of
+yours, which a task's copy cannot be): land it, push its commit yourself,
+or discard it.
 
 Discard, `--answer discard` with the same flags, is given twice. Alone it
 shows exactly what removing the copy would lose, in the structured answer
