@@ -49,9 +49,10 @@ var ErrNotificationSettled = errors.New("store: the notification is already sett
 var ErrUnknownNotification = errors.New("store: notification record is outside the closed set")
 
 // Notification is the record of one wake offered to the operator's notify
-// command, keyed by the wake: a task wake's in the notification table and a
-// domain wake's in domain_notification, WakeID naming the row of whichever
-// shape the accessor read. It is claimed before the command runs and
+// command, keyed by the wake: a task wake's in the notification table, a
+// domain wake's in domain_notification and a kept-work wake's in
+// kept_work_notification, WakeID naming the row of whichever shape the
+// accessor read. It is claimed before the command runs and
 // settled once after it ends, and the claim and the settlement are the
 // only two writes it takes; the table is sealed against every other. A
 // record claimed and not settled is a command whose end was not recorded,
@@ -147,18 +148,38 @@ func (s *Store) PendingDomainNotifications(ctx context.Context, limit int) ([]Do
 		ORDER BY domain_wake.id LIMIT ?`, limit)
 }
 
-// notificationShape is which of the two notification records an accessor
+// PendingKeptWorkNotifications is PendingNotifications for the queue's
+// third shape: the queued kept-work wakes with no kept_work_notification
+// record, oldest first, at most limit of them, on the same terms.
+func (s *Store) PendingKeptWorkNotifications(ctx context.Context, limit int) ([]KeptWorkWake, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("store: a limit of %d pending kept work notifications is not a batch size", limit)
+	}
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	return s.queryKeptWorkWakes(ctx, "the pending kept work notifications",
+		keptWorkWakeColumns+` WHERE kept_work_wake.handled_at IS NULL
+		AND NOT EXISTS (SELECT 1 FROM kept_work_notification n WHERE n.kept_work_wake_id = kept_work_wake.id)
+		ORDER BY kept_work_wake.id LIMIT ?`, limit)
+}
+
+// notificationShape is which of the three notification records an accessor
 // writes: the task wake's, migration 46's notification keyed by wake_id,
-// or the domain wake's, migration 50's domain_notification keyed by
-// domain_wake_id. The two are the same record over the queue's two shapes,
-// so one implementation serves both and neither can drift from the other.
+// the domain wake's, migration 50's domain_notification keyed by
+// domain_wake_id, or the kept-work wake's, migration 53's
+// kept_work_notification keyed by kept_work_wake_id. The three are the same
+// record over the queue's three shapes, so one implementation serves all
+// and none can drift from the others.
 type notificationShape struct {
 	table, key, wakes, noun string
 }
 
 var (
-	taskNotifications   = notificationShape{table: "notification", key: "wake_id", wakes: "wake", noun: "wake"}
-	domainNotifications = notificationShape{table: "domain_notification", key: "domain_wake_id", wakes: "domain_wake", noun: "domain wake"}
+	taskNotifications     = notificationShape{table: "notification", key: "wake_id", wakes: "wake", noun: "wake"}
+	domainNotifications   = notificationShape{table: "domain_notification", key: "domain_wake_id", wakes: "domain_wake", noun: "domain wake"}
+	keptWorkNotifications = notificationShape{table: "kept_work_notification", key: "kept_work_wake_id", wakes: "kept_work_wake",
+		noun: "kept work wake"}
 )
 
 // ClaimNotification writes the claim for a wake and returns the record as
@@ -175,6 +196,12 @@ func (s *Store) ClaimNotification(ctx context.Context, wakeID int64) (Notificati
 // same terms, in domain_notification.
 func (s *Store) ClaimDomainNotification(ctx context.Context, domainWakeID int64) (Notification, error) {
 	return s.claimNotification(ctx, domainNotifications, domainWakeID)
+}
+
+// ClaimKeptWorkNotification is ClaimNotification for a kept-work wake, on
+// the same terms, in kept_work_notification.
+func (s *Store) ClaimKeptWorkNotification(ctx context.Context, keptWorkWakeID int64) (Notification, error) {
+	return s.claimNotification(ctx, keptWorkNotifications, keptWorkWakeID)
 }
 
 func (s *Store) claimNotification(ctx context.Context, shape notificationShape, wakeID int64) (Notification, error) {
@@ -218,6 +245,12 @@ func (s *Store) SettleDomainNotification(ctx context.Context, domainWakeID int64
 	return s.settleNotification(ctx, domainNotifications, domainWakeID, n)
 }
 
+// SettleKeptWorkNotification is SettleNotification for a kept-work wake's
+// claim, on the same terms.
+func (s *Store) SettleKeptWorkNotification(ctx context.Context, keptWorkWakeID int64, n NotificationSettlement) (Notification, error) {
+	return s.settleNotification(ctx, keptWorkNotifications, keptWorkWakeID, n)
+}
+
 func (s *Store) settleNotification(ctx context.Context, shape notificationShape, wakeID int64, n NotificationSettlement) (Notification, error) {
 	if err := n.valid(); err != nil {
 		return Notification{}, fmt.Errorf("store: settling the notification of %s %d: %w", shape.noun, wakeID, err)
@@ -255,6 +288,12 @@ func (s *Store) Notification(ctx context.Context, wakeID int64) (Notification, e
 // the record's WakeID then carries.
 func (s *Store) DomainNotification(ctx context.Context, domainWakeID int64) (Notification, error) {
 	return s.notification(ctx, domainNotifications, domainWakeID)
+}
+
+// KeptWorkNotification is Notification for a kept-work wake, whose
+// identifier the record's WakeID then carries.
+func (s *Store) KeptWorkNotification(ctx context.Context, keptWorkWakeID int64) (Notification, error) {
+	return s.notification(ctx, keptWorkNotifications, keptWorkWakeID)
 }
 
 func (s *Store) notification(ctx context.Context, shape notificationShape, wakeID int64) (Notification, error) {

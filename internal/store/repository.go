@@ -363,6 +363,14 @@ var runRecords = []runRecord{
 	// answered or closed on a proof: refuseUnlessForgettable refuses a
 	// repository with an open one before anything is removed, and the
 	// delete's own filter and the table's seal hold the same line again.
+	// The kept-work wake raised about such an entry, and its notification,
+	// go with it and before it, on the same filter, which their seals hold
+	// too.
+	{table: "kept_work_notification", remove: `DELETE FROM kept_work_notification WHERE kept_work_wake_id IN (
+		SELECT w.id FROM kept_work_wake w JOIN kept_work k ON k.id = w.kept_work
+		WHERE k.run_id = ? AND (k.answer IS NOT NULL OR k.closure IS NOT NULL))`, afterRun: true},
+	{table: "kept_work_wake", remove: `DELETE FROM kept_work_wake WHERE kept_work IN (
+		SELECT id FROM kept_work WHERE run_id = ? AND (answer IS NOT NULL OR closure IS NOT NULL))`, afterRun: true},
 	{table: "kept_work", remove: `DELETE FROM kept_work WHERE run_id = ? AND (answer IS NOT NULL OR closure IS NOT NULL)`, afterRun: true},
 	// A seen mark of a merge record is keyed by the run through its kind,
 	// which the catalog cannot say, so it is named here; it goes after the

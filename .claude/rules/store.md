@@ -19,6 +19,12 @@ paths: ["internal/store/**"]
   queue's second shape, a wake about a domain, owned by the delegation row and
   under the wake table's seals; `AppendDomainWakeWithMarkers` is its one
   append and advances `delegation_marker` in the same transaction.
+  keptWorkWakesMigration's `kept_work_wake` is the third shape, PRD section
+  8's kept-work wake about an entry no task names, owned by the entry, once
+  per entry; `AppendKeptWorkWake` is its one append and records the entry's
+  `surfaced_at` in the same transaction. `untaskedShape` serves the second
+  and third shapes' offer, handout and acknowledgement; `DrainAll` and
+  `AcknowledgeAll` take every shape in one transaction.
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'

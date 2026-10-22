@@ -624,6 +624,12 @@ type AcknowledgeRequest struct {
 	// caller acted on, numbered apart from Wakes, on the same terms. A
 	// subordinate coordinator may name none, since no such row is its.
 	DomainWakes []int64 `json:"domain_wakes,omitempty"`
+	// KeptWorkWakes are the identifiers of the queued rows about a kept
+	// work entry the caller acted on, numbered apart from both, on the same
+	// terms. A subordinate coordinator may name none, since no such row is
+	// its. Acknowledging one closes the wake and answers nothing about the
+	// entry.
+	KeptWorkWakes []int64 `json:"kept_work_wakes,omitempty"`
 }
 
 // DomainDelegateRequest delegates a named domain of tasks to a subordinate

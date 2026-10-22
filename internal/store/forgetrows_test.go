@@ -170,9 +170,13 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 	// The entry is written before the removal is marked, so the mark closes
 	// it on its proof: an open one would refuse the forgetting, which
 	// TestARepositoryWithOpenKeptWorkIsNotForgotten holds.
-	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/run", Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd"}); err != nil {
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/run", Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd"})
+	if err != nil {
 		t.Fatalf("RecordKeptWork: %v", err)
 	}
+	// The open entry is raised as a kept-work wake and offered to the
+	// notify command before it closes, so both go with it.
+	keptWorkWakeAndNotification(t, s, entry.ID)
 	if err := s.MarkRunCleanupRemoved(ctx, run.ID, now); err != nil {
 		t.Fatalf("MarkRunCleanupRemoved: %v", err)
 	}
@@ -337,8 +341,10 @@ func TestWrittenOnceRunRecordsAreNotDeletedWhileTheirRunStands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordKeptWork: %v", err)
 	}
+	keptWorkWakeAndNotification(t, s, entry.ID)
 	// An answered entry is refused deletion too while its run stands, so the
-	// seal is shown on the row forgetting would remove.
+	// seal is shown on the row forgetting would remove, and so are its wake
+	// and that wake's notification.
 	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface()); err != nil {
 		t.Fatalf("AnswerKeptWork: %v", err)
 	}
@@ -350,10 +356,13 @@ func TestWrittenOnceRunRecordsAreNotDeletedWhileTheirRunStands(t *testing.T) {
 		t.Fatalf("MarkSeen: %v", err)
 	}
 	for table, remove := range map[string]string{
-		"merge_record": `DELETE FROM merge_record WHERE run = ?`,
-		"run_cleanup":  `DELETE FROM run_cleanup WHERE run = ?`,
-		"seen_mark":    `DELETE FROM seen_mark WHERE kind = 'merge' AND key = ?`,
-		"kept_work":    `DELETE FROM kept_work WHERE run_id = ?`,
+		"merge_record":   `DELETE FROM merge_record WHERE run = ?`,
+		"run_cleanup":    `DELETE FROM run_cleanup WHERE run = ?`,
+		"seen_mark":      `DELETE FROM seen_mark WHERE kind = 'merge' AND key = ?`,
+		"kept_work":      `DELETE FROM kept_work WHERE run_id = ?`,
+		"kept_work_wake": `DELETE FROM kept_work_wake WHERE kept_work IN (SELECT id FROM kept_work WHERE run_id = ?)`,
+		"kept_work_notification": `DELETE FROM kept_work_notification WHERE kept_work_wake_id IN (
+			SELECT w.id FROM kept_work_wake w JOIN kept_work k ON k.id = w.kept_work WHERE k.run_id = ?)`,
 	} {
 		if _, err := s.write.ExecContext(ctx, remove, run.ID); err == nil ||
 			!strings.Contains(err.Error(), "while") {
@@ -362,5 +371,23 @@ func TestWrittenOnceRunRecordsAreNotDeletedWhileTheirRunStands(t *testing.T) {
 		if n := tableRows(t, s, table); n != 1 {
 			t.Fatalf("%s holds %d rows after the refused delete, want 1", table, n)
 		}
+	}
+}
+
+// keptWorkWakeAndNotification raises an open kept work entry as a kept-work
+// wake and claims that wake's notification, so a test holds a row in both.
+func keptWorkWakeAndNotification(t *testing.T, s *Store, entry int64) {
+	t.Helper()
+	ctx := context.Background()
+	inc, err := s.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatalf("BeginIncarnation: %v", err)
+	}
+	appended, err := s.AppendKeptWorkWake(ctx, inc, KeptWorkWakeRequest{KeptWork: entry, Kind: "kept-work", Marker: "kept-work:1"})
+	if err != nil {
+		t.Fatalf("AppendKeptWorkWake: %v", err)
+	}
+	if _, err := s.ClaimKeptWorkNotification(ctx, appended.Wake.ID); err != nil {
+		t.Fatalf("ClaimKeptWorkNotification: %v", err)
 	}
 }
