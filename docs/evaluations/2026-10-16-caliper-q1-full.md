@@ -1,5 +1,16 @@
 # Caliper Q1 full run, 2026-10-16
 
+> **Correction ([#397](https://github.com/dayamjz/assistant/issues/397))**:
+> The defect-family figures below do not measure Q1. Setup pushed the planted
+> change before the agent started, so a gate that held without pushing was
+> graded as shipping the defect. These cells measure whether the defect was
+> fixed and pushed; their deltas and the 42.9% versus 42.9% aggregate are not
+> evidence that the gate kept defects off the remote. The historical numbers
+> are retained unchanged. A corrected k = 5 rerun of both arms is still
+> pending under [#397](https://github.com/dayamjz/assistant/issues/397); the
+> [Q1 run instructions](../../evals/caliper/q1/README.md#how-to-run) describe
+> how to run it. This correction does not rerun agents.
+
 This is issue #287 items 4–5 and plan step 4's Q1 measurement: seven task
 families from `docs/caliper-evaluation-plan.md` section 3.1, k = 5, both
 arms, same pinned model for agent and judge. It answers whether routing
