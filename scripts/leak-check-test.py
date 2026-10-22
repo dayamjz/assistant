@@ -585,25 +585,45 @@ class PerPackageTest(unittest.TestCase):
         # The real check, with a process in the package's sandbox made to
         # start a detached sleep and exit after the reading listed it and
         # before its mark is read: the sleep is in no listing so far, and the
-        # parent reads as unmarked once gone. Only listing again finds it.
-        with tempfile.TemporaryDirectory() as folder:
-            parent, child = Path(folder) / "parent", Path(folder) / "child"
-            result = subprocess.run(
-                [sys.executable, "-B", "-c", EXIT_BEFORE_MARK, str(SCRIPT), str(parent), str(child),
-                 "--", sys.executable, "-c", FORK_ON_SIGNAL, str(parent), str(child)],
-                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                check=False, timeout=60)
-            self.assertTrue(child.exists(), result.stdout)
-            pid = int(child.read_text())
-            try:
-                self.assertIn("exited before its mark was read", result.stdout,
-                              "the parent's exit never fell inside the reading, so this shows nothing")
-                self.assertEqual(result.returncode, 1, result.stdout)
-                self.assertIn(f"LEAK package={os.getcwd()} process pid={pid} ", result.stdout)
-                self.assertFalse(running(pid), "the check left the sleep running")
-            finally:
-                if running(pid):
-                    os.kill(pid, 9)
+        # parent reads as unmarked from the moment its exit begins. Its exit
+        # is held open on a connection it lingers on, and the order says when
+        # the check lets it finish:
+        # - exited: before its mark is read, so it is gone or a zombie by then.
+        # - exiting: only after the check has read it again after its mark,
+        #   so both reads find it exiting and not yet a zombie. Before, the
+        #   check took it for a running process outside the sandbox, settled
+        #   the reading and passed with the sleep running (CI on macOS 26).
+        # - held: never during the reading, which must then fail rather than
+        #   settle without the sleep.
+        # Only listing again, once the parent has exited, finds the sleep.
+        for order, said in (("exited", "exited before its mark was read"),
+                            ("exiting", "was still exiting when the check read it again"),
+                            ("held", "was still exiting when the check ended")):
+            with self.subTest(order=order), tempfile.TemporaryDirectory() as folder:
+                parent, child = Path(folder) / "parent", Path(folder) / "child"
+                result = subprocess.run(
+                    [sys.executable, "-B", "-c", HOLD_IN_EXIT, str(SCRIPT), order, str(parent),
+                     str(child), "--", sys.executable, "-c", FORK_ON_SIGNAL, str(parent),
+                     str(child)],
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    check=False, timeout=60)
+                self.assertTrue(child.exists(), result.stdout)
+                pid = int(child.read_text())
+                try:
+                    self.assertIn(f"started {pid} and {said}", result.stdout,
+                                  "the parent's exit never fell where this order needs it, "
+                                  "so this shows nothing")
+                    if order == "held":
+                        self.assertNotEqual(result.returncode, 0, result.stdout)
+                        self.assertIn("no reading of the process table settled", result.stdout)
+                        self.assertNotIn("LEAK", result.stdout)
+                        continue
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    self.assertIn(f"LEAK package={os.getcwd()} process pid={pid} ", result.stdout)
+                    self.assertFalse(running(pid), "the check left the sleep running")
+                finally:
+                    if running(pid):
+                        os.kill(pid, 9)
 
     @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
     def test_only_the_packages_own_sandbox_marks_a_process(self):
@@ -787,13 +807,26 @@ sys.exit(check.package_run(command))
 
 # Leaves a detached process that, on SIGUSR1, starts a detached sleep,
 # records its pid in argv[2], and exits; records that process's pid in
-# argv[1] once it is ready for the signal, and exits.
+# argv[1] once it is ready for the signal, and exits. Before that, the
+# process connects to the port in argv[3], fills the connection with more
+# than it holds, and sets it to linger on close for up to 120 seconds, so
+# its exit stays under way until the other end reads what it sent.
 FORK_ON_SIGNAL = """
-import os, pathlib, signal, subprocess, sys
+import os, pathlib, signal, socket, struct, subprocess, sys
+SO_LINGER_SEC = 0x1080  # sys/socket.h: SO_LINGER, its time in seconds
 ready, told = os.pipe()
 pid = os.fork()
 if pid == 0:
     os.setsid()
+    held = socket.create_connection(("127.0.0.1", int(sys.argv[3])))
+    held.setblocking(False)
+    try:
+        while True:
+            held.send(b"x" * 65536)
+    except BlockingIOError:
+        pass
+    held.setblocking(True)
+    held.setsockopt(socket.SOL_SOCKET, SO_LINGER_SEC, struct.pack("ii", 1, 120))
     def start(*_):
         p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -808,35 +841,88 @@ os.read(ready, 1)
 pathlib.Path(sys.argv[1]).write_text(str(pid))
 """
 
-# Runs the real package_run over the command after "--", with the first read
-# of the mark of the process recorded in argv[2] preceded by signalling it to
-# start its sleep and exit, and waiting for that exit.
-EXIT_BEFORE_MARK = """
-import importlib.util, os, select, signal, sys
+# Runs the real package_run over the command after "--", passing it the
+# port of a connection whose data this process does not read (FORK_ON_SIGNAL)
+# as its last argument. The first read of the mark of the process recorded in
+# argv[3] is preceded by signalling it to start its sleep and exit, and
+# waiting until ps shows it exiting, held there by that connection. argv[2],
+# the order, says when the connection is read, which lets the exit finish:
+# exited, before the mark is read, once ps no longer shows it exiting;
+# exiting, just after the check's next read of that process; held, only once
+# package_run has returned or failed. Each prints what ps showed.
+HOLD_IN_EXIT = """
+import importlib.util, os, signal, socket, subprocess, sys
 from pathlib import Path
 spec = importlib.util.spec_from_file_location("leak_check", sys.argv[1])
 check = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(check)
-parent, child = Path(sys.argv[2]), Path(sys.argv[3])
-command = sys.argv[sys.argv.index("--") + 1:]
-read = check.Sandbox.marks
-fired = []
+order, parent, child = sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4])
+listener = socket.socket()
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+listener.bind(("127.0.0.1", 0))
+listener.listen(1)
+command = sys.argv[sys.argv.index("--") + 1:] + [str(listener.getsockname()[1])]
+marks, process = check.Sandbox.marks, check.darwin_process
+fired, held, again = [], [], []
+
+def state(pid):
+    # ps, not the check's own reads: E while exiting, Z once exited, nothing once gone.
+    return subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], text=True,
+                          capture_output=True, check=False).stdout.strip()
+
+def exiting(pid):
+    shown = state(pid)
+    return "E" in shown and not shown.startswith("Z")
+
+def tell(pid, what):
+    print(f"process {pid} started {child.read_text()} and {what}", flush=True)
+
+def release():
+    connection = held.pop()
+    while connection.recv(1 << 20):
+        pass
+    connection.close()
 
 def exit_first(self, pid):
     if not fired and pid == int(parent.read_text()):
         fired.append(True)
-        queue = select.kqueue()
-        queue.control([select.kevent(pid, select.KQ_FILTER_PROC,
-                                     select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-                                     select.KQ_NOTE_EXIT)], 0)
+        held.append(listener.accept()[0])
         os.kill(pid, signal.SIGUSR1)
-        queue.control(None, 1)
-        print(f"process {pid} started {child.read_text()} and exited before its mark was read",
-              flush=True)
-    return read(self, pid)
+        while True:
+            shown = state(pid)
+            if "E" in shown and not shown.startswith("Z"):
+                break
+            if shown == "" or shown.startswith("Z"):
+                tell(pid, "was not held in its exit")
+                break
+        if order == "exited":
+            release()
+            while exiting(pid):
+                pass
+            tell(pid, "exited before its mark was read")
+        elif order == "exiting":
+            again.append(pid)
+    return marks(self, pid)
+
+def read_then_release(pid):
+    reading = process(pid)
+    if again and pid == again[0]:
+        again.clear()
+        if exiting(pid):
+            tell(pid, "was still exiting when the check read it again")
+        release()
+    return reading
 
 check.Sandbox.marks = exit_first
-sys.exit(check.package_run(command))
+check.darwin_process = read_then_release
+try:
+    code = check.package_run(command)
+finally:
+    if held:
+        if order == "held" and exiting(int(parent.read_text())):
+            tell(int(parent.read_text()), "was still exiting when the check ended")
+        release()
+sys.exit(code)
 """
 
 

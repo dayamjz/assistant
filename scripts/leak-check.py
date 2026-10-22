@@ -651,14 +651,23 @@ def linux_leftovers(package):
 
 KINFO_PROC_SIZE = 648  # sizeof(struct kinfo_proc) from sys/sysctl.h, 64-bit
 SZOMB = 5  # extern_proc.p_stat of a process that has exited, from sys/proc.h
+P_WEXIT = 0x00002000  # extern_proc.p_flag of a process working on exiting, from sys/proc.h
 SANDBOX_FILTER_PATH = 1  # sandbox_check's filter for a path argument
 SANDBOX_CHECK_NO_REPORT = 0x40000000  # sandbox_check: do not log a denial
 SETTLE_READINGS = 64
 
+# A process's state in a kinfo_proc record (darwin_records).
+RUNNING, EXITING, EXITED = "running", "exiting", "exited"
+
 
 def darwin_records(mib):
-    """The kinfo_proc records sysctl returns for mib, as (pid, start, zombie):
-    start is the kernel's start time in the form process_start uses."""
+    """The kinfo_proc records sysctl returns for mib, as (pid, start, state):
+    start is the kernel's start time in the form process_start uses; state is
+    EXITED for a zombie (p_stat SZOMB), EXITING for a process that is not one
+    yet but whose p_flag has P_WEXIT, the flag ps shows as E, and RUNNING
+    otherwise. A process held in its exit reads EXITING, not yet a zombie,
+    for as long as it is held, and sandbox_check answers for it as for a pid
+    that is gone (the guard's tests hold one there)."""
     libc = ctypes.CDLL(None, use_errno=True)
     name = (ctypes.c_int * len(mib))(*mib)
     for _ in range(SETTLE_READINGS):
@@ -679,22 +688,29 @@ def darwin_records(mib):
                            f"not whole {KINFO_PROC_SIZE}-byte records")
     records = []
     for offset in range(0, size.value, KINFO_PROC_SIZE):
-        # extern_proc: p_starttime at 0, p_stat at 36, p_pid at 40.
+        # extern_proc: p_starttime at 0, p_flag at 32, p_stat at 36, p_pid at 40.
         sec, usec = struct.unpack_from("<qi", buffer.raw, offset)
+        flag, = struct.unpack_from("<i", buffer.raw, offset + 32)
         pid, = struct.unpack_from("<i", buffer.raw, offset + 40)
-        records.append((pid, f"{sec}.{usec:06d}", buffer.raw[offset + 36] == SZOMB))
+        if buffer.raw[offset + 36] == SZOMB:
+            state = EXITED
+        elif flag & P_WEXIT:
+            state = EXITING
+        else:
+            state = RUNNING
+        records.append((pid, f"{sec}.{usec:06d}", state))
     return records
 
 
 def darwin_table():
-    """Map (pid, start) to whether it has exited, for every process in the
-    kernel's table (sysctl kern.proc.all), whatever its user."""
-    return {(pid, start): zombie for pid, start, zombie in darwin_records((1, 14, 0))}
+    """Map (pid, start) to its state (darwin_records), for every process in
+    the kernel's table (sysctl kern.proc.all), whatever its user."""
+    return {(pid, start): state for pid, start, state in darwin_records((1, 14, 0))}
 
 
 def darwin_process(pid):
-    """(start, exited) for the process pid now is, or None once it is gone
-    (sysctl kern.proc.pid)."""
+    """(start, state) for the process pid now is (darwin_records), or None
+    once it is gone (sysctl kern.proc.pid)."""
     records = darwin_records((1, 14, 1, pid))
     return (records[0][1], records[0][2]) if records else None
 
@@ -723,8 +739,9 @@ class Sandbox:
     outside it, since what it started there would carry no mark, so a test
     that runs one fails under this check rather than leaving a process it
     cannot see.
-    sandbox_check reads the mark of any pid; for a pid that is gone it
-    answers denied for both files, which is not the mark.
+    sandbox_check reads the mark of any pid; for a pid that is gone, and for
+    a process that has begun exiting (darwin_records), it answers denied for
+    both files, which is not the mark.
     """
 
     def __init__(self, unwritable=None):
@@ -765,37 +782,46 @@ class Sandbox:
 def darwin_marked(sandbox):
     """Every (pid, start) a settled reading finds running in sandbox.
 
-    A reading lists the kernel's table and, for each process running in it
-    that it has not settled, reads the mark and then the process again. A
-    process still the same and running at that second read was running when
-    its mark was read, so the mark settles it either way; a marked one is
-    found even if it has exited by then. One that has exited by the second
-    read and is not marked may have been read after it was gone, and may have
-    started a process before it went that the listing could not hold, so the
-    table is listed again, and only a listing in which every process settled
-    ends the reading. A process that exits before its mark is read, and
-    started nothing, is not found. SETTLE_READINGS listings without one that
-    settles are an error.
+    A reading lists the kernel's table and, for each process in it that has
+    not exited and that it has not settled, reads the mark and then the
+    process again. A process still the same and running, not exiting, at that
+    second read was running when its mark was read, so the mark settles it
+    either way; a marked one is found even if it has exited by then. One that
+    is exiting, has exited or is gone by the second read and is not marked
+    may have been read once its exit had begun, when it reads as unmarked
+    whatever its sandbox (Sandbox), and may have started a process before
+    then that the listing could not hold, so the table is listed again, and
+    only a listing in which every process settled ends the reading. Such a
+    process stays unsettled in each listing that finds it exiting, so one
+    held in its exit through SETTLE_READINGS listings makes this an error
+    rather than a reading without what it started. A process that exits
+    before its mark is read, and started nothing, is not found.
+    SETTLE_READINGS listings without one that settles are an error naming
+    what the last left unsettled.
     """
     found, settled = set(), set()
     for _ in range(SETTLE_READINGS):
-        unsettled = False
+        unsettled = []
         # Newest first: a process the package left is among the last started.
         table = darwin_table()
         for key in sorted(table, key=lambda k: tuple(map(int, k[1].split("."))), reverse=True):
-            if table[key] or key in settled:
+            if table[key] == EXITED or key in settled:
                 continue
             mark = sandbox.marks(key[0])
-            running = darwin_process(key[0]) == (key[1], False)
+            reading = darwin_process(key[0])
+            running = reading == (key[1], RUNNING)
             if mark:
                 found.add(key)
             if mark or (running and mark is not None):
                 settled.add(key)
             if not running or mark is None:
-                unsettled = True
+                state = "gone" if reading is None or reading[0] != key[1] else reading[1]
+                unsettled.append(f"pid={key[0]} start={key[1]} {state}"
+                                 + (", its mark unread" if mark is None else ""))
         if not unsettled:
             return found
-    raise RuntimeError(f"no reading of the process table settled in {SETTLE_READINGS} listings")
+    raise RuntimeError(f"no reading of the process table settled in {SETTLE_READINGS} "
+                       f"listings; the last left unsettled: {'; '.join(unsettled)}")
 
 
 def darwin_command(pid):
@@ -829,7 +855,7 @@ def darwin_leftovers(package, sandbox):
                   f"command={darwin_command(pid)}", flush=True)
         named |= found
         for pid, start in found:
-            if darwin_process(pid) == (start, False):
+            if darwin_process(pid) in ((start, RUNNING), (start, EXITING)):
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except ProcessLookupError:
