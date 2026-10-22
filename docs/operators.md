@@ -557,11 +557,15 @@ its commit yourself, or discard it.
 Discard, `--answer discard` with the same flags, is given twice. Alone it
 shows exactly what removing the copy would lose, in the structured answer
 (`--json`): the commits the default branch lacks, whether the copy holds a
-change, a file or a stash no commit records, and a digest of all of it; it
-records and removes nothing. Given again with `--confirm DIGEST` it removes
-the copy only while the copy still holds exactly what that digest was shown
-for, so a commit, an edit, a file or a stash made since is refused and you
-are told to look again. The entry then records the answer, what it was
+change, a file or a stash no commit records, and a digest of everything
+removing the copy destroys; it records and removes nothing. The digest
+covers more than the list: every file in the copy, ones git ignores
+included, the repository's own files (its configuration and hooks), every
+reference and every reflog entry, so the whole stash list and a commit only
+a reflog still names are sealed though not listed. Given again with
+`--confirm DIGEST` it removes the copy only while the copy still holds
+exactly what that digest was shown for, so a commit, an edit, a file or a
+stash made since is refused and you are told to look again. The entry then records the answer, what it was
 shown and who gave it. An entry whose "what the default branch lacks" is
 not established (the upstream could not be read when the copy was kept) is
 refused rather than shown a list that may be wrong; the next cleanup of the

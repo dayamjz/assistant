@@ -36,11 +36,15 @@ paths: ["internal/tasks/**"]
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
   refusals are a copy kept for its work; `kept_test.go` places every reason.
 - `kept_discard.go` is the copy's half of PRD section 6's discard: `Loss`
-  reads what removing the copy would lose, the entry's `Lacks` and the
-  inventory's three indicators, with a digest over everything the discard
-  would destroy (the index at every stage by `vcs.IndexEntries`, every
-  changed or untracked path by its bytes, an untracked directory walked,
-  the stash, the tips, `Lacks`), refusing an unestablished entry; `Discard`
+  reads what removing the copy would lose, the commits the default branch
+  lacks read from the copy now and the inventory's three indicators, with a digest over everything the discard
+  would destroy, decided from what the copy holds and never from what git
+  reports changed (`copyState`: the whole copy walked by the filesystem,
+  ignored files included, its repository directory too, and what git
+  rewrites there sealed by content: every reference, every reflog entry,
+  the stash list whole, the index at every stage; then the commits
+  lacking; the header names what it does not cover), refusing an
+  unestablished entry; `Discard`
   removes the copy only on that digest, the one use of
   `vcs.RemoveWorktreeDiscardingChanges`, behind a person's answer and no
   proof.

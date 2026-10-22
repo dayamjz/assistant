@@ -215,3 +215,59 @@ func advanceUpstream(t *testing.T, upstream, file string) string {
 	git(t, pusher, "push", "--quiet", "origin", "HEAD:main")
 	return git(t, pusher, "rev-parse", "HEAD")
 }
+
+// A discard's digest seals the whole stash list, not the stash's tip, the
+// reviewer's sequence on a task's clone, which a discard removes with its
+// stash: work is stashed and the stash's tip saved, the discard shown, new
+// work stashed over it, and the saved tip stored back on top with git stash
+// store, so refs/stash names the commit it named when the discard was shown
+// and the new work is the list's second entry. The confirmation with the
+// digest shown is refused as changed, the copy stands and the new stash is
+// still in it. Without the list in the digest the copy and the stashed work
+// are removed on the stale confirmation.
+func TestADiscardDigestSealsTheWholeStashList(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	if err := writeFile(entry.CopyPath+"/finding.txt", "the first stashed edit\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "stash", "--quiet")
+	saved := git(t, entry.CopyPath, "rev-parse", "refs/stash")
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil || !shown.Loss.Stash {
+			t.Fatalf("the discard shown = %+v, %v; want what would be lost, the stash among it", shown, err)
+		}
+		if err := writeFile(entry.CopyPath+"/finding.txt", "new work, stashed after the discard was shown\n"); err != nil {
+			t.Fatal(err)
+		}
+		git(t, entry.CopyPath, "stash", "--quiet")
+		unseen := git(t, entry.CopyPath, "rev-parse", "refs/stash")
+		git(t, entry.CopyPath, "stash", "store", "--quiet", "-m", "the saved tip, stored back", saved)
+		if tip := git(t, entry.CopyPath, "rev-parse", "refs/stash"); tip != saved {
+			t.Fatalf("the stash's tip is %s, want it back at %s", tip, saved)
+		}
+		request.Confirm = shown.Loss.Digest
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &out)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "changed") {
+			t.Fatalf("a confirmation once new work was stashed under the shown tip = %+v, %v; want it refused as changed", out, err)
+		}
+		if list := git(t, entry.CopyPath, "stash", "list", "--format=%H"); !strings.Contains(list, unseen) {
+			t.Fatalf("after the refused discard the stash list reads %q; want the new work %s still in it", list, unseen)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
+			t.Fatalf("after the refused confirmation the entry reads %+v, %v; want it open", still, err)
+		}
+	})
+}

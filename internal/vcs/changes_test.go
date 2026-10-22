@@ -35,16 +35,14 @@ func TestChangesSeparatesUntrackedUnstagedAndStaged(t *testing.T) {
 	check := func(when string, want vcs.Changes) {
 		t.Helper()
 		got := changesOf(t, copy)
-		// The indicators are compared here; the paths they were read from
-		// are TestChangesListsThePathsItReadFrom's.
-		if got.Untracked != want.Untracked || got.Unstaged != want.Unstaged || got.Staged != want.Staged || got.Unmerged != want.Unmerged {
+		if got != want {
 			t.Errorf("%s: Changes = %+v, want %+v", when, got, want)
 		}
 		inv := inventory(t, copy)
 		if inv.Dirty != want.Dirty() || inv.Untracked != want.Untracked {
 			t.Errorf("%s: Inventory reads dirty=%v untracked=%v, and Changes %+v", when, inv.Dirty, inv.Untracked, want)
 		}
-		if got.Clean() != want.Clean() || got.Clean() != (len(got.Paths) == 0) {
+		if got.Clean() != (want == vcs.Changes{}) {
 			t.Errorf("%s: Clean = %v for %+v", when, got.Clean(), got)
 		}
 	}
@@ -114,25 +112,15 @@ func TestChangesRefusesABareRepository(t *testing.T) {
 	}
 }
 
-// Changes lists the paths its indicators were read from, as git prints
-// them, with whether each is untracked or gone from the tree: an untracked
-// file, a staged file, an edited tracked file, a path with a space in it,
-// and a tracked file deleted in the tree, each once; a clean tree lists
-// none. IndexEntries names the index's content by git's own object
-// identity, so staging a change moves it and nothing else in the tree does.
-func TestChangesListsThePathsItReadFrom(t *testing.T) {
+// IndexEntries names the index's content by git's own object identity, so
+// staging a change moves it and nothing else in the tree does: an untracked
+// file, a path with a space in it, an unstaged edit and a deletion in the
+// tree leave it as it was, and staging a file adds its entry.
+func TestIndexEntriesNameTheIndexByObjectIdentity(t *testing.T) {
 	gitEnvironment(t)
 	copy, _, _, _ := clonedCopy(t)
 	dir := copy.Path()
 	ctx := context.Background()
-	paths := func(when string, want []vcs.ChangedPath) {
-		t.Helper()
-		got := changesOf(t, copy).Paths
-		if !slices.Equal(got, want) {
-			t.Errorf("%s: Paths = %+v, want %+v", when, got, want)
-		}
-	}
-	paths("a fresh clone", nil)
 	index := func(when string) []vcs.IndexEntry {
 		t.Helper()
 		entries, err := copy.IndexEntries(ctx)
@@ -150,20 +138,17 @@ func TestChangesListsThePathsItReadFrom(t *testing.T) {
 
 	writeFile(t, filepath.Join(dir, "new.txt"), "untracked\n")
 	writeFile(t, filepath.Join(dir, "with space.txt"), "untracked too\n")
-	paths("two untracked files", []vcs.ChangedPath{{Path: "new.txt", Untracked: true}, {Path: "with space.txt", Untracked: true}})
 	if entries := index("untracked files"); !slices.Equal(entries, clean) {
 		t.Fatalf("IndexEntries with untracked files = %+v; want the clean index's %+v", entries, clean)
 	}
 
 	rawGit(t, dir, "add", "new.txt")
-	paths("one staged", []vcs.ChangedPath{{Path: "new.txt"}, {Path: "with space.txt", Untracked: true}})
 	staged := index("a file staged")
 	if slices.Equal(staged, clean) || len(staged) != len(clean)+1 {
 		t.Fatalf("IndexEntries with a file staged = %+v; want one more entry than %+v", staged, clean)
 	}
 
 	writeFile(t, filepath.Join(dir, "kept.txt"), "edited\n")
-	paths("a tracked file edited", []vcs.ChangedPath{{Path: "kept.txt"}, {Path: "new.txt"}, {Path: "with space.txt", Untracked: true}})
 	if entries := index("an unstaged edit"); !slices.Equal(entries, staged) {
 		t.Fatalf("IndexEntries with an unstaged edit = %+v; want the index's %+v unchanged", entries, staged)
 	}
@@ -171,5 +156,7 @@ func TestChangesListsThePathsItReadFrom(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "kept.txt")); err != nil {
 		t.Fatal(err)
 	}
-	paths("a tracked file deleted in the tree", []vcs.ChangedPath{{Path: "kept.txt", Gone: true}, {Path: "new.txt"}, {Path: "with space.txt", Untracked: true}})
+	if entries := index("a deletion in the tree"); !slices.Equal(entries, staged) {
+		t.Fatalf("IndexEntries with a deletion in the tree = %+v; want the index's %+v unchanged", entries, staged)
+	}
 }

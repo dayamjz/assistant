@@ -79,6 +79,10 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	// digest shown no longer names the copy, and a discard on it is refused.
 	// Staging the edit changes it again.
 	tracked := filepath.Join(tk.copy, "own.txt")
+	committed, err := os.Lstat(tracked)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(tracked, []byte("edited once\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +132,11 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	}
 	rawGit(t, tk.copy, "reset", "--quiet", "own.txt")
 	rawGit(t, tk.copy, "checkout", "--", "own.txt")
+	// The checkout writes the file under the process's own mask, and the
+	// mode is part of what a discard destroys, so it is put back too.
+	if err := os.Chmod(tracked, committed.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(filepath.Join(tk.copy, "second.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -557,4 +566,112 @@ func TestADiscardPreviewLeavesTheCleanupsReferencesAlone(t *testing.T) {
 	if left := rawGit(t, tk.copy, "for-each-ref", "refs/assistant/discard/"); left != "" {
 		t.Fatalf("the preview left its references behind:\n%s", left)
 	}
+}
+
+// The digest covers everything the removal of a task's clone deletes, not
+// only what git reports changed: from a digest shown, each of these moves
+// it and refuses the digest shown before it, with HEAD, every branch and
+// every indicator the same: the stash list gaining an entry under a tip
+// stored back where it was (the reviewer's sequence); a commit reset away,
+// which only HEAD's and the branch's reflogs still name; a file git is
+// told to ignore, created and then edited; a hook written into the
+// repository directory; a remote added to its configuration; and a
+// reference outside the branches and tags, which keeps no log. Two reads of the copy in
+// between, each of which fetches the default branch into it, digest the
+// same. Without the reflogs, the ignored file, the repository directory
+// or every reference in the digest, the stale digest removes the clone.
+func TestADiscardDigestCoversEverythingTheRemovalDeletes(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/whole")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	entry := got.Entry
+	shown := func(when string) Loss {
+		t.Helper()
+		l, err := s.cleaner.Loss(ctx, entry)
+		if err != nil {
+			t.Fatalf("%s: Loss: %v", when, err)
+		}
+		if again, err := s.cleaner.Loss(ctx, entry); err != nil || again.Digest != l.Digest {
+			t.Fatalf("%s: read again the copy digests %s (%v), want %s", when, again.Digest, err, l.Digest)
+		}
+		return l
+	}
+	moves := func(when string, before Loss, change func()) Loss {
+		t.Helper()
+		change()
+		after := shown(when)
+		if after.Digest == before.Digest || after.Head != before.Head || !slices.Equal(after.Lacks, before.Lacks) ||
+			after.Dirty != before.Dirty || after.Untracked != before.Untracked {
+			t.Fatalf("%s: Loss = %+v after %+v; want another digest and the same HEAD, commits lost and indicators", when, after, before)
+		}
+		if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+			t.Fatalf("%s: a discard on the digest shown before = %v; want ErrLossChanged", when, err)
+		}
+		if _, err := os.Stat(tk.copy); err != nil {
+			t.Fatalf("%s: the refused discard removed the copy: %v", when, err)
+		}
+		return after
+	}
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tracked := filepath.Join(tk.copy, "own.txt")
+	write(tracked, "stashed first\n")
+	rawGit(t, tk.copy, "stash", "--quiet")
+	saved := rawGit(t, tk.copy, "rev-parse", "refs/stash")
+	l := shown("one stash")
+	l = moves("new work stashed under the saved tip stored back", l, func() {
+		write(tracked, "stashed after the discard was shown\n")
+		rawGit(t, tk.copy, "stash", "--quiet")
+		rawGit(t, tk.copy, "stash", "store", "--quiet", "-m", "stored back", saved)
+	})
+	l = moves("a commit reset away", l, func() {
+		// The files the commit and the reset write beside the reflogs are
+		// put back as they were, so the reflogs alone carry the change.
+		gitDir := filepath.Join(tk.copy, ".git")
+		beside := map[string][]byte{}
+		for _, name := range []string{"ORIG_HEAD", "COMMIT_EDITMSG"} {
+			raw, err := os.ReadFile(filepath.Join(gitDir, name))
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+			beside[name] = raw
+		}
+		commit(t, tk.copy, "away.txt", "reset away\n", "a commit only the reflogs name")
+		rawGit(t, tk.copy, "reset", "--quiet", "--hard", "HEAD~1")
+		for name, raw := range beside {
+			if raw == nil {
+				if err := os.Remove(filepath.Join(gitDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(filepath.Join(gitDir, name), raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	write(filepath.Join(tk.copy, ".git", "info", "exclude"), "secret.env\n")
+	l = shown("an ignored name")
+	l = moves("an ignored file created", l, func() { write(filepath.Join(tk.copy, "secret.env"), "TOKEN=one\n") })
+	l = moves("an ignored file edited", l, func() { write(filepath.Join(tk.copy, "secret.env"), "TOKEN=two\n") })
+	l = moves("a hook written", l, func() { write(filepath.Join(tk.copy, ".git", "hooks", "pre-push"), "#!/bin/sh\nexit 0\n") })
+	l = moves("a remote added", l, func() { rawGit(t, tk.copy, "remote", "add", "elsewhere", s.upstream) })
+	moves("a reference outside the branches and tags", l, func() { rawGit(t, tk.copy, "update-ref", "refs/aside/kept", "HEAD") })
 }
