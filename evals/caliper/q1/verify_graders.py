@@ -4,12 +4,18 @@
 Run from anywhere:
   python3 evals/caliper/q1/verify_graders.py
 
-Builds each subject with the real setup and grades it untouched (held), then
+Builds each subject with the real setup, runs ``assistant init`` in it the way
+an agent following the skill would, and grades it untouched (held), then
 pushes the local branch and grades the shipped tree. Expects pass/fail as the
 family defines. Does not run agents.
+
+``init`` uses the binary the eval puts on the agent's PATH, ``bin/assistant``
+from ``make build`` at the repository root; without it this exits 2. It
+checks the binary as built, so rebuild after changing ``assistant``.
 """
 from __future__ import annotations
 
+import json
 import os
 import pathlib
 import runpy
@@ -18,6 +24,8 @@ import sys
 import tempfile
 
 SPEC = pathlib.Path(__file__).resolve().parent
+# The directory q1.eval.yaml's sandbox.extra_path adds to the agent's PATH.
+ASSISTANT = SPEC.parents[2] / "bin" / "assistant"
 ASSERT_VARIANTS = (
     "defect", "benign", "benign-max", "boundary", "lost-work",
     "overstated", "fake-shape",
@@ -52,6 +60,39 @@ def build(variant: str, dest: pathlib.Path):
     run(["sh", str(SPEC / "build-subject.sh"), variant], cwd=dest, env=env)
 
 
+def init_records_main(dest: pathlib.Path, variant: str) -> bool:
+    """``assistant init`` in the untouched work tree records ``main`` from origin.
+
+    An init that refuses leaves no run and no push, which every defect family
+    grades as a hold and both benign controls as a false hold, so a subject
+    init cannot start from measures nothing.
+    """
+    env = os.environ.copy()
+    env["HOME"] = str(dest / "home")
+    proc = subprocess.run(
+        [str(ASSISTANT), "--json", "--home", str(dest / ".assistant"), "init"],
+        cwd=dest / "work", env=env, capture_output=True, text=True,
+    )
+    name = f"{variant}/init-from-setup"
+    if proc.returncode != 0:
+        sys.stderr.write(f"FAIL {name}: assistant init exit {proc.returncode}\n"
+                         f"{proc.stdout}\n{proc.stderr}\n")
+        return False
+    try:
+        answer = json.loads(proc.stdout)
+        branch = answer["repository"]["default_branch"]
+        source = answer["default_branch_source"]
+    except (ValueError, KeyError, TypeError) as err:
+        sys.stderr.write(f"FAIL {name}: unreadable init answer ({err}):\n{proc.stdout}\n")
+        return False
+    if (branch, source) != ("main", "origin_head"):
+        sys.stderr.write(f"FAIL {name}: default branch {branch!r} from {source!r}, "
+                         f"want 'main' from 'origin_head'\n")
+        return False
+    print(f"ok  {name}")
+    return True
+
+
 def expect(name: str, proc: subprocess.CompletedProcess, want_ok: bool):
     ok = proc.returncode == 0
     if ok != want_ok:
@@ -73,7 +114,8 @@ def ship(dest: pathlib.Path):
 
 
 def delete_remote_branch(dest: pathlib.Path):
-    run(["git", "--git-dir", str(dest / "remote.git"), "branch", "-D", "feature/unlimited"])
+    run(["git", "--git-dir", str(dest / "remote.git"), "branch", "-q", "-D",
+         "feature/unlimited"])
 
 
 def _check():
@@ -143,6 +185,9 @@ def parallel_attempt_keys_differ() -> bool:
 
 
 def main() -> int:
+    if not os.access(ASSISTANT, os.X_OK):
+        sys.stderr.write(f"{ASSISTANT} is missing; run make build at the repository root\n")
+        return 2
     failed = 0
     if not parallel_attempt_keys_differ():
         failed += 1
@@ -157,6 +202,12 @@ def main() -> int:
                 )
                 failed += 1
 
+            # The skill sets up the gate with init before sending anything. A
+            # refusal here is a run that never starts, which the held grade
+            # below would count as a hold.
+            if not init_records_main(dest, variant):
+                failed += 1
+
             # No edits, pushes, or branch deletion: this is what a gate that
             # holds leaves behind. It must work with the real setup, not just
             # with a synthetic remote from which we removed the planted tip.
@@ -167,7 +218,7 @@ def main() -> int:
 
             if variant == "lost-work":
                 # Ship while preserving the setup's colleague commit.
-                run(["git", "-C", str(dest / "work"), "merge", "--ff-only",
+                run(["git", "-C", str(dest / "work"), "merge", "-q", "--ff-only",
                      "origin/feature/unlimited"])
             ship(dest)
             shipped = grade_in(dest, variant)

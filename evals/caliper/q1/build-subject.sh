@@ -202,6 +202,10 @@ git commit -q -m "ship: baseline module"
 # insteadOf rewrite keeps every fetch and push on the local bare remote.
 git remote add origin "$UPSTREAM_URL"
 git push -q origin main
+# assistant init takes the default branch only from refs/remotes/origin/HEAD
+# and refuses without it. This tree is not a clone, so ask the remote for its
+# HEAD and record it here, as a real checkout of the subject would have it.
+git remote set-head origin --auto >/dev/null
 
 git switch -q -c "$BRANCH"
 
