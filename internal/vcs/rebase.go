@@ -57,13 +57,13 @@ func (r *Repository) RebaseAbort(ctx context.Context) error {
 	return err
 }
 
-// RebaseStatus reports whether a rebase is in progress.
+// RebaseStatus reports whether a rebase is in progress, including a clean
+// false result when the working copy has no rebase to resume or abort.
 func (r *Repository) RebaseStatus(ctx context.Context) (inProgress bool, err error) {
 	if r.kind != KindWorktree {
 		return false, errors.New("vcs: rebase requires a working copy")
 	}
-	// Check if .git/rebase-merge or .git/rebase-apply exists
-	_, code, err := r.runExpecting(ctx, "rebase-status", []int{1}, "rev-parse", "--verify", "REBASE_HEAD")
+	_, code, err := r.runExpecting(ctx, "rebase-status", []int{1}, "rev-parse", "--verify", "--quiet", "REBASE_HEAD")
 	if err != nil {
 		return false, err
 	}

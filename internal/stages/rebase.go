@@ -57,9 +57,10 @@ import (
 // # Fix rounds
 //
 // This stage has 3 fix rounds available per config.FixRounds.Rebase. When
-// conflicts occur during rebase, the fixer can be invoked to resolve them.
-// That is the first pass only, before anything was pushed; the section below
-// says what a conflict does after the push.
+// conflicts occur during the first pass, the rebase is aborted before a fix
+// finding is reported. The fixer can then change the submitted branch, and
+// the next stage execution starts a new rebase. The section below says what
+// a conflict does after the push.
 //
 // # After the push: a second pass that rebases a branch the run pushed
 //
@@ -255,6 +256,9 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	err = copied.Rebase(ctx, rebaseSpec)
 	if err != nil {
 		if errors.Is(err, vcs.ErrRebaseConflict) {
+			if err := copied.RebaseAbort(ctx); err != nil {
+				return pipeline.Output{}, fmt.Errorf("stages: abandoning the conflicting rebase onto %s: %w", target, err)
+			}
 			return withWrites(rebaseConflictReport(branch, base, target), writes), nil
 		}
 		return pipeline.Output{}, fmt.Errorf("stages: rebasing onto %s: %w", target, err)
@@ -349,12 +353,13 @@ func checkDiffEmpty(ctx context.Context, repo *vcs.Repository, head, target, sub
 	}, nil
 }
 
-// rebaseConflictReport builds the report for a rebase that stopped due to conflicts.
+// rebaseConflictReport builds the fix finding after the conflicting rebase was
+// aborted, leaving the submitted branch ready for the fixer and a new rebase.
 func rebaseConflictReport(branch, base, target string) pipeline.Output {
 	description := fmt.Sprintf(
-		"The rebase onto %s encountered conflicts that need to be resolved. "+
+		"The rebase onto %s encountered conflicts and was aborted. "+
 			"The branch %s could not be automatically rebased onto %s.\n\n"+
-			"A fixer can attempt to resolve these conflicts, or the run can be "+
+			"A fixer can change the branch before another rebase attempt, or the run can be "+
 			"cancelled if manual intervention is required.",
 		target, branch, base)
 
