@@ -360,7 +360,7 @@ func TestASweepWhoseLsofExitsInTimeStillClears(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sweeping an empty copy with the real lsof under the production deadline: %v", err)
 	}
-	requireClearUnlessHostBlocks(t, r, blockers, "the sweep of an empty copy")
+	requireClearUnlessHostBlocks(t, r, &blockers, "the sweep of an empty copy")
 	hostLimit(t, blockers, "that a timely lsof run clears the sweep")
 }
 
@@ -371,15 +371,16 @@ func TestASweepWhoseLsofExitsInTimeStillClears(t *testing.T) {
 // output open for hold, and exits at once. The run never takes that output
 // as whole once its deadline has passed or its context has ended: held past
 // the deadline it is agents.ErrSweepTimedOut within the deadline, never a
-// bare exec.ErrWaitDelay; cancelled while held it is context.Canceled at the
-// cancellation, cancelled once the leader has exited and the descendant
+// bare exec.ErrWaitDelay; cancelled while held it is context.Canceled
+// within the run's grace of the cancellation, which is how long held output
+// is waited on, cancelled once the leader has exited and the descendant
 // holds the output, never a wait for the deadline, and that holds when the
 // descendant lets go of the output after the cancellation too, which is
 // never a success, and when the cancellation comes after the cutoff has
-// killed a leader that was still running, during the cleanup after it,
-// the cancellation wins over the timeout. The last row is the positive control: let go at once
-// and not cancelled, the same output is read and accepted, so the refusals
-// above are not the output's.
+// killed a leader that was still running, during the wait for its output
+// after that, the cancellation wins over the timeout. The last row is the
+// positive control: let go at once and not cancelled, the same output is
+// read and accepted, so the refusals above are not the output's.
 func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	requiresIdentityRead(t)
@@ -397,15 +398,14 @@ func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *t
 		run      string
 		deadline time.Duration
 		cancel   bool
-		cancelAt time.Duration
 		want     error
 		within   time.Duration
 	}{
-		{"held past the deadline", "3600", "0.05", 500 * time.Millisecond, false, 0, agents.ErrSweepTimedOut, 500 * time.Millisecond},
-		{"held when cancelled", "3600", "0.05", 5 * time.Second, true, 0, context.Canceled, 0},
-		{"let go after the cancellation", "1", "0.05", 5 * time.Second, true, 0, context.Canceled, 0},
-		{"cancelled after the cutoff while held", "3600", "3600", 2 * time.Second, true, 1900 * time.Millisecond, context.Canceled, 0},
-		{"let go at once", "0", "0.05", 2 * time.Second, false, 0, nil, 2 * time.Second},
+		{"held past the deadline", "3600", "0.05", 500 * time.Millisecond, false, agents.ErrSweepTimedOut, 500 * time.Millisecond},
+		{"held when cancelled", "3600", "0.05", 5 * time.Second, true, context.Canceled, agents.LsofGrace(5 * time.Second)},
+		{"let go after the cancellation", "1", "0.05", 5 * time.Second, true, context.Canceled, agents.LsofGrace(5 * time.Second)},
+		{"cancelled after the cutoff while held", "3600", "3600", 5 * time.Second, true, context.Canceled, agents.LsofGrace(5 * time.Second)},
+		{"let go at once", "0", "0.05", 2 * time.Second, false, nil, 2 * time.Second},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			// The descendant is started under set -m, which POSIX defines as
@@ -421,24 +421,14 @@ func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *t
 			defer cancel()
 			// A cancelled row cancels once the leader has exited and the
 			// descendant is holding the output, so the cancellation lands in
-			// the output wait, and is timed from there. A row with cancelAt
-			// cancels at that point from the start instead: past the cutoff
-			// that killed a leader still running, during the cleanup that
-			// follows it, which a cancellation wins over the timeout.
+			// the output wait, and is timed from there. A leader that runs
+			// for an hour has exited only because the cutoff killed it, so
+			// that row's cancellation lands in the output wait after the
+			// cutoff, which a cancellation wins over the timeout.
 			started := make(chan time.Time, 1)
 			started <- time.Now()
 			returned := make(chan struct{})
-			if c.cancelAt > 0 {
-				<-started
-				go func() {
-					select {
-					case <-returned:
-					case <-time.After(c.cancelAt):
-						started <- time.Now()
-						cancel()
-					}
-				}()
-			} else if c.cancel {
+			if c.cancel {
 				<-started
 				go func() {
 					for {
@@ -492,5 +482,57 @@ func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *t
 				t.Fatalf("the read answered %v, %v, want %v and no working directories", cwds, err, c.want)
 			}
 		})
+	}
+}
+
+// TestALsofRunExitingOneWhoseOutputWasCutIsNotReadAsWhole is review's case
+// against the accepted status: lsof's status of one is an answer, but only
+// when its output reached its end. A program standing where lsof is prints
+// this process's working directory, leaves a descendant in a group of its
+// own holding the output open with a second record still to print, and
+// exits with status one. The read refuses with agents.ErrSweepTimedOut and
+// returns no working directories, rather than the one record it had, since a
+// listing cut short would under-report a blocker (P6). The descendant waits
+// on a sleep of an hour, so its record comes past the grace by construction
+// rather than by a margin. The positive control is the same program with no
+// descendant, whose status of one is read with its record.
+func TestALsofRunExitingOneWhoseOutputWasCutIsNotReadAsWhole(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	requiresIdentityRead(t)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := filepath.EvalSymlinks(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const deadline = 2 * time.Second
+	self := "printf 'p%s\\nfcwd\\nn%s\\n' " + strconv.Itoa(os.Getpid()) + " '" + cwd + "'\n"
+	other := "printf 'p1\\nfcwd\\nn/\\n'"
+
+	// Under set -m the shell starts the descendant as a job in a process
+	// group of its own, which is the one holder ending lsof's group does not
+	// reach; the descendant's group is ended by the cleanup, its leader
+	// verified by identity first.
+	body := "set -m\n(/bin/sleep 3600; " + other + ") &\nset +m\necho $! >> PIDS\n" + self + "exit 1\n"
+	program, pidFile := standInLsof(t, t.TempDir(), body)
+	cwds, err := agents.ReadCwdsWithLsof(context.Background(), program, deadline)
+	pids := startedPIDs(t, pidFile, 2)
+	if id, present, idErr := agents.Identify(pids[1]); idErr == nil && present {
+		t.Cleanup(func() {
+			if presence, err := id.Presence(); err == nil && presence == agents.PresencePresent {
+				_ = syscall.Kill(-id.PID, syscall.SIGKILL)
+			}
+		})
+	}
+	if !errors.Is(err, agents.ErrSweepTimedOut) || cwds != nil {
+		t.Fatalf("the read of a stand-in lsof that exited 1 with its output held open answered %v, %v, want agents.ErrSweepTimedOut and no working directories", cwds, err)
+	}
+
+	control, _ := standInLsof(t, t.TempDir(), self+"exit 1\n")
+	cwds, err = agents.ReadCwdsWithLsof(context.Background(), control, deadline)
+	if err != nil || cwds[os.Getpid()] != cwd {
+		t.Fatalf("the read of a stand-in lsof that exited 1 with its output whole answered %v, %v, want this process's working directory %q", cwds, err, cwd)
 	}
 }

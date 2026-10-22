@@ -97,6 +97,8 @@ func Main() {
 		os.Exit(serveACP(control, args))
 	case codexExecArgs(args):
 		os.Exit(serveCodexExec(control, args))
+	case cursorPrintArgs(args):
+		os.Exit(serveCursorPrint(control, args))
 	case interactiveArgs(args):
 		os.Exit(serveInteractiveWorker(control, args))
 	case !oneShotArgs(args):
@@ -152,7 +154,8 @@ func flagArg(args []string, name string) string {
 
 // readPrompt returns the invocation prompt: the contents of --prompt-file when
 // that flag is present (Grok Build), otherwise everything on standard input
-// (Claude Code and Cursor).
+// (Claude Code). Codex and Cursor carry theirs on the command line, which
+// serveCodexExec and serveCursorPrint read instead.
 func readPrompt(args []string) (string, error) {
 	if path := flagArg(args, promptFileFlag); path != "" {
 		raw, err := os.ReadFile(path)

@@ -204,7 +204,8 @@ func writePointed(w io.Writer, row rendering, value any) {
 //     requires and says is an evidence document in P13's sense.
 //   - usage is the usage view, runs --usage's answer: what the agent calls
 //     in a window cost, grouped by agent, model, purpose, role, provider,
-//     type, version and effort, and by run and stage, under those exact names.
+//     type, version, effort and context window, and by run and stage, under
+//     those exact names.
 //   - log is the log view, runs RUN --log=STAGE's answer: the end of one
 //     stage's log, with each agent call's account and reply as the log
 //     holds them. It is an answer of its own and not part of the detail
@@ -760,6 +761,24 @@ func readOutQueuedWakes(w io.Writer, q machine.QueuedWakes) {
 	// coordinator's own word and escaped, on the same terms.
 	for _, row := range q.DomainWakes {
 		writef(w, "%s: %s %s\n", printable(row.Domain), machine.QueuedDomainWakePhrase(row), machine.QueuedDomainWakeStanding(row))
+	}
+	// A notice about a kept work entry no task names is listed under the
+	// entry's project and then the branch it was kept on, PRD section 8's
+	// two, each the person's own text and escaped, so entries kept on
+	// branches of the same name in two projects read apart; an entry that
+	// names neither is listed by its row alone.
+	for _, row := range q.KeptWorkWakes {
+		var label []string
+		if project, ok := row.Project.Get(); ok {
+			label = append(label, printable(project))
+		}
+		if branch, ok := row.Branch.Get(); ok {
+			label = append(label, printable(branch))
+		}
+		if len(label) > 0 {
+			writef(w, "%s: ", strings.Join(label, " "))
+		}
+		writef(w, "%s %s\n", machine.QueuedKeptWorkWakePhrase(row), machine.QueuedKeptWorkWakeStanding(row))
 	}
 }
 

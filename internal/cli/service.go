@@ -203,6 +203,19 @@ func (in *invocation) startableConfiguration() error {
 // detached from this process's own lifetime, because the service outlives the
 // command that started it.
 //
+// It is not a short-lived program, so it does not run through procgroup and
+// carries no invocation deadline: what it starts is the service itself,
+// which runs until it is stopped, and is the exception the owner's decision
+// on #430 makes of a long-lived process, on that decision's terms. On unix
+// the copy leads a session, and so a process group, of its own (detach).
+// Its recorded owner is the service itself, which holds the home's lock
+// for as long as it serves (PRD section 8). What ends it is its stop, a
+// stop request or SIGTERM, which PRD section 8 bounds by stop_grace, or
+// the operating system ending it outright. The launching command bounds
+// only its own wait for readiness, readyTimeout, and ends nothing when that
+// wait runs out. A restart's successor, which the outgoing service launches
+// through this same path, is the same exception.
+//
 // The channel it returns is closed once that copy has exited. It is waited for
 // on a goroutine of its own, so nothing here blocks for the life of the
 // service; a command that ends first simply stops watching, and the service,

@@ -150,6 +150,43 @@ func TestRunIsNotHeldByACallersBlockedWriter(t *testing.T) {
 	}
 }
 
+// A program that exits with a failing status while its output is not
+// complete is reported with both facts: the *exec.ExitError of its status and
+// exec.ErrWaitDelay for the output that was cut. A caller that accepts a
+// failing status as an answer reads the output only when the copy finished,
+// so an exit error alone would let it read output that was cut short as
+// whole. The writer never accepts, so the cut is certain rather than raced.
+func TestRunReportsOutputCutShortBesideAFailingStatus(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pr.Close() })
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), standInMode+"="+standInPrintFail)
+	cmd.Stdout = pw
+	err := runWithin(t, cmd, false)
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Errorf("Run of a program exiting 1 = %v; want its *exec.ExitError with status 1", err)
+	}
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Errorf("Run of a program exiting 1 whose output was cut = %v; want exec.ErrWaitDelay as well", err)
+	}
+
+	// The positive control: the same failing status with output that was
+	// copied whole names no cut.
+	var out writerOnly
+	whole := exec.Command(os.Args[0])
+	whole.Env = append(os.Environ(), standInMode+"="+standInPrintFail)
+	whole.Stdout = &out
+	err = runWithin(t, whole, false)
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 || errors.Is(err, exec.ErrWaitDelay) {
+		t.Errorf("Run of a program exiting 1 whose output was copied whole = %v; want its *exec.ExitError alone", err)
+	}
+	if got := string(out.b); got != "stand-in output\n" {
+		t.Errorf("Run delivered %q; want the line the stand-in wrote", got)
+	}
+}
+
 // The copying Run does in place of os/exec's delivers what the program wrote
 // to an ordinary writer, whole, and reads an ordinary reader, so owning the
 // copy costs no output in the case that holds nothing open.

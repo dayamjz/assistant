@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // queuedPair creates a blocker with an attempt and a successor queued behind
@@ -264,7 +266,8 @@ func TestTwoReleasesOfOneTaskDispatchOnce(t *testing.T) {
 func TestNewRefusesAMissingDependency(t *testing.T) {
 	f := newFixture(t)
 	whole := Deps{Home: f.home, Store: f.store, Reader: taskstate.NewReader(f.store, nil, nil),
-		Exclude: f.exclusion.hold, BranchInGate: f.queue.inGate, GatePath: f.queue.gatePath, Posture: f.queue.posture}
+		Exclude: f.exclusion.hold, BranchInGate: f.queue.inGate, GatePath: f.queue.gatePath, Posture: f.queue.posture,
+		GitDeadline: vcs.DefaultInvocationDeadline}
 	if _, err := New(whole); err != nil {
 		t.Fatalf("New with every dependency: %v", err)
 	}
@@ -285,10 +288,14 @@ func TestNewRefusesAMissingDependency(t *testing.T) {
 			d.GatePath = nil
 		case "posture reader":
 			d.Posture = nil
+		case "git deadline":
+			d.GitDeadline = 0
+		case "negative git deadline":
+			d.GitDeadline = -time.Minute
 		}
 		return d
 	}
-	for _, name := range []string{"home", "store", "reader", "exclusion", "gate", "gate locator", "posture reader"} {
+	for _, name := range []string{"home", "store", "reader", "exclusion", "gate", "gate locator", "posture reader", "git deadline", "negative git deadline"} {
 		d := without(name)
 		if _, err := New(d); !errors.Is(err, ErrIncomplete) {
 			t.Errorf("New without the %s = %v, want ErrIncomplete", name, err)

@@ -13,29 +13,30 @@ import (
 
 // PRD section 8 fixes what an agent invocation record holds: purpose, agent,
 // the model provider, type and version the launch was asked for, the model
-// identifier started, the role and the effort, timing, failure category, and
-// token usage, and the run and stage it served, and never prompts, outputs,
-// diffs, or credentials. These two tests assert that on the recorded shape
+// identifier started, the role, the effort, and the context window, timing,
+// failure category, and token usage, and the run and stage it served, and
+// never prompts, outputs, diffs, or credentials. These two tests assert that on the recorded shape
 // rather than on a call site: the first fails if a field is added that
 // content could be written into, and the second fails if content reaches one
 // of the fields that are there.
 
 func TestARecordHasNoFieldContentCouldBeWrittenInto(t *testing.T) {
 	allowed := map[string]reflect.Type{
-		"Purpose":  reflect.TypeFor[agents.Purpose](),
-		"Agent":    reflect.TypeFor[string](),
-		"Model":    reflect.TypeFor[string](),
-		"Role":     reflect.TypeFor[string](),
-		"Provider": reflect.TypeFor[string](),
-		"Type":     reflect.TypeFor[string](),
-		"Version":  reflect.TypeFor[string](),
-		"Effort":   reflect.TypeFor[string](),
-		"Session":  reflect.TypeFor[agents.SessionUse](),
-		"Started":  reflect.TypeFor[time.Time](),
-		"Duration": reflect.TypeFor[time.Duration](),
-		"Failure":  reflect.TypeFor[agents.Failure](),
-		"Usage":    reflect.TypeFor[agents.Usage](),
-		"Served":   reflect.TypeFor[agents.Served](),
+		"Purpose":       reflect.TypeFor[agents.Purpose](),
+		"Agent":         reflect.TypeFor[string](),
+		"Model":         reflect.TypeFor[string](),
+		"Role":          reflect.TypeFor[string](),
+		"Provider":      reflect.TypeFor[string](),
+		"Type":          reflect.TypeFor[string](),
+		"Version":       reflect.TypeFor[string](),
+		"Effort":        reflect.TypeFor[string](),
+		"ContextWindow": reflect.TypeFor[string](),
+		"Session":       reflect.TypeFor[agents.SessionUse](),
+		"Started":       reflect.TypeFor[time.Time](),
+		"Duration":      reflect.TypeFor[time.Duration](),
+		"Failure":       reflect.TypeFor[agents.Failure](),
+		"Usage":         reflect.TypeFor[agents.Usage](),
+		"Served":        reflect.TypeFor[agents.Served](),
 	}
 	typ := reflect.TypeFor[agents.Record]()
 	seen := make(map[string]struct{}, typ.NumField())
@@ -320,6 +321,7 @@ func TestTheRecordedModelFallsBackToTheOneAskedFor(t *testing.T) {
 	inv.Type = "opus"
 	inv.Version = "5.5"
 	inv.Effort = "high"
+	inv.ContextWindow = "1m"
 
 	if _, err := runner.Run(t.Context(), agents.PurposeTest, inv); err != nil {
 		t.Fatalf("invocation failed: %v", err)
@@ -330,5 +332,8 @@ func TestTheRecordedModelFallsBackToTheOneAskedFor(t *testing.T) {
 	}
 	if got.Role != "review" || got.Provider != "anthropic" || got.Type != "opus" || got.Version != "5.5" || got.Effort != "high" {
 		t.Errorf("the launch attribution is role %q provider %q type %q version %q effort %q", got.Role, got.Provider, got.Type, got.Version, got.Effort)
+	}
+	if got.ContextWindow != "1m" {
+		t.Errorf("the launch attribution is context %q, want the 1m it was asked for", got.ContextWindow)
 	}
 }

@@ -33,7 +33,13 @@ type launchSubject struct {
 // standin.New's, the shipped adapter's stand-in, does not.
 func newLaunchSubject(t *testing.T, agent *standin.Agent) *launchSubject {
 	t.Helper()
-	sub := newDispatchSubject(t)
+	return newLaunchSubjectAs(t, agent, "")
+}
+
+// newLaunchSubjectAs is newLaunchSubject over a task recorded with role.
+func newLaunchSubjectAs(t *testing.T, agent *standin.Agent, role string) *launchSubject {
+	t.Helper()
+	sub := newDispatchSubjectAs(t, role)
 	sub.service.catalog = agents.NewCatalog(fixedRunner{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
 	sub.service.cfg = config.Defaults()
 	sub.service.registry = newRegistry()
@@ -407,3 +413,137 @@ func TestAnOrderedSkipIsRecordedWithItsReasonOnTheAttempt(t *testing.T) {
 		t.Fatalf("session = %q (known=%v), want %s", ref, ok, launched.Reference())
 	}
 }
+
+// A worker role on Opus 5.5 at context 1m starts the worker with
+// --model claude-opus-5-5[1m], read off the command line the stand-in
+// recorded, and the attempt records that identifier as the model it asked
+// for. The window comes from the role the operator named, not from a
+// launcher outside the program.
+func TestAWorkerRoleStartsTheContextWindowItNames(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	subject := newLaunchSubject(t, claudeWorkerStandIn(t))
+	name := subject.agent.Runner().Name()
+	subject.service.cfg.Roles = config.Roles{config.RoleWorker: {
+		Agent: name, Provider: "anthropic", Type: "opus", Version: "5.5", Effort: "high", ContextWindow: config.Context1M,
+	}}
+	d, err := subject.service.dispatchTask(ctx, subject.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	launched, err := subject.service.launchTask(ctx, d)
+	if err != nil {
+		t.Fatalf("launching: %v", err)
+	}
+	provider, _, _ := subject.service.sessionOf(subject.task)
+	waitCaptured(t, provider, launched, claudeWorkerStarted)
+	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
+	if err != nil || len(attempts) != 1 {
+		t.Fatalf("TaskAttempts = %+v, %v", attempts, err)
+	}
+	if model, ok := attempts[0].Model.Get(); !ok || model != "claude-opus-5-5[1m]" {
+		t.Fatalf("the attempt asked for model %q (known=%v), want claude-opus-5-5[1m]", model, ok)
+	}
+	var started []string
+	for _, call := range subject.agent.Calls() {
+		if call.Worker {
+			started = append(started, call.Model())
+		}
+	}
+	if len(started) != 1 || started[0] != "claude-opus-5-5[1m]" {
+		t.Fatalf("the worker was started with --model %q, want claude-opus-5-5[1m] once", started)
+	}
+}
+
+// A worker role whose context window the routed adapter has not declared on
+// that model is refused before the worker starts: a recorded route-refused
+// naming the role and the window, the task Failed from it, and no worker
+// started at the standard window in its place. A task that names no role
+// resolves the worker role, and one that names a role is refused under its
+// own name.
+func TestAnUndeclaredWorkerContextWindowIsRefusedBeforeLaunch(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		taskRole string
+		role     config.Role
+	}{
+		{"haiku at 1m", "", config.Role{Provider: "anthropic", Type: "haiku", Version: "4.5", ContextWindow: config.Context1M}},
+		{"a window with no model", "", config.Role{ContextWindow: config.Context1M}},
+		{"a named role", "pages", config.Role{Provider: "anthropic", Type: "haiku", Version: "4.5", ContextWindow: config.Context1M}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			undeclaredWorkerWindowIsRefused(t, tc.taskRole, tc.role)
+		})
+	}
+}
+
+func undeclaredWorkerWindowIsRefused(t *testing.T, taskRole string, role config.Role) {
+	t.Helper()
+	ctx := t.Context()
+	subject := newLaunchSubjectAs(t, claudeWorkerStandIn(t), taskRole)
+	role.Agent = subject.agent.Runner().Name()
+	subject.service.cfg.Roles = config.Roles{config.TaskRoleName(taskRole): role}
+	d, err := subject.service.dispatchTask(ctx, subject.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	_, err = subject.service.launchTask(ctx, d)
+	var refused *routeRefused
+	if !errors.As(err, &refused) || !errors.Is(err, agents.ErrUndeclaredModel) {
+		t.Fatalf("the launch answered %v, want a *routeRefused over ErrUndeclaredModel", err)
+	}
+	resolved, err := subject.service.tasks().Resolved(ctx, subject.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.State.State != taskstate.Failed || resolved.State.Basis.EventKind != routeRefusedKind {
+		t.Fatalf("the task resolves %+v, want Failed from route-refused", resolved.State)
+	}
+	detail := routeRefusedDetail(t, subject)
+	want := "the " + config.TaskRoleName(taskRole) + " role"
+	if !strings.Contains(detail, want) || !strings.Contains(detail, "context 1m") {
+		t.Fatalf("route-refused detail %q does not name %s and context 1m", detail, want)
+	}
+	if _, _, ok := subject.service.sessionOf(subject.task); ok {
+		t.Fatal("the service holds a session for the refused launch")
+	}
+	for _, call := range subject.agent.Calls() {
+		if call.Worker {
+			t.Fatalf("a worker was started for the refused launch: %s", call)
+		}
+	}
+}
+
+// routeRefusedDetail is the detail of the task's last route-refused event,
+// empty when it has none.
+func routeRefusedDetail(t *testing.T, subject *launchSubject) string {
+	t.Helper()
+	events, err := subject.records.TaskEvents(t.Context(), subject.task, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail string
+	for _, e := range events {
+		if e.Kind == routeRefusedKind {
+			detail = e.Detail
+		}
+	}
+	return detail
+}
+
+// claudeWorkerStandIn is a stand-in worker under the shipped Claude Code
+// adapter, so the model identifier a launch translates is the one that
+// adapter puts on the command line. It answers the subject's first turn,
+// whose instructions are "work", with claudeWorkerStarted, which a test
+// waits on before it reads the worker's record.
+func claudeWorkerStandIn(t *testing.T) *standin.Agent {
+	t.Helper()
+	return standin.New(t, standin.Script{Worker: &standin.WorkerScript{
+		Exchanges: []standin.Exchange{{Contains: "work", Reply: claudeWorkerStarted}},
+	}}, agents.WithTerminationGrace(2*time.Second))
+}
+
+// claudeWorkerStarted is what claudeWorkerStandIn answers its first turn with.
+const claudeWorkerStarted = "the first turn was read"

@@ -15,7 +15,7 @@ git config --global --get-regexp '^url\..*\.insteadof$' "$UPSTREAM_URL" 2>/dev/n
 	done
 
 # Caliper runs this hook with cwd=$CALIPER_WORKDIR (<attempt>/work). The agent
-# starts the service under <attempt>/.assistant. build-subject also clones a
+# starts the service under <attempt>/.assistant. build-subject also creates a
 # nested ./work here, so testing for [ -d work ] and cd'ing into it both
 # mis-keyed the gate dump and left assistant talking to the operator HOME
 # (every 2026-10-16 full-run capture failed that way).

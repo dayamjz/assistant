@@ -20,15 +20,17 @@ const (
 	// agent uses this list. The default fixer names cursor and does not.
 	KeyAgent Key = "agent"
 	// KeyRoles is "roles": which agent, model provider, model type, model
-	// version, and effort each role runs. The default names fix as cursor
+	// version, effort, and context window each role runs. The default names fix as cursor
 	// and names no other role, so review and worker use KeyAgent. A document
 	// that sets this key and does not name fix keeps that fixer. A fix role
 	// that names no agent uses KeyAgent. review, fix, and worker are the
 	// three the program assigns; any other name is a worker role a task may
 	// name. It is the same trust class as KeyAgent. A provider, type, or
-	// version outside the model table, a partial triple, and an effort other
-	// than low, medium, or high fail at parse time and name the role. Each
-	// role may name one explicit fallback, with its own agent and model.
+	// version outside the model table, a partial triple, an effort other
+	// than low, medium, or high, and a context outside ContextWindows or on
+	// a role with no triple fail at parse time and name the role. Each role
+	// may name one explicit fallback, with its own agent, model, effort, and
+	// context.
 	KeyRoles Key = "roles"
 	// KeyCommandsTest is "commands.test": a targeted check for the change.
 	KeyCommandsTest Key = "commands.test"
@@ -173,6 +175,23 @@ const (
 	// the one reader. The default, floor and ceiling are chosen, not
 	// measured, and PRD section 10's schema does not yet have the row.
 	KeyCommandTimeout Key = "command_timeout"
+	// KeyGitDeadline is "git_deadline": how long one invocation of git the
+	// service makes may run, when its caller set no deadline of its own,
+	// before internal/vcs ends it with its process group, PRD P15's deadline
+	// for git and section 8's process model. It is global-only for
+	// KeyCommandTimeout's reason: it bounds a program on the operator's
+	// machine, so a repository that could raise it could hold the host as
+	// long as it liked. internal/service is the one reader: it builds every
+	// vcs handle it and the packages it drives open with this value through
+	// vcs.WithInvocationDeadline, and internal/vcs reads no configuration.
+	// The command line does not read it; its own git runs under internal/vcs's
+	// fallback, which DefaultGitDeadline equals.
+	KeyGitDeadline Key = "git_deadline"
+	// KeyGHDeadline is "gh_deadline": KeyGitDeadline for gh, the GitHub
+	// command line internal/forge runs, on the same terms and with the same
+	// one reader, through forge.WithInvocationDeadline. The GitLab adapter
+	// starts no program, so this does not bound it.
+	KeyGHDeadline Key = "gh_deadline"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
 	// template. It shapes the subject line and nothing else: a fix commit
 	// also carries a body, the fixer's whole account of the round, which
@@ -454,6 +473,10 @@ var specs = []spec{
 		func(c *Config, v any) { c.StopGrace = v.(time.Duration) }},
 	{KeyCommandTimeout, TrustGlobal, DefaultCommandTimeout, decodeCommandTimeout,
 		func(c *Config, v any) { c.CommandTimeout = v.(time.Duration) }},
+	{KeyGitDeadline, TrustGlobal, DefaultGitDeadline, decodeGitDeadline,
+		func(c *Config, v any) { c.GitDeadline = v.(time.Duration) }},
+	{KeyGHDeadline, TrustGlobal, DefaultGHDeadline, decodeGHDeadline,
+		func(c *Config, v any) { c.GHDeadline = v.(time.Duration) }},
 	{KeyCommitFixMessage, TrustPushed, DefaultCommitFixMessage, decodeFixMessage,
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},
 	{KeyAllowPushedCommands, TrustTrusted, false, decodeBool,

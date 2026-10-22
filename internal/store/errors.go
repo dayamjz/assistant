@@ -63,6 +63,15 @@ var ErrRunActive = errors.New("store: run has not finished")
 // stands with it.
 var ErrRunProcessRecorded = errors.New("store: a run's agent process has no recorded end")
 
+// ErrKeptWorkWakeQueued is returned by ForgetRepository, RepositoryRemovable
+// and ReserveRepositoryRemoval while a kept-work wake about a kept work
+// entry of the repository is unacknowledged. PRD section 8 keeps such a row
+// actionable until the coordinator acknowledges it, and forgetting the
+// repository would delete it with its entry, and its notification with it,
+// though its entry is closed. Acknowledging the wake clears the refusal;
+// the closed wake and its notification then go with the closed entry.
+var ErrKeptWorkWakeQueued = errors.New("store: a kept-work wake about the repository's kept work is unacknowledged")
+
 // ErrNoResolution is returned by ResolveHold when no resolution text was given.
 // PRD section 8 says a hold is closed only by an explicit resolution, and an
 // empty one is not explicit.

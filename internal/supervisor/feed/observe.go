@@ -85,7 +85,11 @@ func InFlightFrom(ctx context.Context, s *store.Store, reader *taskstate.Reader)
 	if err != nil {
 		return supervisor.InFlightUnknown, err
 	}
-	return supervisor.InFlightOf(states, unacknowledged, domainWakes), nil
+	keptWorkWakes, err := s.UnacknowledgedKeptWorkWakes(ctx)
+	if err != nil {
+		return supervisor.InFlightUnknown, err
+	}
+	return supervisor.InFlightOf(states, unacknowledged, domainWakes+keptWorkWakes), nil
 }
 
 // Guard is the pull guard over a home: Observe, then supervisor.GuardOf at

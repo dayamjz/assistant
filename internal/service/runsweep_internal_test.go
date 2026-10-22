@@ -132,8 +132,12 @@ const sweepAttempts = 5
 // for every later one, since the first ended them. A refusal that rule rejects is the copy's and fails the test at
 // once. One it accepts is P6's refusal working on a process the test did
 // not place in dir (#449 saw tmux's setgid utempter helper, started by
-// another test, be one), which is logged, and again is called, which must
-// have the service ask exactly one more sweep of dir. After sweepAttempts
+// another test, be one, and #491 a sudo at its password prompt), which is
+// logged, and again is called, which must have the service ask exactly one
+// more sweep of dir. A nil again says dir no longer stands and nothing can
+// ask a sweep of it again: then the accepted refusal is returned in place of
+// a cleared sweep, so the second result does not clear, and what that leaves
+// unestablished is the caller's to report. After sweepAttempts
 // accepted refusals in a row the failure goes through
 // fatalUnlessSweepsStoppedClearing, which skips, or fails under
 // standin.RequireSweepClearVar, when an empty copy elsewhere is refused too
@@ -164,6 +168,9 @@ func (a *sweepsAsked) untilClear(t *testing.T, unestablished, dir string, placed
 		}
 		if err := refusedByOthers(r, dir, placed); err != nil {
 			t.Fatalf("the sweep the service asked of %s did not clear, and the refusal is the copy's: %v (%s)", dir, err, r)
+		}
+		if again == nil {
+			return first, r
 		}
 		if attempt == sweepAttempts {
 			fatalUnlessSweepsStoppedClearing(t, unestablished,
@@ -604,8 +611,14 @@ func ended(t *testing.T, exited <-chan struct{}, after string) {
 // the test did not place in the copy is asked again on untilClear's terms,
 // because whether some other process's working directory is readable is
 // the host's and not the copy's (#449); refusalRuleHolds is that rule's
-// positive control. Skips where the existing sweep tests skip, with the
-// same reasons.
+// positive control. A sweep can be asked again only while the copy stands,
+// and a run that completes or is cancelled has its copy reclaimed by settle
+// once the sweep returns, which the test asserts before it decides: so a
+// refusal of such a run's sweep is the answer, held to untilClear's rule
+// and recorded and reported as not cleared, and the test then skips on
+// sweepLimit's terms with the blockers named, because a cleared record for
+// that ending is left unestablished (#491). Skips where the existing sweep
+// tests skip, with the same reasons.
 func TestARunsCopyIsSweptOnceTheRunIsFinalAndNeverBefore(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
@@ -694,13 +707,47 @@ func TestARunsCopyIsSweptOnceTheRunIsFinalAndNeverBefore(t *testing.T) {
 				}
 				recordsSweep(t, sweep, r, store.SweptAtFinish)
 			}
-			asked.untilClear(t, unestablished, copyPath, []agents.Identity{left.id}, recorded,
-				func() { s.sweepFinished(ctx, final, store.SweptAtFinish) })
+			// The move's sweep can be asked again only of a copy that still
+			// stands. Every call that could remove it has returned by now: a
+			// run that completes or is cancelled ends through settle, which
+			// reclaims a finished run's copy once its sweep has returned
+			// (settle here, and the cancelled segment's own settle, which
+			// awaitSegment waited out), and a failed run's move reclaims
+			// nothing. So whether it stands is settled, and is asserted
+			// rather than read as whatever is found.
+			reclaimed := ending != "fails"
+			_, err = os.Lstat(copyPath)
+			if gone := errors.Is(err, os.ErrNotExist); gone != reclaimed || (err != nil && !gone) {
+				t.Fatalf("the copy of a run that %s, once the ending returned: %v, want it reclaimed %v", ending, err, reclaimed)
+			}
+			var again func()
+			if !reclaimed {
+				again = func() { s.sweepFinished(ctx, final, store.SweptAtFinish) }
+			}
+			_, last := asked.untilClear(t, unestablished, copyPath, []agents.Identity{left.id}, recorded, again)
 			refusalRuleHolds(t, asked.ending(t, copyPath, left.id), copyPath, left, leaveRunning(t, t.TempDir()), leaveRunning(t, t.TempDir()))
-			if answer, err := s.view(ctx, record.ID); err != nil || answer.CopySweep == nil || answer.CopySweep.Outcome != store.SweepCleared {
-				t.Fatalf("the run's status answer carries the sweep %+v (%v)", answer.CopySweep, err)
+			outcome := store.SweepCleared
+			if !last.Clear() {
+				outcome = store.SweepNotCleared
+			}
+			if answer, err := s.view(ctx, record.ID); err != nil || answer.CopySweep == nil || answer.CopySweep.Outcome != outcome {
+				t.Fatalf("the run's status answer carries the sweep %+v (%v), want %s", answer.CopySweep, err, outcome)
 			}
 			log := serviceLog(t, s.home)
+			if !last.Clear() {
+				// A reclaimed copy cannot be asked again, so the move's
+				// sweep stands refused by processes the test did not place
+				// there, on untilClear's terms, and a cleared sweep's record
+				// for this ending is what is left unestablished.
+				if !strings.Contains(log, "run "+record.ID+" is "+string(want)+" and the sweep of its isolated copy did not clear it: ") {
+					t.Fatalf("the service log does not say the sweep of the copy did not clear it:\n%s", log)
+				}
+				sweepLimit(t, fmt.Sprintf("the sweep of %s was refused by %d process(es) the test did not place there whose working directory "+
+					"this service cannot read and which neither of agents.Sweeper's carve-outs sets aside (%s), as P6 requires, and the run's "+
+					"own reclaim removed the copy after it, so no sweep of it can be asked again and %s, recorded as cleared, is not "+
+					"established here, and everything else this test checks was",
+					copyPath, len(last.UnreadableBlocking), agents.DescribeBlockers(last.UnreadableBlocking), unestablished))
+			}
 			if !strings.Contains(log, "run "+record.ID+" is "+string(want)+" and its isolated copy was swept: ") ||
 				!strings.Contains(log, "1 ended") {
 				t.Fatalf("the service log does not say the copy was swept and one process ended:\n%s", log)

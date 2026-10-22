@@ -81,6 +81,10 @@ var LsofOutput = systemLsof.run
 // LsofDeadline is the deadline the listing's lsof run carries.
 const LsofDeadline = lsofDeadline
 
+// LsofGrace is the grace an lsof run under deadline gives procgroup.Run,
+// which is how long output held open past lsof's exit is waited on.
+var LsofGrace = lsofGrace
+
 // LsofCleanupShare is the part of a run's deadline kept back for ending its
 // group: lsof is killed once the deadline less one LsofCleanupShare-th of it
 // has passed.

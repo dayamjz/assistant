@@ -64,12 +64,23 @@ func TestALandedOrCompleteTaskWithADeadTerminalRaisesNoTerminalGone(t *testing.T
 		}
 	}
 	deadline := time.Now().Add(loopWait)
-	for !l.service.landedWasTried(landed, "pane-landed") {
+	for landedAskedUnder(l.service, landed, "pane-landed") == 0 {
 		if !time.Now().Before(deadline) {
 			t.Fatal("landed.go never asked the cleanup decision under the landed task's Dead terminal")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// landedAskedUnder is how many times landed.go counted an ask of the cleanup
+// decision for the task under ref, read from the memory it keeps.
+func landedAskedUnder(s *Service, id, ref string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tried, ok := s.landedTried[id]; ok && tried.ref == ref {
+		return tried.asks
+	}
+	return 0
 }
 
 // plantFinished plants a delivery task that resolves want, Landed or
