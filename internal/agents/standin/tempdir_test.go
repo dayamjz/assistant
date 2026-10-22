@@ -109,7 +109,7 @@ func TestAKilledTestBinarysTempDirIsReclaimedAtTheNextStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bad, err := os.MkdirTemp(tempRoot(), tempPrefix(tag)+"unparseable-")
+	bad, err := unparseableTempDir(tag)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestAReplacedOwnerIdentityIsReclaimed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, err := os.MkdirTemp(tempRoot(), tempName(tag, "replaced-", agents.Identity{PID: self.PID, Start: self.Start + 1}))
+	path, err := replacedTempDir(tag, agents.Identity{PID: self.PID, Start: self.Start + 1})
 	if err != nil {
 		t.Fatal(err)
 	}

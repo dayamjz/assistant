@@ -22,8 +22,11 @@ with the main module path recorded in the binary, which is the form
 `-trimpath` leaves, and that path is not opened. `TempDir` and
 `SweepTempDirs` take no tag and use only that namespace, and they refuse
 when none is recorded. A package's `TestMain`
-registers and sweeps before tests. A live owner and a name that does not
-parse are left. `tmux.go` owns `standin.Tmux` and
+registers and sweeps before tests. A test file that calls `os.MkdirTemp`
+fails the type-checked scan of those calls; the names `TempDir` cannot
+make, an unparseable one and a replaced identity, are planted from
+`tempdir.go`. A live owner and a name that does not parse are left.
+`tmux.go` owns `standin.Tmux` and
 `terminal_unix.go` owns `standin.AtTerminal`. `owner_unix.go` is the one
 owner watch a test's processes end with (P15), the binary `AtTerminal` runs
 again and the owner sweep for a tmux server included, and its `RunOwned` is

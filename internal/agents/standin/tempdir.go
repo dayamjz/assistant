@@ -216,6 +216,20 @@ func tempName(tag, pattern string, owner agents.Identity) string {
 		strconv.FormatUint(owner.Start, 36) + "-" + pattern
 }
 
+// unparseableTempDir is a directory whose name does not record an owner.
+// SweepTempDirs leaves it. TempDir cannot make one, because every directory
+// it makes records the calling process.
+func unparseableTempDir(tag string) (string, error) {
+	return os.MkdirTemp(tempRoot(), tempPrefix(tag)+"unparseable-")
+}
+
+// replacedTempDir is a directory recorded as id, which a sweep test sets to
+// this process's identifier with a different start time. TempDir would
+// record the real identity, and SweepTempDirs would keep that directory.
+func replacedTempDir(tag string, id agents.Identity) (string, error) {
+	return os.MkdirTemp(tempRoot(), tempName(tag, "replaced-", id))
+}
+
 // tempRoot keeps local socket paths short on the two platforms that host
 // terminal tests. The system temp directory on macOS is much deeper than the
 // socket limit allows once a process identity is included in the name.
