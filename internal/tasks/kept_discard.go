@@ -110,6 +110,14 @@ import (
 // discard by its nature has none of. A copy already gone is not refused:
 // the answer and the digest it carried say the removal was wanted, and
 // nothing stands to lose.
+//
+// What the removal does not cover: the moment between Discard's last read
+// of the copy, the one that checks the digest, and the removal is not
+// closed. Anything written into the copy in it, a file git ignores among
+// it, is destroyed without having been shown, and what Discard returns as
+// lost does not name it; nothing here stops a process writing into the
+// copy while it is removed. internal/service's keptdiscard.go says what
+// the record is left holding then.
 
 // Loss is what discarding a kept copy would lose, as read now.
 type Loss struct {
@@ -522,6 +530,9 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 	}
 	if len(unshown) > 0 {
 		return Loss{}, fmt.Errorf("%w: the default branch now lacks %s, which the discard was not shown as lost", ErrLossChanged, strings.Join(unshown, ", "))
+	}
+	if c.betweenDiscardReadAndRemoval != nil {
+		c.betweenDiscardReadAndRemoval()
 	}
 	if entry.TaskID.IsKnown() {
 		if err := os.RemoveAll(entry.CopyPath); err != nil {

@@ -71,12 +71,22 @@ import (
 // No answer and no confirmation is written while another entry of the copy
 // holds one not yet carried out, a land whose run is not named, a carry on
 // not marked or a discard confirmed (store.ErrKeptWorkCopyOwed, refused
-// with refusedOwed): each still needs the copy where it stands. What is
-// left: an entry a cleanup records for the copy after the confirmation,
-// which it can only do for a copy that changed since, so whose removal the
-// digest refuses unless the change lands in the moment between the
-// removal's last read and the removal, is left open over a copy that is
-// gone, and listed.
+// with refusedOwed): each still needs the copy where it stands.
+//
+// What is left: the moment between the removal's last read of the copy
+// and the removal is not closed (internal/tasks' Discard names it).
+// Anything written into the copy in that moment, a file git ignores, an
+// edit or a deletion among it, is destroyed with the copy without having
+// been shown, and the mark answers and marks the entries all the same, so
+// nothing stays listed for it. A cleanup that keeps the copy then records
+// no new entry for such a change: an entry is keyed by the copy's path and
+// the commits its references and HEAD stand on (store.KeptWorkOf), which a
+// file, an edit or a deletion leaves as they were, so the cleanup finds the
+// entry already standing. Only a change to those commits in that moment
+// has a cleanup record a new entry, kept after the confirmation and so not
+// marked: it is left open over a copy that is gone, and listed. A cleanup
+// that records one before that moment and after the confirmation records
+// it for a copy the digest no longer matches, and the removal is refused.
 
 // # What "person-only" is enforced by, and what it is not
 //

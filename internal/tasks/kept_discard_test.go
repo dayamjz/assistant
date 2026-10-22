@@ -800,3 +800,64 @@ func TestALossNamesEveryPathItDestroysThatNothingElseHolds(t *testing.T) {
 		t.Fatalf("the discarded clone still stands: %v", err)
 	}
 }
+
+// The window between a discard's last read of the copy and the removal is
+// not closed, and this test holds what it leaves to what kept_discard.go's
+// header says, the reviewer's sequence on #475: a file git ignores, written
+// into the clone after Discard's last read and before the removal, is
+// destroyed with it, Discard reports the removal done, and what it returns
+// as lost does not name the file. A cleanup keeping the copy inside the
+// window finds the entry already standing and records no other, since the
+// copy's identity, the path and the commits its references and HEAD stand
+// on, is what it was, so nothing is left to list the file. A change that closes the window
+// fails this test, and the header and internal/service's statement of the
+// window are to be rewritten with it.
+func TestAFileWrittenAfterADiscardsLastReadIsDestroyedUnshown(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/window")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	if err := os.MkdirAll(filepath.Join(tk.copy, ".git", "info"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tk.copy, ".git", "info", "exclude"), []byte("secret.txt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(tk.copy, "secret.txt")
+	var inside KeptEntry
+	s.cleaner.betweenDiscardReadAndRemoval = func() {
+		if err := os.WriteFile(secret, []byte("written inside the window\n"), 0o600); err != nil {
+			t.Error(err)
+		}
+		if inside, err = s.cleaner.Keep(ctx, kept); err != nil {
+			t.Error(err)
+		}
+	}
+	lost, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "")
+	if err != nil {
+		t.Fatalf("Discard on the digest shown, a file written inside the window: %v", err)
+	}
+	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the clone still stands: %v", err)
+	}
+	if slices.ContainsFunc(lost.Files, func(f LostPath) bool { return f.Path == "secret.txt" }) {
+		t.Fatalf("Discard returned %+v as lost; the window is closed, so rewrite the statements of it", lost.Files)
+	}
+	if inside.Entry.ID != got.Entry.ID {
+		t.Fatalf("a cleanup inside the window kept %+v; want entry %d, the one standing", inside.Entry, got.Entry.ID)
+	}
+}
