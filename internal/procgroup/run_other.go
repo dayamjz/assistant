@@ -4,6 +4,7 @@ package procgroup
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"time"
 )
@@ -34,9 +35,5 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 	s.started()
 	stop := context.AfterFunc(ctx, func() { _ = cmd.Process.Kill() })
 	defer stop()
-	waitErr := cmd.Wait()
-	if copyErr := s.finish(grace); waitErr == nil {
-		waitErr = copyErr
-	}
-	return waitErr
+	return errors.Join(cmd.Wait(), s.finish(grace))
 }

@@ -72,3 +72,16 @@ var AvailabilityMessage = availabilityMessage
 // translation of a grant, so a test can derive the command line a role's
 // grant writes rather than restating it.
 var ClaudeGrantFlags = claudeGrantFlags
+
+// The bound of each kind of tmux client and the grace each is run with, so a
+// test of a client that never answers can say when its call must have
+// returned.
+const (
+	TmuxStartBound  = tmuxStartBound
+	TmuxTypeBound   = tmuxTypeBound
+	TmuxReadBound   = tmuxReadBound
+	TmuxEndBound    = tmuxEndBound
+	TmuxClientGrace = tmuxClientGrace
+	// TerminalPoll is how often a readiness wait reads the screen again.
+	TerminalPoll = terminalPoll
+)
