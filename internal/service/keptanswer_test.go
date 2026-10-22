@@ -373,17 +373,19 @@ func keepTaskCopy(t *testing.T, h *home.Home, id string) store.KeptWork {
 	return got.Entry
 }
 
-// A land answer carries HEAD, so an entry whose default branch lacks a
-// commit HEAD does not reach is refused naming that commit, and records
-// nothing. The entries are the real cleanup's, through Keep, over a
+// A land answer carries HEAD, so a copy holding a commit the default
+// branch lacks that HEAD does not reach is refused naming that commit, and
+// records nothing. The entries are the real cleanup's, through Keep, over a
 // delivery task's clone of the upstream holding its own commit on its
-// branch and a second commit on another branch, HEAD on the first. Kept
-// with the upstream unreadable, the entry is not established and a land is
-// refused naming that; kept again with the upstream back, the same entry
-// is established lacking both commits and a land is refused naming the
-// one HEAD does not reach; with that branch deleted the copy is kept as a
-// new entry lacking HEAD's commit alone, and that entry lands. Without the
-// check the entry is answered and the other commit is never carried.
+// branch and a second commit on another branch, HEAD on the first. With
+// the upstream unreadable, what the copy holds is not established now and
+// a land is refused naming that; with the upstream back, a land is refused
+// naming the one commit HEAD does not reach; with that branch deleted the
+// commit is still recorded by HEAD's reflog, which the copy's removal
+// would destroy, so a land is refused naming it still; with the reflogs
+// expired the copy holds nothing HEAD does not carry and the entry kept
+// then, lacking HEAD's commit alone, lands. Without the check the entry is
+// answered and the other commit is never carried.
 func TestALandingIsRefusedWhenHEADLeavesAHeldCommitBehind(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -443,30 +445,27 @@ func TestALandingIsRefusedWhenHEADLeavesAHeldCommitBehind(t *testing.T) {
 		t.Fatal(err)
 	}
 	unestablished := keepTaskCopy(t, h, id)
-	if err := os.Rename(upstream+".gone", upstream); err != nil {
-		t.Fatal(err)
-	}
 	if unestablished.Established() {
 		t.Fatalf("the copy kept with the upstream unreadable reads %+v; want it not established", unestablished)
 	}
 	land := func(under serviceUnderTest, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
-		var out machine.KeptWorkAnswered
-		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
-			Task: id, Hold: entry.Key(), Answer: string(store.KeptLand)}, &out)
-		return out, err
+		return landTask(under, t, id, entry)
 	}
 	withService(t, h, func(under serviceUnderTest) {
 		if _, err := land(under, unestablished); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "not established") {
-			t.Fatalf("landing an unestablished entry = %v; want it refused as not established", err)
+			t.Fatalf("landing with the upstream unreadable = %v; want it refused as not established", err)
 		}
 	})
+	if err := os.Rename(upstream+".gone", upstream); err != nil {
+		t.Fatal(err)
+	}
 
 	both := keepTaskCopy(t, h, id)
 	if both.ID != unestablished.ID || !both.Established() || !slices.Contains(both.Lacks, own) || !slices.Contains(both.Lacks, aside) {
 		t.Fatalf("the copy kept again reads %+v; want entry %d established lacking %s and %s", both, unestablished.ID, own, aside)
 	}
 	withService(t, h, func(under serviceUnderTest) {
-		if _, err := land(under, both); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "holding "+aside+", which") {
+		if _, err := land(under, both); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "holds "+aside+", which") {
 			t.Fatalf("landing an entry HEAD does not reach all of = %v; want it refused naming %s alone", err, aside)
 		}
 		if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), both.ID); err != nil || !still.Open() {
@@ -475,6 +474,12 @@ func TestALandingIsRefusedWhenHEADLeavesAHeldCommitBehind(t *testing.T) {
 	})
 
 	git(t, copyPath, "branch", "--quiet", "-D", "aside")
+	withService(t, h, func(under serviceUnderTest) {
+		if _, err := land(under, both); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "holds "+aside+", which") {
+			t.Fatalf("landing a copy whose HEAD reflog alone records %s = %v; want it refused naming it", aside, err)
+		}
+	})
+	git(t, copyPath, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
 	reaches := keepTaskCopy(t, h, id)
 	if reaches.ID == both.ID || !slices.Equal(reaches.Lacks, []string{own}) {
 		t.Fatalf("the copy kept without the other branch reads %+v; want a new entry lacking %s alone", reaches, own)
@@ -482,6 +487,179 @@ func TestALandingIsRefusedWhenHEADLeavesAHeldCommitBehind(t *testing.T) {
 	withService(t, h, func(under serviceUnderTest) {
 		if out, err := land(under, reaches); err != nil || out.Run == "" {
 			t.Fatalf("landing the entry HEAD reaches all of = %+v, %v; want a run", out, err)
+		}
+	})
+}
+
+// plantKeptDelivery records a delivery task of the repository on branch
+// whose worker is gone and whose copy, a clone of the upstream holding the
+// task's own commit on its branch, is kept as an open entry by the real
+// cleanup and Keep. It returns the task, its copy, the commit and the entry.
+func plantKeptDelivery(t *testing.T, h *home.Home, repository store.Repository, branch string) (string, string, string, store.KeptWork) {
+	t.Helper()
+	id, err := home.NewTaskID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath, err := h.TaskCopy(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.CreateTask(t.Context(), store.Task{
+		ID: id, Shape: store.TaskDelivery, Project: "the parser", Mode: "headless", WorktreePath: copyPath,
+		RepositoryID: store.Known(repository.ID), Branch: store.Known(branch),
+	}, store.Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.BeginTaskAttempt(t.Context(), id, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone"); err != nil {
+		t.Fatal(err)
+	}
+	_ = records.Close()
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	git(t, filepath.Dir(copyPath), "clone", "--quiet", repository.UpstreamURL, copyPath)
+	git(t, copyPath, "checkout", "--quiet", "-b", branch)
+	if err := writeFile(filepath.Join(copyPath, "own.txt"), "the task's own work\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, copyPath, "add", "-A")
+	git(t, copyPath, "commit", "--quiet", "-m", "the task's own commit")
+	own := git(t, copyPath, "rev-parse", "HEAD")
+	entry := keepTaskCopy(t, h, id)
+	if !entry.Established() || !slices.Equal(entry.Lacks, []string{own}) {
+		t.Fatalf("the real Keep recorded %+v; want an entry lacking the task's commit %s alone", entry, own)
+	}
+	return id, copyPath, own, entry
+}
+
+// landTask is the land answer to an entry of a task's copy.
+func landTask(under serviceUnderTest, t *testing.T, task string, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
+	var out machine.KeptWorkAnswered
+	err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+		Task: task, Hold: entry.Key(), Answer: string(store.KeptLand)}, &out)
+	return out, err
+}
+
+// A land answer decides from the copy as it stands, never from what the
+// entry recorded it holding when it was kept, the reviewer's sequence: a
+// delivery task's clone is kept at its commit A, then a commit B is made on
+// a side branch and HEAD returns to A, so the entry still records A alone.
+// Landing the original entry is refused naming B, which HEAD does not
+// carry, and records nothing; with the side branch deleted and the reflogs
+// that record B expired, an annotated tag made on A is refused the same
+// way, since a landing carries no tag; with the tag deleted, and a
+// reference made at a blob A's tree records, which HEAD carries, the same
+// entry lands. Without the read of the copy as it stands the original
+// entry is answered land on A and B never reaches validation.
+func TestALandingRefusesWorkTheCopyGainedSinceItWasKept(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	id, copyPath, own, entry := plantKeptDelivery(t, h, repository, "task/kept")
+	git(t, copyPath, "checkout", "--quiet", "-b", "side")
+	if err := writeFile(filepath.Join(copyPath, "side.txt"), "work made after the copy was kept\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, copyPath, "add", "-A")
+	git(t, copyPath, "commit", "--quiet", "-m", "work on a side branch")
+	side := git(t, copyPath, "rev-parse", "HEAD")
+	git(t, copyPath, "checkout", "--quiet", "task/kept")
+	if head := git(t, copyPath, "rev-parse", "HEAD"); head != own {
+		t.Fatalf("HEAD is %s; want it back at the kept commit %s", head, own)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		if out, err := landTask(under, t, id, entry); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), side) {
+			t.Fatalf("landing the entry kept before the side branch = %+v, %v; want it refused naming %s", out, err, side)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() || still.LandingClaimed() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open and unclaimed", still, err)
+		}
+	})
+
+	git(t, copyPath, "branch", "--quiet", "-D", "side")
+	git(t, copyPath, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+	git(t, copyPath, "tag", "--annotate", "--message", "a release", "release", own)
+	tag := git(t, copyPath, "rev-parse", "release")
+	withService(t, h, func(under serviceUnderTest) {
+		if out, err := landTask(under, t, id, entry); !errors.Is(err, ipc.ErrRefused) ||
+			!strings.Contains(err.Error(), "tag "+tag+" (refs/tags/release)") {
+			t.Fatalf("landing a copy holding an annotated tag = %+v, %v; want it refused naming the tag", out, err)
+		}
+	})
+
+	git(t, copyPath, "tag", "--delete", "release")
+	git(t, copyPath, "update-ref", "refs/kept/blob", git(t, copyPath, "rev-parse", "HEAD:own.txt"))
+	withService(t, h, func(under serviceUnderTest) {
+		out, err := landTask(under, t, id, entry)
+		if err != nil || out.Run == "" {
+			t.Fatalf("landing the copy once it holds nothing HEAD does not carry = %+v, %v; want a run", out, err)
+		}
+		if run, err := recordsOf(t, h).Run(t.Context(), out.Run); err != nil || run.SubmittedHead != own {
+			t.Fatalf("the landing's run reads %+v, %v; want it at %s", run, err, own)
+		}
+	})
+}
+
+// A land answer refuses a file no commit records though git ignores it,
+// the reviewer's sequence: a delivery task's clone is kept at its commit,
+// then a file holding content nothing else holds is written beside it and
+// excluded through .git/info/exclude, so git reports the copy clean.
+// Landing is refused naming the file and records nothing; with the file
+// removed the same entry lands. Without the read of the copy's paths as
+// discard reads them, the entry is answered land and the file is left
+// unsent in a copy the entry no longer speaks for.
+func TestALandingRefusesAFileGitIgnores(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	id, copyPath, own, entry := plantKeptDelivery(t, h, repository, "task/kept")
+	if err := writeFile(filepath.Join(copyPath, ".git", "info", "exclude"), "notes.txt\n"); err != nil {
+		t.Fatal(err)
+	}
+	notes := filepath.Join(copyPath, "notes.txt")
+	if err := writeFile(notes, "content only this file holds\n"); err != nil {
+		t.Fatal(err)
+	}
+	if status := git(t, copyPath, "status", "--porcelain"); status != "" {
+		t.Fatalf("git reports %q in the copy; want it clean, the file ignored", status)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		if out, err := landTask(under, t, id, entry); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "notes.txt") {
+			t.Fatalf("landing a copy holding an ignored file = %+v, %v; want it refused naming notes.txt", out, err)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() || still.LandingClaimed() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open and unclaimed", still, err)
+		}
+	})
+
+	if err := os.Remove(notes); err != nil {
+		t.Fatal(err)
+	}
+	withService(t, h, func(under serviceUnderTest) {
+		out, err := landTask(under, t, id, entry)
+		if err != nil || out.Run == "" {
+			t.Fatalf("landing the copy once the file is gone = %+v, %v; want a run", out, err)
+		}
+		if run, err := recordsOf(t, h).Run(t.Context(), out.Run); err != nil || run.SubmittedHead != own {
+			t.Fatalf("the landing's run reads %+v, %v; want it at %s", run, err, own)
 		}
 	})
 }

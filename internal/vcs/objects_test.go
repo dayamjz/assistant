@@ -147,6 +147,62 @@ func TestNotReachedFromListsWhatOnlyTheNamesHold(t *testing.T) {
 	}
 }
 
+// NotHeldBy answers from rev's whole history: of a commit, trees and blobs
+// HEAD's history holds, a tree and a commit only a commit past HEAD holds,
+// a blob nothing holds, annotated tags on both commits and an object the
+// repository does not hold, it returns exactly the ones HEAD's history does
+// not hold, each once and in order: the past commit and its tree, the
+// loose blob, both tags and the missing object. A blob only an older commit
+// of HEAD's history records, which HEAD's own tree does not, is held.
+func TestNotHeldByAnswersFromTheWholeHistory(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", ".")
+	writeFile(t, filepath.Join(dir, "old.txt"), "only the first commit holds this\n")
+	rawGit(t, dir, "add", "-A")
+	rawGit(t, dir, "commit", "--quiet", "-m", "first")
+	old := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD:old.txt"))
+	rawGit(t, dir, "rm", "--quiet", "old.txt")
+	writeFile(t, filepath.Join(dir, "kept.txt"), "kept\n")
+	rawGit(t, dir, "add", "-A")
+	rawGit(t, dir, "commit", "--quiet", "-m", "kept")
+	kept := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD"))
+	keptTree := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD^{tree}"))
+	keptBlob := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD:kept.txt"))
+	writeFile(t, filepath.Join(dir, "past.txt"), "past\n")
+	rawGit(t, dir, "add", "-A")
+	rawGit(t, dir, "commit", "--quiet", "-m", "past it")
+	past := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD"))
+	pastTree := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD^{tree}"))
+	rawGit(t, dir, "tag", "--annotate", "--message", "on the past", "on-past", past)
+	rawGit(t, dir, "reset", "--quiet", "--hard", kept)
+	rawGit(t, dir, "tag", "--annotate", "--message", "on the kept", "on-kept", kept)
+	onKept := strings.TrimSpace(rawGit(t, dir, "rev-parse", "on-kept"))
+	onPast := strings.TrimSpace(rawGit(t, dir, "rev-parse", "on-past"))
+	writeFile(t, filepath.Join(dir, "loose.txt"), "a blob nothing holds\n")
+	loose := strings.TrimSpace(rawGit(t, dir, "hash-object", "-w", "loose.txt"))
+	missing := strings.Repeat("1", len(kept))
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	objects := []string{kept, keptTree, keptBlob, old, past, pastTree, pastTree, loose, onKept, onPast, missing}
+	got, err := repo.NotHeldBy(ctx(t), "HEAD", objects)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{past, pastTree, loose, onKept, onPast, missing}; !slices.Equal(got, want) {
+		t.Errorf("NotHeldBy = %v; want %v", got, want)
+	}
+	if got, err := repo.NotHeldBy(ctx(t), "HEAD", []string{kept, keptTree, keptBlob, old}); err != nil || len(got) != 0 {
+		t.Errorf("NotHeldBy of what HEAD's history holds = %v, %v; want nothing", got, err)
+	}
+	if _, err := repo.NotHeldBy(ctx(t), missing, []string{kept}); err == nil {
+		t.Error("NotHeldBy from a commit the repository does not hold succeeded; want an error")
+	}
+}
+
 // ReflogValues reads every value of every reflog, previous values and
 // values of any type among them: a commit a reset left recorded only as the
 // previous value of the one entry left in HEAD's reflog, which git log

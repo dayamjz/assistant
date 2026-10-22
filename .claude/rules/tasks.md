@@ -35,7 +35,8 @@ paths: ["internal/tasks/**"]
   proof. And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
   refusals are a copy kept for its work; `kept_test.go` places every reason.
-- `kept_discard.go` is the copy's half of PRD section 6's discard: `Loss`
+- `kept_discard.go` is the copy's half of PRD section 6's discard, and
+  `Loss` is also what `internal/service`'s land answer decides from: `Loss`
   reads what removing the copy would lose, the commits the default branch
   lacks that anything the removal destroys names reaches (HEAD, a
   reference, a root reference such as ORIG_HEAD, a reflog entry by either

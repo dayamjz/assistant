@@ -224,6 +224,46 @@ func (r *Repository) NotReachedFrom(ctx context.Context, reach Reach, incorporat
 	return commits, others, nil
 }
 
+// NotHeldBy returns, of objects, each once and in their order, the ones the
+// history of rev does not hold: everything git's walk from rev lists, every
+// commit rev reaches and every tree and blob those commits record (git
+// rev-list --objects rev), is held, and nothing else is. An annotated tag
+// is never in that walk, so a tag is always returned, and so is an object
+// the repository does not hold at all. rev is anything that names a
+// commit. The walk is of rev's whole history, so it costs that history's
+// size; nothing is walked when objects is empty.
+func (r *Repository) NotHeldBy(ctx context.Context, rev string, objects []string) ([]string, error) {
+	for _, object := range objects {
+		if err := checkArg("object", object); err != nil {
+			return nil, err
+		}
+	}
+	if len(objects) == 0 {
+		return nil, nil
+	}
+	from, err := r.ResolveCommit(ctx, rev)
+	if err != nil {
+		return nil, err
+	}
+	out, err := r.run(ctx, "objects-held", "rev-list", "--objects", "--end-of-options", from)
+	if err != nil {
+		return nil, err
+	}
+	held := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if object, _, _ := strings.Cut(line, " "); object != "" {
+			held[object] = true
+		}
+	}
+	var missing []string
+	for _, object := range objects {
+		if !held[object] && !slices.Contains(missing, object) {
+			missing = append(missing, object)
+		}
+	}
+	return missing, nil
+}
+
 // ObjectType is the type git records object under: commit, tag, tree or
 // blob. An object the repository does not hold is an error.
 func (r *Repository) ObjectType(ctx context.Context, object string) (string, error) {

@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"slices"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -27,29 +28,55 @@ import (
 // # Land
 //
 // PRD section 6: "the program carries the work to the gate as a delivery
-// and asks nothing it would not ask of a push". The entry's copy must
-// stand, and must hold nothing a commit does not record: a tracked change,
-// an untracked file or a stash is refused, because a push carries commits
-// and nothing else, and committing a person's uncommitted work is not this
-// answer's to decide. Its owner must name a branch of a project to land on:
-// a run always does, and a task does when it is a delivery task; an
-// investigation's copy is refused, since its delivery is a promotion. The
-// copy's HEAD is then fetched into the project's gate under
-// refs/assistant/kept/<entry> and a run of the owner's branch is started at
-// it through startPushedBranch, the path a push to the gate takes, so the
-// run supersedes the branch's run in flight, takes the nine stages and
-// holds where a push's would. Its intent is the owner's: a task's, as its
-// worker's push would carry, or the owner run's own.
+// and asks nothing it would not ask of a push". Its owner must name a
+// branch of a project to land on: a run always does, and a task does when
+// it is a delivery task; an investigation's copy is refused, since its
+// delivery is a promotion. The copy's HEAD is then fetched into the
+// project's gate under refs/assistant/kept/<entry> and a run of the
+// owner's branch is started at it through startPushedBranch, the path a
+// push to the gate takes, so the run supersedes the branch's run in
+// flight, takes the nine stages and holds where a push's would. Its intent
+// is the owner's: a task's, as its worker's push would carry, or the owner
+// run's own.
 //
-// What is landed is HEAD, and the entry is answered as a whole, so HEAD
-// must reach every commit the entry records the default branch lacking,
-// store.KeptWork.Lacks: one it does not reach, a commit on another
-// reference of the copy, would be answered and never carried, which is kept
-// work gone silent (P15). Such an entry is refused naming the commits HEAD
-// leaves behind, and nothing is recorded. An entry whose basis is not
-// established (store.KeptWork.Established) says what the copy stands on
-// and nothing about what of it is at risk, so it is refused too, naming
-// why, until a later cleanup of the unchanged copy establishes it.
+// What is landed is HEAD's commit, and the entry is answered as a whole,
+// so the copy must hold nothing a landing leaves behind, decided from the
+// copy as it stands by the one computation a discard shows,
+// internal/tasks' Loss, and never from the entry's record of the copy
+// when it was kept (store.KeptWork.Lacks), which says nothing of what the
+// copy gained since: work answered and never carried is kept work gone
+// silent (P15). So a landing is refused, naming what it would leave
+// behind, when Loss shows a path of the working tree or the index no
+// commit records, a changed, new, staged or deleted path, a file git
+// ignores among them, since a push carries commits and nothing else and
+// committing a person's uncommitted work is not this answer's to decide;
+// when it shows one of git's indicators, a tracked change, an untracked
+// file or a task's clone's stash; and when it shows a commit the default
+// branch lacks that HEAD does not reach, or another object HEAD's history
+// does not hold (leftBehind): a commit on another reference, in a stash
+// or recorded only by a reflog entry's either value, a commit amended or
+// rebased away among them, and an annotated tag, which a landing never
+// carries. A default branch that cannot be read now refuses it as not
+// established. A run's worktree is read as a discard reads it, so the
+// gate's references, reflogs and stash, which stand after it, refuse
+// nothing.
+//
+// What the check does not cover, and what that costs. The entries of the
+// repository directory Loss shows (LostRepository: the configuration, a
+// hook, info/exclude, the pointer files git keeps) are not refused, since
+// every clone holds some that differ from a new repository's and a
+// landing would then refuse every copy; a hook or a configuration of the
+// person's own is not carried and is not named. Loss lists what fails
+// toward showing, so the refusal does too: an annotated tag or a commit
+// the copy holds through a name the upstream also advertises, a release
+// tag cloned from the person's checkout among them, refuses a landing as
+// work left behind although the upstream holds it, and so does a commit
+// only a reflog records though the copy's own branch carries what
+// replaced it; the person expires the record or removes the name and
+// answers again, or lands by hand. And the moment between the check and
+// the fetch of HEAD's commit is not closed: what the copy gains in it is
+// neither carried nor named, and the landing carries the commit the check
+// read, by its identifier, whatever HEAD names by then.
 //
 // The checks run before anything is recorded, so a refused land records
 // nothing. A landing is then recorded as two facts, so the entry is never
@@ -81,12 +108,14 @@ import (
 // recorded (landedRunSince), which it names rather than starting twice. A
 // run with no reference or no checkpoint, a create stopped before its
 // reference was written, pending or ended, is not that run: nothing of the
-// work reached validation through it, so the retry starts another. What
-// that does not cover: a copy that changed after the claim lands what it
-// holds when the landing is completed; and a completion that cannot read
-// what it would land leaves the claim standing, the entry open and listed
-// and no other answer taken on the copy, until a later call or start
-// carries it out.
+// work reached validation through it, so the retry starts another. A
+// completion checks the copy again as it stands (landingOf), so a copy
+// that changed after the claim lands what it holds then or is refused for
+// what it would leave behind. What that does not cover: a completion
+// refused so, or one that cannot read what it would land, leaves the claim
+// standing, the entry open and listed and no other answer taken on the
+// copy, until a later call or start carries it out once the copy holds
+// nothing a landing leaves behind; withdrawing such a claim is #530's.
 
 // answerKeptWork is MethodKeptWorkAnswer, on this file's terms.
 func (s *Service) answerKeptWork(ctx context.Context, req ipc.Request, r machine.KeptWorkAnswerRequest) (machine.KeptWorkAnswered, error) {
@@ -246,51 +275,85 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 		return landing{}, err
 	}
 	out.repository, out.branch = repository, branch
-	if _, err := os.Lstat(entry.CopyPath); errors.Is(err, os.ErrNotExist) {
+	// What the copy holds is read as it stands now, by the one computation
+	// a discard shows (tasks.Loss), never from the entry's record of the
+	// copy when it was kept.
+	loss, err := s.cleaner.Loss(ctx, entry)
+	switch {
+	case errors.Is(err, tasks.ErrCopyGone):
 		return refuse("its copy at " + entry.CopyPath + " is gone")
-	} else if err != nil {
-		return landing{}, fmt.Errorf("service: reading the kept copy at %s: %w", entry.CopyPath, err)
+	case errors.Is(err, tasks.ErrLossUnestablished):
+		return refuse("what its copy holds that the default branch lacks is not established now (" + err.Error() +
+			"), so a landing cannot say what it would leave behind")
+	case err != nil:
+		return landing{}, err
 	}
-	copyRepo, err := vcs.OpenWorktree(ctx, entry.CopyPath, vcs.WithRedactor(redact.New()))
-	if err != nil {
-		return landing{}, fmt.Errorf("service: opening the kept copy at %s: %w", entry.CopyPath, err)
-	}
-	inv, err := copyRepo.Inventory(ctx)
-	if err != nil {
-		return landing{}, fmt.Errorf("service: reading the kept copy at %s: %w", entry.CopyPath, err)
+	var paths []string
+	for _, f := range loss.Files {
+		if f.Kind != tasks.LostRepository {
+			paths = append(paths, string(f.Kind)+" "+f.Path)
+		}
 	}
 	switch {
-	case inv.Dirty:
+	case len(paths) > 0:
+		return refuse("its copy holds what no commit records, which a landing would leave behind: " + strings.Join(paths, ", ") +
+			"; a landing carries commits only, so commit or remove them in " + entry.CopyPath)
+	case loss.Dirty:
 		return refuse("its copy holds a tracked change no commit records, and a landing carries commits only; commit or discard it in " + entry.CopyPath)
-	case inv.Untracked:
+	case loss.Untracked:
 		return refuse("its copy holds a file no commit records, and a landing carries commits only; commit or remove it in " + entry.CopyPath)
-	case inv.Stash:
+	case loss.Stash:
 		return refuse("its copy holds a stash, and a landing carries commits only; apply or drop it in " + entry.CopyPath)
-	case inv.Head.Commit == "":
+	case loss.Head == "":
 		return refuse("its copy's HEAD names no commit")
 	}
-	out.head = inv.Head.Commit
-	if !entry.Established() {
-		return refuse("what its copy holds that the default branch lacks is not established (" +
-			entry.Unestablished.Or("the entry was recorded before the store kept that") +
-			"), so a landing cannot say what it would leave behind; the next cleanup of the unchanged copy establishes it")
-	}
-	var behind []string
-	for _, held := range entry.Lacks {
-		reaches, err := copyRepo.IsAncestor(ctx, held, out.head)
-		if err != nil {
-			return landing{}, fmt.Errorf("service: reading whether HEAD of the kept copy at %s reaches %s: %w", entry.CopyPath, held, err)
-		}
-		if !reaches {
-			behind = append(behind, held)
-		}
+	out.head = loss.Head
+	behind, err := leftBehind(ctx, entry, loss)
+	if err != nil {
+		return landing{}, err
 	}
 	if len(behind) > 0 {
-		return refuse(fmt.Sprintf("a landing carries HEAD, %s, and the copy was kept holding %s, which HEAD does not reach, so landing "+
-			"it would leave that behind; put it on the branch in %s first, or land what HEAD holds by hand",
+		return refuse(fmt.Sprintf("a landing carries HEAD, %s, and its copy holds %s, which HEAD does not carry, so landing it would "+
+			"leave that behind: a commit on another reference, in a stash or recorded only by a reflog, or an object a name "+
+			"records; put it on the branch or remove it in %s first, or land what HEAD holds by hand",
 			out.head, strings.Join(behind, ", "), entry.CopyPath))
 	}
 	return out, nil
+}
+
+// leftBehind is what of loss a landing of HEAD does not carry, each named
+// for a refusal: every commit lost that HEAD does not reach, and every
+// other object lost that HEAD's history does not hold (vcs.NotHeldBy), an
+// annotated tag always among them, since a landing carries no tag.
+func leftBehind(ctx context.Context, entry store.KeptWork, loss tasks.Loss) ([]string, error) {
+	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, vcs.WithRedactor(redact.New()))
+	if err != nil {
+		return nil, fmt.Errorf("service: opening the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	var behind []string
+	for _, lost := range loss.Lacks {
+		reaches, err := copied.IsAncestor(ctx, lost, loss.Head)
+		if err != nil {
+			return nil, fmt.Errorf("service: reading whether HEAD of the kept copy at %s reaches %s: %w", entry.CopyPath, lost, err)
+		}
+		if !reaches {
+			behind = append(behind, lost)
+		}
+	}
+	objects := make([]string, len(loss.Objects))
+	for i, o := range loss.Objects {
+		objects[i] = o.Object
+	}
+	missing, err := copied.NotHeldBy(ctx, loss.Head, objects)
+	if err != nil {
+		return nil, fmt.Errorf("service: reading what HEAD of the kept copy at %s holds: %w", entry.CopyPath, err)
+	}
+	for _, o := range loss.Objects {
+		if slices.Contains(missing, o.Object) {
+			behind = append(behind, o.Type+" "+o.Object+" ("+strings.Join(o.Names, ", ")+")")
+		}
+	}
+	return behind, nil
 }
 
 // completeLanding carries out a land answer already recorded on the entry,

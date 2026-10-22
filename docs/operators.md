@@ -536,23 +536,29 @@ An entry is answered the way a hold is: `assistant --task ID --answer land
 `assistant --json status` shows the entry's number and owner. This build
 takes land: the copy's commit is brought into the gate and a run of the
 entry's branch starts at it, as a push to the gate would start one, and the
-entry's tasks start. A landing is refused, recording nothing, when the copy
-holds a change no commit records, a file no commit records or a stash,
-because a landing carries commits only; and for an investigation's copy,
+entry's tasks start. A landing decides from the copy as it stands when you
+answer, by the same reading a discard shows you, never from what the entry
+recorded when the copy was kept. It carries the copy's HEAD and commits
+only, so it is refused, recording nothing, when the copy holds a path no
+commit records (a changed, new, staged or deleted file, one git ignores
+included, each named), a stash, or anything HEAD does not carry that the
+default branch lacks: a commit on another branch, one only a reflog
+records (an amended or rebased-away commit among them), or a tag. Put that
+work on the branch, or remove it (`git reflog expire` for a reflog's
+record), and answer again. It is refused for an investigation's copy too,
 whose delivery is a promotion. The entry stays open and listed until the
 run has started, and only then is it answered land; if the run cannot be
 started, the answer is refused naming why and the entry stays open for
 another answer. A land answer a stopped service recorded and did not carry
-out is carried out at the next start. A landing carries the
-copy's HEAD, so an entry recorded holding a commit HEAD does not reach is
-refused naming it.
+out is carried out at the next start, checked again the same way.
 
 Carry on, `--answer carry-on` with the same flags, creates a new task of
 the same project, shape and branch whose copy is the kept copy, moved to
 the new task's own place and asserted the way every task's copy is before
 anything is written into it; the task the copy outlived keeps its record,
-the new task's instructions are the old intake text with a note saying
-what is already there, and the task dispatches into the copy as any task
+the new task's instructions are the old intake text, or for a promoted
+task the intent it was promoted with, with a note saying what is already
+there, and the task dispatches into the copy as any task
 does. The entry stays open and listed until the new task owns the copy,
 and only then is it answered carry on; if the new task cannot be created
 (its role is no longer configured, say), nothing is moved, the answer is
