@@ -55,7 +55,11 @@ func rebasesOf(t *testing.T, records *store.Store, run string) []store.RunRebase
 // rewritten. A second replay, after a commit of the run's own on top of the
 // first one's result, is recorded as carrying the submitted commit too,
 // although that commit is no longer in its history: the first record's head
-// is. And a head already on the base records nothing.
+// is. It is not recorded once that commit of the run's took the submitted
+// change out or rewrote its lines, although the replay itself was faithful:
+// a row names a rebased head that holds what the run was submitted. A replay
+// that left the submitted work out records nothing either. And a head
+// already on the base records nothing.
 func TestTheRebaseStageRecordsEachRebaseThatCarriedTheSubmittedWork(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	principles.Cite(t, principles.P12)
@@ -120,6 +124,63 @@ func TestTheRebaseStageRecordsEachRebaseThatCarriedTheSubmittedWork(t *testing.T
 		}
 		if r := got[1]; r.Submitted != submitted || r.Before != fixed || r.Onto != onto || r.After != run.head || r.After == first {
 			t.Fatalf("the second record is %+v, want %s replayed onto %s as %s, carrying %s", r, fixed, onto, run.head, submitted)
+		}
+	})
+
+	t.Run("a second replay after a fix round that removed the submitted work records nothing", func(t *testing.T) {
+		run := newPushRun(t)
+		records := recordingRun(t, run)
+		submitted := run.head
+		run.commitOnTopOfUpstream(t, "main", "elsewhere.go", "package subject\n\n// landed first\n")
+		run.rebase(t)
+		if got := rebasesOf(t, records, run.runID); len(got) != 1 {
+			t.Fatalf("the first replay recorded %+v, want one rebase", got)
+		}
+
+		// A fix round that takes the submitted change back out, then the base
+		// moving again before the stage runs again. The second replay is
+		// faithful to what it replayed, so only the submitted commit's
+		// content tells this rebase from one that carried the work.
+		git(t, run.copy, "rm", "--quiet", "change.go")
+		git(t, run.copy, "commit", "--quiet", "-m", "a fix round that removes the change")
+		fixed := git(t, run.copy, "rev-parse", "HEAD")
+		run.head = fixed
+		run.commitOnTopOfUpstream(t, "main", "later.go", "package subject\n\n// landed later\n")
+
+		run.rebase(t)
+		if run.head == fixed {
+			t.Fatalf("the second rebase left the head at %s, so it rewrote nothing", fixed)
+		}
+		if _, err := tryGit(run.copy, "cat-file", "-e", run.head+":change.go"); err == nil {
+			t.Fatalf("the rebased head %s still holds change.go, so the case is not exercised", run.head)
+		}
+		if got := rebasesOf(t, records, run.runID); len(got) != 1 {
+			t.Fatalf("a rebase whose head %s no longer holds the submitted %s's change was recorded as carrying it: %+v",
+				run.head, submitted, got[1:])
+		}
+	})
+
+	t.Run("a second replay after a fix round that rewrote the submitted lines records nothing", func(t *testing.T) {
+		run := newPushRun(t)
+		records := recordingRun(t, run)
+		run.commitOnTopOfUpstream(t, "main", "elsewhere.go", "package subject\n\n// landed first\n")
+		run.rebase(t)
+
+		// The cost the rebaserecord.go comment states: a fix round that
+		// rewrites the submitted commit's own lines leaves a head that no
+		// longer holds them as submitted, so no row follows it.
+		write(t, run.copy, "change.go", "package subject\n\n// the change, as the fix round rewrote it\n")
+		git(t, run.copy, "commit", "--quiet", "-am", "a fix round that rewrites the change")
+		rewritten := git(t, run.copy, "rev-parse", "HEAD")
+		run.head = rewritten
+		run.commitOnTopOfUpstream(t, "main", "later.go", "package subject\n\n// landed later\n")
+
+		out := run.rebase(t)
+		if len(out.Report.Findings) != 0 || run.head == rewritten {
+			t.Fatalf("the second rebase did not replay %s cleanly (head %s, report %+v), so the case is not exercised", rewritten, run.head, out.Report)
+		}
+		if got := rebasesOf(t, records, run.runID); len(got) != 1 {
+			t.Fatalf("a rebase of a fix round that rewrote the submitted lines was recorded: %+v", got[1:])
 		}
 	})
 
