@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // ctrlBreakEvent is CTRL_BREAK_EVENT, the console control event that can be
@@ -64,7 +66,7 @@ func terminateTree(proc *os.Process, grace time.Duration, leaderRunning bool, st
 // taskkill is the command that forcefully ends the tree rooted at pid, for
 // runTreeKill to run.
 func taskkill(pid int) *exec.Cmd {
-	return exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid))
+	return procgroup.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid))
 }
 
 // sendCtrlBreak addresses a console control event at the group rooted at pid.

@@ -218,6 +218,12 @@ type StageDeps struct {
 	// pushed one. Its zero value composes nothing, so an unwired StageDeps
 	// tells a reviewer no knowledge rather than a guess at it.
 	knowledge knowledge.Knowledge
+	// rebases is the run rebase record the rebase body writes every clean
+	// replay of the submitted work to, so a later cleanup can follow a
+	// rewritten commit to the one the run published. It is build-scoped for
+	// the reason waits is, and unexported on the same terms; rebaserecord.go
+	// owns why it exists and what a nil record leaves.
+	rebases RebaseRecords
 	// slots is the set of command slots a stage's command takes one of
 	// before it starts. Nil is hostCommandSlots, the one set every run in
 	// this process shares, so an unwired StageDeps is bounded like a wired

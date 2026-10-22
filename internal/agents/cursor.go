@@ -533,6 +533,11 @@ func (r *cursorRunner) sweep(ctx context.Context, dir string) {
 //
 // This describes what the adapter reads, not what the agent guarantees to
 // write. An envelope this adapter cannot read is FailureOutput.
+//
+// The usage keys are the ones cursor-agent 2026.10.19-6bbf2c4 printed,
+// recorded in testdata/cursor-print-2026.10.19.json: camelCase, with cache
+// creation as cacheWriteTokens. That CLI printed no model and no turn count,
+// so on its output those read as unnamed and unreported.
 type cursorEnvelope struct {
 	Subtype   string   `json:"subtype"`
 	IsError   bool     `json:"is_error"`
@@ -545,10 +550,10 @@ type cursorEnvelope struct {
 	// would collapse the two here, where the difference is still knowable.
 	NumTurns *int64 `json:"num_turns"`
 	Usage    struct {
-		InputTokens              *int64 `json:"input_tokens"`
-		OutputTokens             *int64 `json:"output_tokens"`
-		CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
-		CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
+		InputTokens      *int64 `json:"inputTokens"`
+		OutputTokens     *int64 `json:"outputTokens"`
+		CacheReadTokens  *int64 `json:"cacheReadTokens"`
+		CacheWriteTokens *int64 `json:"cacheWriteTokens"`
 	} `json:"usage"`
 }
 
@@ -558,8 +563,8 @@ func (e cursorEnvelope) usage() Usage {
 	return Usage{
 		InputTokens:         reportedCount(e.Usage.InputTokens),
 		OutputTokens:        reportedCount(e.Usage.OutputTokens),
-		CacheReadTokens:     reportedCount(e.Usage.CacheReadInputTokens),
-		CacheCreationTokens: reportedCount(e.Usage.CacheCreationInputTokens),
+		CacheReadTokens:     reportedCount(e.Usage.CacheReadTokens),
+		CacheCreationTokens: reportedCount(e.Usage.CacheWriteTokens),
 		Turns:               reportedCount(e.NumTurns),
 	}
 }

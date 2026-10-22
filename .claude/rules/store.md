@@ -55,6 +55,9 @@ paths: ["internal/store/**"]
   run of a reserved repository (`ErrRepositoryBeingRemoved`), and nothing
   refuses a kept work entry over a reservation. internal/service releases a
   reservation whose owner is gone when it opens.
+- runRebaseMigration's `run_rebase` is the run rebase record the rebase
+  stage writes through `RecordRunRebase`, held to the run row's submitted
+  commit (`ErrRebaseNotOfRun`), written once, and gone only with its run.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number
   what they append from the shipped list rather than spelling a version out.

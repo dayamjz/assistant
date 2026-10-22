@@ -3,11 +3,12 @@
 // or its context ends. It is PRD section 8's "the program runs in a process
 // group that the invoker ends when the call returns or times out", as one
 // mechanism the packages that invoke short-lived programs share rather than
-// each writing their own: internal/vcs runs git through it,
-// internal/forge runs gh through it, internal/stages runs a configured
-// command line through it, internal/agents runs its forceful tree kill,
-// lsof and its tmux clients through it, and internal/managed runs
-// launchctl and systemctl through it.
+// each writing their own. internal/vcs runs git through it, internal/forge
+// gh, internal/stages a configured command line, internal/agents its
+// forceful tree kill, lsof and its tmux clients, internal/managed launchctl
+// and systemctl, and internal/journey the build of the binary it tests.
+// internal/procgroup/guard fails the build on a program started anywhere
+// else that its exception list does not name.
 //
 // It decides nothing about what a program's exit means. Run returns what
 // os/exec's Wait reported joined to exec.ErrWaitDelay when the output did not
@@ -59,8 +60,19 @@ package procgroup
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"time"
 )
+
+// Command returns the command that runs name with args, not yet started,
+// for Run. It is exec.Command and nothing more, here so that no package but
+// this one names os/exec's constructor, which internal/procgroup/guard holds
+// them to. Building a command here does not put it on this package's terms;
+// only Run does, and the guard fails a call to one of *exec.Cmd's starting
+// methods outside this package as well.
+func Command(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
+}
 
 // ErrAbandoned is Run's answer when the context ended, the group was sent
 // SIGKILL, and the leader still had not exited within the grace. The leader is

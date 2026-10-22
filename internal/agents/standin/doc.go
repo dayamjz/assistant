@@ -169,6 +169,19 @@
 // on the terms serveCodexExec and codexWire state. Call.Session reads the
 // thread after its resume subcommand.
 //
+// NewCursor's one-shot invocations are `cursor-agent --print --output-format
+// json`, told apart from the Claude Code adapter's by the grant flag only the
+// Cursor adapter writes, --mode or --force, before the "--". The prompt is
+// the one word after it, and a scripted envelope is written as the CLI's
+// result object, camelCase usage keys and all, on the terms serveCursorPrint
+// and cursorWire state.
+//
+// Where a CLI's output was recorded, internal/agents/testdata holds it, and
+// TestTheModelledUsageKeysAreTheRecordedOnes holds each one-shot wire's usage
+// keys here to the keys that recording carries, so a key the model drops or
+// misspells fails there rather than reading as unreported in every test
+// that runs against it.
+//
 // Line mode is the scripted adapter's: no --print at all, and no screen
 // reader flag. NewWorker builds
 // agents.ScriptedFactory, which starts one. The worker reads its standard
