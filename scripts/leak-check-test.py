@@ -65,8 +65,10 @@ class LeakCheckTest(unittest.TestCase):
         new = {str(p): (1, i, "directory") for i, p in enumerate([
             root / "com.apple.devicecheckd", root / "com.apple.x" / "inner",
             root / "xcrun_db", root / ".LINKS" / "ABC",
+            root / "TemporaryItems" / "NSIRD_xcodebuild_yh1fJd",
             root / "TestLeak123", root / "gitconfig9",
             other / "com.apple.devicecheckd", other / "xcrun_db",
+            other / "TemporaryItems",
         ])}
         messages, aside = check.differences(({}, {}), ({}, new), {}, root)
         self.assertEqual(sorted(messages), sorted([
@@ -74,11 +76,12 @@ class LeakCheckTest(unittest.TestCase):
             f"LEAK directory {root / 'gitconfig9'}",
             f"LEAK directory {other / 'com.apple.devicecheckd'}",
             f"LEAK directory {other / 'xcrun_db'}",
+            f"LEAK directory {other / 'TemporaryItems'}",
         ]))
-        self.assertEqual(len(aside), 4)
+        self.assertEqual(len(aside), 5)
         # With no root, as when TMPDIR is the per-user temp dir, none is aside.
         messages, aside = check.differences(({}, {}), ({}, new), {}, None)
-        self.assertEqual((len(messages), aside), (8, []))
+        self.assertEqual((len(messages), aside), (10, []))
 
     def test_apple_temp_root_is_off_when_tmpdir_shares_it(self):
         if sys.platform != "darwin":

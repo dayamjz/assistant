@@ -163,7 +163,8 @@ def apple_owned(new_pids):
 
 # Entries Apple's own tools make directly in the per-user temp dir
 # (getconf DARWIN_USER_TEMP_DIR), which they find through confstr and not
-# TMPDIR: xcrun's cache, and the directories launchd's Apple agents keep there.
+# TMPDIR: xcrun's cache, the directories launchd's Apple agents keep there,
+# and the one Foundation makes item-replacement directories in.
 # Each is set aside with everything under it, only in that directory, and only
 # when TMPDIR is another directory, so the temporary files of go, git, tmux and
 # the tests (which follow TMPDIR) can never land under one. Any other new name
@@ -172,6 +173,8 @@ APPLE_TEMP_NAMES = {
     "xcrun_db",             # xcrun's lookup cache, written by the cgo toolchain
     ".LINKS",               # Apple framework hard-link staging
     "betaenrollmentagent",  # the beta enrollment agent's scratch directory
+    "TemporaryItems",       # Foundation's NSIRD_<program>_* directories; CI's
+                            # macOS runner left xcodebuild's plugin cache in one
 }
 APPLE_TEMP_PREFIX = "com.apple."  # one directory per Apple agent, by bundle id
 
