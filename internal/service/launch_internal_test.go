@@ -33,7 +33,13 @@ type launchSubject struct {
 // standin.New's, the shipped adapter's stand-in, does not.
 func newLaunchSubject(t *testing.T, agent *standin.Agent) *launchSubject {
 	t.Helper()
-	sub := newDispatchSubject(t)
+	return newLaunchSubjectAs(t, agent, "")
+}
+
+// newLaunchSubjectAs is newLaunchSubject over a task recorded with role.
+func newLaunchSubjectAs(t *testing.T, agent *standin.Agent, role string) *launchSubject {
+	t.Helper()
+	sub := newDispatchSubjectAs(t, role)
 	sub.service.catalog = agents.NewCatalog(fixedRunner{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
 	sub.service.cfg = config.Defaults()
 	sub.service.registry = newRegistry()
@@ -452,29 +458,33 @@ func TestAWorkerRoleStartsTheContextWindowItNames(t *testing.T) {
 // A worker role whose context window the routed adapter has not declared on
 // that model is refused before the worker starts: a recorded route-refused
 // naming the role and the window, the task Failed from it, and no worker
-// started at the standard window in its place.
+// started at the standard window in its place. A task that names no role
+// resolves the worker role, and one that names a role is refused under its
+// own name.
 func TestAnUndeclaredWorkerContextWindowIsRefusedBeforeLaunch(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name string
-		role config.Role
+		name     string
+		taskRole string
+		role     config.Role
 	}{
-		{"haiku at 1m", config.Role{Provider: "anthropic", Type: "haiku", Version: "4.5", ContextWindow: config.Context1M}},
-		{"a window with no model", config.Role{ContextWindow: config.Context1M}},
+		{"haiku at 1m", "", config.Role{Provider: "anthropic", Type: "haiku", Version: "4.5", ContextWindow: config.Context1M}},
+		{"a window with no model", "", config.Role{ContextWindow: config.Context1M}},
+		{"a named role", "pages", config.Role{Provider: "anthropic", Type: "haiku", Version: "4.5", ContextWindow: config.Context1M}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			undeclaredWorkerWindowIsRefused(t, tc.role)
+			undeclaredWorkerWindowIsRefused(t, tc.taskRole, tc.role)
 		})
 	}
 }
 
-func undeclaredWorkerWindowIsRefused(t *testing.T, role config.Role) {
+func undeclaredWorkerWindowIsRefused(t *testing.T, taskRole string, role config.Role) {
 	t.Helper()
 	ctx := t.Context()
-	subject := newLaunchSubject(t, claudeWorkerStandIn(t))
+	subject := newLaunchSubjectAs(t, claudeWorkerStandIn(t), taskRole)
 	role.Agent = subject.agent.Runner().Name()
-	subject.service.cfg.Roles = config.Roles{config.RoleWorker: role}
+	subject.service.cfg.Roles = config.Roles{config.TaskRoleName(taskRole): role}
 	d, err := subject.service.dispatchTask(ctx, subject.task)
 	if err != nil {
 		t.Fatalf("dispatching: %v", err)
@@ -491,18 +501,10 @@ func undeclaredWorkerWindowIsRefused(t *testing.T, role config.Role) {
 	if resolved.State.State != taskstate.Failed || resolved.State.Basis.EventKind != routeRefusedKind {
 		t.Fatalf("the task resolves %+v, want Failed from route-refused", resolved.State)
 	}
-	events, err := subject.records.TaskEvents(ctx, subject.task, 0, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var detail string
-	for _, e := range events {
-		if e.Kind == routeRefusedKind {
-			detail = e.Detail
-		}
-	}
-	if !strings.Contains(detail, "the worker role") || !strings.Contains(detail, "context 1m") {
-		t.Fatalf("route-refused detail %q does not name the worker role and context 1m", detail)
+	detail := routeRefusedDetail(t, subject)
+	want := "the " + config.TaskRoleName(taskRole) + " role"
+	if !strings.Contains(detail, want) || !strings.Contains(detail, "context 1m") {
+		t.Fatalf("route-refused detail %q does not name %s and context 1m", detail, want)
 	}
 	if _, _, ok := subject.service.sessionOf(subject.task); ok {
 		t.Fatal("the service holds a session for the refused launch")
@@ -512,6 +514,23 @@ func undeclaredWorkerWindowIsRefused(t *testing.T, role config.Role) {
 			t.Fatalf("a worker was started for the refused launch: %s", call)
 		}
 	}
+}
+
+// routeRefusedDetail is the detail of the task's last route-refused event,
+// empty when it has none.
+func routeRefusedDetail(t *testing.T, subject *launchSubject) string {
+	t.Helper()
+	events, err := subject.records.TaskEvents(t.Context(), subject.task, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail string
+	for _, e := range events {
+		if e.Kind == routeRefusedKind {
+			detail = e.Detail
+		}
+	}
+	return detail
 }
 
 // claudeWorkerStandIn is a stand-in worker under the shipped Claude Code

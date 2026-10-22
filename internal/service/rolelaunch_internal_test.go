@@ -112,29 +112,7 @@ func TestReviewAndFixRolesStartTheAgentTheyName(t *testing.T) {
 	if _, err := built.stages.Run(ctx, agents.PurposeLint, inv); err != nil {
 		t.Fatalf("lint: %v", err)
 	}
-	if _, err := s.store.UpsertRepository(ctx, store.Repository{
-		ID: "repo-1", WorkingPath: dir, UpstreamURL: "https://example.test/one.git", DefaultBranch: "main",
-	}); err != nil {
-		t.Fatalf("UpsertRepository: %v", err)
-	}
-	build, err := store.CurrentBuild()
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := s.store.CreateRun(ctx, store.Run{
-		ID: "run-1", RepositoryID: "repo-1", Branch: "topic", SubmittedHead: "abc",
-		Intent: "work", IntentSource: "push", Build: build, ConfigDigest: "cfg",
-	})
-	if err != nil {
-		t.Fatalf("CreateRun: %v", err)
-	}
-	fixer, err := built.runs.Fixer(ctx, run.ID)
-	if err != nil {
-		t.Fatalf("Fixer: %v", err)
-	}
-	if _, err := fixer.Apply(ctx, inv); err != nil {
-		t.Fatalf("fix: %v", err)
-	}
+	applyFix(t, s, built, inv)
 
 	calls := agent.Calls()
 	if len(calls) != 3 {
@@ -224,10 +202,10 @@ func TestReviewFallsBackWithoutInheritingThePrimaryModel(t *testing.T) {
 }
 
 // A review role and a fix role that name a context window start the model at
-// that window: Opus 5.5 at 1m reaches the command line as
-// claude-opus-5-5[1m], and Sonnet 5 at standard as the plain identifier. Each
-// launch records the window it was asked for, and a launch whose role named
-// none records it as not named.
+// that window: the review on Opus 5.5 at 1m reaches the command line as
+// claude-opus-5-5[1m], and the fixer on Sonnet 5 at standard as the plain
+// claude-sonnet-5. Each launch records the window it was asked for, and the
+// lint launch, whose purpose no role names, records it as not named.
 func TestReviewAndFixRolesStartTheContextWindowTheyName(t *testing.T) {
 	ctx := t.Context()
 	rec := &roleRecorder{}
@@ -250,21 +228,48 @@ func TestReviewAndFixRolesStartTheContextWindowTheyName(t *testing.T) {
 			t.Fatalf("%s: %v", purpose, err)
 		}
 	}
-	fix, err := s.gateRole(ctx, config.RoleFix)
-	if err != nil {
-		t.Fatalf("resolving the fix role: %v", err)
-	}
-	if fix.model != "claude-sonnet-5" || fix.window != config.ContextStandard {
-		t.Fatalf("the fix role resolved to model %q at %q, want claude-sonnet-5 at standard", fix.model, fix.window)
-	}
+	applyFix(t, s, built, inv)
 
 	calls := agent.Calls()
-	if len(calls) != 2 || calls[0].Model() != "claude-opus-5-5[1m]" || calls[1].Model() != "" {
-		t.Fatalf("the stand-in saw %v, want review at claude-opus-5-5[1m] and lint at no model", calls)
+	if len(calls) != 3 || calls[0].Model() != "claude-opus-5-5[1m]" || calls[1].Model() != "" || calls[2].Model() != "claude-sonnet-5" {
+		t.Fatalf("the stand-in saw %v, want review at claude-opus-5-5[1m], lint at no model, and fix at claude-sonnet-5", calls)
 	}
 	got := rec.snapshot()
-	if len(got) != 2 || got[0].ContextWindow != config.Context1M || got[0].Model != "claude-opus-5-5[1m]" || got[1].ContextWindow != "" {
-		t.Fatalf("recorded launches = %+v, want review at 1m and lint not named", got)
+	if len(got) != 3 ||
+		got[0].ContextWindow != config.Context1M || got[0].Model != "claude-opus-5-5[1m]" ||
+		got[1].ContextWindow != "" ||
+		got[2].ContextWindow != config.ContextStandard || got[2].Model != "claude-sonnet-5" {
+		t.Fatalf("recorded launches = %+v, want review at 1m, lint not named, and fix at standard", got)
+	}
+}
+
+// applyFix starts the fix role the way a run's fix stage does: through the
+// run's Fixer, over a run recorded against a repository at inv.Dir.
+func applyFix(t *testing.T, s *Service, built *driver, inv agents.Invocation) {
+	t.Helper()
+	ctx := t.Context()
+	if _, err := s.store.UpsertRepository(ctx, store.Repository{
+		ID: "repo-1", WorkingPath: inv.Dir, UpstreamURL: "https://example.test/one.git", DefaultBranch: "main",
+	}); err != nil {
+		t.Fatalf("UpsertRepository: %v", err)
+	}
+	build, err := store.CurrentBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := s.store.CreateRun(ctx, store.Run{
+		ID: "run-1", RepositoryID: "repo-1", Branch: "topic", SubmittedHead: "abc",
+		Intent: "work", IntentSource: "push", Build: build, ConfigDigest: "cfg",
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	fixer, err := built.runs.Fixer(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Fixer: %v", err)
+	}
+	if _, err := fixer.Apply(ctx, inv); err != nil {
+		t.Fatalf("fix: %v", err)
 	}
 }
 

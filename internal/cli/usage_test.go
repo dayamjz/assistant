@@ -15,8 +15,10 @@ import (
 // TestRunsUsageReportsTheInvocationRecordThroughTheSurface drives PRD section
 // 9's usage view through cli.Run against a real service, over a home whose
 // agent invocation history holds a review call and a fix round serving one
-// run's review stage, a call from before the record kept a run or stage, and
-// a call older than the window. The rows are written straight to the store
+// run's review stage, a review call from before the record kept a run,
+// stage, or context window, and a call older than the window. The two review
+// calls inside the window differ in nothing the usage view groups by but the
+// context window, so the grouping by window is the window's alone. The rows are written straight to the store
 // because which calls a run makes, and that each lands with its run and
 // stage, are other tests' subjects; what is under test here is what
 // runs --usage makes of the record once it exists.
@@ -47,7 +49,7 @@ func TestRunsUsageReportsTheInvocationRecordThroughTheSurface(t *testing.T) {
 		{Purpose: "fix", Agent: "claude", Model: "some-model", SessionUse: "opened", Started: now.Add(-time.Hour),
 			Duration: 2 * time.Second, Failure: "timeout", Run: store.Known("usage-run-1"), Stage: store.Known("review"),
 			ContextWindow: store.Known("")},
-		{Purpose: "intent", Agent: "claude", SessionUse: "none", Started: now.Add(-30 * time.Minute), Duration: time.Second,
+		{Purpose: "review", Agent: "claude", Model: "some-model", SessionUse: "none", Started: now.Add(-30 * time.Minute), Duration: time.Second,
 			InputTokens: store.Known[int64](5)},
 		{Purpose: "review", Agent: "claude", Model: "some-model", SessionUse: "none", Started: now.Add(-48 * time.Hour),
 			Duration: time.Minute, InputTokens: store.Known[int64](99999)},

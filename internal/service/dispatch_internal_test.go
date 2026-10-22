@@ -28,6 +28,13 @@ type dispatchSubject struct {
 
 func newDispatchSubject(t *testing.T) *dispatchSubject {
 	t.Helper()
+	return newDispatchSubjectAs(t, "")
+}
+
+// newDispatchSubjectAs is newDispatchSubject over a task intake recorded
+// with role, so a launch resolves that role rather than the worker role.
+func newDispatchSubjectAs(t *testing.T, role string) *dispatchSubject {
+	t.Helper()
 	ctx := t.Context()
 	h, err := home.Open(t.TempDir())
 	if err != nil {
@@ -42,7 +49,7 @@ func newDispatchSubject(t *testing.T) *dispatchSubject {
 		t.Fatalf("opening the store: %v", err)
 	}
 	t.Cleanup(func() { _ = records.Close() })
-	id, copyPath := plantLaunchable(t, h, records)
+	id, copyPath := plantLaunchableAs(t, h, records, role)
 	log, err := h.OpenLog(0)
 	if err != nil {
 		t.Fatalf("opening the log: %v", err)
@@ -60,6 +67,12 @@ func newDispatchSubject(t *testing.T) *dispatchSubject {
 // and globally by TestMain for the whole process, so no background git
 // process holds a repository a test is about to remove.
 func plantLaunchable(t *testing.T, h *home.Home, records *store.Store) (id, copyPath string) {
+	t.Helper()
+	return plantLaunchableAs(t, h, records, "")
+}
+
+// plantLaunchableAs is plantLaunchable with the task recorded under role.
+func plantLaunchableAs(t *testing.T, h *home.Home, records *store.Store, role string) (id, copyPath string) {
 	t.Helper()
 	ctx := t.Context()
 	primary, upstream, _ := heldSubject(t)
@@ -91,7 +104,7 @@ func plantLaunchable(t *testing.T, h *home.Home, records *store.Store) (id, copy
 	}
 	if _, err := records.CreateTask(ctx, store.Task{
 		ID: id, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: copyPath,
-		RepositoryID: store.Known(repository.ID), Branch: store.Known("task/one"),
+		RepositoryID: store.Known(repository.ID), Branch: store.Known("task/one"), Role: role,
 	}, store.Disposition{}); err != nil {
 		t.Fatalf("recording the task: %v", err)
 	}

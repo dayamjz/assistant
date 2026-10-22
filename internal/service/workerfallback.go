@@ -17,14 +17,18 @@ import (
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
-func (s *Service) selectWorkerChoice(ctx context.Context, role config.Role) (agents.Selection, error) {
+// selectWorkerChoice routes a worker backup's own agent and checks that the
+// agent declares the backup's triple, context window, and effort. A triple
+// or window it has not declared is refused naming roleName, the role the
+// backup belongs to, as launchTask names it for the primary (PRD section 10).
+func (s *Service) selectWorkerChoice(ctx context.Context, roleName string, role config.Role) (agents.Selection, error) {
 	selection, err := agents.Route(ctx, s.catalog, nil, agents.NeedForWorker(s.cfg.SessionProvider == config.SessionProviderTmux), role.Agent)
 	if err != nil {
 		return selection, err
 	}
 	if role.Provider != "" || role.ContextWindow != "" {
 		if _, err = agents.Translate(selection.Resolution.Name, role.Provider, role.Type, role.Version, role.ContextWindow); err != nil {
-			return agents.Selection{}, err
+			return agents.Selection{}, fmt.Errorf("service: the %s role: %w", roleName, err)
 		}
 	}
 	if err = agents.AcceptsEffort(selection.Resolution.Name, role.Effort); err != nil {
@@ -38,7 +42,7 @@ func (s *Service) routeTaskWorker(ctx context.Context, task store.Task, attempt 
 		return agents.Selection{}, role, err
 	}
 	if role.Fallback != nil {
-		if _, err := s.selectWorkerChoice(ctx, *role.Fallback); err != nil && !agents.FallbackAllowed(err) {
+		if _, err := s.selectWorkerChoice(ctx, config.TaskRoleName(task.Role), *role.Fallback); err != nil && !agents.FallbackAllowed(err) {
 			return agents.Selection{}, role, err
 		}
 	}
@@ -51,7 +55,7 @@ func (s *Service) routeTaskWorker(ctx context.Context, task store.Task, attempt 
 			return agents.Selection{}, role, errors.New("service: the recorded worker backup is no longer configured")
 		}
 		backup := *role.Fallback
-		selection, err := s.selectWorkerChoice(ctx, backup)
+		selection, err := s.selectWorkerChoice(ctx, config.TaskRoleName(task.Role), backup)
 		if err != nil {
 			return agents.Selection{}, backup, err
 		}
@@ -65,7 +69,7 @@ func (s *Service) routeTaskWorker(ctx context.Context, task store.Task, attempt 
 		return selection, role, err
 	}
 	backup := *role.Fallback
-	next, nextErr := s.selectWorkerChoice(ctx, backup)
+	next, nextErr := s.selectWorkerChoice(ctx, config.TaskRoleName(task.Role), backup)
 	if nextErr != nil {
 		return agents.Selection{}, role, errors.Join(err, nextErr)
 	}

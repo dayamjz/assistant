@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,23 +197,31 @@ func TestABackupWithAnUndeclaredContextWindowIsRefusedBeforeAnyWorkerStarts(t *t
 	for _, tc := range []struct {
 		name   string
 		backup config.Role
+		window string
 	}{
-		{"codex at standard", config.Role{Agent: agents.CodexName, Provider: "openai", Type: "gpt", Version: "6-astra", ContextWindow: config.ContextStandard}},
-		{"a window with no model", config.Role{Agent: agents.CodexName, ContextWindow: config.Context1M}},
+		{"codex at standard", config.Role{Agent: agents.CodexName, Provider: "openai", Type: "gpt", Version: "6-astra", ContextWindow: config.ContextStandard}, "context standard"},
+		{"a window with no model", config.Role{Agent: agents.CodexName, ContextWindow: config.Context1M}, "context 1m"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			primary := standin.New(t, standin.Script{})
 			backup := standin.NewCodex(t, standin.Script{})
-			sub := newLaunchSubject(t, primary)
+			sub := newLaunchSubjectAs(t, primary, "pages")
 			s := sub.service
 			s.catalog = agents.NewCatalog(fixedRunner{runner: primary.Runner()}, fixedRunner{runner: backup.Runner()})
-			s.cfg.Roles = config.Roles{config.RoleWorker: {Agent: agents.ClaudeName, Fallback: &tc.backup}}
+			s.cfg.Roles = config.Roles{"pages": {Agent: agents.ClaudeName, Fallback: &tc.backup}}
 			d, err := s.dispatchTask(t.Context(), sub.task)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err = s.launchTask(t.Context(), d); !errors.Is(err, agents.ErrUndeclaredModel) {
-				t.Fatalf("the launch answered %v, want ErrUndeclaredModel for the backup's window", err)
+			_, err = s.launchTask(t.Context(), d)
+			var refused *routeRefused
+			if !errors.As(err, &refused) || !errors.Is(err, agents.ErrUndeclaredModel) {
+				t.Fatalf("the launch answered %v, want a *routeRefused over ErrUndeclaredModel for the backup's window", err)
+			}
+			// PRD section 10: the refusal names the role, the triple, and
+			// the window, on the backup's path as on the primary's.
+			if detail := routeRefusedDetail(t, sub); !strings.Contains(detail, "the pages role") || !strings.Contains(detail, tc.window) {
+				t.Fatalf("route-refused detail %q does not name the pages role and %s", detail, tc.window)
 			}
 			if len(primary.Calls()) != 0 || len(backup.Calls()) != 0 {
 				t.Fatal("a backup whose window cannot be expressed let a worker start")
