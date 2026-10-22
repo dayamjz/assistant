@@ -2,6 +2,10 @@ package vcs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -106,4 +110,41 @@ func parseChanges(out string) (Changes, error) {
 		}
 	}
 	return c, nil
+}
+
+// UncommittedDigest identifies the content a commit of this working copy
+// would newly record, including unresolved conflict markers in the worktree.
+//
+// Equal results mean that content is unchanged. Ignored files are not part of
+// it, which is the same gap Changes leaves. The result is not a git object
+// name.
+func (r *Repository) UncommittedDigest(ctx context.Context) (string, error) {
+	if r.kind != KindWorktree {
+		return "", &openError{path: r.path, kind: KindWorktree}
+	}
+	diff, _, err := r.runExpecting(ctx, "uncommitted-diff", []int{1}, "diff", "--binary", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	others, err := r.run(ctx, "uncommitted-untracked", "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.New()
+	sum.Write(diff)
+	sum.Write([]byte{0})
+	for path := range strings.SplitSeq(string(others), "\x00") {
+		if path == "" {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(r.path, filepath.FromSlash(path)))
+		if err != nil {
+			return "", err
+		}
+		sum.Write([]byte(path))
+		sum.Write([]byte{0})
+		sum.Write(body)
+		sum.Write([]byte{0})
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }

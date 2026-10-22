@@ -3,6 +3,9 @@ package vcs
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 )
 
 // RebaseSpec describes a rebase operation.
@@ -57,15 +60,64 @@ func (r *Repository) RebaseAbort(ctx context.Context) error {
 	return err
 }
 
-// RebaseStatus reports whether a rebase is in progress, including a clean
-// false result when the working copy has no rebase to resume or abort.
+// RebaseContinue continues an in-progress rebase whose current step is
+// already committed.
+//
+// A later step that conflicts returns ErrRebaseConflict and leaves the rebase
+// in progress. A later step that applies cleanly is replayed. When nothing
+// remains, the rebase is finished. A continue that is not ready, including
+// one whose conflicts are still unmerged, returns an error and leaves the
+// rebase in progress. The editor every invocation runs exits non-zero, so a
+// continue that still has to ask for a commit message fails rather than waits.
+func (r *Repository) RebaseContinue(ctx context.Context) error {
+	if r.kind != KindWorktree {
+		return errors.New("vcs: rebase requires a working copy")
+	}
+	_, code, err := r.runExpecting(ctx, "rebase-continue", []int{1}, "rebase", "--continue")
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return ErrRebaseConflict
+	}
+	return nil
+}
+
+// RebaseStatus reports whether a rebase is in progress.
+//
+// It is in progress when the rebase-merge directory or the rebase-apply
+// directory git names for this working copy is present. Those are the
+// directories a later abort or continue acts on. Neither being present is a
+// false result, including for a clean copy, and that absence is not an error.
+//
+// REBASE_HEAD is not the signal. A rebase paused before any commit is picked
+// has the directory and no such name, and abort still succeeds.
 func (r *Repository) RebaseStatus(ctx context.Context) (inProgress bool, err error) {
 	if r.kind != KindWorktree {
 		return false, errors.New("vcs: rebase requires a working copy")
 	}
-	_, code, err := r.runExpecting(ctx, "rebase-status", []int{1}, "rev-parse", "--verify", "--quiet", "REBASE_HEAD")
-	if err != nil {
-		return false, err
+	for _, name := range []string{"rebase-merge", "rebase-apply"} {
+		out, err := r.run(ctx, "rebase-status", "rev-parse", "--git-path", name)
+		if err != nil {
+			return false, err
+		}
+		path := strings.TrimSpace(string(out))
+		if path == "" {
+			return false, errors.New("vcs: git reported no path for " + name)
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(r.path, filepath.FromSlash(path))
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return false, err
+		}
+		if info.IsDir() {
+			return true, nil
+		}
 	}
-	return code == 0, nil
+	return false, nil
 }

@@ -2,6 +2,7 @@ package stages_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,9 +20,10 @@ import (
 
 // TestAConflictingRebaseLeavesTheCopyReadyForItsFixRound runs a submitted
 // change against a newer, conflicting base through the real rebase stage and
-// scripted fixer. The fixer changes nothing, so the rebase stage must be able
-// to retry and the run must stop on its convergence bound. P6 requires the
-// submitted commit to remain available when the replay cannot apply.
+// scripted fixer. The fixer is shown the conflict on the new base and edits
+// nothing, so the round aborts that rebase and the stage can retry. The run
+// stops on its convergence bound. P6 requires the submitted commit to remain
+// available when the replay cannot apply.
 func TestAConflictingRebaseLeavesTheCopyReadyForItsFixRound(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	s := newSubject(t)
@@ -69,10 +71,18 @@ func TestAConflictingRebaseLeavesTheCopyReadyForItsFixRound(t *testing.T) {
 			if err != nil {
 				t.Fatalf("checking the copy before the fix round: %v", err)
 			}
-			if inProgress {
-				t.Fatal("the fixer was sent into a rebase left in progress by the stage")
+			if !inProgress {
+				t.Fatal("the fixer was not shown the conflict the rebase stopped on")
 			}
-			return fixBody(ctx, in)
+			out, err := fixBody(ctx, in)
+			if err != nil {
+				return out, err
+			}
+			inProgress, err = copy.RebaseStatus(ctx)
+			if err != nil || inProgress {
+				t.Fatalf("after the fix round, rebase in progress %v, error %v", inProgress, err)
+			}
+			return out, nil
 		}
 	}
 	p, err := pipeline.New(pipeline.Options{
@@ -110,4 +120,136 @@ func TestAConflictingRebaseLeavesTheCopyReadyForItsFixRound(t *testing.T) {
 		t.Fatalf("the copy is not clean after the run stopped:\n%s", status)
 	}
 	t.Logf("rebase stage ran %d times; the scripted fixer ran %d times", rebaseRuns, fixRuns)
+}
+
+// resolvedTotal is the submitted change and the newer base, in one file. It is
+// what a fixer writes over the conflict while the copy stands on the new base.
+const resolvedTotal = `package total
+
+// Total sums the values.
+func Total(values []int) int {
+	sum := 0 // start empty, on the newer base
+	for _, v := range values {
+		sum += v
+	}
+	return sum
+}
+`
+
+// TestARebaseConflictIsResolvedOnTheRebasedBase runs the same conflicting
+// replay as the no-edit case, with a fixer that writes the combined file.
+// The resolution has to be committed on the new base. A fix commit appended
+// after the copy is returned to the submitted branch does not resolve the
+// replay: the next rebase stops on the original commit, before it reaches
+// the fix. P6 keeps the submitted commit, and the resolved head has to carry
+// its change on top of the upstream the stage fetched.
+func TestARebaseConflictIsResolvedOnTheRebasedBase(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	git(t, s.dir, "config", "user.name", "test")
+	git(t, s.dir, "config", "user.email", "test@example.invalid")
+	upstream := filepath.Join(t.TempDir(), "upstream.git")
+	git(t, filepath.Dir(upstream), "init", "--quiet", "--bare", "-b", "main", upstream)
+	git(t, s.dir, "remote", "add", stages.UpstreamRemote, upstream)
+	git(t, s.dir, "push", "--quiet", stages.UpstreamRemote, s.base+":refs/heads/main")
+	other := t.TempDir()
+	git(t, other, "clone", "--quiet", upstream, other)
+	write(t, other, totalPath, strings.Replace(baseTotal, "sum := 0", "sum := 0 // newer base", 1))
+	git(t, other, "add", "-A")
+	git(t, other, "commit", "--quiet", "-m", "change the same line on main")
+	git(t, other, "push", "--quiet", "origin", "main")
+
+	agent := standin.New(t, script(standin.Text("resolved the conflict on the new base")))
+	cfg := config.Defaults()
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, cfg, nil, redact.New())
+	fixDeps := stages.NewFixDeps(func(ctx context.Context, _ string) (agents.Fixer, error) {
+		inner, err := agents.OpenFixer(ctx, agent.Runner(), "")
+		if err != nil {
+			return nil, err
+		}
+		return resolvingFixer{inner: inner, dir: s.dir, t: t}, nil
+	}, s.home, cfg, nil, redact.New())
+	all := pipeline.ConstantStages("nothing to report")
+	rebase := stages.Rebase(deps)
+	all.Rebase = rebase
+	fixer := stages.Fix(fixDeps)
+	fixBody := fixer.NewBody()
+	var fixRuns int
+	fixer.NewBody = func() pipeline.FixBody {
+		return func(ctx context.Context, in pipeline.FixInput) (pipeline.FixOutput, error) {
+			fixRuns++
+			repo, err := vcs.OpenWorktree(ctx, s.dir)
+			if err != nil {
+				t.Fatalf("opening the copy before the fix round: %v", err)
+			}
+			inProgress, err := repo.RebaseStatus(ctx)
+			if err != nil {
+				t.Fatalf("checking the copy before the fix round: %v", err)
+			}
+			if !inProgress {
+				t.Fatal("the fixer was not given the conflict on the rebased base")
+			}
+			return fixBody(ctx, in)
+		}
+	}
+	p, err := pipeline.New(pipeline.Options{
+		Stages: all, Rounds: config.FixRounds{Rebase: 3},
+		Budget: config.DefaultRunBudget, Fixer: fixer,
+	})
+	if err != nil {
+		t.Fatalf("building the pipeline: %v", err)
+	}
+	exec, err := p.Executor(graph.NewMemoryStore())
+	if err != nil {
+		t.Fatalf("building the executor: %v", err)
+	}
+	state, err := p.NewState(s.start())
+	if err != nil {
+		t.Fatalf("building the run state: %v", err)
+	}
+	result, err := exec.Run(t.Context(), s.run, state)
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	head := git(t, s.dir, "rev-parse", "HEAD")
+	base := git(t, s.dir, "rev-parse", "refs/remotes/"+stages.UpstreamRemote+"/main")
+	if result.Status != graph.StatusCompleted || !isAncestor(t, s.dir, base, head) {
+		t.Fatalf("status %s, head %s, upstream %s is ancestor %v; the resolution has to land on the new base and the run has to finish",
+			result.Status, head, base, isAncestor(t, s.dir, base, head))
+	}
+	if fixRuns == 0 || len(agent.Calls()) != fixRuns {
+		t.Fatalf("the fixer ran %d time(s), and the scripted agent received %d calls", fixRuns, len(agent.Calls()))
+	}
+	if git(t, s.dir, "cat-file", "-t", s.head) != "commit" {
+		t.Fatalf("the submitted commit %s is gone", s.head)
+	}
+	got, err := os.ReadFile(filepath.Join(s.dir, filepath.FromSlash(totalPath)))
+	if err != nil {
+		t.Fatalf("reading the resolved file: %v", err)
+	}
+	if string(got) != resolvedTotal {
+		t.Fatalf("the resolved head has:\n%s\nwant:\n%s", got, resolvedTotal)
+	}
+	repo, err := vcs.OpenWorktree(t.Context(), s.dir)
+	if err != nil {
+		t.Fatalf("opening the copy after the run: %v", err)
+	}
+	if inProgress, err := repo.RebaseStatus(t.Context()); err != nil || inProgress {
+		t.Fatalf("after the run, rebase in progress %v, error %v", inProgress, err)
+	}
+}
+
+// resolvingFixer edits the conflicted file while the real fixer invocation
+// runs, which is when a round's digest of the working copy is taken.
+type resolvingFixer struct {
+	inner agents.Fixer
+	dir   string
+	t     *testing.T
+}
+
+func (f resolvingFixer) Reference() string { return f.inner.Reference() }
+
+func (f resolvingFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Result, error) {
+	write(f.t, f.dir, totalPath, resolvedTotal)
+	return f.inner.Apply(ctx, inv)
 }

@@ -100,6 +100,15 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 // what makes the round mean anything to the stages after it: every one of them
 // reads a commit, and a working copy with uncommitted edits is not one.
 //
+// A rebase the rebase stage left in progress is the conflict on the new base.
+// The round commits the resolution there and continues the rebase, so the
+// conflicting commit is not replayed again ahead of the fix. A round that
+// leaves that working copy unchanged aborts the rebase and reports that
+// nothing changed, so the stage's next execution starts a new rebase rather
+// than meeting one left in progress. A continue that stops on a later commit
+// leaves that rebase in progress; the stage's next execution reports it and
+// does not start a second one.
+//
 // pipeline.KeyHead is the write that carries it, and it is the write that makes
 // the graph's convergence bound meaningful: a round that changed nothing leaves
 // state as it was, and the loop ends rather than asking again forever.
@@ -195,6 +204,20 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 			"stages: reading where the copy of run %s stands before its %s fix round: %w",
 			facts.run, in.Stage, err)
 	}
+	rebasing, err := copied.RebaseStatus(ctx)
+	if err != nil {
+		return pipeline.FixOutput{}, fmt.Errorf(
+			"stages: reading whether a rebase is in progress before the %s fix round: %w",
+			in.Stage, err)
+	}
+	var digest string
+	if rebasing {
+		digest, err = copied.UncommittedDigest(ctx)
+		if err != nil {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: reading the conflicted copy before the %s fix round: %w", in.Stage, err)
+		}
+	}
 
 	fixer, err := deps.Fixer(ctx, facts.run)
 	if err != nil {
@@ -235,8 +258,29 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 	}
 	body := fixBody(deps.redact, result.Text, rendered)
 
+	if rebasing {
+		after, err := copied.UncommittedDigest(ctx)
+		if err != nil {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: reading the conflicted copy after the %s fix round: %w", in.Stage, err)
+		}
+		if after == digest {
+			if err := copied.RebaseAbort(ctx); err != nil {
+				return pipeline.FixOutput{}, fmt.Errorf(
+					"stages: abandoning the rebase the %s fix round left unchanged: %w", in.Stage, err)
+			}
+			return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
+		}
+	}
+
 	committed, err := copied.CommitAllWithBody(ctx, subject, body)
 	if errors.Is(err, vcs.ErrNothingToCommit) {
+		if rebasing {
+			if err := copied.RebaseAbort(ctx); err != nil {
+				return pipeline.FixOutput{}, fmt.Errorf(
+					"stages: abandoning the rebase the %s fix round did not commit: %w", in.Stage, err)
+			}
+		}
 		return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
 	}
 	if err != nil {
@@ -247,7 +291,29 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 		// Belt and braces: CommitAll reports ErrNothingToCommit for this, and
 		// a commit identical to the one before it would otherwise be reported
 		// as progress the convergence bound could not see.
+		if rebasing {
+			if err := copied.RebaseAbort(ctx); err != nil {
+				return pipeline.FixOutput{}, fmt.Errorf(
+					"stages: abandoning the rebase the %s fix round did not move: %w", in.Stage, err)
+			}
+		}
 		return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
+	}
+	if rebasing {
+		if err := copied.RebaseContinue(ctx); err != nil && !errors.Is(err, vcs.ErrRebaseConflict) {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: continuing the rebase after the %s fix round: %w", in.Stage, err)
+		}
+		// A continue that replayed further commits moved HEAD past the
+		// resolution commit. The head this round reports is where the copy
+		// stands now, including when a later commit stopped on a new conflict.
+		now, err := copied.ResolveCommit(ctx, "HEAD")
+		if err != nil {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: reading where the copy stands after the %s fix round continued its rebase: %w",
+				in.Stage, err)
+		}
+		committed = now
 	}
 
 	holds, err := judgeRound(ctx, copied, deps.Config.JudgePaths, in, before, committed)
