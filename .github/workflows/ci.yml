@@ -138,8 +138,9 @@ jobs:
           else
             # macOS's own agents and xcrun write into the per-user temp dir
             # whatever TMPDIR says. With the tests' TMPDIR elsewhere, the
-            # guard can set those Apple entries aside there without any
-            # chance of covering a test's; it still watches both.
+            # per-package check denies every package's processes writes
+            # there, so the guard can set entries with Apple's names aside
+            # there (run --per-package); it still watches both.
             TMPDIR=$(mktemp -d "$RUNNER_TEMP/tmp.XXXXXX")
             export TMPDIR
           fi
@@ -161,15 +162,18 @@ jobs:
           # processes here fails the step instead of passing. Existing
           # processes are matched by pid and start time, not by name; Go's
           # build cache lives outside the watched temp roots. The only things
-          # set aside are macOS's own Apple launchd jobs, XPC services and
-          # temp entries, each printed; the script says which.
+          # set aside are taken for macOS's: Apple launchd jobs and XPC
+          # services only root can have defined, and Apple-named entries in
+          # the per-user temp dir, which no package can write; each is
+          # printed, and the script says on what evidence.
           # Each package the check runs is recorded, and every package go test
-          # reports ok must be among them, so a lost -exec fails the step.
+          # reports ok must be among them, so a lost -exec fails the step,
+          # and so does a run whose --per-package claim did not hold.
           per_package=(-exec "python3 $PWD/scripts/leak-check.py package --")
           export LEAK_CHECK_RECORD="$RUNNER_TEMP/per-package-checked.txt"
           "${run[@]}" python3 scripts/leak-check.py self-test
           : > "$LEAK_CHECK_RECORD"
-          "${run[@]}" python3 scripts/leak-check.py run -- \
+          "${run[@]}" python3 scripts/leak-check.py run --per-package -- \
             go test "${per_package[@]}" -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
           passed=$(grep -cE '^ok[[:space:]]' test.log || true)
           checked=$(wc -l < "$LEAK_CHECK_RECORD")

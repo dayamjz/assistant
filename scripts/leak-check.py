@@ -22,11 +22,14 @@ Linux ties a process to its package with the child subreaper, macOS with a
 sandbox profile the package's processes inherit; package_run says how, and
 what neither sees.
 
-The only things set aside are macOS's own, each listed below with why: launchd
-jobs labelled com.apple.*, Apple XPC services launchd started from /System, and
-a fixed set of Apple entries in the per-user temp dir when TMPDIR points
-elsewhere. On macOS run with a TMPDIR of its own, as CI
-does; without one, those temp entries are reported rather than set aside.
+The only things set aside are taken for macOS's, each printed, and each only
+on evidence that rules out the tests' own processes: a com.apple.* launchd job
+whose definition only root can have made (apple_launchd_jobs), an XPC service
+launchd started from a bundle under /System (apple_xpc_service), and, with
+run --per-package, entries with Apple's names in the per-user temp dir, where
+the per-package check denies every package's processes writes (guarded_run).
+On macOS run with a TMPDIR of its own, as CI does; without one, those temp
+entries are reported rather than set aside.
 """
 
 import argparse
@@ -100,9 +103,49 @@ def processes():
     return found
 
 
-def apple_launchd_jobs():
-    """Map the pid of each running com.apple.* job in this user's launchd domain
-    to its label.
+SF_IMMUTABLE = 0x00020000  # sys/stat.h: no change, rename or removal, even by root
+SF_RESTRICTED = 0x00080000  # sys/stat.h: System Integrity Protection's restricted flag
+SF_NOUNLINK = 0x00100000  # sys/stat.h: no rename or removal, even by root
+
+
+def only_root_changes(path):
+    """Whether no user but root can have put path where it is, or changed it.
+
+    path, resolved, must exist, and must be unchangeable: on a read-only
+    volume, or flagged immutable or restricted, or owned by root and writable
+    by neither its group nor others. Each entry from it up to / must also be
+    irreplaceable: its directory unchangeable in the same sense, or the entry
+    itself flagged so that it cannot be renamed or removed. Mode bits alone
+    do not decide it: System Integrity Protection refuses this user writes in
+    /System/Volumes/Preboot/Cryptexes, which is mode 777, and the entry
+    below it there is flagged against removal.
+    """
+    try:
+        target = Path(os.path.realpath(path))
+        chain = [target, *target.parents]
+        infos = {node: os.lstat(node) for node in chain}
+        volumes = {node: os.statvfs(node) for node in chain}
+    except OSError:
+        return False
+
+    def unchangeable(node):
+        info = infos[node]
+        return bool(volumes[node].f_flag & os.ST_RDONLY
+                    or getattr(info, "st_flags", 0) & (SF_IMMUTABLE | SF_RESTRICTED)
+                    or (info.st_uid == 0 and not info.st_mode & 0o022))
+
+    def irreplaceable(node):
+        flags = getattr(infos[node], "st_flags", 0)
+        return (node == node.parent or unchangeable(node.parent)
+                or bool(flags & (SF_IMMUTABLE | SF_RESTRICTED | SF_NOUNLINK)))
+
+    return unchangeable(target) and all(irreplaceable(node) for node in chain)
+
+
+def apple_launchd_jobs(new_pids):
+    """Map each of new_pids that a com.apple.* job in this user's launchd
+    domains runs to its label, when launchd loaded that job from a definition
+    no user but root can have made.
 
     macOS's launchd starts Apple's agents and XPC services in the runner's
     session on its own schedule and as a side effect of the toolchain (xcrun
@@ -110,8 +153,16 @@ def apple_launchd_jobs():
     saw over a hundred. They are the runner's services, not the command's.
     launchctl reports a pid only for a process launchd itself started as that
     job, so an orphan a test leaves, which launchd also adopts, is not one of
-    these and is still reported. A test that asks launchd to start an Apple
-    job is not reported; stopping one is launchd's.
+    these and is still reported.
+
+    A label is not proof: a test can submit a job under any label. So the job
+    is read again by its label (launchctl print), and set aside only when it
+    still runs as that pid and the definition launchd recorded for it, a plist
+    or an XPC bundle, is one only root can have put there (only_root_changes).
+    A submitted job records none, and one a test bootstraps from a plist of
+    its own records that plist. A test that asks launchd to start one of
+    Apple's own jobs from its own definition is not reported; stopping it is
+    launchd's.
     """
     if sys.platform != "darwin":
         return {}
@@ -119,9 +170,30 @@ def apple_launchd_jobs():
     jobs = {}
     for line in output.splitlines()[1:]:
         pid, _, label = line.split("\t", 2)
-        if pid != "-" and label.startswith("com.apple."):
+        if pid == "-" or int(pid) not in new_pids or not label.startswith("com.apple."):
+            continue
+        definition = launchd_definition(label, int(pid))
+        if definition is not None and only_root_changes(definition):
             jobs[int(pid)] = label
     return jobs
+
+
+def launchd_definition(label, pid):
+    """The definition path launchd recorded for the job label in this user's
+    gui or user domain while it runs as pid, or None."""
+    for domain in (f"gui/{os.getuid()}", f"user/{os.getuid()}"):
+        result = subprocess.run(["launchctl", "print", f"{domain}/{label}"], text=True,
+                                errors="replace", capture_output=True, check=False)
+        if result.returncode != 0:
+            continue
+        fields = {}
+        for line in result.stdout.splitlines():
+            if line.startswith("\t") and not line.startswith("\t\t"):
+                name, _, value = line.strip().partition(" = ")
+                fields.setdefault(name, value)
+        if fields.get("pid") == str(pid) and fields.get("path", "").startswith("/"):
+            return fields["path"]
+    return None
 
 
 def apple_xpc_service(pid):
@@ -151,8 +223,7 @@ def apple_xpc_service(pid):
 def apple_owned(new_pids):
     """Describe each of new_pids that is macOS's own: a com.apple.* launchd job
     or an Apple XPC service launchd started (apple_xpc_service)."""
-    jobs = {pid: f"launchd job {label}" for pid, label in apple_launchd_jobs().items()
-            if pid in new_pids}
+    jobs = {pid: f"launchd job {label}" for pid, label in apple_launchd_jobs(new_pids).items()}
     for pid in new_pids:
         if pid not in jobs:
             bundle = apple_xpc_service(pid)
@@ -161,14 +232,14 @@ def apple_owned(new_pids):
     return jobs
 
 
-# Entries Apple's own tools make directly in the per-user temp dir
+# Names Apple's own tools give entries directly in the per-user temp dir
 # (getconf DARWIN_USER_TEMP_DIR), which they find through confstr and not
 # TMPDIR: xcrun's cache, the directories launchd's Apple agents keep there,
 # and the one Foundation makes item-replacement directories in.
-# Each is set aside with everything under it, only in that directory, and only
-# when TMPDIR is another directory, so the temporary files of go, git, tmux and
-# the tests (which follow TMPDIR) can never land under one. Any other new name
-# there is still reported.
+# A name proves nothing about who made the entry, so one is set aside, with
+# everything under it, only in that directory, only when TMPDIR is another
+# directory, and only by run --per-package, whose packages cannot write there
+# (guarded_run). Any other new name there is still reported.
 APPLE_TEMP_NAMES = {
     "xcrun_db",             # xcrun's lookup cache, written by the cgo toolchain
     ".LINKS",               # Apple framework hard-link staging
@@ -196,7 +267,9 @@ def apple_temp_root():
 
 
 def apple_temp_entry(path, root):
-    """Whether path is, or is under, an Apple-made entry directly in root."""
+    """Whether path is, or is under, an entry directly in root with one of
+    the names Apple's tools use there (APPLE_TEMP_NAMES, APPLE_TEMP_PREFIX).
+    The name is all it reads."""
     if root is None:
         return False
     try:
@@ -264,10 +337,10 @@ def snapshot(roots):
 
 def differences(before, after, jobs=None, apple_root=None):
     """Return every new process identity and new or replaced filesystem entry,
-    and, separately, the new ones set aside as macOS's own.
+    and, separately, the new ones set aside as taken for macOS's.
 
     jobs maps a pid to a description of it as macOS's own (apple_owned) and
-    apple_root is the directory apple_temp_entry applies to.
+    apple_root is the directory apple_temp_entry applies to, None for none.
     """
     jobs = jobs or {}
     old_processes, old_entries = before
@@ -284,23 +357,42 @@ def differences(before, after, jobs=None, apple_root=None):
         if old_entries.get(path) == entry:
             continue
         if apple_temp_entry(path, apple_root):
-            aside.append(f"Apple temp {entry[2]} {path}")
+            aside.append(f"Apple-named temp {entry[2]} {path}")
         else:
             messages.append(f"LEAK {entry[2]} {path}")
     return messages, aside
 
 
-def guarded_run(command):
+def guarded_run(command, per_package=False):
+    """Run command and fail for every runner-user process and temp entry it
+    left: new when it ends, and not set aside as macOS's own (differences).
+
+    A name in the per-user temp dir is no proof of who made the entry, since
+    a test can make com.apple.anything there as easily as an Apple agent. So
+    run sets aside the Apple entries there (apple_temp_entry) only when
+    per_package says the command runs every test binary through package,
+    whose sandbox denies all of the package's processes writes there
+    (Sandbox), and only when TMPDIR is elsewhere (apple_temp_root). run does
+    not check that claim; CI's step does, by failing unless every package go
+    test reported ok went through package. Without per_package, every new
+    entry there is reported. What the sandbox does not cover is an entry made
+    there by a process outside every package's tree, such as a launchd job a
+    test submitted (package_run), whose entry is set aside when its name is
+    one of Apple's.
+    """
     roots = temp_roots()
     print("leak-check: watching " + ", ".join(map(str, roots)), flush=True)
-    apple_root = apple_temp_root()
+    apple_root = apple_temp_root() if per_package else None
+    if per_package and apple_root is not None:
+        print(f"leak-check: Apple entries in {apple_root} are set aside; the per-package "
+              "check denies every package's processes writes there", flush=True)
     before = snapshot(roots)
     result = subprocess.run(command, check=False)
     after = snapshot(roots)
     new_pids = {pid for pid, start in after[0] if (pid, start) not in before[0]}
     messages, aside = differences(before, after, apple_owned(new_pids), apple_root)
     for message in aside:
-        print(f"leak-check: set aside as macOS's own: {message}", flush=True)
+        print(f"leak-check: set aside: {message}", flush=True)
     for message in messages:
         print(message, flush=True)
     print(f"leak-check: {len(messages)} leftover(s); command exit={result.returncode}",
@@ -351,21 +443,31 @@ pathlib.Path(sys.argv[2]).mkdir()
 def package_self_test():
     """The per-package check's controls: package_run must fail a command that
     leaves a detached process behind, name it and end it, and must neither
-    name nor end a process started outside the command."""
+    name nor end a process started outside the command. Where run sets aside
+    Apple-named entries in the per-user temp dir (apple_temp_root), the
+    command must also be refused making one there."""
     code = """
-import subprocess
+import os, subprocess, sys
 p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
 print(f'planted {p.pid}', flush=True)
+if len(sys.argv) > 1:
+    target = os.path.join(sys.argv[1], f'com.apple.leak-check-self-test-{os.getpid()}')
+    try:
+        os.mkdir(target)
+        print(f'wrote {target}', flush=True)
+    except PermissionError as error:
+        print(f'refused {target}: {error.strerror}', flush=True)
 """
+    user_temp = apple_temp_root()
     bystander = subprocess.Popen(["sleep", "300"], stdin=subprocess.DEVNULL,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  start_new_session=True)
     try:
         result = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "package", "--",
-             sys.executable, "-c", code],
+             sys.executable, "-c", code] + ([str(user_temp)] if user_temp else []),
             text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             check=False, timeout=60,
         )
@@ -379,15 +481,27 @@ print(f'planted {p.pid}', flush=True)
         running = process_start(pid) is not None
         if running:
             os.kill(pid, 9)
+        wrote = [line.split(None, 1)[1] for line in result.stdout.splitlines()
+                 if line.startswith("wrote ")]
+        for path in wrote:
+            os.rmdir(path)
         if result.returncode != 1 or not named or running:
             raise RuntimeError("per-package self-test did not fail, name and end the planted process")
         if f"pid={bystander.pid} " in result.stdout or bystander.poll() is not None:
             raise RuntimeError("per-package self-test named or ended a process outside the package")
+        if user_temp is not None and (wrote or "refused " not in result.stdout):
+            raise RuntimeError(f"the per-package check let a package write in {user_temp}, "
+                               "where run sets Apple-named entries aside")
     finally:
         bystander.kill()
         bystander.wait()
     print("leak-check self-test: per-package check failed, named and ended its planted process, "
           "and left a process outside the package alone")
+    if user_temp is not None:
+        print(f"leak-check self-test: per-package check refused a write in {user_temp}")
+    elif sys.platform == "darwin":
+        print("leak-check self-test: TMPDIR is the per-user temp dir, so the per-package check "
+              "does not deny writes there and run sets nothing aside there; neither was checked")
 
 
 PR_SET_CHILD_SUBREAPER = 36  # from linux/prctl.h
@@ -540,14 +654,20 @@ class Sandbox:
     """A sandbox profile that marks a package's processes, and the reads that
     tell them apart.
 
-    The profile allows everything except reading one file, inside, so a
-    process in it denies inside and allows outside, two empty files in a
+    The profile allows everything except reading one file, inside, and the
+    writes below, so a process in it denies inside and allows outside, two empty files in a
     directory of their own. A process outside it allows both, and one in
     another sandbox that denies both is not marked either. A process started
     under the profile is in it after a new session, its parent's exit and
     exec, and sandbox-exec run inside it fails before starting its command,
     so a process the package starts cannot leave the mark that way; the
     guard's tests check each of these on the machine they run on.
+
+    Given unwritable, a directory, the profile also denies every write under
+    it: package_run passes the per-user temp dir when TMPDIR is elsewhere
+    (apple_temp_root), so no process of the package can make an entry there,
+    whatever its name, and an entry run sets aside there by name is not one
+    of the package's (guarded_run).
 
     A sandboxed process cannot exec a set-user-ID program (/bin/ps and sudo
     among them): the start fails with EPERM. The profile lets none run
@@ -558,16 +678,19 @@ class Sandbox:
     answers denied for both files, which is not the mark.
     """
 
-    def __init__(self):
+    def __init__(self, unwritable=None):
         self.folder = Path(tempfile.mkdtemp(prefix="leak-check-package-")).resolve()
         self.inside = self.folder / "inside"
         self.outside = self.folder / "outside"
         self.inside.touch()
         self.outside.touch()
-        if '"' in str(self.inside) or "\\" in str(self.inside):
-            raise RuntimeError(f"cannot quote {self.inside} in a sandbox profile")
+        for path in (self.inside, unwritable):
+            if path is not None and ('"' in str(path) or "\\" in str(path)):
+                raise RuntimeError(f"cannot quote {path} in a sandbox profile")
         self.profile = ("(version 1)(allow default)"
                         f'(deny file-read-data (literal "{self.inside}"))')
+        if unwritable is not None:
+            self.profile += f'(deny file-write* (subpath "{unwritable}"))'
         self.check = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True).sandbox_check
         self.check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
         self.check.restype = ctypes.c_int
@@ -706,7 +829,7 @@ def package_run(command):
             code = ctypes.get_errno()
             raise OSError(code, "prctl(PR_SET_CHILD_SUBREAPER)")
     elif sys.platform == "darwin":
-        sandbox = Sandbox()
+        sandbox = Sandbox(unwritable=apple_temp_root())
         command = ["/usr/bin/sandbox-exec", "-p", sandbox.profile] + command
     else:
         raise RuntimeError("the per-package check runs on Linux and macOS, "
@@ -758,13 +881,16 @@ def main():
                 parser.error("self-test takes no command")
             return self_test()
         command = args.command
+        per_package = args.mode == "run" and command[:1] == ["--per-package"]
+        if per_package:
+            command = command[1:]
         if command[:1] == ["--"]:
             command = command[1:]
         if not command:
             parser.error(f"{args.mode} requires a command")
         if args.mode == "package":
             return package_run(command)
-        return guarded_run(command)
+        return guarded_run(command, per_package)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"leak-check: inspection failed: {error}", file=sys.stderr, flush=True)
         return 2

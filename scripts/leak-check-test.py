@@ -96,19 +96,88 @@ class LeakCheckTest(unittest.TestCase):
                 mock.patch.object(tempfile, "gettempdir", return_value=folder):
             self.assertEqual(check.apple_temp_root(), Path(darwin).resolve())
 
-    def test_launchd_jobs_are_read_from_launchctl(self):
-        jobs = check.apple_launchd_jobs()
+    def test_launchd_jobs_are_read_only_on_macos(self):
         if sys.platform != "darwin":
-            self.assertEqual(jobs, {})
-            return
-        self.assertTrue(jobs, "launchctl listed no running com.apple job")
-        self.assertTrue(all(label.startswith("com.apple.") for label in jobs.values()))
+            self.assertEqual(check.apple_launchd_jobs({1}), {})
+
+    @unittest.skipUnless(sys.platform == "darwin", "launchd is macOS's")
+    def test_an_apple_label_alone_does_not_set_a_job_aside(self):
+        def listed():
+            jobs = {}
+            for line in subprocess.check_output(["launchctl", "list"], text=True).splitlines()[1:]:
+                pid, _, label = line.split("\t", 2)
+                if pid != "-" and label.startswith("com.apple."):
+                    jobs[int(pid)] = label
+            return jobs
+        # Positive control: Apple's own running jobs are set aside.
+        running = listed()
+        jobs = check.apple_launchd_jobs(set(running))
+        self.assertTrue(jobs, "no running com.apple job was set aside")
+        self.assertTrue(all(running[pid] == label for pid, label in jobs.items()))
+        # A job a test submits under an Apple label, running sleep.
+        label = f"com.apple.leak-check-test-{os.getpid()}"
+        subprocess.run(["launchctl", "submit", "-l", label, "--", "/bin/sleep", "300"],
+                       check=True)
+        try:
+            pid = None
+            while pid is None:
+                pid = next((p for p, l in listed().items() if l == label), None)
+            self.assertNotIn(pid, check.apple_launchd_jobs({pid}))
+            self.assertEqual(check.apple_owned({pid}), {})
+        finally:
+            subprocess.run(["launchctl", "remove", label], check=False)
+        # An orphan is no job at all.
         with subprocess.Popen(["sleep", "300"], start_new_session=True) as child:
             try:
-                self.assertNotIn(child.pid, check.apple_launchd_jobs())
+                self.assertNotIn(child.pid, check.apple_launchd_jobs({child.pid}))
             finally:
                 child.kill()
                 child.wait()
+
+    def test_only_root_can_change_a_definition_under_roots_directories(self):
+        if sys.platform == "darwin":
+            agents = Path("/System/Library/LaunchAgents")
+            owned = next(agents.glob("*.plist"))
+        else:
+            owned = Path("/usr/bin/env")
+        self.assertTrue(check.only_root_changes(owned), owned)
+        with tempfile.TemporaryDirectory() as folder:
+            mine = Path(folder) / "com.apple.mine.plist"
+            mine.write_text("")
+            self.assertFalse(check.only_root_changes(mine))
+            self.assertFalse(check.only_root_changes(Path(folder) / "absent.plist"))
+            if sys.platform == "darwin":
+                # A root-owned file this user cannot change, linked into a
+                # directory this user can: it could be swapped for another.
+                linked = Path(folder) / "hosts"
+                os.link("/private/etc/hosts", linked)
+                self.assertEqual(linked.stat().st_uid, 0)
+                self.assertFalse(check.only_root_changes(linked))
+        cryptex = Path("/System/Volumes/Preboot/Cryptexes/App/System/Library/LaunchAgents")
+        if sys.platform == "darwin" and cryptex.is_dir():
+            # Mode 777 above it, but System Integrity Protection refuses this
+            # user writes there and the entry below is flagged against removal.
+            for plist in cryptex.glob("*.plist"):
+                self.assertTrue(check.only_root_changes(plist), plist)
+
+    @unittest.skipUnless(sys.platform == "darwin", "the per-user temp dir is macOS's")
+    def test_an_apple_name_in_the_user_temp_dir_is_set_aside_only_per_package(self):
+        user_temp = Path(subprocess.check_output(["getconf", "DARWIN_USER_TEMP_DIR"],
+                                                 text=True).strip()).resolve()
+        with tempfile.TemporaryDirectory(dir="/tmp") as folder:
+            env = dict(os.environ, TMPDIR=folder)
+            for flag, expected in (([], "LEAK directory {}"),
+                                   (["--per-package"], "set aside: Apple-named temp directory {}")):
+                made = user_temp / f"com.apple.leak-check-test-{os.getpid()}-{len(flag)}"
+                try:
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPT), "run", *flag, "--", "mkdir", str(made)],
+                        env=env, text=True, capture_output=True, check=False, timeout=300)
+                    self.assertTrue(made.is_dir(), result)
+                    self.assertIn(expected.format(made), result.stdout)
+                finally:
+                    if made.is_dir():
+                        made.rmdir()
 
     def test_an_orphan_is_not_an_apple_xpc_service(self):
         with subprocess.Popen(["sleep", "300"], start_new_session=True) as child:
@@ -316,6 +385,21 @@ func TestOutlastsTheEarlyPackagesProcess(t *testing.T) {
 }
 """
 
+
+USER_TEMP_TEST = """package a
+
+import (
+	"os"
+	"testing"
+)
+
+// It makes the directory MAKE names and passes.
+func TestMakesADirectory(t *testing.T) {
+	if err := os.Mkdir(os.Getenv("MAKE"), 0o700); err != nil {
+		t.Fatalf("making %s: %v", os.Getenv("MAKE"), err)
+	}
+}
+"""
 
 PS_TEST = """package a
 
@@ -557,6 +641,43 @@ class PerPackageTest(unittest.TestCase):
                 self.assertFalse(record.exists(), "ps started under the check")
             finally:
                 os.close(reader)
+
+    @unittest.skipUnless(sys.platform == "darwin", "the per-user temp dir is macOS's")
+    def test_a_package_cannot_write_in_the_user_temp_dir(self):
+        # A real package makes com.apple.<name> in the per-user temp dir,
+        # where run --per-package sets Apple-named entries aside. Unwrapped,
+        # it passes and the entry stands. Under the check, with TMPDIR
+        # elsewhere as in CI, the write is refused and the package fails.
+        # Before, the check allowed the write, and the whole-run comparison
+        # set the entry aside as Apple's by its name.
+        user_temp = Path(subprocess.check_output(["getconf", "DARWIN_USER_TEMP_DIR"],
+                                                 text=True).strip()).resolve()
+        made = user_temp / f"com.apple.leak-check-test-{os.getpid()}"
+        with tempfile.TemporaryDirectory(dir="/tmp") as folder:
+            module = Path(folder).resolve() / "module"
+            (module / "a").mkdir(parents=True)
+            (module / "go.mod").write_text("module example.com/leaks\n\ngo 1.21\n")
+            (module / "a" / "a_test.go").write_text(USER_TEMP_TEST)
+            env = dict(os.environ, TMPDIR=folder, MAKE=str(made))
+
+            def go_test(*wrap):
+                return subprocess.run(["go", "test", "-count=1", *wrap, "./..."], cwd=module,
+                                      env=env, text=True, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, check=False, timeout=300)
+            try:
+                plain = go_test()
+                self.assertEqual(plain.returncode, 0, plain.stdout)
+                self.assertTrue(made.is_dir(), "the package made nothing, so this shows nothing")
+                made.rmdir()
+
+                wrapped = go_test("-exec", f"{sys.executable} {SCRIPT} package --")
+                self.assertRegex(wrapped.stdout, r"(?m)^FAIL\texample.com/leaks/a\b")
+                self.assertIn(f"making {made}: mkdir {made}: operation not permitted",
+                              wrapped.stdout)
+                self.assertFalse(made.exists(), "the package wrote in the per-user temp dir")
+            finally:
+                if made.is_dir():
+                    made.rmdir()
 
     @unittest.skipIf(sys.platform in ("linux", "darwin"), "the per-package check runs here")
     def test_the_per_package_check_refuses_elsewhere(self):
