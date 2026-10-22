@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -664,6 +665,78 @@ func TestADiscardShowsACommitOnlyAReflogsPreviousValueRecords(t *testing.T) {
 			t.Fatalf("the confirmed discard = %+v, %v", done, err)
 		}
 	})
+}
+
+// A discard answers every entry of its copy that the removal's own read of
+// the copy covers, not only the ones kept before the confirmation: the
+// discard is confirmed and the service stops before the removal; then the
+// copy's main branch, standing at the commit it was cloned at, which the
+// default branch holds, is deleted, so nothing shown changes and the real
+// cleanup's Keep records the copy again as a second entry. The next start removes the copy
+// on the digest shown and answers both entries discard. Without the bound
+// moved to the read, the second entry is left open over a copy that is
+// gone, refusing every answer and holding its project's new tasks.
+func TestADiscardAnswersAnEntryKeptBeforeItsRemovalRead(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+	stopped := errors.New("the service stopped between the confirmation's record and the removal")
+	withServiceOptions(t, service.WithDiscardInterruptForTest(t, options(t, h), func() error { return stopped }), func(under serviceUnderTest) {
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		confirm := request
+		confirm.Confirm = shown.Loss.Digest
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, confirm, &out); err == nil || !strings.Contains(err.Error(), "stopped between") {
+			t.Fatalf("the confirmation past the stopped seam = %+v, %v; want the stop", out, err)
+		}
+	})
+	git(t, entry.CopyPath, "branch", "--quiet", "-D", "main")
+	second := keepTaskCopy(t, h, old)
+	if second.ID == entry.ID || !second.Open() {
+		t.Fatalf("the copy kept again reads %+v; want a second open entry", second)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		for _, id := range []int64{entry.ID, second.ID} {
+			got := waitDiscarded(t, h, id)
+			if got.Answer.Or("") != store.KeptDiscard {
+				t.Fatalf("entry %d reads %+v; want it answered discard", id, got)
+			}
+		}
+		if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the discarded copy still stands: %v", err)
+		}
+		if open, err := recordsOf(t, h).OpenKeptWork(ctx); err != nil || len(open) != 0 {
+			t.Fatalf("the open kept work is %+v, %v; want none", open, err)
+		}
+	})
+}
+
+// waitDiscarded waits until the entry reads discarded and returns it.
+func waitDiscarded(t *testing.T, h *home.Home, id int64) store.KeptWork {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		got, err := recordsOf(t, h).KeptWorkEntry(t.Context(), id)
+		if err == nil && got.DiscardedAt.IsKnown() {
+			return got
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("entry %d was never discarded (%+v, %v); the log reads:\n%s", id, got, err, readServiceLog(t, h))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // A discard a stopped service confirmed and did not carry out, over a copy

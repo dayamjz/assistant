@@ -67,8 +67,9 @@ type KeptWorkLoss struct {
 	Dirty     bool `json:"dirty"`
 	Untracked bool `json:"untracked"`
 	Stash     bool `json:"stash"`
-	// Digest confirms exactly this: a discard given it removes the copy
-	// only while the copy still holds what it digests.
+	// Digest confirms exactly this and nothing else, each file by what it
+	// holds: a discard given it removes the copy only while everything
+	// above is as shown.
 	Digest string `json:"digest"`
 }
 

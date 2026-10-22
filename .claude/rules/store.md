@@ -85,7 +85,8 @@ paths: ["internal/store/**"]
   only with `discarded_at` by `MarkKeptWorkDiscarded` once the copy is
   gone, which the triggers enforce. Carry on and discard each move or
   remove the whole copy, so each mark answers and marks every other open
-  entry of the copy kept by its claim or confirmation; and no answer, claim
+  entry of the copy kept by its claim, or for a discard by the time the
+  removal's read of the copy began; and no answer, claim
   or confirmation is written while an entry of the copy holds one not yet
   carried out, a claim or confirmation on the entry itself included
   (`ErrKeptWorkCopyOwed`), and

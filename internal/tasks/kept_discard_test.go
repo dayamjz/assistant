@@ -19,7 +19,8 @@ import (
 // included: the same copy digests the same twice, a file no commit records
 // changes it, and removing the file brings the first digest back; an edit
 // to a tracked file and a second untracked file change it while every name
-// and indicator stays the same, and staging the edit changes it again. Discard refuses a digest that is
+// and indicator stays the same, and staging the edit, whose content the
+// working tree holds as shown, leaves it as it was. Discard refuses a digest that is
 // not the copy's and removes nothing, removes the clone on the copy's own
 // digest, and treats a copy already gone as nothing to lose; Loss refuses
 // an entry whose basis is not established and a copy that is gone. Without
@@ -77,7 +78,7 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	// shown, then the tracked file is edited again and another file is
 	// added, which keeps every name and both indicators the same; the
 	// digest shown no longer names the copy, and a discard on it is refused.
-	// Staging the edit changes it again.
+	// Staging the edit loses nothing more, so it leaves the digest as it was.
 	tracked := filepath.Join(tk.copy, "own.txt")
 	committed, err := os.Lstat(tracked)
 	if err != nil {
@@ -127,8 +128,8 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	}
 	rawGit(t, tk.copy, "add", "own.txt")
 	staged, err := s.cleaner.Loss(ctx, entry)
-	if err != nil || staged.Digest == added.Digest {
-		t.Fatalf("with the edit staged Loss = %+v, %v; want another digest than %s", staged, err, added.Digest)
+	if err != nil || staged.Digest != added.Digest {
+		t.Fatalf("with the edit staged Loss = %+v, %v; want the digest %s, since the working tree holds what was staged", staged, err, added.Digest)
 	}
 	rawGit(t, tk.copy, "reset", "--quiet", "own.txt")
 	rawGit(t, tk.copy, "checkout", "--", "own.txt")
@@ -575,12 +576,12 @@ func TestADiscardPreviewLeavesTheCleanupsReferencesAlone(t *testing.T) {
 // stored back where it was (the reviewer's sequence); a commit reset away,
 // which only HEAD's and the branch's reflogs still name, and both of these
 // add what they hold to the commits shown lacking, since the removal
-// destroys it and nothing else holds it; a file git is told to ignore, created and then edited; a hook written into the
-// repository directory; a remote added to its configuration; and a
-// reference outside the branches and tags, which keeps no log. Two reads of the copy in
+// destroys it and nothing else holds it; a file git is told to ignore,
+// created and then edited; a hook written into the repository directory;
+// and a remote added to its configuration. Two reads of the copy in
 // between, each of which fetches the default branch into it, digest the
-// same. Without the reflogs, the ignored file, the repository directory
-// or every reference in the digest, the stale digest removes the clone.
+// same. Without the reflogs, the ignored file or the repository directory
+// in the digest, the stale digest removes the clone.
 func TestADiscardDigestCoversEverythingTheRemovalDeletes(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	s := newCleanupSubject(t, forgetest.Script{})
@@ -679,8 +680,7 @@ func TestADiscardDigestCoversEverythingTheRemovalDeletes(t *testing.T) {
 	l = moves("an ignored file created", l, false, func() { write(filepath.Join(tk.copy, "secret.env"), "TOKEN=one\n") })
 	l = moves("an ignored file edited", l, false, func() { write(filepath.Join(tk.copy, "secret.env"), "TOKEN=two\n") })
 	l = moves("a hook written", l, false, func() { write(filepath.Join(tk.copy, ".git", "hooks", "pre-push"), "#!/bin/sh\nexit 0\n") })
-	l = moves("a remote added", l, false, func() { rawGit(t, tk.copy, "remote", "add", "elsewhere", s.upstream) })
-	moves("a reference outside the branches and tags", l, false, func() { rawGit(t, tk.copy, "update-ref", "refs/aside/kept", "HEAD") })
+	moves("a remote added", l, false, func() { rawGit(t, tk.copy, "remote", "add", "elsewhere", s.upstream) })
 }
 
 // Loss names every path the removal of a task's clone destroys whose
@@ -999,5 +999,190 @@ func TestALossListsWhatOnlyAPreviousValueOrARootReferenceHolds(t *testing.T) {
 	}
 	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the discarded clone still stands: %v", err)
+	}
+}
+
+// A discard's digest seals exactly what it shows: HEAD, the commits lost,
+// the objects lost with their names, each path lost by what it holds, and
+// the indicators. A kept clone is shown losing two commits of its own, one
+// on a branch beside, one whose tree is HEAD's, an annotated tag, a tracked
+// file edited, a file and a directory no commit holds, content staged and
+// then edited, a tracked file deleted and a hook. Then, from the digest
+// shown, nothing it shows changes and the digest holds: a branch made at
+// HEAD, the references packed, a tracked file rewritten with the same bytes
+// and its mode's other bits changed with the index refreshed over it, and
+// the object database repacked. Then each thing shown changes in turn and
+// the digest before it is refused: HEAD moved to the commit holding its
+// tree, the tag given another name, a commit shown dropped from the copy
+// (refused naming it), and each path's content. The last digest removes
+// the clone. Sealing the whole copy refuses the first set; sealing any less
+// than what is shown lets one of the second through.
+func TestADiscardSealsExactlyWhatItShows(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/exact")
+	commit(t, tk.copy, "same.txt", "unchanged\n", "a file the copy keeps as committed")
+	commit(t, tk.copy, "deleted.txt", "deleted later\n", "a file the copy deletes later")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	entry := got.Entry
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at := func(rel string) string { return filepath.Join(tk.copy, filepath.FromSlash(rel)) }
+	beside := strings.TrimSpace(rawGit(t, tk.copy, "commit-tree", "-p", "HEAD", "-m", "beside", "HEAD^{tree}"))
+	rawGit(t, tk.copy, "update-ref", "refs/heads/beside", beside)
+	twin := strings.TrimSpace(rawGit(t, tk.copy, "commit-tree", "-p", "HEAD", "-m", "HEAD's tree again", "HEAD^{tree}"))
+	rawGit(t, tk.copy, "update-ref", "refs/heads/twin", twin)
+	rawGit(t, tk.copy, "tag", "--annotate", "--message", "a note", "noted", "HEAD")
+	tag := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "refs/tags/noted"))
+	write(at("own.txt"), "edited\n")
+	write(at("note.txt"), "a new file\n")
+	write(at("scratch/a.txt"), "inside a new directory\n")
+	write(at("staged.txt"), "staged\n")
+	rawGit(t, tk.copy, "add", "staged.txt")
+	write(at("staged.txt"), "staged, then edited\n")
+	if err := os.Remove(at("deleted.txt")); err != nil {
+		t.Fatal(err)
+	}
+	write(at(".git/hooks/pre-push"), "#!/bin/sh\nexit 0\n")
+
+	loss := func(when string) Loss {
+		t.Helper()
+		l, err := s.cleaner.Loss(ctx, entry)
+		if err != nil {
+			t.Fatalf("%s: Loss: %v", when, err)
+		}
+		return l
+	}
+	shown := loss("shown")
+	for _, c := range []string{beside, twin} {
+		if !slices.Contains(shown.Lacks, c) {
+			t.Fatalf("the commits shown lost are %v; want %s among them", shown.Lacks, c)
+		}
+	}
+	wantFiles := []LostPath{{LostChanged, "own.txt"}, {LostNew, "note.txt"}, {LostNew, "scratch/"}, {LostNew, "staged.txt"},
+		{LostStaged, "staged.txt"}, {LostDeleted, "deleted.txt"}, {LostRepository, "hooks/pre-push"}}
+	for _, w := range wantFiles {
+		if !slices.Contains(shown.Files, w) {
+			t.Fatalf("the paths shown lost are %+v; want %+v among them", shown.Files, w)
+		}
+	}
+	if !slices.ContainsFunc(shown.Objects, func(o LostObject) bool { return o.Object == tag }) {
+		t.Fatalf("the objects shown lost are %+v; want the tag %s", shown.Objects, tag)
+	}
+
+	// Nothing shown changes.
+	rawGit(t, tk.copy, "branch", "made-at-head")
+	rawGit(t, tk.copy, "pack-refs", "--all")
+	write(at("same.txt"), "unchanged\n")
+	if err := os.Chmod(at("same.txt"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "status", "--porcelain")
+	rawGit(t, tk.copy, "repack", "-a", "-d", "-n", "-q")
+	if still := loss("nothing shown changed"); still.Digest != shown.Digest {
+		t.Fatalf("with nothing shown changed the copy digests %s, not %s as shown:\n%+v\n%+v", still.Digest, shown.Digest, still, shown)
+	}
+
+	// Each thing shown changes.
+	before := shown
+	refused := func(when string, change func()) {
+		t.Helper()
+		change()
+		if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+			t.Fatalf("%s: a discard on the digest shown before = %v; want ErrLossChanged", when, err)
+		}
+		if _, err := os.Stat(tk.copy); err != nil {
+			t.Fatalf("%s: the refused discard removed the copy: %v", when, err)
+		}
+		before = loss(when)
+	}
+	refused("HEAD moved to a commit holding its tree", func() {
+		// The branch HEAD is on moves, so the repository's HEAD file, a
+		// path shown, still names the branch, and no ORIG_HEAD is written.
+		rawGit(t, tk.copy, "update-ref", "refs/heads/task/exact", twin)
+		if l := loss("HEAD moved"); l.Head != twin || !slices.Equal(l.Files, before.Files) ||
+			!slices.Equal(slices.Sorted(slices.Values(l.Lacks)), slices.Sorted(slices.Values(before.Lacks))) {
+			t.Fatalf("with HEAD moved Loss = %+v; want HEAD on %s and the commits and paths as before", l, twin)
+		}
+	})
+	refused("the tag given another name", func() { rawGit(t, tk.copy, "update-ref", "refs/aside/noted", tag) })
+	refused("a commit shown dropped from the copy", func() {
+		rawGit(t, tk.copy, "branch", "--quiet", "-D", "beside")
+		if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, ""); !errors.Is(err, ErrLossChanged) ||
+			!strings.Contains(err.Error(), beside) {
+			t.Fatalf("a discard with %s dropped = %v; want ErrLossChanged naming it", beside, err)
+		}
+	})
+	refused("a tracked file edited again", func() { write(at("own.txt"), "edited twice\n") })
+	refused("a new file edited", func() { write(at("note.txt"), "a new file, edited\n") })
+	refused("a file inside a new directory edited", func() { write(at("scratch/a.txt"), "edited inside\n") })
+	refused("other content staged", func() {
+		write(at("staged.txt"), "staged again\n")
+		rawGit(t, tk.copy, "add", "staged.txt")
+		write(at("staged.txt"), "staged, then edited\n")
+	})
+	refused("a deletion undone", func() { write(at("deleted.txt"), "deleted later\n") })
+	refused("a hook edited", func() { write(at(".git/hooks/pre-push"), "#!/bin/sh\nexit 1\n") })
+
+	if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, ""); err != nil {
+		t.Fatalf("Discard on the last digest shown: %v", err)
+	}
+	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the discarded clone still stands: %v", err)
+	}
+}
+
+// The indicators a discard shows are sealed with it: a kept clone with one
+// tracked file edited is shown dirty, then the file is marked
+// skip-worktree, so git reports the copy clean while the path lost and what
+// it holds are as shown; the digest shown before is refused. Without the
+// indicators in the seal, the confirmation of a dirty copy removes one
+// shown clean.
+func TestADiscardSealsTheIndicatorsItShows(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/indicated")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(tk.copy, "own.txt"), []byte("edited\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dirty, err := s.cleaner.Loss(ctx, got.Entry)
+	if err != nil || !dirty.Dirty {
+		t.Fatalf("Loss = %+v, %v; want it dirty", dirty, err)
+	}
+	rawGit(t, tk.copy, "update-index", "--skip-worktree", "own.txt")
+	clean, err := s.cleaner.Loss(ctx, got.Entry)
+	if err != nil || clean.Dirty || !slices.Equal(clean.Files, dirty.Files) || !slices.Equal(clean.Lacks, dirty.Lacks) {
+		t.Fatalf("with the file marked skip-worktree Loss = %+v, %v; want it clean with the paths and commits of %+v", clean, err, dirty)
+	}
+	if _, err := s.cleaner.Discard(ctx, got.Entry, dirty.Digest, dirty.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("a discard on the digest shown dirty = %v; want ErrLossChanged", err)
 	}
 }

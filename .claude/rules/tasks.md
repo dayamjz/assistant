@@ -44,15 +44,13 @@ paths: ["internal/tasks/**"]
   else holds (`kept_lost.go`, decided from the copy against HEAD's tree, the
   index and what git writes into a new repository, ignored files and
   deletions included) and the
-  inventory's three indicators, with a digest over everything the discard
-  would destroy, decided from what the copy holds and never from what git
-  reports changed (`copyState`: the whole copy walked by the filesystem,
-  ignored files included, its repository directory too, and what git
-  rewrites there sealed by content: every reference, every reflog entry,
-  the stash list whole, the index at every stage; then the commits
-  lacking; the header names what it does not cover), refusing an
-  unestablished entry; `Discard`
-  removes the copy only on that digest, the one use of
+  inventory's three indicators, with a digest over exactly what is shown
+  and nothing else (`seal`: HEAD, the commits and objects lost, each path
+  lost with what it holds, decided from the copy and never from what git
+  reports changed, and the indicators; the header names what it does not
+  cover), refusing an unestablished entry; `Discard` removes the copy only
+  on that digest, with every commit lost now among those shown and every
+  one shown still in the copy or taken up upstream, the one use of
   `vcs.RemoveWorktreeDiscardingChanges`, behind a person's answer and no
   proof.
 - Intake writes the instructions file whole and never through a link,

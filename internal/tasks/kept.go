@@ -318,20 +318,37 @@ func keptDefaultTip(ctx context.Context, l landing) (string, string) {
 // root reference such as ORIG_HEAD or the stash records among them, and
 // every object reach names that is not a commit (vcs.NotReachedFrom). The
 // default branch is read on lacking's terms, and any step that fails leaves
-// it unestablished.
-func lostFrom(ctx context.Context, l landing, reach vcs.Reach) (held, []string) {
+// it unestablished. gone is, of shown, the commits a discard was shown as
+// lost that are neither among them now nor held by the default branch: a
+// commit the copy no longer holds, which is a change to what was shown.
+func lostFrom(ctx context.Context, l landing, reach vcs.Reach, shown []string) (lost held, others, gone []string) {
 	defer l.forget(ctx)
 	tip, detail := keptDefaultTip(ctx, l)
 	if detail != "" {
-		return held{unestablished: detail}, nil
+		return held{unestablished: detail}, nil, nil
 	}
 	commits, others, err := l.repo.NotReachedFrom(ctx, reach, tip)
 	if err != nil {
 		return held{unestablished: "which commits and objects the copy's names hold that the default branch at " + tip +
-			" lacks could not be read: " + err.Error()}, nil
+			" lacks could not be read: " + err.Error()}, nil, nil
 	}
 	if commits == nil {
 		commits = []string{}
 	}
-	return held{lacks: commits, against: tip}, others
+	for _, c := range shown {
+		if slices.Contains(commits, c) {
+			continue
+		}
+		taken, err := l.repo.IsAncestor(ctx, c, tip)
+		switch {
+		case errors.Is(err, vcs.ErrRefNotFound):
+			gone = append(gone, c)
+		case err != nil:
+			return held{unestablished: "whether the default branch at " + tip + " holds " + c + ", shown as lost, could not be read: " +
+				err.Error()}, nil, nil
+		case !taken:
+			gone = append(gone, c)
+		}
+	}
+	return held{lacks: commits, against: tip}, others, gone
 }

@@ -51,43 +51,34 @@ import (
 // preview with ErrLossUnestablished rather than showing a list that may
 // overstate or understate. A copy that is gone is ErrCopyGone.
 //
-// The digest is over the copy's state as a discard would destroy it
-// (copyState), each piece a framed record (digest), so no name, target or
-// content can stand for a boundary, and the commits shown as lost (seal).
-// It is decided from what the copy holds, never from what git reports
-// changed, so neither git's ignore rules nor its configuration can keep a
-// file out of it:
-//
-//   - the copy's path and the commit HEAD stands on;
-//   - every entry under the copy, walked by the filesystem, a file git
-//     ignores and a nested repository's own .git among them: its path, its
-//     type, its full mode, and a hash of a file's bytes or a link's target;
-//   - the repository directory the removal deletes with it, a task's
-//     clone's .git or the directory the gate keeps for a run's worktree,
-//     walked the same way (its configuration, hooks, and any operation in
-//     progress), except the entries git rewrites without changing what they
-//     hold, which Loss's own fetch writes to (gitDirSealedByContent), sealed
-//     instead by what they hold: every reference and the object it names,
-//     every entry of every reflog, the stash list whole among them, and
-//     every entry of the index at every stage by git's own object identity;
-//     for a run's worktree the references are its own and the stash
-//     (runWorktreeRefs) and the reflogs HEAD's and theirs, since everything
-//     else it reads is the gate's, shared with every other run;
-//   - the three indicators;
-//   - the paths shown as lost, by kind and path (seal), which the copy's
-//     state decides but for what git writes into a new repository, so a
-//     change to that between showing and confirming refuses too.
+// The digest seals exactly what Loss shows and nothing else (seal): HEAD;
+// the commits lost; every object lost by identifier, with its type and the
+// names shown for it; every path lost by kind and path with what it is lost
+// holding (lostPaths: a file's bytes by their hash or a link's target with
+// the mode git records, a directory lost whole by every entry under it, a
+// staged path by the index entries it stages, a deletion by HEAD's entry);
+// and the three indicators. Each record is framed (digest), so no name,
+// target or content can stand for a boundary. What is shown and what is
+// sealed are one set by construction: a change to anything shown moves
+// the digest, which lets Discard refuse a copy that no longer holds exactly
+// what was shown (ErrLossChanged), and a change to nothing shown leaves it
+// as it was, since the removal destroys nothing more for it: a branch made
+// at a commit already shown or held upstream, references packed, the
+// object database repacked, a file rewritten with the bytes it held, or an
+// edit staged whose content the working tree holds as shown. Every path is
+// decided from what the copy holds, never from what git reports changed,
+// so neither git's ignore rules nor its configuration can keep one off the
+// list or out of the digest. It is a confirmation and not a secret.
 //
 // The default branch's tip is not in it: it is not the copy's, and a
 // discard answered and stopped before its removal would otherwise be
-// refused for good by an unrelated commit landing upstream. The same copy
-// in the same state digests the same, and anything the removal would
-// destroy that changes since moves it, which is what lets Discard refuse a
-// copy that no longer holds exactly what was shown (ErrLossChanged). It is
-// a confirmation and not a secret.
+// refused for good by an unrelated commit landing upstream. Discard holds
+// the commits lost to the ones shown instead: none lost now that was not
+// shown, and none shown that the copy no longer holds, unless the default
+// branch has taken it up.
 //
 // What it does not cover, and what that costs. An object nothing names, no
-// reference, reflog entry or index entry, is not sealed: one written since
+// reference, reflog entry or index entry, is not shown: one written since
 // the discard was shown leaves the digest as it was, and a stash dropped
 // before it and not yet pruned, which only git fsck finds, is destroyed
 // with the copy and named by neither the digest nor the list. What git
@@ -96,15 +87,15 @@ import (
 // of an operation in progress (a rebase's or a sequencer's directory); each
 // is shown as a repository path, its file and not the commits it names. A
 // reflog entry whose previous value is a tree, a blob or a tag is not
-// listed by that value (vcs.NotReachedFrom says when git writes one). A tree, a
-// blob or an annotated tag a name points at is listed whatever else holds
-// it, which fails toward showing. A run's
-// worktree's stash is the gate's, which the removal leaves standing; it is
-// sealed all the same, so a stash made in another worktree of the gate in
-// between refuses the confirmation, which is shown again. And git's own
-// maintenance, which a fetch may start, can rewrite what is sealed by what
-// it holds, expiring an old reflog entry among other things, which refuses
-// the confirmation the same way: each of these fails toward keeping.
+// listed by that value (vcs.NotReachedFrom says when git writes one). A
+// tree, a blob or an annotated tag a name points at is listed whatever
+// else holds it, which fails toward showing. A run's worktree's stash is
+// the gate's, which the removal leaves standing; its commits are shown all
+// the same, so a stash made in another worktree of the gate in between
+// refuses the confirmation, which is shown again. And git's own
+// maintenance, which a fetch may start, can expire the one reflog entry
+// that keeps a commit shown in the copy, which refuses the confirmation the
+// same way: each of these fails toward keeping.
 //
 // # The removal
 //
@@ -147,18 +138,19 @@ type Loss struct {
 	Dirty, Untracked, Stash bool
 	// Files is every path the removal destroys whose content or deletion
 	// nothing else holds, decided from what the copy holds (lostPaths), in
-	// Kind's order and by path within it.
+	// Kind's order and by path within it. What each holds is not shown and
+	// is sealed (files).
 	Files []LostPath
 	// Objects is every object a name the removal destroys points at that
 	// is not a commit, an annotated tag, a tree or a blob, with the names
 	// that point at it, in the order they are named (lostFrom).
 	Objects []LostObject
-	// Digest is the confirmation of exactly this: the copy's state, the
-	// commits lacking and the files, as shown (seal).
+	// Digest is the confirmation of exactly this, everything above as
+	// shown, each path by what it is lost holding (seal).
 	Digest string
-	// state is copyState's digest of the copy's state, which the digest
-	// seals with the commits shown as lost.
-	state string
+	// files is Files with what each path is lost holding, which the digest
+	// seals.
+	files []lostFile
 }
 
 // LostPath is one path a discard destroys whose content or deletion
@@ -204,8 +196,8 @@ const (
 	// content HEAD holds and whose deletion nothing else does.
 	LostDeleted LostKind = "deleted"
 	// LostRepository is an entry of the repository directory the removal
-	// deletes, not among those sealed by what they hold
-	// (gitDirSealedByContent), whose content differs from what git writes
+	// deletes, not among those shown as what they hold
+	// (gitDirShownAsObjects), whose content differs from what git writes
 	// into a new repository at that path: its configuration, a hook, the
 	// state of an operation in progress, and the pointer files git keeps
 	// there.
@@ -230,20 +222,28 @@ var ErrLossChanged = errors.New("tasks: the copy no longer holds exactly what wa
 // Loss reads what discarding the entry's copy would lose, on this file's
 // terms.
 func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) {
+	loss, _, err := c.loss(ctx, entry, nil)
+	return loss, err
+}
+
+// loss is Loss, and of shown, the commits a discard was shown as lost, the
+// ones the copy no longer holds that the default branch does not hold
+// either (lostFrom's gone).
+func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, shown []string) (Loss, []string, error) {
 	standing, err := c.standing(entry.CopyPath)
 	if err != nil {
-		return Loss{}, err
+		return Loss{}, nil, err
 	}
 	if !standing {
-		return Loss{}, fmt.Errorf("%w: nothing stands at %s", ErrCopyGone, entry.CopyPath)
+		return Loss{}, nil, fmt.Errorf("%w: nothing stands at %s", ErrCopyGone, entry.CopyPath)
 	}
 	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, vcs.WithRedactor(redact.New()))
 	if err != nil {
-		return Loss{}, fmt.Errorf("tasks: opening the kept copy at %s: %w", entry.CopyPath, err)
+		return Loss{}, nil, fmt.Errorf("tasks: opening the kept copy at %s: %w", entry.CopyPath, err)
 	}
 	inv, err := copied.Inventory(ctx)
 	if err != nil {
-		return Loss{}, fmt.Errorf("tasks: reading the kept copy at %s: %w", entry.CopyPath, err)
+		return Loss{}, nil, fmt.Errorf("tasks: reading the kept copy at %s: %w", entry.CopyPath, err)
 	}
 	// What is lost is read from the copy now, from every name the removal
 	// destroys, so what is shown is what the copy holds when it is shown
@@ -251,24 +251,24 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	// copy when it was kept.
 	refs, logs, err := copyNames(ctx, entry, copied)
 	if err != nil {
-		return Loss{}, err
+		return Loss{}, nil, err
 	}
 	var l landing
 	if taskID, ok := entry.TaskID.Get(); ok {
 		task, err := c.store.Task(ctx, taskID)
 		if err != nil {
-			return Loss{}, err
+			return Loss{}, nil, err
 		}
 		if l, err = c.taskLanding(ctx, task, copied, nil); err != nil {
-			return Loss{}, err
+			return Loss{}, nil, err
 		}
 	} else {
 		run, err := c.store.Run(ctx, entry.RunID.Or(""))
 		if err != nil {
-			return Loss{}, err
+			return Loss{}, nil, err
 		}
 		if l, err = c.runLanding(ctx, run, copied, nil); err != nil {
-			return Loss{}, err
+			return Loss{}, nil, err
 		}
 	}
 	// The default branch is fetched under a namespace of this read's own,
@@ -276,7 +276,7 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	// once (recovery asks it of every finished run's standing copy), and
 	// its forget would delete the reference this read is about to resolve.
 	if l.namespace, err = discardNamespace(entry); err != nil {
-		return Loss{}, err
+		return Loss{}, nil, err
 	}
 	named := namesOf(inv.Head.Commit, refs, logs)
 	// Besides every name read, git's own sets, read as it walks: for a
@@ -284,23 +284,27 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	// HEAD; and every reflog entry's previous value as well as its new one,
 	// for a run's worktree its own and the stash's alone.
 	reach := vcs.Reach{Objects: named.objects, Refs: entry.TaskID.IsKnown(), Reflogs: true, ThisWorktree: !entry.TaskID.IsKnown()}
-	held, others := lostFrom(ctx, l, reach)
+	held, others, gone := lostFrom(ctx, l, reach, shown)
 	if !held.established() {
-		return Loss{}, fmt.Errorf("%w: %s", ErrLossUnestablished, held.unestablished)
+		return Loss{}, nil, fmt.Errorf("%w: %s", ErrLossUnestablished, held.unestablished)
 	}
 	loss := Loss{Head: inv.Head.Commit, Lacks: held.lacks, Dirty: inv.Dirty, Untracked: inv.Untracked, Stash: inv.Stash}
 	for _, object := range others {
 		kind, err := copied.ObjectType(ctx, object)
 		if err != nil {
-			return Loss{}, fmt.Errorf("tasks: reading what %s is in the kept copy at %s: %w", object, entry.CopyPath, err)
+			return Loss{}, nil, fmt.Errorf("tasks: reading what %s is in the kept copy at %s: %w", object, entry.CopyPath, err)
 		}
 		loss.Objects = append(loss.Objects, LostObject{Object: object, Type: kind, Names: named.names[object]})
 	}
-	if loss.state, loss.Files, err = copyState(ctx, entry, copied, inv, refs, logs); err != nil {
-		return Loss{}, err
+	if loss.files, err = copyFiles(ctx, entry, copied, inv); err != nil {
+		return Loss{}, nil, err
 	}
-	loss.Digest = seal(loss.state, loss.Lacks, loss.Files, loss.Objects)
-	return loss, nil
+	loss.Files = make([]LostPath, len(loss.files))
+	for i, f := range loss.files {
+		loss.Files[i] = f.LostPath
+	}
+	loss.Digest = seal(loss, loss.Lacks)
+	return loss, gone, nil
 }
 
 // copyNames is every name the removal destroys that git lists, read from
@@ -370,18 +374,18 @@ func namesOf(head string, refs []vcs.Ref, logs []vcs.ReflogEntry) names {
 	return n
 }
 
-// gitDirSealedByContent is the entries of a repository directory whose
-// bytes copyState does not read, because git rewrites them without changing
-// what they hold, and Loss's own read writes some of them: the object
-// database, which the read's fetch adds to and git's maintenance repacks;
-// the references and their logs, in whichever form the repository keeps
-// them, which that fetch writes a reference under for the read's length
-// and maintenance may pack; and the index, whose recorded file times a
-// person's own git status refreshes. Each is read by what it holds
-// instead: every reference and its object, every entry of every reflog,
-// and every entry of the index. What the object database holds that none
-// of those name is the residual gap the header states.
-var gitDirSealedByContent = []string{"objects", "refs", "packed-refs", "logs", "reftable", "index"}
+// gitDirShownAsObjects is the entries of a repository directory that
+// copyFiles does not walk, because git rewrites them without changing what
+// they hold, and Loss's own read writes some of them: the object database,
+// which the read's fetch adds to and git's maintenance repacks; the
+// references and their logs, in whichever form the repository keeps them,
+// which that fetch writes a reference under for the read's length and
+// maintenance may pack; and the index, whose recorded file times a
+// person's own git status refreshes. What they hold is shown instead: the
+// commits and objects their names reach (lostFrom) and the index's content
+// as the paths it stages (lostPaths). What the object database holds that
+// none of those name is the residual gap the header states.
+var gitDirShownAsObjects = []string{"objects", "refs", "packed-refs", "logs", "reftable", "index"}
 
 // runWorktreeRefs is the references a run's worktree holds of its own,
 // which the discard's removal of the worktree takes with it, and the stash
@@ -390,64 +394,50 @@ var gitDirSealedByContent = []string{"objects", "refs", "packed-refs", "logs", "
 // other run.
 var runWorktreeRefs = []string{"refs/worktree/", "refs/bisect/", "refs/rewritten/", "refs/stash"}
 
-// copyState is the digest of the copy's state as a discard would destroy
-// it, on this file's terms, every record framed in one stream, and the
-// paths lost with it, on lostPaths' terms. Both are decided from what the
-// copy holds, never from what git reports changed: the working tree is
-// walked by the filesystem whatever git ignores or reports, and git is
-// asked only for what its own files hold in a form they are rewritten in
-// (gitDirSealedByContent) and for HEAD's tree.
-func copyState(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, inv vcs.Inventory, refs []vcs.Ref,
-	logs []vcs.ReflogEntry) (string, []LostPath, error) {
-	d := newDigest()
-	d.record("copy", entry.CopyPath, inv.Head.Commit)
-	for _, ref := range refs {
-		d.record("ref", ref.Name, ref.Object, ref.Commit)
-	}
-	for _, l := range logs {
-		d.record("reflog", l.Ref, strconv.Itoa(l.Index), l.Object)
-	}
+// copyFiles is every path the removal destroys whose content or deletion
+// nothing else holds, with what each is lost holding, on lostPaths' terms,
+// decided from what the copy holds and never from what git reports
+// changed: the working tree is walked by the filesystem whatever git
+// ignores or reports, then the repository directory the removal deletes
+// with it, a task's clone's .git or the directory the gate keeps for a
+// run's worktree, but for what git rewrites without changing what it holds
+// (gitDirShownAsObjects), and git is asked for HEAD's tree and the index.
+func copyFiles(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, inv vcs.Inventory) ([]lostFile, error) {
 	index, err := copied.IndexEntries(ctx)
 	if err != nil {
-		return "", nil, fmt.Errorf("tasks: reading the index of the kept copy at %s: %w", entry.CopyPath, err)
-	}
-	for _, e := range index {
-		d.record("index", e.Mode, e.Object, strconv.Itoa(e.Stage), e.Path)
+		return nil, fmt.Errorf("tasks: reading the index of the kept copy at %s: %w", entry.CopyPath, err)
 	}
 	obs, err := vcs.Observe(ctx, entry.CopyPath, vcs.WithRedactor(redact.New()))
 	if err != nil {
-		return "", nil, fmt.Errorf("tasks: finding the repository directory of the kept copy at %s: %w", entry.CopyPath, err)
+		return nil, fmt.Errorf("tasks: finding the repository directory of the kept copy at %s: %w", entry.CopyPath, err)
 	}
 	gitDir, err := os.Stat(obs.GitDir)
 	if err != nil {
-		return "", nil, fmt.Errorf("tasks: reading the repository directory of the kept copy at %s: %w", entry.CopyPath, err)
+		return nil, fmt.Errorf("tasks: reading the repository directory of the kept copy at %s: %w", entry.CopyPath, err)
 	}
 	lost, err := newLostPaths(ctx, copied, inv.Head.Commit, index)
 	if err != nil {
-		return "", nil, fmt.Errorf("tasks: reading what the kept copy at %s holds against HEAD: %w", entry.CopyPath, err)
+		return nil, fmt.Errorf("tasks: reading what the kept copy at %s holds against HEAD: %w", entry.CopyPath, err)
 	}
 	// The working tree, everything under the copy but the repository
 	// directory standing in it, which is walked on its own terms below;
 	// a nested repository's .git, a submodule's among them, is walked
 	// here as files like any other.
-	err = recordTree(d, "tree", entry.CopyPath, func(rel string, info os.FileInfo) bool {
+	err = walkTree(entry.CopyPath, func(rel string, info os.FileInfo) bool {
 		return rel == ".git" && info.IsDir() && os.SameFile(info, gitDir)
 	}, lost.worktree(entry.CopyPath))
 	if err != nil {
-		return "", nil, fmt.Errorf("tasks: reading the kept copy at %s: %w", entry.CopyPath, err)
+		return nil, fmt.Errorf("tasks: reading the kept copy at %s: %w", entry.CopyPath, err)
 	}
-	// The repository directory: a task's clone's .git, or the directory
-	// the gate keeps for a run's worktree, which its removal deletes.
-	sealedByContent := func(rel string, _ os.FileInfo) bool { return slices.Contains(gitDirSealedByContent, rel) }
-	fresh, err := freshRepository(ctx, sealedByContent)
+	shownAsObjects := func(rel string, _ os.FileInfo) bool { return slices.Contains(gitDirShownAsObjects, rel) }
+	fresh, err := freshRepository(ctx, shownAsObjects)
 	if err != nil {
-		return "", nil, fmt.Errorf("tasks: reading what git writes into a new repository: %w", err)
+		return nil, fmt.Errorf("tasks: reading what git writes into a new repository: %w", err)
 	}
-	if err := recordTree(d, "gitdir", obs.GitDir, sealedByContent, lost.repository(fresh)); err != nil {
-		return "", nil, fmt.Errorf("tasks: reading the repository directory of the kept copy at %s: %w", entry.CopyPath, err)
+	if err := walkTree(obs.GitDir, shownAsObjects, lost.repository(fresh)); err != nil {
+		return nil, fmt.Errorf("tasks: reading the repository directory of the kept copy at %s: %w", entry.CopyPath, err)
 	}
-	d.record("indicators", strconv.FormatBool(inv.Dirty), strconv.FormatBool(inv.Untracked), strconv.FormatBool(inv.Stash))
-	return d.sum(), lost.list(), nil
+	return lost.list(), nil
 }
 
 // discardNamespace is a namespace no other read uses, under which one Loss
@@ -465,24 +455,32 @@ func discardNamespace(entry store.KeptWork) (string, error) {
 	return "refs/assistant/discard/" + owner + "/" + hex.EncodeToString(suffix[:]), nil
 }
 
-// seal is the digest a discard is shown and confirmed with: the copy's
-// state, copyState's digest of it, the commits shown as lost, and the paths
-// shown as lost. The
-// default branch's tip is not sealed. It is not the copy's, so a commit
+// seal is the digest a discard is shown and confirmed with: everything
+// loss shows and nothing else, with lacks for the commits shown as lost
+// (Loss gives its own, and Discard the ones the confirmation was shown, so
+// a default branch that took some up since is no change). HEAD; the
+// commits lost; every object lost by identifier with its type and names;
+// every path lost by kind and path with what it is lost holding
+// (lostFile); and the three indicators. Each set is sealed in an order of
+// its own, sorted, so a set read in another order seals the same. The
+// default branch's tip is not sealed: it is not the copy's, so a commit
 // landing on it that the copy does not hold changes nothing a discard
 // destroys, and sealing it would refuse a recorded discard for good
 // whenever the upstream moved before the removal. What it can change is
 // what of the copy is lost, which Discard holds to what was shown instead.
-func seal(state string, lacks []string, files []LostPath, objects []LostObject) string {
+func seal(loss Loss, lacks []string) string {
 	d := newDigest()
-	d.record("state", state)
-	d.record(append([]string{"lacks"}, lacks...)...)
-	for _, f := range files {
-		d.record("file", string(f.Kind), f.Path)
-	}
+	d.record("head", loss.Head)
+	d.record(append([]string{"lacks"}, slices.Sorted(slices.Values(lacks))...)...)
+	objects := slices.Clone(loss.Objects)
+	slices.SortFunc(objects, func(a, b LostObject) int { return strings.Compare(a.Object, b.Object) })
 	for _, o := range objects {
-		d.record(append([]string{"object", o.Object, o.Type}, o.Names...)...)
+		d.record(append([]string{"object", o.Object, o.Type}, slices.Sorted(slices.Values(o.Names))...)...)
 	}
+	for _, f := range loss.files {
+		d.record("path", string(f.Kind), f.Path, f.held)
+	}
+	d.record("indicators", strconv.FormatBool(loss.Dirty), strconv.FormatBool(loss.Untracked), strconv.FormatBool(loss.Stash))
 	return d.sum()[:12]
 }
 
@@ -510,22 +508,19 @@ func (d *digest) record(fields ...string) {
 // sum is the digest of every record written, in hexadecimal.
 func (d *digest) sum() string { return hex.EncodeToString(d.h.Sum(nil)) }
 
-// recordTree writes one record for every entry under root, root itself
-// included, walked by the filesystem in lexical order and never through a
-// link: its path relative to root, its type, its full mode (the type, the
-// nine permission bits git keeps the executable ones of, and the rest a
-// discard destroys too), and what it holds: a link's target, a regular
-// file's bytes by their hash, nothing more for a directory, and nothing
-// for anything else, a pipe or a socket, which has no bytes to read. An
-// entry skip answers true for, by its path relative to root, is not
-// recorded, and nothing under it is walked. Every record is framed on
-// digest's terms, so no name, target or content can stand for a boundary.
-// visit, when not nil, is given every entry recorded but root, with what
-// its record says it holds, in the walk's order.
-func recordTree(d *digest, label, root string, skip func(rel string, info os.FileInfo) bool, visit treeVisit) error {
+// walkTree gives visit every entry under root, root itself aside, walked
+// by the filesystem in lexical order and never through a link, with its
+// path relative to root and what it holds: a link's target, a regular
+// file's bytes by their hash, and nothing for anything else, a directory,
+// a pipe or a socket. An entry skip answers true for, by its path relative
+// to root, is not given, and nothing under it is walked.
+func walkTree(root string, skip func(rel string, info os.FileInfo) bool, visit treeVisit) error {
 	return filepath.WalkDir(root, func(p string, _ fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if p == root {
+			return nil
 		}
 		rel, err := filepath.Rel(root, p)
 		if err != nil {
@@ -536,40 +531,30 @@ func recordTree(d *digest, label, root string, skip func(rel string, info os.Fil
 		if err != nil {
 			return err
 		}
-		if p != root && skip(rel, info) {
+		if skip(rel, info) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		mode := strconv.FormatUint(uint64(info.Mode()), 8)
 		held := ""
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
 			if held, err = os.Readlink(p); err != nil {
 				return err
 			}
-			d.record(label, rel, "link", mode, held)
-		case info.IsDir():
-			d.record(label, rel, "dir", mode)
 		case info.Mode().IsRegular():
 			if held, err = hashFile(p); err != nil {
 				return err
 			}
-			d.record(label, rel, "file", mode, held)
-		default:
-			d.record(label, rel, "other", mode)
 		}
-		if visit != nil && p != root {
-			return visit(rel, info, held)
-		}
-		return nil
+		return visit(rel, info, held)
 	})
 }
 
-// treeVisit is what recordTree gives each entry it records: its path
-// relative to the root, what Lstat read of it, and what its record says it
-// holds, a link's target or a file's hash, empty for anything else.
+// treeVisit is what walkTree gives each entry: its path relative to the
+// root, what Lstat read of it, and what it holds, a link's target or a
+// file's hash, empty for anything else.
 type treeVisit func(rel string, info os.FileInfo, held string) error
 
 // hashFile is a hash of the file's bytes, read as a stream.
@@ -588,13 +573,14 @@ func hashFile(path string) (string, error) {
 
 // Discard removes the entry's copy when it still holds exactly what digest
 // was shown for, on this file's terms, and returns what was lost. shown is
-// the commits the discard was shown as lost, which digest seals with the
-// copy's state: the copy read now must seal with them to digest, so it
-// holds exactly what it held when shown, and what the default branch read
-// now lacks of it must be among them, so a commit that would be lost now
-// and was not shown is refused with ErrLossChanged. gate is the gate repository a run's
-// copy is a worktree of, and is not read for a task's. A copy already gone
-// returns the zero Loss and no error.
+// the commits the discard was shown as lost, which digest seals: the copy
+// read now must seal with them to digest, so everything shown but the
+// commits is as it was; every commit lost now must be among them, so one
+// that would be lost now and was not shown is refused; and every one of
+// them must be lost now or held by the default branch, so one the copy no
+// longer holds is refused. Each refusal is ErrLossChanged. gate is the gate
+// repository a run's copy is a worktree of, and is not read for a task's. A
+// copy already gone returns the zero Loss and no error.
 //
 // What the commit check does not cover: a default branch that moved only
 // forward over commits the copy does not hold changes nothing here, and one
@@ -602,14 +588,14 @@ func hashFile(path string) (string, error) {
 // proceed; one that was rewound or force-pushed past a commit it had can
 // make the copy the only place that commit is, which is refused.
 func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest string, shown []string, gatePath string) (Loss, error) {
-	loss, err := c.Loss(ctx, entry)
+	loss, gone, err := c.loss(ctx, entry, shown)
 	if errors.Is(err, ErrCopyGone) {
 		return Loss{}, nil
 	}
 	if err != nil {
 		return Loss{}, err
 	}
-	if sealed := seal(loss.state, shown, loss.Files, loss.Objects); sealed != digest {
+	if sealed := seal(loss, shown); sealed != digest {
 		return Loss{}, fmt.Errorf("%w: it was shown as %s and holds what digests as %s now", ErrLossChanged, digest, sealed)
 	}
 	var unshown []string
@@ -620,6 +606,10 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 	}
 	if len(unshown) > 0 {
 		return Loss{}, fmt.Errorf("%w: the default branch now lacks %s, which the discard was not shown as lost", ErrLossChanged, strings.Join(unshown, ", "))
+	}
+	if len(gone) > 0 {
+		return Loss{}, fmt.Errorf("%w: the copy no longer holds %s, which the discard was shown as lost and the default branch does not hold",
+			ErrLossChanged, strings.Join(gone, ", "))
 	}
 	if c.betweenDiscardReadAndRemoval != nil {
 		c.betweenDiscardReadAndRemoval()

@@ -582,11 +582,12 @@ a file the copy deleted, staged or not, or `repository` for a
 file of the copy's repository directory, a hook or its configuration
 among them, that differs from what git writes into every new repository),
 a directory lost whole named once with a trailing slash; whether git
-reports a change, a file or a stash; and a digest of all of it. It records
-and removes nothing. Given again with
-`--confirm DIGEST` it removes the copy only while the copy still holds
-exactly what that digest was shown for, so a commit, an edit, a file or a
-stash made since is refused and you are told to look again. Your
+reports a change, a file or a stash; and a digest of exactly what is
+shown, each file by what it holds. It records and removes nothing. Given
+again with `--confirm DIGEST` it removes the copy only while everything
+shown is as it was, so a commit, an edit, a file or a stash made since is
+refused and you are told to look again; a change that loses nothing more,
+such as a branch made at a commit already listed, is not. Your
 confirmation is recorded first, with what it was shown and who gave it,
 and the entry stays open and listed until the copy is gone; only then is
 it answered discard. If the service stops in between, the next start
@@ -594,8 +595,8 @@ removes the copy if it still holds what you were shown; if the copy
 changed meanwhile, your confirmation is withdrawn, the copy stays, and
 the entry is listed again for you to look at and answer afresh. A copy
 kept again at another state has an entry for each state; discarding the
-copy answers and closes all of them kept by the time you confirmed, as
-carrying it on does. While one entry of a copy has an answer still being
+copy answers and closes all of them kept by the time its removal read the
+copy, as carrying it on does for those kept by the time you answered. While one entry of a copy has an answer still being
 carried out (a landing whose run is not started yet, a carry on or a
 discard not finished), the copy's other entries are not answered, and the
 task is not promoted; the answer under way finishes on its own or at the

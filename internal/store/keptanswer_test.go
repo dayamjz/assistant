@@ -70,7 +70,7 @@ func TestALandingIsClaimedAndThenAnsweredWithItsRun(t *testing.T) {
 	if _, err := s.ConfirmKeptWorkDiscard(ctx, other.ID, "shown", nil, ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MarkKeptWorkDiscarded(ctx, other.ID); err != nil {
+	if _, err := s.MarkKeptWorkDiscarded(ctx, other.ID, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.RecordKeptWorkLanding(ctx, other.ID, run.ID); !errors.Is(err, ErrKeptWorkAnswered) {
@@ -325,7 +325,7 @@ func TestADiscardIsConfirmedAndThenAnsweredWithItsRemoval(t *testing.T) {
 	if _, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, "abc123", nil, Resolver{}); !errors.Is(err, ErrNoResolver) {
 		t.Fatalf("a confirmation from nobody = %v; want ErrNoResolver", err)
 	}
-	if _, err := s.MarkKeptWorkDiscarded(ctx, entry.ID); !errors.Is(err, ErrKeptWorkNotDiscard) {
+	if _, err := s.MarkKeptWorkDiscarded(ctx, entry.ID, time.Time{}); !errors.Is(err, ErrKeptWorkNotDiscard) {
 		t.Fatalf("marking an entry with no confirmation discarded = %v; want ErrKeptWorkNotDiscard", err)
 	}
 	if _, err := s.WithdrawKeptWorkDiscard(ctx, entry.ID, "abc123"); !errors.Is(err, ErrKeptWorkNotConfirmed) {
@@ -366,12 +366,12 @@ func TestADiscardIsConfirmedAndThenAnsweredWithItsRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	done, err := s.MarkKeptWorkDiscarded(ctx, entry.ID)
+	done, err := s.MarkKeptWorkDiscarded(ctx, entry.ID, time.Time{})
 	if err != nil || done.Answer.Or("") != KeptDiscard || done.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() ||
 		done.AnsweredAt != again.DiscardConfirmedAt || done.DiscardDigest.Or("") != "def456" || !done.DiscardedAt.IsKnown() || done.Open() {
 		t.Fatalf("the mark = %+v, %v; want it answered discard as confirmed, def456, and marked", done, err)
 	}
-	if _, err := s.MarkKeptWorkDiscarded(ctx, entry.ID); !errors.Is(err, ErrKeptWorkDiscarded) {
+	if _, err := s.MarkKeptWorkDiscarded(ctx, entry.ID, time.Time{}); !errors.Is(err, ErrKeptWorkDiscarded) {
 		t.Fatalf("marking it again = %v; want ErrKeptWorkDiscarded", err)
 	}
 	if _, err := s.WithdrawKeptWorkDiscard(ctx, entry.ID, "def456"); !errors.Is(err, ErrKeptWorkAnswered) {
@@ -419,11 +419,13 @@ func TestADiscardIsConfirmedAndThenAnsweredWithItsRemoval(t *testing.T) {
 // ErrKeptWorkCopyOwed and write nothing; once the landing is recorded, the
 // second is confirmed, which leaves the third open and takes no answer or
 // confirmation on it, nor on an entry of the copy kept after; and the mark
-// of the second answers and marks the third with the same digest, commits
-// and resolver, leaves the land entry, the other copy's entry and the
-// entry kept after the confirmation as they were, after which that one
-// can be answered. Without the siblings in the mark the third is left
-// open over a copy that is gone.
+// of the second, given when the removal's read of the copy began, answers
+// and marks the third and the one kept after the confirmation before that
+// read with the same digest, commits and resolver, and leaves the land
+// entry, the other copy's entry and an entry kept after the read as they
+// were, after which that one can be answered. Without the siblings in the
+// mark the third is left open over a copy that is gone; with the bound at
+// the confirmation, so is the one kept before the read.
 func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -480,7 +482,14 @@ func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) 
 		t.Fatalf("a land while a discard of the copy is confirmed = %v; want ErrKeptWorkCopyOwed", err)
 	}
 
-	if _, err := s.MarkKeptWorkDiscarded(ctx, second.ID); err != nil {
+	// The removal's read of the copy begins once late is kept, and unread
+	// is kept after it began.
+	removalRead := time.Now()
+	unread := record("/worktrees/g", "g555")
+	if !unread.KeptAt.After(removalRead) {
+		t.Fatalf("the entry kept after the read was kept at %v, not after the read at %v", unread.KeptAt, removalRead)
+	}
+	if _, err := s.MarkKeptWorkDiscarded(ctx, second.ID, removalRead); err != nil {
 		t.Fatal(err)
 	}
 	sibling := read(third)
@@ -494,13 +503,17 @@ func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) 
 	if !read(elsewhere).Open() {
 		t.Fatalf("another copy's entry reads %+v; want it open", read(elsewhere))
 	}
-	if got := read(late); !got.Open() || got.DiscardDigest.IsKnown() {
-		t.Fatalf("the entry kept after the confirmation reads %+v; want it open, not taken by a discard it was not shown in", got)
+	if got := read(late); got.Answer.Or("") != KeptDiscard || !got.DiscardedAt.IsKnown() {
+		t.Fatalf("the entry kept after the confirmation and before the removal's read reads %+v; want it answered discard, "+
+			"since the read the removal was held to covers it", got)
+	}
+	if got := read(unread); !got.Open() || got.DiscardDigest.IsKnown() {
+		t.Fatalf("the entry kept after the removal's read reads %+v; want it open, not taken by a discard that did not read it", got)
 	}
 	if owed, err := s.KeptWorkDiscardsOwed(ctx); err != nil || len(owed) != 0 {
 		t.Fatalf("KeptWorkDiscardsOwed = %+v, %v; want none once the copy is marked gone", owed, err)
 	}
-	if _, err := s.ClaimKeptWorkLanding(ctx, late.ID, ResolvedByMachineInterface()); err != nil {
-		t.Fatalf("the late entry once nothing of its copy is owed: %v", err)
+	if _, err := s.ClaimKeptWorkLanding(ctx, unread.ID, ResolvedByMachineInterface()); err != nil {
+		t.Fatalf("the entry kept after the read once nothing of its copy is owed: %v", err)
 	}
 }

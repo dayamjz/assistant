@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/redact"
@@ -38,9 +39,18 @@ import (
 //     new repository at the same path, read from one made for the purpose
 //     (freshRepository), so a sample hook git writes into every repository
 //     is not named and a hook or configuration of the copy's own is
-//     (LostRepository). The entries sealed by what they hold
-//     (gitDirSealedByContent) are not walked, so not named: what they hold
-//     is shown as the commits lacking and the stash indicator.
+//     (LostRepository). The entries git rewrites without changing what
+//     they hold (gitDirShownAsObjects) are not walked, so not named: what
+//     they hold is shown as the commits and objects lost and the staged
+//     paths.
+//
+// Each path is listed with what it is lost holding, the content the seal
+// holds a confirmation to (lostFile): a working-tree or repository entry's
+// type, the mode git records (the executable bit, or a link) and its bytes'
+// hash or a link's target, a directory lost whole as every entry under it
+// the same way with its path; an index entry's mode, object and stage, for
+// every lost entry at the path; and a deletion's entry of HEAD's tree, its
+// type, mode and object.
 //
 // What it names more than is lost, failing toward showing: a file whose
 // content a commit other than HEAD's holds, one a filter or line-ending
@@ -59,10 +69,19 @@ type lostPaths struct {
 	// seen is every path the working tree's walk visited.
 	seen  map[string]bool
 	found map[LostKind][]string
+	// held is what each path found is lost holding, written as it is found.
+	held map[LostPath]*digest
+}
+
+// lostFile is a path a discard destroys and what it is lost holding, as
+// lostPaths decides it: a digest of the content, framed on digest's terms.
+type lostFile struct {
+	LostPath
+	held string
 }
 
 // newLostPaths reads HEAD's tree and the repository's object format, which
-// the working tree is decided against, with the index entries copyState
+// the working tree is decided against, with the index entries copyFiles
 // read.
 func newLostPaths(ctx context.Context, copied *vcs.Repository, head string, index []vcs.IndexEntry) (*lostPaths, error) {
 	format, err := copied.ObjectFormat(ctx)
@@ -74,7 +93,7 @@ func newLostPaths(ctx context.Context, copied *vcs.Repository, head string, inde
 		return nil, err
 	}
 	l := &lostPaths{format: format, head: tree, index: index, indexed: map[string]bool{}, working: map[string]string{},
-		seen: map[string]bool{}, found: map[LostKind][]string{}}
+		seen: map[string]bool{}, found: map[LostKind][]string{}, held: map[LostPath]*digest{}}
 	for _, e := range index {
 		l.indexed[e.Path] = true
 	}
@@ -85,7 +104,8 @@ func newLostPaths(ctx context.Context, copied *vcs.Repository, head string, inde
 // root.
 func (l *lostPaths) worktree(root string) treeVisit {
 	whole := ""
-	return func(rel string, info os.FileInfo, _ string) error {
+	var under *digest
+	return func(rel string, info os.FileInfo, held string) error {
 		// The copy's .git that is not walked is its repository directory,
 		// decided on its own terms; one that is a file is a linked
 		// worktree's pointer to that directory.
@@ -104,6 +124,7 @@ func (l *lostPaths) worktree(root string) treeVisit {
 			l.working[rel] = mode + " " + object
 		}
 		if whole != "" && strings.HasPrefix(rel, whole) {
+			holding(under, rel, info, held)
 			return nil
 		}
 		whole = ""
@@ -113,24 +134,32 @@ func (l *lostPaths) worktree(root string) treeVisit {
 				return nil
 			}
 			whole = rel + "/"
-			l.add(LostNew, whole)
+			under = l.add(LostNew, whole)
+			holding(under, rel, info, held)
 		case inHead && e.Type == "blob":
 			if mode == "" || mode != e.Mode || object != e.Object {
-				l.add(LostChanged, rel)
+				holding(l.add(LostChanged, rel), rel, info, held)
 			}
 		default:
-			l.add(LostNew, rel)
+			holding(l.add(LostNew, rel), rel, info, held)
 		}
 		return nil
 	}
+}
+
+// holding writes into d what the entry at rel holds, on lostPaths' terms.
+func holding(d *digest, rel string, info os.FileInfo, held string) {
+	d.record(rel, entryKind(info), gitMode(info), held)
 }
 
 // repository is the visit that decides the repository directory's entries
 // against fresh, what git writes into a new repository.
 func (l *lostPaths) repository(fresh map[string]freshEntry) treeVisit {
 	whole := ""
+	var under *digest
 	return func(rel string, info os.FileInfo, held string) error {
 		if whole != "" && strings.HasPrefix(rel, whole) {
+			holding(under, rel, info, held)
 			return nil
 		}
 		whole = ""
@@ -140,34 +169,40 @@ func (l *lostPaths) repository(fresh map[string]freshEntry) treeVisit {
 		case ok && f.kind == kind && (kind == "dir" || (kind != "other" && f.held == held)):
 		case kind == "dir":
 			whole = rel + "/"
-			l.add(LostRepository, whole)
+			under = l.add(LostRepository, whole)
+			holding(under, rel, info, held)
 		default:
-			l.add(LostRepository, rel)
+			holding(l.add(LostRepository, rel), rel, info, held)
 		}
 		return nil
 	}
 }
 
-// list is every path found, the index and HEAD's tree decided last against
-// what the walk read of the working tree, in lostKinds' order and by path
-// within each.
-func (l *lostPaths) list() []LostPath {
+// list is every path found with what it is lost holding, the index and
+// HEAD's tree decided last against what the walk read of the working tree,
+// in lostKinds' order and by path within each.
+func (l *lostPaths) list() []lostFile {
 	l.deletions()
 	for _, e := range l.index {
 		if h, ok := l.head[e.Path]; ok && h.Mode == e.Mode && h.Object == e.Object {
 			continue
 		}
-		if l.working[e.Path] == e.Mode+" "+e.Object || slices.Contains(l.found[LostStaged], e.Path) {
+		if l.working[e.Path] == e.Mode+" "+e.Object {
 			continue
 		}
-		l.add(LostStaged, e.Path)
+		d, ok := l.held[LostPath{Kind: LostStaged, Path: e.Path}]
+		if !ok {
+			d = l.add(LostStaged, e.Path)
+		}
+		d.record(e.Mode, e.Object, strconv.Itoa(e.Stage))
 	}
-	out := []LostPath{}
+	out := []lostFile{}
 	for _, kind := range lostKinds {
 		paths := l.found[kind]
 		slices.Sort(paths)
 		for _, p := range paths {
-			out = append(out, LostPath{Kind: kind, Path: p})
+			at := LostPath{Kind: kind, Path: p}
+			out = append(out, lostFile{LostPath: at, held: l.held[at].sum()})
 		}
 	}
 	return out
@@ -191,14 +226,21 @@ func (l *lostPaths) deletions() {
 		switch e := l.head[path]; {
 		case e.Type == "tree" && !l.seen[path]:
 			whole = path + "/"
-			l.add(LostDeleted, whole)
+			l.add(LostDeleted, whole).record(e.Type, e.Mode, e.Object)
 		case e.Type != "tree" && (!l.seen[path] || !l.indexed[path]):
-			l.add(LostDeleted, path)
+			l.add(LostDeleted, path).record(e.Type, e.Mode, e.Object)
 		}
 	}
 }
 
-func (l *lostPaths) add(kind LostKind, path string) { l.found[kind] = append(l.found[kind], path) }
+// add finds path lost for kind and returns the digest what it holds is
+// written into.
+func (l *lostPaths) add(kind LostKind, path string) *digest {
+	l.found[kind] = append(l.found[kind], path)
+	d := newDigest()
+	l.held[LostPath{Kind: kind, Path: path}] = d
+	return d
+}
 
 // gitMode is the mode git records a working-tree entry under, or "" for
 // one git records no blob for: a link, an executable file (the owner's
@@ -216,10 +258,10 @@ func gitMode(info os.FileInfo) string {
 }
 
 // freshEntry is one entry of a new repository's directory: its type and
-// what recordTree read it to hold.
+// what walkTree read it to hold.
 type freshEntry struct{ kind, held string }
 
-// entryKind is an entry's type as recordTree records it.
+// entryKind is an entry's type as walkTree reads it.
 func entryKind(info os.FileInfo) string {
 	switch {
 	case info.Mode()&os.ModeSymlink != 0:
@@ -248,7 +290,7 @@ func freshRepository(ctx context.Context, skip func(rel string, info os.FileInfo
 		return nil, fmt.Errorf("initializing one: %w", err)
 	}
 	fresh := map[string]freshEntry{}
-	err = recordTree(newDigest(), "fresh", path, skip, func(rel string, info os.FileInfo, held string) error {
+	err = walkTree(path, skip, func(rel string, info os.FileInfo, held string) error {
 		fresh[rel] = freshEntry{kind: entryKind(info), held: held}
 		return nil
 	})

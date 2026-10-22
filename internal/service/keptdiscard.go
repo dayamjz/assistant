@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -20,18 +21,21 @@ import (
 //
 // # What is shown, and what is confirmed
 //
-// internal/tasks' Loss reads what would be lost from the copy now: the commits
-// the default branch, read fresh, lacks that anything in the copy names, a
-// reference, a root reference such as ORIG_HEAD, a reflog entry by either of
-// its values or HEAD, with every tag, tree or blob such a name points at, every path whose content or deletion nothing else holds, ignored
-// files and deletions included, and the three indicators git reports, with a
-// digest over the copy's state, those commits and those paths. A default branch
-// that cannot be read now is refused rather than shown a list that may
-// overstate or understate, naming why. A discard given a digest is compared
-// against that read again: a copy that changed since, by a commit, an edit, a
-// deletion, a file or a stash, digests differently and is refused, and the
-// person is told to look again. Nothing is recorded for a discard shown or
-// refused.
+// internal/tasks' Loss reads what would be lost from the copy now: the
+// commits the default branch, read fresh, lacks that anything in the copy
+// names, a reference, a root reference such as ORIG_HEAD, a reflog entry by
+// either of its values or HEAD, with every tag, tree or blob such a name
+// points at, every path whose content or deletion nothing else holds,
+// ignored files and deletions included, and the three indicators git
+// reports, with a digest over exactly what is shown, each path by what it
+// holds. A default branch that cannot be read now is refused rather than
+// shown a list that may overstate or understate, naming why. A discard
+// given a digest is compared against that read again: a copy in which
+// anything shown changed since, a commit, an edit, a deletion, a file or a
+// stash among it, digests differently and is refused, and the person is
+// told to look again; a change to nothing shown, a branch made at a commit
+// already shown among them, is no reason to refuse. Nothing is recorded for
+// a discard shown or refused.
 //
 // # The order, and what a stop leaves
 //
@@ -66,8 +70,11 @@ import (
 // A copy kept again at another state has an entry per state, and a
 // discard removes the copy whole, which is what was shown and confirmed.
 // So the mark answers and marks every open entry of the copy kept by the
-// time of the confirmation in its one write, none of them left holding the
-// project's new tasks over a copy that is gone; completeDiscard reads its
+// time the removal's read of the copy began, or by the confirmation when
+// that is later, in its one write, none of them left holding the project's
+// new tasks over a copy that is gone: the removal went ahead only because
+// that read found nothing lost that was not shown, so it covers the state
+// each of them was kept from; completeDiscard reads its
 // entry again first, so a call that finds it marked reports it discarded.
 // No answer and no confirmation is written while another entry of the copy
 // holds one not yet carried out, a land whose run is not named, a carry on
@@ -84,10 +91,12 @@ import (
 // the commits its references and HEAD stand on (store.KeptWorkOf), which a
 // file, an edit or a deletion leaves as they were, so the cleanup finds the
 // entry already standing. Only a change to those commits in that moment
-// has a cleanup record a new entry, kept after the confirmation and so not
-// marked: it is left open over a copy that is gone, and listed. A cleanup
-// that records one before that moment and after the confirmation records
-// it for a copy the digest no longer matches, and the removal is refused.
+// has a cleanup record a new entry, kept after the removal's read began and
+// so not marked: it is left open over a copy that is gone, and listed. One
+// a cleanup records after the confirmation and before that read is marked
+// with the rest when the read finds nothing lost unshown, a reference made
+// or removed at a commit already shown or held upstream among it, and the
+// removal is refused when it does.
 
 // # What "person-only" is enforced by, and what it is not
 //
@@ -300,6 +309,9 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 			return machine.KeptWorkAnswered{}, err
 		}
 	}
+	// The removal is held to a read of the copy that begins now, so every
+	// entry of the copy kept by now was kept from a state that read covers.
+	read := time.Now()
 	lost, err := s.cleaner.Discard(ctx, entry, digest, entry.DiscardLacks, gatePath)
 	if errors.Is(err, tasks.ErrLossChanged) {
 		open, werr := s.store.WithdrawKeptWorkDiscard(ctx, entry.ID, digest)
@@ -313,7 +325,7 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 	} else if err != nil {
 		return machine.KeptWorkAnswered{}, refusedLoss(entry, err)
 	}
-	marked, err := s.store.MarkKeptWorkDiscarded(ctx, entry.ID)
+	marked, err := s.store.MarkKeptWorkDiscarded(ctx, entry.ID, read)
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
