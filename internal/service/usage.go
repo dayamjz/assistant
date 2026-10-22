@@ -34,5 +34,5 @@ func (s *Service) usage(ctx context.Context, req machine.UsageRequest) (machine.
 	if err != nil {
 		return machine.Usage{}, err
 	}
-	return machine.UsageViewOf(window, s.cfg.UsageCeiling, readAt, rows), nil
+	return machine.UsageViewOf(window, s.cfg.UsageCeiling, readAt, rows, s.declarations()), nil
 }

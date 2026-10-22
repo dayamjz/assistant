@@ -38,7 +38,9 @@ type Call struct {
 	Dir string `json:"dir"`
 	// Step is the index of the script step that answered this invocation, or
 	// -1 when no step matched and the stand-in exited with ExitUnscripted. It
-	// is -1 for a worker, which no step answers.
+	// is -1 for a worker, which no step answers, and for a Cursor one-shot
+	// the modelled CLI refused before any step was chosen, because its
+	// command line did not tell the CLI to trust its directory.
 	Step int `json:"step"`
 	// Worker reports that this process was started as a worker rather than
 	// as a one-shot invocation: the adapter put neither --print nor
