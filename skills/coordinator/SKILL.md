@@ -284,7 +284,13 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   anywhere safe; the entry is in `assistant --json status` under
   `kept_work` and in the catch-up read under `kept`. Tell the person: it is
   theirs to decide. Answering it is not in this build yet, and it does not
-  hold new tasks in the project from dispatching. The
+  hold new tasks in the project from dispatching. A kept entry no task
+  names, such as the run of the person's own push, reaches you as a
+  `kept-work` wake about the entry instead, listed under `kept_work_wakes`
+  with the entry's id in `kept_work`, its `project` and its `branch`, with
+  numbers of its own, and acknowledged as `kNUMBER`. Acknowledging it
+  closes the wake and answers nothing: the entry stays listed until it is
+  answered or its work lands. The
   program's own records of creating and dispatching a task wake nobody.
 - `acknowledge` also closes a wake `listen` printed that you dealt with
   without draining. Naming an id no wake has, or one already acknowledged,

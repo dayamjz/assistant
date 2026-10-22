@@ -336,8 +336,12 @@
 // seals, a sequence of its own, and no markers, since it is raised once per
 // entry, which its unique key holds. AppendKeptWorkWake is the one append;
 // it refuses an entry answered or closed, and records the entry's
-// surfaced_at in the wake's own transaction, so the supervisor loop reads
-// whether an entry surfaced from the entry whichever shape raised it.
+// surfaced_at in the wake's own transaction, as AppendWakeWithMarkers does
+// for a task's wake naming the entry in WakeRequest.Surfaces, so the
+// supervisor loop reads whether an entry surfaced from the entry whichever
+// shape raised it; TaskWakeKeyed is the read of a task's wake by kind and
+// marker, for a database an earlier build left with a task's wake and no
+// instant.
 // untaskedShape is the one implementation of the offer, the handout, the
 // count and the acknowledgement for the two shapes about no task, and
 // DrainAll and AcknowledgeAll take all three shapes in one transaction. A

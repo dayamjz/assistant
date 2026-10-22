@@ -150,11 +150,7 @@ func (s *Store) AppendKeptWorkWake(ctx context.Context, inc Incarnation, w KeptW
 		if err != nil {
 			return err
 		}
-		// When the entry surfaced only moves forward, which the schema
-		// holds; an instant already recorded past this one stands.
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE kept_work SET surfaced_at = ? WHERE id = ? AND (surfaced_at IS NULL OR surfaced_at < ?)`,
-			encodeTime(now), w.KeptWork, encodeTime(now)); err != nil {
+		if err := markKeptWorkSurfacedTx(ctx, tx, w.KeptWork, now); err != nil {
 			return err
 		}
 		appended, err := keptWorkWakeByID(ctx, tx, id)
@@ -169,6 +165,40 @@ func (s *Store) AppendKeptWorkWake(ctx context.Context, inc Incarnation, w KeptW
 		return KeptWorkWakeAppend{}, fmt.Errorf("store: appending a %s wake for kept work entry %d: %w", w.Kind, w.KeptWork, err)
 	}
 	return out, nil
+}
+
+// markKeptWorkSurfacedTx records, inside the caller's transaction, that the
+// entry surfaced at at. When the entry surfaced only moves forward, which
+// the schema holds, so an instant already recorded past this one stands. An
+// entry that does not exist is ErrNotFound.
+func markKeptWorkSurfacedTx(ctx context.Context, tx *sql.Tx, entry int64, at time.Time) error {
+	var one int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM kept_work WHERE id = ?`, entry).Scan(&one); err != nil {
+		return errNoRows(err)
+	}
+	_, err := tx.ExecContext(ctx,
+		`UPDATE kept_work SET surfaced_at = ? WHERE id = ? AND (surfaced_at IS NULL OR surfaced_at < ?)`,
+		encodeTime(at), entry, encodeTime(at))
+	return err
+}
+
+// TaskWakeKeyed returns the oldest wake of any task with the kind and
+// marker, queued or acknowledged, and whether there is one. It is the read
+// of whether a detection keyed that way already surfaced on a task, which
+// the supervisor loop asks of a kept work entry before it raises the entry
+// on the third shape.
+func (s *Store) TaskWakeKeyed(ctx context.Context, kind, marker string) (Wake, bool, error) {
+	if err := s.live(); err != nil {
+		return Wake{}, false, err
+	}
+	w, err := scanWake(s.read.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE kind = ? AND marker = ? ORDER BY id LIMIT 1`, kind, marker))
+	switch {
+	case isNoRows(err):
+		return Wake{}, false, nil
+	case err != nil:
+		return Wake{}, false, fmt.Errorf("store: reading the %s wake marked %s: %w", kind, marker, err)
+	}
+	return w, true, nil
 }
 
 // KeptWorkWakes returns every kept-work wake, acknowledged or not, oldest
