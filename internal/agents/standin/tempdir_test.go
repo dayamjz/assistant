@@ -396,13 +396,17 @@ func TestTrimpathRegistersWithoutTheSourceTree(t *testing.T) {
 	}
 }
 
+// namespaceProbeModule is the module that contains this test. go test sets
+// the working directory to the package directory, so the walk starts there.
+// The path recorded in the binary is not used: under -trimpath that path is
+// the import path, and walking it does not find go.mod.
 func namespaceProbeModule(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("no caller")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-	mod, err := moduleRootFrom(filepath.Dir(file))
+	mod, err := moduleRootFrom(wd)
 	if err != nil {
 		t.Fatal(err)
 	}
