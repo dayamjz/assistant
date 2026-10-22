@@ -185,3 +185,46 @@ func TestAListingSettlesBesideAZombie(t *testing.T) {
 	_, _ = proc.Wait()
 	reaped = true
 }
+
+// ProcessesMatching lists a process by its arguments whatever it runs: a real
+// shell, not this binary, started with an argument of this test's own that
+// holds spaces, is listed once with exactly the arguments it was started
+// with, read whole rather than split. The control is that once the shell has
+// exited the same listing finds nothing.
+func TestProcessesMatchingListsAProcessByItsArguments(t *testing.T) {
+	t.Parallel()
+	token := fmt.Sprintf("matching %d %d", os.Getpid(), time.Now().UnixNano())
+	shell := exec.Command("/bin/sh", "-c", "read line; exit 0", "sh", token)
+	in, err := shell.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := shell.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := false
+	t.Cleanup(func() {
+		if !exited {
+			_ = shell.Process.Kill()
+			_ = shell.Wait()
+		}
+	})
+	carriesToken := func(args []string) bool { return slices.Contains(args, token) }
+
+	listed, err := ProcessesMatching(carriesToken)
+	if err != nil {
+		t.Fatalf("listing: %v", err)
+	}
+	if len(listed) != 1 || listed[0].PID != shell.Process.Pid || !slices.Equal(listed[0].Args, shell.Args) {
+		t.Fatalf("the listing is %v, want only process %d with arguments %q", listed, shell.Process.Pid, shell.Args)
+	}
+
+	_ = in.Close()
+	if err := shell.Wait(); err != nil {
+		t.Fatalf("the shell did not exit cleanly once its input closed: %v", err)
+	}
+	exited = true
+	if listed, err := ProcessesMatching(carriesToken); err != nil || len(listed) != 0 {
+		t.Errorf("after the shell exited the listing is %v, %v, want none", listed, err)
+	}
+}

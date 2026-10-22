@@ -393,28 +393,6 @@ func TestAKilledServiceLeavesItsRecordAndTheNextOneEndsThatGroupAlone(t *testing
 	}
 }
 
-// matchingCommandLines is what a kill matched on a command line would reach:
-// every process whose command line, as ps prints it, contains pattern. It is
-// the positive control's half and nothing in the product does it.
-func matchingCommandLines(t *testing.T, pattern string) map[int]bool {
-	t.Helper()
-	out, err := exec.Command("ps", "-A", "-ww", "-o", "pid=,args=").Output()
-	if err != nil {
-		t.Fatalf("listing processes for the positive control: %v", err)
-	}
-	matched := map[int]bool{}
-	for line := range strings.Lines(string(out)) {
-		fields := strings.Fields(line)
-		if len(fields) < 2 || !strings.Contains(line, pattern) {
-			continue
-		}
-		if pid, err := strconv.Atoi(fields[0]); err == nil {
-			matched[pid] = true
-		}
-	}
-	return matched
-}
-
 // TestRecoveryLeavesAloneWhatItCannotVerifyAndWhatIsActive establishes P6's
 // refuse-and-report on the kill path at recovery. Three live groups are
 // recorded the way a service that died would have left them, and each is

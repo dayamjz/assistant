@@ -44,6 +44,20 @@ func ProcessesOf(binary string) ([]Process, error) {
 	return processesWhere(kernel{}, ofBinary(binary))
 }
 
+// ProcessesMatching lists every process whose arguments, argv[0] first, match
+// accepts, whatever its executable, leaving out the same processes
+// ProcessesOf does, from a settled reading of the process table
+// (processesWhere). Its arguments are read from the kernel as ProcessesOf
+// reads them, so no program is started to list them. A process whose command
+// line cannot be read while it runs, one of another user's, is passed over,
+// and a list that cannot be read is an error and never an empty list.
+func ProcessesMatching(match func(args []string) bool) ([]Process, error) {
+	return processesWhere(kernel{}, func(table processTable, pid int) bool {
+		_, args, err := table.commandLine(pid)
+		return err == nil && match(args)
+	})
+}
+
 // ofBinary is ProcessesOf's match: a process whose executable is binary.
 func ofBinary(binary string) func(processTable, int) bool {
 	return func(table processTable, pid int) bool {
