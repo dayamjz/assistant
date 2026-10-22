@@ -69,7 +69,7 @@ func TestAnUnreadableProcessOfThisUserInTheCopyKeepsTheSweepFromClearing(t *test
 	if err != nil || !slices.Contains(control.Ended, d.id) {
 		t.Fatalf("the same sweep with the read allowed did %s, %v, want %s ended", control, err, d.id)
 	}
-	requireClearUnlessHostBlocks(t, control, blockers, "the same sweep with the read allowed")
+	requireClearUnlessHostBlocks(t, control, &blockers, "the same sweep with the read allowed", d.id)
 	waitEnded(t, d, "the control sweep")
 	hostLimit(t, blockers, "that the control sweep, with the read allowed, clears")
 }
@@ -97,7 +97,7 @@ func TestAnUnreadableAncestorDoesNotKeepTheSweepFromClearing(t *testing.T) {
 	if err != nil || r.Unreadable < 1 || blocks(r, parent) {
 		t.Fatalf("the sweep refused the working directory of this test's parent %s and did %s, %v (%+v), want the refusal counted and not blocking", parent, r, err, r)
 	}
-	requireClearUnlessHostBlocks(t, r, blockers, "the sweep with this test's parent refused")
+	requireClearUnlessHostBlocks(t, r, &blockers, "the sweep with this test's parent refused")
 	hostLimit(t, blockers, "that a sweep whose only refused process in reach is an ancestor clears")
 }
 
@@ -291,7 +291,7 @@ func TestARefusalNamesItsBlockersAndTheNameDecidesNothing(t *testing.T) {
 	waitEnded(t, inCopy, "the control sweep")
 	waitEnded(t, renamed, "the control sweep")
 	requirePresent(t, namesake, "the namesake in another copy after the control sweep")
-	requireClearUnlessHostBlocks(t, control, blockers, "the same sweep with the reads allowed")
+	requireClearUnlessHostBlocks(t, control, &blockers, "the same sweep with the reads allowed", inCopy.id, renamed.id, namesake.id)
 	hostLimit(t, blockers, "that the control sweep, with the reads allowed, clears")
 }
 
@@ -420,4 +420,47 @@ func TestBlockerForIsTheBlockerTheSweepRecords(t *testing.T) {
 	if b, present, err := agents.BlockerFor(c.id); present || err != nil {
 		t.Fatalf("BlockerFor of an exited, reaped process is %s, present %v, %v, want not present", b, present, err)
 	}
+}
+
+// TestAHostBlockerTheSampleMissedIsRecordedAndOneTheTestStartedIsNot holds
+// requireClearUnlessHostBlocks to #513 through a real sweep. A process of
+// this user outside every copy, whose working directory the sweep is
+// refused with a real refusal, stands for a host process that started after
+// hostBlockers sampled the host: it blocks the sweep of an empty copy, as
+// P6 requires. Against a sample that saw nothing, the helper records it as
+// the host's rather than failing the test. The control is the same result
+// with that process named as one the test started, which the helper must
+// fail, since a process the test put somewhere blocking its sweep is not
+// the host's.
+func TestAHostBlockerTheSampleMissedIsRecordedAndOneTheTestStartedIsNot(t *testing.T) {
+	requiresSweep(t)
+	refusal := realRefusal(t)
+	h, _ := sweepHome(t, sweepBase(t), "home")
+	copyDir := makeTaskCopy(t, h)
+	outside := startDetached(t, t.TempDir(), false)
+	r, err := agents.SweepRefusing(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir,
+		func(pid int) bool { return pid == outside.id.PID }, refusal)
+	if err != nil || !blocks(r, outside.id) || mentions(r, outside.id) {
+		t.Fatalf("the sweep refused %s's working directory and did %s, %v, want it blocking and never signalled, or this test proves nothing", outside.id, r, err)
+	}
+
+	var sampled []agents.Blocker
+	recorder := &recordingTB{TB: t}
+	onItsOwnGoroutine(func() { requireClearUnlessHostBlocks(recorder, r, &sampled, "the sweep of an empty copy") })
+	if recorder.failed {
+		t.Fatalf("a blocker the host sample missed failed the test: %s", recorder.message)
+	}
+	if !slices.ContainsFunc(sampled, func(b agents.Blocker) bool { return b.Identity == outside.id }) {
+		t.Fatalf("the host blockers read %v after the sweep, want %s recorded among them", sampled, outside.id)
+	}
+
+	var none []agents.Blocker
+	control := &recordingTB{TB: t}
+	onItsOwnGoroutine(func() {
+		requireClearUnlessHostBlocks(control, r, &none, "the sweep of an empty copy", outside.id)
+	})
+	if !control.failed || !strings.Contains(control.message, outside.id.String()) {
+		t.Fatalf("a blocker this test started answered %q (failed %v), want the test failed naming %s", control.message, control.failed, outside.id)
+	}
+	requirePresent(t, outside, "a refused process after the sweep")
 }
