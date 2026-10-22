@@ -92,8 +92,8 @@
 // passed, and the sweep stays for a binary that failed its check or never
 // reached it. What neither the check nor the sweep can see is not ended
 // either way: a process running another program that is not read as
-// carrying the identity, which on macOS includes Apple's /bin/sh, /bin/bash,
-// /bin/zsh and /bin/sleep, whose environment the read cannot find. Nor is
+// carrying the identity, which on some macOS machines includes Apple's
+// shells and /bin/sleep, whose environment the read cannot find there. Nor is
 // any file a test leaves removed: the wrapper's directory is the only path
 // RunOwned removes. RunOwned's doc comment owns those gaps.
 //

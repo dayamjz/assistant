@@ -126,8 +126,8 @@ func awaitGone(owner agents.Identity) {
 // a test's os.Exit, a panic, a timeout or a kill, runs no check; what it
 // left is the owner sweep's to end, and nothing reports it. A process
 // running another program that the check cannot read as carrying the
-// identity (leftAfterTests), which on macOS includes every process of
-// Apple's /bin/sh, /bin/bash, /bin/zsh and /bin/sleep, is neither reported
+// identity (leftAfterTests), which on some macOS machines includes every
+// process of Apple's shells and /bin/sleep (carrying), is neither reported
 // nor ended by the check, and once a passing check has retired the sweep,
 // neither is a process it starts afterwards, carrying the identity or not;
 // before the sweep was retired, it ended such a process only when it had

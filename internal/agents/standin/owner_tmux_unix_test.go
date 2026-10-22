@@ -249,12 +249,15 @@ func tmuxOwnerTests(dir, mode string) int {
 // it one lower, and writes that process's identifier to trapChildRecord in
 // the owner's directory. The shell runs for two seconds first, so the check
 // lists this process before it exits. It is this binary waiting on the
-// shell, rather than the shell itself, because on macOS the read finds no
-// environment for Apple's /bin/sh, so a shell is seen by neither the check
-// nor the sweep there; this binary is listed by its executable on both
-// platforms, and it exits only once the trap has started its child. Ended
-// by SIGTERM, as the check ends what it names, it kills the shell first, so
-// the trap never runs and an ended chain starts nothing more.
+// shell, rather than the shell itself, because on some macOS machines the
+// read finds no environment for Apple's /bin/sh, so a shell is seen by
+// neither the check nor the sweep there; this binary is listed by its
+// executable everywhere, and it exits only once the trap has started its
+// child. Ended by SIGTERM, as the check ends what it names, it kills the
+// shell first; and the shell, which the check names and ends itself where
+// its environment can be read, clears its EXIT trap on SIGTERM before it
+// exits (macOS's /bin/sh, which is bash, runs the EXIT trap on a signal
+// that ends it otherwise), so an ended chain starts nothing more.
 func trapExitMain() int {
 	self, err := os.Executable()
 	if err != nil {
@@ -268,7 +271,7 @@ func trapExitMain() int {
 		env = append(env, trapChainVar+"="+strconv.Itoa(chain-1))
 	}
 	shell := exec.Command("/bin/sh", append([]string{"-c",
-		`trap '"$0" "$@" </dev/null >/dev/null 2>&1 & echo $! >"$TRAP_RECORD"' EXIT; sleep 2`,
+		`trap 'trap - EXIT; exit 143' TERM; trap '"$0" "$@" </dev/null >/dev/null 2>&1 & echo $! >"$TRAP_RECORD"' EXIT; sleep 2`,
 		self}, next...)...)
 	shell.Env = append(env, "TRAP_RECORD="+filepath.Join(os.Getenv(tmuxOwnerDirVar), trapChildRecord))
 	ended := make(chan os.Signal, 1)
@@ -488,8 +491,8 @@ func identifyRunning(t *testing.T, field string) agents.Identity {
 // SIGKILL, and the server, the pane's process and the sweep itself are all
 // read as gone within OwnerPoll and a margin, and so is the directory of the
 // tmux wrapper the owner's Tmux named. The pane runs this binary, as a
-// stand-in worker's does, since on macOS the read finds no environment for
-// some programs, an Apple-signed /bin/sleep among them.
+// stand-in worker's does, since on some macOS machines the read finds no
+// environment for some programs (carrying).
 //
 // It holds for a server started under the owner's environment and for one
 // started under an environment built from nothing, without the owner

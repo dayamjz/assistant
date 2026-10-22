@@ -60,8 +60,11 @@ func ofBinary(binary string) func(processTable, int) bool {
 // test's. It is a settled reading, as ProcessesOf's is. A process whose
 // environment cannot be read while it runs, one of another user's, is not
 // read as carrying the identity, and neither is one whose environment reads
-// as empty: on macOS the read finds none for some programs, an Apple-signed
-// /bin/sleep among them, whatever they were started with.
+// as empty. On some macOS machines the read finds none for some programs,
+// whatever they were started with: on the one this was written on, every
+// process of Apple's /bin/sh, /bin/bash, /bin/zsh and /bin/sleep, read with
+// a probe of kern.procargs2; CI's macOS runner, by contrast, read the
+// environment of /bin/sh and /bin/sleep processes the tests started.
 func carrying(value string) ([]Process, error) {
 	return processesWhere(kernel{}, carries(value))
 }
@@ -294,11 +297,11 @@ func stayed(ps []Process, grace time.Duration) []Process {
 // What it does not see: a process running another executable that was
 // started with an environment without OwnerVar, unless it is a tmux the
 // wrapper ran (ownProcesses) or a process in that tmux's panes, or before
-// ownership was recorded, or whose environment the read cannot find
-// (carrying), which on macOS is every process of Apple's /bin/sh, /bin/bash,
-// /bin/zsh and /bin/sleep; what such a process starts once the check has
-// listed for the last time; a process whose command line cannot be read
-// while it runs (processesWhere), and what it starts; and anything at all
+// ownership was recorded, or whose environment the read cannot find, which
+// on some macOS machines is a whole program's (carrying); what such a
+// process starts once the check has listed for the last time; a process
+// whose command line cannot be read while it runs (processesWhere), and
+// what it starts; and anything at all
 // once this binary is gone, so the binary AtTerminal ran again outliving a
 // killed outer one is watchOuter's to end, and a terminal server outliving
 // a killed owner the owner sweep's, and no check in that run reports
