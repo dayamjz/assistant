@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dayamjz/assistant/internal/safety"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -26,18 +27,27 @@ import (
 // matching commits by what they hold, which would be an inference about two
 // commits where this is an observation of one rewrite.
 //
-// A row is written only for a rebase whose replayed head the stage has
-// established carries the commit the run was submitted: that commit is an
-// ancestor of the head, or a head an earlier row of the run recorded is. So
-// every row says the run's own rebase carried the submitted work into its
-// After, and a chain of rebases with fix rounds between them still yields a
-// row from the submitted commit to the last rebased head, established each
-// time in the run's copy, where every one of those commits is present.
+// A row is written only for a rebase the stage has established two things
+// of, each in the run's copy, where every commit involved is present. The
+// replayed head carries the commit the run was submitted: that commit is an
+// ancestor of the head, or a head an earlier row of the run recorded is. And
+// the rebased head holds what the replayed head held: integrating the
+// replayed head into it would change nothing, by internal/safety's
+// Incorporation, the content check P12's default-branch proof makes. The
+// second is what a clean return from the rebase does not establish:
+// rebase_record_test.go drives two replays that return without a conflict
+// and leave work out, a submitted merge whose own result added a file and a
+// commit whose change the base applied and then reverted. So every row says the run's own rebase carried the
+// replayed head's content into its After, and a chain of rebases with fix
+// rounds between them still yields a row from the submitted commit to the
+// last rebased head.
 //
 // What it does not record: a rebase that conflicted, which is abandoned or
 // left to a fix round, and whatever a fix round rewrote by hand, because
-// neither is a replay this stage saw apply; and a rebase that left the head
-// where it was, which rewrote nothing. A landing that went through either is
+// neither is a replay this stage saw apply; a rebase that left the head
+// where it was, which rewrote nothing; and a replay whose result the content
+// check does not find holding what it replayed, or cannot decide about,
+// which is a run that goes on as before with nothing recorded for it. A landing that went through either is
 // one the cleanup proofs cannot follow by this record, so its copy is kept
 // unless another proof holds: a missing record can keep a copy and never
 // remove one.
@@ -78,11 +88,13 @@ func recorderOf(deps StageDeps, copied *vcs.Repository, run, submitted string) r
 }
 
 // record writes that a replay of before onto onto applied and left the copy
-// at after, when before carries the submitted commit, and writes nothing for
-// a replay that left the head where it was or for a recorder with no record.
-// An error is a record that could not be read or written, or ancestry that
-// could not be established, and the body returns it rather than carrying on
-// with a rewrite nothing recorded.
+// at after, when before carries the submitted commit and after holds what
+// before held, and writes nothing for a replay that left the head where it
+// was, for one whose result the content check does not establish holds
+// before's content, or for a recorder with no record. An error is a record
+// that could not be read or written, or ancestry that could not be
+// established, and the body returns it rather than carrying on with a
+// rewrite nothing recorded.
 func (r rebaseRecorder) record(ctx context.Context, before, onto, after string) error {
 	if r.records == nil || before == after {
 		return nil
@@ -94,12 +106,32 @@ func (r rebaseRecorder) record(ctx context.Context, before, onto, after string) 
 	if !carries {
 		return nil
 	}
+	kept, err := r.holds(ctx, before, after)
+	if err != nil || !kept {
+		return err
+	}
 	if _, err := r.records.RecordRunRebase(ctx, store.RunRebase{
 		Run: r.run, Submitted: r.submitted, Before: before, Onto: onto, After: after,
 	}); err != nil {
 		return fmt.Errorf("stages: recording that %s was rebased onto %s as %s: %w", before, onto, after, err)
 	}
 	return nil
+}
+
+// holds reports whether after holds what before held: integrating before
+// into after would change nothing. A comparison internal/safety could not
+// make, a conflict among them, is not that, and answers false; it is no
+// failure of the stage, whose run goes on with nothing recorded for the
+// replay.
+func (r rebaseRecorder) holds(ctx context.Context, before, after string) (bool, error) {
+	result, err := safety.New(r.copied).Incorporation(ctx, []string{before}, after)
+	switch {
+	case errors.Is(err, safety.ErrNotEstablished):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("stages: establishing whether %s holds what %s held: %w", after, before, err)
+	}
+	return result.Incorporated(), nil
 }
 
 // carries reports whether before carries the submitted commit: the commit

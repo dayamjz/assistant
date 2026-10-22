@@ -13,7 +13,9 @@ import (
 // the run's isolated copy, recorded by the stage when it made it, that carried
 // the commit the run was submitted. The stage replayed Before, a head it had
 // established carries Submitted, onto Onto, the replay applied without a
-// conflict, and the copy then stood at After.
+// conflict, the copy then stood at After, and the stage had established that
+// integrating Before into After would change nothing. This package stores
+// what the stage says and checks none of it but Submitted.
 //
 // It is what internal/tasks' cleanup proofs follow from a commit a task's copy
 // holds to the commit the gate published for it after rewriting it: the

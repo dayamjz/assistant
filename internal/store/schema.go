@@ -2207,7 +2207,8 @@ var schema = []migration{
 			// the copy stood at once the replay applied without a conflict
 			// (after). A row is written only when the stage established that
 			// before carries the commit the run was submitted (submitted,
-			// which RecordRunRebase holds to the run row's own), so a row says
+			// which RecordRunRebase holds to the run row's own) and that
+			// integrating before into after would change nothing, so a row says
 			// that the run's own rebase carried the submitted work into after.
 			// It is what lets internal/tasks' cleanup proofs follow a task's
 			// commit to the commit the gate published for it after rewriting

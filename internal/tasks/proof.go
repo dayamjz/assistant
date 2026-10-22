@@ -34,10 +34,19 @@ import (
 // whether it is reachable from the tip they read, or else whether a run
 // rebase record of one of the task's own runs (store.RunRebase) carries it
 // there: the commit is in the history of the commit that run was submitted,
-// read in the copy, and the head that run's rebase left, which is the
-// identifier the run published, is reachable from the tip. That is a fact the
-// program observed when it made the rewrite, followed by commit identifiers;
-// nothing here matches two commits by what they hold. The record is
+// read in the copy, the head that run's rebase left, which is the identifier
+// the run published, is reachable from the tip, and integrating the commit
+// into that head would change nothing, by internal/safety's Incorporation.
+// The record is a fact the program observed when it made the rewrite, and it
+// says which published commit to look at; it never stands in for looking. A
+// rebase can return without a conflict and still leave work out, and the
+// stage refuses to record one its own content check catches, but this proof
+// makes the same check again over the copy's own commit rather than trust
+// that, because the copy is what a removal would destroy. What the content
+// check costs: a chain of rebases with a fix round between them whose commit
+// rewrote the worker's own lines does not hold the worker's commit as it
+// stood, so such a landing is not followed and its copy is kept unless
+// another proof holds. The record is
 // internal/stages' to write and to state the limits of, in rebaserecord.go;
 // what this adds to them is that only the runs internal/store attributes to
 // the task are read (TaskSnapshot.Runs), so a rebase recorded by a run the
@@ -307,36 +316,61 @@ func (l landing) reached(ctx context.Context, w, tip, where string, absent func(
 	if direct {
 		return nil, ""
 	}
+	var lacking []string
 	for _, r := range l.carried {
-		followed, detail := l.follows(ctx, r, w, tip)
+		followed, lacks, detail := l.follows(ctx, r, w, tip)
 		if detail != "" {
 			return nil, detail
 		}
 		if followed {
 			return []string{r.Submitted, r.After}, ""
 		}
+		if lacks != "" {
+			lacking = append(lacking, lacks)
+		}
 	}
-	return nil, absent(w) + ", itself or through " + recordedRebases(len(l.carried))
+	detail := absent(w) + ", itself or through " + recordedRebases(len(l.carried))
+	if len(lacking) > 0 {
+		detail += ": " + strings.Join(lacking, "; ")
+	}
+	return nil, detail
 }
 
 // follows reports whether rebase record r carries w to tip: w is in the
-// history of r's submitted commit, and r's published head is reachable from
-// tip. A commit the copy does not hold answers false; any other failure is a
-// detail.
-func (l landing) follows(ctx context.Context, r store.RunRebase, w, tip string) (bool, string) {
+// history of r's submitted commit, r's published head is reachable from tip,
+// and integrating w into that published head would change nothing, checked
+// here through internal/safety's Incorporation rather than taken from the
+// record, so a removal never rests on the writer's word that the rewrite
+// kept the work. A commit the copy does not hold answers false. A published
+// head that does not hold w's content, or whose comparison with it could not
+// be made, answers false with what was found, for the detail of a commit no
+// record carried. Any other failure is a detail.
+func (l landing) follows(ctx context.Context, r store.RunRebase, w, tip string) (bool, string, string) {
 	for _, step := range [][2]string{{w, r.Submitted}, {r.After, tip}} {
 		ok, err := l.repo.IsAncestor(ctx, step[0], step[1])
 		switch {
 		case errors.Is(err, vcs.ErrRefNotFound):
-			return false, ""
+			return false, "", ""
 		case err != nil:
-			return false, "whether " + step[0] + " is reachable from " + step[1] + ", which run " + r.Run +
+			return false, "", "whether " + step[0] + " is reachable from " + step[1] + ", which run " + r.Run +
 				"'s recorded rebase rests on, could not be established: " + err.Error()
 		case !ok:
-			return false, ""
+			return false, "", ""
 		}
 	}
-	return true, ""
+	result, err := safety.New(l.repo).Incorporation(ctx, []string{w}, r.After)
+	switch {
+	case errors.Is(err, safety.ErrNotEstablished):
+		return false, "whether " + r.After + ", the head run " + r.Run + "'s recorded rebase left, holds " + w +
+			" was not established: " + err.Error(), ""
+	case err != nil:
+		return false, "", "whether " + r.After + ", the head run " + r.Run + "'s recorded rebase left, holds " + w +
+			" could not be established: " + err.Error()
+	case !result.Incorporated():
+		return false, "integrating " + w + " into " + r.After + ", the head run " + r.Run +
+			"'s recorded rebase left, would change it", ""
+	}
+	return true, "", ""
 }
 
 // recordedRebases names how many rebase records the task's runs left, for a
