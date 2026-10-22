@@ -22,6 +22,8 @@ type afterPush struct {
 	head   string
 	pushed string
 	fork   string
+	// recorder records a rebase that applied.
+	recorder rebaseRecorder
 }
 
 // The identifiers of the holds the second pass raises, one per reason it does
@@ -125,6 +127,9 @@ func rebaseAfterPush(ctx context.Context, copied *vcs.Repository, facts afterPus
 	rebased, err := copied.ResolveCommit(ctx, "HEAD")
 	if err != nil {
 		return pipeline.Output{}, fmt.Errorf("stages: resolving HEAD after rebasing again: %w", err)
+	}
+	if err := facts.recorder.record(ctx, current, ontoCommit, rebased); err != nil {
+		return pipeline.Output{}, err
 	}
 	changes, err := copied.ChangedFiles(ctx, ontoCommit, rebased)
 	if err != nil {

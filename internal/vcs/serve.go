@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
 
 	"github.com/dayamjz/assistant/internal/procgroup"
 )
@@ -42,7 +41,7 @@ func (r *Repository) ServeReceivePack(ctx context.Context, in io.Reader, out, er
 
 	ctx, cancel := procgroup.Bound(ctx, r.set.deadline)
 	defer cancel()
-	cmd := exec.Command(r.set.git, full...)
+	cmd := procgroup.Command(r.set.git, full...)
 	cmd.Dir = r.path
 	cmd.Env = envFor(os.Environ(), r.set.ssh)
 	cmd.Stdin = in

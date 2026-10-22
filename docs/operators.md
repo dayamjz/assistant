@@ -485,19 +485,34 @@ catch-up read (`kept` in `--json`) and in `assistant status`
 (`kept_work` in `--json`): a working copy's status lists the entries whose
 repository is that working copy's, and every status lists the entries whose
 owner names no repository, such as an investigation task started without
-one, because those belong to no working copy. An entry about a task, or about a run
-attributed to a task, also raises one `kept-work` wake, which reaches the
-coordinator and the notify command like any other wake. This build
-deviates from PRD section 6 for an entry about a run no task names, such as
-the run your own push started: it is listed by `status` and the catch-up
-read, but it never reaches the private channel or the coordinator until
-#458 lands.
+one, because those belong to no working copy. Each entry also raises one
+`kept-work` wake, which reaches the coordinator and the notify command like
+any other wake: about the task, for an entry about a task or about a run
+attributed to a task, and otherwise about the entry itself, for an entry
+about a run no task names, such as the run your own push started. The
+second is a wake of its own shape: the notify command's line names the
+entry in `kept_work` and its `project` and `branch` rather than a
+`task_id`, `assistant coordinator wakes` lists it under the project and
+then the branch, and the coordinator acknowledges it as `kNUMBER`, a
+number of its own. Acknowledging the wake answers nothing: the entry is
+listed until it is answered or closed.
 
 If the copy's work later turns up somewhere safe, for example once you push
-its commit to the upstream branch, the next cleanup of it (for a run's copy,
-the next service start) removes the copy on that proof and closes the entry
-as removed on a proof, recorded as the program's and never as a discard; a
-closed entry is no longer listed. Nothing else removes a kept copy. A
+its commit to the upstream branch, the next cleanup of it removes the copy on
+that proof and closes the entry as removed on a proof, recorded as the
+program's and never as a discard; a closed entry is no longer listed. For a
+run's copy the next cleanup is the next service start. For a task's copy
+whose worker has stopped, the service asks again every five minutes, at most
+six times for that stopped worker, and again when the coordinator stops the
+task or the service starts. A delivery whose commits the gate rebased before publishing them is
+followed through the gate's own record of that rebase, so the copy, which
+still holds the commits under their old identifiers, is removed once the
+published ones are on the task's upstream branch or in the merged pull
+request and hold everything the copy's commits held. A rebase that left
+something out, such as a file only a merge commit added, is not recorded,
+and neither is a later rebase once a fix round took the delivered change
+out or rewrote its lines, so the copy is kept. When the copy is kept
+instead, the service log names each check and what it found. Nothing else removes a kept copy. A
 service that stops between removing the copy and marking it removed leaves
 the entry open; the next start completes the mark from the recorded proof
 and closes it. An entry whose copy is gone with no proof recorded, a copy
@@ -511,6 +526,14 @@ work ships (#411 part 2), the way past it is the work landing: once its
 commits are on the upstream branch or in the default branch, the next
 service start removes the copy on that proof and closes the entry. Part 2's
 discard will be your other way.
+
+Eject is also refused, before the gate is touched, while a `kept-work` wake
+about one of the repository's entries is still unacknowledged, even once
+the entry is closed, because the wake stays actionable until the coordinator
+acknowledges it, and forgetting the repository would delete it. The refusal
+names the wake by its number; once the coordinator acknowledges it as
+`kNUMBER`, eject removes the closed entry, its wake and the wake's
+notification record with the run.
 
 Eject is also refused while any run copy of the repository still stands on
 disk, whether its run's cleanup has not decided it yet or kept it, and the
@@ -651,7 +674,10 @@ queues, with the wake on standard input as one line of JSON, followed by
 end of file. The line is the wake object itself (`id`, `task_id`, `kind`,
 `marker` and the rest), not the event `assistant --json coordinator listen`
 prints: a `listen` line wraps the same object as its `payload`, beside
-`type` and `revision`, and the command's line has no such wrapper. The
+`type` and `revision`, and the command's line has no such wrapper. A wake
+about no task carries no `task_id`: one about a delegated domain names
+`delegation` and `domain`, and one about kept work no task names names the
+entry in `kept_work`, with its `project` and `branch`. The
 command decides where it goes: a script that posts to your own private chat
 channel, writes a desktop notification, or appends to a file. The line is a
 line of shell, run the way `commands.test` is, in the assistant home (by

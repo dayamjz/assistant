@@ -3,7 +3,6 @@ package forge
 import (
 	"context"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -253,7 +252,7 @@ type procResult struct {
 func runProvider(ctx context.Context, s *settings, env []string, stdin string, args []string) procResult {
 	ctx, cancel := procgroup.Bound(ctx, s.deadline)
 	defer cancel()
-	cmd := exec.Command(s.bin, args...)
+	cmd := procgroup.Command(s.bin, args...)
 	cmd.Dir = s.dir
 	cmd.Env = env
 	// With nothing to carry, standard input stays os.DevNull, which is the end

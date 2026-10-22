@@ -175,6 +175,15 @@ const keptWorkMigration = "kept work record"
 // sealCheckpointTableMigration is a constant.
 const keptWorkAgainstMigration = "kept work against the default branch"
 
+// runRebaseMigration names the migration that adds the run rebase record, for
+// the reason sealCheckpointTableMigration is a constant.
+const runRebaseMigration = "run rebase record"
+
+// keptWorkWakesMigration names the migration that adds the wake about a
+// kept work entry rather than a task, and its notification record, for the
+// reason sealCheckpointTableMigration is a constant.
+const keptWorkWakesMigration = "kept work wakes"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2206,6 +2215,158 @@ var schema = []migration{
 			// the column; an empty string means the launch named none, which
 			// a usage total keeps apart from a named window and from unknown.
 			`ALTER TABLE agent_invocation ADD COLUMN context_window TEXT`,
+		},
+	},
+	{
+		version: 54,
+		name:    runRebaseMigration,
+		statements: []string{
+			// A rebase a run's rebase stage made in the run's isolated copy,
+			// recorded by the stage at the point it made it: the head it
+			// replayed (before), the commit it replayed it onto, and the head
+			// the copy stood at once the replay applied without a conflict
+			// (after). A row is written only when the stage established that
+			// before carries the commit the run was submitted (submitted,
+			// which RecordRunRebase holds to the run row's own) and that
+			// integrating before into after, and submitted into after, would
+			// each change nothing. So a row says that after holds what the
+			// run's own rebase replayed and what the run was submitted; it
+			// does not say that before's history contains submitted, since a
+			// later row's before may be a fix round's head on an earlier
+			// row's after. internal/stages' rebaserecord.go owns those checks,
+			// and nothing here enforces them.
+			// It is what lets internal/tasks' cleanup proofs follow a task's
+			// commit to the commit the gate published for it after rewriting
+			// it, from what the program itself did rather than from matching
+			// two commits by what they hold.
+			//
+			// It is written once and never updated. The same rebase written
+			// again, which a stage re-executed on resume makes, finds the row
+			// already there, which the unique key holds. A row is not deleted
+			// while its run stands, on forgetRunRecordsMigration's terms, so it
+			// goes only with its run, which only ForgetRepository removes.
+			`CREATE TABLE run_rebase (
+				id          INTEGER PRIMARY KEY,
+				run         TEXT NOT NULL REFERENCES run(id),
+				submitted   TEXT NOT NULL,
+				before      TEXT NOT NULL,
+				onto        TEXT NOT NULL,
+				after       TEXT NOT NULL,
+				recorded_at TEXT NOT NULL,
+				UNIQUE (run, before, onto, after)
+			) STRICT`,
+			`CREATE TRIGGER run_rebase_is_written_once
+				BEFORE UPDATE ON run_rebase
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run rebase record is written once by the rebase that made it and is not updated');
+				END`,
+			`CREATE TRIGGER run_rebase_is_not_removed
+				BEFORE DELETE ON run_rebase
+				WHEN EXISTS (SELECT 1 FROM run WHERE id = OLD.run)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run rebase record is not deleted while its run stands');
+				END`,
+		},
+	},
+	{
+		version: 55,
+		name:    keptWorkWakesMigration,
+		statements: []string{
+			// A wake about a kept work entry rather than a task: PRD section
+			// 8's kept-work wake, the queue's third shape, for an entry no
+			// task names, such as the run of a person's own push, which the
+			// wake table cannot carry because its row names a task. The row
+			// is owned by the entry (P14): the project is read off the
+			// entry's row and recorded nowhere here. It is domain_wake's
+			// shape with the delegation replaced by the entry and its
+			// markers dropped, under the same seals: no column but the
+			// acknowledgement and the handout may change, an
+			// acknowledgement is written once, and a handout is written
+			// only while the row is queued and counted once. An entry is
+			// raised once, which the unique key holds. A row is not
+			// deleted while its entry may not be, on kept_work's own terms:
+			// it goes only with a closed run entry whose run is gone, which
+			// only ForgetRepository removes, and that refuses while the row
+			// is unacknowledged. Because a row can go, its
+			// identifier is AUTOINCREMENT, so a removed row's number is never
+			// handed to a later wake, and an acknowledgement naming it is
+			// refused rather than closing another wake.
+			`CREATE TABLE kept_work_wake (
+				id               INTEGER PRIMARY KEY AUTOINCREMENT,
+				kept_work        INTEGER NOT NULL REFERENCES kept_work(id),
+				kind             TEXT NOT NULL,
+				marker           TEXT NOT NULL,
+				created_at       TEXT NOT NULL,
+				handled_at       TEXT,
+				acknowledged_by  TEXT,
+				handed_out_at    TEXT,
+				handed_out_to    TEXT,
+				handed_out_under TEXT,
+				handouts         INTEGER,
+				UNIQUE (kept_work)
+			) STRICT`,
+			`CREATE INDEX kept_work_wake_unacknowledged ON kept_work_wake(id) WHERE handled_at IS NULL`,
+			`CREATE TRIGGER kept_work_wake_is_appended
+				BEFORE UPDATE OF id, kept_work, kind, marker, created_at ON kept_work_wake
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work wake is appended by the loop that observed it and is not rewritten');
+				END`,
+			`CREATE TRIGGER kept_work_wake_is_acknowledged_once
+				BEFORE UPDATE OF handled_at, acknowledged_by ON kept_work_wake
+				WHEN OLD.handled_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work wake is acknowledged once and the first acknowledgement stands');
+				END`,
+			`CREATE TRIGGER kept_work_wake_is_handed_out_while_queued
+				BEFORE UPDATE OF handed_out_at, handed_out_to, handed_out_under, handouts ON kept_work_wake
+				WHEN OLD.handled_at IS NOT NULL
+					OR NEW.handed_out_at IS NULL OR NEW.handed_out_to IS NULL OR NEW.handed_out_under IS NULL
+					OR NEW.handouts IS NOT coalesce(OLD.handouts, 0) + 1
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work wake is handed out only while it is queued, and each handout is counted once');
+				END`,
+			`CREATE TRIGGER kept_work_wake_is_not_removed
+				BEFORE DELETE ON kept_work_wake
+				WHEN EXISTS (SELECT 1 FROM kept_work k WHERE k.id = OLD.kept_work
+					AND (k.task_id IS NOT NULL OR (k.answer IS NULL AND k.closure IS NULL)
+						OR EXISTS (SELECT 1 FROM run WHERE run.id = k.run_id)))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work wake is kept after it is drained and is not deleted while its entry stands');
+				END`,
+			// Migration 46's notification record for the queue's third
+			// shape, on domain_notification's terms, keyed by the kept work
+			// wake it is about, and removed only with that wake.
+			`CREATE TABLE kept_work_notification (
+				kept_work_wake_id INTEGER PRIMARY KEY REFERENCES kept_work_wake(id),
+				claimed_at        TEXT NOT NULL,
+				outcome           TEXT CHECK (outcome IN ('sent', 'failed')),
+				exit_code         INTEGER,
+				detail            TEXT,
+				settled_at        TEXT,
+				CHECK ((outcome IS NULL) = (settled_at IS NULL)),
+				CHECK (outcome IS NOT NULL OR (exit_code IS NULL AND detail IS NULL)),
+				CHECK (outcome IS NOT 'sent' OR exit_code = 0)
+			) STRICT`,
+			`CREATE TRIGGER kept_work_notification_claim_is_written_once
+				BEFORE UPDATE OF kept_work_wake_id, claimed_at ON kept_work_notification
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is claimed once and the claim is not rewritten');
+				END`,
+			`CREATE TRIGGER kept_work_notification_is_settled_once
+				BEFORE UPDATE OF outcome, exit_code, detail, settled_at ON kept_work_notification
+				WHEN OLD.outcome IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is settled once and the first outcome stands');
+				END`,
+			`CREATE TRIGGER kept_work_notification_is_not_removed
+				BEFORE DELETE ON kept_work_notification
+				WHEN EXISTS (SELECT 1 FROM kept_work_wake w JOIN kept_work k ON k.id = w.kept_work
+					WHERE w.id = OLD.kept_work_wake_id
+						AND (k.task_id IS NOT NULL OR (k.answer IS NULL AND k.closure IS NULL)
+							OR EXISTS (SELECT 1 FROM run WHERE run.id = k.run_id)))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is kept and is not deleted while its kept work wake stands');
+				END`,
 		},
 	},
 }

@@ -65,6 +65,14 @@ func streamWorkerAgent(t *testing.T) (*agents.Catalog, *standin.Agent) {
 // the running service, the task, the worker, and the stand-in.
 func streamWorker(t *testing.T, branch, config string, body func(w launched, agent *standin.Agent)) {
 	t.Helper()
+	streamWorkerWith(t, branch, config, func(o service.Options) service.Options { return o }, body)
+}
+
+// streamWorkerWith is streamWorker over the service options adjust returns
+// from the ones it builds.
+func streamWorkerWith(t *testing.T, branch, config string, adjust func(service.Options) service.Options,
+	body func(w launched, agent *standin.Agent)) {
+	t.Helper()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -78,7 +86,7 @@ func streamWorker(t *testing.T, branch, config string, body func(w launched, age
 	o := options(t, h)
 	catalog, agent := streamWorkerAgent(t)
 	o.Catalog = catalog
-	withServiceOptions(t, o, func(running serviceUnderTest) {
+	withServiceOptions(t, adjust(o), func(running serviceUnderTest) {
 		provider, session := launchedSession(t, running.service, id)
 		waitCapture(t, provider, session, "the instructions were read")
 		body(launched{running: running, home: h, repository: repository, gateRepo: gateRepositoryOf(t, h, subject),

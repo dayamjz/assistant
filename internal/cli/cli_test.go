@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -904,16 +905,24 @@ func TestEjectRemovesEveryRecordOfAFinishedRunOrRefusesFirst(t *testing.T) {
 // through the real cleanup. A cancelled run's copy holds a commit on no
 // remote, so the cancel's cleanup keeps it and records a kept work entry.
 // Eject is then refused before the gate is touched, naming the entry's copy,
-// its run, the commit and the way past. Once the commit is on the upstream
+// its run, the commit and the way past. The supervisor loop raises the
+// entry, which no task names, as a kept-work wake, and the coordinator
+// drains it without acknowledging it. Once the commit is on the upstream
 // branch, the next service start removes the copy on the remote-branch
-// proof and closes the entry, and the same command completes, taking the
-// closed entry with the run.
+// proof and closes the entry, and eject is still refused, naming the wake,
+// because PRD section 8 keeps a wake actionable until it is acknowledged and
+// forgetting the repository would delete it. Once the coordinator
+// acknowledges it, the same command completes, taking the closed entry and
+// its wake with the run.
 func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P15)
 	h := newHome(t)
 	subject := newSubject(t)
+	if err := os.WriteFile(h.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	stop := serveUntilStopped(t, h)
 
 	created := run(t, h, subject, "--json", "init")
@@ -938,6 +947,13 @@ func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
 		t.Fatalf("status lists kept work %+v, want the cancelled run's one entry:\n%s", status.KeptWork, got.stdout)
 	}
 	entry := status.KeptWork[0]
+	var drained machine.Wakes
+	if got := run(t, h, subject, "--json", "coordinator", "await", "--timeout", "30s"); got.code != machine.ExitOK ||
+		json.Unmarshal([]byte(got.stdout), &drained) != nil || len(drained.KeptWorkWakes) != 1 || drained.KeptWorkWakes[0].KeptWork != entry.ID {
+		t.Fatalf("the wait exited %s handing out kept-work wakes %+v, want entry %d's one:\n%s%s",
+			got.code, drained.KeptWorkWakes, entry.ID, got.stdout, got.stderr)
+	}
+	wake := drained.KeptWorkWakes[0].ID
 
 	refused := run(t, h, subject, "eject", "--confirm")
 	if refused.code != machine.ExitFailure {
@@ -970,8 +986,19 @@ func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	queued := run(t, h, subject, "eject", "--confirm")
+	if queued.code != machine.ExitFailure || !strings.Contains(queued.stderr, "kept-work wake "+strconv.FormatInt(wake, 10)+",") {
+		t.Fatalf("eject --confirm exited %s with kept-work wake %d queued, want it refused naming the wake:\n%s%s",
+			queued.code, wake, queued.stdout, queued.stderr)
+	}
+	if _, err := os.Stat(built.Gate.Repository); err != nil {
+		t.Fatalf("the eject refused over a queued wake removed the gate at %s: %v", built.Gate.Repository, err)
+	}
+	if got := run(t, h, subject, "coordinator", "acknowledge", machine.KeptWorkWakePrefix+strconv.FormatInt(wake, 10)); got.code != machine.ExitOK {
+		t.Fatalf("acknowledging kept-work wake %d exited %s:\n%s%s", wake, got.code, got.stdout, got.stderr)
+	}
 	if got := run(t, h, subject, "eject", "--confirm"); got.code != machine.ExitOK {
-		t.Fatalf("eject --confirm exited %s once the entry closed:\n%s%s", got.code, got.stdout, got.stderr)
+		t.Fatalf("eject --confirm exited %s once the entry closed and its wake was acknowledged:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 	records := openStore(t, h)
 	defer func() { _ = records.Close() }()
