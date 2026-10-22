@@ -947,6 +947,15 @@ reason rather than falling back or widening grants; list Claude after Cursor
 if you want Cursor for runs and Claude for attachable workers. See
 `docs/multi-agent-support.md`.
 
+`session_provider: herdr` and the keys for workers on another machine
+(`remote_hosts`, `placement.local`, `placement.arch` and
+`remote_disconnect_grace`, PRD section 8) are parsed and validated, but this
+build does not act on them yet. The service refuses to start on a
+`config.yaml` that sets any of them, naming the key, rather than running
+workers some other way. A repository's `assistant.json` may carry
+`placement.arch` on its default branch, and nothing applies it yet: its tasks
+run on this machine whatever its architecture.
+
 Each launch records which adapter it chose on the task attempt in the home's
 database, once, as `adapter`, `route_reason` and `route_skipped`; no command
 prints the attempt yet. The reason is `override`, `ordered`, `fallback-unavailable` or

@@ -363,6 +363,74 @@ const (
 	// comparison; internal/service's runbudget.go owns that reading and what
 	// it leaves open. PRD section 10's keys table has its row.
 	KeyRunUsageBudgetOutputTokens Key = "run_usage_budget.output_tokens"
+
+	// KeyRemoteHosts is "remote_hosts": the other machines workers may run
+	// on, PRD section 8's "Workers on another machine" and section 10's row.
+	// Each entry is a RemoteHost: the host as the operator's SSH
+	// configuration names it, the absolute remote root on it, the absolute
+	// path of the binary its bridge runs, and optionally the three placement
+	// limits a dispatch there needs. Empty, the default, runs every worker on
+	// this machine. The list holds at most MaxRemoteHosts entries, the first
+	// increment's one host.
+	//
+	// It is global-only, a P7 decision: each field chooses where, and as
+	// what, a process starts with the operator's credentials, so no
+	// repository copy, trusted or pushed, is the document it could be read
+	// from, and a repository file naming it is refused at parse time.
+	//
+	// A remote host requires KeySessionProvider to be herdr, and a document
+	// that names a host under any other provider, the default included, is
+	// refused at parse time naming this key. Both keys are global-only, so
+	// the operator's document is the one that decides both, and that check
+	// is complete there.
+	//
+	// What parsing does not check: that the host is reachable, that it runs
+	// macOS (the first increment's other limit, PRD section 12), that the
+	// root is empty or absent at first use, or that the binary is there.
+	// Those need the host, and a bridge reads them there. Nothing in this
+	// build reads the key: internal/service refuses a home whose file sets
+	// it, an empty list included, until it can run a worker there (its
+	// unhonored.go).
+	KeyRemoteHosts Key = "remote_hosts"
+	// KeyPlacementLocal is "placement.local": the placement limits for this
+	// machine, on the terms a remote host's are, PlacementLimits. Unset
+	// limits nothing, which is the default, so a home with no remote host
+	// places exactly as it did before the key existed. It is global-only on
+	// KeyRemoteHosts' terms: the limits are the operator's about their own
+	// machines. Nothing in this build reads it, and internal/service refuses
+	// a home whose file sets it until a dispatch applies it (its
+	// unhonored.go).
+	KeyPlacementLocal Key = "placement.local"
+	// KeyPlacementArch is "placement.arch": the architectures a repository's
+	// tasks may run on, each spelled as Architectures lists it. Empty, the
+	// default, allows every one. It can only narrow which machines a task
+	// may go to and never adds one.
+	//
+	// It is trusted-only (P7): a pushed copy setting it is dropped at the
+	// merge and reported as a rejection, so a branch cannot choose where its
+	// own work runs. The class also admits the operator's own file, as it
+	// does for every trusted-only key, so an operator who sets it there
+	// narrows every repository of the home whose trusted copy does not set
+	// it; a trusted copy that sets it replaces the operator's list, as a
+	// repository layer replaces any list.
+	//
+	// Nothing in this build reads it. internal/service refuses a home whose
+	// own file sets it (its unhonored.go), but nothing refuses it in a
+	// repository's trusted copy: a task of a repository that sets it there
+	// runs on this machine whatever this machine's architecture is, until a
+	// dispatch places by it (PRD section 8's "Which machine a task runs on").
+	KeyPlacementArch Key = "placement.arch"
+	// KeyRemoteDisconnectGrace is "remote_disconnect_grace": how long a
+	// bridge whose transport is gone keeps the workers it started before it
+	// ends them and then itself, PRD section 8's ownership row. It is
+	// global-only on KeyRemoteHosts' terms. A duration between
+	// MinRemoteDisconnectGrace and MaxRemoteDisconnectGrace, refused rather
+	// than clamped outside them; the default and both limits are the PRD's,
+	// chosen, not measured. It is not a loop bound: it ends no task and
+	// parks nothing, and it bounds nothing once the bridge itself is gone.
+	// Nothing in this build reads it, and internal/service refuses a home
+	// whose file sets it (its unhonored.go).
+	KeyRemoteDisconnectGrace Key = "remote_disconnect_grace"
 )
 
 // cloneSlice copies a slice-valued configuration value. A default and a parsed
@@ -503,6 +571,14 @@ var specs = []spec{
 		func(c *Config, v any) { c.NotifyCommand = v.(string) }},
 	{KeyRunUsageBudgetOutputTokens, TrustGlobal, int64(0), decodeRunUsageBudget,
 		func(c *Config, v any) { c.RunUsageBudget = v.(int64) }},
+	{KeyRemoteHosts, TrustGlobal, []RemoteHost(nil), decodeRemoteHosts,
+		func(c *Config, v any) { c.RemoteHosts = cloneSlice(v.([]RemoteHost)) }},
+	{KeyPlacementLocal, TrustGlobal, PlacementLimits{}, decodePlacementLocal,
+		func(c *Config, v any) { c.PlacementLocal = v.(PlacementLimits) }},
+	{KeyPlacementArch, TrustTrusted, []string(nil), decodePlacementArch,
+		func(c *Config, v any) { c.PlacementArch = cloneSlice(v.([]string)) }},
+	{KeyRemoteDisconnectGrace, TrustGlobal, DefaultRemoteDisconnectGrace, decodeRemoteDisconnectGrace,
+		func(c *Config, v any) { c.RemoteDisconnectGrace = v.(time.Duration) }},
 }
 
 // specByKey indexes the schema, and sections holds every dotted prefix a key
