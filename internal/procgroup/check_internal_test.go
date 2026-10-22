@@ -3,8 +3,10 @@ package procgroup
 import (
 	"context"
 	"errors"
+	"io"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -14,24 +16,47 @@ import (
 // StdinPipe, StdoutPipe and StderrPipe. That is the positive control: a
 // toolchain that renamed the field, or stopped recording a pipe in it, fails
 // here rather than letting the refusal look at nothing.
+//
+// Both ends of each pipe are closed before the test finishes. The parent
+// ends are the closers those three methods return, and the child ends are
+// what they store on the command. A parent end left to the finalizer is
+// still open for a later descriptor count, and the collector closing it
+// during that count's wait makes the count fail on a descriptor this test
+// opened.
 func TestThePipeCountIsReadFromARealCommand(t *testing.T) {
+	before, counted := openDescriptors(t)
 	cmd := exec.Command("true")
 	if n, known := closersIn(reflect.ValueOf(cmd).Elem(), "parentIOPipes"); !known || n != 0 {
 		t.Fatalf("a plain command holds %d os/exec pipes (known %v), want 0 and known", n, known)
 	}
-	if _, err := cmd.StdinPipe(); err != nil {
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cmd.StdoutPipe(); err != nil {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cmd.StderrPipe(); err != nil {
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		defer runtime.KeepAlive(cmd)
+		for _, c := range []io.Closer{stdin, stdout, stderr} {
+			_ = c.Close()
+		}
 		for _, f := range []any{cmd.Stdin, cmd.Stdout, cmd.Stderr} {
 			if c, ok := f.(interface{ Close() error }); ok {
 				_ = c.Close()
+			}
+		}
+		// cmd is still reachable, so a parent end this cleanup did not
+		// close is still open: the finalizer has not run. The count is of
+		// what this cleanup actually closed.
+		if counted {
+			if got, _ := openDescriptors(t); got != before {
+				t.Errorf("%d descriptors are open after closing the pipes, %d before: a parent end was left open", got, before)
 			}
 		}
 	})
