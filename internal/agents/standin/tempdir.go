@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -17,15 +18,18 @@ import (
 var registeredTempTag string
 
 // RegisterTempTag records the namespace this process sweeps: the directory
-// of the caller, relative to the module that contains it. Two directories
-// therefore never share a namespace, and a call cannot pass a different one.
-// TestMain calls it after every mode that makes this binary another process
-// and before TempDir or SweepTempDirs. Registering does not sweep. A second
-// call from the same directory records the same namespace. A second call
-// from another directory is refused and leaves the recorded namespace as it
-// was. A directory whose name contains a hyphen is refused, because the
-// stamped name uses a hyphen to separate the namespace from the process
-// identity.
+// of the caller, relative to the module that contains it. '_' in a directory
+// name encodes as "_0" and a slash between directories encodes as "_1", so
+// two directories never share a namespace, and a call cannot pass a different
+// one. An absolute caller path is made relative by walking up to go.mod. A
+// non-absolute path is accepted only when it begins with the main module
+// path recorded in the binary followed by the directory, which is the form
+// -trimpath leaves, and that path is not opened. TestMain calls it before
+// TempDir or SweepTempDirs. Registering does not sweep. A second call from
+// the same directory records the same namespace. A second call from another directory
+// is refused and leaves the recorded namespace as it was. A directory whose
+// name contains a hyphen is refused, because the stamped name uses a hyphen
+// to separate the namespace from the process identity.
 func RegisterTempTag() error {
 	_, file, _, ok := runtime.Caller(1)
 	if !ok || file == "" {
@@ -112,27 +116,68 @@ func SweepTempDirs() error {
 	return nil
 }
 
-// namespaceFromFile is the directory of file inside the nearest module,
-// with slashes turned into underscores. The trailing hyphen tempPrefix adds
-// keeps a shorter directory from matching a longer one's names.
+// namespaceFromFile is the caller's directory within its module. '_' encodes
+// as "_0" and '/' as "_1", so a directory named a_b and directories a/b or
+// a/_b do not match. The encoding emits no hyphen, and the trailing hyphen
+// tempPrefix adds keeps a shorter directory from matching a longer one's names.
 func namespaceFromFile(file string) (string, error) {
-	dir := filepath.Dir(file)
-	root, err := moduleRootFrom(dir)
+	rel, err := moduleRelativeDir(file)
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(root, dir)
-	if err != nil {
-		return "", fmt.Errorf("standin: test temp namespace: %w", err)
+	return encodeNamespace(rel)
+}
+
+func moduleRelativeDir(file string) (string, error) {
+	dir := filepath.Dir(file)
+	if filepath.IsAbs(dir) {
+		root, err := moduleRootFrom(dir)
+		if err != nil {
+			return "", err
+		}
+		rel, err := filepath.Rel(root, dir)
+		if err != nil {
+			return "", fmt.Errorf("standin: test temp namespace: %w", err)
+		}
+		return filepath.ToSlash(rel), nil
 	}
-	rel = filepath.ToSlash(rel)
-	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
-		return "", fmt.Errorf("standin: test temp namespace caller %s is outside the module", file)
+	slash := filepath.ToSlash(dir)
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info == nil || info.Main.Path == "" {
+		return "", fmt.Errorf("standin: no module path recorded for caller %s", file)
+	}
+	prefix := info.Main.Path
+	if slash == prefix {
+		return ".", nil
+	}
+	if !strings.HasPrefix(slash, prefix+"/") {
+		return "", fmt.Errorf("standin: caller %s is not in module %s", file, prefix)
+	}
+	return strings.TrimPrefix(slash, prefix+"/"), nil
+}
+
+func encodeNamespace(rel string) (string, error) {
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") || strings.Contains(rel, "/../") {
+		return "", fmt.Errorf("standin: test temp namespace %s is outside the module", rel)
 	}
 	if strings.Contains(rel, "-") {
 		return "", fmt.Errorf("standin: test temp namespace %s contains a hyphen, which separates the namespace from the process identity", rel)
 	}
-	tag := strings.ReplaceAll(rel, "/", "_")
+	var b strings.Builder
+	for _, r := range rel {
+		switch r {
+		case '/':
+			b.WriteString("_1")
+		case '_':
+			b.WriteString("_0")
+		default:
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') {
+				return "", fmt.Errorf("standin: test temp namespace %q is not a module directory", rel)
+			}
+			b.WriteRune(r)
+		}
+	}
+	tag := b.String()
 	if err := validTempTag(tag); err != nil {
 		return "", err
 	}

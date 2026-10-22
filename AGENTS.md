@@ -138,11 +138,15 @@ repository more than one round of review.
   is never a second parser.
 - A temporary directory a test makes with `os.MkdirTemp` is
   `standin.TempDir`'s. `RegisterTempTag` records the caller's directory
-  inside the module as the namespace, and `TempDir` and `SweepTempDirs`
-  use only that recorded namespace. The package's `TestMain` registers
-  and sweeps before tests. A live owner, and a name that does not parse,
-  are left. Go's `t.TempDir` and `go-build*` directories, and a scratch
-  directory the product makes for itself, are not this.
+  inside the module as the namespace. A slash and an underscore in that
+  directory stay distinct. An absolute path is made relative by walking up
+  to `go.mod`; a non-absolute path is accepted only as the main module path
+  plus that directory, the form `-trimpath` records, and is not opened.
+  `TempDir` and `SweepTempDirs` use only that recorded namespace. The
+  package's `TestMain` registers and sweeps before tests. A live owner, and
+  a name that does not parse, are left. Go's `t.TempDir` and `go-build*`
+  directories, and a scratch directory the product makes for itself, are
+  not this.
 - Only `internal/home` spells a path under the home root, except
   `<home>/repos/<id>.git`, which `internal/gate` composes itself. Only
   `internal/managed` writes a service definition or invokes `launchctl`

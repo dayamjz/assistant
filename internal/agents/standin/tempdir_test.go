@@ -222,8 +222,34 @@ func TestEachDirectoryHasItsOwnNamespace(t *testing.T) {
 	if library == caller {
 		t.Fatalf("storetest and cli share namespace %s", library)
 	}
-	if strings.HasPrefix(tempPrefix(library), tempPrefix("internal_store")) {
-		t.Fatalf("prefix %s matches the shorter directory", tempPrefix(library))
+	parent, err := namespaceFromFile(filepath.Join(root, "internal", "store", "helpers_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(tempPrefix(library), tempPrefix(parent)) {
+		t.Fatalf("prefix %s matches the shorter directory %s", tempPrefix(library), parent)
+	}
+	slash, err := namespaceFromFile(filepath.Join(root, "review488probe", "a", "b", "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	under, err := namespaceFromFile(filepath.Join(root, "review488probe", "a_b", "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slash == under {
+		t.Fatalf("a/b and a_b share namespace %s", slash)
+	}
+	withUnder, err := namespaceFromFile(filepath.Join(root, "review488probe", "a", "_b", "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	underSlash, err := namespaceFromFile(filepath.Join(root, "review488probe", "a_", "b", "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withUnder == underSlash {
+		t.Fatalf("a/_b and a_/b share namespace %s", withUnder)
 	}
 }
 
@@ -256,13 +282,21 @@ func TestTheRegisteredNamespaceIsThisDirectory(t *testing.T) {
 	}
 }
 
-// The stamped name, with the longest directory that calls TempDir, the
-// longest pattern those calls pass, eight base36 digits of process
+// The stamped name, for internal/supervisor/feed as namespaceFromFile encodes
+// it, the longest pattern those calls pass, eight base36 digits of process
 // identifier, the full width of a start time, and the longest suffix
 // os.MkdirTemp appends, still leaves room for a socket under the bound
 // terminal.go records as maxSocketPath.
 func TestAStampedNameLeavesRoomForASocket(t *testing.T) {
-	name := tempPrefix("internal_supervisor_feed") + "zzzzzzzz-" +
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tag, err := namespaceFromFile(filepath.Join(root, "internal", "supervisor", "feed", "main_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := tempPrefix(tag) + "zzzzzzzz-" +
 		strconv.FormatUint(^uint64(0), 36) + "-storetemplate4294967295"
 	path := filepath.Join(tempRoot(), name, "socket")
 	const socketPathLimit = 103
@@ -284,6 +318,173 @@ func runTempDirChild(t *testing.T, mode string) string {
 		t.Fatalf("child %s: %v\n%s", mode, err, out)
 	}
 	return string(out)
+}
+
+// P15: a/b and a_b are different directories. A sweep of one must not reclaim
+// a directory the other made, once that owner is gone, and must not reclaim
+// it while the owner is still running.
+func TestADirectoryDoesNotSweepItsSlashUnderscoreTwin(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	mod := namespaceProbeModule(t)
+	bins := t.TempDir()
+	writeNamespaceProbe(t, mod)
+	under := buildNamespaceProbe(t, mod, "review488probe/a_b", filepath.Join(bins, "under.bin"), false)
+	slash := buildNamespaceProbe(t, mod, "review488probe/a/b", filepath.Join(bins, "slash.bin"), false)
+
+	cmd := exec.Command(under, "create", "stay")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+	path, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil {
+		t.Fatalf("reading a_b's directory: %v", err)
+	}
+	path = strings.TrimSpace(path)
+	t.Cleanup(func() { _ = os.RemoveAll(path) })
+
+	runNamespaceProbe(t, slash, "sweep")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("a live owner's directory was removed: %v", err)
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	runNamespaceProbe(t, slash, "sweep")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("a/b reclaimed a_b's directory %s: %v", filepath.Base(path), err)
+	}
+	runNamespaceProbe(t, under, "sweep")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("a_b left its own directory %s: %v", filepath.Base(path), err)
+	}
+}
+
+// P15: a binary built with -trimpath still registers, including when it is
+// started from its package directory, and its directory is the same namespace
+// a build without -trimpath sweeps.
+func TestTrimpathRegistersWithoutTheSourceTree(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	mod := namespaceProbeModule(t)
+	bins := t.TempDir()
+	writeNamespaceProbe(t, mod)
+	plain := buildNamespaceProbe(t, mod, "review488probe/a_b", filepath.Join(bins, "plain.bin"), false)
+	trim := buildNamespaceProbe(t, mod, "review488probe/a_b", filepath.Join(bins, "trim.bin"), true)
+
+	cmd := exec.Command(trim, "create")
+	cmd.Dir = filepath.Join(mod, "review488probe", "a_b")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("trimpath from the package directory: %v\n%s", err, out)
+	}
+	path := strings.TrimSpace(string(out))
+	t.Cleanup(func() { _ = os.RemoveAll(path) })
+	runNamespaceProbe(t, plain, "sweep")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("the untrimmed build left the trimpath directory %s: %v", filepath.Base(path), err)
+	}
+}
+
+func namespaceProbeModule(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("no caller")
+	}
+	mod, err := moduleRootFrom(filepath.Dir(file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mod
+}
+
+func writeNamespaceProbe(t *testing.T, mod string) {
+	t.Helper()
+	root := filepath.Join(mod, "review488probe")
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	src := []byte(`package main
+
+import (
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/dayamjz/assistant/internal/agents/standin"
+)
+
+func main() {
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if len(os.Args) < 2 {
+		os.Exit(2)
+	}
+	switch os.Args[1] {
+	case "create":
+		dir, err := standin.TempDir("p")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(dir)
+		if len(os.Args) == 3 && os.Args[2] == "stay" {
+			time.Sleep(time.Hour)
+		}
+	case "sweep":
+		if err := standin.SweepTempDirs(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	default:
+		os.Exit(2)
+	}
+}
+`)
+	for _, rel := range []string{"a_b/main.go", "a/b/main.go"} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, src, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func buildNamespaceProbe(t *testing.T, root, pkg, out string, trimpath bool) string {
+	t.Helper()
+	args := []string{"build", "-o", out}
+	if trimpath {
+		args = append(args, "-trimpath")
+	}
+	args = append(args, "./"+pkg)
+	cmd := exec.Command("go", args...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOMAXPROCS=4")
+	if outb, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build %s: %v\n%s", pkg, err, outb)
+	}
+	return out
+}
+
+func runNamespaceProbe(t *testing.T, bin, arg string) {
+	t.Helper()
+	cmd := exec.Command(bin, arg)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%s %s: %v\n%s", filepath.Base(bin), arg, err, out)
+	}
 }
 
 // P15: a reused PID with a different start time cannot keep the previous
