@@ -2,11 +2,14 @@ package checkpoints_test
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sync"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/checkpoints"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/store"
@@ -17,6 +20,20 @@ import (
 // carries a scheme. internal/store requires a redactor to open at all, and its
 // own is unexported, so the tests supply one of that shape rather than reaching
 // into another package.
+// TestMain reclaims a directory a killed run of this package left before the
+// examples and tests make another.
+func TestMain(m *testing.M) {
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
+
 var seamUserinfo = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)([^/@\s]+)@`)
 
 func workingRedactor() vcs.Redactor {

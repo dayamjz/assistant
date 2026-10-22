@@ -43,11 +43,7 @@ func requiresIdentifiedPeer(t *testing.T) {
 // report values the test already knows.
 func acceptedPair(t *testing.T) (server, client net.Conn) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "ipc")
-	if err != nil {
-		t.Fatalf("temp dir: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := ipcDir(t)
 	l := listenLocal(t, filepath.Join(dir, "s"))
 	defer l.Close()
 	type accepted struct {
@@ -59,6 +55,7 @@ func acceptedPair(t *testing.T) (server, client net.Conn) {
 		c, err := l.Accept()
 		ch <- accepted{c, err}
 	}()
+	var err error
 	client, err = net.Dial("unix", l.Addr().String())
 	if err != nil {
 		t.Fatalf("dial: %v", err)

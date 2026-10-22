@@ -3,12 +3,14 @@ package fixture_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/gate"
@@ -39,8 +41,16 @@ var (
 // here rather than lazily so that a failure to build is one reported failure
 // rather than one per test.
 func TestMain(m *testing.M) {
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	if _, err := exec.LookPath("git"); err == nil {
-		root, err := os.MkdirTemp("", "fixture-shared")
+		root, err := standin.TempDir("shared")
 		if err != nil {
 			panic(err)
 		}

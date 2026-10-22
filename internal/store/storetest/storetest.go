@@ -33,6 +33,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -49,7 +50,7 @@ var template struct {
 // templatePath returns the template's path, making it on first use.
 func templatePath() (string, error) {
 	template.once.Do(func() {
-		dir, err := os.MkdirTemp("", "dbtemplate")
+		dir, err := standin.TempDir("dbtemplate")
 		if err != nil {
 			template.err = err
 			return

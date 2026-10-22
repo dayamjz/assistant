@@ -53,6 +53,14 @@ func TestMain(m *testing.M) {
 	// take no terminal of their own; a test's push is a person's, and the
 	// gate places one by a terminal's foreground on the pushing chain.
 	standin.AtTerminal()
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	os.Exit(standin.RunOwned(func() int { return runQuietly(m) }))
 }
 
@@ -68,7 +76,7 @@ func TestMain(m *testing.M) {
 // raw git helper above still names an absent file of its own, so what a test
 // builds by hand is insulated from this one as it was from the machine's.
 func runQuietly(m *testing.M) int {
-	dir, err := os.MkdirTemp("", "gitconfig")
+	dir, err := standin.TempDir("gitconfig")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "making the quiet git configuration:", err)
 		return 1
@@ -289,7 +297,7 @@ func requiresIdentifiedPeer(t *testing.T) {
 // named after a test would produce, so this does not use t.TempDir.
 func newHome(t *testing.T) *home.Home {
 	t.Helper()
-	root, err := os.MkdirTemp("", "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}
@@ -344,7 +352,7 @@ func git(t *testing.T, dir string, args ...string) string {
 // that short circuit rather than the walk it is about.
 func newSubject(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "s")
+	dir, err := standin.TempDir("s")
 	if err != nil {
 		t.Fatalf("making a subject repository: %v", err)
 	}
@@ -355,7 +363,7 @@ func newSubject(t *testing.T) string {
 	}
 	git(t, dir, "add", "-A")
 	git(t, dir, "commit", "--quiet", "-m", "first")
-	upstream, err := os.MkdirTemp("", "u")
+	upstream, err := standin.TempDir("u")
 	if err != nil {
 		t.Fatalf("making an upstream repository: %v", err)
 	}

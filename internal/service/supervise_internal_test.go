@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -170,7 +171,7 @@ func loopHome(t *testing.T) (*home.Home, *store.Store) {
 // stated, for a test that needs the loop's windows apart.
 func loopHomeConfigured(t *testing.T, document string) (*home.Home, *store.Store) {
 	t.Helper()
-	root, err := os.MkdirTemp("", "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}

@@ -3,6 +3,7 @@ package standin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,10 +24,21 @@ import (
 // one (tmuxOwnerMain), and otherwise owns what its own tests start, since
 // some start tmux servers.
 func TestMain(m *testing.M) {
+	// Before any mode that calls RunOwned, including the tmux-owner child,
+	// so the wrapper it installs is stamped with this package's tag.
+	if err := RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	Main()
+	tempDirChildMain()
 	atTerminalMain()
 	tmuxOwnerMain()
 	unownedMain(m)
+	if err := SweepTempDirs(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	os.Exit(RunOwned(m.Run))
 }
 

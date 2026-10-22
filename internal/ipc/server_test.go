@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -99,11 +98,7 @@ type harness struct {
 // service actually uses and the only one a peer can be identified over.
 func serveOnSocket(t *testing.T, cfg func(*ipc.ServerConfig)) *harness {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "ipc")
-	if err != nil {
-		t.Fatalf("temp dir: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := ipcDir(t)
 	h := &harness{
 		socket:   filepath.Join(dir, "s"),
 		handler:  &recordingHandler{},
@@ -793,11 +788,7 @@ func TestConnectionRefusesMoreRequestsThanItMayServeAtOnce(t *testing.T) {
 // makes Serve return. A caller that waited for Serve after Close alone would
 // wait forever.
 func TestCloseLeavesTheListenerToItsOwner(t *testing.T) {
-	dir, err := os.MkdirTemp("", "ipc")
-	if err != nil {
-		t.Fatalf("temp dir: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := ipcDir(t)
 	socket := filepath.Join(dir, "s")
 	srv, err := ipc.NewServer(ipc.ServerConfig{
 		Handler:  &recordingHandler{},
