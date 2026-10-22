@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -20,7 +19,7 @@ import (
 // coordinator use. A person's run, started and cancelled here, keeps its
 // copy because its commit landed nowhere, and no task names the run. The
 // person's listing, assistant coordinator wakes, shows the notice under the
-// entry's project, phrased, and takes nothing; the coordinator's --json
+// entry's project and branch, phrased, and takes nothing; the coordinator's --json
 // drain carries the row under kept_work_wakes; assistant coordinator
 // acknowledge kNUMBER closes it, after which neither lists it, while the
 // entry stays open in status; and naming it again is refused as an
@@ -57,17 +56,13 @@ func TestAKeptWorkWakeIsListedAndAcknowledgedThroughTheCommandLine(t *testing.T)
 		t.Fatalf("the entry %+v names no branch, and a person's run is kept on one", entry)
 	}
 
-	var wake store.KeptWorkWake
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		got := run(t, h, subject, "coordinator", "wakes")
-		if strings.Contains(got.stdout, branch+": ") {
-			break
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatalf("the person's listing never showed a notice under branch %s:\n%s%s", branch, got.stdout, got.stderr)
-		}
-		time.Sleep(50 * time.Millisecond)
+	// The loop raises the entry on its next pass, and the wait returns once
+	// a wake is on offer. Its client then detaches, so the drain below is
+	// offered the row again.
+	var awaited machine.Wakes
+	coordinate(t, h, subject, &awaited, "await", "--timeout", "30s")
+	if len(awaited.KeptWorkWakes) != 1 {
+		t.Fatalf("the wait handed out kept-work wakes %+v, want entry %d's one", awaited.KeptWorkWakes, entry.ID)
 	}
 	var drained machine.Wakes
 	coordinate(t, h, subject, &drained, "wakes")
@@ -75,9 +70,10 @@ func TestAKeptWorkWakeIsListedAndAcknowledgedThroughTheCommandLine(t *testing.T)
 		drained.KeptWorkWakes[0].Branch != entry.Branch {
 		t.Fatalf("the coordinator's drain carries kept-work wakes %+v, want entry %d's one under its project and branch", drained.KeptWorkWakes, entry.ID)
 	}
-	wake = drained.KeptWorkWakes[0]
+	wake := drained.KeptWorkWakes[0]
 	listing := run(t, h, subject, "coordinator", "wakes")
-	if line := branch + ": " + machine.QueuedKeptWorkWakePhrase(wake).String(); !strings.Contains(listing.stdout, line) {
+	label := entry.RepositoryID.Or("") + " " + branch + ": "
+	if line := label + machine.QueuedKeptWorkWakePhrase(wake).String(); !strings.Contains(listing.stdout, line) {
 		t.Fatalf("the person's listing does not read %q:\n%s", line, listing.stdout)
 	}
 
@@ -92,7 +88,7 @@ func TestAKeptWorkWakeIsListedAndAcknowledgedThroughTheCommandLine(t *testing.T)
 	if len(after.KeptWorkWakes) != 0 {
 		t.Fatalf("the drain after the acknowledgement carries %+v, want nothing", after.KeptWorkWakes)
 	}
-	if got := run(t, h, subject, "coordinator", "wakes"); strings.Contains(got.stdout, branch+": ") {
+	if got := run(t, h, subject, "coordinator", "wakes"); strings.Contains(got.stdout, label) {
 		t.Fatalf("the person's listing still shows the notice after it was acknowledged:\n%s", got.stdout)
 	}
 	if got := run(t, h, subject, "--json", "status"); json.Unmarshal([]byte(got.stdout), &status) != nil || len(status.KeptWork) != 1 || status.KeptWork[0].ID != entry.ID {

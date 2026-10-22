@@ -31,16 +31,16 @@ func readOutUsage(w io.Writer, u machine.Usage) {
 	if u.Total.Calls == 0 {
 		return
 	}
-	writeln(w, "\nBy agent, model, purpose, role, provider, type, version and effort")
+	writeln(w, "\nBy agent, model, purpose, role, provider, type, version, effort and context window")
 	for _, g := range u.ByAgent {
 		model := g.Model
 		if model == "" {
 			model = "(no model named)"
 		}
-		writeUsageTotals(w, fmt.Sprintf("  %s  %s  %s  role %s  %s %s %s  effort %s",
+		writeUsageTotals(w, fmt.Sprintf("  %s  %s  %s  role %s  %s %s %s  effort %s  context %s",
 			printable(g.Agent), printable(model), printable(g.Purpose),
 			namedDimension(g.Role), namedDimension(g.Provider), namedDimension(g.Type), namedDimension(g.Version),
-			namedDimension(g.Effort)), g.UsageTotals)
+			namedDimension(g.Effort), namedDimension(g.ContextWindow)), g.UsageTotals)
 	}
 	writeln(w, "\nBy run and stage")
 	for _, g := range u.ByRun {

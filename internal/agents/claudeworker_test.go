@@ -67,15 +67,31 @@ func TestTheClaudeWorkerIsToldExactlyWhatItIsSent(t *testing.T) {
 	}
 }
 
-// A worker role on Claude Fable 5.1 reaches the Claude Code CLI as
-// --model claude-fable-5-1. The role is the operator's YAML document read by
-// the real parser and resolver, the identifier is Translate's, which is the
+// A worker role reaches the Claude Code CLI as the --model Translate composes:
+// Fable 5.1 as claude-fable-5-1, and Opus 5.5 at context 1m as
+// claude-opus-5-5[1m], the window the role names and not one a launcher
+// outside the program supplies. The role is the operator's YAML document read
+// by the real parser and resolver, the identifier is Translate's, which is the
 // call internal/service's launch makes, and the command line is what the
 // stand-in recorded off the process the adapter started, so no step states the
 // identifier the next one reads.
-func TestAFableWorkerRoleReachesTheClaudeCommandLine(t *testing.T) {
+func TestAWorkerRoleReachesTheClaudeCommandLine(t *testing.T) {
 	t.Parallel()
-	doc := "roles:\n  worker-hard:\n    agent: claude\n    provider: anthropic\n    type: fable\n    version: \"5.1\"\n    effort: high\n"
+	for _, tc := range []struct {
+		name, doc, model string
+	}{
+		{"fable", "roles:\n  worker-hard:\n    agent: claude\n    provider: anthropic\n    type: fable\n    version: \"5.1\"\n    effort: high\n", "claude-fable-5-1"},
+		{"opus at 1m", "roles:\n  worker-hard:\n    agent: claude\n    provider: anthropic\n    type: opus\n    version: \"5.5\"\n    effort: high\n    context: 1m\n", "claude-opus-5-5[1m]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			workerRoleReachesTheCommandLine(t, tc.doc, tc.model)
+		})
+	}
+}
+
+func workerRoleReachesTheCommandLine(t *testing.T, doc, wantModel string) {
+	t.Helper()
 	layer, err := config.ParseYAML(config.OriginGlobal, []byte(doc))
 	if err != nil {
 		t.Fatalf("parsing the roles: %v", err)
@@ -88,9 +104,9 @@ func TestAFableWorkerRoleReachesTheClaudeCommandLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolving the task's role: %v", err)
 	}
-	model, err := agents.Translate(agents.ClaudeName, role.Provider, role.Type, role.Version)
+	model, err := agents.Translate(agents.ClaudeName, role.Provider, role.Type, role.Version, role.ContextWindow)
 	if err != nil {
-		t.Fatalf("translating %s %s %s: %v", role.Provider, role.Type, role.Version, err)
+		t.Fatalf("translating %s %s %s at %q: %v", role.Provider, role.Type, role.Version, role.ContextWindow, err)
 	}
 	if err := agents.AcceptsEffort(agents.ClaudeName, role.Effort); err != nil {
 		t.Fatalf("the Claude adapter refused effort %q: %v", role.Effort, err)
@@ -120,8 +136,8 @@ func TestAFableWorkerRoleReachesTheClaudeCommandLine(t *testing.T) {
 	if !call.Worker {
 		t.Fatalf("no worker was recorded: %s", agent.Calls())
 	}
-	if call.Model() != "claude-fable-5-1" {
-		t.Errorf("the worker was started with --model %q, want claude-fable-5-1: %q", call.Model(), call.Args)
+	if call.Model() != wantModel {
+		t.Errorf("the worker was started with --model %q, want %s: %q", call.Model(), wantModel, call.Args)
 	}
 	if i := slices.Index(call.Args, "--effort"); i < 0 || i+1 >= len(call.Args) || call.Args[i+1] != "high" {
 		t.Errorf("the worker was started without --effort high: %q", call.Args)

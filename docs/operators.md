@@ -492,10 +492,10 @@ attributed to a task, and otherwise about the entry itself, for an entry
 about a run no task names, such as the run your own push started. The
 second is a wake of its own shape: the notify command's line names the
 entry in `kept_work` and its `project` and `branch` rather than a
-`task_id`, `assistant coordinator wakes` lists it under the branch, and
-the coordinator acknowledges it as `kNUMBER`, a number of its own.
-Acknowledging the wake answers nothing: the entry is listed until it is
-answered or closed.
+`task_id`, `assistant coordinator wakes` lists it under the project and
+then the branch, and the coordinator acknowledges it as `kNUMBER`, a
+number of its own. Acknowledging the wake answers nothing: the entry is
+listed until it is answered or closed.
 
 If the copy's work later turns up somewhere safe, for example once you push
 its commit to the upstream branch, the next cleanup of it (for a run's copy,
@@ -515,6 +515,14 @@ work ships (#411 part 2), the way past it is the work landing: once its
 commits are on the upstream branch or in the default branch, the next
 service start removes the copy on that proof and closes the entry. Part 2's
 discard will be your other way.
+
+Eject is also refused, before the gate is touched, while a `kept-work` wake
+about one of the repository's entries is still unacknowledged, even once
+the entry is closed, because the wake stays actionable until the coordinator
+acknowledges it, and forgetting the repository would delete it. The refusal
+names the wake by its number; once the coordinator acknowledges it as
+`kNUMBER`, eject removes the closed entry, its wake and the wake's
+notification record with the run.
 
 Eject is also refused while any run copy of the repository still stands on
 disk, whether its run's cleanup has not decided it yet or kept it, and the

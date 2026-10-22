@@ -3,7 +3,6 @@
 package stages
 
 import (
-	"context"
 	"os/exec"
 )
 
@@ -17,14 +16,16 @@ import (
 // sentence above across to it.
 const shellPath = "/bin/sh"
 
-// shellCommand builds the process one configured command line runs as.
+// shellCommand builds the process one configured command line runs as,
+// unstarted and with no context, for runCommand to run through
+// procgroup.Run, which owns its deadline and its process group.
 //
 // The line reaches the interpreter as a single argument, so the interpreter
 // splits it and nothing here does. That is what PRD section 10 asks for: a
 // commands.* value is a line of shell rather than an argument list, and a
 // splitting rule invented here would be a second, quieter one.
-func shellCommand(ctx context.Context, command, dir string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, shellPath, "-c", command)
+func shellCommand(command, dir string) *exec.Cmd {
+	cmd := exec.Command(shellPath, "-c", command)
 	cmd.Dir = dir
 	return cmd
 }

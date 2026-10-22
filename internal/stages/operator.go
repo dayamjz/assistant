@@ -13,9 +13,10 @@ import (
 // through, runCommand, so it is a line of shell handed to the platform's
 // interpreter whole, it inherits the service's environment, its output is
 // redacted on the way in, and every residual gap commandGrace states about
-// that runner holds for it too: on unix the command is the leader of a
-// process group of its own, which is ended when the command returns or its
-// context ends (inGroup), and a descendant that left the group is not ended.
+// that runner holds for it too: on linux and darwin the command is the
+// leader of a process group of its own, which is ended when the command
+// returns or its context ends (procgroup.Run), and a descendant that left the
+// group is not ended.
 // Unlike a stage's command it takes no command slot and no time limit of
 // runCommand's own, because its caller's context is its deadline.
 //
@@ -61,14 +62,17 @@ type OperatorResult struct {
 }
 
 // RunOperatorCommand runs c to completion on runCommand's terms. Ending ctx
-// ends the command and, on unix, its process group, which the result then
-// reports as not having exited on its own; a caller that bounds a command
-// with a deadline reads why from the context rather than from the result.
+// ends the command and, on linux and darwin, its process group, which the
+// result then reports as not having exited on its own; a caller that bounds
+// a command with a deadline reads why from the context rather than from the
+// result.
 //
-// On unix the call returns at most c.Grace after the command exited or ctx
-// ended, whichever is first: the group is ended with SIGKILL, which the
-// interpreter cannot outlast, and the read of the output is then given up
-// after the grace. Elsewhere commandGrace says what is not bounded.
+// On linux and darwin the call returns at most c.Grace after the command
+// exited, when the read of the output is given up, and at most twice c.Grace
+// after ctx ended: the group is sent SIGKILL at once, the command is given
+// c.Grace to exit, past which procgroup.Run answers ErrAbandoned without it,
+// and the read is then given up after c.Grace more. Elsewhere commandGrace
+// says what is not bounded.
 func RunOperatorCommand(ctx context.Context, c OperatorCommand) OperatorResult {
 	grace := c.Grace
 	if grace <= 0 {
