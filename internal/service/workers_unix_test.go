@@ -119,7 +119,7 @@ func gitAs(t *testing.T, w launched, dir string, args ...string) (string, error)
 
 // callAs has the worker make one call on the service's socket through
 // callMain, and returns the answer or the wire code the call was refused
-// with. The parameters reach the command through a file rather than on the
+// with, read by refusedWith, which logs the refusal's reason. The parameters reach the command through a file rather than on the
 // line the worker reads, so a test counting the lines that carry a text
 // counts what the program wrote to the worker and not what it asked the
 // worker to run.
@@ -139,7 +139,7 @@ func callAs(t *testing.T, w launched, method ipc.Method, params any) (json.RawMe
 	case 0:
 		return json.RawMessage(ran.Stdout), ""
 	case 1:
-		return nil, ipc.Code(ran.Stderr)
+		return nil, refusedWith(t, method, ran.Stderr)
 	default:
 		t.Fatalf("calling %s from the worker: %+v", method, ran)
 		return nil, ""
