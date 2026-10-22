@@ -1068,7 +1068,8 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		s.forge,
 		redactor,
 		vcs.WithRedactor(redactor),
-	).WithJudge(s.judge).WithChecksWaits(s.store).WithRunRecords(s.store).WithKnowledge(resolved.knowledge)
+	).WithJudge(s.judge).WithChecksWaits(s.store).WithRunRecords(s.store).WithRebaseRecords(s.store).
+		WithKnowledge(resolved.knowledge)
 	// The fix seam is built here, beside the stage seam and deliberately apart
 	// from it. It carries the one thing a stage body may not have: a route to
 	// the run's fixer role, which internal/runs hands out per run and which
