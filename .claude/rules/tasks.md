@@ -17,6 +17,9 @@ paths: ["internal/tasks/**"]
   loosen it (`*PostureError`).
 - A local task's cleanup proof is the content check against the working
   copy's default branch and nothing else.
+- The remote-branch and merged-pull-request proofs follow a commit the gate
+  rebased only through a `store.RunRebase` of a run the snapshot attributes
+  to the task, never by matching commits by content; `proof.go` owns it.
 - This package's own P11 citation claims the assertion refuses and nothing
   about launch; `internal/service`'s claims the launch edge.
 - It is P12's decision and the only writer of the cleanup record. An

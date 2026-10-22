@@ -104,6 +104,12 @@ func rebasedLanding(t *testing.T, branch string, deleteBranch bool, body func(w 
 	subject := newSubject(t)
 	quietMaintenance(t, subject)
 	local := git(t, subject, "remote", "get-url", "origin")
+	// The task's copy is a clone of the subject, so it carries the subject's
+	// work branch beside the task's own; that branch is already on the
+	// upstream's default branch, as land in landed_unix_test.go has it, so
+	// the one commit of the copy no upstream holds by its own identifier is
+	// the worker's.
+	git(t, subject, "push", "--quiet", "origin", "work:main")
 	recordRepositoryWithUpstream(t, h, subject, rebasedUpstream)
 	gateRepo := gateRepositoryOf(t, h, subject)
 	quietMaintenance(t, gateRepo)
