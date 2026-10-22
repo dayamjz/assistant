@@ -9,10 +9,10 @@ import (
 	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
-// TestTheBinaryBuildEndsWhenTheTestTimeoutElapses is a program started the
-// way the product-binary build is started. The test harness's -timeout has
-// to end it. A context with no deadline leaves it running after that
-// timeout, and the harness ending this process does not end the group.
+// TestTheBinaryBuildEndsWhenTheTestTimeoutElapses checks the deadline
+// binaryBuildContext gives the product-binary build. Run ends the command
+// when it handles that cancellation. The testing alarm exiting the process
+// first is TestATimedOutBuildDoesNotOutliveTheHarness.
 func TestTheBinaryBuildEndsWhenTheTestTimeoutElapses(t *testing.T) {
 	if testBinaryTimeout() <= 0 {
 		t.Fatal("the test binary's -timeout was read as zero, so the build would be unbounded")

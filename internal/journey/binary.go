@@ -16,9 +16,8 @@ import (
 	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
-// processStarted is when this package began initializing. The testing
-// harness arms -timeout later, at the start of the test run, so a deadline
-// measured from here falls before that alarm.
+// processStarted is when this package began initializing. binaryBuildContext
+// measures the build's deadline from here.
 var processStarted = time.Now()
 
 // buildGrace is procgroup.Run's grace for the build: how long the go command
@@ -94,9 +93,12 @@ func resolveBinary() (string, error) {
 		return "", fmt.Errorf("journey: making a directory to build the binary into: %w", err)
 	}
 	built := filepath.Join(dir, "assistant"+exeSuffix())
-	// The build runs through procgroup.Run, so what the go command started
-	// ends with it. binaryBuildContext owns the deadline.
-	cmd := procgroup.Command("go", "build", "-o", built, "./cmd/assistant")
+	cmd, life, err := buildCommand(built)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	defer func() { _ = life.Close() }()
 	cmd.Dir = root
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -114,13 +116,16 @@ func resolveBinary() (string, error) {
 
 // binaryBuildContext is the context the product-binary build runs under.
 //
-// timeout is the test binary's -timeout. Measured from started, which is
-// this package's initialization and therefore before the testing harness
-// arms that timeout, the deadline falls before the alarm that exits the
-// process, and Run ends the build's group then. A non-positive timeout
-// leaves the context without a deadline, so the build is unbounded. A
-// process killed outright before the deadline ends no group either: Run is
-// not running a cancellation then, which procgroup's package comment states.
+// timeout is the test binary's -timeout, measured from started, which is
+// this package's initialization. The testing harness arms the same timeout
+// later, at the start of the run, so this deadline leads the alarm by the
+// time between initialization and that start. Run ends the group when it
+// handles the cancellation. It does not promise to win that race: with one
+// processor the alarm can exit the process while Run is still blocked, and
+// a context deadline does not run then. buildCommand is what ends the group
+// in that case, on the platforms where it ties the command to this process.
+// A non-positive timeout leaves the context without a deadline, so the
+// build is not ended while this process stays alive.
 func binaryBuildContext(started time.Time, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if timeout <= 0 {
 		return context.Background(), func() {}
