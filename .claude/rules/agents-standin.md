@@ -16,7 +16,8 @@ Read `doc.go` for what a recorded `Call` does and does not prove about P4,
 and for the two residual gaps. `tempdir.go` owns a test's temporary
 directories: the tag constants are the one list, `TempDir` stamps the
 owning process's identity, and a package's `TestMain` sweeps with
-`SweepTempDirs` before tests. `tmux.go` owns `standin.Tmux` and
+`SweepTempDirs` before tests. The test that each binary has one distinct
+tag type-checks the calls to `TempDir` and `SweepTempDirs`. `tmux.go` owns `standin.Tmux` and
 `terminal_unix.go` owns `standin.AtTerminal`. `owner_unix.go` is the one
 owner watch a test's processes end with (P15), the binary `AtTerminal` runs
 again and the owner sweep for a tmux server included, and its `RunOwned` is

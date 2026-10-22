@@ -11,11 +11,11 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 )
 
-// Temp tags are the one list of namespaces a test binary sweeps. Each names
-// the package whose TestMain passes it to RegisterTempTag and SweepTempDirs,
-// and a directory is stamped with the tag of the binary that made it so that
-// binary's next start reclaims it. TempTags lists every one of these; a new
-// tag is a constant here and an entry there.
+// Temp tags are the namespaces a test binary sweeps. Each names the package
+// whose TestMain passes it to SweepTempDirs, and a directory is stamped with
+// the tag of the binary that made it so that binary's next start reclaims it.
+// A new tag is one of these constants. Which test binary uses which letter is
+// read from the calls to TempDir and SweepTempDirs.
 const (
 	// TempTagStandin is the namespace internal/agents/standin's tests sweep.
 	TempTagStandin = "a"
@@ -46,17 +46,6 @@ const (
 	// TempTagService is the namespace internal/service's tests sweep.
 	TempTagService = "s"
 )
-
-// TempTags is every package namespace, in the order the constants are
-// declared. The distinctness test walks this and nothing else.
-func TempTags() []string {
-	return []string{
-		TempTagStandin, TempTagStoretest, TempTagCLI, TempTagStore,
-		TempTagSession, TempTagFixture, TempTagStages, TempTagIPC,
-		TempTagJourney, TempTagCheckpoints, TempTagAgents, TempTagFeed,
-		TempTagService,
-	}
-}
 
 // registeredTempTag is the namespace RegisterTempTag recorded for this
 // process. TestMain writes it before tests run; helpers only read it after

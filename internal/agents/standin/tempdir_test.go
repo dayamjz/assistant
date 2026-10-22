@@ -104,23 +104,6 @@ func TestAKilledTestBinarysTempDirIsReclaimedAtTheNextStart(t *testing.T) {
 	}
 }
 
-// P15: the tag list has one letter per package. A repeat would make two
-// packages one namespace, so a start of either reclaims the other's
-// directories.
-func TestTempTagsAreOnePerPackage(t *testing.T) {
-	principles.Cite(t, principles.P15)
-	seen := map[string]struct{}{}
-	for _, tag := range TempTags() {
-		if err := validTempTag(tag); err != nil {
-			t.Fatalf("tag %q: %v", tag, err)
-		}
-		if _, ok := seen[tag]; ok {
-			t.Fatalf("tag %q is used by more than one package", tag)
-		}
-		seen[tag] = struct{}{}
-	}
-}
-
 // RegisterTempTag refuses a tag SweepTempDirs would also refuse, and does so
 // without replacing a tag already recorded.
 func TestRegisterTempTagRefusesATagThatIsNotOneLetter(t *testing.T) {
