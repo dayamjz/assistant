@@ -381,14 +381,14 @@ func startTmuxOwnerOf(t *testing.T, mode string, copied bool) *tmuxOwned {
 		}
 	}
 	o.record = filepath.Join(dir, tmuxOwnerRecord)
-	o.cmd, err = StartCopied(func() *exec.Cmd {
+	o.cmd, err = StartCopied(func() (*exec.Cmd, error) {
 		cmd := exec.Command(self, "-test.run=^$")
 		cmd.Env = append(os.Environ(), tmuxOwnerDirVar+"="+dir,
 			tmuxOwnerSocketVar+"="+o.socket, tmuxOwnerModeVar+"="+mode)
 		o.stderr.Reset()
 		cmd.Stderr = o.stderr
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-		return cmd
+		return cmd, cmd.Start()
 	})
 	if err != nil {
 		t.Fatalf("starting the owner: %v", err)

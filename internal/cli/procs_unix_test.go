@@ -148,10 +148,10 @@ func TestTheCheckReportsALiveProcessOfABinaryWhosePathHasASpace(t *testing.T) {
 	}
 	h := newHomeNamed(t, "h s")
 
-	served, err := standin.StartCopied(func() *exec.Cmd {
+	served, err := standin.StartCopied(func() (*exec.Cmd, error) {
 		cmd := exec.Command(copied, "--home", h.Root(), "service", "start", "--foreground")
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-		return cmd
+		return cmd, cmd.Start()
 	})
 	if err != nil {
 		t.Fatalf("starting the copy: %v", err)

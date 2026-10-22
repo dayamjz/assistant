@@ -256,11 +256,11 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 	}
 	record := filepath.Join(dir, "held")
 	r := &heldChildRun{exited: make(chan struct{}), out: &lockedOutput{}}
-	r.cmd, err = standin.StartCopied(func() *exec.Cmd {
+	r.cmd, err = standin.StartCopied(func() (*exec.Cmd, error) {
 		cmd := exec.Command(binary, append([]string{"-test.run=^TestHeldShellChild$", "-test.count=1"}, extra...)...)
 		cmd.Env = append(os.Environ(), heldModeVar+"="+mode, heldRecordVar+"="+record, "TMPDIR="+childTemp)
 		cmd.Stdout, cmd.Stderr = r.out, r.out
-		return cmd
+		return cmd, cmd.Start()
 	})
 	if err != nil {
 		t.Fatal(err)
