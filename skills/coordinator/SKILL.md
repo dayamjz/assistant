@@ -267,7 +267,7 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   or the program already relaunched that one, do not call `task.relaunch`
   again. A marker carrying `:again:` is a resurface reminder for the same
   silence, not a second relaunch. Case `unobservable` means probe or wait;
-  never `task.relaunch` on it — only `dead` is a crashed worker the program
+  never `task.relaunch` on it; only `dead` is a crashed worker the program
   relaunches. For `hold-opened`, answer with
   `assistant --task ID --answer ...`, with one exception: a local delivery
   task's approval hold, keyed `task/ID/local-approval/...`, is the person's
@@ -281,7 +281,13 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   anywhere safe; the entry is in `assistant --json status` under
   `kept_work` and in the catch-up read under `kept`. Tell the person: it is
   theirs to decide. Answering it is not in this build yet, and it does not
-  hold new tasks in the project from dispatching. The
+  hold new tasks in the project from dispatching. A kept entry no task
+  names, such as the run of the person's own push, reaches you as a
+  `kept-work` wake about the entry instead, listed under `kept_work_wakes`
+  with the entry's id in `kept_work`, its `project` and its `branch`, with
+  numbers of its own, and acknowledged as `kNUMBER`. Acknowledging it
+  closes the wake and answers nothing: the entry stays listed until it is
+  answered or its work lands. The
   program's own records of creating and dispatching a task wake nobody.
 - `acknowledge` also closes a wake `listen` printed that you dealt with
   without draining. Naming an id no wake has, or one already acknowledged,
@@ -394,10 +400,11 @@ A subordinate still running across a restart is placed from its record and
 its process, so it stays the subordinate of its domain and `end-delegation`
 ends it.
 Wakes about a domain are listed under `domain_wakes` with numbers of their
-own and acknowledged as `dNUMBER`:
+own and acknowledged as `dNUMBER`; wakes about kept work no task names are
+listed under `kept_work_wakes` and acknowledged as `kNUMBER`:
 
 ```sh
-assistant coordinator acknowledge 12 d3
+assistant coordinator acknowledge 12 d3 k5
 assistant --domain DOMAIN --answer retry     # begin its coordinator once more
 assistant --domain DOMAIN --answer stop      # end the delegation
 ```

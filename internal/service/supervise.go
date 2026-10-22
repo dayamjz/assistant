@@ -73,14 +73,15 @@ import (
 // entry about it, PRD section 6's kept work, read from the kept work record
 // and keyed by the entry so it surfaces once, as a kept-work wake. An entry
 // is about the task that owns it, or the task that owns or is attributed the
-// run that owns it. A deviation from PRD section 6, by the owner's decision
-// and followed up in #458: an entry about a run no task names, a person's
-// own push, is listed by status and the catch-up read but never reaches the
-// private channel or the coordinator until #458 lands, because it is on no
-// task and the wake table's row names one. And a gap: when the entry
-// surfaced is written after its wake, in a transaction of its own, so a
-// service that stops between the two leaves the wake with no instant on the
-// entry.
+// run that owns it. An entry about a run no task names, a person's own push,
+// is raised on the queue's third shape instead, after the tasks, on
+// keptworkwake.go's terms. An entry surfaces once whichever shape carries
+// it: one whose surfaced instant is recorded is raised on neither again,
+// because attribution can move between passes. A gap: on a task's wake
+// when the entry surfaced is written after the wake, in a transaction of
+// its own, so a service that stops between the two leaves the wake with no
+// instant on the entry, and an entry whose attribution then moves to no
+// task is raised a second time, on the third shape.
 //
 // A watched task's terminal is read only where supervisor.TerminalWatched
 // says so, which is every state but Reported, Landed and Complete. A task
@@ -356,6 +357,9 @@ type passReport struct {
 	// Delegations is the pass over every standing delegation, keyed by
 	// domain, on delegations.go's terms; nil when none stands.
 	Delegations map[string]taskReport
+	// KeptWork is the pass over the open kept work no task names, keyed by
+	// entry, on keptworkwake.go's terms; nil when there is none.
+	KeptWork map[int64]taskReport
 }
 
 // taskReport is one task's part of a pass.
@@ -528,6 +532,14 @@ func (s *Service) passAndReport(c *incarnation, reply chan<- passReport) (replac
 			}
 		}
 	}
+	for entry, kr := range report.KeptWork {
+		if kr.Err != nil {
+			s.log.Printf("supervisor incarnation %d could not record its pass over kept work entry %d: %v", c.inc.Epoch(), entry, kr.Err)
+			if errors.Is(kr.Err, store.ErrStaleIncarnation) {
+				replaced = true
+			}
+		}
+	}
 	switch {
 	case reply != nil:
 		reply <- report
@@ -583,7 +595,7 @@ func (s *Service) pass(c *incarnation) passReport {
 		report.Err = err
 		return report
 	}
-	keptByTask := keptWorkByTask(observed, kept)
+	keptByTask, untasked := keptWorkByTask(observed, kept)
 	providerWideSurfaced := false
 	for _, o := range observed {
 		id := o.Snapshot.Task.ID
@@ -593,6 +605,8 @@ func (s *Service) pass(c *incarnation) passReport {
 	// standing one's subordinate probed, its gone surfaced on the queue's
 	// second shape, and the bound's hold registered for one past it.
 	report.Delegations = s.superviseDelegations(c, now)
+	// The kept work no task names last, on keptworkwake.go's terms.
+	report.KeptWork = s.superviseUntaskedKeptWork(c, untasked)
 	return report
 }
 
@@ -859,7 +873,7 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 	}
 	for _, k := range o.kept {
 		marker := keptWorkMarker(k.ID)
-		if seen(supervisor.KindKeptWork, marker) {
+		if seen(supervisor.KindKeptWork, marker) || k.SurfacedAt.IsKnown() {
 			continue
 		}
 		if d.keptWork == nil {
@@ -980,9 +994,9 @@ func keptWorkMarker(id int64) string { return fmt.Sprintf("kept-work:%d", id) }
 // keptWorkByTask places each open kept work entry on the task it is
 // about: the task that owns it, or the task a run that owns it is attributed
 // to, read off the task's own snapshot. An entry about a run no task names is
-// on no task, so it raises no wake; status and the catch-up read list it, and
-// this file's header names that gap.
-func keptWorkByTask(observed []taskstate.Observed, kept []store.KeptWork) map[string][]store.KeptWork {
+// on no task, and is returned apart, oldest first, for the queue's third
+// shape.
+func keptWorkByTask(observed []taskstate.Observed, kept []store.KeptWork) (map[string][]store.KeptWork, []store.KeptWork) {
 	runTask := make(map[string]string)
 	for _, o := range observed {
 		for _, r := range o.Snapshot.Runs {
@@ -993,6 +1007,7 @@ func keptWorkByTask(observed []taskstate.Observed, kept []store.KeptWork) map[st
 		}
 	}
 	out := make(map[string][]store.KeptWork)
+	var untasked []store.KeptWork
 	for _, k := range kept {
 		task, ok := k.TaskID.Get()
 		if !ok {
@@ -1000,9 +1015,11 @@ func keptWorkByTask(observed []taskstate.Observed, kept []store.KeptWork) map[st
 		}
 		if ok {
 			out[task] = append(out[task], k)
+			continue
 		}
+		untasked = append(untasked, k)
 	}
-	return out
+	return out, untasked
 }
 
 // runHeldMarker composes the marker of the wake for a run moved to held:

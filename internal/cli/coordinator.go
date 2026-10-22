@@ -441,20 +441,24 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	}
 	request := machine.AcknowledgeRequest{Wakes: make([]int64, 0, len(in.args))}
 	for _, arg := range in.args {
-		// A wake about a domain is numbered apart from a task's and is
-		// named with the prefix the --json listing shows it under, so the
-		// two cannot be confused by number.
+		// A wake about a domain or a kept work entry is numbered apart from
+		// a task's and is named with its shape's prefix, so the three
+		// cannot be confused by number.
 		text, domain := strings.CutPrefix(arg, domainWakePrefix)
+		text, kept := strings.CutPrefix(text, keptWorkWakePrefix)
 		id, err := strconv.ParseInt(text, 10, 64)
-		if err != nil {
-			return nil, usagef("assistant %s takes wake identifiers, as a number or %sNUMBER for a notice about a domain, and %q is not one",
-				name, domainWakePrefix, printable(arg))
+		if err != nil || (domain && kept) {
+			return nil, usagef("assistant %s takes wake identifiers, as a number, %sNUMBER for a notice about a domain or %sNUMBER for one about kept work, and %q is not one",
+				name, domainWakePrefix, keptWorkWakePrefix, printable(arg))
 		}
-		if domain {
+		switch {
+		case domain:
 			request.DomainWakes = append(request.DomainWakes, id)
-			continue
+		case kept:
+			request.KeptWorkWakes = append(request.KeptWorkWakes, id)
+		default:
+			request.Wakes = append(request.Wakes, id)
 		}
-		request.Wakes = append(request.Wakes, id)
 	}
 	var acknowledged machine.Acknowledged
 	err := in.callService(ctx, ipc.MethodWakesAcknowledge, request, &acknowledged)
@@ -466,6 +470,10 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 // numbers its rows apart from the task wakes, so a bare number is always a
 // task wake and a prefixed one always a domain wake.
 const domainWakePrefix = "d"
+
+// keptWorkWakePrefix is domainWakePrefix for the queue's third shape, a
+// wake about a kept work entry no task names.
+const keptWorkWakePrefix = "k"
 
 // coordinatorListen is wakes.subscribe, the coordinator's wake stream: the
 // service pushes each wake as the supervisor queues it, PRD section 5's
