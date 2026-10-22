@@ -139,6 +139,10 @@ func (f *claudeFactory) Name() string { return ClaudeName }
 // 12 names, so "auto" may choose it. It is not evidence about the real CLI.
 func (f *claudeFactory) AutoEligible() bool { return true }
 
+// Declares is what every runner this factory builds declares, which
+// claudeRunner's Capabilities states and explains.
+func (f *claudeFactory) Declares() Capabilities { return claudeDeclaration }
+
 // New reports whether Claude Code can be run here, and returns a Runner when
 // it can.
 //
@@ -204,6 +208,12 @@ func (r *claudeRunner) Name() string { return r.name }
 // observed on; a second probe holds it to an installed CLI where there is
 // one, and capability.go says how the two and the declaration meet.
 //
+// All four token counts are declared because the result envelope's usage
+// object carries them and the reader reads each one: input_tokens,
+// output_tokens, cache_read_input_tokens and cache_creation_input_tokens,
+// the keys Claude Code 2.1.306 printed in
+// testdata/claude-print-2.1.306.json.
+//
 // Instruction suppression is not declared, because nothing here implements it.
 // This adapter carries a configured entry's own flags and the four the run
 // manages, and none of those tells Claude Code to ignore a repository's
@@ -211,9 +221,12 @@ func (r *claudeRunner) Name() string { return r.name }
 // while reporting that it did, which is the substitution PRD section 8 refuses.
 // Leaving it undeclared is what lets internal/pipeline refuse a run that asks
 // for suppression against this adapter before it launches one.
-func (r *claudeRunner) Capabilities() Capabilities {
-	return Declare(CapabilityResumableSessions, CapabilityWorkerSessions, CapabilityTerminalWorkers)
-}
+func (r *claudeRunner) Capabilities() Capabilities { return claudeDeclaration }
+
+// claudeDeclaration is what Capabilities and the factory's Declares both return.
+var claudeDeclaration = Declare(CapabilityResumableSessions, CapabilityWorkerSessions, CapabilityTerminalWorkers,
+	CapabilityReportsInputTokens, CapabilityReportsOutputTokens,
+	CapabilityReportsCacheReadTokens, CapabilityReportsCacheCreationTokens)
 
 // Run executes one invocation with no session. It resumes nothing, and the
 // session the agent opens for itself is not kept, so a record it produces

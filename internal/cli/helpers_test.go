@@ -412,6 +412,8 @@ func (f fixedFactory) Name() string { return f.runner.Name() }
 
 func (f fixedFactory) AutoEligible() bool { return true }
 
+func (f fixedFactory) Declares() agents.Capabilities { return f.runner.Capabilities() }
+
 func (f fixedFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 
 // cursorFactory is the default fixer. It returns the runner the test already
@@ -422,6 +424,8 @@ type cursorFactory struct{ runner agents.Runner }
 func (cursorFactory) Name() string { return agents.CursorName }
 
 func (cursorFactory) AutoEligible() bool { return false }
+
+func (f cursorFactory) Declares() agents.Capabilities { return f.runner.Capabilities() }
 
 func (f cursorFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 
@@ -438,6 +442,8 @@ type unrunnableFactory struct{}
 func (unrunnableFactory) Name() string { return "unrunnable" }
 
 func (unrunnableFactory) AutoEligible() bool { return true }
+
+func (unrunnableFactory) Declares() agents.Capabilities { return agents.Capabilities{} }
 
 func (unrunnableFactory) New(context.Context, []string) (agents.Runner, error) {
 	return nil, errors.New("this adapter is not installed on this machine")

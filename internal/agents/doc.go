@@ -63,7 +63,9 @@
 // declares a mechanism it does not carry and one that carries a mechanism it
 // did not declare are both refused, and the whole resolution ends rather than
 // passing over the entry. What a caller holds after Resolve therefore agrees
-// with itself.
+// with itself. Resolve also holds the Runner's declaration equal to its
+// factory's Declares, which is the declaration read for an agent nothing
+// built, such as the agent a recorded call names, so the two are one.
 //
 // OpenFixer reads it. It is the only route to a session this package offers a
 // caller holding a Runner, and it consults the declaration before the type, so
@@ -78,7 +80,16 @@
 // nothing, and a declaration of a capability no row can probe is refused by
 // the tests rather than accepted on trust.
 //
-// Two residual gaps are left, and both are worth stating plainly.
+// The four token-count capabilities are the one place the tests are the
+// whole check. Nothing in a Runner's type shows which counts its reader
+// reads, so Resolve takes them at their word, and the conformance suite runs
+// every adapter the default catalog ships over the stand-in, which prints
+// every count its model of that agent's output carries: a count the adapter
+// declares and did not read back, or read back and did not declare, fails.
+// They matter outside this package because internal/machine's usage ceiling
+// does not hold a call to a count its agent does not declare.
+//
+// Three residual gaps are left, and all are worth stating plainly.
 //
 // A capability whose row has no probe, which is
 // CapabilitySuppressProjectInstructions today, is a declaration this package
@@ -89,6 +100,16 @@
 // that refusal happens and not here: this package has nothing a suppression
 // request could arrive in and so nothing to refuse at. The conformance test
 // fails on the first adapter that declares it without a probe to hold it to.
+//
+// A token-count declaration is held to the stand-in's model of its agent's
+// output, and that model is only as good as what backs it. For Claude Code,
+// Cursor and Codex it is held to a recording of the CLI, so a declaration
+// there agrees with what that CLI version printed. For Grok Build and OpenAI
+// nothing was recorded and the model is each reader's own, so the probe
+// establishes what the adapter reads and not what an installed CLI prints:
+// an OpenAI CLI that printed a cache count would have it left out of the
+// record and out of a ceiling on it, as it already was, without anything
+// here noticing.
 //
 // SessionRunner and WorkerRunner are exported, so calling Fixer or Start on
 // one is expressible without going through OpenFixer or OpenWorker, and a

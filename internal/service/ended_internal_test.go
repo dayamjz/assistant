@@ -371,11 +371,15 @@ func (cursorFactory) Name() string { return agents.CursorName }
 
 func (cursorFactory) AutoEligible() bool { return false }
 
+func (f cursorFactory) Declares() agents.Capabilities { return f.runner.Capabilities() }
+
 func (f cursorFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 
 func (f fixedRunner) Name() string { return f.runner.Name() }
 
 func (f fixedRunner) AutoEligible() bool { return true }
+
+func (f fixedRunner) Declares() agents.Capabilities { return f.runner.Capabilities() }
 
 func (f fixedRunner) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 

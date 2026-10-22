@@ -520,11 +520,15 @@ func (cursorFactory) Name() string { return agents.CursorName }
 
 func (cursorFactory) AutoEligible() bool { return false }
 
+func (f cursorFactory) Declares() agents.Capabilities { return f.runner.Capabilities() }
+
 func (f cursorFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 
 func (f fixedFactory) Name() string { return f.runner.Name() }
 
 func (f fixedFactory) AutoEligible() bool { return true }
+
+func (f fixedFactory) Declares() agents.Capabilities { return f.runner.Capabilities() }
 
 func (f fixedFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 

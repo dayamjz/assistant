@@ -143,6 +143,10 @@ func (f *cursorFactory) Name() string { return CursorName }
 // Code, so this one resolves only when an entry names it.
 func (f *cursorFactory) AutoEligible() bool { return false }
 
+// Declares is what every runner this factory builds declares, which
+// cursorRunner's Capabilities states and explains.
+func (f *cursorFactory) Declares() Capabilities { return cursorDeclaration }
+
 // New reports whether Cursor can be run here, and returns a Runner when
 // it can.
 //
@@ -196,6 +200,12 @@ func (r *cursorRunner) Name() string { return CursorName }
 // envelope reported, which arguments and invoke build, and the Fixer method
 // below is what makes that reachable.
 //
+// All four token counts are declared because the result object's usage
+// carries them and the reader reads each one: inputTokens, outputTokens,
+// cacheReadTokens, and cacheWriteTokens as cache creation, the keys
+// cursor-agent 2026.10.19-6bbf2c4 printed in
+// testdata/cursor-print-2026.10.19.json.
+//
 // Instruction suppression is not declared, because nothing here implements it.
 // This adapter carries a configured entry's own flags and the four the run
 // manages, and none of those tells Cursor to ignore a repository's
@@ -203,9 +213,12 @@ func (r *cursorRunner) Name() string { return CursorName }
 // while reporting that it did, which is the substitution PRD section 8 refuses.
 // Leaving it undeclared is what lets internal/pipeline refuse a run that asks
 // for suppression against this adapter before it launches one.
-func (r *cursorRunner) Capabilities() Capabilities {
-	return Declare(CapabilityResumableSessions, CapabilityWorkerSessions)
-}
+func (r *cursorRunner) Capabilities() Capabilities { return cursorDeclaration }
+
+// cursorDeclaration is what Capabilities and the factory's Declares both return.
+var cursorDeclaration = Declare(CapabilityResumableSessions, CapabilityWorkerSessions,
+	CapabilityReportsInputTokens, CapabilityReportsOutputTokens,
+	CapabilityReportsCacheReadTokens, CapabilityReportsCacheCreationTokens)
 
 // Run executes one invocation with no session. It resumes nothing, and the
 // session the agent opens for itself is not kept, so a record it produces
