@@ -67,7 +67,7 @@ func WithMaxOutput(n int64) Option {
 // WithInvocationDeadline sets the deadline one invocation runs under when the
 // context it was called with carries none, which is what a context derived
 // through context.WithoutCancel carries. A caller's own deadline is never
-// shortened by it. A value of zero or less leaves defaultInvocationDeadline
+// shortened by it. A value of zero or less leaves DefaultInvocationDeadline
 // in place, because no deadline at all is what this setting exists to rule
 // out.
 func WithInvocationDeadline(d time.Duration) Option {
@@ -78,14 +78,19 @@ func WithInvocationDeadline(d time.Duration) Option {
 	}
 }
 
-// defaultInvocationDeadline is the deadline an invocation gets when its
-// caller's context has none. The longest invocations this package makes are a
+// DefaultInvocationDeadline is the deadline an invocation gets when its
+// caller's context has none and its handle was built without
+// WithInvocationDeadline. The longest invocations this package makes are a
 // clone, a fetch and a push, whose size the repository decides, so the bound
 // is generous for those and is still a bound: a git still running at ten
-// minutes is taken as wedged and ended with its group. It is a fixed value of
-// this package rather than a configuration key; whether an operator should be
-// able to change it is an open question for the owner (#430).
-const defaultInvocationDeadline = 10 * time.Minute
+// minutes is taken as wedged and ended with its group.
+//
+// This package reads no configuration. The operator's git_deadline reaches a
+// handle only through WithInvocationDeadline, which internal/service passes
+// to every handle it builds; a handle built without it, as the command
+// line's own are, runs under this value, which is git_deadline's default
+// (config.DefaultGitDeadline; a test in internal/config holds the two equal).
+const DefaultInvocationDeadline = 10 * time.Minute
 
 // defaultSSHCommand is the ssh command an invocation uses when a caller names
 // none. It is what a plain git installation would reach for, and naming it
@@ -131,7 +136,7 @@ type settings struct {
 }
 
 func newSettings(opts []Option) settings {
-	s := settings{git: "git", ssh: defaultSSHCommand, redactor: defaultRedactor{}, maxOutput: defaultMaxOutput, deadline: defaultInvocationDeadline}
+	s := settings{git: "git", ssh: defaultSSHCommand, redactor: defaultRedactor{}, maxOutput: defaultMaxOutput, deadline: DefaultInvocationDeadline}
 	for _, o := range opts {
 		if o != nil {
 			o(&s)
@@ -370,7 +375,7 @@ func (r *Repository) runWith(ctx context.Context, op string, extra []string, arg
 	full = append(full, globalArgs...)
 	full = append(full, args...)
 
-	cmd := exec.Command(r.set.git, full...)
+	cmd := procgroup.Command(r.set.git, full...)
 	cmd.Dir = r.path
 	cmd.Env = append(envFor(os.Environ(), r.set.ssh), extra...)
 	// A nil Stdin is os.DevNull, so anything git reads from standard input

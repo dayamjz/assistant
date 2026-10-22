@@ -96,7 +96,7 @@ func newCleanupSubject(t *testing.T, script forgetest.Script) *cleanupSubject {
 		t.Fatalf("UpsertRepository: %v", err)
 	}
 	provider := forgetest.New(t, script)
-	cleaner, err := NewCleaner(CleanupDeps{Home: h, Store: s, Forge: provider.Host()})
+	cleaner, err := NewCleaner(CleanupDeps{Home: h, Store: s, Forge: provider.Host(), GitDeadline: vcs.DefaultInvocationDeadline})
 	if err != nil {
 		t.Fatalf("NewCleaner: %v", err)
 	}

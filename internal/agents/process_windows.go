@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // ctrlBreakEvent is CTRL_BREAK_EVENT, the console control event that can be
@@ -56,9 +58,15 @@ func terminateTree(proc *os.Process, grace time.Duration, leaderRunning bool, st
 	// taskkill /T ends the tree rather than the one process, which is what
 	// this call is for; falling back to killing the leader alone is strictly
 	// less than that and is said so here rather than reported as success.
-	if err := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run(); err != nil {
+	if err := runTreeKill(taskkill(pid), treeKillDeadline); err != nil {
 		_ = proc.Kill()
 	}
+}
+
+// taskkill is the command that forcefully ends the tree rooted at pid, for
+// runTreeKill to run.
+func taskkill(pid int) *exec.Cmd {
+	return procgroup.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid))
 }
 
 // sendCtrlBreak addresses a console control event at the group rooted at pid.

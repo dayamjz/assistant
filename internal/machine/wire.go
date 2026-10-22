@@ -1136,6 +1136,10 @@ type Wakes struct {
 	// limit and numbered apart from Wakes. They reach the first coordinator
 	// alone; a subordinate's drain carries none.
 	DomainWakes []store.DomainWake `json:"domain_wakes,omitempty"`
+	// KeptWorkWakes are the rows of the queue's third shape handed out, the
+	// wakes about a kept work entry no task names, on DomainWakes' terms
+	// and numbered apart from both.
+	KeptWorkWakes []store.KeptWorkWake `json:"kept_work_wakes,omitempty"`
 }
 
 // QueuedWakes is the answer to a person's reading of the wake queue: every
@@ -1148,6 +1152,10 @@ type QueuedWakes struct {
 	// DomainWakes are the queued rows about a domain rather than a task,
 	// oldest first under the same limit, on Wakes.DomainWakes' terms.
 	DomainWakes []store.DomainWake `json:"domain_wakes,omitempty"`
+	// KeptWorkWakes are the queued rows about a kept work entry no task
+	// names, oldest first under the same limit, on Wakes.KeptWorkWakes'
+	// terms.
+	KeptWorkWakes []store.KeptWorkWake `json:"kept_work_wakes,omitempty"`
 }
 
 // QueuedWake is one queued row and the project of the task it is about,
@@ -1171,6 +1179,9 @@ type Acknowledged struct {
 	// DomainWakes are the domain wake identifiers the batch closed, as the
 	// request named them.
 	DomainWakes []int64 `json:"domain_wakes,omitempty"`
+	// KeptWorkWakes are the kept-work wake identifiers the batch closed, as
+	// the request named them.
+	KeptWorkWakes []int64 `json:"kept_work_wakes,omitempty"`
 	// By is who the rows record as having acknowledged them, rendered the
 	// way internal/store renders the closed set.
 	By string `json:"by"`

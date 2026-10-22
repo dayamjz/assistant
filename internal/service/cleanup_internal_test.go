@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -48,7 +49,7 @@ func cleanupService(t *testing.T) (*Service, *store.Store, *home.Home) {
 	// A code host whose command line cannot be run: no site here reaches a
 	// proof, because every task copy refuses on its terminal first.
 	s.forge = forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))
-	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records, Forge: s.forge}); err != nil {
+	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records, Forge: s.forge, GitDeadline: config.DefaultGitDeadline}); err != nil {
 		t.Fatalf("building the cleaner: %v", err)
 	}
 	return s, records, h
@@ -179,7 +180,7 @@ func TestATaskCopyIsKeptWhileItsWorkerRunsAndTheLandingEndsItAndRemovesTheCopy(t
 	s.terminals = heldTerminals{s}
 	s.forge = forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))
 	var err error
-	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err != nil {
+	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge, GitDeadline: config.DefaultGitDeadline}); err != nil {
 		t.Fatalf("building the cleaner: %v", err)
 	}
 	d, err := s.dispatchTask(ctx, sub.task)

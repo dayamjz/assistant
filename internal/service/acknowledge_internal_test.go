@@ -113,7 +113,7 @@ func TestACombinedDrainThatFailsHandsOutNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	handout := store.WakeHandout{To: store.AcknowledgedByCoordinator(), Under: "drain-1", Held: []string{"drain-1"}, Route: wakeRouteOf(placedPeer{})}
-	if _, err := sub.service.drainBoth(ctx, 10, handout); err == nil {
+	if _, err := sub.service.drainAll(ctx, 10, handout); err == nil {
 		t.Fatal("the drain succeeded with its domain half failing")
 	}
 	if handedOut() {
@@ -122,7 +122,7 @@ func TestACombinedDrainThatFailsHandsOutNothing(t *testing.T) {
 	if err := lift(); err != nil {
 		t.Fatal(err)
 	}
-	drained, err := sub.service.drainBoth(ctx, 10, handout)
+	drained, err := sub.service.drainAll(ctx, 10, handout)
 	if err != nil || len(drained.Wakes) != 1 || len(drained.DomainWakes) != 1 {
 		t.Fatalf("the drain after the fault = %+v, %v; want one of each shape", drained, err)
 	}

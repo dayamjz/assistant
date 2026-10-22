@@ -11,7 +11,6 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -64,7 +63,7 @@ func (s *Service) syncBranch(ctx context.Context, req ipc.Request, r machine.Syn
 	if err != nil {
 		return machine.Plan{}, err
 	}
-	working, err := vcs.OpenWorktree(ctx, repository.WorkingPath, vcs.WithRedactor(redact.New()))
+	working, err := vcs.OpenWorktree(ctx, repository.WorkingPath, s.git()...)
 	if err != nil {
 		return machine.Plan{}, err
 	}
@@ -110,7 +109,7 @@ func (s *Service) syncBranch(ctx context.Context, req ipc.Request, r machine.Syn
 // that could not be read is reported as unverifiable rather than failing the
 // status, which reports everything it can.
 func (s *Service) custodyStatus(ctx context.Context, repository store.Repository) *machine.Custody {
-	working, err := vcs.OpenWorktree(ctx, repository.WorkingPath, vcs.WithRedactor(redact.New()))
+	working, err := vcs.OpenWorktree(ctx, repository.WorkingPath, s.git()...)
 	if err == nil {
 		var read custodyRead
 		if read, err = s.custodyRead(ctx, repository, working); err == nil {
@@ -248,7 +247,7 @@ func (s *Service) copyOf(ctx context.Context, record store.Run) (custody.Copy, e
 	} else if err != nil {
 		return custody.Copy{}, fmt.Errorf("service: reading the isolated copy of run %s: %w", record.ID, err)
 	}
-	copyRepo, err := vcs.OpenWorktree(ctx, path, vcs.WithRedactor(redact.New()))
+	copyRepo, err := vcs.OpenWorktree(ctx, path, s.git()...)
 	if err != nil {
 		return custody.Copy{}, fmt.Errorf("service: opening the isolated copy of run %s: %w", record.ID, err)
 	}

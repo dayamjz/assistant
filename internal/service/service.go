@@ -199,6 +199,10 @@ type Options struct {
 	// hands them to internal/tasks' InterruptBeforeMarkForTest.
 	cleanupTest          testing.TB
 	interruptCleanupMark func() error
+	// cleanupAskSpacing replaces landedAskSpacing for this service, which
+	// export_test.go's WithCleanupAskSpacingForTest sets and the product
+	// never does; zero is landedAskSpacing.
+	cleanupAskSpacing time.Duration
 	// beforeStaleRemovalRelease runs in recovery between reading a removal
 	// reservation whose owner is gone and releasing it; export_test.go's
 	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
@@ -438,11 +442,15 @@ type Service struct {
 	// head, and a run that recorded no observed head. It is memory and
 	// nothing durable, guarded by mu; mergeread.go owns it.
 	mergeReadsSettled map[string]bool
-	// landedTried holds, per landed task, the session reference whose Dead
-	// terminal the cleanup decision was last asked under, so the supervisor
-	// pass asks once per reference rather than at every interval. It is
-	// memory and nothing durable, guarded by mu; landed.go owns it.
-	landedTried map[string]string
+	// landedTried holds, per task, how often and when the cleanup decision
+	// was asked under the session reference whose terminal it last read
+	// Dead, so the supervisor pass asks again on landed.go's spacing and
+	// bound rather than at every interval or never. It is memory and
+	// nothing durable, guarded by mu; landed.go owns it.
+	landedTried map[string]landedAsk
+	// landedSpacing is landedAskSpacing, or the spacing a test set through
+	// Options; landed.go reads it.
+	landedSpacing time.Duration
 
 	revision atomic.Uint64
 	// published is the basis of the last task.state this service sent per
@@ -626,6 +634,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		topologies:                make(map[string]*topology),
 		advancing:                 make(map[string]*slot),
 		beforeStaleRemovalRelease: o.beforeStaleRemovalRelease,
+		landedSpacing:             landedSpacingOf(o.cleanupAskSpacing),
 		afterIntakeBranchRelease:  o.afterIntakeBranchRelease,
 		isolated:                  make(map[string]tasks.Isolation),
 		claiming:                  make(map[string]bool),
@@ -646,13 +655,6 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	if s.terminals == nil {
 		s.terminals = heldTerminals{s}
 	}
-	// Both hosts are built with their own redactor because the redactor is
-	// otherwise chosen per topology; all are redact.New, which
-	// internal/redact makes the one owner of what is removed.
-	github := o.Forge
-	if github == nil {
-		github = forge.NewGitHubHost(redact.New())
-	}
 	if s.catalog == nil {
 		// The shipped adapters are built with the recorder that feeds the
 		// store's agent invocation history, so a run's cost is recorded
@@ -670,17 +672,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	}
 	s.judge = judge.FromEnvironment(lookup,
 		append(append([]judge.Option(nil), o.Judge...), judge.WithRecorder(decisionRecorder{s}))...)
-	gitlab := o.GitLab
-	if gitlab == nil {
-		token, _ := lookup(forge.GitLabTokenVariable)
-		host, err := forge.NewGitLabHost(redact.New(), forge.WithGitLabToken(token))
-		if err != nil {
-			return nil, unstarted(err)
-		}
-		gitlab = host
-	}
-	s.forge = forge.Hosts{GitHub: github, GitLab: gitlab}
-	if err := s.openParts(ctx, o); err != nil {
+	if err := s.openParts(ctx, o, lookup); err != nil {
 		s.log.Printf("the service could not start: %v", err)
 		_ = s.Close()
 		return nil, err
@@ -706,15 +698,53 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	return s, nil
 }
 
+// git returns the options every repository this service opens is opened
+// with: redact.New, and the operator's git_deadline as the invocation
+// deadline where a caller's context carries none, PRD section 8's process
+// model. internal/vcs reads no configuration, so this is the route that
+// bound takes to a git this service starts; internal/tasks is given the same
+// value through its GitDeadline, internal/gate these options through
+// gate.WithGitOptions, and the stage and fix seams get gitWith. A handle
+// internal/vcs derives from one of these, a worktree AddWorktree creates,
+// carries the same options.
+func (s *Service) git() []vcs.Option {
+	return s.gitWith(redact.New())
+}
+
+// gitWith is git with the redactor a topology chose, for the stage and fix
+// seams, which apply that same redactor to what they persist.
+func (s *Service) gitWith(redactor redact.Redactor) []vcs.Option {
+	return []vcs.Option{vcs.WithRedactor(redactor), vcs.WithInvocationDeadline(s.cfg.GitDeadline)}
+}
+
 // openParts opens everything Open owns once the lock is held. It is separate
 // so that a failure part way through is cleaned up by Close rather than by an
 // unwinding sequence written twice.
-func (s *Service) openParts(ctx context.Context, o Options) error {
+func (s *Service) openParts(ctx context.Context, o Options, lookup func(string) (string, bool)) error {
 	global, cfg, digest, err := resolveConfig(s.home.ConfigFile())
 	if err != nil {
 		return err
 	}
 	s.global, s.cfg, s.digest = global, cfg, digest
+	// The code hosts are built once the operator's configuration is read,
+	// because the GitHub host runs gh under its gh_deadline. Both are built
+	// with their own redactor because the redactor is otherwise chosen per
+	// topology; all are redact.New, which internal/redact makes the one owner
+	// of what is removed.
+	github := o.Forge
+	if github == nil {
+		github = forge.NewGitHubHost(redact.New(), forge.WithInvocationDeadline(s.cfg.GHDeadline))
+	}
+	gitlab := o.GitLab
+	if gitlab == nil {
+		token, _ := lookup(forge.GitLabTokenVariable)
+		host, err := forge.NewGitLabHost(redact.New(), forge.WithGitLabToken(token))
+		if err != nil {
+			return err
+		}
+		gitlab = host
+	}
+	s.forge = forge.Hosts{GitHub: github, GitLab: gitlab}
 	records, err := store.Open(ctx, s.home.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		return err
@@ -724,7 +754,8 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	if s.queue, err = s.newQueue(); err != nil {
 		return err
 	}
-	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err == nil && o.interruptCleanupMark != nil {
+	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge,
+		GitDeadline: s.cfg.GitDeadline}); err == nil && o.interruptCleanupMark != nil {
 		err = s.cleaner.InterruptBeforeMarkForTest(o.cleanupTest, o.interruptCleanupMark)
 	}
 	if err != nil {
@@ -1067,8 +1098,9 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		resolved.cfg,
 		s.forge,
 		redactor,
-		vcs.WithRedactor(redactor),
-	).WithJudge(s.judge).WithChecksWaits(s.store).WithRunRecords(s.store).WithKnowledge(resolved.knowledge)
+		s.gitWith(redactor)...,
+	).WithJudge(s.judge).WithChecksWaits(s.store).WithRunRecords(s.store).WithRebaseRecords(s.store).
+		WithKnowledge(resolved.knowledge)
 	// The fix seam is built here, beside the stage seam and deliberately apart
 	// from it. It carries the one thing a stage body may not have: a route to
 	// the run's fixer role, which internal/runs hands out per run and which
@@ -1083,7 +1115,7 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		resolved.cfg,
 		built.runs.FixerRequires(),
 		redactor,
-		vcs.WithRedactor(redactor),
+		s.gitWith(redactor)...,
 	)
 	pipe, err := pipeline.New(pipeline.Options{
 		Stages:                      s.observeStages(s.newStages(deps)),

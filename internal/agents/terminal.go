@@ -561,7 +561,7 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 				size, TerminalCommandLimit),
 		}
 	}
-	cmd := exec.Command(t.Tmux, args...)
+	cmd := procgroup.Command(t.Tmux, args...)
 	cmd.Dir = spec.dir
 	cmd.Env = withoutTmux(spec.env)
 	var stdout, stderr bytes.Buffer
@@ -723,7 +723,7 @@ func (w *tmuxWorker) await(ctx context.Context, ok func(screenState) bool) error
 
 // screen is the pane's visible screen, with lines tmux wrapped joined back.
 func (w *tmuxWorker) screen(ctx context.Context) (string, error) {
-	out, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the screen", exec.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
+	out, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the screen", procgroup.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
 		"capture-pane", "-p", "-J", "-t", terminalTarget))
 	return string(out), err
 }
@@ -834,7 +834,7 @@ func (w *tmuxWorker) end() {
 // tmuxEndBound. A server already gone, or a client that ran past its bound,
 // is not an error worth reporting: the socket is removed either way.
 func killTerminalServer(t Terminal) {
-	_ = runTmux(context.Background(), tmuxEndBound, "the client ending the server", exec.Command(t.Tmux, "-S", t.Socket, "kill-server"))
+	_ = runTmux(context.Background(), tmuxEndBound, "the client ending the server", procgroup.Command(t.Tmux, "-S", t.Socket, "kill-server"))
 	_ = os.Remove(t.Socket)
 }
 
@@ -869,7 +869,7 @@ func (w *tmuxWorker) Send(ctx context.Context, text string) error {
 			"paste-buffer", "-p", "-d", "-b", terminalBuffer, "-t", terminalTarget, ";",
 			"send-keys", "-t", terminalTarget, "Enter"}
 	}
-	cmd := exec.Command(w.terminal.Tmux, args...)
+	cmd := procgroup.Command(w.terminal.Tmux, args...)
 	cmd.Stdin = bytes.NewReader(framed)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -905,12 +905,12 @@ func (w *tmuxWorker) Capture() Capture {
 	default:
 	}
 	ctx := context.Background()
-	screen, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the history", exec.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
+	screen, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the history", procgroup.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
 		"capture-pane", "-p", "-J", "-S", "-", "-E", "-", "-t", terminalTarget))
 	if err != nil {
 		return w.last
 	}
-	history, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the history's size", exec.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
+	history, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the history's size", procgroup.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
 		"display-message", "-p", "-t", terminalTarget, "#{history_size} #{history_limit}"))
 	uncounted := false
 	if err == nil {
