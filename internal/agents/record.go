@@ -114,10 +114,10 @@ type Usage struct {
 // Record is what is kept about one invocation. PRD section 8 lists it as
 // history and fixes its contents: purpose, agent, the model provider, type,
 // and version the launch was asked for, the model identifier started, the
-// role and the effort, timing, failure category, token usage, and the run
-// and stage it served where it served one. Never prompts, outputs, diffs,
-// or credentials. An empty provider, type, version, role, or effort means
-// the launch did not name one. This type cannot say unknown: a row written
+// role, the effort, and the context window, timing, failure category, token
+// usage, and the run and stage it served where it served one. Never prompts,
+// outputs, diffs, or credentials. An empty provider, type, version, role,
+// effort, or context window means the launch did not name one. This type cannot say unknown: a row written
 // before those columns existed reads back unknown from the store, and a
 // record handed to the store names each of them, empty when it was not named.
 //
@@ -144,6 +144,10 @@ type Record struct {
 	Version  string
 	// Effort is the effort the launch was asked for. Empty means none was named.
 	Effort string
+	// ContextWindow is the context window the launch was asked for. Empty
+	// means none was named. It is what was asked, not a window this package
+	// observed the agent run at.
+	ContextWindow string
 	// Session is what the invocation did with the run's durable session.
 	Session SessionUse
 	// Started is when the agent process was started.
@@ -163,14 +167,15 @@ type Record struct {
 
 // noteLaunch copies the role attribution the invocation carried. Adapters
 // call it when they build a record, and they do not fill a field the launch
-// left empty: an empty provider, type, version, role, or effort is recorded
-// as not named.
+// left empty: an empty provider, type, version, role, effort, or context
+// window is recorded as not named.
 func (r *Record) noteLaunch(inv Invocation) {
 	r.Role = inv.Role
 	r.Provider = inv.Provider
 	r.Type = inv.Type
 	r.Version = inv.Version
 	r.Effort = inv.Effort
+	r.ContextWindow = inv.ContextWindow
 }
 
 // Recorder receives one Record per invocation that got past Invocation.

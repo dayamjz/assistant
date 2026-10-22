@@ -258,3 +258,29 @@ func TestUsageKeepsAnUnnamedEffortApartFromANamedOne(t *testing.T) {
 		t.Fatalf("efforts grouped as %s, %s, %s, %s", usage.ByAgent[0].Effort, usage.ByAgent[1].Effort, usage.ByAgent[2].Effort, usage.ByAgent[3].Effort)
 	}
 }
+
+// A context window the launch did not name is its own total, and so is a
+// window a row written before the column cannot say. Neither is folded into
+// a named window, and two named windows stay apart.
+func TestUsageKeepsAnUnnamedContextWindowApartFromANamedOne(t *testing.T) {
+	long := call("claude", "m", "review", time.Hour)
+	long.Effort, long.ContextWindow = store.Known("high"), store.Known("1m")
+	standard := long
+	standard.ContextWindow = store.Known("standard")
+	unnamed := long
+	unnamed.ContextWindow = store.Known("")
+	unknown := long
+	unknown.ContextWindow = store.Optional[string]{}
+
+	usage := machine.UsageOf(window(t, "24h"), usageReadAt, []store.AgentInvocation{long, standard, unnamed, unknown, long})
+	if len(usage.ByAgent) != 4 {
+		t.Fatalf("grouped as %+v, want four groups", usage.ByAgent)
+	}
+	var got []string
+	for _, g := range usage.ByAgent {
+		got = append(got, g.ContextWindow.String())
+	}
+	if strings.Join(got, ",") != "1m,standard,,unknown" || usage.ByAgent[0].Calls != 2 {
+		t.Fatalf("windows grouped as %q with %d calls at 1m, want 1m,standard,(not named),unknown with 2", got, usage.ByAgent[0].Calls)
+	}
+}

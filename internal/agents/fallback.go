@@ -41,7 +41,7 @@ func (r *fallbackRunner) Capabilities() Capabilities {
 	return Declare(caps...)
 }
 func cleanRoleInvocation(inv Invocation) Invocation {
-	inv.Model, inv.Provider, inv.Type, inv.Version, inv.Effort = "", "", "", "", ""
+	inv.Model, inv.Provider, inv.Type, inv.Version, inv.Effort, inv.ContextWindow = "", "", "", "", "", ""
 	return inv
 }
 

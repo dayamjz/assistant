@@ -148,10 +148,10 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
 	}
 	model := ""
-	if role.Provider != "" {
-		model, err = agents.Translate(selection.Resolution.Name, role.Provider, role.Type, role.Version)
+	if role.Provider != "" || role.ContextWindow != "" {
+		model, err = agents.Translate(selection.Resolution.Name, role.Provider, role.Type, role.Version, role.ContextWindow)
 		if err != nil {
-			return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
+			return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, fmt.Errorf("service: the %s role: %w", config.TaskRoleName(task.Role), err))
 		}
 	}
 	if err := agents.AcceptsEffort(selection.Resolution.Name, role.Effort); err != nil {
