@@ -22,14 +22,14 @@ import (
 //
 // internal/tasks' Loss reads what would be lost from the copy now: the
 // commits the default branch, read fresh, lacks, every path whose content
-// nothing else holds, ignored files included, and the three indicators git
-// reports, with a digest over the copy's state, those commits and those
-// paths. A default branch that cannot be read now is refused rather than
-// shown a list that may overstate or understate, naming why. A discard
-// given a digest is
-// compared against that read again: a copy that changed since, by a commit,
-// an edit, a file or a stash, digests differently and is refused, and the
-// person is told to look again. Nothing is recorded for a discard shown or
+// or deletion nothing else holds, ignored files and deletions included, and
+// the three indicators git reports, with a digest over the copy's state,
+// those commits and those paths. A default branch that cannot be read now
+// is refused rather than shown a list that may overstate or understate,
+// naming why. A discard given a digest is compared against that read
+// again: a copy that changed since, by a commit, an edit, a deletion, a
+// file or a stash, digests differently and is refused, and the person is
+// told to look again. Nothing is recorded for a discard shown or
 // refused.
 //
 // # The order, and what a stop leaves

@@ -12,11 +12,12 @@ import (
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
-// lostPaths decides which paths a discard destroys whose content nothing
-// else holds, the list Loss shows (Loss.Files), from what the copy holds
-// and never from what git reports, so neither git's ignore rules nor its
-// configuration keep a path off it. It is given every entry the digest's
-// walk records, and decides each against what holds content elsewhere:
+// lostPaths decides which paths a discard destroys whose content or
+// deletion nothing else holds, the list Loss shows (Loss.Files), from what
+// the copy holds and never from what git reports, so neither git's ignore
+// rules nor its configuration keep a path off it. It is given every entry
+// the digest's walk records, and decides each against what holds content
+// elsewhere:
 //
 //   - a working-tree entry against HEAD's tree, whose commit the default
 //     branch holds or the list of commits lacking names: a file holding
@@ -28,6 +29,11 @@ import (
 //     is named again;
 //   - an index entry against HEAD's tree and the working tree at its path,
 //     so staged content held by neither is named (LostStaged);
+//   - an entry of HEAD's tree against the working tree and the index, so a
+//     deletion is named (LostDeleted) whether or not it is staged: the
+//     content is HEAD's, which nothing loses, but the deletion is the
+//     copy's alone. A directory of HEAD's tree the working tree does not
+//     hold is named once, whole, and nothing under it is named again;
 //   - an entry of the repository directory against what git writes into a
 //     new repository at the same path, read from one made for the purpose
 //     (freshRepository), so a sample hook git writes into every repository
@@ -38,8 +44,10 @@ import (
 //
 // What it names more than is lost, failing toward showing: a file whose
 // content a commit other than HEAD's holds, one a filter or line-ending
-// conversion would store as HEAD's content, and a submodule's working tree,
-// whose commits are another repository's, are named all the same.
+// conversion would store as HEAD's content, a submodule's working tree,
+// whose commits are another repository's, and a path a sparse checkout
+// leaves out of the working tree, which reads as deleted, are named all
+// the same.
 type lostPaths struct {
 	format  string
 	head    map[string]vcs.TreeEntry
@@ -48,7 +56,9 @@ type lostPaths struct {
 	// working is the mode and object of the working-tree entry at each
 	// path the index names, which the index entries are decided against.
 	working map[string]string
-	found   map[LostKind][]string
+	// seen is every path the working tree's walk visited.
+	seen  map[string]bool
+	found map[LostKind][]string
 }
 
 // newLostPaths reads HEAD's tree and the repository's object format, which
@@ -64,7 +74,7 @@ func newLostPaths(ctx context.Context, copied *vcs.Repository, head string, inde
 		return nil, err
 	}
 	l := &lostPaths{format: format, head: tree, index: index, indexed: map[string]bool{}, working: map[string]string{},
-		found: map[LostKind][]string{}}
+		seen: map[string]bool{}, found: map[LostKind][]string{}}
 	for _, e := range index {
 		l.indexed[e.Path] = true
 	}
@@ -82,6 +92,7 @@ func (l *lostPaths) worktree(root string) treeVisit {
 		if rel == ".git" && !info.IsDir() {
 			return nil
 		}
+		l.seen[rel] = true
 		mode := gitMode(info)
 		e, inHead := l.head[rel]
 		object := ""
@@ -137,9 +148,11 @@ func (l *lostPaths) repository(fresh map[string]freshEntry) treeVisit {
 	}
 }
 
-// list is every path found, the index decided last against what the walk
-// read of the working tree, in lostKinds' order and by path within each.
+// list is every path found, the index and HEAD's tree decided last against
+// what the walk read of the working tree, in lostKinds' order and by path
+// within each.
 func (l *lostPaths) list() []LostPath {
+	l.deletions()
 	for _, e := range l.index {
 		if h, ok := l.head[e.Path]; ok && h.Mode == e.Mode && h.Object == e.Object {
 			continue
@@ -158,6 +171,31 @@ func (l *lostPaths) list() []LostPath {
 		}
 	}
 	return out
+}
+
+// deletions names every entry of HEAD's tree the working tree or the index
+// no longer holds, on lostPaths' terms.
+func (l *lostPaths) deletions() {
+	paths := make([]string, 0, len(l.head))
+	for path := range l.head {
+		paths = append(paths, path)
+	}
+	// Sorted, a directory comes before every path under it.
+	slices.Sort(paths)
+	whole := ""
+	for _, path := range paths {
+		if whole != "" && strings.HasPrefix(path, whole) {
+			continue
+		}
+		whole = ""
+		switch e := l.head[path]; {
+		case e.Type == "tree" && !l.seen[path]:
+			whole = path + "/"
+			l.add(LostDeleted, whole)
+		case e.Type != "tree" && (!l.seen[path] || !l.indexed[path]):
+			l.add(LostDeleted, path)
+		}
+	}
 }
 
 func (l *lostPaths) add(kind LostKind, path string) { l.found[kind] = append(l.found[kind], path) }

@@ -40,12 +40,14 @@ type KeptWorkLoss struct {
 	Head string `json:"head"`
 	// Lacks is the commits the copy holds that the default branch lacks.
 	Lacks []string `json:"lacks"`
-	// Files is every path the removal destroys whose content nothing else
-	// holds, decided from what the copy holds and not from what git
-	// reports, a file git ignores among them: each with why it is lost,
-	// one of changed (a file HEAD holds other content at), new (nothing in
-	// HEAD at that path), staged (index content neither HEAD nor the
-	// working tree holds) and repository (a file of the repository
+	// Files is every path the removal destroys whose content or deletion
+	// nothing else holds, decided from what the copy holds and not from
+	// what git reports, a file git ignores among them: each with why it is
+	// lost, one of changed (a file HEAD holds other content at), new
+	// (nothing in HEAD at that path), staged (index content neither HEAD
+	// nor the working tree holds), deleted (a path HEAD holds that the
+	// working tree or the index no longer does, staged or not) and
+	// repository (a file of the repository
 	// directory the removal deletes that differs from what git writes into
 	// a new repository, its path relative to that directory). A path
 	// ending in a slash is a directory lost whole.
@@ -62,8 +64,8 @@ type KeptWorkLoss struct {
 	Digest string `json:"digest"`
 }
 
-// KeptWorkLostPath is one path a discard destroys whose content nothing
-// else holds, and why (KeptWorkLoss.Files).
+// KeptWorkLostPath is one path a discard destroys whose content or
+// deletion nothing else holds, and why (KeptWorkLoss.Files).
 type KeptWorkLostPath struct {
 	Kind string `json:"kind"`
 	Path string `json:"path"`

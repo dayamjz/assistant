@@ -37,8 +37,9 @@ import (
 // can see, read from the copy as it stands when it is shown: the commits
 // its references and HEAD reach that the default branch, read fresh as Keep
 // reads it (lacking), lacks; every path the removal destroys whose content
-// nothing else holds, a file git ignores among them, decided from what the
-// copy holds on lostPaths' terms (kept_lost.go); and the three indicators
+// or deletion nothing else holds, a file git ignores and a deletion git
+// has not staged among them, decided from what the copy holds on
+// lostPaths' terms (kept_lost.go); and the three indicators
 // vcs.Inventory reads as git reports them, a tracked change, a file no
 // commit records that git does not ignore, and a stash. The entry's
 // recorded basis is not what is shown, because the copy may hold more
@@ -125,9 +126,9 @@ type Loss struct {
 	// commit the default branch could lack records. Files names every path
 	// they speak of, and the ignored ones they do not.
 	Dirty, Untracked, Stash bool
-	// Files is every path the removal destroys whose content nothing else
-	// holds, decided from what the copy holds (lostPaths), in Kind's order
-	// and by path within it.
+	// Files is every path the removal destroys whose content or deletion
+	// nothing else holds, decided from what the copy holds (lostPaths), in
+	// Kind's order and by path within it.
 	Files []LostPath
 	// Digest is the confirmation of exactly this: the copy's state, the
 	// commits lacking and the files, as shown (seal).
@@ -137,11 +138,11 @@ type Loss struct {
 	state string
 }
 
-// LostPath is one path a discard destroys whose content nothing else holds:
-// where it is and why it is lost. Path is relative to the copy for every
-// kind but LostRepository, whose path is relative to the repository
-// directory the removal deletes, and a Path ending in a slash is a
-// directory lost whole, everything under it with it.
+// LostPath is one path a discard destroys whose content or deletion
+// nothing else holds: where it is and why it is lost. Path is relative to
+// the copy for every kind but LostRepository, whose path is relative to
+// the repository directory the removal deletes, and a Path ending in a
+// slash is a directory lost whole, everything under it with it.
 type LostPath struct {
 	Kind LostKind
 	Path string
@@ -162,6 +163,10 @@ const (
 	// LostStaged is an index entry holding content neither HEAD's tree
 	// nor the working tree holds at its path.
 	LostStaged LostKind = "staged"
+	// LostDeleted is a path HEAD's tree holds an entry at that the working
+	// tree or the index holds nothing at: a deletion, staged or not, whose
+	// content HEAD holds and whose deletion nothing else does.
+	LostDeleted LostKind = "deleted"
 	// LostRepository is an entry of the repository directory the removal
 	// deletes, not among those sealed by what they hold
 	// (gitDirSealedByContent), whose content differs from what git writes
@@ -172,7 +177,7 @@ const (
 )
 
 // lostKinds is the kinds in Files' order.
-var lostKinds = []LostKind{LostChanged, LostNew, LostStaged, LostRepository}
+var lostKinds = []LostKind{LostChanged, LostNew, LostStaged, LostDeleted, LostRepository}
 
 // ErrLossUnestablished is returned by Loss and Discard when what the
 // default branch lacks cannot be read now: what would be lost cannot be

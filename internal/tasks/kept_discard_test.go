@@ -696,6 +696,13 @@ func TestALossNamesEveryPathItDestroysThatNothingElseHolds(t *testing.T) {
 	tk := s.deliveryTask(t, "task/paths")
 	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
 	commit(t, tk.copy, "tool.sh", "echo tool\n", "a script")
+	if err := os.MkdirAll(filepath.Join(tk.copy, "gone", "deep"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	commit(t, tk.copy, "gone/a.txt", "a\n", "a directory")
+	commit(t, tk.copy, "gone/deep/b.txt", "b\n", "deeper in it")
+	commit(t, tk.copy, "unstaged.txt", "deleted, not staged\n", "a file")
+	commit(t, tk.copy, "uncached.txt", "deleted from the index alone\n", "another")
 	_, err := s.cleanUp(t, tk.id)
 	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
 	if !ok {
@@ -738,6 +745,15 @@ func TestALossNamesEveryPathItDestroysThatNothingElseHolds(t *testing.T) {
 	rawGit(t, tk.copy, "add", "staged.txt")
 	write("staged.txt", "edited after it was staged\n")
 	write(".git/hooks/pre-push", "#!/bin/sh\nexit 0\n")
+	// Deletions: a directory, a file not staged, and a file deleted from
+	// the index alone, whose working-tree file still holds HEAD's content.
+	if err := os.RemoveAll(filepath.Join(tk.copy, "gone")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(tk.copy, "unstaged.txt")); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "rm", "--quiet", "--cached", "uncached.txt")
 
 	l, err := s.cleaner.Loss(ctx, entry)
 	if err != nil {
@@ -747,6 +763,7 @@ func TestALossNamesEveryPathItDestroysThatNothingElseHolds(t *testing.T) {
 		{LostChanged, "own.txt"}, {LostChanged, "tool.sh"},
 		{LostNew, "build/"}, {LostNew, "notes.txt"}, {LostNew, "staged.txt"},
 		{LostStaged, "staged.txt"},
+		{LostDeleted, "gone/"}, {LostDeleted, "uncached.txt"}, {LostDeleted, "unstaged.txt"},
 	}
 	if paths := ofWorktree(l); !slices.Equal(paths, want) {
 		t.Fatalf("Loss names %+v; want %+v", paths, want)

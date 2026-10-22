@@ -498,6 +498,62 @@ func TestADiscardShowsAnIgnoredFileItDestroys(t *testing.T) {
 	})
 }
 
+// A discard shows the deletions it destroys, the reviewer's sequence on
+// #475: in a kept clone a tracked file is deleted and not staged and
+// another is deleted with git rm. The commits HEAD stands on hold both
+// files, so their content is not lost, but the deletions are, and nothing
+// else holds them; each is named, and confirming the digest shown removes
+// the copy. Without the deletions named, the preview says only that the
+// copy is dirty and the confirmation destroys work it never named.
+func TestADiscardShowsTheDeletionsItDestroys(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	if err := os.Remove(filepath.Join(entry.CopyPath, "finding.txt")); err != nil {
+		t.Fatal(err)
+	}
+	tracked := strings.Fields(git(t, entry.CopyPath, "ls-files"))
+	staged := ""
+	for _, path := range tracked {
+		if path != "finding.txt" {
+			staged = path
+			break
+		}
+	}
+	if staged == "" {
+		t.Fatalf("the copy tracks %q; want a second file to delete with git rm", tracked)
+	}
+	git(t, entry.CopyPath, "rm", "--quiet", staged)
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		for _, want := range []machine.KeptWorkLostPath{{Kind: "deleted", Path: "finding.txt"}, {Kind: "deleted", Path: staged}} {
+			if !slices.Contains(shown.Loss.Files, want) {
+				t.Fatalf("the discard shown = %+v; want %+v, a deletion the removal destroys, among its files", *shown.Loss, want)
+			}
+		}
+		request.Confirm = shown.Loss.Digest
+		var done machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &done); err != nil || done.Effect != machine.KeptWorkDiscarded {
+			t.Fatalf("the confirmed discard = %+v, %v", done, err)
+		}
+		if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the discarded copy still stands: %v", err)
+		}
+	})
+}
+
 // A discard a stopped service confirmed and did not carry out, over a copy
 // that changed before the next start, is never silent, the reviewer's
 // sequence: the discard is shown and confirmed, and the service stops

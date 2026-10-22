@@ -566,8 +566,9 @@ or discard it.
 Discard, `--answer discard` with the same flags, is given twice. Alone it
 shows exactly what removing the copy would lose, in the structured answer
 (`--json`): the commits the default branch lacks; every file removing the
-copy destroys whose content nothing else holds, files git ignores
-included, each with why (`changed`, `new`, `staged`, or `repository` for a
+copy destroys whose content or deletion nothing else holds, files git
+ignores included, each with why (`changed`, `new`, `staged`, `deleted` for
+a file the copy deleted, staged or not, or `repository` for a
 file of the copy's repository directory, a hook or its configuration
 among them, that differs from what git writes into every new repository),
 a directory lost whole named once with a trailing slash; whether git
