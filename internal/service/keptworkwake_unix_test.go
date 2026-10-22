@@ -36,8 +36,11 @@ const keptWorkWakeWait = 30 * time.Second
 // coordinator's wake stream is pushed it as kept-work-wake.queued; the
 // notify command is run once with that row; the coordinator's drain hands it out;
 // and acknowledging it closes the wake and leaves the entry open, listed
-// by status. Later passes raise nothing more. On #442's head the drain
-// carries no such row and the command is sent nothing.
+// by status. Later passes raise nothing more. The wake's notification
+// record is settled sent, read once a second kept run's wake reaches the
+// command, which runs only after the first wake's record is settled. On
+// #442's head the drain carries no such row and the command is sent
+// nothing.
 func TestAPersonsKeptRunRaisesOneKeptWorkWakeThatReachesTheChannelOnce(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -77,37 +80,28 @@ func TestAPersonsKeptRunRaisesOneKeptWorkWakeThatReachesTheChannelOnce(t *testin
 		}
 		entry := status.KeptWork[0]
 
-		var drained machine.Wakes
-		deadline := time.Now().Add(keptWorkWakeWait)
-		for {
-			drained = mustList(t, under.client)
-			if len(drained.KeptWorkWakes) > 0 {
-				break
-			}
-			if !time.Now().Before(deadline) {
-				t.Fatalf("no drain handed out a kept-work wake about entry %d; the last one was %+v", entry.ID, drained)
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		if len(drained.KeptWorkWakes) != 1 {
-			t.Fatalf("the drain handed out kept-work wakes %+v, want exactly one", drained.KeptWorkWakes)
-		}
-		wake := drained.KeptWorkWakes[0]
-		if wake.KeptWork != entry.ID || wake.Kind != string(supervisor.KindKeptWork) || wake.Project != store.Known(repository.ID) || wake.Branch != entry.Branch ||
-			!wake.HandedOut() || wake.Handouts != store.Known(int64(1)) {
-			t.Fatalf("the drained wake is %+v, want entry %d's kept-work wake under project %s, handed out once", wake, entry.ID, repository.ID)
-		}
+		// The loop pushes the wake once its row is committed, so the drain
+		// after the push finds it.
+		var pushed store.KeptWorkWake
 		for {
 			event := recvWithin(t, pushes, keptWorkWakeWait)
 			if event.Type != ipc.TypeKeptWorkWakeQueued {
 				continue
 			}
-			var pushed store.KeptWorkWake
-			if err := json.Unmarshal(event.Payload, &pushed); err != nil || pushed.ID != wake.ID || pushed.KeptWork != entry.ID ||
-				event.Revision != uint64(wake.ID) {
-				t.Fatalf("the stream pushed %+v (%+v, %v), want kept-work wake %d about entry %d", event, pushed, err, wake.ID, entry.ID)
+			if err := json.Unmarshal(event.Payload, &pushed); err != nil || pushed.KeptWork != entry.ID || event.Revision != uint64(pushed.ID) {
+				t.Fatalf("the stream pushed %+v (%+v, %v), want a kept-work wake about entry %d", event, pushed, err, entry.ID)
 			}
 			break
+		}
+		drained := mustList(t, under.client)
+		if len(drained.KeptWorkWakes) != 1 {
+			t.Fatalf("the drain handed out kept-work wakes %+v, want exactly one", drained.KeptWorkWakes)
+		}
+		wake := drained.KeptWorkWakes[0]
+		if wake.ID != pushed.ID || wake.KeptWork != entry.ID || wake.Kind != string(supervisor.KindKeptWork) || wake.Project != store.Known(repository.ID) ||
+			wake.Branch != entry.Branch || !wake.HandedOut() || wake.Handouts != store.Known(int64(1)) {
+			t.Fatalf("the drained wake is %+v, want pushed kept-work wake %d about entry %d under project %s, handed out once",
+				wake, pushed.ID, entry.ID, repository.ID)
 		}
 		for _, w := range drained.Wakes {
 			if w.Kind == string(supervisor.KindKeptWork) {
@@ -118,10 +112,6 @@ func TestAPersonsKeptRunRaisesOneKeptWorkWakeThatReachesTheChannelOnce(t *testin
 		lines := sentKeptWorkWakes(t, sent, 1)
 		if len(lines) != 1 || lines[0].ID != wake.ID || lines[0].KeptWork != entry.ID || lines[0].Project != store.Known(repository.ID) {
 			t.Fatalf("the notify command was sent %+v, want kept-work wake %d once", lines, wake.ID)
-		}
-		notified, err := recordsOf(t, h).KeptWorkNotification(t.Context(), wake.ID)
-		if err != nil || notified.Outcome != store.Known(store.NotificationSent) {
-			t.Fatalf("the wake's notification record is %+v, %v; want it settled sent", notified, err)
 		}
 
 		var acknowledged machine.Acknowledged
@@ -144,6 +134,28 @@ func TestAPersonsKeptRunRaisesOneKeptWorkWakeThatReachesTheChannelOnce(t *testin
 		}
 		if lines := sentKeptWorkWakes(t, sent, 1); len(lines) != 1 {
 			t.Fatalf("the notify command was sent %+v by the end, want the one wake once", lines)
+		}
+
+		// The command having written its line says nothing of the
+		// notification record, which is settled after the command ends.
+		// Commands run one at a time, and the write settling a wake's
+		// record is made before the next wake's command starts, pending
+		// kept-work wakes being offered oldest first, so the command being
+		// sent a second person's kept run's wake is the signal that the
+		// first wake's settlement was written, or failed and was logged,
+		// which the read below then shows.
+		commitOn(t, subject, "a-second-change", "second.txt")
+		second := startRunSkipping(t, under.client, subject, afterIntent()...)
+		if second := runByID(t, under.client, second.Record.ID); second.Cleanup == nil || !second.Cleanup.Kept() {
+			t.Fatalf("the second run's copy reads %+v, want it kept, so that a second wake follows the first", second.Cleanup)
+		}
+		lines = sentKeptWorkWakes(t, sent, 2)
+		if len(lines) != 2 || lines[0].ID != wake.ID || lines[1].ID == wake.ID || lines[1].KeptWork == entry.ID {
+			t.Fatalf("the notify command was sent %+v, want kept-work wake %d once and then the second run's", lines, wake.ID)
+		}
+		notified, err := recordsOf(t, h).KeptWorkNotification(t.Context(), wake.ID)
+		if err != nil || notified.Outcome != store.Known(store.NotificationSent) {
+			t.Fatalf("the wake's notification record is %+v, %v; want it settled sent", notified, err)
 		}
 	})
 }
