@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -33,6 +34,19 @@ func WithCleanupInterruptForTest(tb testing.TB, o Options, f func() error) Optio
 	return o
 }
 
+// WithCleanupAskSpacingForTest returns o with the spacing the supervisor
+// pass leaves between two asks of one landed task's cleanup set to d, for
+// this package's external tests, which cannot wait landedAskSpacing.
+func WithCleanupAskSpacingForTest(o Options, d time.Duration) Options {
+	o.cleanupAskSpacing = d
+	return o
+}
+
+// LandedCleanupAsks is landedAsks, the most times the cleanup decision is
+// asked for one landed task under one Dead terminal in a service's life, for
+// this package's external tests to count against.
+const LandedCleanupAsks = landedAsks
+
 // WithBeforeStaleRemovalReleaseForTest returns o with recovery's seam between
 // reading a dead eject's removal reservation and releasing it set to f, for
 // this package's external tests.
@@ -55,6 +69,14 @@ func WithAfterIntakeBranchReleaseForTest(o Options, f func()) Options {
 // release or another task.create could.
 func (s *Service) DispatchDueForTest(ctx context.Context) {
 	s.dispatchDue(ctx)
+}
+
+// ReadPersonMergesForTest runs one pass of mergeread.go's read for merges a
+// person made, readPersonMerges, for this package's external tests, which
+// use it to read a merge they scripted the code host to report without
+// waiting mergeReadInterval for the next pass.
+func (s *Service) ReadPersonMergesForTest(ctx context.Context) {
+	s.readPersonMerges(ctx)
 }
 
 // SetBeforeRefusalEndForTest installs beforeRefusalEnd for this

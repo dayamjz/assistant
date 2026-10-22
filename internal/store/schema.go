@@ -175,6 +175,10 @@ const keptWorkMigration = "kept work record"
 // sealCheckpointTableMigration is a constant.
 const keptWorkAgainstMigration = "kept work against the default branch"
 
+// runRebaseMigration names the migration that adds the run rebase record, for
+// the reason sealCheckpointTableMigration is a constant.
+const runRebaseMigration = "run rebase record"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2206,6 +2210,57 @@ var schema = []migration{
 			// the column; an empty string means the launch named none, which
 			// a usage total keeps apart from a named window and from unknown.
 			`ALTER TABLE agent_invocation ADD COLUMN context_window TEXT`,
+		},
+	},
+	{
+		version: 54,
+		name:    runRebaseMigration,
+		statements: []string{
+			// A rebase a run's rebase stage made in the run's isolated copy,
+			// recorded by the stage at the point it made it: the head it
+			// replayed (before), the commit it replayed it onto, and the head
+			// the copy stood at once the replay applied without a conflict
+			// (after). A row is written only when the stage established that
+			// before carries the commit the run was submitted (submitted,
+			// which RecordRunRebase holds to the run row's own) and that
+			// integrating before into after, and submitted into after, would
+			// each change nothing. So a row says that after holds what the
+			// run's own rebase replayed and what the run was submitted; it
+			// does not say that before's history contains submitted, since a
+			// later row's before may be a fix round's head on an earlier
+			// row's after. internal/stages' rebaserecord.go owns those checks,
+			// and nothing here enforces them.
+			// It is what lets internal/tasks' cleanup proofs follow a task's
+			// commit to the commit the gate published for it after rewriting
+			// it, from what the program itself did rather than from matching
+			// two commits by what they hold.
+			//
+			// It is written once and never updated. The same rebase written
+			// again, which a stage re-executed on resume makes, finds the row
+			// already there, which the unique key holds. A row is not deleted
+			// while its run stands, on forgetRunRecordsMigration's terms, so it
+			// goes only with its run, which only ForgetRepository removes.
+			`CREATE TABLE run_rebase (
+				id          INTEGER PRIMARY KEY,
+				run         TEXT NOT NULL REFERENCES run(id),
+				submitted   TEXT NOT NULL,
+				before      TEXT NOT NULL,
+				onto        TEXT NOT NULL,
+				after       TEXT NOT NULL,
+				recorded_at TEXT NOT NULL,
+				UNIQUE (run, before, onto, after)
+			) STRICT`,
+			`CREATE TRIGGER run_rebase_is_written_once
+				BEFORE UPDATE ON run_rebase
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run rebase record is written once by the rebase that made it and is not updated');
+				END`,
+			`CREATE TRIGGER run_rebase_is_not_removed
+				BEFORE DELETE ON run_rebase
+				WHEN EXISTS (SELECT 1 FROM run WHERE id = OLD.run)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run rebase record is not deleted while its run stands');
+				END`,
 		},
 	},
 }
