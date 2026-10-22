@@ -25,31 +25,41 @@ import (
 // next service of the home and not this one. Empty, the default, starts
 // nothing: no goroutine, no command, no record.
 //
-// For each wake the supervisor loop appends, of either of the queue's two
-// shapes, the command is run once with the wake's row on standard input:
-// one line of the JSON store.Wake encodes to for a wake about a task, or of
-// the JSON store.DomainWake encodes to for a wake about a domain, as the
-// record holds it when it is offered, and then end of file. A task wake's
-// line names the task in "task_id"; a domain wake's names the delegation in
-// "delegation" and the domain in "domain" and carries no "task_id", so the
-// command tells the two apart by those fields, and "kind" is
-// subordinate-gone, subordinate-escalated or hold-opened for the second. That
-// is the row bare, not the ipc.Event wakes.subscribe pushes: the stream
-// carries the same encoding as an event's payload, beside its type and
-// revision, and the command is given no such envelope. Every field of that row is a closed word,
-// a validated identifier, a time, or a marker the loop passed through
-// internal/redact before writing it, so the row carries no credential the
-// redactor recognizes. The sender encodes that stored row as JSON and does
-// not redact the encoded line: redaction on an encoded payload can corrupt
-// the JSON and is not safe. The command is run
-// through internal/stages' RunOperatorCommand, the runner every commands.*
-// key runs through, in the home's root with this service's environment, so
-// it carries the operator's credentials and that runner's gaps; no second
-// process starter is written here. That runner ends the command's whole
-// process group on unix when the bound or Close ends it, and leaves a
-// descendant that left the group, or that a command exiting on its own left
-// behind, running. Its output is not shown to anyone: the redacted end of it
-// is kept on the record as evidence.
+// For each wake the supervisor loop appends, of any of the queue's three
+// shapes, the command is run once with the wake's row on standard input: one
+// line of the JSON store.Wake encodes to for a wake about a task, of the
+// JSON store.DomainWake encodes to for a wake about a domain, or of the JSON
+// store.KeptWorkWake encodes to for a wake about a kept work entry no task
+// names, and then end of file. A task or domain wake's row is as the record
+// holds it when it is offered; a kept-work wake's is too, except that its
+// project and branch are first passed through internal/redact, as described
+// below, so a credential the redactor recognizes in either reaches the
+// command replaced, while the record keeps the text as written. A task
+// wake's line names the task in "task_id"; a domain wake's names the
+// delegation in "delegation" and the domain in "domain"; a kept-work wake's
+// names the entry in "kept_work" and its project and branch in "project" and
+// "branch"; neither of the last two carries a "task_id", so the command
+// tells the three apart by those fields. "kind" is subordinate-gone,
+// subordinate-escalated or hold-opened for the second shape and kept-work
+// for the third. That is the row bare, not the ipc.Event wakes.subscribe
+// pushes: the stream carries the same encoding as an event's payload, beside
+// its type and revision, and the command is given no such envelope. Every
+// field of a task or domain wake's row is a closed word, a validated
+// identifier, a time, or a marker the loop passed through internal/redact
+// before writing it. A kept-work wake's row also names the entry's project
+// and branch, which are a person's text read off the entry, so
+// keptWorkNotice passes those two fields through internal/redact before the
+// row is encoded. So no row carries a credential the redactor recognizes.
+// The sender encodes the row as JSON and does not redact the encoded line:
+// redaction on an encoded payload can corrupt the JSON and is not safe. The
+// command is run through internal/stages' RunOperatorCommand, the runner
+// every commands.* key runs through, in the home's root with this service's
+// environment, so it carries the operator's credentials and that runner's
+// gaps; no second process starter is written here. That runner ends the
+// command's whole process group on unix when the bound or Close ends it, and
+// leaves a descendant that left the group, or that a command exiting on its
+// own left behind, running. Its output is not shown to anyone: the redacted
+// end of it is kept on the record as evidence.
 //
 // Nothing the command does reaches the program. Its exit status and output
 // are recorded and never read back as an answer, an acknowledgement, a
@@ -69,16 +79,20 @@ import (
 // the bell before each read, so a row appended after the read is not
 // missed. What it sends is decided from the record and never from the
 // ring: store.PendingNotifications is the queued wakes with no notification
-// record, oldest first, and store.PendingDomainNotifications the same for
-// the domain wakes, so a wake appended before a restart and not yet offered
-// is offered by the next service. A pass offers the task wakes first.
+// record, oldest first, and store.PendingDomainNotifications and
+// store.PendingKeptWorkNotifications the same for the other two shapes, so
+// a wake appended before a restart and not yet offered is offered by the
+// next service. A pass offers the task wakes first, then the domain wakes,
+// then the kept-work wakes.
 //
 // Each wake is claimed before its command runs (store.ClaimNotification,
-// or store.ClaimDomainNotification for a domain wake, in a record of its
-// own), and the claim is the whole of what keeps it from being sent twice:
+// or store.ClaimDomainNotification and store.ClaimKeptWorkNotification for
+// the other shapes, each in a record of its own), and the claim is the
+// whole of what keeps it from being sent twice:
 // a wake with any record is never offered again, so delivery is at most
 // once. The claim is settled once when the command ends
-// (store.SettleNotification, store.SettleDomainNotification):
+// (store.SettleNotification, store.SettleDomainNotification,
+// store.SettleKeptWorkNotification):
 // sent for a command that exited zero, failed for one that exited non-zero,
 // could not start, ran past notifyBound, or was ended by the service
 // closing, each with its exit status when it reported one and a detail
@@ -193,7 +207,8 @@ func (s *Service) startNotifier(hooks supervisionHooks) {
 }
 
 // notifyPending offers every pending wake to the command, oldest first,
-// task wakes and then domain wakes, until a read of each finds none or ctx
+// task wakes, then domain wakes, then kept-work wakes, until a read of each
+// finds none or ctx
 // ends, and reports true. It reports false, having logged why once, when
 // the store refused a read or a claim, which ends the pass at that wake.
 func (s *Service) notifyPending(ctx context.Context, line string, bound time.Duration) bool {
@@ -212,7 +227,14 @@ func (s *Service) notifyPending(ctx context.Context, line string, bound time.Dur
 			}
 			return false
 		}
-		if len(pending)+len(pendingDomain) == 0 {
+		pendingKept, err := s.store.PendingKeptWorkNotifications(ctx, notifyBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				s.log.Printf("could not read the kept work wakes to notify: %v", err)
+			}
+			return false
+		}
+		if len(pending)+len(pendingDomain)+len(pendingKept) == 0 {
 			return true
 		}
 		for _, w := range pending {
@@ -231,11 +253,19 @@ func (s *Service) notifyPending(ctx context.Context, line string, bound time.Dur
 				return false
 			}
 		}
+		for _, w := range pendingKept {
+			if ctx.Err() != nil {
+				return true
+			}
+			if !s.notifyOne(ctx, line, bound, keptWorkNotice(s.store, w)) {
+				return false
+			}
+		}
 	}
 	return true
 }
 
-// notice is one wake of either shape as the sender offers it: what names
+// notice is one wake of any shape as the sender offers it: what names
 // it in the log, the row the command is given, and the claim and the
 // settlement of its own record, so the once-only terms are written once.
 type notice struct {
@@ -272,6 +302,39 @@ func domainNotice(records *store.Store, w store.DomainWake) notice {
 			return err
 		},
 	}
+}
+
+// keptWorkNotice is a kept-work wake's notice: its row, which names the
+// entry, its project and its branch where a task wake's names a task, with
+// the project and branch redacted by redactedKeptWorkWake and then encoded
+// as store.KeptWorkWake encodes, claimed and settled in
+// kept_work_notification.
+func keptWorkNotice(records *store.Store, w store.KeptWorkWake) notice {
+	return notice{
+		label: fmt.Sprintf("kept work wake %d about kept work entry %d", w.ID, w.KeptWork),
+		row:   redactedKeptWorkWake(w),
+		claim: func(ctx context.Context) error { _, err := records.ClaimKeptWorkNotification(ctx, w.ID); return err },
+		settle: func(ctx context.Context, n store.NotificationSettlement) error {
+			_, err := records.SettleKeptWorkNotification(ctx, w.ID, n)
+			return err
+		},
+	}
+}
+
+// redactedKeptWorkWake is a kept-work wake's row with the two fields that
+// are a person's text, the entry's project and branch, passed through
+// internal/redact, field by field before the row is encoded, so the JSON
+// stays whole. Every other field is a closed word, a number, a time or the
+// loop's redacted marker.
+func redactedKeptWorkWake(w store.KeptWorkWake) store.KeptWorkWake {
+	r := redact.New()
+	if project, ok := w.Project.Get(); ok {
+		w.Project = store.Known(r.Redact(project))
+	}
+	if branch, ok := w.Branch.Get(); ok {
+		w.Branch = store.Known(r.Redact(branch))
+	}
+	return w
 }
 
 // notifyOne claims one wake, runs the command for it, and settles the claim.

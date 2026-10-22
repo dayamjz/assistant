@@ -74,7 +74,7 @@ func runAtTerminal(t *testing.T, argv ...string) ran {
 func startAtTerminal(t *testing.T, argv ...string) func() ran {
 	t.Helper()
 	tmux := standin.Tmux(t)
-	dir, err := os.MkdirTemp("", "t")
+	dir, err := standin.TempDir("t")
 	if err != nil {
 		t.Fatal(err)
 	}

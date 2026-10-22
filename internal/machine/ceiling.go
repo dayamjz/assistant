@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/store"
@@ -28,8 +29,11 @@ const (
 	// total at it leaves nothing for another call.
 	CeilingReached CeilingStanding = "reached"
 	// CeilingUnestablished is a set count that some call in the window left
-	// unreported, so its total is a lower bound and not the total. A count
-	// nobody reported is never read as none.
+	// unreported while its agent declares it reports that count, or while
+	// this build holds no declaration for its agent, so the total is a lower
+	// bound and not the total. A count nobody reported is never read as none.
+	// A call whose agent declares it does not report the count is left out of
+	// it instead, and UsageCeilingCount.Exempt says how many.
 	CeilingUnestablished CeilingStanding = "unestablished"
 	// CeilingUnread is a record that could not be read, so no total is known.
 	CeilingUnread CeilingStanding = "unread"
@@ -76,29 +80,64 @@ type UsageCeilingCount struct {
 	Count string `json:"count"`
 	// Ceiling is the operator's ceiling on it, which is positive.
 	Ceiling int64 `json:"ceiling"`
-	// Recorded is UsageOf's total of it over the window.
+	// Recorded is UsageOf's total of it over the window, so the calls Exempt
+	// counts are among its unreported ones.
 	Recorded UsageCount `json:"recorded"`
+	// Exempt is how many of Recorded's unreported calls the comparison
+	// leaves out because their agent declares it does not report this count.
+	Exempt int `json:"exempt"`
 	// Standing is under, reached, or unestablished.
 	Standing CeilingStanding `json:"standing"`
 }
 
 // ceilingCounts is the one table joining a configured ceiling to the count
-// UsageOf totals. Its names are UsageTotals' JSON names, and a ceiling's key
-// is "usage_ceiling." followed by the same name, which the test holds to the
-// configuration schema.
+// UsageOf totals and to the capability an agent declares it reports that
+// count with. Its names are UsageTotals' JSON names, and a ceiling's key is
+// "usage_ceiling." followed by the same name, which the test holds to the
+// configuration schema; the test also holds its capabilities to
+// agents.CountCapabilities, one row each.
 var ceilingCounts = []struct {
 	name     string
 	ceiling  func(config.UsageCeiling) int64
 	recorded func(UsageTotals) UsageCount
+	call     func(store.AgentInvocation) store.Optional[int64]
+	reports  agents.Capability
 }{
 	{"input_tokens", func(c config.UsageCeiling) int64 { return c.InputTokens },
-		func(t UsageTotals) UsageCount { return t.InputTokens }},
+		func(t UsageTotals) UsageCount { return t.InputTokens },
+		func(inv store.AgentInvocation) store.Optional[int64] { return inv.InputTokens },
+		agents.CapabilityReportsInputTokens},
 	{"output_tokens", func(c config.UsageCeiling) int64 { return c.OutputTokens },
-		func(t UsageTotals) UsageCount { return t.OutputTokens }},
+		func(t UsageTotals) UsageCount { return t.OutputTokens },
+		func(inv store.AgentInvocation) store.Optional[int64] { return inv.OutputTokens },
+		agents.CapabilityReportsOutputTokens},
 	{"cache_read_tokens", func(c config.UsageCeiling) int64 { return c.CacheReadTokens },
-		func(t UsageTotals) UsageCount { return t.CacheReadTokens }},
+		func(t UsageTotals) UsageCount { return t.CacheReadTokens },
+		func(inv store.AgentInvocation) store.Optional[int64] { return inv.CacheReadTokens },
+		agents.CapabilityReportsCacheReadTokens},
 	{"cache_creation_tokens", func(c config.UsageCeiling) int64 { return c.CacheCreationTokens },
-		func(t UsageTotals) UsageCount { return t.CacheCreationTokens }},
+		func(t UsageTotals) UsageCount { return t.CacheCreationTokens },
+		func(inv store.AgentInvocation) store.Optional[int64] { return inv.CacheCreationTokens },
+		agents.CapabilityReportsCacheCreationTokens},
+}
+
+// Declarations is what each agent declares, looked up by the agent name a
+// record carries: the declaration and true, or false for an agent this build
+// holds no declaration for, such as one an earlier build recorded.
+// internal/service hands over agents.Catalog.Declared, so the declaration
+// the ceiling reads is the capability table's and the adapter's own (P14). A
+// nil Declarations holds no declaration for any agent.
+type Declarations func(agent string) (agents.Capabilities, bool)
+
+// declaresUnreported reports whether the agent declares that it does not
+// report count: true only for an agent with a declaration that leaves the
+// count out. An agent with no declaration is held to every count.
+func (d Declarations) declaresUnreported(agent string, count agents.Capability) bool {
+	if d == nil {
+		return false
+	}
+	declared, ok := d(agent)
+	return ok && !declared.Has(count)
 }
 
 // CeilingCountNames is the names of the counts a ceiling may be set on, in
@@ -122,20 +161,26 @@ func CeilingWindow(c config.UsageCeiling) UsageWindow {
 	return UsageWindow{text: text, span: c.Window}
 }
 
-// CeilingOf compares c against rows, read at readAt. The totals are
-// UsageOf's over CeilingWindow(c), so a row whose call started before the
-// window is not counted and a caller may hand over more than the window.
+// CeilingOf compares c against rows, read at readAt, with each row's agent
+// looked up in declared. The totals are UsageOf's over CeilingWindow(c), so
+// a row whose call started before the window is not counted and a caller may
+// hand over more than the window.
 //
 // A count is reached when its recorded total is at or over its ceiling, and
-// unestablished when any call in the window left it unreported, whatever the
-// reported calls sum to. A window with no calls is under every positive
-// ceiling. The standing is reached when any count is, else unestablished when
-// any count is, else under; a ceiling with no count set is off.
+// unestablished when a call in the window left it unreported whose agent does
+// not declare that it does not report it, whatever the reported calls sum
+// to. That holds a call by an agent declared holds no declaration for to
+// every count. A call whose agent declares it does not report the count is
+// left out of it, counted in Exempt, and neither refuses nor is read as a
+// zero; a count a call did report is in the total whatever its agent
+// declares. A window with no calls is under every positive ceiling. The
+// standing is reached when any count is, else unestablished when any count
+// is, else under; a ceiling with no count set is off.
 //
 // A ceiling with a count set and no positive window, which config.Resolve
 // never produces, cannot be compared and reads as unread rather than as a
 // window holding no calls.
-func CeilingOf(c config.UsageCeiling, readAt time.Time, rows []store.AgentInvocation) UsageCeiling {
+func CeilingOf(c config.UsageCeiling, readAt time.Time, rows []store.AgentInvocation, declared Declarations) UsageCeiling {
 	if c.Set() && c.Window <= 0 {
 		return CeilingUnreadable(config.UsageCeiling{Window: time.Nanosecond, InputTokens: c.InputTokens,
 			OutputTokens: c.OutputTokens, CacheReadTokens: c.CacheReadTokens, CacheCreationTokens: c.CacheCreationTokens},
@@ -153,10 +198,18 @@ func CeilingOf(c config.UsageCeiling, readAt time.Time, rows []store.AgentInvoca
 		}
 		recorded := row.recorded(usage.Total)
 		count := UsageCeilingCount{Count: row.name, Ceiling: limit, Recorded: recorded, Standing: CeilingUnder}
+		for _, inv := range rows {
+			if _, ok := row.call(inv).Get(); ok || inv.Started.Before(usage.Since) {
+				continue
+			}
+			if declared.declaresUnreported(inv.Agent, row.reports) {
+				count.Exempt++
+			}
+		}
 		switch {
 		case recorded.Total.Or(0) >= limit:
 			count.Standing, reached = CeilingReached, true
-		case recorded.Unreported > 0:
+		case recorded.Unreported > count.Exempt:
 			count.Standing, unestablished = CeilingUnestablished, true
 		}
 		out.Counts = append(out.Counts, count)
@@ -178,7 +231,7 @@ func CeilingOf(c config.UsageCeiling, readAt time.Time, rows []store.AgentInvoca
 // unread, naming why, with no totals. A ceiling with no count set reads
 // nothing and is off, so it is never unread.
 func CeilingUnreadable(c config.UsageCeiling, readAt time.Time, err error) UsageCeiling {
-	out := CeilingOf(c, readAt, nil)
+	out := CeilingOf(c, readAt, nil, nil)
 	if out.Standing == CeilingOff {
 		return out
 	}
@@ -194,7 +247,8 @@ func CeilingUnreadable(c config.UsageCeiling, readAt time.Time, err error) Usage
 // Figures is the comparison in exact terms, for the hold's finding and the
 // usage view: the window, then each set count's recorded total against its
 // ceiling. A total some calls did not report says how many, so it is never
-// read as the whole. It names no instant: the finding it goes into is graph
+// read as the whole, and says how many of those it leaves out because their
+// agent declares it does not report the count. It names no instant: the finding it goes into is graph
 // state, which the convergence bound reads as the run's fingerprint, and a
 // time there would differ on every execution; Since and ReadAt travel in the
 // structured answer instead.
@@ -202,7 +256,7 @@ func (u UsageCeiling) Figures() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "usage ceiling %s over the last %s", u.Standing, u.Window)
 	for _, c := range u.Counts {
-		fmt.Fprintf(&b, "; %s %s of %d (%s)", c.Count, recordedText(c.Recorded), c.Ceiling, c.Standing)
+		fmt.Fprintf(&b, "; %s %s of %d (%s)", c.Count, recordedText(c), c.Ceiling, c.Standing)
 	}
 	if u.Unread != "" {
 		fmt.Fprintf(&b, "; the record could not be read: %s", u.Unread)
@@ -210,16 +264,26 @@ func (u UsageCeiling) Figures() string {
 	return b.String()
 }
 
-// recordedText is one recorded count as Figures writes it.
-func recordedText(c UsageCount) string {
-	total, ok := c.Total.Get()
+// recordedText is one set count's recorded total as Figures writes it: the
+// total alone when every call reported it, the total with the calls left out
+// when only calls whose agent declares it does not report it did not, and a
+// lower bound naming the unreported calls otherwise.
+func recordedText(c UsageCeilingCount) string {
+	r := c.Recorded
+	calls := r.Reported + r.Unreported
+	total, ok := r.Total.Get()
 	switch {
-	case c.Unreported == 0 && !ok:
+	case r.Unreported == 0 && !ok:
 		return "0"
-	case c.Unreported == 0:
+	case r.Unreported == 0:
 		return fmt.Sprint(total)
+	case r.Unreported == c.Exempt:
+		return fmt.Sprintf("%d (%d of %d calls by agents that do not report it left out)", r.Total.Or(0), c.Exempt, calls)
+	case c.Exempt > 0:
+		return fmt.Sprintf("at least %d (%d of %d calls unreported, %d of them by agents that do not report it)",
+			r.Total.Or(0), r.Unreported, calls, c.Exempt)
 	}
-	return fmt.Sprintf("at least %d (%d of %d calls unreported)", c.Total.Or(0), c.Unreported, c.Reported+c.Unreported)
+	return fmt.Sprintf("at least %d (%d of %d calls unreported)", r.Total.Or(0), r.Unreported, calls)
 }
 
 // errNoCeilingWindow is why a ceiling with no positive window reads as unread.

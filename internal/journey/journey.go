@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -154,7 +155,9 @@ type Options struct {
 // whose path is bounded by the operating system at a length a temporary
 // directory under a long parent exceeds, and the failure that produces is the
 // service refusing to bind with an error about an invalid argument that names
-// nothing about length.
+// nothing about length. The directory is standin.TempDir's, under /tmp on the
+// platforms that host the socket. The pattern is one letter, because the name
+// also carries the registering package's directory and the process identity.
 func Open(opts Options) (*Journey, error) {
 	binary, err := Binary()
 	if err != nil {
@@ -166,7 +169,7 @@ func Open(opts Options) (*Journey, error) {
 	if err := oneWordEach(opts.AgentArguments); err != nil {
 		return nil, err
 	}
-	root, err := os.MkdirTemp("", "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		return nil, fmt.Errorf("journey: making a home root: %w", err)
 	}

@@ -154,7 +154,7 @@ func eventLine(event ipc.Event) string {
 		return printable(machine.HoldPhrase(hold).String())
 	case ipc.TypeTaskEvent:
 		return machine.PhraseWorkerSpoke.String()
-	case ipc.TypeWakeQueued, ipc.TypeDomainWakeQueued:
+	case ipc.TypeWakeQueued, ipc.TypeDomainWakeQueued, ipc.TypeKeptWorkWakeQueued:
 		return machine.PhraseNoticeQueued.String()
 	case ipc.TypeGap:
 		return machine.PhraseUpdatesMissed.String()
