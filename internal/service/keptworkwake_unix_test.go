@@ -32,8 +32,9 @@ const keptWorkWakeWait = 30 * time.Second
 // socket, the real supervisor loop at its interval and the operator's real
 // notify command: a person's push starts a run whose copy is kept because
 // its commit landed nowhere. The loop raises the entry as exactly one
-// kept-work wake, about the entry and under its project; the notify
-// command is run once with that row; the coordinator's drain hands it out;
+// kept-work wake, about the entry and under its project; the
+// coordinator's wake stream is pushed it as kept-work-wake.queued; the
+// notify command is run once with that row; the coordinator's drain hands it out;
 // and acknowledging it closes the wake and leaves the entry open, listed
 // by status. Later passes raise nothing more. On #442's head the drain
 // carries no such row and the command is sent nothing.
@@ -55,6 +56,16 @@ func TestAPersonsKeptRunRaisesOneKeptWorkWakeThatReachesTheChannelOnce(t *testin
 	}
 
 	withService(t, h, func(under serviceUnderTest) {
+		// The coordinator's wake stream, held on a connection of its own
+		// from before the run, is pushed the wake as the loop queues it.
+		pushes, err := dial(t, under.service).SubscribeTo(t.Context(), ipc.MethodWakesSubscribe, nil)
+		if err != nil {
+			t.Fatalf("opening the wake stream: %v", err)
+		}
+		defer pushes.Close()
+		if first := recvWithin(t, pushes, keptWorkWakeWait); first.Type != ipc.TypeGap {
+			t.Fatalf("the wake stream opened with %+v, want the opening gap", first)
+		}
 		started := startRunSkipping(t, under.client, subject, afterIntent()...)
 		run := runByID(t, under.client, started.Record.ID)
 		if run.Cleanup == nil || !run.Cleanup.Kept() {
@@ -85,6 +96,18 @@ func TestAPersonsKeptRunRaisesOneKeptWorkWakeThatReachesTheChannelOnce(t *testin
 		if wake.KeptWork != entry.ID || wake.Kind != string(supervisor.KindKeptWork) || wake.Project != store.Known(repository.ID) || wake.Branch != entry.Branch ||
 			!wake.HandedOut() || wake.Handouts != store.Known(int64(1)) {
 			t.Fatalf("the drained wake is %+v, want entry %d's kept-work wake under project %s, handed out once", wake, entry.ID, repository.ID)
+		}
+		for {
+			event := recvWithin(t, pushes, keptWorkWakeWait)
+			if event.Type != ipc.TypeKeptWorkWakeQueued {
+				continue
+			}
+			var pushed store.KeptWorkWake
+			if err := json.Unmarshal(event.Payload, &pushed); err != nil || pushed.ID != wake.ID || pushed.KeptWork != entry.ID ||
+				event.Revision != uint64(wake.ID) {
+				t.Fatalf("the stream pushed %+v (%+v, %v), want kept-work wake %d about entry %d", event, pushed, err, wake.ID, entry.ID)
+			}
+			break
 		}
 		for _, w := range drained.Wakes {
 			if w.Kind == string(supervisor.KindKeptWork) {
