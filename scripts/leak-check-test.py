@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Executable and model tests for the CI leftover guard (P15)."""
+"""Executable and model tests for the CI leftover guard, leak-check.py."""
 
 import contextlib
 import importlib.util
@@ -129,10 +129,24 @@ class LeakCheckTest(unittest.TestCase):
                 check.temp_entries([Path(folder) / "missing"])
 
     def test_owned_unreadable_tree_is_an_error(self):
+        # A real subdirectory this user owns and cannot list or enter: not a
+        # root, so not required, and not enterable, so only its owner being
+        # this user makes the walk fail rather than set it aside.
         with tempfile.TemporaryDirectory() as folder:
-            with mock.patch.object(Path, "iterdir", side_effect=PermissionError):
+            owned = Path(folder) / "owned"
+            owned.mkdir()
+            owned.chmod(0)
+            try:
+                self.assertEqual(owned.stat().st_uid, os.geteuid())
+                self.assertFalse(os.access(owned, os.X_OK),
+                                 "a mode 000 directory reads as enterable; "
+                                 "this user (root?) cannot be refused one")
+                with self.assertRaises(PermissionError):
+                    list(owned.iterdir())
                 with self.assertRaises(PermissionError):
                     check.temp_entries([Path(folder)])
+            finally:
+                owned.chmod(0o700)
 
     def test_only_foreign_unenterable_subtrees_can_be_set_aside(self):
         with tempfile.TemporaryDirectory() as folder:
