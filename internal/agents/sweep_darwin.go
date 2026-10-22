@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -179,105 +178,48 @@ func (l lsofRun) readCwds(ctx context.Context) (map[int]string, error) {
 //
 // The run carries l.deadline whatever ctx carries, because the sweep's
 // callers may hand it a context that never ends: internal/service's
-// sweepFinished runs under context.WithoutCancel. lsof is started as the
-// leader of a process group of its own, and the group is signalled only
-// while that leader is unreaped, so its identifier cannot have been given
-// to another process and still names this group. That is mechanism rather
-// than timing: nothing reaps the leader until cmd.Wait, which is called
-// only after the last signal, and the wait for its exit is a kqueue's
-// NOTE_EXIT, which leaves it unreaped. When lsof has not exited by its share
-// of the deadline, or ctx ends first, the group is sent SIGKILL, so a
-// leader that ignores SIGTERM and a descendant that stayed in its group are
-// both ended. Once the leader has exited, by either path, the group is sent
-// SIGKILL again, which ends a descendant a leader that exited on its own
-// left in it. Then the leader is reaped, with WaitDelay set to what is left
-// of the deadline for output a descendant that left the group holds open,
-// so the whole run returns within l.deadline, and the wait for that reap
-// also ends when ctx does. A deadline that passed, including one that
-// passed while output was still held open, is ErrSweepTimedOut, and ctx
-// ending at any point is ctx's error, each in place of whatever the run
-// printed or exited with: output is never taken as whole past either.
+// sweepFinished runs under context.WithoutCancel. It runs through
+// procgroup.Run, the one owner of a short-lived program's group, whose
+// package comment states the mechanism and its gaps: lsof leads a process
+// group of its own, the group is ended once lsof exits and, at once, when
+// lsof's share of the deadline passes or ctx ends, so a leader that ignores
+// SIGTERM and a descendant that stayed in its group are both ended. The
+// share is l.deadline less one lsofCleanupShare-th of it, and the grace
+// procgroup.Run is given is a third of that last part, because Run answers
+// within three graces of its context ending, so the whole run returns
+// within l.deadline.
 //
-// Residual gaps: a descendant that left the group is not ended, only stops
-// being waited on; a leader that SIGKILL does not end before the deadline
-// is left to a goroutine that reaps it once it exits, and the run still
-// answers at the deadline; and anything else in this process that reaped
-// every child, a wait on any process, would undo the unreaped guarantee,
-// which nothing in this module does.
+// Output a descendant that left the group holds open is waited on for one
+// grace once lsof has exited, and then the run answers without it. A
+// deadline that passed, or output that was not complete within its grace, is
+// ErrSweepTimedOut, and ctx having ended is ctx's error, each in place of
+// whatever the run printed or exited with: output is never taken as whole
+// past any of them. A ctx that ends while that output is waited on is
+// answered when the grace ends rather than at once, since procgroup.Run
+// does not read its context once lsof is reaped; that is within l.deadline
+// all the same.
+//
+// Residual gaps are procgroup.Run's: a descendant that left the group is
+// not ended, only stops being waited on, and a leader that SIGKILL does not
+// end within the grace is left to a goroutine that reaps it once it exits,
+// with the run answering ErrSweepTimedOut without it.
 func (l lsofRun) run(ctx context.Context) ([]byte, error) {
-	end := time.Now().Add(l.deadline)
-	cut := time.NewTimer(l.deadline - l.deadline/lsofCleanupShare)
-	defer cut.Stop()
+	share := l.deadline - l.deadline/lsofCleanupShare
+	grace := lsofGrace(l.deadline)
+	bounded, cancel := context.WithTimeout(ctx, share)
+	defer cancel()
 	cmd := exec.Command(l.program, "-n", "-P", "-w", "-d", "cwd", "-F", "pfn")
 	cmd.Env = []string{}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("agents: running %s: %w", l.program, err)
-	}
-	pgid := cmd.Process.Pid
-	// answer is what the run returns in place of err: ctx's error once ctx
-	// has ended, whatever else stopped the run, so a cancellation observed
-	// before the run answers always wins.
-	answer := func(err error) error {
-		if ctx.Err() != nil {
-			return fmt.Errorf("agents: running %s: %w", l.program, ctx.Err())
-		}
-		return err
-	}
-	exited := make(chan error, 1)
-	go func() { exited <- procgroup.AwaitExit(pgid) }()
-	var stopped error
-	select {
-	case err := <-exited:
-		if err != nil {
-			// Its exit cannot be observed, but the leader is still
-			// unreaped, since only cmd.Wait reaps it, so the group is
-			// still this run's to end before that reap.
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
-			reapWithin(cmd, end)
-			return nil, answer(fmt.Errorf("agents: waiting on %s: %w", l.program, err))
-		}
-	case <-cut.C:
-		stopped = fmt.Errorf("%w: %s ran past %s and its process group was ended", ErrSweepTimedOut, l.program, l.deadline-l.deadline/lsofCleanupShare)
-	case <-ctx.Done():
-		stopped = fmt.Errorf("agents: running %s: %w", l.program, ctx.Err())
-	}
-	if stopped != nil {
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		select {
-		case <-exited:
-		case <-time.After(remaining(end)):
-			go func() {
-				<-exited
-				_ = cmd.Wait()
-			}()
-			return nil, answer(stopped)
-		}
-	}
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
-	cmd.WaitDelay = remaining(end)
-	reaped := make(chan error, 1)
-	go func() { reaped <- cmd.Wait() }()
-	bound := time.NewTimer(remaining(end))
-	defer bound.Stop()
-	var err error
-	select {
-	case err = <-reaped:
-	case <-bound.C:
-	case <-ctx.Done():
-	}
-	// The output is taken as whole only when the reap came back before the
-	// deadline passed and before ctx ended, and without os/exec having
-	// closed a pipe a process that left the group still held, which it does
-	// once WaitDelay, the rest of the deadline, has passed. Past either
-	// check the reap is left to its goroutine and the output is never read.
+	err := procgroup.Run(bounded, cmd, grace)
 	switch {
-	case ctx.Err() != nil, stopped != nil:
-		return nil, answer(stopped)
-	case !time.Now().Before(end), errors.Is(err, exec.ErrWaitDelay):
-		return nil, answer(fmt.Errorf("%w: the output of %s was not complete within %s and its process group was ended", ErrSweepTimedOut, l.program, l.deadline))
+	case ctx.Err() != nil:
+		return nil, fmt.Errorf("agents: running %s: %w", l.program, ctx.Err())
+	case bounded.Err() != nil:
+		return nil, fmt.Errorf("%w: %s ran past %s and its process group was ended", ErrSweepTimedOut, l.program, share)
+	case errors.Is(err, procgroup.ErrAbandoned), errors.Is(err, exec.ErrWaitDelay):
+		return nil, fmt.Errorf("%w: the output of %s was not complete within %s and its process group was ended", ErrSweepTimedOut, l.program, l.deadline)
 	}
 	out := stdout.Bytes()
 	if err != nil {
@@ -289,25 +231,12 @@ func (l lsofRun) run(ctx context.Context) ([]byte, error) {
 	return out, nil
 }
 
-// reapWithin reaps cmd's leader, waiting until end at most, and leaves the
-// reap to a goroutine of its own when end passes first.
-func reapWithin(cmd *exec.Cmd, end time.Time) {
-	cmd.WaitDelay = remaining(end)
-	reaped := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(reaped)
-	}()
-	select {
-	case <-reaped:
-	case <-time.After(remaining(end)):
-	}
-}
-
-// remaining is how long is left until end, never less than a millisecond,
-// because a WaitDelay of zero is os/exec's way of asking for no bound.
-func remaining(end time.Time) time.Duration {
-	return max(time.Until(end), time.Millisecond)
+// lsofGrace is the grace a run under deadline gives procgroup.Run: a third
+// of the part of the deadline kept back from lsof, since Run answers within
+// three graces of its context ending. It is never less than a millisecond,
+// because Run refuses a grace that bounds nothing.
+func lsofGrace(deadline time.Duration) time.Duration {
+	return max(deadline/lsofCleanupShare/3, time.Millisecond)
 }
 
 // parseLsof reads lsof's field output for working directory descriptors: a

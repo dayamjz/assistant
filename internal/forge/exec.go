@@ -227,12 +227,11 @@ type procResult struct {
 	// the process never ran.
 	startErr error
 	// waitErr is what waiting on the process reported. A failing status is
-	// reported here as an *exec.ExitError and takes precedence over anything
-	// else the wait found, so the value worth testing for is
-	// exec.ErrWaitDelay: it means the wait for the output pipes was abandoned
-	// at the grace deadline, which is how a caller tells output that was
-	// collected whole from output that may be missing bytes the provider
-	// wrote.
+	// reported here as an *exec.ExitError, joined to anything else the wait
+	// found, so the value worth testing for is exec.ErrWaitDelay: it means
+	// the wait for the output pipes was abandoned at the grace deadline,
+	// which is how a caller tells output that was collected whole from
+	// output that may be missing bytes the provider wrote.
 	waitErr error
 	// ended is the error of the context the invocation ran under, read once
 	// it returned: the caller's context's error, or the invocation

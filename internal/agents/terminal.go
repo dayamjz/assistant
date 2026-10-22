@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // A terminal worker is a worker hosted in a terminal a person can attach to:
@@ -110,9 +112,42 @@ import (
 // That is the same path a person's keystrokes take into the pane, which is
 // why typing into an attached window reaches the agent exactly as a Send
 // does and why this package cannot tell the two apart afterwards: the pane
-// has one input. A send ctx ends returns ctx's error, and the tmux client it
-// was running is killed, which may leave part of the text pasted; nothing
-// here takes it back.
+// has one input. A send ctx ends returns ctx's error, and the process group
+// of the tmux client it was running is ended, which may leave part of the
+// text pasted; nothing here takes it back.
+//
+// # The tmux clients
+//
+// Every tmux command this package sends is one short-lived client program,
+// and each runs through procgroup.Run, PRD section 8's terms for an external
+// program: as the leader of a process group of its own, under a deadline,
+// with the group ended when the client returns or the deadline passes. The
+// deadline is the caller's ctx where there is one and the bound of the
+// client's kind, whichever ends first, one bound per kind: tmuxStartBound
+// for the client that starts the server, tmuxTypeBound for a send,
+// tmuxReadBound for a reading of the pane, and tmuxEndBound for the client
+// that ends the server. A client still running at its bound is ended with
+// its group and answered as ErrTerminalClientTimedOut, and a start or a Send
+// waiting for the screen to read ready stops at the first reading that does
+// so, refused with ErrTerminalNotReady beside it. So a wedged server, one
+// whose clients do not answer, cannot hold a start, a Send, a Capture or a
+// Close forever. A caller whose ctx ends while a client runs is answered
+// with ctx's error, the client's own failure kept beside it.
+//
+// What this does not bound is a server that answers: a screen reading that
+// fails at once is read again, and a screen that reads but never reads
+// ready, a turn that does not end among them, is waited on until the
+// worker ends or ctx does, and a start's wait also until
+// terminalReadyTimeout passes. A Send under a ctx that never ends can wait
+// that long.
+//
+// Ending a client's group does not end the server that client started: the
+// server is not in that group once the client has answered, which every
+// terminal test that types into a worker after starting it rests on, since
+// a server ended with its first client would leave nothing to type into.
+// The server and the agent in its pane are long-lived, and are ended by
+// Close, by the poll once the agent has gone, and by a failed start, as the
+// sections above state, never by a client's deadline.
 //
 // # Capture
 //
@@ -293,10 +328,87 @@ func OpenTerminalSubordinate(ctx context.Context, r Runner, t Terminal, spec Wor
 // that its process has gone.
 const terminalPoll = 100 * time.Millisecond
 
-// terminalCommandTimeout bounds every tmux client this package runs that is
-// not bounded by a caller's ctx, so a wedged server cannot hold Capture or
-// Close forever.
+// terminalCommandTimeout bounds the two waits on a terminal this package
+// makes that are not a tmux client: a new pane's process coming to lead its
+// own group, and Close's wait for the poll once the server was ended.
 const terminalCommandTimeout = 10 * time.Second
+
+// The bound of each kind of tmux client, on the terms the file comment's
+// section on the clients states. Each kind took between ten and forty
+// milliseconds against a live tmux 3.7b server when these were chosen, a
+// ten kilobyte send included, so each bound is several hundred times what
+// a healthy server takes, and a client still running at it is taken as
+// wedged rather than slow.
+const (
+	// tmuxStartBound bounds the client that starts a worker's server, which
+	// answers once the server is listening and the pane's process has
+	// started. It is ten seconds, as the other kinds are: starting the
+	// server was the slowest kind observed, at forty milliseconds.
+	tmuxStartBound = 10 * time.Second
+	// tmuxTypeBound bounds one send: loading the framed text into a buffer,
+	// pasting it, and, for a bracketed paste, typing Enter. It is ten
+	// seconds because the text is bounded by the framing and a ten kilobyte
+	// send took twenty milliseconds; a screen read before typing is a
+	// reading, under tmuxReadBound, and not part of it.
+	tmuxTypeBound = 10 * time.Second
+	// tmuxReadBound bounds one reading of the pane, its visible screen, its
+	// whole history, or its history's size and limit. It is ten seconds
+	// because a reading of the whole history took twenty milliseconds, and
+	// a Capture makes two readings, each under a bound of its own.
+	tmuxReadBound = 10 * time.Second
+	// tmuxEndBound bounds the client that ends a worker's server. It is ten
+	// seconds because ending a server took twenty milliseconds, and Close
+	// and a failed start each wait for it before they return.
+	tmuxEndBound = 10 * time.Second
+)
+
+// tmuxClientGrace is the grace procgroup.Run is given for a tmux client: how
+// long a client sent SIGKILL gets to exit, and how long its output pipes are
+// waited on once it has, before the call answers without them. A client
+// holds nothing that outlasts a SIGKILL, so the grace is short; a call
+// returns within its bound and three graces at most, as procgroup.Run
+// states.
+const tmuxClientGrace = time.Second
+
+// ErrTerminalClientTimedOut is the answer of a tmux client that was still
+// running at the bound of its kind, whose process group was then ended. It
+// is never a caller's own deadline: a call whose ctx ended answers an error
+// wrapping ctx's error instead, which runTmux decides in one place.
+var ErrTerminalClientTimedOut = errors.New("agents: a tmux client ran past its bound and its process group was ended")
+
+// runTmux runs one tmux client, cmd, built with exec.Command and not yet
+// started, through procgroup.Run, under ctx and bound, whichever ends first.
+// A client that failed is answered with an error wrapping ctx's error when
+// ctx has ended, since the caller's cancellation is then the explanation,
+// with an error wrapping ErrTerminalClientTimedOut when bound passed and ctx
+// had not ended, and otherwise with procgroup.Run's answer; the first two
+// keep that answer beside them. A client that answered in full is its answer
+// even when ctx or bound ended as it did. what names the client in the
+// error.
+func runTmux(ctx context.Context, bound time.Duration, what string, cmd *exec.Cmd) error {
+	bounded, cancel := context.WithTimeout(ctx, bound)
+	defer cancel()
+	err := procgroup.Run(bounded, cmd, tmuxClientGrace)
+	switch {
+	case err == nil:
+		return nil
+	case ctx.Err() != nil:
+		return fmt.Errorf("%s ended with its caller's context: %w: %w", what, ctx.Err(), err)
+	case bounded.Err() != nil:
+		return fmt.Errorf("%w: %s ran past %s: %w", ErrTerminalClientTimedOut, what, bound, err)
+	}
+	return err
+}
+
+// tmuxOutput is runTmux for a client whose standard output is its answer.
+func tmuxOutput(ctx context.Context, bound time.Duration, what string, cmd *exec.Cmd) ([]byte, error) {
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := runTmux(ctx, bound, what, cmd); err != nil {
+		return nil, err
+	}
+	return stdout.Bytes(), nil
+}
 
 // terminalTarget is the session, and so the pane, a worker's server holds.
 // The server is the worker's own, so one fixed name addresses it.
@@ -309,9 +421,11 @@ const terminalBuffer = "assistant-send"
 // ErrTerminalNotReady is the refusal of a terminal worker whose screen did
 // not read as ready for what was asked: at start, an interface that was not
 // drawn within the bound, and at a send, one that did not read ready to be
-// typed into before the send's ctx ended. Nothing is typed into a screen that has not read
+// typed into before the send's ctx ended; at either, a screen whose reading
+// ran past tmuxReadBound. Nothing is typed into a screen that has not read
 // ready, so a send refused with it typed nothing. It is wrapped together
-// with ctx's error where ctx is what ended the wait.
+// with ctx's error where ctx is what ended the wait, and with
+// ErrTerminalClientTimedOut where a reading did.
 var ErrTerminalNotReady = errors.New("agents: the terminal worker's screen did not read ready")
 
 // screenState is what an adapter's reader makes of a terminal worker's
@@ -447,12 +561,12 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 				size, TerminalCommandLimit),
 		}
 	}
-	cmd := exec.CommandContext(ctx, t.Tmux, args...)
+	cmd := exec.Command(t.Tmux, args...)
 	cmd.Dir = spec.dir
 	cmd.Env = withoutTmux(spec.env)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
+	if err := runTmux(ctx, tmuxStartBound, "the client starting the server", cmd); err != nil {
 		killTerminalServer(t)
 		return nil, fmt.Errorf("starting the terminal worker's server: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
@@ -567,20 +681,40 @@ func TmuxStartCommandSize(t Terminal, dir, bin string, workerArgs []string) (int
 
 // await reads the visible screen through the adapter's reader, every
 // terminalPoll, until ok accepts what it reads. It returns ErrWorkerEnded
-// once the worker has ended, and an error wrapping ErrTerminalNotReady and
-// ctx's error when ctx ends first. A screen that cannot be read is read
-// again rather than taken for any state.
+// once the worker has ended, an error wrapping ErrTerminalNotReady and
+// ctx's error when ctx ends first, and one wrapping ErrTerminalNotReady and
+// ErrTerminalClientTimedOut when a reading ran past tmuxReadBound: a server
+// that does not answer one reading within that bound is taken as wedged, so
+// the wait ends there rather than starting another reading of it. A screen
+// that cannot be read for any other reason is read again rather than taken
+// for any state.
 func (w *tmuxWorker) await(ctx context.Context, ok func(screenState) bool) error {
 	tick := time.NewTicker(terminalPoll)
 	defer tick.Stop()
 	for {
-		if screen, err := w.screen(ctx); err == nil && ok(w.typing.read(screen)) {
+		screen, err := w.screen(ctx)
+		switch {
+		case err == nil && ok(w.typing.read(screen)):
 			return nil
+		case errors.Is(err, ErrTerminalClientTimedOut):
+			return fmt.Errorf("%w: %w", ErrTerminalNotReady, err)
+		case ctx.Err() != nil:
+			// ctx is read once the reading has returned and before any
+			// select, so a tick already waiting can never start another
+			// reading under the ended ctx. A reading ctx cut short is
+			// runTmux's answer, which already wraps ctx's error and keeps
+			// the client's failure beside it, so it is returned whole.
+			if err != nil && errors.Is(err, ctx.Err()) {
+				return fmt.Errorf("%w: %w", ErrTerminalNotReady, err)
+			}
+			return fmt.Errorf("%w: %w", ErrTerminalNotReady, ctx.Err())
 		}
 		select {
 		case <-w.done:
 			return ErrWorkerEnded
 		case <-ctx.Done():
+			// No reading was cut here: ctx ended while the wait was idle
+			// between readings.
 			return fmt.Errorf("%w: %w", ErrTerminalNotReady, ctx.Err())
 		case <-tick.C:
 		}
@@ -589,8 +723,8 @@ func (w *tmuxWorker) await(ctx context.Context, ok func(screenState) bool) error
 
 // screen is the pane's visible screen, with lines tmux wrapped joined back.
 func (w *tmuxWorker) screen(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, w.terminal.Tmux, "-S", w.terminal.Socket,
-		"capture-pane", "-p", "-J", "-t", terminalTarget).Output()
+	out, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the screen", exec.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
+		"capture-pane", "-p", "-J", "-t", terminalTarget))
 	return string(out), err
 }
 
@@ -696,13 +830,11 @@ func (w *tmuxWorker) end() {
 	})
 }
 
-// killTerminalServer ends the server on t and removes its socket. A server
-// already gone is not an error worth reporting: the socket is removed
-// either way.
+// killTerminalServer ends the server on t and removes its socket, under
+// tmuxEndBound. A server already gone, or a client that ran past its bound,
+// is not an error worth reporting: the socket is removed either way.
 func killTerminalServer(t Terminal) {
-	ctx, cancel := context.WithTimeout(context.Background(), terminalCommandTimeout)
-	defer cancel()
-	_ = exec.CommandContext(ctx, t.Tmux, "-S", t.Socket, "kill-server").Run()
+	_ = runTmux(context.Background(), tmuxEndBound, "the client ending the server", exec.Command(t.Tmux, "-S", t.Socket, "kill-server"))
 	_ = os.Remove(t.Socket)
 }
 
@@ -737,13 +869,23 @@ func (w *tmuxWorker) Send(ctx context.Context, text string) error {
 			"paste-buffer", "-p", "-d", "-b", terminalBuffer, "-t", terminalTarget, ";",
 			"send-keys", "-t", terminalTarget, "Enter"}
 	}
-	cmd := exec.CommandContext(ctx, w.terminal.Tmux, args...)
+	cmd := exec.Command(w.terminal.Tmux, args...)
 	cmd.Stdin = bytes.NewReader(framed)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := runTmux(ctx, tmuxTypeBound, "the client typing a send", cmd); err != nil {
+		// runTmux's answer is returned whole rather than replaced, so the
+		// client's own failure stays beside the caller's cancellation; a ctx
+		// that ended after the client failed for its own reason is put in
+		// front of that failure the same way.
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+			if !errors.Is(err, ctxErr) {
+				return fmt.Errorf("typing into the terminal: %w: %w", ctxErr, err)
+			}
+			return err
+		}
+		if errors.Is(err, ErrTerminalClientTimedOut) {
+			return err
 		}
 		if presence, perr := w.identity.Presence(); perr == nil && presence != PresencePresent {
 			return ErrWorkerEnded
@@ -762,15 +904,14 @@ func (w *tmuxWorker) Capture() Capture {
 		return w.last
 	default:
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), terminalCommandTimeout)
-	defer cancel()
-	screen, err := exec.CommandContext(ctx, w.terminal.Tmux, "-S", w.terminal.Socket,
-		"capture-pane", "-p", "-J", "-S", "-", "-E", "-", "-t", terminalTarget).Output()
+	ctx := context.Background()
+	screen, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the history", exec.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
+		"capture-pane", "-p", "-J", "-S", "-", "-E", "-", "-t", terminalTarget))
 	if err != nil {
 		return w.last
 	}
-	history, err := exec.CommandContext(ctx, w.terminal.Tmux, "-S", w.terminal.Socket,
-		"display-message", "-p", "-t", terminalTarget, "#{history_size} #{history_limit}").Output()
+	history, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the history's size", exec.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
+		"display-message", "-p", "-t", terminalTarget, "#{history_size} #{history_limit}"))
 	uncounted := false
 	if err == nil {
 		size, limit, _ := strings.Cut(strings.TrimSpace(string(history)), " ")
