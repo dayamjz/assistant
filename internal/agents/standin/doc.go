@@ -193,7 +193,12 @@
 // Cursor adapter writes, --mode or --force, before the "--". The prompt is
 // the one word after it, and a scripted envelope is written as the CLI's
 // result object, camelCase usage keys and all, on the terms serveCursorPrint
-// and cursorWire state.
+// and cursorWire state. A one-shot whose options carry none of --trust,
+// --yolo, -f or --force is refused as the CLI refused one in a directory it
+// had not been told to trust: the recorded refusal on standard error, nothing
+// on standard output, status 1, no step consumed. The stand-in keeps no
+// record of a directory trusted earlier, so every directory is untrusted to
+// it, which is what a run's fresh copy is to the CLI.
 //
 // Where a CLI's output was recorded, internal/agents/testdata holds it, and
 // TestTheModelledUsageKeysAreTheRecordedOnes holds each one-shot wire's usage

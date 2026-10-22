@@ -487,9 +487,16 @@ func (r *cursorRunner) arguments(grant Grant, inv Invocation, resume string) []s
 
 // cursorGrantFlags is Cursor Agent CLI's translation of a Grant.
 //
-//   - GrantRead runs in ask mode, which the CLI documents as read-only.
+//   - GrantRead runs in ask mode, which the CLI documents as read-only, with
+//     --trust, without which cursor-agent 2026.10.19-6bbf2c4 refuses to run
+//     at all in a directory it was not told to trust, and a run's copy is a
+//     fresh directory (#511). --trust buys only that the call runs: what it
+//     may do there is still ask mode's, and it is not --force, which would
+//     auto-approve commands.
 //   - GrantEdit runs with --force so headless tool calls are not left waiting
-//     on a person who is not there. Residual gap versus Claude's GrantEdit:
+//     on a person who is not there, and it needs no --trust: --force alone
+//     was observed to answer in a fresh directory on the same version.
+//     Residual gap versus Claude's GrantEdit:
 //     Cursor's --force auto-approves commands as well as edits (the CLI's
 //     "force allow commands unless explicitly denied"); this package does not
 //     pass a deny list to narrow that, so the grant is wider than "edits
@@ -503,7 +510,7 @@ func cursorGrantFlags(g Grant) []string {
 	case GrantEdit:
 		return []string{"--force"}
 	}
-	return []string{"--mode", "ask"}
+	return []string{"--mode", "ask", "--trust"}
 }
 
 // report hands one record to the configured Recorder, if there is one.
