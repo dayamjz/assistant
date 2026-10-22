@@ -450,8 +450,9 @@ func (g *Graph) recordsFingerprint(i int) bool { return g.back[i] || g.leavesHal
 
 // comparesFingerprint reports whether a traversal of edge i is compared with
 // the one before it, given whether the latest answer the run took was
-// unattended. That is the convergence check's whole rule, and two of its
-// three cases exist only for an unattended answer.
+// unattended. That is the convergence check's whole rule for comparing, and
+// two of its three cases exist only for an unattended answer; restartedBy
+// says when a person's answer empties what a comparison would read.
 //
 // A back edge not marked Edge.Answered is always compared. An Answered back
 // edge is compared after an unattended answer, measuring the round it closes
@@ -473,6 +474,46 @@ func (g *Graph) comparesFingerprint(i int, unattended bool) bool {
 	default:
 		return g.recordsFingerprint(i)
 	}
+}
+
+// restartedBy returns the back edges whose convergence measure a traversal of
+// edge i starts afresh when it follows a person's answer, which is the whole
+// of that rule: none unless i is marked Edge.Answered, and otherwise every
+// back edge into the node i enters that is not itself Answered and leaves a
+// node entered from that node and from nowhere else, a round the node runs
+// for itself. checkEdgeBounds applies it only after an attended answer.
+func (g *Graph) restartedBy(i int) []int {
+	if !g.edges[i].Answered {
+		return nil
+	}
+	into := g.edges[i].To
+	var out []int
+	for j, e := range g.edges {
+		if g.back[j] && !e.Answered && e.To == into && g.enteredOnlyFrom(e.From, into) {
+			out = append(out, j)
+		}
+	}
+	return out
+}
+
+// enteredOnlyFrom reports whether node is entered by at least one edge, every
+// edge entering it leaves from, and it is not the start node, which a run
+// enters by no edge at all.
+func (g *Graph) enteredOnlyFrom(node, from string) bool {
+	if node == g.start {
+		return false
+	}
+	entered := false
+	for _, e := range g.edges {
+		if e.To != node {
+			continue
+		}
+		if e.From != from {
+			return false
+		}
+		entered = true
+	}
+	return entered
 }
 
 // convergedReason is what a convergence park on edge i says, which is the
