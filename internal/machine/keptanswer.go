@@ -31,22 +31,42 @@ type KeptWorkAnswerRequest struct {
 }
 
 // KeptWorkLoss is what discarding a kept copy would lose, as the program
-// read it: the commits the default branch lacks, the three indicators of
-// what no commit records, the commit HEAD stands on, and the digest of
-// all of it, which a discard is confirmed with.
+// read it: the commits the default branch lacks, every path whose content
+// nothing else holds, the three indicators git reports, the commit HEAD
+// stands on, and the digest of all of it, which a discard is confirmed
+// with.
 type KeptWorkLoss struct {
 	// Head is the commit the copy's HEAD stands on.
 	Head string `json:"head"`
 	// Lacks is the commits the copy holds that the default branch lacks.
 	Lacks []string `json:"lacks"`
-	// Dirty, Untracked and Stash say whether the copy holds a tracked
-	// change, a file no commit records, and a stash.
+	// Files is every path the removal destroys whose content nothing else
+	// holds, decided from what the copy holds and not from what git
+	// reports, a file git ignores among them: each with why it is lost,
+	// one of changed (a file HEAD holds other content at), new (nothing in
+	// HEAD at that path), staged (index content neither HEAD nor the
+	// working tree holds) and repository (a file of the repository
+	// directory the removal deletes that differs from what git writes into
+	// a new repository, its path relative to that directory). A path
+	// ending in a slash is a directory lost whole.
+	Files []KeptWorkLostPath `json:"files"`
+	// Dirty, Untracked and Stash say whether git reports the copy holding
+	// a tracked change, a file no commit records that git does not ignore,
+	// and a stash; Files names every path these speak of, and the ignored
+	// ones they do not.
 	Dirty     bool `json:"dirty"`
 	Untracked bool `json:"untracked"`
 	Stash     bool `json:"stash"`
 	// Digest confirms exactly this: a discard given it removes the copy
 	// only while the copy still holds what it digests.
 	Digest string `json:"digest"`
+}
+
+// KeptWorkLostPath is one path a discard destroys whose content nothing
+// else holds, and why (KeptWorkLoss.Files).
+type KeptWorkLostPath struct {
+	Kind string `json:"kind"`
+	Path string `json:"path"`
 }
 
 // KeptWorkEffect is what an answer to a kept work entry did. The set is

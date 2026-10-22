@@ -565,13 +565,16 @@ or discard it.
 
 Discard, `--answer discard` with the same flags, is given twice. Alone it
 shows exactly what removing the copy would lose, in the structured answer
-(`--json`): the commits the default branch lacks, whether the copy holds a
-change, a file or a stash no commit records, and a digest of everything
-removing the copy destroys; it records and removes nothing. The digest
-covers more than the list: every file in the copy, ones git ignores
-included, the repository's own files (its configuration and hooks), every
-reference and every reflog entry, so the whole stash list and a commit only
-a reflog still names are sealed though not listed. Given again with
+(`--json`): the commits the default branch lacks; every file removing the
+copy destroys whose content nothing else holds, files git ignores
+included, each with why (`changed`, `new`, `staged`, or `repository` for a
+file of the copy's repository directory, a hook or its configuration
+among them, that differs from what git writes into every new repository),
+a directory lost whole named once with a trailing slash; whether git
+reports a change, a file or a stash; and a digest of all of it. It records
+and removes nothing. The digest covers more than the list in one respect:
+every reference and every reflog entry, so the whole stash list and a
+commit only a reflog still names are sealed though not listed. Given again with
 `--confirm DIGEST` it removes the copy only while the copy still holds
 exactly what that digest was shown for, so a commit, an edit, a file or a
 stash made since is refused and you are told to look again. The entry then records the answer, what it was

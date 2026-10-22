@@ -181,7 +181,12 @@ func refusedLoss(entry store.KeptWork, err error) error {
 
 // lossOf is tasks.Loss as the answer carries it.
 func lossOf(l tasks.Loss) machine.KeptWorkLoss {
-	return machine.KeptWorkLoss{Head: l.Head, Lacks: l.Lacks, Dirty: l.Dirty, Untracked: l.Untracked, Stash: l.Stash, Digest: l.Digest}
+	files := make([]machine.KeptWorkLostPath, len(l.Files))
+	for i, f := range l.Files {
+		files[i] = machine.KeptWorkLostPath{Kind: string(f.Kind), Path: f.Path}
+	}
+	return machine.KeptWorkLoss{Head: l.Head, Lacks: l.Lacks, Files: files, Dirty: l.Dirty, Untracked: l.Untracked, Stash: l.Stash,
+		Digest: l.Digest}
 }
 
 // completeDiscard carries out a discard answer already recorded on the

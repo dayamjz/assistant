@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,8 @@ func discardRequest(entry store.KeptWork, confirm string) machine.KeptWorkAnswer
 // PRD section 6's discard, through the real socket on a run's kept copy, a
 // worktree of the gate: a discard alone shows exactly what would be lost,
 // the commit the default branch lacks and the digest of the copy's state,
-// and records and removes nothing; a confirmation with another digest is
+// naming no path of its working tree, the .git file pointing at the gate
+// among them, and records and removes nothing; a confirmation with another digest is
 // refused; a confirmation with the digest shown is refused once the copy
 // holds a file it did not, and taken once the copy is back as shown, which
 // removes the copy, answers the entry discard with the digest it was shown
@@ -54,6 +56,10 @@ func TestDiscardingKeptWorkShowsWhatIsLostAndRemovesOnlyOnTheDigest(t *testing.T
 		if err != nil || shown.Effect != machine.KeptWorkDiscardShown || shown.Loss == nil || shown.Loss.Digest == "" ||
 			len(shown.Loss.Lacks) != 1 || shown.Loss.Lacks[0] != submitted || shown.Loss.Head != submitted {
 			t.Fatalf("a discard shown = %+v, %v; want what would be lost, the commit %s, with a digest", shown, err, submitted)
+		}
+		if slices.ContainsFunc(shown.Loss.Files, func(f machine.KeptWorkLostPath) bool { return f.Kind != "repository" }) {
+			t.Fatalf("a discard of a worktree holding its commit alone names %+v; want no path of its working tree, "+
+				"its .git pointer to the gate among them", shown.Loss.Files)
 		}
 		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
 			t.Fatalf("after the discard was shown the entry reads %+v, %v; want it open", still, err)
@@ -425,6 +431,67 @@ func TestADiscardOfTwoEntriesAStoppedServiceLeftIsCompletedOnceForBoth(t *testin
 		}
 		if log := readServiceLog(t, h); strings.Contains(log, "could not be completed") {
 			t.Fatalf("the start logged a discard left undone:\n%s", log)
+		}
+	})
+}
+
+// A discard shows every file it destroys that is nowhere else, a file git
+// ignores among them, the reviewer's sequence: an investigation's copy is
+// kept, and a file named in the copy's own exclude list, secret.txt, is
+// written into it, which no commit, stash or index entry holds. The
+// discard shown names it as new, and names the edited exclude list as a
+// file of the repository directory, but none of the sample hooks git
+// writes into every repository; the confirmation with the digest shown
+// removes it with the copy. Without the walk of what the copy holds the
+// preview reports no untracked file and names nothing, and the
+// confirmation deletes the file unseen.
+func TestADiscardShowsAnIgnoredFileItDestroys(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	exclude := filepath.Join(entry.CopyPath, ".git", "info", "exclude")
+	if err := os.MkdirAll(filepath.Dir(exclude), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(exclude, "secret.txt\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(filepath.Join(entry.CopyPath, "secret.txt"), "the only copy of this\n"); err != nil {
+		t.Fatal(err)
+	}
+	if status := git(t, entry.CopyPath, "status", "--porcelain"); status != "" {
+		t.Fatalf("git status reads %q; want the file ignored, so git reports nothing", status)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		files := shown.Loss.Files
+		for _, want := range []machine.KeptWorkLostPath{{Kind: "new", Path: "secret.txt"}, {Kind: "repository", Path: "info/exclude"}} {
+			if !slices.Contains(files, want) {
+				t.Fatalf("the discard shown names %+v; want %+v, which the removal destroys and nothing else holds, among them", files, want)
+			}
+		}
+		if slices.ContainsFunc(files, func(f machine.KeptWorkLostPath) bool { return strings.HasPrefix(f.Path, "hooks/") }) {
+			t.Fatalf("the discard shown names %+v; want none of the sample hooks git writes into every repository", files)
+		}
+		request.Confirm = shown.Loss.Digest
+		var done machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &done); err != nil || done.Effect != machine.KeptWorkDiscarded {
+			t.Fatalf("the confirmed discard = %+v, %v", done, err)
+		}
+		if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the discarded copy still stands: %v", err)
 		}
 	})
 }

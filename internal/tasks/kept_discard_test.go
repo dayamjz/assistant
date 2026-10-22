@@ -675,3 +675,111 @@ func TestADiscardDigestCoversEverythingTheRemovalDeletes(t *testing.T) {
 	l = moves("a remote added", l, func() { rawGit(t, tk.copy, "remote", "add", "elsewhere", s.upstream) })
 	moves("a reference outside the branches and tags", l, func() { rawGit(t, tk.copy, "update-ref", "refs/aside/kept", "HEAD") })
 }
+
+// Loss names every path the removal of a task's clone destroys whose
+// content nothing else holds, decided from the copy and not from what git
+// reports: a clone kept with nothing but committed work names no path of
+// its working tree, and once it holds them it names a tracked file edited
+// (changed), a tracked file made executable (changed), a file no commit
+// holds (new), a directory the copy's exclude list makes git ignore, once
+// and whole (new, nothing under it again), content staged and then edited
+// (new for the file, staged for the index), a hook written into the
+// repository directory and the edited exclude list (repository), and none
+// of the sample hooks git writes into every repository. The digest seals
+// the list: with git's template emptied, the same copy would be shown
+// naming every sample hook, and the digest shown is refused; with it back,
+// the digest shown removes the clone.
+func TestALossNamesEveryPathItDestroysThatNothingElseHolds(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/paths")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	commit(t, tk.copy, "tool.sh", "echo tool\n", "a script")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	entry := got.Entry
+	ofWorktree := func(l Loss) []LostPath {
+		return slices.DeleteFunc(slices.Clone(l.Files), func(f LostPath) bool { return f.Kind == LostRepository })
+	}
+	clean, err := s.cleaner.Loss(ctx, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths := ofWorktree(clean); len(paths) != 0 {
+		t.Fatalf("a clone holding committed work alone names %+v; want no path of its working tree", paths)
+	}
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(tk.copy, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("own.txt", "edited since\n")
+	if err := os.Chmod(filepath.Join(tk.copy, "tool.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write("notes.txt", "a file no commit holds\n")
+	write(".git/info/exclude", "build/\n")
+	write("build/deep/a.txt", "ignored\n")
+	write("build/b.txt", "ignored too\n")
+	write("staged.txt", "staged first\n")
+	rawGit(t, tk.copy, "add", "staged.txt")
+	write("staged.txt", "edited after it was staged\n")
+	write(".git/hooks/pre-push", "#!/bin/sh\nexit 0\n")
+
+	l, err := s.cleaner.Loss(ctx, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []LostPath{
+		{LostChanged, "own.txt"}, {LostChanged, "tool.sh"},
+		{LostNew, "build/"}, {LostNew, "notes.txt"}, {LostNew, "staged.txt"},
+		{LostStaged, "staged.txt"},
+	}
+	if paths := ofWorktree(l); !slices.Equal(paths, want) {
+		t.Fatalf("Loss names %+v; want %+v", paths, want)
+	}
+	for _, f := range []LostPath{{LostRepository, "hooks/pre-push"}, {LostRepository, "info/exclude"}} {
+		if !slices.Contains(l.Files, f) {
+			t.Errorf("Loss names %+v; want %+v among them", l.Files, f)
+		}
+	}
+	if slices.ContainsFunc(l.Files, func(f LostPath) bool { return strings.HasSuffix(f.Path, ".sample") }) {
+		t.Errorf("Loss names %+v; want none of git's sample hooks", l.Files)
+	}
+	// What git writes into a new repository changes under the same copy:
+	// an empty template, so every sample hook the copy holds would be named.
+	cfg := os.Getenv("GIT_CONFIG_GLOBAL")
+	original, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.ToSlash(t.TempDir())
+	if err := os.WriteFile(cfg, append(slices.Clone(original), []byte("[init]\n\ttemplateDir = "+empty+"\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.cleaner.Discard(ctx, entry, l.Digest, l.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("Discard once the list shown would name more = %v; want ErrLossChanged", err)
+	}
+	if err := os.WriteFile(cfg, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.cleaner.Discard(ctx, entry, l.Digest, l.Lacks, ""); err != nil {
+		t.Fatalf("Discard on the digest shown: %v", err)
+	}
+	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the discarded clone still stands: %v", err)
+	}
+}
