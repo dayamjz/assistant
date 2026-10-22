@@ -468,7 +468,7 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 // domainWakePrefix is what a wake about a domain is named with on the
 // acknowledge command line, before its number: the queue's second shape
 // numbers its rows apart from the task wakes, so a bare number is always a
-// task wake and a prefixed one always a domain wake.
+// task wake and one with this prefix always a domain wake.
 const domainWakePrefix = "d"
 
 // keptWorkWakePrefix is domainWakePrefix for the queue's third shape, a

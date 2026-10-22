@@ -253,6 +253,9 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   ack; `handouts` only counts deliveries. Read the task before every act.
 - Act on each wake, then acknowledge it by its `id` - every id you acted on,
   including one you decided needs nothing further after reading the task.
+  A row of `domain_wakes` or `kept_work_wakes` is numbered apart from the
+  task wakes, so name it `dNUMBER` or `kNUMBER`: a bare number always names
+  a task's wake, and would close a different wake or none.
   Acknowledging is the only thing that records a wake as handled, and a wake
   keeps its task counted as in flight until you do.
 - A wake you were handed and did not acknowledge is handed out again: after
