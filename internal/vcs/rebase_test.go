@@ -368,3 +368,95 @@ func TestUncommittedDigestSeesASubmoduleCheckoutMove(t *testing.T) {
 		t.Fatalf("digest after moving the submodule from %s to %s = %q, before %q, error %v", two, three, after, before, err)
 	}
 }
+
+// divergentSubmodule is a superproject stopped on a submodule conflict. The
+// checkout is attached to the submodule's main at topic, which is one side of
+// the conflict. fix is another commit in that submodule, on neither side.
+func divergentSubmodule(t *testing.T) (dir, fix string) {
+	t.Helper()
+	sub := t.TempDir()
+	rawGit(t, sub, "init", "--quiet", "-b", "main", ".")
+	base := commitFile(t, sub, "f.txt", "base\n", "base")
+	rawGit(t, sub, "checkout", "--quiet", "-b", "topic")
+	topic := commitFile(t, sub, "f.txt", "topic\n", "topic")
+	rawGit(t, sub, "checkout", "--quiet", "main")
+	upstream := commitFile(t, sub, "f.txt", "upstream\n", "upstream")
+	rawGit(t, sub, "checkout", "--quiet", "-b", "fix")
+	fix = commitFile(t, sub, "f.txt", "fix\n", "fix")
+	rawGit(t, sub, "checkout", "--quiet", "main")
+	dir = t.TempDir()
+	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
+	rawGit(t, dir, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", sub, "lib")
+	rawGit(t, dir, "-C", "lib", "checkout", "--quiet", base)
+	rawGit(t, dir, "add", "lib")
+	rawGit(t, dir, "commit", "--quiet", "-m", "base")
+	rawGit(t, dir, "checkout", "--quiet", "-b", "topic")
+	rawGit(t, dir, "-C", "lib", "checkout", "--quiet", topic)
+	rawGit(t, dir, "add", "lib")
+	rawGit(t, dir, "commit", "--quiet", "-m", "topic")
+	rawGit(t, dir, "checkout", "--quiet", "main")
+	rawGit(t, dir, "-C", "lib", "checkout", "--quiet", upstream)
+	rawGit(t, dir, "add", "lib")
+	rawGit(t, dir, "commit", "--quiet", "-m", "upstream")
+	main := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD"))
+	rawGit(t, dir, "checkout", "--quiet", "topic")
+	if err := func() error {
+		repo, err := vcs.OpenWorktree(ctx(t), dir)
+		if err != nil {
+			return err
+		}
+		return repo.Rebase(ctx(t), vcs.RebaseSpec{Onto: main})
+	}(); !errors.Is(err, vcs.ErrRebaseConflict) {
+		t.Fatalf("rebasing onto %s: %v, want a submodule conflict", main, err)
+	}
+	rawGit(t, dir, "-C", "lib", "checkout", "--quiet", "-B", "main", topic)
+	return dir, fix
+}
+
+// TestUncommittedDigestFollowsASubmoduleSymbolicRef is a conflicted submodule
+// whose HEAD points through refs/heads/alias at refs/heads/main. Moving main
+// between two commits that both differ from the index has to change the
+// digest. Recording the alias text does not.
+func TestUncommittedDigestFollowsASubmoduleSymbolicRef(t *testing.T) {
+	gitEnvironment(t)
+	dir, fix := divergentSubmodule(t)
+	rawGit(t, dir, "-C", "lib", "symbolic-ref", "refs/heads/alias", "refs/heads/main")
+	rawGit(t, dir, "-C", "lib", "symbolic-ref", "HEAD", "refs/heads/alias")
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := repo.UncommittedDigest(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, dir, "-C", "lib", "update-ref", "refs/heads/main", fix)
+	after, err := repo.UncommittedDigest(ctx(t))
+	if err != nil || after == before {
+		t.Fatalf("digest after moving the symbolic target to %s = %q, before %q, error %v", fix, after, before, err)
+	}
+}
+
+// TestUncommittedDigestReadsAReftableSubmoduleHead is a conflicted submodule
+// whose checkout stores refs in a reftable, with HEAD attached. The digest
+// has to resolve that HEAD, and moving the branch has to change it. Opening
+// the sentinel path reftable writes is a filesystem error, and the round
+// would fail before the fixer ran.
+func TestUncommittedDigestReadsAReftableSubmoduleHead(t *testing.T) {
+	gitEnvironment(t)
+	dir, fix := divergentSubmodule(t)
+	rawGit(t, dir, "-C", "lib", "refs", "migrate", "--ref-format=reftable")
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := repo.UncommittedDigest(ctx(t))
+	if err != nil {
+		t.Fatalf("digest of a reftable submodule: %v", err)
+	}
+	rawGit(t, dir, "-C", "lib", "update-ref", "refs/heads/main", fix)
+	after, err := repo.UncommittedDigest(ctx(t))
+	if err != nil || after == before {
+		t.Fatalf("digest after moving the reftable branch to %s = %q, before %q, error %v", fix, after, before, err)
+	}
+}

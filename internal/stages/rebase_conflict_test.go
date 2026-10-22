@@ -475,3 +475,186 @@ func (f modeFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Res
 	}
 	return f.inner.Apply(ctx, inv)
 }
+
+// submoduleCase is a submitted branch that conflicts with upstream on a
+// submodule gitlink, plus an earlier commit the rebase can apply. fix is a
+// commit in that submodule, reachable from the checkout, that neither side of
+// the conflict names.
+type submoduleCase struct {
+	s   *subject
+	fix string
+}
+
+// prepareSubmoduleConflict builds submoduleCase and leaves the checkout on
+// the submitted branch, with the submodule attached to its own main at the
+// submitted gitlink. arrange adjusts that checkout before the run, which is
+// where a symbolic HEAD or a reftable store is installed.
+func prepareSubmoduleConflict(t *testing.T, arrange func(t *testing.T, dir string)) submoduleCase {
+	t.Helper()
+	sub := t.TempDir()
+	git(t, sub, "init", "--quiet", "-b", "main", ".")
+	write(t, sub, "f.txt", "base\n")
+	git(t, sub, "add", "f.txt")
+	git(t, sub, "commit", "--quiet", "-m", "base")
+	subBase := git(t, sub, "rev-parse", "HEAD")
+	git(t, sub, "checkout", "--quiet", "-b", "topic")
+	write(t, sub, "f.txt", "topic\n")
+	git(t, sub, "commit", "--quiet", "-am", "topic")
+	subTopic := git(t, sub, "rev-parse", "HEAD")
+	git(t, sub, "checkout", "--quiet", "main")
+	write(t, sub, "f.txt", "upstream\n")
+	git(t, sub, "commit", "--quiet", "-am", "upstream")
+	subUpstream := git(t, sub, "rev-parse", "HEAD")
+	git(t, sub, "checkout", "--quiet", "-b", "fix")
+	write(t, sub, "f.txt", "fix\n")
+	git(t, sub, "commit", "--quiet", "-am", "fix")
+	subFix := git(t, sub, "rev-parse", "HEAD")
+
+	s := newSubject(t)
+	git(t, s.dir, "config", "user.name", "test")
+	git(t, s.dir, "config", "user.email", "test@example.invalid")
+	git(t, s.dir, "checkout", "--quiet", "main")
+	git(t, s.dir, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", sub, "lib")
+	git(t, s.dir, "-C", "lib", "checkout", "--quiet", subBase)
+	git(t, s.dir, "add", "lib")
+	git(t, s.dir, "commit", "--quiet", "-m", "add the submodule")
+
+	git(t, s.dir, "checkout", "--quiet", "-B", "topic")
+	write(t, s.dir, "internal/note/note.go", keptNote)
+	s.commit(t, "note a fact the rebase can apply")
+	git(t, s.dir, "-C", "lib", "checkout", "--quiet", subTopic)
+	git(t, s.dir, "add", "lib")
+	s.head = s.commit(t, "point the submodule at a diverging commit")
+
+	git(t, s.dir, "checkout", "--quiet", "main")
+	git(t, s.dir, "-C", "lib", "checkout", "--quiet", subUpstream)
+	git(t, s.dir, "add", "lib")
+	git(t, s.dir, "commit", "--quiet", "-m", "point the submodule at the other side")
+	remote := filepath.Join(t.TempDir(), "upstream.git")
+	git(t, filepath.Dir(remote), "init", "--quiet", "--bare", "-b", "main", remote)
+	git(t, s.dir, "remote", "add", stages.UpstreamRemote, remote)
+	git(t, s.dir, "push", "--quiet", stages.UpstreamRemote, "HEAD:refs/heads/main")
+	git(t, s.dir, "checkout", "--quiet", "topic")
+	git(t, s.dir, "-C", "lib", "checkout", "--quiet", "-B", "main", subTopic)
+	arrange(t, s.dir)
+	return submoduleCase{s: s, fix: subFix}
+}
+
+// runSubmoduleResolution runs the rebase stage and a fixer that moves the
+// submodule's main branch to fix. That is the whole resolution: the program
+// stages and continues.
+func runSubmoduleResolution(t *testing.T, c submoduleCase) graph.Result {
+	t.Helper()
+	s := c.s
+	agent := standin.New(t, script(standin.Text("moved the submodule checkout")))
+	cfg := config.Defaults()
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, cfg, nil, redact.New())
+	fixDeps := stages.NewFixDeps(func(ctx context.Context, _ string) (agents.Fixer, error) {
+		inner, err := agents.OpenFixer(ctx, agent.Runner(), "")
+		if err != nil {
+			return nil, err
+		}
+		return submoduleMoveFixer{inner: inner, dir: s.dir, commit: c.fix, t: t}, nil
+	}, s.home, cfg, nil, redact.New())
+	all := pipeline.ConstantStages("nothing to report")
+	all.Rebase = stages.Rebase(deps)
+	fixer := stages.Fix(fixDeps)
+	p, err := pipeline.New(pipeline.Options{
+		Stages: all, Rounds: config.FixRounds{Rebase: 3},
+		Budget: config.DefaultRunBudget, Fixer: fixer,
+	})
+	if err != nil {
+		t.Fatalf("building the pipeline: %v", err)
+	}
+	exec, err := p.Executor(graph.NewMemoryStore())
+	if err != nil {
+		t.Fatalf("building the executor: %v", err)
+	}
+	state, err := p.NewState(s.start())
+	if err != nil {
+		t.Fatalf("building the run state: %v", err)
+	}
+	result, err := exec.Run(t.Context(), s.run, state)
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	if len(agent.Calls()) == 0 {
+		t.Fatal("the fixer was not launched")
+	}
+	return result
+}
+
+func expectSubmoduleResolved(t *testing.T, c submoduleCase, result graph.Result) {
+	t.Helper()
+	s := c.s
+	head := git(t, s.dir, "rev-parse", "HEAD")
+	base := git(t, s.dir, "rev-parse", "refs/remotes/"+stages.UpstreamRemote+"/main")
+	if result.Status != graph.StatusCompleted || !isAncestor(t, s.dir, base, head) {
+		t.Fatalf("status %s, head %s, upstream %s is ancestor %v; the submodule resolution has to finish the rebase",
+			result.Status, head, base, isAncestor(t, s.dir, base, head))
+	}
+	got, err := os.ReadFile(filepath.Join(s.dir, "internal/note/note.go"))
+	if err != nil || string(got) != keptNote {
+		t.Fatalf("the earlier commit's file = %q, error %v", got, err)
+	}
+	if git(t, s.dir, "-C", "lib", "rev-parse", "HEAD") != c.fix {
+		t.Fatalf("submodule HEAD = %s, want %s", git(t, s.dir, "-C", "lib", "rev-parse", "HEAD"), c.fix)
+	}
+	if git(t, s.dir, "cat-file", "-t", s.head) != "commit" {
+		t.Fatalf("the submitted commit %s is gone", s.head)
+	}
+	repo, err := vcs.OpenWorktree(t.Context(), s.dir)
+	if err != nil {
+		t.Fatalf("opening the copy after the run: %v", err)
+	}
+	if inProgress, err := repo.RebaseStatus(t.Context()); err != nil || inProgress {
+		t.Fatalf("after the run, rebase in progress %v, error %v", inProgress, err)
+	}
+}
+
+// TestASymbolicSubmoduleResolutionKeepsAnEarlierCommit is a conflicted
+// submodule whose HEAD points through refs/heads/alias at refs/heads/main.
+// The fixer only moves main, between two commits that both differ from the
+// index. That has to change the digest, be staged, and finish the rebase, so
+// the earlier commit stays. A digest that records the alias text aborts the
+// round and drops that commit. P6 keeps the submitted commit.
+func TestASymbolicSubmoduleResolutionKeepsAnEarlierCommit(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	c := prepareSubmoduleConflict(t, func(t *testing.T, dir string) {
+		t.Helper()
+		git(t, dir, "-C", "lib", "symbolic-ref", "refs/heads/alias", "refs/heads/main")
+		git(t, dir, "-C", "lib", "symbolic-ref", "HEAD", "refs/heads/alias")
+	})
+	expectSubmoduleResolved(t, c, runSubmoduleResolution(t, c))
+}
+
+// TestAReftableSubmoduleResolutionKeepsAnEarlierCommit is a conflicted
+// submodule whose checkout stores refs in a reftable and whose HEAD is
+// attached. The fixer moves that branch. The round has to read the digest,
+// launch the fixer, and finish the rebase. A digest that opens the sentinel
+// path reftable writes fails before the fixer runs. P6 keeps the submitted
+// commit.
+func TestAReftableSubmoduleResolutionKeepsAnEarlierCommit(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	c := prepareSubmoduleConflict(t, func(t *testing.T, dir string) {
+		t.Helper()
+		git(t, dir, "-C", "lib", "refs", "migrate", "--ref-format=reftable")
+	})
+	expectSubmoduleResolved(t, c, runSubmoduleResolution(t, c))
+}
+
+// submoduleMoveFixer moves the submodule's main branch and does not stage
+// the superproject. The program records the checkout that move resolves to.
+type submoduleMoveFixer struct {
+	inner  agents.Fixer
+	dir    string
+	commit string
+	t      *testing.T
+}
+
+func (f submoduleMoveFixer) Reference() string { return f.inner.Reference() }
+
+func (f submoduleMoveFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Result, error) {
+	git(f.t, f.dir, "-C", "lib", "update-ref", "refs/heads/main", f.commit)
+	return f.inner.Apply(ctx, inv)
+}

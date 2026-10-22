@@ -67,7 +67,10 @@
 // selecting a program during a comparison is --no-ext-diff and --no-textconv
 // on the diff command lines in diff.go and on the name listing
 // UncommittedDigest uses. That digest reads worktree bytes itself and does
-// not ask git for a patch. The filter is not what enforces either.
+// not ask git for a patch. The filter is not what enforces either. A
+// submodule checkout contributes the commit rev-parse HEAD prints in that
+// checkout, so a ref is followed to a commit and the ref storage is that
+// invocation's to read.
 //
 // GIT_PAGER and PAGER are kept because --no-pager on every command line is the
 // single mechanism this package uses against a pager, and a second one would
