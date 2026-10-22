@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -35,7 +36,26 @@ const (
 	// argument rather than a variable, because the pane inherits the owner's
 	// variables through the server.
 	tmuxPaneArg = "-standin-test-tmux-pane"
+	// trapExitArg makes this binary a process a test leaves that exits on
+	// its own and, as it exits, has a shell's EXIT trap start another
+	// process carrying the owner identity (trapExitMain). trapChildRecord is
+	// the file in the owner's directory the trap writes that process's
+	// identifier to.
+	trapExitArg     = "-standin-test-trap-exit"
+	trapChildRecord = "trap-child"
+	// trapChainVar is how many more processes like itself a trapExitMain
+	// process has its trap start, one after another, before the last one's
+	// trap starts a pane's process; unset is none.
+	trapChainVar = "STANDIN_TEST_TRAP_CHAIN"
+	// lateChildRecord is the file in the owner's directory an ownerLate
+	// owner writes the identifier of a process it started after RunOwned
+	// returned to, which it must never be able to do.
+	lateChildRecord = "late-child"
 )
+
+// lateBound is how long an ownerLate owner gives a process start to return,
+// before the tests return as the control and after RunOwned returned.
+const lateBound = 5 * time.Second
 
 // The modes of tmuxOwnerMain. ownerWaits leaves the server running and
 // waits forever, so nothing but the owner sweep can end the server once the
@@ -45,9 +65,14 @@ const (
 // it running and returns, so RunOwned runs its check the way a package's
 // TestMain does once its tests return; ownerCleans ends it first and then
 // returns, the control that the check passes when nothing is left;
-// ownerUnowned asks Tmux outside RunOwned, with no ownership recorded;
-// ownerUnchecked records ownership, as a TestMain that started the sweep
-// and wired no check would, and asks Tmux outside RunOwned.
+// ownerTraps ends it too and returns leaving a process that, as it exits,
+// starts another (trapExitMain); ownerChains does the same with a chain of
+// sweepRounds such processes, each started by the previous one's exit;
+// ownerLate ends it too, and starts a process inside RunOwned's run and
+// then again once RunOwned has returned (lateMain); ownerUnowned asks Tmux
+// outside RunOwned, with no ownership recorded; ownerUnchecked records
+// ownership, as a TestMain that started the sweep and wired no check would,
+// and asks Tmux outside RunOwned.
 const (
 	ownerWaits     = "wait"
 	ownerStrips    = "strip"
@@ -55,6 +80,9 @@ const (
 	ownerCleans    = "clean"
 	ownerUnowned   = "unowned"
 	ownerUnchecked = "unchecked"
+	ownerTraps     = "trap"
+	ownerLate      = "late"
+	ownerChains    = "chain"
 )
 
 // exitLeft is the status tmuxOwnerMain exits with when RunOwned's check
@@ -78,6 +106,9 @@ func tmuxOwnerMain() {
 			time.Sleep(time.Hour)
 		}
 	}
+	if slices.Contains(os.Args[1:], trapExitArg) {
+		os.Exit(trapExitMain())
+	}
 	dir := os.Getenv(tmuxOwnerDirVar)
 	if dir == "" {
 		return
@@ -96,7 +127,56 @@ func tmuxOwnerMain() {
 		}
 		os.Exit(0)
 	}
+	if mode == ownerLate {
+		os.Exit(lateMain(dir))
+	}
 	os.Exit(RunOwned(func() int { return tmuxOwnerTests(dir, mode) }))
+}
+
+// lateMain is an ownerLate owner: inside RunOwned's run it starts a process
+// of this binary, which must return within lateBound, and ends it, the
+// control that a start here returns in that time; then it runs the tests as
+// ownerCleans does, so the check passes. Once RunOwned has returned, which
+// is where a goroutine a test left still running would start one, it
+// starts the same process again, and records it in lateChildRecord when
+// the start returned within lateBound. It returns RunOwned's status, or
+// exitBroken when the control's start did not return.
+func lateMain(dir string) int {
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "locating this binary:", err)
+		return exitBroken
+	}
+	code := RunOwned(func() int {
+		cmd, err := startWithin(self, lateBound)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "the control's start inside the tests:", err)
+			return exitBroken
+		}
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return tmuxOwnerTests(dir, ownerLate)
+	})
+	if cmd, err := startWithin(self, lateBound); err == nil {
+		_ = writeWhole(filepath.Join(dir, lateChildRecord), []byte(strconv.Itoa(cmd.Process.Pid)))
+		fmt.Fprintf(os.Stderr, "started process %d after RunOwned returned\n", cmd.Process.Pid)
+	}
+	return code
+}
+
+// startWithin starts this binary as a pane's process, which runs until
+// something ends it, and returns it once the start has returned, or an
+// error when the start failed or had not returned within bound.
+func startWithin(self string, bound time.Duration) (*exec.Cmd, error) {
+	cmd := exec.Command(self, "-test.run=^$", tmuxPaneArg)
+	started := make(chan error, 1)
+	go func() { started <- cmd.Start() }()
+	select {
+	case err := <-started:
+		return cmd, err
+	case <-time.After(bound):
+		return nil, fmt.Errorf("the start had not returned %v later", bound)
+	}
 }
 
 // tmuxOwnerTests is the tests of the binary tmuxOwnerMain makes, run inside
@@ -140,12 +220,76 @@ func tmuxOwnerTests(dir, mode string) int {
 		for {
 			time.Sleep(time.Hour)
 		}
-	case ownerCleans:
+	case ownerCleans, ownerTraps, ownerChains, ownerLate:
 		if err := exec.Command(tmux, "-S", socket, "kill-server").Run(); err != nil {
 			fail("ending the tmux server", err)
 		}
 	}
+	if mode == ownerTraps || mode == ownerChains {
+		trap := exec.Command(self, "-test.run=^$", trapExitArg)
+		if mode == ownerChains {
+			trap.Env = append(os.Environ(), trapChainVar+"="+strconv.Itoa(sweepRounds-1))
+		}
+		if err := trap.Start(); err != nil {
+			fail("starting the process whose exit starts another", err)
+		}
+		// Reaped as it exits, so the check reads it gone rather than a
+		// zombie of this process.
+		go func() { _ = trap.Wait() }()
+	}
 	return 0
+}
+
+// trapExitMain is a process a test leaves that exits on its own, within
+// EndGrace, and as it exits starts another process carrying the owner
+// identity, the case sweepRounds exists for: a shell whose EXIT trap starts
+// this binary as a pane's process, which runs until something ends it, or,
+// while trapChainVar is above zero, as another process like this one with
+// it one lower, and writes that process's identifier to trapChildRecord in
+// the owner's directory. The shell runs for two seconds first, so the check
+// lists this process before it exits. It is this binary waiting on the
+// shell, rather than the shell itself, because on macOS the read finds no
+// environment for Apple's /bin/sh, so a shell is seen by neither the check
+// nor the sweep there; this binary is listed by its executable on both
+// platforms, and it exits only once the trap has started its child. Ended
+// by SIGTERM, as the check ends what it names, it kills the shell first, so
+// the trap never runs and an ended chain starts nothing more.
+func trapExitMain() int {
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "locating this binary:", err)
+		return exitBroken
+	}
+	next := []string{"-test.run=^$", tmuxPaneArg}
+	env := os.Environ()
+	if chain, _ := strconv.Atoi(os.Getenv(trapChainVar)); chain > 0 {
+		next = []string{"-test.run=^$", trapExitArg}
+		env = append(env, trapChainVar+"="+strconv.Itoa(chain-1))
+	}
+	shell := exec.Command("/bin/sh", append([]string{"-c",
+		`trap '"$0" "$@" </dev/null >/dev/null 2>&1 & echo $! >"$TRAP_RECORD"' EXIT; sleep 2`,
+		self}, next...)...)
+	shell.Env = append(env, "TRAP_RECORD="+filepath.Join(os.Getenv(tmuxOwnerDirVar), trapChildRecord))
+	ended := make(chan os.Signal, 1)
+	signal.Notify(ended, syscall.SIGTERM)
+	if err := shell.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, "starting the shell whose exit starts a process:", err)
+		return exitBroken
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- shell.Wait() }()
+	select {
+	case err := <-exited:
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "running the shell whose exit starts a process:", err)
+			return exitBroken
+		}
+		return 0
+	case <-ended:
+		_ = shell.Process.Kill()
+		<-exited
+		return 0
+	}
 }
 
 // tmuxOutsideATest is what Tmux answers outside a test, which is how
@@ -467,10 +611,10 @@ func TestRunOwnedFailsAPackageThatLeavesATmuxServer(t *testing.T) {
 	}
 }
 
-// A package whose check passes leaves nothing running once its binary has
-// exited, its own owner sweep included (P15): RunOwned ends the sweep and
-// removes the tmux wrapper before it returns, so both are already gone when
-// the owner's exit is observed, with no wait. Before #454 the sweep outlived
+// A package whose check passes leaves neither its owner sweep nor its tmux
+// wrapper's directory behind once its binary has exited (P15): RunOwned ends
+// the sweep and removes the wrapper's directory before it returns, so both
+// are already gone when the owner's exit is observed, with no wait. Before #454 the sweep outlived
 // every passing package by up to OwnerPoll and then removed the wrapper
 // itself, so a check of what go test leaves behind saw the last package's
 // sweep and wrapper whenever it looked in time. The control is the owner
@@ -502,6 +646,128 @@ func TestAPassedCheckLeavesNoSweepOrWrapperBehind(t *testing.T) {
 	}
 	if presence, err := left.sweep.Presence(); err != nil || presence != agents.PresencePresent {
 		t.Errorf("the sweep %v of the owner whose check failed reads %v (%v) when the owner had exited; want it still running to end what the check's ending started", left.sweep, presence, err)
+	}
+}
+
+// A process a test leaves that exits on its own while the check waits on it,
+// and as it exits has a shell's EXIT trap start another process carrying
+// the owner identity, fails the package and leaves nothing running (P15):
+// the check lists again once what it listed is gone, so it finds the trap's
+// process, names it and ends it, and the sweep stays, as for any failed
+// check. Before the check listed again, the first listing's process exiting
+// in time passed the check, RunOwned retired the sweep, and the trap's
+// process, started after the only listing, outlived the binary with nothing
+// left to end it. The owner is a copy, so its check lists the processes of
+// that copy alone.
+func TestRunOwnedFailsAPackageWhoseExitingProcessStartsAnother(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	o := startTmuxOwnerCopy(t, ownerTraps)
+	var child agents.Identity
+	t.Cleanup(func() {
+		if child.PID != 0 {
+			if presence, err := child.Presence(); err == nil && presence == agents.PresencePresent {
+				_ = syscall.Kill(child.PID, syscall.SIGKILL)
+			}
+		}
+	})
+	<-o.done
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(o.record), trapChildRecord))
+	if err != nil {
+		t.Fatalf("the trap recorded no process (%v); the owner said: %s", err, o.stderr)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("the trap recorded %q", raw)
+	}
+	// Read as soon as the owner is gone, so a process still running is one
+	// the owner's check left, and its start time keeps a reused number from
+	// being signalled in cleanup.
+	child, found, err := agents.Identify(pid)
+	if err != nil {
+		t.Fatalf("reading the identity of the trap's process %d: %v", pid, err)
+	}
+	if !found {
+		child = agents.Identity{}
+	}
+	if found {
+		t.Errorf("the trap's process %d was still running when its owner had exited %d; want it ended by the owner's check",
+			pid, o.cmd.ProcessState.ExitCode())
+	}
+	if code := o.cmd.ProcessState.ExitCode(); code != exitLeft {
+		t.Errorf("the owner whose test left a process that started another as it exited exited %d, want %d from a failed check: %s",
+			code, exitLeft, o.stderr)
+	}
+	if want := fmt.Sprintf("FAIL: process %d (", pid); !strings.Contains(o.stderr.String(), want) {
+		t.Errorf("the check's report does not name the trap's process with %q:\n%s", want, o.stderr)
+	}
+}
+
+// A chain of processes, each started by the previous one's EXIT trap as it
+// exits, fails the package once the check has listed sweepRounds times and
+// still finds one, rather than the check following it for as long as it
+// goes on (P15): the check names the last one, the process still being
+// started, and ends it, so the chain starts nothing more. The owner leaves
+// the first of sweepRounds such processes, so its check's last listing finds
+// the last of them.
+func TestRunOwnedFailsAPackageWhoseProcessesKeepStartingOthers(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	o := startTmuxOwnerCopy(t, ownerChains)
+	<-o.done
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(o.record), trapChildRecord))
+	if err != nil {
+		t.Fatalf("the chain recorded no process (%v); the owner said: %s", err, o.stderr)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("the chain recorded %q", raw)
+	}
+	if id, found, err := agents.Identify(pid); err != nil {
+		t.Fatalf("reading the identity of the chain's last process %d: %v", pid, err)
+	} else if found {
+		_ = syscall.Kill(id.PID, syscall.SIGKILL)
+		t.Errorf("the chain's last process %d was still running when its owner had exited; want it ended by the owner's check", pid)
+	}
+	if code := o.cmd.ProcessState.ExitCode(); code != exitLeft {
+		t.Errorf("the owner whose processes kept starting others exited %d, want %d from a failed check: %s", code, exitLeft, o.stderr)
+	}
+	want := fmt.Sprintf("FAIL: process %d (", pid)
+	still := fmt.Sprintf("still being started %d listings after", sweepRounds)
+	if !strings.Contains(o.stderr.String(), want) || !strings.Contains(o.stderr.String(), still) {
+		t.Errorf("the check's report does not name the chain's last process with %q and %q:\n%s", want, still, o.stderr)
+	}
+}
+
+// Once RunOwned has returned, the binary that ran it starts no process, so
+// nothing it starts after its check's last listing can outlive it unseen
+// once that check retired its sweep (P15): a goroutine a test left running
+// would start one there. The owner starts a process of its binary once
+// RunOwned has returned, after its check passed, and the start never
+// returns before the owner exits, so nothing is started. The control is the
+// same start inside RunOwned's run, which returns within the same bound in
+// the same owner, or the owner exits exitBroken.
+func TestNothingStartsOnceRunOwnedHasReturned(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	o := startTmuxOwnerCopy(t, ownerLate)
+	<-o.done
+	if raw, err := os.ReadFile(filepath.Join(filepath.Dir(o.record), lateChildRecord)); err == nil {
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil {
+			if id, found, err := agents.Identify(pid); err == nil && found {
+				t.Cleanup(func() {
+					if presence, err := id.Presence(); err == nil && presence == agents.PresencePresent {
+						_ = syscall.Kill(id.PID, syscall.SIGKILL)
+					}
+				})
+			}
+		}
+		t.Errorf("the owner started process %s after RunOwned returned; want the start held back until the owner exited", raw)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("reading what the owner started after RunOwned returned: %v", err)
+	}
+	if code := o.cmd.ProcessState.ExitCode(); code != 0 {
+		t.Fatalf("the owner exited %d, want 0 from a passed check and a control start that returned: %s", code, o.stderr)
 	}
 }
 

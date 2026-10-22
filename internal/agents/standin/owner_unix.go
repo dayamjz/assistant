@@ -50,8 +50,9 @@ const (
 	OwnerGrace = 10 * time.Second
 )
 
-// EndGrace is how long Process.End and leftAfterTests give a process of this
-// binary to exit on SIGTERM before they kill it.
+// EndGrace is how long Process.End gives a process to exit on SIGTERM before
+// it kills it, and how long leftAfterTests gives each process it lists to
+// exit on its own before it names and ends it.
 const EndGrace = 10 * time.Second
 
 // encodeOwner is the one spelling of an owner's identity in an environment
@@ -110,17 +111,31 @@ func awaitGone(owner agents.Identity) {
 // ownership and leave the check unwired: Tmux refuses a test anywhere but
 // inside run, which is the only place the check is certain to follow.
 //
-// When the check passes, RunOwned then ends the owner sweep and removes the
-// tmux wrapper itself (retireSweep), so a package that passes leaves nothing
-// of its own running or on disk once its binary exits (#454); when it fails,
-// the sweep is left to end, once the owner is gone, what the check's own
-// ending of a process may start.
+// Once run returns, RunOwned has this binary start no further process
+// (stopStarting) before the check lists anything, and the check lists again
+// whenever what it listed has exited, until a listing comes back empty, so a
+// process that one the tests left starts as it exits (a shell's EXIT trap)
+// is in a listing too. Only then, on a passing check, does RunOwned end the
+// owner sweep and remove the tmux wrapper's directory (retireSweep), so
+// neither outlives a binary whose check passed (#454): by then no process
+// the check can see is left to start one carrying the identity. When the
+// check fails, the sweep is left to end, once the owner is gone, what the
+// check's own ending of a process may start.
 //
 // What it does not cover: a process that ends inside run without returning,
 // a test's os.Exit, a panic, a timeout or a kill, runs no check; what it
-// left is the owner sweep's to end, and nothing reports it. A process that
-// starts carrying the identity after a passing check, which only something
-// still running in this binary once run returned could start, is not swept.
+// left is the owner sweep's to end, and nothing reports it. A process
+// running another program that the check cannot read as carrying the
+// identity (leftAfterTests), which on macOS includes every process of
+// Apple's /bin/sh, /bin/bash, /bin/zsh and /bin/sleep, is neither reported
+// nor ended by the check, and once a passing check has retired the sweep,
+// neither is a process it starts afterwards, carrying the identity or not;
+// before the sweep was retired, it ended such a process only when it had
+// started by the time the sweep listed, after the owner was gone. A process
+// this binary starts other than through Go's fork (stopStarting) is not
+// held back. And it removes no file a test left: the wrapper's directory is
+// the only path it removes, so what a test leaves under os.TempDir or
+// anywhere else stays.
 func RunOwned(run func() int) int {
 	if err := ownProcesses(); err != nil {
 		fmt.Fprintln(os.Stderr, "recording this test binary as the owner of what its tests start:", err)
@@ -129,6 +144,7 @@ func RunOwned(run func() int) int {
 	setChecked(true)
 	code := run()
 	setChecked(false)
+	stopStarting()
 	if !leftAfterTests() {
 		if code == 0 {
 			code = 1
@@ -144,10 +160,33 @@ func RunOwned(run func() int) int {
 	return code
 }
 
+// stopStarting has this binary start no further process through Go, for
+// as long as it runs: it takes syscall.ForkLock for writing and never
+// releases it. The syscall package's documentation of ForkLock is that a
+// fork is done holding it for writing, so a goroutine still running once the
+// tests have returned that starts a process waits on the lock until this
+// binary exits, and starts nothing; TestNothingStartsOnceRunOwnedHasReturned
+// reads that of an os/exec start, beside the same start returning before.
+// A fork already under way holds the lock, so this returns once it is done,
+// and the process it started is in the check's listing that follows.
+// RunOwned calls it once run has returned, so a TestMain can start no
+// process after RunOwned returns: such a start never returns.
+//
+// What it does not hold back: a process started other than through Go's
+// fork (cgo calling fork or posix_spawn, a raw system call). And a
+// descriptor Go creates holding ForkLock for reading, which on macOS
+// os.Pipe and the net package's sockets are, waits until this binary exits
+// too; nothing RunOwned does after stopStarting creates either.
+func stopStarting() {
+	syscall.ForkLock.Lock()
+}
+
 // retireSweep ends the owner sweep ownProcesses started, waits until it has
-// been reaped, and removes the tmux wrapper's directory, which is the
-// sweep's work once nothing is left to end. RunOwned calls it after a
-// passing check. The sweep is this process's child, so the wait is on its
+// been reaped, and removes the tmux wrapper's directory, which the sweep
+// would have removed once it had swept. RunOwned calls it only after a
+// passing check, once this binary starts nothing (stopStarting) and a
+// listing came back empty, so the sweep is killed with nothing it could see
+// left to end. The sweep is this process's child, so the wait is on its
 // exit status and not on a poll. An error is the wrapper's directory that
 // could not be removed.
 func retireSweep() error {
@@ -184,8 +223,9 @@ func noteMain() { mainCalled = true }
 
 // ownProcesses records this process as the owner of every process the tests
 // start, and starts the owner sweep that ends those still running once it is
-// gone. RunOwned calls it, so the owner is the binary that runs the tests. A
-// second call does nothing.
+// gone, unless a passing check retires it first (RunOwned). RunOwned calls
+// it, so the owner is the binary that runs the tests. A second call does
+// nothing.
 //
 // The identity reaches what the tests start through the environment
 // (OwnerVar), which every process started with this process's environment
@@ -387,8 +427,10 @@ func startSweep(value, wrapperDir string) (agents.Identity, *os.Process, chan st
 }
 
 // sweepRounds bounds how many times the sweep lists what is left and ends
-// it, since ending a process can start another one carrying the identity
-// (a shell running a trap, for one) and the sweep must itself end.
+// it, and how many times leftAfterTests lists what is left, since a process
+// ending, on a signal or on its own, can start another one carrying the
+// identity (a shell running an EXIT trap, for one), and both must
+// themselves end.
 const sweepRounds = 3
 
 // sweep is the owner sweep for the owner value names, which Main runs when
@@ -408,7 +450,8 @@ const sweepRounds = 3
 // identity unless it is a tmux the wrapper ran (ownProcesses) or a process
 // in that tmux's panes, and one whose environment the read cannot find
 // (carrying) does not show it, so neither is seen; and a sweep killed
-// outright sweeps nothing.
+// outright sweeps nothing, which is how retireSweep ends one, once a passing
+// check has left nothing the sweep could see.
 func sweep(value, wrapperDir string) int {
 	owner, err := parseOwner(value)
 	if err != nil {

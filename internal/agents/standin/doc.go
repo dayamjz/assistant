@@ -84,10 +84,18 @@
 // whatever environment a test starts it with, and Tmux refuses a test that
 // does not run inside RunOwned. The check RunOwned runs once the tests have
 // returned fails the package naming every process of its binary, and every
-// process carrying its identity, still running; when it passes, RunOwned
-// ends the sweep and removes the wrapper itself, so a passing package leaves
-// nothing of its own behind once its binary exits, and the sweep stays only
-// for a binary that failed its check or never reached it.
+// process carrying its identity, still running. Before it, RunOwned has the
+// binary start no further process, and the check lists again until a
+// listing comes back empty, so what an exiting process starts is listed
+// too; only then, on a pass, does RunOwned end the sweep and remove the
+// wrapper's directory itself, so neither outlives a binary whose check
+// passed, and the sweep stays for a binary that failed its check or never
+// reached it. What neither the check nor the sweep can see is not ended
+// either way: a process running another program that is not read as
+// carrying the identity, which on macOS includes Apple's /bin/sh, /bin/bash,
+// /bin/zsh and /bin/sleep, whose environment the read cannot find. Nor is
+// any file a test leaves removed: the wrapper's directory is the only path
+// RunOwned removes. RunOwned's doc comment owns those gaps.
 //
 // That wiring serves a caller who can be handed a Runner. One in another
 // process cannot be: internal/agents resolves the configured agent by name off
