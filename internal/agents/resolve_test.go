@@ -36,11 +36,21 @@ type stubFactory struct {
 	args      []string
 	// namedOnly makes the factory decline AutoEligible.
 	namedOnly bool
+	// unbuilt, when set, is what Declares answers in place of declares, so
+	// the factory says one thing for its runners and they say another.
+	unbuilt []agents.Capability
 }
 
 func (f *stubFactory) Name() string { return f.name }
 
 func (f *stubFactory) AutoEligible() bool { return !f.namedOnly }
+
+func (f *stubFactory) Declares() agents.Capabilities {
+	if f.unbuilt != nil {
+		return agents.Declare(f.unbuilt...)
+	}
+	return agents.Declare(f.declares...)
+}
 
 func (f *stubFactory) New(_ context.Context, args []string) (agents.Runner, error) {
 	if !f.available {
