@@ -104,13 +104,15 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 // The round commits a resolution that differs from the commit the rebase is
 // stopped on and continues, so the conflicting commit is not replayed again
 // ahead of the fix. A resolution that matches that commit records no new
-// tree. The rebase continues anyway, so a step already replayed stays.
-// Aborting there would drop that step, and the next replay would stop on the
-// original commit. A round that leaves the index and the worktree unchanged
-// aborts the rebase and reports that nothing changed, so the stage's next
-// execution starts a new rebase rather than meeting one left in progress. A
-// continue that stops on a later commit leaves that rebase in progress; the
-// stage's next execution reports it and does not start a second one.
+// tree. That step is skipped, not continued: continue finishes a step that
+// is already committed, and this one was not. Skipping drops the patch and
+// keeps a step already replayed. Aborting would drop that step, and the next
+// replay would stop on the original commit. The round reports the head when
+// the rebase has finished or stopped on a later conflict. A stop with nothing
+// unmerged is an error, and the round does not report a head. A round that
+// leaves the index and the worktree unchanged aborts the rebase and reports
+// that nothing changed, so the stage's next execution starts a new rebase
+// rather than meeting one left in progress.
 //
 // pipeline.KeyHead is the write that carries it, and it is the write that makes
 // the graph's convergence bound meaningful: a round that changed nothing leaves
@@ -277,13 +279,19 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 	}
 
 	committed, err := copied.CommitAllWithBody(ctx, subject, body)
+	skipped := false
 	if errors.Is(err, vcs.ErrNothingToCommit) {
 		if !rebasing {
 			return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
 		}
-		// The resolution matches the commit the rebase is stopped on, so there
-		// is nothing to record. Continuing drops this step and keeps a step
-		// already replayed. Aborting would drop that step too.
+		// The resolution matches the commit the rebase is stopped on, so the
+		// step was staged and not committed. Skip it. Continue would be asked
+		// to finish a step that has no commit.
+		if err := copied.RebaseSkip(ctx); err != nil && !errors.Is(err, vcs.ErrRebaseConflict) {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: skipping the empty rebase step after the %s fix round: %w", in.Stage, err)
+		}
+		skipped = true
 		committed = before
 	} else if err != nil {
 		return pipeline.FixOutput{}, fmt.Errorf(
@@ -294,19 +302,20 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 		// as progress the convergence bound could not see.
 		return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
 	}
-	if rebasing {
+	if rebasing && !skipped {
 		if err := copied.RebaseContinue(ctx); err != nil && !errors.Is(err, vcs.ErrRebaseConflict) {
 			return pipeline.FixOutput{}, fmt.Errorf(
 				"stages: continuing the rebase after the %s fix round: %w", in.Stage, err)
 		}
-		// A continue that replayed further commits moved HEAD past the
-		// resolution commit. The head this round reports is where the copy
-		// stands now, including when a later commit stopped on a new conflict.
-		now, err := copied.ResolveCommit(ctx, "HEAD")
+	}
+	if rebasing {
+		// The head this round reports is where the copy stands now, including
+		// when a later commit stopped on a new conflict. A rebase still
+		// stopped with nothing unmerged has not moved past this step, and
+		// reporting that head would leave the next round to abort it.
+		now, err := rebaseAdvanced(ctx, copied, in.Stage)
 		if err != nil {
-			return pipeline.FixOutput{}, fmt.Errorf(
-				"stages: reading where the copy stands after the %s fix round continued its rebase: %w",
-				in.Stage, err)
+			return pipeline.FixOutput{}, err
 		}
 		committed = now
 	}
@@ -320,6 +329,35 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 		Writes:  map[pipeline.Key]graph.Value{pipeline.KeyHead: graph.TextValue(committed)},
 		Holds:   holds,
 	}, nil
+}
+
+// rebaseAdvanced reads HEAD after a skip or a continue. A rebase that is
+// still in progress is a later conflict only when a path is unmerged. One
+// that is stopped with a clean index is not a head this round may report.
+func rebaseAdvanced(ctx context.Context, copied *vcs.Repository, stage pipeline.Stage) (string, error) {
+	active, err := copied.RebaseStatus(ctx)
+	if err != nil {
+		return "", fmt.Errorf(
+			"stages: reading whether a rebase is in progress after the %s fix round: %w", stage, err)
+	}
+	if active {
+		changes, err := copied.Changes(ctx)
+		if err != nil {
+			return "", fmt.Errorf(
+				"stages: reading the rebase after the %s fix round: %w", stage, err)
+		}
+		if !changes.Unmerged {
+			return "", fmt.Errorf(
+				"stages: the %s fix round left the rebase stopped with nothing unmerged", stage)
+		}
+	}
+	now, err := copied.ResolveCommit(ctx, "HEAD")
+	if err != nil {
+		return "", fmt.Errorf(
+			"stages: reading where the copy stands after the %s fix round moved its rebase: %w",
+			stage, err)
+	}
+	return now, nil
 }
 
 // nothingChanged is the summary for a round that left the copy as it was. It

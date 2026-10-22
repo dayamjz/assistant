@@ -62,7 +62,7 @@ import (
 // fix round resolves them there. It commits a resolution that differs from
 // the commit the rebase is stopped on and continues, so the conflicting
 // commit is not replayed again ahead of the fix. A resolution that matches
-// that commit continues too, and a step already replayed stays. A round that
+// that commit skips the step, and a step already replayed stays. A round that
 // leaves the index and the worktree unchanged aborts the rebase, and the
 // next execution starts a new one. An execution that finds a rebase this
 // stage already started does not start a second one. The section below says

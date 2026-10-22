@@ -159,6 +159,52 @@ func TestRebaseContinueCommitsTheResolutionOntoTheNewBase(t *testing.T) {
 	}
 }
 
+// TestRebaseSkipDropsAnEmptyStepAndKeepsAnEarlierCommit is a conflict whose
+// resolution matches the commit the rebase stopped on. Skipping that step
+// finishes the rebase and keeps the commit that already applied. The step
+// itself is not committed first.
+func TestRebaseSkipDropsAnEmptyStepAndKeepsAnEarlierCommit(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
+	commitFile(t, dir, "clash.txt", "base\n", "base")
+	rawGit(t, dir, "checkout", "--quiet", "-b", "topic")
+	commitFile(t, dir, "keep.txt", "topic-keep\n", "clean")
+	commitFile(t, dir, "clash.txt", "topic\n", "conflict")
+	rawGit(t, dir, "checkout", "--quiet", "main")
+	main := commitFile(t, dir, "clash.txt", "main\n", "main")
+	rawGit(t, dir, "checkout", "--quiet", "topic")
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Rebase(ctx(t), vcs.RebaseSpec{Onto: main}); !errors.Is(err, vcs.ErrRebaseConflict) {
+		t.Fatalf("rebasing onto %s: %v, want a conflict", main, err)
+	}
+	writeFile(t, filepath.Join(dir, "clash.txt"), "main\n")
+	if _, err := repo.CommitAll(ctx(t), "resolve"); !errors.Is(err, vcs.ErrNothingToCommit) {
+		t.Fatalf("committing a resolution that matches HEAD: %v, want nothing to commit", err)
+	}
+	if err := repo.RebaseSkip(ctx(t)); err != nil {
+		t.Fatalf("skipping the empty step: %v", err)
+	}
+	if active, err := repo.RebaseStatus(ctx(t)); err != nil || active {
+		t.Fatalf("after skip: active %v, error %v; want the rebase finished", active, err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "keep.txt"))
+	if err != nil || string(body) != "topic-keep\n" {
+		t.Fatalf("keep.txt = %q, error %v", body, err)
+	}
+	head, err := repo.ResolveCommit(ctx(t), "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ancestor, err := repo.IsAncestor(ctx(t), main, head)
+	if err != nil || !ancestor {
+		t.Fatalf("main %s ancestor of %s: %v, %v", main, head, ancestor, err)
+	}
+}
+
 // TestUncommittedDigestIgnoresATextconvThatCollapsesBytes is the trust
 // boundary on the digest a rebase fix round compares. A .gitattributes entry
 // can name a textconv, and a textconv that prints one text for every blob
@@ -254,5 +300,71 @@ func TestUncommittedDigestSeesAnIndexResolutionThatDoesNotChangeBytes(t *testing
 	after, err := repo.UncommittedDigest(ctx(t))
 	if err != nil || after == before {
 		t.Fatalf("digest after staging the file left in the tree = %q, before %q, error %v", after, before, err)
+	}
+}
+
+// TestUncommittedDigestSeesAModeOnlyChangeOnAConflictedPath is a conflicted
+// file whose bytes stay put. Changing its mode has to change the digest. The
+// path is already listed, so a record of bytes alone does not.
+func TestUncommittedDigestSeesAModeOnlyChangeOnAConflictedPath(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
+	commitFile(t, dir, "clash.txt", "base\n", "base")
+	rawGit(t, dir, "checkout", "--quiet", "-b", "topic")
+	commitFile(t, dir, "clash.txt", "topic\n", "topic")
+	rawGit(t, dir, "checkout", "--quiet", "main")
+	main := commitFile(t, dir, "clash.txt", "main\n", "main")
+	rawGit(t, dir, "checkout", "--quiet", "topic")
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Rebase(ctx(t), vcs.RebaseSpec{Onto: main}); !errors.Is(err, vcs.ErrRebaseConflict) {
+		t.Fatalf("rebasing onto %s: %v, want a conflict", main, err)
+	}
+	before, err := repo.UncommittedDigest(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(dir, "clash.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after, err := repo.UncommittedDigest(ctx(t))
+	if err != nil || after == before {
+		t.Fatalf("digest after chmod = %q, before %q, error %v", after, before, err)
+	}
+}
+
+// TestUncommittedDigestSeesASubmoduleCheckoutMove is a submodule whose
+// checkout is already a difference from the index. Moving that checkout to
+// another commit has to change the digest. A directory recorded with no
+// commit does not.
+func TestUncommittedDigestSeesASubmoduleCheckoutMove(t *testing.T) {
+	gitEnvironment(t)
+	sub := t.TempDir()
+	rawGit(t, sub, "init", "--quiet", "-b", "main", ".")
+	one := commitFile(t, sub, "f.txt", "one\n", "one")
+	two := commitFile(t, sub, "f.txt", "two\n", "two")
+	three := commitFile(t, sub, "f.txt", "three\n", "three")
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
+	rawGit(t, dir, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", sub, "lib")
+	rawGit(t, dir, "-C", "lib", "checkout", "--quiet", one)
+	rawGit(t, dir, "add", "lib")
+	rawGit(t, dir, "commit", "--quiet", "-m", "base")
+	rawGit(t, dir, "-C", "lib", "checkout", "--quiet", two)
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := repo.UncommittedDigest(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, dir, "-C", "lib", "checkout", "--quiet", three)
+	after, err := repo.UncommittedDigest(ctx(t))
+	if err != nil || after == before {
+		t.Fatalf("digest after moving the submodule from %s to %s = %q, before %q, error %v", two, three, after, before, err)
 	}
 }

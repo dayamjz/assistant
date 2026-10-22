@@ -83,6 +83,28 @@ func (r *Repository) RebaseContinue(ctx context.Context) error {
 	return nil
 }
 
+// RebaseSkip skips the current patch and replays what remains.
+//
+// A caller uses it when that patch has nothing to commit. The operation does
+// not check that: the current patch is dropped either way. A later step that
+// conflicts returns ErrRebaseConflict and leaves the rebase in progress.
+// When nothing remains, the rebase is finished. The editor every invocation
+// runs exits non-zero, so a skip that still has to ask for a commit message
+// fails rather than waits.
+func (r *Repository) RebaseSkip(ctx context.Context) error {
+	if r.kind != KindWorktree {
+		return errors.New("vcs: rebase requires a working copy")
+	}
+	_, code, err := r.runExpecting(ctx, "rebase-skip", []int{1}, "rebase", "--skip")
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return ErrRebaseConflict
+	}
+	return nil
+}
+
 // RebaseStatus reports whether a rebase is in progress.
 //
 // It is in progress when the rebase-merge directory or the rebase-apply

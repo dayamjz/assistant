@@ -114,13 +114,19 @@ func parseChanges(out string) (Changes, error) {
 	return c, nil
 }
 
-// UncommittedDigest identifies the index and the worktree bytes that differ
-// from it, including unresolved conflict stages and untracked files.
+// UncommittedDigest identifies the index and the worktree state of paths
+// that differ from it, including unresolved conflict stages and untracked
+// files.
 //
-// Equal results mean that content is unchanged. Staging a path changes the
-// result even when its worktree bytes do not, because the index stages are
-// part of it. Ignored files are not part of it, which is the same gap Changes
-// leaves. The result is not a git object name.
+// Equal results mean that state is unchanged. The worktree record of a path
+// is its mode and its bytes, so a mode-only change counts. A symlink
+// contributes its target text. A directory that holds a submodule checkout
+// contributes the commit that checkout has checked out, read from the gitdir
+// that checkout names. A directory that does not is recorded as a directory
+// and its mode, not the files inside it. Staging a path changes the result
+// even when its worktree bytes do not, because the index stages are part of
+// it. Ignored files are not part of it, which is the same gap Changes leaves.
+// The result is not a git object name.
 //
 // The name listing passes --no-ext-diff and --no-textconv, and the bytes are
 // read from the worktree rather than from a patch. An attributes diff driver
@@ -170,9 +176,10 @@ func digestWrite(sum io.Writer, b []byte) error {
 	return err
 }
 
-// hashWorktreeList mixes the worktree bytes of each NUL-separated path into
-// sum. A missing path is recorded as absent. A symlink contributes its target
-// text, not the file it points at.
+// hashWorktreeList mixes the worktree state of each NUL-separated path into
+// sum. A missing path is recorded as absent. A symlink contributes its mode
+// and target text. A regular file contributes its mode and bytes. A
+// submodule directory contributes its mode and the commit it has checked out.
 func hashWorktreeList(sum io.Writer, root, listed string) error {
 	for path := range strings.SplitSeq(listed, "\x00") {
 		if path == "" {
@@ -198,6 +205,9 @@ func hashWorktreeList(sum io.Writer, root, listed string) error {
 			}
 			return err
 		}
+		if err := digestWrite(sum, modeBytes(info)); err != nil {
+			return err
+		}
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
 			target, err := os.Readlink(full)
@@ -213,6 +223,15 @@ func hashWorktreeList(sum io.Writer, root, listed string) error {
 		case info.IsDir():
 			if err := digestWrite(sum, []byte{2}); err != nil {
 				return err
+			}
+			commit, ok, err := submoduleCommit(full)
+			if err != nil {
+				return err
+			}
+			if ok {
+				if err := digestWrite(sum, []byte(commit)); err != nil {
+					return err
+				}
 			}
 		default:
 			f, err := os.Open(full)
@@ -237,6 +256,91 @@ func hashWorktreeList(sum io.Writer, root, listed string) error {
 		}
 	}
 	return nil
+}
+
+// modeBytes is the permission bits of info, so a mode-only change is part of
+// the digest.
+func modeBytes(info os.FileInfo) []byte {
+	perm := uint32(info.Mode().Perm())
+	return []byte{byte(perm >> 8), byte(perm)}
+}
+
+// submoduleCommit reads the commit a submodule checkout at dir has checked
+// out. ok is false when dir has no .git metadata. HEAD is that commit when
+// it is detached, and the loose or packed ref when it names one.
+func submoduleCommit(dir string) (commit string, ok bool, err error) {
+	pointer := filepath.Join(dir, ".git")
+	info, err := os.Lstat(pointer)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	var gitDir string
+	if info.IsDir() {
+		gitDir = pointer
+	} else {
+		body, err := os.ReadFile(pointer)
+		if err != nil {
+			return "", false, err
+		}
+		line := strings.TrimSpace(string(body))
+		rest, found := strings.CutPrefix(line, "gitdir: ")
+		if !found {
+			return "", false, nil
+		}
+		if filepath.IsAbs(rest) {
+			gitDir = rest
+		} else {
+			gitDir = filepath.Join(dir, rest)
+		}
+	}
+	headRaw, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return "", false, err
+	}
+	head := strings.TrimSpace(string(headRaw))
+	ref, found := strings.CutPrefix(head, "ref: ")
+	if !found {
+		return head, true, nil
+	}
+	refBody, err := os.ReadFile(filepath.Join(gitDir, filepath.FromSlash(ref)))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return "", false, err
+		}
+		id, found, perr := packedRef(gitDir, ref)
+		if perr != nil || !found {
+			if perr != nil {
+				return "", false, perr
+			}
+			return "", false, fmt.Errorf("vcs: submodule HEAD %s is not in %s", ref, gitDir)
+		}
+		return id, true, nil
+	}
+	return strings.TrimSpace(string(refBody)), true, nil
+}
+
+// packedRef returns the id packed-refs records for name.
+func packedRef(gitDir, name string) (string, bool, error) {
+	body, err := os.ReadFile(filepath.Join(gitDir, "packed-refs"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	for line := range strings.SplitSeq(string(body), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "^") {
+			continue
+		}
+		id, ref, found := strings.Cut(line, " ")
+		if found && ref == name {
+			return id, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // worktreePath joins a git path onto the working copy and refuses one that
