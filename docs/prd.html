@@ -839,11 +839,12 @@ flowchart TD
   fix --> conv{"Did anything <br />actually change?"}
   conv -- no --> park
   conv -- yes --> run
-  hold --> act["Approve, fix a selection, retry, skip, or cancel"]
+  hold --> act["Approve, fix a selection, skip, or cancel"]
   act -->|fix| fix
-  act -->|retry| run
   act -->|approve| done
   act -->|skip| done
+  hold -->|held on the usage ceiling| retry["Or retry, once there is room"]
+  retry --> run
     </pre>
   </div>
 
@@ -854,7 +855,7 @@ flowchart TD
         <tr><td><b>Per-stage rounds</b></td><td>Each stage has its own limit. Reaching it parks the stage rather than continuing.</td><td>One stage oscillating between two wrong fixes.</td></tr>
         <tr><td><b>Run-wide budget</b></td><td>A total step budget across the whole run, independent of any stage's limit.</td><td>Several stages each staying under their own limit while the run as a whole never finishes.</td></tr>
         <tr><td><b>Per-run usage budget</b></td><td>The output tokens the run's own agent calls report, read from the agent invocation record before every step and compared against the budget the run recorded when it started. Reaching it, or a call that reported no count, parks the run. It changes on a live run only by adopting a new budget into the run's history.</td><td>A run whose stages each stay under their round limits, and whose steps stay under the run-wide budget, while its agent calls cost far more than intended.</td></tr>
-        <tr><td><b>Convergence</b></td><td>A fix round that produces no change parks the loop. The measure is over the run's whole state, so the loop parks after its second round that changes nothing, not its first. The automatic loop and the rounds standing consent asks for both park this way; a round you ask for at a hold does not (section 14, decision 8).</td><td>An agent that reports success each round without editing anything. Neither counter would catch this before exhausting itself.</td></tr>
+        <tr><td><b>Convergence</b></td><td>A fix round that produces no change parks the loop. The measure is over the run's whole state, so the loop parks after its second round that changes nothing, not its first. The automatic loop and the rounds standing consent asks for both park this way; a round you ask for at a hold does not (section 14, decision 8), and neither does a retry at the usage ceiling's hold (decision 25).</td><td>An agent that reports success each round without editing anything. Neither counter would catch this before exhausting itself.</td></tr>
       </tbody>
     </table>
   </div>
@@ -867,7 +868,9 @@ flowchart TD
     push, pull request, or checks, for the reason section 14 decision 8 records: a round at push
     would push its result before you saw it, and a round at the two stages after push would leave
     a commit nothing pushes. Retry is offered only at a hold the usage ceiling raised (section 10),
-    at whichever stage it holds, for the reason section 14 decision 25 records.
+    at whichever stage it holds, for the reason section 14 decision 25 records. Such a hold is the
+    only one that lists it, and an answer of retry at any other hold is refused while that hold
+    stays open.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
     <table class="table table-sm table-zebra">
@@ -875,7 +878,7 @@ flowchart TD
       <tbody>
         <tr><td><b>Approve</b></td><td>Accept the findings as they stand and advance.</td></tr>
         <tr><td><b>Fix</b></td><td>Run one fix round over the findings you selected, with any notes you attached and any findings you wrote yourself. The stage re-runs and holds again so you see the result.</td></tr>
-        <tr><td><b>Retry</b></td><td>Run the stage again once the usage ceiling has room: the calls in its window have aged out, or you raised the ceiling and restarted the service. The stage runs from the top. If its agent call is refused again it holds again on the same question, and otherwise it goes on as it would have. A hold a fix round left for the stage's next execution is kept, except the ceiling's own, so a round you asked for is still shown to you.</td></tr>
+        <tr><td><b>Retry</b></td><td>Run the stage again once the usage ceiling has room: the calls in its window have aged out, or you raised the ceiling and restarted the service. The stage runs from the top. If its agent call is refused again it holds again on the same question, and otherwise it goes on as it would have. A hold a fix round left for the stage's next execution is kept, except the ceiling's own, so a round you asked for is still shown to you and a ceiling question that no longer applies is not. The program marks the ceiling's own hold as standing for a call that never started, a mark no agent's report can carry, and that mark is what offers the retry and what the retry drops.</td></tr>
         <tr><td><b>Skip</b></td><td>Mark this stage skipped for this run only.</td></tr>
         <tr><td><b>Cancel</b></td><td>End the run. Work stays recoverable.</td></tr>
       </tbody>
@@ -3225,7 +3228,7 @@ flowchart TB
         <tr>
           <td class="prd-num">25</td>
           <td>A run held on the usage ceiling <b>is retried in place</b> once there is room, rather than cancelled and started again.</td>
-          <td>Decided 2026-10-19 (#375). Section 5's hold gains a fifth action, Retry, offered only at a hold the usage ceiling raised, and section 10's ceiling row points at it. It runs the stage whose agent call the ceiling refused again, in the same run, so the work before that stage is not repeated. It is a second cycle through the stage, like Fix, and bounded the same way: each retry leaves the hold back into the stage and counts toward that exit's bound, three per stage per run, a fixed number with no key in section 10. An answer asking for a fourth is refused while the hold is still open, so approve, skip, and cancel remain, and the run-wide budget counts every one. A retry while there is still no room is refused by the ceiling again and holds on the same question; it does not loop. Standing consent never gives it, because the ceiling's hold is one whose remedy lies outside the change. The answer does not check for room itself: the stage's call is admitted or refused by the ceiling as any call is.</td>
+          <td>Decided 2026-10-19 (#375). Section 5's hold gains a fifth action, Retry, offered only at a hold the usage ceiling raised, and section 10's ceiling row points at it. It runs the stage whose agent call the ceiling refused again, in the same run, so the work before that stage is not repeated. It is a second cycle through the stage, like Fix, and bounded the same way: each retry leaves the hold back into the stage and counts toward that exit's bound, three per stage per run, a fixed number with no key in section 10. An answer asking for a fourth is refused while the hold is still open, so approve, skip, and cancel remain, and the run-wide budget counts every one. A retry while there is still no room is refused by the ceiling again and holds on the same question; it does not loop. Its way back into the stage is not held to convergence, as a round you ask for is not (decision 8): a retry with still no room leaves the run's state where the retry before it left it, so held to that measure the second such retry would park the run and take the hold, and the answers it offers, with it. What offers the retry is the program's own mark on the ceiling's hold, which no agent's report can carry, so an answer of retry at any other hold is refused while that hold stays open, and a retry drops only the ceiling's hold from those a refused fix round left. Standing consent never gives it, because the ceiling's hold is one whose remedy lies outside the change. The answer does not check for room itself: the stage's call is admitted or refused by the ceiling as any call is.</td>
         </tr>
       </tbody>
     </table>
