@@ -2,6 +2,7 @@ package machine
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/gate"
@@ -630,6 +631,38 @@ type AcknowledgeRequest struct {
 	// its. Acknowledging one closes the wake and answers nothing about the
 	// entry.
 	KeptWorkWakes []int64 `json:"kept_work_wakes,omitempty"`
+}
+
+// The prefixes a wake of the queue's second and third shapes is named with
+// on the acknowledge command line, before its number. Each shape numbers its
+// rows apart from the others, so a task wake, a domain wake and a kept-work
+// wake can share a number: a bare number is always a task wake, one with
+// DomainWakePrefix always a domain wake, and one with KeptWorkWakePrefix
+// always a wake about a kept work entry no task names. A task's own wake
+// about work kept in its copy is a task wake and takes no prefix.
+// AcknowledgeNames writes them and internal/cli's acknowledge command reads
+// them, so the two cannot drift.
+const (
+	DomainWakePrefix   = "d"
+	KeptWorkWakePrefix = "k"
+)
+
+// AcknowledgeNames is every row of the drain w, named as the acknowledge
+// command line takes it: the task wakes by their numbers, then the domain
+// wakes and the kept-work wakes with their shape's prefix, each shape
+// oldest first, as w holds them.
+func AcknowledgeNames(w Wakes) []string {
+	names := make([]string, 0, len(w.Wakes)+len(w.DomainWakes)+len(w.KeptWorkWakes))
+	for _, row := range w.Wakes {
+		names = append(names, strconv.FormatInt(row.ID, 10))
+	}
+	for _, row := range w.DomainWakes {
+		names = append(names, DomainWakePrefix+strconv.FormatInt(row.ID, 10))
+	}
+	for _, row := range w.KeptWorkWakes {
+		names = append(names, KeptWorkWakePrefix+strconv.FormatInt(row.ID, 10))
+	}
+	return names
 }
 
 // DomainDelegateRequest delegates a named domain of tasks to a subordinate

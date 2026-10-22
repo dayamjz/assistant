@@ -26,37 +26,40 @@ import (
 // nothing: no goroutine, no command, no record.
 //
 // For each wake the supervisor loop appends, of any of the queue's three
-// shapes, the command is run once with the wake's row on standard input:
-// one line of the JSON store.Wake encodes to for a wake about a task, of
-// the JSON store.DomainWake encodes to for a wake about a domain, or of the
-// JSON store.KeptWorkWake encodes to for a wake about a kept work entry no
-// task names, as the record holds it when it is offered, and then end of
-// file. A task wake's line names the task in "task_id"; a domain wake's
-// names the delegation in "delegation" and the domain in "domain"; a
-// kept-work wake's names the entry in "kept_work" and its project and
-// branch in "project" and "branch"; neither of the last two carries a "task_id", so the command
+// shapes, the command is run once with the wake's row on standard input: one
+// line of the JSON store.Wake encodes to for a wake about a task, of the
+// JSON store.DomainWake encodes to for a wake about a domain, or of the JSON
+// store.KeptWorkWake encodes to for a wake about a kept work entry no task
+// names, and then end of file. A task or domain wake's row is as the record
+// holds it when it is offered; a kept-work wake's is too, except that its
+// project and branch are first passed through internal/redact, as described
+// below, so a credential the redactor recognizes in either reaches the
+// command replaced, while the record keeps the text as written. A task
+// wake's line names the task in "task_id"; a domain wake's names the
+// delegation in "delegation" and the domain in "domain"; a kept-work wake's
+// names the entry in "kept_work" and its project and branch in "project" and
+// "branch"; neither of the last two carries a "task_id", so the command
 // tells the three apart by those fields. "kind" is subordinate-gone,
 // subordinate-escalated or hold-opened for the second shape and kept-work
-// for the third. That
-// is the row bare, not the ipc.Event wakes.subscribe pushes: the stream
-// carries the same encoding as an event's payload, beside its type and
-// revision, and the command is given no such envelope. Every field of a
-// task or domain wake's row is a closed word, a validated identifier, a
-// time, or a marker the loop passed through internal/redact before writing
-// it. A kept-work wake's row also names the entry's project and branch,
-// which are a person's text read off the entry, so keptWorkNotice passes
-// those two fields through internal/redact before the row is encoded. So
-// no row carries a credential the redactor recognizes. The sender encodes
-// the row as JSON and does not redact the encoded line: redaction on an
-// encoded payload can corrupt the JSON and is not safe. The command is run
-// through internal/stages' RunOperatorCommand, the runner every commands.*
-// key runs through, in the home's root with this service's environment, so
-// it carries the operator's credentials and that runner's gaps; no second
-// process starter is written here. That runner ends the command's whole
-// process group on unix when the bound or Close ends it, and leaves a
-// descendant that left the group, or that a command exiting on its own left
-// behind, running. Its output is not shown to anyone: the redacted end of it
-// is kept on the record as evidence.
+// for the third. That is the row bare, not the ipc.Event wakes.subscribe
+// pushes: the stream carries the same encoding as an event's payload, beside
+// its type and revision, and the command is given no such envelope. Every
+// field of a task or domain wake's row is a closed word, a validated
+// identifier, a time, or a marker the loop passed through internal/redact
+// before writing it. A kept-work wake's row also names the entry's project
+// and branch, which are a person's text read off the entry, so
+// keptWorkNotice passes those two fields through internal/redact before the
+// row is encoded. So no row carries a credential the redactor recognizes.
+// The sender encodes the row as JSON and does not redact the encoded line:
+// redaction on an encoded payload can corrupt the JSON and is not safe. The
+// command is run through internal/stages' RunOperatorCommand, the runner
+// every commands.* key runs through, in the home's root with this service's
+// environment, so it carries the operator's credentials and that runner's
+// gaps; no second process starter is written here. That runner ends the
+// command's whole process group on unix when the bound or Close ends it, and
+// leaves a descendant that left the group, or that a command exiting on its
+// own left behind, running. Its output is not shown to anyone: the redacted
+// end of it is kept on the record as evidence.
 //
 // Nothing the command does reaches the program. Its exit status and output
 // are recorded and never read back as an answer, an acknowledgement, a
@@ -301,9 +304,10 @@ func domainNotice(records *store.Store, w store.DomainWake) notice {
 	}
 }
 
-// keptWorkNotice is a kept-work wake's notice: its row as
-// store.KeptWorkWake encodes it, which names the entry, its project and
-// its branch where a task wake's names a task, claimed and settled in
+// keptWorkNotice is a kept-work wake's notice: its row, which names the
+// entry, its project and its branch where a task wake's names a task, with
+// the project and branch redacted by redactedKeptWorkWake and then encoded
+// as store.KeptWorkWake encodes, claimed and settled in
 // kept_work_notification.
 func keptWorkNotice(records *store.Store, w store.KeptWorkWake) notice {
 	return notice{

@@ -2,6 +2,7 @@ package machine
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
@@ -172,11 +173,15 @@ func DelegationEndedPhrase(DelegationEnded) Phrase { return phraseDelegationEnde
 // WakesPhrase is what a person reads about a drain of the wake queue: how
 // many rows the drain handed out, or that none were on offer. A drain closes
 // nothing, so the phrase says the rows stay waiting until each is
-// acknowledged, and that a row not acknowledged comes back, and how each
-// shape is named on the acknowledge line, since a domain's and a kept work
-// entry's notices are numbered apart from a task's. Which work each
-// row is about and what kind of notice it is are the structured rendering's,
-// because a kind is a word the derived forbidden set keeps from a person.
+// acknowledged, and that a row not acknowledged comes back, and it gives the
+// acknowledge command that closes exactly the rows handed out, each named
+// as AcknowledgeNames names it. The command is spelled out rather than
+// described, because a description by what a notice is about cannot tell a
+// task's own notice about its kept copy, a task wake named by its number
+// alone, from a notice about a kept work entry no task names, which takes
+// KeptWorkWakePrefix. Which work each row is about and what kind of notice
+// it is are the structured rendering's, because a kind is a word the
+// derived forbidden set keeps from a person.
 func WakesPhrase(w Wakes) Phrase {
 	n := len(w.Wakes) + len(w.DomainWakes) + len(w.KeptWorkWakes)
 	if n == 0 {
@@ -185,7 +190,7 @@ func WakesPhrase(w Wakes) Phrase {
 	return Phrase{
 		Outcome:     fmt.Sprintf("%d notice(s) about the fleet were handed to the coordinator, oldest first, and none is recorded as handled yet.", n),
 		Consequence: "Each stays waiting until it is acknowledged, and one not acknowledged is handed out again if the coordinator goes away first.",
-		Decision:    "Act on each, then run assistant coordinator acknowledge with the numbers the --json form lists, a notice about a domain as dNUMBER and one about work left in a local copy as kNUMBER.",
+		Decision:    "Act on each, then run assistant coordinator acknowledge " + strings.Join(AcknowledgeNames(w), " ") + ", which closes exactly these; the --json form says what each is about.",
 	}
 }
 

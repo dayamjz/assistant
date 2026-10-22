@@ -441,15 +441,16 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	}
 	request := machine.AcknowledgeRequest{Wakes: make([]int64, 0, len(in.args))}
 	for _, arg := range in.args {
-		// A wake about a domain or a kept work entry is numbered apart from
-		// a task's and is named with its shape's prefix, so the three
-		// cannot be confused by number.
-		text, domain := strings.CutPrefix(arg, domainWakePrefix)
-		text, kept := strings.CutPrefix(text, keptWorkWakePrefix)
+		// A wake about a domain or a kept work entry no task names is
+		// numbered apart from a task's and is named with its shape's
+		// prefix, machine's, which a drain's phrase names it with, so the
+		// three cannot be confused by number.
+		text, domain := strings.CutPrefix(arg, machine.DomainWakePrefix)
+		text, kept := strings.CutPrefix(text, machine.KeptWorkWakePrefix)
 		id, err := strconv.ParseInt(text, 10, 64)
 		if err != nil || (domain && kept) {
-			return nil, usagef("assistant %s takes wake identifiers, as a number, %sNUMBER for a notice about a domain or %sNUMBER for one about kept work, and %q is not one",
-				name, domainWakePrefix, keptWorkWakePrefix, printable(arg))
+			return nil, usagef("assistant %s takes wake identifiers, as a number, %sNUMBER for a notice about a domain or %sNUMBER for one about kept work no task names, and %q is not one",
+				name, machine.DomainWakePrefix, machine.KeptWorkWakePrefix, printable(arg))
 		}
 		switch {
 		case domain:
@@ -464,16 +465,6 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	err := in.callService(ctx, ipc.MethodWakesAcknowledge, request, &acknowledged)
 	return acknowledged, err
 }
-
-// domainWakePrefix is what a wake about a domain is named with on the
-// acknowledge command line, before its number: the queue's second shape
-// numbers its rows apart from the task wakes, so a bare number is always a
-// task wake and one with this prefix always a domain wake.
-const domainWakePrefix = "d"
-
-// keptWorkWakePrefix is domainWakePrefix for the queue's third shape, a
-// wake about a kept work entry no task names.
-const keptWorkWakePrefix = "k"
 
 // coordinatorListen is wakes.subscribe, the coordinator's wake stream: the
 // service pushes each wake as the supervisor queues it, PRD section 5's
