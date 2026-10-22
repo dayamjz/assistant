@@ -40,12 +40,15 @@ import (
 // for the third. That
 // is the row bare, not the ipc.Event wakes.subscribe pushes: the stream
 // carries the same encoding as an event's payload, beside its type and
-// revision, and the command is given no such envelope. Every field of that row is a closed word,
-// a validated identifier, a time, or a marker the loop passed through
-// internal/redact before writing it, so the row carries no credential the
-// redactor recognizes. The sender encodes that stored row as JSON and does
-// not redact the encoded line: redaction on an encoded payload can corrupt
-// the JSON and is not safe. The command is run
+// revision, and the command is given no such envelope. Every field of a
+// task or domain wake's row is a closed word, a validated identifier, a
+// time, or a marker the loop passed through internal/redact before writing
+// it. A kept-work wake's row also names the entry's project and branch,
+// which are a person's text read off the entry, so keptWorkNotice passes
+// those two fields through internal/redact before the row is encoded. So
+// no row carries a credential the redactor recognizes. The sender encodes
+// the row as JSON and does not redact the encoded line: redaction on an
+// encoded payload can corrupt the JSON and is not safe. The command is run
 // through internal/stages' RunOperatorCommand, the runner every commands.*
 // key runs through, in the home's root with this service's environment, so
 // it carries the operator's credentials and that runner's gaps; no second
@@ -305,13 +308,29 @@ func domainNotice(records *store.Store, w store.DomainWake) notice {
 func keptWorkNotice(records *store.Store, w store.KeptWorkWake) notice {
 	return notice{
 		label: fmt.Sprintf("kept work wake %d about kept work entry %d", w.ID, w.KeptWork),
-		row:   w,
+		row:   redactedKeptWorkWake(w),
 		claim: func(ctx context.Context) error { _, err := records.ClaimKeptWorkNotification(ctx, w.ID); return err },
 		settle: func(ctx context.Context, n store.NotificationSettlement) error {
 			_, err := records.SettleKeptWorkNotification(ctx, w.ID, n)
 			return err
 		},
 	}
+}
+
+// redactedKeptWorkWake is a kept-work wake's row with the two fields that
+// are a person's text, the entry's project and branch, passed through
+// internal/redact, field by field before the row is encoded, so the JSON
+// stays whole. Every other field is a closed word, a number, a time or the
+// loop's redacted marker.
+func redactedKeptWorkWake(w store.KeptWorkWake) store.KeptWorkWake {
+	r := redact.New()
+	if project, ok := w.Project.Get(); ok {
+		w.Project = store.Known(r.Redact(project))
+	}
+	if branch, ok := w.Branch.Get(); ok {
+		w.Branch = store.Known(r.Redact(branch))
+	}
+	return w
 }
 
 // notifyOne claims one wake, runs the command for it, and settles the claim.
