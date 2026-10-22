@@ -703,6 +703,12 @@ func (w *tmuxWorker) await(ctx context.Context, ok func(screenState) bool) error
 		case <-w.done:
 			return ErrWorkerEnded
 		case <-ctx.Done():
+			// A reading ctx cut short is runTmux's answer, which already
+			// wraps ctx's error and keeps the client's failure beside it, so
+			// it is returned whole rather than replaced by ctx's error alone.
+			if err != nil && errors.Is(err, ctx.Err()) {
+				return fmt.Errorf("%w: %w", ErrTerminalNotReady, err)
+			}
 			return fmt.Errorf("%w: %w", ErrTerminalNotReady, ctx.Err())
 		case <-tick.C:
 		}
@@ -862,8 +868,15 @@ func (w *tmuxWorker) Send(ctx context.Context, text string) error {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := runTmux(ctx, tmuxTypeBound, "the client typing a send", cmd); err != nil {
+		// runTmux's answer is returned whole rather than replaced, so the
+		// client's own failure stays beside the caller's cancellation; a ctx
+		// that ended after the client failed for its own reason is put in
+		// front of that failure the same way.
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+			if !errors.Is(err, ctxErr) {
+				return fmt.Errorf("typing into the terminal: %w: %w", ctxErr, err)
+			}
+			return err
 		}
 		if errors.Is(err, ErrTerminalClientTimedOut) {
 			return err

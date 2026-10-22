@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -355,4 +356,92 @@ func TestATerminalStartCancelledDuringItsClientAnswersTheCancellation(t *testing
 	if _, err := os.Lstat(term.Socket); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the socket outlived the cancelled start: %v", err)
 	}
+}
+
+// TestATerminalSendCancelledDuringItsClientKeepsTheClientsFailure is
+// review's case against what a cancelled send answers: a send whose typing
+// client never answers, cancelled by its caller while that client runs,
+// answers the caller's context.Canceled with the client's own failure, the
+// *exec.ExitError of the group it ended, kept beside it rather than
+// discarded, and the client's group is gone, asked by identity. Before Send
+// kept runTmux's answer, it answered context.Canceled alone.
+func TestATerminalSendCancelledDuringItsClientKeepsTheClientsFailure(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	requiresIdentityRead(t)
+	w := newWedgedTmux(t)
+	term := agents.Terminal{Tmux: w.tmux, Socket: filepath.Join(standin.SocketDir(t), "s")}
+	agent := standin.NewWorker(t, standin.Script{Worker: &standin.WorkerScript{}},
+		agents.WithTerminationGrace(300*time.Millisecond))
+	worker, err := agents.OpenTerminalWorker(t.Context(), agent.Runner(), term, workerSpec(t))
+	if err != nil {
+		t.Fatalf("starting the terminal worker: %v", err)
+	}
+	t.Cleanup(worker.Close)
+	w.wedge(t, "load-buffer")
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	defer cancel()
+	done := make(chan error, 1)
+	returned := make(chan struct{})
+	go func() {
+		done <- worker.Send(ctx, "hello")
+		close(returned)
+	}()
+	ids := w.wedgedClient(t, returned)
+	cancel()
+	within := 3*agents.TmuxClientGrace + 2*time.Second
+	select {
+	case err = <-done:
+	case <-time.After(within):
+		t.Fatalf("a send cancelled during its client was still blocked %s after the cancellation", within)
+	}
+	var exit *exec.ExitError
+	if !errors.Is(err, context.Canceled) || !errors.As(err, &exit) {
+		t.Fatalf("a send cancelled during its client answered %v, want context.Canceled and the client's *exec.ExitError beside it", err)
+	}
+	requireGone(t, ids)
+}
+
+// TestAClaudeTerminalSendCancelledDuringItsReadingKeepsTheClientsFailure is
+// the same case at the send's readiness wait, the sibling path that
+// surfaces a tmux client's error: a Claude Code send whose screen reading
+// never answers, cancelled by its caller while that reading runs, answers
+// agents.ErrTerminalNotReady and context.Canceled with the reading client's
+// *exec.ExitError kept beside them, and the client's group is gone. Before
+// the wait kept the reading's answer, it answered ErrTerminalNotReady and
+// context.Canceled alone.
+func TestAClaudeTerminalSendCancelledDuringItsReadingKeepsTheClientsFailure(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	requiresIdentityRead(t)
+	w := newWedgedTmux(t)
+	term := agents.Terminal{Tmux: w.tmux, Socket: filepath.Join(standin.SocketDir(t), "s")}
+	agent := standin.New(t, standin.Script{Worker: &standin.WorkerScript{}},
+		agents.WithTerminationGrace(300*time.Millisecond), agents.WithBaseEnvironment(claudeTerminalEnv(t)))
+	worker, err := agents.OpenTerminalWorker(t.Context(), agent.Runner(), term, workerSpec(t))
+	if err != nil {
+		t.Fatalf("starting a Claude Code terminal worker: %v", err)
+	}
+	t.Cleanup(worker.Close)
+	awaitInteractive(t, agent, answered(1))
+	w.wedge(t, "capture-pane")
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	defer cancel()
+	done := make(chan error, 1)
+	returned := make(chan struct{})
+	go func() {
+		done <- worker.Send(ctx, "refused")
+		close(returned)
+	}()
+	ids := w.wedgedClient(t, returned)
+	cancel()
+	within := 3*agents.TmuxClientGrace + 2*time.Second
+	select {
+	case err = <-done:
+	case <-time.After(within):
+		t.Fatalf("a send cancelled during its reading was still blocked %s after the cancellation", within)
+	}
+	var exit *exec.ExitError
+	if !errors.Is(err, agents.ErrTerminalNotReady) || !errors.Is(err, context.Canceled) || !errors.As(err, &exit) {
+		t.Fatalf("a send cancelled during its reading answered %v, want agents.ErrTerminalNotReady, context.Canceled and the client's *exec.ExitError beside them", err)
+	}
+	requireGone(t, ids)
 }
