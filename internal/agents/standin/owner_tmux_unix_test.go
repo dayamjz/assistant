@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // The variables a test hands this binary when it starts it as a test binary
@@ -128,7 +129,7 @@ func tmuxOwnerTests(dir, mode string) int {
 		fail("reading the tmux server's process identifiers", err)
 	}
 	value, sweeper := owned()
-	record := fmt.Sprintf("%s %s %d %s", value, strings.TrimSpace(string(pids)), sweeper.PID, tmux)
+	record := fmt.Sprintf("%s %s %d %s %d", value, strings.TrimSpace(string(pids)), sweeper.PID, tmux, sweeper.Start)
 	// Whole or not at all, since startTmuxOwner polls this one path and
 	// parses the first content it reads there as the record (#459).
 	if err := writeWhole(filepath.Join(dir, tmuxOwnerRecord), []byte(record)); err != nil {
@@ -202,19 +203,46 @@ type tmuxOwned struct {
 // process it names is ended in cleanup where it outlives the test.
 func startTmuxOwner(t *testing.T, mode string) *tmuxOwned {
 	t.Helper()
+	return startTmuxOwnerOf(t, mode, false)
+}
+
+// startTmuxOwnerCopy is startTmuxOwner with the owner a copy of this binary
+// written for it alone, so its check lists the copy's processes and never
+// those of this binary that other parallel tests start, nor theirs its.
+func startTmuxOwnerCopy(t *testing.T, mode string) *tmuxOwned {
+	t.Helper()
+	return startTmuxOwnerOf(t, mode, true)
+}
+
+func startTmuxOwnerOf(t *testing.T, mode string, copied bool) *tmuxOwned {
+	t.Helper()
 	o := &tmuxOwned{tmux: Tmux(t), socket: filepath.Join(SocketDir(t), "o"), done: make(chan struct{}), stderr: &bytes.Buffer{}}
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
+	if copied {
+		raw, err := os.ReadFile(self)
+		if err != nil {
+			t.Fatal(err)
+		}
+		self = filepath.Join(dir, "owner.test")
+		if err := os.WriteFile(self, raw, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	o.record = filepath.Join(dir, tmuxOwnerRecord)
-	o.cmd = exec.Command(self, "-test.run=^$")
-	o.cmd.Env = append(os.Environ(), tmuxOwnerDirVar+"="+dir,
-		tmuxOwnerSocketVar+"="+o.socket, tmuxOwnerModeVar+"="+mode)
-	o.cmd.Stderr = o.stderr
-	o.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	if err := o.cmd.Start(); err != nil {
+	o.cmd, err = StartCopied(func() *exec.Cmd {
+		cmd := exec.Command(self, "-test.run=^$")
+		cmd.Env = append(os.Environ(), tmuxOwnerDirVar+"="+dir,
+			tmuxOwnerSocketVar+"="+o.socket, tmuxOwnerModeVar+"="+mode)
+		o.stderr.Reset()
+		cmd.Stderr = o.stderr
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		return cmd
+	})
+	if err != nil {
 		t.Fatalf("starting the owner: %v", err)
 	}
 	go func() { _ = o.cmd.Wait(); close(o.done) }()
@@ -253,14 +281,23 @@ func startTmuxOwner(t *testing.T, mode string) *tmuxOwned {
 		raw, err := os.ReadFile(o.record)
 		if err == nil {
 			fields := strings.Fields(string(raw))
-			if len(fields) != 5 {
+			if len(fields) != 6 {
 				t.Fatalf("the owner recorded %q", raw)
 			}
 			o.value, o.wrapper = fields[0], fields[4]
 			// An owner that ends its server ends it before this read can, so
 			// a process already gone is a zero identity, which nothing
 			// below signals.
-			o.server, o.pane, o.sweep = identifyRunning(t, fields[1]), identifyRunning(t, fields[2]), identifyRunning(t, fields[3])
+			o.server, o.pane = identifyRunning(t, fields[1]), identifyRunning(t, fields[2])
+			// The sweep is the owner's own record of it, never a read of a
+			// running process: an owner whose check passes retires its sweep
+			// (RunOwned), which can be before this read.
+			pid, perr := strconv.Atoi(fields[3])
+			start, serr := strconv.ParseUint(fields[5], 10, 64)
+			if perr != nil || serr != nil || pid <= 0 || start == 0 {
+				t.Fatalf("the owner recorded its sweep as %q started at %q", fields[3], fields[5])
+			}
+			o.sweep = agents.Identity{PID: pid, Start: start}
 			return o
 		}
 		select {
@@ -427,6 +464,44 @@ func TestRunOwnedFailsAPackageThatLeavesATmuxServer(t *testing.T) {
 	<-clean.done
 	if code := clean.cmd.ProcessState.ExitCode(); code != 0 {
 		t.Fatalf("the owner that ended its tmux server exited %d, want 0 from a passed check: %s", code, clean.stderr)
+	}
+}
+
+// A package whose check passes leaves nothing running once its binary has
+// exited, its own owner sweep included (P15): RunOwned ends the sweep and
+// removes the tmux wrapper before it returns, so both are already gone when
+// the owner's exit is observed, with no wait. Before #454 the sweep outlived
+// every passing package by up to OwnerPoll and then removed the wrapper
+// itself, so a check of what go test leaves behind saw the last package's
+// sweep and wrapper whenever it looked in time. The control is the owner
+// that leaves a server, whose sweep stays to end what the check's own
+// ending can start, as TestRunOwnedFailsAPackageThatLeavesATmuxServer
+// reads of this binary's.
+func TestAPassedCheckLeavesNoSweepOrWrapperBehind(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	clean := startTmuxOwnerCopy(t, ownerCleans)
+	if clean.wrapper == "" {
+		t.Fatal("the owner recorded no tmux wrapper")
+	}
+	<-clean.done
+	if code := clean.cmd.ProcessState.ExitCode(); code != 0 {
+		t.Fatalf("the owner that ended its tmux server exited %d, want 0 from a passed check: %s", code, clean.stderr)
+	}
+	if !(Process{Identity: clean.sweep}).GoneWithin(0) {
+		t.Errorf("the owner's sweep %v was still running when the owner whose check passed had exited", clean.sweep)
+	}
+	if _, err := os.Stat(filepath.Dir(clean.wrapper)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the owner's tmux wrapper directory %s reads %v when the owner whose check passed had exited; want it removed", filepath.Dir(clean.wrapper), err)
+	}
+
+	left := startTmuxOwnerCopy(t, ownerLeaves)
+	<-left.done
+	if code := left.cmd.ProcessState.ExitCode(); code != exitLeft {
+		t.Fatalf("the owner that left a tmux server exited %d, want %d from a failed check: %s", code, exitLeft, left.stderr)
+	}
+	if presence, err := left.sweep.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Errorf("the sweep %v of the owner whose check failed reads %v (%v) when the owner had exited; want it still running to end what the check's ending started", left.sweep, presence, err)
 	}
 }
 

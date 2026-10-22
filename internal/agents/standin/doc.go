@@ -84,7 +84,10 @@
 // whatever environment a test starts it with, and Tmux refuses a test that
 // does not run inside RunOwned. The check RunOwned runs once the tests have
 // returned fails the package naming every process of its binary, and every
-// process carrying its identity, still running.
+// process carrying its identity, still running; when it passes, RunOwned
+// ends the sweep and removes the wrapper itself, so a passing package leaves
+// nothing of its own behind once its binary exits, and the sweep stays only
+// for a binary that failed its check or never reached it.
 //
 // That wiring serves a caller who can be handed a Runner. One in another
 // process cannot be: internal/agents resolves the configured agent by name off

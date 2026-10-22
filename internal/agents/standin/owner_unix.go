@@ -110,9 +110,17 @@ func awaitGone(owner agents.Identity) {
 // ownership and leave the check unwired: Tmux refuses a test anywhere but
 // inside run, which is the only place the check is certain to follow.
 //
+// When the check passes, RunOwned then ends the owner sweep and removes the
+// tmux wrapper itself (retireSweep), so a package that passes leaves nothing
+// of its own running or on disk once its binary exits (#454); when it fails,
+// the sweep is left to end, once the owner is gone, what the check's own
+// ending of a process may start.
+//
 // What it does not cover: a process that ends inside run without returning,
 // a test's os.Exit, a panic, a timeout or a kill, runs no check; what it
-// left is the owner sweep's to end, and nothing reports it.
+// left is the owner sweep's to end, and nothing reports it. A process that
+// starts carrying the identity after a passing check, which only something
+// still running in this binary once run returned could start, is not swept.
 func RunOwned(run func() int) int {
 	if err := ownProcesses(); err != nil {
 		fmt.Fprintln(os.Stderr, "recording this test binary as the owner of what its tests start:", err)
@@ -121,10 +129,39 @@ func RunOwned(run func() int) int {
 	setChecked(true)
 	code := run()
 	setChecked(false)
-	if !leftAfterTests() && code == 0 {
-		code = 1
+	if !leftAfterTests() {
+		if code == 0 {
+			code = 1
+		}
+		return code
+	}
+	if err := retireSweep(); err != nil {
+		fmt.Fprintln(os.Stderr, "FAIL: ending this test binary's owner sweep after its check passed:", err)
+		if code == 0 {
+			code = 1
+		}
 	}
 	return code
+}
+
+// retireSweep ends the owner sweep ownProcesses started, waits until it has
+// been reaped, and removes the tmux wrapper's directory, which is the
+// sweep's work once nothing is left to end. RunOwned calls it after a
+// passing check. The sweep is this process's child, so the wait is on its
+// exit status and not on a poll. An error is the wrapper's directory that
+// could not be removed.
+func retireSweep() error {
+	owning.mu.Lock()
+	proc, exited, wrapper := owning.sweepProc, owning.sweepExited, owning.tmux
+	owning.mu.Unlock()
+	if proc != nil {
+		_ = proc.Kill()
+		<-exited
+	}
+	if wrapper != "" {
+		return os.RemoveAll(filepath.Dir(wrapper))
+	}
+	return nil
 }
 
 // setChecked records whether RunOwned's run is running, which is when
@@ -199,12 +236,13 @@ func ownProcesses() error {
 			return err
 		}
 	}
-	sweeper, err := startSweep(value, wrapperDir)
+	sweeper, proc, exited, err := startSweep(value, wrapperDir)
 	if err != nil {
 		_ = os.RemoveAll(wrapperDir)
 		return fmt.Errorf("standin: starting the owner sweep: %w", err)
 	}
 	owning.value, owning.sweeper, owning.tmux = value, sweeper, wrapper
+	owning.sweepProc, owning.sweepExited = proc, exited
 	return nil
 }
 
@@ -265,15 +303,18 @@ func isTmuxWrapper(path string) bool {
 }
 
 // owning is what ownProcesses recorded: this process's owner identity as
-// OwnerVar spells it, the identity of the sweep it started, and the
-// tmux wrapper Tmux names, empty when there was no tmux to wrap; and whether
-// RunOwned's run is running (checked).
+// OwnerVar spells it, the identity of the sweep it started, the sweep's
+// process and a channel closed once it has been waited for (retireSweep),
+// and the tmux wrapper Tmux names, empty when there was no tmux to wrap; and
+// whether RunOwned's run is running (checked).
 var owning struct {
-	mu      sync.Mutex
-	value   string
-	sweeper agents.Identity
-	tmux    string
-	checked bool
+	mu          sync.Mutex
+	value       string
+	sweeper     agents.Identity
+	sweepProc   *os.Process
+	sweepExited chan struct{}
+	tmux        string
+	checked     bool
 }
 
 // owned is what ownProcesses recorded, empty when it was not called.
@@ -314,15 +355,16 @@ func requireOwned(tb testing.TB, starts string) string {
 }
 
 // startSweep starts this binary again as the owner sweep for value, which
-// removes wrapperDir when it is not empty, and returns its identity. It is
-// not waited for beyond reaping, because it outlives this process by
-// design, and it holds none of this process's files: its standard streams
-// are the null device, so a go test reading this binary's output does not
-// wait on it.
-func startSweep(value, wrapperDir string) (agents.Identity, error) {
+// removes wrapperDir when it is not empty, and returns its identity, its
+// process, and a channel closed once it has been waited for. It is not
+// waited for beyond reaping, because it outlives this process by design
+// unless a passing check retires it first (retireSweep), and it holds none
+// of this process's files: its standard streams are the null device, so a
+// go test reading this binary's output does not wait on it.
+func startSweep(value, wrapperDir string) (agents.Identity, *os.Process, chan struct{}, error) {
 	self, err := os.Executable()
 	if err != nil {
-		return agents.Identity{}, err
+		return agents.Identity{}, nil, nil, err
 	}
 	cmd := exec.Command(self, sweepFlag+value, sweepDirFlag+wrapperDir)
 	for _, kv := range os.Environ() {
@@ -332,15 +374,16 @@ func startSweep(value, wrapperDir string) (agents.Identity, error) {
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
-		return agents.Identity{}, err
+		return agents.Identity{}, nil, nil, err
 	}
-	go func() { _ = cmd.Wait() }()
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
 	id, found, err := agents.Identify(cmd.Process.Pid)
 	if err != nil || !found {
 		_ = cmd.Process.Kill()
-		return agents.Identity{}, fmt.Errorf("reading the identity of sweep %d (found %v): %w", cmd.Process.Pid, found, err)
+		return agents.Identity{}, nil, nil, fmt.Errorf("reading the identity of sweep %d (found %v): %w", cmd.Process.Pid, found, err)
 	}
-	return id, nil
+	return id, cmd.Process, exited, nil
 }
 
 // sweepRounds bounds how many times the sweep lists what is left and ends
