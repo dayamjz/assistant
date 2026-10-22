@@ -58,9 +58,13 @@ func OnRemoteHost(name string) Placement { return Placement{kind: placedOnRemote
 //
 // The entry must be answered carry on and must be of another owner than the
 // task, with the task's project and branch, or the dispatch is refused with
-// ErrNotCarriedOn. That is as far as the store can tie the task to the
-// entry: no record here says which task a carry on created, so two tasks of
-// that project and branch could both name one entry, and each would get its
+// ErrNotCarriedOn. The project is the repository the entry names, as for
+// every kept work entry, and an entry naming none is refused, since nothing
+// then shows that the task is of its project; Task.Project, what the task
+// is for, is not compared. An entry naming no branch matches only a task
+// naming none. That is as far as the store can tie the task to the entry:
+// no record here says which task a carry on created, so two tasks of that
+// project and branch could both name one entry, and each would get its
 // machine.
 func CarriedOnFrom(entry int64) Placement {
 	return Placement{kind: placedWithKeptCopy, keptWork: entry}
@@ -162,6 +166,9 @@ func keptCopyMachineTx(ctx context.Context, tx *sql.Tx, taskID string, entry int
 	}
 	if owner.Or("") == taskID {
 		return "", fmt.Errorf("%w: kept work entry %d is of the task's own copy, which it never left", ErrNotCarriedOn, entry)
+	}
+	if !repository.IsKnown() {
+		return "", fmt.Errorf("%w: kept work entry %d names no project, so no task can be shown to be of its project", ErrNotCarriedOn, entry)
 	}
 	var ownRepository, ownBranch Optional[string]
 	if err := tx.QueryRowContext(ctx, `SELECT repository_id, branch FROM task WHERE id = ?`, taskID).

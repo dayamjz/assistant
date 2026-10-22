@@ -458,6 +458,48 @@ func TestCarryOnGivesTheNewTaskTheKeptCopysMachine(t *testing.T) {
 		}
 	})
 
+	t.Run("an entry that names no project is nobody's to carry on", func(t *testing.T) {
+		// Two investigations naming no repository, of different projects:
+		// their unknown repositories and branches are no evidence that they
+		// share either, so the second may not take the first's machine.
+		investigation := func(id, project string) Task {
+			t.Helper()
+			task, err := s.CreateTask(ctx, Task{ID: id, Shape: TaskInvestigation, Project: project, Mode: "interactive",
+				WorktreePath: "/tasks/" + id + "/copy"}, Disposition{})
+			if err != nil {
+				t.Fatalf("CreateTask %s: %v", id, err)
+			}
+			return task
+		}
+		first := investigation("projectoneaa", "project-one")
+		if _, err := s.BeginFirstTaskAttempt(ctx, first.ID, OnRemoteHost("studio")); err != nil {
+			t.Fatal(err)
+		}
+		unnamed, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: first.ID, CopyPath: first.WorktreePath,
+			Holds: []string{"abab"}, Reason: "unproven", Against: "dddd"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, known := unnamed.RepositoryID.Get(); known {
+			t.Fatalf("the entry reads project %q, want none: the case below would test nothing", unnamed.RepositoryID.Or(""))
+		}
+		if _, err := s.AnswerKeptWork(ctx, unnamed.ID, KeptCarryOn, ResolvedByPerson()); err != nil {
+			t.Fatal(err)
+		}
+		for name, task := range map[string]Task{
+			"another project's investigation": investigation("projecttwoaa", "project-two"),
+			"an investigation of its project": investigation("projectonebb", "project-one"),
+			"a task naming a repository":      seedTaskOnBranch(t, s, "namedrepoaaa", "named", 0),
+		} {
+			if _, err := s.BeginFirstTaskAttempt(ctx, task.ID, CarriedOnFrom(unnamed.ID)); !errors.Is(err, ErrNotCarriedOn) {
+				t.Errorf("%s carrying on an entry of no project = %v, want ErrNotCarriedOn", name, err)
+			}
+			if got := attemptsOf(t, s, task.ID); len(got) != 0 || machineOf(t, s, task.ID) != "" {
+				t.Errorf("%s: left attempts %+v and machine %q", name, got, machineOf(t, s, task.ID))
+			}
+		}
+	})
+
 	if _, err := s.BeginFirstTaskAttempt(ctx, newTask.ID, CarriedOnFrom(carried.ID)); err != nil {
 		t.Fatalf("BeginFirstTaskAttempt carrying on: %v", err)
 	}
