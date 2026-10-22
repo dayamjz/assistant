@@ -187,6 +187,43 @@ func TestCursorBackupWithTmuxIsRefusedBeforeAnyWorkerStarts(t *testing.T) {
 	}
 }
 
+// A worker backup whose context window its adapter has not declared is
+// refused before any worker starts, as any backup it cannot run is: the
+// primary is not started on the strength of a backup that could never take
+// over, and nothing is sealed. Codex declares no window, and a window with no
+// model is one no adapter can express.
+func TestABackupWithAnUndeclaredContextWindowIsRefusedBeforeAnyWorkerStarts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		backup config.Role
+	}{
+		{"codex at standard", config.Role{Agent: agents.CodexName, Provider: "openai", Type: "gpt", Version: "6-astra", ContextWindow: config.ContextStandard}},
+		{"a window with no model", config.Role{Agent: agents.CodexName, ContextWindow: config.Context1M}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := standin.New(t, standin.Script{})
+			backup := standin.NewCodex(t, standin.Script{})
+			sub := newLaunchSubject(t, primary)
+			s := sub.service
+			s.catalog = agents.NewCatalog(fixedRunner{runner: primary.Runner()}, fixedRunner{runner: backup.Runner()})
+			s.cfg.Roles = config.Roles{config.RoleWorker: {Agent: agents.ClaudeName, Fallback: &tc.backup}}
+			d, err := s.dispatchTask(t.Context(), sub.task)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = s.launchTask(t.Context(), d); !errors.Is(err, agents.ErrUndeclaredModel) {
+				t.Fatalf("the launch answered %v, want ErrUndeclaredModel for the backup's window", err)
+			}
+			if len(primary.Calls()) != 0 || len(backup.Calls()) != 0 {
+				t.Fatal("a backup whose window cannot be expressed let a worker start")
+			}
+			if _, has, err := s.store.TaskFallback(t.Context(), sub.task); err != nil || has {
+				t.Fatalf("the refused backup was sealed: %v %v", has, err)
+			}
+		})
+	}
+}
+
 func TestASealedSelectionDoesNotPermitASecondLiveWorker(t *testing.T) {
 	primary := standin.New(t, standin.Script{})
 	backup := standin.NewCursor(t, standin.Script{})

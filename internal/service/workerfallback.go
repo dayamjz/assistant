@@ -22,8 +22,8 @@ func (s *Service) selectWorkerChoice(ctx context.Context, role config.Role) (age
 	if err != nil {
 		return selection, err
 	}
-	if role.Provider != "" {
-		if _, err = agents.Translate(selection.Resolution.Name, role.Provider, role.Type, role.Version); err != nil {
+	if role.Provider != "" || role.ContextWindow != "" {
+		if _, err = agents.Translate(selection.Resolution.Name, role.Provider, role.Type, role.Version, role.ContextWindow); err != nil {
 			return agents.Selection{}, err
 		}
 	}
