@@ -87,3 +87,41 @@ func TestReflogsReadEveryEntryOfTheStashList(t *testing.T) {
 		t.Errorf("AllReflogs on a bare repository = %v; want ErrNotARepository", err)
 	}
 }
+
+// The reflogs read the same whatever date format the operator's git
+// configuration asks git log for: with log.date set to relative in the
+// global configuration file the package reads, and to iso in the copy's
+// own, AllReflogs and Reflogs read the same positions and objects as with
+// neither, the stash list newest first. A name carrying a selector of its
+// own, which would ask for a reflog as of a date, is refused before git
+// runs, as a full reference name never carries one.
+func TestReflogsReadPositionsWhateverTheOperatorsLogDate(t *testing.T) {
+	cfg := gitEnvironment(t)
+	copy, _, _, _ := clonedCopy(t)
+	dir := copy.Path()
+	c := ctx(t)
+	for _, edit := range []string{"the first stashed edit\n", "the second stashed edit\n"} {
+		writeFile(t, filepath.Join(dir, "kept.txt"), edit)
+		rawGit(t, dir, "stash", "--quiet")
+	}
+	plain, err := copy.AllReflogs(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stash, err := copy.Reflogs(c, "refs/stash")
+	if err != nil || len(stash) != 2 || stash[0].Index != 0 || stash[1].Index != 1 {
+		t.Fatalf("Reflogs(refs/stash) = %+v, %v; want the two stashes at positions 0 and 1", stash, err)
+	}
+
+	appendConfig(t, cfg, "[log]\n\tdate = relative\n")
+	rawGit(t, dir, "config", "log.date", "iso")
+	if got, err := copy.AllReflogs(c); err != nil || !slices.Equal(got, plain) {
+		t.Fatalf("AllReflogs under log.date = %+v, %v; want %+v", got, err, plain)
+	}
+	if got, err := copy.Reflogs(c, "refs/stash"); err != nil || !slices.Equal(got, stash) {
+		t.Fatalf("Reflogs(refs/stash) under log.date = %+v, %v; want %+v", got, err, stash)
+	}
+	if _, err := copy.Reflogs(c, "refs/stash@{now}"); !errors.Is(err, vcs.ErrInvalidArgument) {
+		t.Errorf("Reflogs of a name carrying a selector = %v; want ErrInvalidArgument", err)
+	}
+}

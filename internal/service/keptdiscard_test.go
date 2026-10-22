@@ -272,6 +272,47 @@ func TestADiscardDigestSealsTheWholeStashList(t *testing.T) {
 	})
 }
 
+// A discard is shown and confirmed whatever date format the operator's git
+// configuration asks git log for: an investigation's copy kept with a
+// stash, and log.date set to relative in the copy's own configuration,
+// which the program reads as git does, is shown with the stash among what
+// would be lost, and the confirmation with the digest shown removes it.
+// Were the stash list read in a form that setting changes, the preview and
+// the confirmation would both be refused and the copy could never be
+// discarded.
+func TestADiscardIsShownAndConfirmedWhateverTheOperatorsLogDate(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	if err := writeFile(entry.CopyPath+"/finding.txt", "a stashed edit\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "stash", "--quiet")
+	git(t, entry.CopyPath, "config", "log.date", "relative")
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil || !shown.Loss.Stash {
+			t.Fatalf("the discard shown under log.date=relative = %+v, %v; want what would be lost, the stash among it", shown, err)
+		}
+		request.Confirm = shown.Loss.Digest
+		var done machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &done); err != nil || done.Effect != machine.KeptWorkDiscarded {
+			t.Fatalf("the confirmed discard under log.date=relative = %+v, %v; want it discarded", done, err)
+		}
+		if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the discarded copy still stands: %v", err)
+		}
+	})
+}
+
 // Discarding a copy settles every entry of it, the reviewer's sequence:
 // an investigation's copy is kept at the worker's commit A, the worker
 // commits B, and the copy is kept again, both through the real cleanup and
