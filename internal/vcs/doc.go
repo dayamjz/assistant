@@ -66,8 +66,10 @@
 // GIT_ATTR_SYSTEM are kept for the same reason; what keeps attributes from
 // selecting a program during a comparison is --no-ext-diff and --no-textconv
 // on the diff command lines in diff.go and on the name listing
-// UncommittedDigest uses. That digest reads worktree bytes itself and does
-// not ask git for a patch. The filter is not what enforces either. A
+// UncommittedDigest uses. That digest reads a regular file's worktree bytes
+// itself and does not ask git for a patch. A file that is not a regular
+// file, a symlink, or a directory is not opened. The filter is not what
+// enforces either. A
 // submodule checkout contributes the commit rev-parse HEAD prints in that
 // checkout, so a ref is followed to a commit and the ref storage is that
 // invocation's to read.

@@ -122,6 +122,111 @@ func TestAConflictingRebaseLeavesTheCopyReadyForItsFixRound(t *testing.T) {
 	t.Logf("rebase stage ran %d times; the scripted fixer ran %d times", rebaseRuns, fixRuns)
 }
 
+// upstreamReadme is the newer base's copy of the file a later submitted
+// commit also edits. The first submitted commit conflicts on total.go; this
+// one makes the commit after it conflict too.
+const upstreamReadme = "Total adds up numbers on the newer base.\n"
+
+// TestAnUnchangedLaterRoundKeepsAnEarlierResolution runs two commits that
+// each conflict. The first round resolves the first conflict and the rebase
+// advances to the second. The second round edits nothing. Aborting that
+// round would restore the submitted tip, drop the resolution from the
+// working history, and leave the recorded head naming the commit abort
+// removed. P6 keeps the resolution, and the recorded head is the commit the
+// copy stands on.
+func TestAnUnchangedLaterRoundKeepsAnEarlierResolution(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	git(t, s.dir, "checkout", "--quiet", "-B", "topic", s.base)
+	write(t, s.dir, totalPath, strings.Replace(baseTotal, "sum := 0", "sum := 0 // first edit", 1))
+	s.commit(t, "edit the function")
+	write(t, s.dir, readmePath, "Total sums every value it is given.\n")
+	s.head = s.commit(t, "edit the readme")
+	git(t, s.dir, "config", "user.name", "test")
+	git(t, s.dir, "config", "user.email", "test@example.invalid")
+	upstream := filepath.Join(t.TempDir(), "upstream.git")
+	git(t, filepath.Dir(upstream), "init", "--quiet", "--bare", "-b", "main", upstream)
+	git(t, s.dir, "remote", "add", stages.UpstreamRemote, upstream)
+	git(t, s.dir, "push", "--quiet", stages.UpstreamRemote, s.base+":refs/heads/main")
+	other := t.TempDir()
+	git(t, other, "clone", "--quiet", upstream, other)
+	write(t, other, totalPath, upstreamTotal)
+	write(t, other, readmePath, upstreamReadme)
+	git(t, other, "add", "-A")
+	git(t, other, "commit", "--quiet", "-m", "change both files on main")
+	git(t, other, "push", "--quiet", "origin", "main")
+
+	agent := standin.New(t, script(standin.Text("resolved the first conflict and left the second")))
+	var calls int
+	cfg := config.Defaults()
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, cfg, nil, redact.New())
+	fixDeps := stages.NewFixDeps(func(ctx context.Context, _ string) (agents.Fixer, error) {
+		inner, err := agents.OpenFixer(ctx, agent.Runner(), "")
+		if err != nil {
+			return nil, err
+		}
+		return &firstOnlyFixer{inner: inner, dir: s.dir, t: t, calls: &calls}, nil
+	}, s.home, cfg, nil, redact.New())
+	all := pipeline.ConstantStages("nothing to report")
+	all.Rebase = stages.Rebase(deps)
+	fixer := stages.Fix(fixDeps)
+	p, err := pipeline.New(pipeline.Options{
+		Stages: all, Rounds: config.FixRounds{Rebase: 3},
+		Budget: config.DefaultRunBudget, Fixer: fixer,
+	})
+	if err != nil {
+		t.Fatalf("building the pipeline: %v", err)
+	}
+	exec, err := p.Executor(graph.NewMemoryStore())
+	if err != nil {
+		t.Fatalf("building the executor: %v", err)
+	}
+	state, err := p.NewState(s.start())
+	if err != nil {
+		t.Fatalf("building the run state: %v", err)
+	}
+	result, err := exec.Run(t.Context(), s.run, state)
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	if calls < 2 {
+		t.Fatalf("the fixer ran %d time(s), want a second round on the later conflict", calls)
+	}
+	if result.Status != graph.StatusConverged {
+		t.Fatalf("the run stopped with %s, want convergence after the later round changed nothing", result.Status)
+	}
+	head := git(t, s.dir, "rev-parse", "HEAD")
+	if recorded := textAt(t, result.State, pipeline.KeyHead); recorded != head {
+		t.Fatalf("recorded head %s, working copy %s", recorded, head)
+	}
+	if got := git(t, s.dir, "show", "HEAD:"+totalPath); got != strings.TrimSpace(resolvedTotal) {
+		t.Fatalf("HEAD's %s =\n%s\nwant the first round's resolution", totalPath, got)
+	}
+	if git(t, s.dir, "cat-file", "-t", s.head) != "commit" {
+		t.Fatalf("the submitted commit %s is gone", s.head)
+	}
+}
+
+// firstOnlyFixer resolves the first conflict it is shown and leaves every
+// later round untouched, which is the unchanged round after a resolution
+// this run already committed.
+type firstOnlyFixer struct {
+	inner agents.Fixer
+	dir   string
+	t     *testing.T
+	calls *int
+}
+
+func (f *firstOnlyFixer) Reference() string { return f.inner.Reference() }
+
+func (f *firstOnlyFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Result, error) {
+	*f.calls++
+	if *f.calls == 1 {
+		write(f.t, f.dir, totalPath, resolvedTotal)
+	}
+	return f.inner.Apply(ctx, inv)
+}
+
 // resolvedTotal is the submitted change and the newer base, in one file. It is
 // what a fixer writes over the conflict while the copy stands on the new base.
 const resolvedTotal = `package total

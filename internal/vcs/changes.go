@@ -126,10 +126,14 @@ func parseChanges(out string) (Changes, error) {
 // commit, and the reference's own text is not recorded. The invocation
 // reads whatever ref storage the checkout uses. A directory that does not
 // hold one is recorded as a directory and its mode, not the files inside
-// it. A checkout whose HEAD does not resolve fails the digest. Staging a
-// path changes the result even when its worktree bytes do not, because the
-// index stages are part of it. Ignored files are not part of it, which is
-// the same gap Changes leaves. The result is not a git object name.
+// it. A checkout whose HEAD does not resolve fails the digest. A file that
+// is not a regular file, a symlink, or a directory contributes its mode and
+// its type bits and is not opened. Opening a FIFO that has no writer waits
+// until one appears, and that wait does not observe this call's context.
+// Staging a path changes the result even when its worktree bytes do not,
+// because the index stages are part of it. Ignored files are not part of
+// it, which is the same gap Changes leaves. The result is not a git object
+// name.
 //
 // The name listing passes --no-ext-diff and --no-textconv, and the bytes are
 // read from the worktree rather than from a patch. An attributes diff driver
@@ -183,6 +187,8 @@ func digestWrite(sum io.Writer, b []byte) error {
 // sum. A missing path is recorded as absent. A symlink contributes its mode
 // and target text. A regular file contributes its mode and bytes. A
 // submodule directory contributes its mode and the commit it has checked out.
+// Any other file type contributes its mode and its type bits and is not
+// opened, so a FIFO with no writer cannot hold the call past its context.
 func hashWorktreeList(ctx context.Context, r *Repository, sum io.Writer, root, listed string) error {
 	for path := range strings.SplitSeq(listed, "\x00") {
 		if path == "" {
@@ -237,21 +243,18 @@ func hashWorktreeList(ctx context.Context, r *Repository, sum io.Writer, root, l
 				}
 			}
 		default:
-			f, err := os.Open(full)
-			if err != nil {
+			if !info.Mode().IsRegular() {
+				if err := digestWrite(sum, []byte{4}); err != nil {
+					return err
+				}
+				kind := uint32(info.Mode() & os.ModeType)
+				if err := digestWrite(sum, []byte{
+					byte(kind >> 24), byte(kind >> 16), byte(kind >> 8), byte(kind),
+				}); err != nil {
+					return err
+				}
+			} else if err := digestRegular(sum, full); err != nil {
 				return err
-			}
-			writeErr := digestWrite(sum, []byte{3})
-			_, copyErr := io.Copy(sum, f)
-			closeErr := f.Close()
-			if writeErr != nil {
-				return writeErr
-			}
-			if copyErr != nil {
-				return copyErr
-			}
-			if closeErr != nil {
-				return closeErr
 			}
 		}
 		if err := digestWrite(sum, []byte{0}); err != nil {
@@ -259,6 +262,25 @@ func hashWorktreeList(ctx context.Context, r *Repository, sum io.Writer, root, l
 		}
 	}
 	return nil
+}
+
+// digestRegular records the bytes of a file the caller has classified as
+// regular. The type check is the caller's, from the stat that preceded it.
+func digestRegular(sum io.Writer, full string) error {
+	f, err := os.Open(full)
+	if err != nil {
+		return err
+	}
+	writeErr := digestWrite(sum, []byte{3})
+	_, copyErr := io.Copy(sum, f)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 // modeBytes is the permission bits of info, so a mode-only change is part of

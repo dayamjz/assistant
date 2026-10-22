@@ -63,8 +63,11 @@ import (
 // the commit the rebase is stopped on and continues, so the conflicting
 // commit is not replayed again ahead of the fix. A resolution that matches
 // that commit skips the step, and a step already replayed stays. A round that
-// leaves the index and the worktree unchanged aborts the rebase, and the
-// next execution starts a new one. An execution that finds a rebase this
+// leaves the index and the worktree unchanged aborts the rebase when the
+// copy's HEAD is not the head the run already records, and the next
+// execution starts a new one. When HEAD is that recorded head, the round
+// leaves the rebase in progress so the commit stays on the working copy.
+// An execution that finds a rebase this
 // stage already started does not start a second one. The section below says
 // what a conflict does after the push.
 //

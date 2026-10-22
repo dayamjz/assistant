@@ -110,9 +110,14 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 // replay would stop on the original commit. The round reports the head when
 // the rebase has finished or stopped on a later conflict. A stop with nothing
 // unmerged is an error, and the round does not report a head. A round that
-// leaves the index and the worktree unchanged aborts the rebase and reports
-// that nothing changed, so the stage's next execution starts a new rebase
-// rather than meeting one left in progress.
+// leaves the index and the worktree unchanged aborts the rebase only when
+// the copy's HEAD is not the head the run already records, and reports that
+// nothing changed, so the stage's next execution starts a new rebase rather
+// than meeting one left in progress. When HEAD is that recorded head, an
+// earlier round of this rebase has already committed it. Aborting would
+// remove that commit from the working copy and leave the recorded head
+// naming a commit the copy no longer has, so the round leaves the rebase in
+// progress and writes no new head.
 //
 // pipeline.KeyHead is the write that carries it, and it is the write that makes
 // the graph's convergence bound meaningful: a round that changed nothing leaves
@@ -270,6 +275,18 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 				"stages: reading the conflicted copy after the %s fix round: %w", in.Stage, err)
 		}
 		if after == digest {
+			standing, err := copied.ResolveCommit(ctx, "HEAD")
+			if err != nil {
+				return pipeline.FixOutput{}, fmt.Errorf(
+					"stages: reading where the copy stands after the %s fix round left it unchanged: %w",
+					in.Stage, err)
+			}
+			if standing == facts.head {
+				// The run already records this commit, so an earlier round
+				// committed it during this rebase. Aborting would take it
+				// off the working copy and leave KeyHead naming it.
+				return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
+			}
 			if err := copied.RebaseAbort(ctx); err != nil {
 				return pipeline.FixOutput{}, fmt.Errorf(
 					"stages: abandoning the rebase the %s fix round left unchanged: %w", in.Stage, err)
