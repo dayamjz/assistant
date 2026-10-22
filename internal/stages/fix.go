@@ -101,13 +101,16 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 // reads a commit, and a working copy with uncommitted edits is not one.
 //
 // A rebase the rebase stage left in progress is the conflict on the new base.
-// The round commits the resolution there and continues the rebase, so the
-// conflicting commit is not replayed again ahead of the fix. A round that
-// leaves that working copy unchanged aborts the rebase and reports that
-// nothing changed, so the stage's next execution starts a new rebase rather
-// than meeting one left in progress. A continue that stops on a later commit
-// leaves that rebase in progress; the stage's next execution reports it and
-// does not start a second one.
+// The round commits a resolution that differs from the commit the rebase is
+// stopped on and continues, so the conflicting commit is not replayed again
+// ahead of the fix. A resolution that matches that commit records no new
+// tree. The rebase continues anyway, so a step already replayed stays.
+// Aborting there would drop that step, and the next replay would stop on the
+// original commit. A round that leaves the index and the worktree unchanged
+// aborts the rebase and reports that nothing changed, so the stage's next
+// execution starts a new rebase rather than meeting one left in progress. A
+// continue that stops on a later commit leaves that rebase in progress; the
+// stage's next execution reports it and does not start a second one.
 //
 // pipeline.KeyHead is the write that carries it, and it is the write that makes
 // the graph's convergence bound meaningful: a round that changed nothing leaves
@@ -275,28 +278,20 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 
 	committed, err := copied.CommitAllWithBody(ctx, subject, body)
 	if errors.Is(err, vcs.ErrNothingToCommit) {
-		if rebasing {
-			if err := copied.RebaseAbort(ctx); err != nil {
-				return pipeline.FixOutput{}, fmt.Errorf(
-					"stages: abandoning the rebase the %s fix round did not commit: %w", in.Stage, err)
-			}
+		if !rebasing {
+			return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
 		}
-		return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
-	}
-	if err != nil {
+		// The resolution matches the commit the rebase is stopped on, so there
+		// is nothing to record. Continuing drops this step and keeps a step
+		// already replayed. Aborting would drop that step too.
+		committed = before
+	} else if err != nil {
 		return pipeline.FixOutput{}, fmt.Errorf(
 			"stages: committing what the %s stage's fix round changed: %w", in.Stage, err)
-	}
-	if committed == before {
+	} else if committed == before && !rebasing {
 		// Belt and braces: CommitAll reports ErrNothingToCommit for this, and
 		// a commit identical to the one before it would otherwise be reported
 		// as progress the convergence bound could not see.
-		if rebasing {
-			if err := copied.RebaseAbort(ctx); err != nil {
-				return pipeline.FixOutput{}, fmt.Errorf(
-					"stages: abandoning the rebase the %s fix round did not move: %w", in.Stage, err)
-			}
-		}
 		return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
 	}
 	if rebasing {

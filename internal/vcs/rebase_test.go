@@ -158,3 +158,101 @@ func TestRebaseContinueCommitsTheResolutionOntoTheNewBase(t *testing.T) {
 		t.Fatalf("main %s ancestor of %s: %v, %v", main, head, ancestor, err)
 	}
 }
+
+// TestUncommittedDigestIgnoresATextconvThatCollapsesBytes is the trust
+// boundary on the digest a rebase fix round compares. A .gitattributes entry
+// can name a textconv, and a textconv that prints one text for every blob
+// makes git diff report no change. A real edit still has to change the digest,
+// and the textconv program must not run to decide that.
+func TestUncommittedDigestIgnoresATextconvThatCollapsesBytes(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
+	marker := filepath.Join(t.TempDir(), "ran")
+	script := filepath.Join(t.TempDir(), "flat.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'x\\n' >> '"+marker+"'\nprintf 'flat\\n'\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	commitFile(t, dir, ".gitattributes", "*.txt diff=flat\n", "attributes")
+	commitFile(t, dir, "note.txt", "one\n", "one")
+	rawGit(t, dir, "config", "diff.flat.textconv", script)
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := repo.UncommittedDigest(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "note.txt"), "two\n")
+	after, err := repo.UncommittedDigest(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Fatal("a real edit left the digest unchanged")
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the textconv program ran while the digest was read")
+	}
+}
+
+// TestUncommittedDigestReadsALargeChangeWithoutThePatch is a blob whose
+// literal delta does not fit in the invocation output cap. The digest has to
+// come back anyway, and a further edit has to change it. Reading the patch
+// fails before a fix round can ask the fixer.
+func TestUncommittedDigestReadsALargeChangeWithoutThePatch(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
+	body := strings.Repeat("a", 4096)
+	commitFile(t, dir, "blob.bin", body, "blob")
+	repo, err := vcs.OpenWorktree(ctx(t), dir, vcs.WithMaxOutput(64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "blob.bin"), strings.Repeat("b", 4096))
+	first, err := repo.UncommittedDigest(ctx(t))
+	if err != nil {
+		t.Fatalf("digest of a change larger than the output cap: %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "blob.bin"), strings.Repeat("c", 4096))
+	second, err := repo.UncommittedDigest(ctx(t))
+	if err != nil || second == first {
+		t.Fatalf("digest after a further edit = %q, before %q, error %v", second, first, err)
+	}
+}
+
+// TestUncommittedDigestSeesAnIndexResolutionThatDoesNotChangeBytes is a
+// modify/delete conflict whose worktree already holds the bytes the resolution
+// keeps. Staging that file does not change the worktree, and the digest has to
+// change anyway, because the index is what a later commit records.
+func TestUncommittedDigestSeesAnIndexResolutionThatDoesNotChangeBytes(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
+	commitFile(t, dir, "clash.txt", "base\n", "base")
+	rawGit(t, dir, "checkout", "--quiet", "-b", "topic")
+	commitFile(t, dir, "keep.txt", "topic-keep\n", "clean")
+	rawGit(t, dir, "rm", "--quiet", "clash.txt")
+	rawGit(t, dir, "commit", "--quiet", "-m", "delete clash")
+	rawGit(t, dir, "checkout", "--quiet", "main")
+	commitFile(t, dir, "clash.txt", "main\n", "modify clash")
+	rawGit(t, dir, "checkout", "--quiet", "topic")
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Rebase(ctx(t), vcs.RebaseSpec{Onto: "main"}); !errors.Is(err, vcs.ErrRebaseConflict) {
+		t.Fatalf("rebasing: %v, want a modify/delete conflict", err)
+	}
+	before, err := repo.UncommittedDigest(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, dir, "add", "clash.txt")
+	after, err := repo.UncommittedDigest(ctx(t))
+	if err != nil || after == before {
+		t.Fatalf("digest after staging the file left in the tree = %q, before %q, error %v", after, before, err)
+	}
+}

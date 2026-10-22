@@ -253,3 +253,114 @@ func (f resolvingFixer) Apply(ctx context.Context, inv agents.Invocation) (agent
 	write(f.t, f.dir, totalPath, resolvedTotal)
 	return f.inner.Apply(ctx, inv)
 }
+
+const keptNote = `package note
+
+// Kept is a change an earlier commit made, on a file the conflict does not touch.
+const Kept = true
+`
+
+// upstreamTotal is the newer base's copy of the file the submitted commit also
+// edits. A fixer that keeps this text is resolving onto the commit the rebase
+// stopped on.
+var upstreamTotal = strings.Replace(baseTotal, "sum := 0", "sum := 0 // newer base", 1)
+
+// TestARebaseResolutionMatchingTheBaseKeepsAnEarlierCommit runs a branch whose
+// first commit applies and whose second conflicts. The fixer writes the
+// upstream side of the conflict, which is the tree the rebase is already
+// stopped on. That resolution has to finish the rebase and keep the first
+// commit. Aborting it drops the first commit and the next rebase stops on the
+// original conflicting commit again. P6 keeps the submitted commit.
+func TestARebaseResolutionMatchingTheBaseKeepsAnEarlierCommit(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	git(t, s.dir, "checkout", "--quiet", "-B", "topic", s.base)
+	write(t, s.dir, "internal/note/note.go", keptNote)
+	s.commit(t, "note a fact the rebase can apply")
+	write(t, s.dir, totalPath, strings.Replace(baseTotal, "sum := 0", "sum := 0 // start empty", 1))
+	s.head = s.commit(t, "change the same line")
+	git(t, s.dir, "config", "user.name", "test")
+	git(t, s.dir, "config", "user.email", "test@example.invalid")
+	upstream := filepath.Join(t.TempDir(), "upstream.git")
+	git(t, filepath.Dir(upstream), "init", "--quiet", "--bare", "-b", "main", upstream)
+	git(t, s.dir, "remote", "add", stages.UpstreamRemote, upstream)
+	git(t, s.dir, "push", "--quiet", stages.UpstreamRemote, s.base+":refs/heads/main")
+	other := t.TempDir()
+	git(t, other, "clone", "--quiet", upstream, other)
+	write(t, other, totalPath, upstreamTotal)
+	git(t, other, "add", "-A")
+	git(t, other, "commit", "--quiet", "-m", "change the same line on main")
+	git(t, other, "push", "--quiet", "origin", "main")
+
+	agent := standin.New(t, script(standin.Text("kept the upstream side of the conflict")))
+	cfg := config.Defaults()
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, cfg, nil, redact.New())
+	fixDeps := stages.NewFixDeps(func(ctx context.Context, _ string) (agents.Fixer, error) {
+		inner, err := agents.OpenFixer(ctx, agent.Runner(), "")
+		if err != nil {
+			return nil, err
+		}
+		return upstreamFixer{inner: inner, dir: s.dir, t: t}, nil
+	}, s.home, cfg, nil, redact.New())
+	all := pipeline.ConstantStages("nothing to report")
+	all.Rebase = stages.Rebase(deps)
+	fixer := stages.Fix(fixDeps)
+	p, err := pipeline.New(pipeline.Options{
+		Stages: all, Rounds: config.FixRounds{Rebase: 3},
+		Budget: config.DefaultRunBudget, Fixer: fixer,
+	})
+	if err != nil {
+		t.Fatalf("building the pipeline: %v", err)
+	}
+	exec, err := p.Executor(graph.NewMemoryStore())
+	if err != nil {
+		t.Fatalf("building the executor: %v", err)
+	}
+	state, err := p.NewState(s.start())
+	if err != nil {
+		t.Fatalf("building the run state: %v", err)
+	}
+	result, err := exec.Run(t.Context(), s.run, state)
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	head := git(t, s.dir, "rev-parse", "HEAD")
+	base := git(t, s.dir, "rev-parse", "refs/remotes/"+stages.UpstreamRemote+"/main")
+	if result.Status != graph.StatusCompleted || !isAncestor(t, s.dir, base, head) {
+		t.Fatalf("status %s, head %s, upstream %s is ancestor %v; keeping the upstream side has to finish the rebase on that base",
+			result.Status, head, base, isAncestor(t, s.dir, base, head))
+	}
+	got, err := os.ReadFile(filepath.Join(s.dir, "internal/note/note.go"))
+	if err != nil || string(got) != keptNote {
+		t.Fatalf("the earlier commit's file = %q, error %v", got, err)
+	}
+	total, err := os.ReadFile(filepath.Join(s.dir, filepath.FromSlash(totalPath)))
+	if err != nil || string(total) != upstreamTotal {
+		t.Fatalf("the resolved file =\n%s\nerror %v", total, err)
+	}
+	if git(t, s.dir, "cat-file", "-t", s.head) != "commit" {
+		t.Fatalf("the submitted commit %s is gone", s.head)
+	}
+	repo, err := vcs.OpenWorktree(t.Context(), s.dir)
+	if err != nil {
+		t.Fatalf("opening the copy after the run: %v", err)
+	}
+	if inProgress, err := repo.RebaseStatus(t.Context()); err != nil || inProgress {
+		t.Fatalf("after the run, rebase in progress %v, error %v", inProgress, err)
+	}
+}
+
+// upstreamFixer writes the upstream side of the conflicted file while the real
+// fixer invocation runs.
+type upstreamFixer struct {
+	inner agents.Fixer
+	dir   string
+	t     *testing.T
+}
+
+func (f upstreamFixer) Reference() string { return f.inner.Reference() }
+
+func (f upstreamFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Result, error) {
+	write(f.t, f.dir, totalPath, upstreamTotal)
+	return f.inner.Apply(ctx, inv)
+}

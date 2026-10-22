@@ -59,9 +59,11 @@ import (
 // This stage has 3 fix rounds available per config.FixRounds.Rebase. When
 // the first pass stops on conflicts, the rebase stays in progress and the
 // copy stands on the new base with those conflicts in the working tree. The
-// fix round resolves them there. It commits that resolution on the new base
-// and continues the rebase, so the conflicting commit is not replayed again
-// ahead of the fix. A round that edits nothing aborts the rebase, and the
+// fix round resolves them there. It commits a resolution that differs from
+// the commit the rebase is stopped on and continues, so the conflicting
+// commit is not replayed again ahead of the fix. A resolution that matches
+// that commit continues too, and a step already replayed stays. A round that
+// leaves the index and the worktree unchanged aborts the rebase, and the
 // next execution starts a new one. An execution that finds a rebase this
 // stage already started does not start a second one. The section below says
 // what a conflict does after the push.

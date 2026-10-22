@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,17 +114,29 @@ func parseChanges(out string) (Changes, error) {
 	return c, nil
 }
 
-// UncommittedDigest identifies the content a commit of this working copy
-// would newly record, including unresolved conflict markers in the worktree.
+// UncommittedDigest identifies the index and the worktree bytes that differ
+// from it, including unresolved conflict stages and untracked files.
 //
-// Equal results mean that content is unchanged. Ignored files are not part of
-// it, which is the same gap Changes leaves. The result is not a git object
-// name.
+// Equal results mean that content is unchanged. Staging a path changes the
+// result even when its worktree bytes do not, because the index stages are
+// part of it. Ignored files are not part of it, which is the same gap Changes
+// leaves. The result is not a git object name.
+//
+// The name listing passes --no-ext-diff and --no-textconv, and the bytes are
+// read from the worktree rather than from a patch. An attributes diff driver
+// or textconv does not run, and a large blob is not read through the
+// invocation output cap. A listing of paths that itself exceeds that cap
+// still fails.
 func (r *Repository) UncommittedDigest(ctx context.Context) (string, error) {
 	if r.kind != KindWorktree {
 		return "", &openError{path: r.path, kind: KindWorktree}
 	}
-	diff, _, err := r.runExpecting(ctx, "uncommitted-diff", []int{1}, "diff", "--binary", "HEAD")
+	stage, err := r.run(ctx, "uncommitted-stage", "ls-files", "--stage", "-z")
+	if err != nil {
+		return "", err
+	}
+	names, err := r.run(ctx, "uncommitted-names",
+		"diff-files", "-z", "--name-only", "--no-ext-diff", "--no-textconv")
 	if err != nil {
 		return "", err
 	}
@@ -131,20 +145,106 @@ func (r *Repository) UncommittedDigest(ctx context.Context) (string, error) {
 		return "", err
 	}
 	sum := sha256.New()
-	sum.Write(diff)
-	sum.Write([]byte{0})
-	for path := range strings.SplitSeq(string(others), "\x00") {
+	if err := digestWrite(sum, stage); err != nil {
+		return "", err
+	}
+	if err := digestWrite(sum, []byte{0}); err != nil {
+		return "", err
+	}
+	if err := hashWorktreeList(sum, r.path, string(names)); err != nil {
+		return "", err
+	}
+	if err := digestWrite(sum, []byte{0}); err != nil {
+		return "", err
+	}
+	if err := hashWorktreeList(sum, r.path, string(others)); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// digestWrite records b and returns the writer's error. A hash writer does
+// not fail, and the check is what keeps a later writer from dropping bytes.
+func digestWrite(sum io.Writer, b []byte) error {
+	_, err := sum.Write(b)
+	return err
+}
+
+// hashWorktreeList mixes the worktree bytes of each NUL-separated path into
+// sum. A missing path is recorded as absent. A symlink contributes its target
+// text, not the file it points at.
+func hashWorktreeList(sum io.Writer, root, listed string) error {
+	for path := range strings.SplitSeq(listed, "\x00") {
 		if path == "" {
 			continue
 		}
-		body, err := os.ReadFile(filepath.Join(r.path, filepath.FromSlash(path)))
+		full, err := worktreePath(root, path)
 		if err != nil {
-			return "", err
+			return err
 		}
-		sum.Write([]byte(path))
-		sum.Write([]byte{0})
-		sum.Write(body)
-		sum.Write([]byte{0})
+		if err := digestWrite(sum, []byte(path)); err != nil {
+			return err
+		}
+		if err := digestWrite(sum, []byte{0}); err != nil {
+			return err
+		}
+		info, err := os.Lstat(full)
+		if err != nil {
+			if os.IsNotExist(err) {
+				if err := digestWrite(sum, []byte{0}); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			target, err := os.Readlink(full)
+			if err != nil {
+				return err
+			}
+			if err := digestWrite(sum, []byte{1}); err != nil {
+				return err
+			}
+			if err := digestWrite(sum, []byte(target)); err != nil {
+				return err
+			}
+		case info.IsDir():
+			if err := digestWrite(sum, []byte{2}); err != nil {
+				return err
+			}
+		default:
+			f, err := os.Open(full)
+			if err != nil {
+				return err
+			}
+			writeErr := digestWrite(sum, []byte{3})
+			_, copyErr := io.Copy(sum, f)
+			closeErr := f.Close()
+			if writeErr != nil {
+				return writeErr
+			}
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
+			}
+		}
+		if err := digestWrite(sum, []byte{0}); err != nil {
+			return err
+		}
 	}
-	return hex.EncodeToString(sum.Sum(nil)), nil
+	return nil
+}
+
+// worktreePath joins a git path onto the working copy and refuses one that
+// leaves it.
+func worktreePath(root, rel string) (string, error) {
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.IsAbs(clean) {
+		return "", fmt.Errorf("vcs: uncommitted path %q leaves the working copy", rel)
+	}
+	return filepath.Join(root, clean), nil
 }
