@@ -56,9 +56,15 @@ func terminateTree(proc *os.Process, grace time.Duration, leaderRunning bool, st
 	// taskkill /T ends the tree rather than the one process, which is what
 	// this call is for; falling back to killing the leader alone is strictly
 	// less than that and is said so here rather than reported as success.
-	if err := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid)).Run(); err != nil {
+	if err := runTreeKill(taskkill(pid), treeKillDeadline); err != nil {
 		_ = proc.Kill()
 	}
+}
+
+// taskkill is the command that forcefully ends the tree rooted at pid, for
+// runTreeKill to run.
+func taskkill(pid int) *exec.Cmd {
+	return exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(pid))
 }
 
 // sendCtrlBreak addresses a console control event at the group rooted at pid.

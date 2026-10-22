@@ -20,15 +20,17 @@ const (
 	// agent uses this list. The default fixer names cursor and does not.
 	KeyAgent Key = "agent"
 	// KeyRoles is "roles": which agent, model provider, model type, model
-	// version, and effort each role runs. The default names fix as cursor
+	// version, effort, and context window each role runs. The default names fix as cursor
 	// and names no other role, so review and worker use KeyAgent. A document
 	// that sets this key and does not name fix keeps that fixer. A fix role
 	// that names no agent uses KeyAgent. review, fix, and worker are the
 	// three the program assigns; any other name is a worker role a task may
 	// name. It is the same trust class as KeyAgent. A provider, type, or
-	// version outside the model table, a partial triple, and an effort other
-	// than low, medium, or high fail at parse time and name the role. Each
-	// role may name one explicit fallback, with its own agent and model.
+	// version outside the model table, a partial triple, an effort other
+	// than low, medium, or high, and a context outside ContextWindows or on
+	// a role with no triple fail at parse time and name the role. Each role
+	// may name one explicit fallback, with its own agent, model, effort, and
+	// context.
 	KeyRoles Key = "roles"
 	// KeyCommandsTest is "commands.test": a targeted check for the change.
 	KeyCommandsTest Key = "commands.test"

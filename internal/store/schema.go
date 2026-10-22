@@ -112,6 +112,10 @@ const fixerAgentMigration = "run fixer agent"
 // model triple, and the effort an invocation was asked for.
 const invocationRoleMigration = "agent invocation role"
 
+// invocationContextWindowMigration names the migration that records the
+// context window an invocation was asked for, beside its effort.
+const invocationContextWindowMigration = "agent invocation context window"
+
 // holdResolutionSealMigration names the migration that seals a hold's
 // resolution and note once recorded, for the reason sealCheckpointTableMigration
 // is a constant.
@@ -2200,6 +2204,17 @@ var schema = []migration{
 	},
 	{
 		version: 53,
+		name:    invocationContextWindowMigration,
+		statements: []string{
+			// The context window the launch was asked for, on migration 40's
+			// terms for the effort: NULL means unknown, a row written before
+			// the column; an empty string means the launch named none, which
+			// a usage total keeps apart from a named window and from unknown.
+			`ALTER TABLE agent_invocation ADD COLUMN context_window TEXT`,
+		},
+	},
+	{
+		version: 54,
 		name:    keptWorkWakesMigration,
 		statements: []string{
 			// A wake about a kept work entry rather than a task: PRD section

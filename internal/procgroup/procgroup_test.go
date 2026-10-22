@@ -1,6 +1,7 @@
 package procgroup_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -94,6 +95,33 @@ func TestRunRefusesACommandItCannotRunAsAGroupOfItsOwn(t *testing.T) {
 
 	if err := procgroup.Run(context.Background(), standIn(t), time.Second); err != nil {
 		t.Errorf("Run of a plain command = %v; want it to run", err)
+	}
+}
+
+// A command built with exec.CommandContext, then adjusted the way that
+// constructor documents (Cancel set back to nil, WaitDelay above zero),
+// still carries the context CommandContext stored. check used to treat a
+// context as Cancel != nil, so this shape was started: stdout is a writer,
+// so os/exec records no parentIOPipes entry either. Run refuses it and
+// starts nothing. The program is the hang stand-in, and the call is the
+// review's (a 10ms deadline and a 1ns grace), which reached ErrAbandoned
+// before the refusal.
+func TestRunRefusesACommandContextWhoseCancelWasCleared(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(ctx, os.Args[0])
+	cmd.Env = append(os.Environ(), standInMode+"="+standInHang)
+	cmd.Cancel = nil
+	cmd.WaitDelay = time.Millisecond
+	cmd.Stdout = &bytes.Buffer{}
+	runCtx, runCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	t.Cleanup(runCancel)
+	err := procgroup.Run(runCtx, cmd, time.Nanosecond)
+	if !errors.Is(err, procgroup.ErrMisconfigured) {
+		t.Errorf("Run = %v; want ErrMisconfigured", err)
+	}
+	if cmd.Process != nil {
+		t.Errorf("Run started a command it refused, pid %d", cmd.Process.Pid)
 	}
 }
 

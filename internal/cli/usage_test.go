@@ -15,8 +15,10 @@ import (
 // TestRunsUsageReportsTheInvocationRecordThroughTheSurface drives PRD section
 // 9's usage view through cli.Run against a real service, over a home whose
 // agent invocation history holds a review call and a fix round serving one
-// run's review stage, a call from before the record kept a run or stage, and
-// a call older than the window. The rows are written straight to the store
+// run's review stage, a review call from before the record kept a run,
+// stage, or context window, and a call older than the window. The two review
+// calls inside the window differ in nothing the usage view groups by but the
+// context window, so the grouping by window is the window's alone. The rows are written straight to the store
 // because which calls a run makes, and that each lands with its run and
 // stage, are other tests' subjects; what is under test here is what
 // runs --usage makes of the record once it exists.
@@ -42,10 +44,12 @@ func TestRunsUsageReportsTheInvocationRecordThroughTheSurface(t *testing.T) {
 	now := time.Now().UTC()
 	for _, inv := range []store.AgentInvocation{
 		{Purpose: "review", Agent: "claude", Model: "some-model", SessionUse: "none", Started: now.Add(-2 * time.Hour),
-			Duration: time.Minute, InputTokens: store.Known[int64](1000), Run: store.Known("usage-run-1"), Stage: store.Known("review")},
+			Duration: time.Minute, InputTokens: store.Known[int64](1000), Run: store.Known("usage-run-1"), Stage: store.Known("review"),
+			ContextWindow: store.Known("1m")},
 		{Purpose: "fix", Agent: "claude", Model: "some-model", SessionUse: "opened", Started: now.Add(-time.Hour),
-			Duration: 2 * time.Second, Failure: "timeout", Run: store.Known("usage-run-1"), Stage: store.Known("review")},
-		{Purpose: "intent", Agent: "claude", SessionUse: "none", Started: now.Add(-30 * time.Minute), Duration: time.Second,
+			Duration: 2 * time.Second, Failure: "timeout", Run: store.Known("usage-run-1"), Stage: store.Known("review"),
+			ContextWindow: store.Known("")},
+		{Purpose: "review", Agent: "claude", Model: "some-model", SessionUse: "none", Started: now.Add(-30 * time.Minute), Duration: time.Second,
 			InputTokens: store.Known[int64](5)},
 		{Purpose: "review", Agent: "claude", Model: "some-model", SessionUse: "none", Started: now.Add(-48 * time.Hour),
 			Duration: time.Minute, InputTokens: store.Known[int64](99999)},
@@ -85,6 +89,13 @@ func TestRunsUsageReportsTheInvocationRecordThroughTheSurface(t *testing.T) {
 	if !strings.Contains(got.stdout, `"input_tokens":{"total":null`) {
 		t.Errorf("no group carries an unreported input total as null:\n%s", got.stdout)
 	}
+	var windows []string
+	for _, g := range usage.ByAgent {
+		windows = append(windows, g.ContextWindow.String())
+	}
+	if strings.Join(windows, ",") != "1m,,unknown" {
+		t.Errorf("the calls are grouped by context window as %q, want 1m, not named, and unknown apart", windows)
+	}
 	if usage.Ceiling.Standing != machine.CeilingOff || len(usage.Ceiling.Counts) != 0 {
 		t.Errorf("a home that set no ceiling answered %+v, want it off", usage.Ceiling)
 	}
@@ -102,6 +113,11 @@ func TestRunsUsageReportsTheInvocationRecordThroughTheSurface(t *testing.T) {
 	}
 	if !strings.Contains(human.stdout, "Ceiling    "+machine.CeilingPhrase(machine.CeilingOff).String()+"\n") {
 		t.Errorf("the usage view does not say no ceiling is set:\n%s", human.stdout)
+	}
+	for _, want := range []string{"context 1m", "context (not named)", "context unknown"} {
+		if !strings.Contains(human.stdout, want) {
+			t.Errorf("the usage view does not total %q on its own:\n%s", want, human.stdout)
+		}
 	}
 }
 

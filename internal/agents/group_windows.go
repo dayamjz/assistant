@@ -4,8 +4,6 @@ package agents
 
 import (
 	"os"
-	"os/exec"
-	"strconv"
 	"time"
 )
 
@@ -27,7 +25,7 @@ func endPresentGroup(id Identity, grace time.Duration, hurry <-chan struct{}) (G
 	if waitAbsentOr(id, grace, hurry) {
 		return GroupEnded, nil
 	}
-	if err := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(id.PID)).Run(); err != nil {
+	if err := runTreeKill(taskkill(id.PID), treeKillDeadline); err != nil {
 		if proc, findErr := os.FindProcess(id.PID); findErr == nil {
 			_ = proc.Kill()
 		}
@@ -41,7 +39,7 @@ func endPresentGroup(id Identity, grace time.Duration, hurry <-chan struct{}) (G
 // forcePresentGroup is endPresentGroup's forceful step alone, on
 // ForceGroup's terms: the tree kill at once, then the wait for the leader.
 func forcePresentGroup(id Identity, wait time.Duration) (GroupEnd, error) {
-	if err := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(id.PID)).Run(); err != nil {
+	if err := runTreeKill(taskkill(id.PID), treeKillDeadline); err != nil {
 		if proc, findErr := os.FindProcess(id.PID); findErr == nil {
 			_ = proc.Kill()
 		}
