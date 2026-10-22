@@ -278,42 +278,11 @@ func (s *Store) QueuedDomainWakes(ctx context.Context, limit int) ([]DomainWake,
 		domainWakeColumns+` WHERE domain_wake.handled_at IS NULL ORDER BY domain_wake.id LIMIT ?`, limit)
 }
 
-// offeredDomainClause is offeredClause for the second shape: the route's
-// half is that a subordinate is offered nothing, since every domain wake is
-// about a subordinate and the first coordinator alone acts on one.
-func offeredDomainClause(held []string, route WakeRoute) (string, []any, bool) {
-	if route.Subordinate != "" {
-		return "", nil, false
-	}
-	clause := `domain_wake.handled_at IS NULL`
-	var args []any
-	if len(held) > 0 {
-		marks := make([]string, len(held))
-		for i, h := range held {
-			marks[i] = "?"
-			args = append(args, h)
-		}
-		clause += ` AND (domain_wake.handed_out_under IS NULL OR domain_wake.handed_out_under NOT IN (` + strings.Join(marks, ",") + `))`
-	}
-	return clause, args, true
-}
-
 // OfferedDomainWakes reports how many queued domain wakes a drain made now
 // with held and route would offer, on OfferedWakes' terms: none on a
 // subordinate's route.
 func (s *Store) OfferedDomainWakes(ctx context.Context, held []string, route WakeRoute) (int, error) {
-	if err := s.live(); err != nil {
-		return 0, err
-	}
-	clause, args, offered := offeredDomainClause(held, route)
-	if !offered {
-		return 0, nil
-	}
-	var n int
-	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM domain_wake WHERE `+clause, args...).Scan(&n); err != nil {
-		return 0, fmt.Errorf("store: counting the offered domain wakes: %w", err)
-	}
-	return n, nil
+	return domainWakeShape.offered(ctx, s, held, route)
 }
 
 // DrainDomainWakes is DrainWakes for the second shape: the queued domain
@@ -343,40 +312,12 @@ func (s *Store) DrainDomainWakes(ctx context.Context, limit int, h WakeHandout) 
 // drainDomainWakesTx is DrainDomainWakes inside a transaction the caller
 // holds.
 func drainDomainWakesTx(ctx context.Context, tx *sql.Tx, limit int, h WakeHandout) ([]DomainWake, error) {
-	clause, args, offered := offeredDomainClause(h.Held, h.Route)
-	if !offered {
-		return nil, nil
-	}
-	to, _ := acknowledgerText(h.To)
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM domain_wake WHERE `+clause+` ORDER BY id LIMIT ?`, append(args, limit)...)
+	ids, err := domainWakeShape.handOutTx(ctx, tx, limit, h)
 	if err != nil {
 		return nil, err
 	}
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	now := encodeTime(nowUTC())
 	out := make([]DomainWake, 0, len(ids))
 	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE domain_wake SET handed_out_at = ?, handed_out_to = ?, handed_out_under = ?,
-				handouts = coalesce(handouts, 0) + 1
-			WHERE id = ? AND handled_at IS NULL`,
-			now, to, h.Under, id); err != nil {
-			return nil, err
-		}
 		drained, err := domainWakeByID(ctx, tx, id)
 		if err != nil {
 			return nil, err
@@ -392,14 +333,7 @@ func drainDomainWakesTx(ctx context.Context, tx *sql.Tx, limit int, h WakeHandou
 // count, so a wake about a subordinate keeps the home in flight until the
 // coordinator acknowledges it.
 func (s *Store) UnacknowledgedDomainWakes(ctx context.Context) (int, error) {
-	if err := s.live(); err != nil {
-		return 0, err
-	}
-	var n int
-	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM domain_wake WHERE handled_at IS NULL`).Scan(&n); err != nil {
-		return 0, fmt.Errorf("store: counting queued domain wakes: %w", err)
-	}
-	return n, nil
+	return domainWakeShape.unacknowledged(ctx, s)
 }
 
 // AcknowledgeDomainWakes records that the named domain wakes were handled,
@@ -422,26 +356,7 @@ func (s *Store) AcknowledgeDomainWakes(ctx context.Context, ids []int64, by Ackn
 // acknowledgeDomainWakesTx is AcknowledgeDomainWakes inside a transaction,
 // on acknowledgeWakesTx's terms.
 func acknowledgeDomainWakesTx(ctx context.Context, tx *sql.Tx, ids []int64, who, now string) error {
-	for _, id := range ids {
-		var handled Optional[string]
-		err := tx.QueryRowContext(ctx, `SELECT handled_at FROM domain_wake WHERE id = ?`, id).Scan(&handled)
-		switch {
-		case isNoRows(err):
-			return &WakeIDError{ID: id, Reason: ErrWakeUnknown}
-		case err != nil:
-			return fmt.Errorf("store: acknowledging domain wake %d: %w", id, err)
-		case handled.IsKnown():
-			return &WakeIDError{ID: id, Reason: ErrWakeAcknowledged}
-		}
-	}
-	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE domain_wake SET handled_at = ?, acknowledged_by = ? WHERE id = ? AND handled_at IS NULL`,
-			now, who, id); err != nil {
-			return fmt.Errorf("store: acknowledging domain wake %d: %w", id, err)
-		}
-	}
-	return nil
+	return domainWakeShape.acknowledgeTx(ctx, tx, ids, who, now)
 }
 
 const domainWakeColumns = `SELECT domain_wake.id, domain_wake.delegation, delegation.domain, domain_wake.kind,
