@@ -179,22 +179,38 @@ class LeakCheckTest(unittest.TestCase):
                     if made.is_dir():
                         made.rmdir()
 
-    def test_an_orphan_is_not_an_apple_xpc_service(self):
+    def test_an_orphan_is_not_an_apple_bundle_service(self):
         with subprocess.Popen(["sleep", "300"], start_new_session=True) as child:
             try:
-                self.assertIsNone(check.apple_xpc_service(child.pid))
+                self.assertIsNone(check.apple_bundle_service(child.pid))
                 self.assertEqual(check.apple_owned({child.pid}), {})
             finally:
                 child.kill()
                 child.wait()
         if sys.platform != "darwin":
             return
-        # Positive control: a running Apple XPC service launchd started.
+        # Positive control: running Apple XPC services and app extensions
+        # launchd started are set aside, each by its bundle.
         output = subprocess.check_output(["ps", "-axo", "pid=,command="], text=True)
-        services = [int(line.split(None, 1)[0]) for line in output.splitlines()
-                    if ".xpc/Contents/MacOS/" in line and "/System/" in line]
-        found = [pid for pid in services if check.apple_xpc_service(pid)]
-        self.assertTrue(found, "no running /System XPC service read as launchd's")
+        for kind in (".xpc", ".appex"):
+            with self.subTest(kind=kind):
+                running = [int(line.split(None, 1)[0]) for line in output.splitlines()
+                           if f"{kind}/Contents/MacOS/" in line and line.split(None, 1)[1].startswith("/System/")]
+                found = [pid for pid in running if check.apple_bundle_service(pid)]
+                self.assertTrue(found, f"no running /System {kind} bundle read as launchd's")
+        # A bundle launchd records that this user can change is not set
+        # aside: /Applications is writable by the admin group.
+        with self.subTest(kind="changeable"):
+            changeable = [int(line.split(None, 1)[0]) for line in output.splitlines()
+                          if "/Contents/MacOS/" in line
+                          and line.split(None, 1)[1].startswith("/Applications/")
+                          and (".xpc/" in line or ".appex/" in line)]
+            if not changeable:
+                self.skipTest("no XPC service or app extension from /Applications runs here")
+            self.assertEqual([pid for pid in changeable if check.apple_bundle_service(pid)], [])
+        # /System/Volumes/Data is the writable data volume, so a bundle there
+        # is no Apple bundle whatever its path starts with.
+        self.assertFalse(check.only_root_changes(f"/System/Volumes/Data{Path.home()}"))
 
     def test_missing_root_is_an_error(self):
         with tempfile.TemporaryDirectory() as folder:

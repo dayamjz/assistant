@@ -25,7 +25,8 @@ what neither sees.
 The only things set aside are taken for macOS's, each printed, and each only
 on evidence that rules out the tests' own processes: a com.apple.* launchd job
 whose definition only root can have made (apple_launchd_jobs), an XPC service
-launchd started from a bundle under /System (apple_xpc_service), and, with
+or app extension launchd started from a bundle only root can have made
+(apple_bundle_service), and, with
 run --per-package, entries with Apple's names in the per-user temp dir, where
 the per-package check denies every package's processes writes (guarded_run).
 On macOS run with a TMPDIR of its own, as CI does; without one, those temp
@@ -196,15 +197,19 @@ def launchd_definition(label, pid):
     return None
 
 
-def apple_xpc_service(pid):
-    """The Apple XPC bundle launchd started pid from, or None.
+def apple_bundle_service(pid):
+    """The Apple XPC service or app extension bundle launchd started pid
+    from, or None.
 
-    launchctl list does not show an XPC service a framework starts for its
-    client, but launchd records the bundle such a process was started from as
-    the originator of the process's own domain (launchctl print pid/<pid>),
-    which a process a test starts has none of. Only a bundle under /System,
-    the read-only system volume, counts. A process that exits before the read
-    is not set aside.
+    launchctl list shows neither an XPC service a framework starts for its
+    client nor an app extension the system starts for its host, but launchd
+    records the bundle such a process was started from as the originator of
+    the process's own domain (launchctl print pid/<pid>), which a process a
+    test starts has none of. The bundle counts only when it is an .xpc or
+    .appex that no user but root can have made or replaced
+    (only_root_changes): a path under /System is not enough, since
+    /System/Volumes/Data is the writable data volume. A process that exits
+    before the read is not set aside.
     """
     if sys.platform != "darwin":
         return None
@@ -214,21 +219,22 @@ def apple_xpc_service(pid):
         return None
     for line in result.stdout.splitlines():
         name, _, value = line.strip().partition(" = ")
-        if (name == "originator" and value.startswith("/System/")
-                and value.endswith(".xpc")):
+        if (name == "originator" and value.endswith((".xpc", ".appex"))
+                and only_root_changes(value)):
             return value
     return None
 
 
 def apple_owned(new_pids):
     """Describe each of new_pids that is macOS's own: a com.apple.* launchd job
-    or an Apple XPC service launchd started (apple_xpc_service)."""
+    (apple_launchd_jobs) or an Apple XPC service or app extension launchd
+    started (apple_bundle_service)."""
     jobs = {pid: f"launchd job {label}" for pid, label in apple_launchd_jobs(new_pids).items()}
     for pid in new_pids:
         if pid not in jobs:
-            bundle = apple_xpc_service(pid)
+            bundle = apple_bundle_service(pid)
             if bundle is not None:
-                jobs[pid] = f"launchd XPC service {bundle}"
+                jobs[pid] = f"launchd {'app extension' if bundle.endswith('.appex') else 'XPC service'} {bundle}"
     return jobs
 
 
