@@ -99,9 +99,7 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 		t.Errorf("OpenKeptWorkOf(repo-1) = %+v, %v; want the run's entry", kept, err)
 	}
 
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
+	landKept(t, s, entry.ID)
 	if got, err := s.KeptWorkHolding(ctx, "taskheldnewa"); err != nil || len(got) != 0 {
 		t.Fatalf("after the answer KeptWorkHolding(held) = %+v, %v; want none", got, err)
 	}

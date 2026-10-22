@@ -104,12 +104,12 @@ func TestLandingKeptWorkStartsARunOfItsBranchAndLiftsTheHold(t *testing.T) {
 }
 
 // A land answer recorded by a service that stopped before it carried it out
-// is completed by the next start: the entry answered land with no landing
-// run, written straight to the store the way the stopped service left it,
+// is completed by the next start: the open entry with a landing claim and
+// no run, written straight to the store the way the stopped service left it,
 // names a run of its branch at the copy's commit once the next service has
 // opened. A landing whose copy holds a file no commit records is refused
 // and records nothing, since a landing carries commits only. Without the
-// completion at open the entry stays answered with no run.
+// completion at open the entry stays claimed with no run.
 func TestALandAnswerAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -145,7 +145,7 @@ func TestALandAnswerAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *te
 	if still, err := records.KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() {
 		t.Fatalf("after the refused landing the entry reads %+v, %v; want it open", still, err)
 	}
-	if _, err := records.AnswerKeptWork(t.Context(), entry.ID, store.KeptLand, store.ResolvedByMachineInterface()); err != nil {
+	if _, err := records.ClaimKeptWorkLanding(t.Context(), entry.ID, store.ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	_ = records.Close()
@@ -223,8 +223,8 @@ func TestALandingWhoseRunWasStartedBeforeAStopIsNamedAndNotStartedAgain(t *testi
 	if started == "" {
 		t.Fatal("the landing reached no seam")
 	}
-	if got, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || got.LandedRun.IsKnown() || got.Answer.Or("") != store.KeptLand {
-		t.Fatalf("after the stop the entry reads %+v, %v; want it answered land with no run named", got, err)
+	if got, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || got.LandedRun.IsKnown() || !got.LandingClaimed() {
+		t.Fatalf("after the stop the entry reads %+v, %v; want it open with its landing claimed and no run named", got, err)
 	}
 
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
@@ -271,7 +271,7 @@ func TestALandingWhoseRunWasStartedBeforeAStopIsNamedAndNotStartedAgain(t *testi
 }
 
 // A landing whose claimed runs never started validation is started again:
-// the entry is answered land and claimed, and two runs of its branch at the
+// the entry is claimed for a landing, and two runs of its branch at the
 // copy's commit are recorded since, one terminated with no checkpoint and
 // one still pending with no submitted reference and no checkpoint, the
 // states a create stopped before its reference leaves. The next start names
@@ -293,10 +293,7 @@ func TestALandingWhoseRunEndedBeforeItExecutedIsStartedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.AnswerKeptWork(t.Context(), entry.ID, store.KeptLand, store.ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := records.ClaimKeptWorkLanding(t.Context(), entry.ID); err != nil {
+	if _, err := records.ClaimKeptWorkLanding(t.Context(), entry.ID, store.ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	build, err := store.CurrentBuild()
@@ -549,6 +546,68 @@ func TestTwoLandAnswersStartOneRunBetweenThem(t *testing.T) {
 		runs, err := recordsOf(t, h).RunsForRepository(ctx, repository.ID)
 		if err != nil || len(runs) != 2 {
 			t.Fatalf("the repository has %d runs (%v); want the kept one and the landing's", len(runs), err)
+		}
+	})
+}
+
+// A landing whose run cannot be started leaves the entry open and listed:
+// inside the window between the landing's claim and its start the gate's
+// program references are made read-only, so bringing the copy's commit
+// into the gate fails, as it does for a gate that cannot be written. The
+// answer is refused, no run is started, and the entry is open with no
+// claim, read by status and by the open kept work, and still holds its
+// project's new tasks; once the gate is writable again the same answer
+// lands it. Without the answer kept apart
+// from its outcome, the entry reads answered land with no run and is
+// listed nowhere until a restart completes it.
+func TestALandingWhoseRunCannotStartLeavesTheEntryOpen(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	entry := keptEntryOf(t, h, subject)
+	common := git(t, entry.CopyPath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	refs := filepath.Join(common, "refs", "assistant")
+	if _, err := os.Stat(refs); err != nil {
+		t.Fatalf("the gate holds no program references at %s: %v", refs, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(refs, 0o700) })
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptLand)}
+		var once sync.Once
+		under.service.SetBetweenLandingClaimAndStartForTest(func() {
+			once.Do(func() {
+				if err := os.Chmod(refs, 0o500); err != nil {
+					t.Error(err)
+				}
+			})
+		})
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &out); err == nil {
+			t.Fatalf("the landing completed with the gate's references read-only: %+v", out)
+		}
+		if err := os.Chmod(refs, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		after, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !after.Open() || after.LandingClaimedAt.IsKnown() {
+			t.Fatalf("after the failed start the entry reads %+v, %v; want it open with no landing claimed", after, err)
+		}
+		if status := statusOf(t, under.client, subject); !slices.ContainsFunc(status.KeptWork, func(k store.KeptWork) bool { return k.ID == entry.ID }) {
+			t.Fatalf("status lists kept work %+v; want entry %d", status.KeptWork, entry.ID)
+		}
+		if runs, err := recordsOf(t, h).RunsForRepository(ctx, repository.ID); err != nil || len(runs) != 1 {
+			t.Fatalf("the repository has %d runs (%v); want the kept one alone", len(runs), err)
+		}
+		var landed machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &landed); err != nil || landed.Run == "" ||
+			landed.Entry.Answer.Or("") != store.KeptLand || landed.Entry.LandedRun.Or("") != landed.Run {
+			t.Fatalf("the landing once the gate is writable = %+v, %v; want it answered land naming its run", landed, err)
 		}
 	})
 }

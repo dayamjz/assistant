@@ -2237,33 +2237,46 @@ var schema = []migration{
 		version: 54,
 		name:    keptWorkLandingMigration,
 		statements: []string{
-			// The run a land answer to a kept work entry started, PRD section
-			// 6's "the program carries the work to the gate as a delivery":
-			// written once by RecordKeptWorkLanding, only on an entry
-			// answered land, after the run was recorded. NULL on an entry
-			// answered land is a landing not yet carried out, which the next
-			// call or the next start completes. It names a run by
-			// identifier and holds no foreign key, so forgetting a
+			// A land answer to a kept work entry, PRD section 6's "the
+			// program carries the work to the gate as a delivery", as two
+			// facts. The claim is landing_claimed_at and landing_by, who
+			// asked, written together by ClaimKeptWorkLanding on an entry
+			// neither answered nor closed, which stays open, before the run
+			// is started, so two answers landing one entry start one run
+			// between them; withdrawn together by WithdrawKeptWorkLanding,
+			// while it is unanswered, when the run could not be started. The
+			// answer is the landing's outcome: answer land, from the claim,
+			// with landed_run, the run it started, in one write by
+			// RecordKeptWorkLanding once the run is recorded, so no entry is
+			// ever answered land before its run exists. landed_run names a
+			// run by identifier and holds no foreign key, so forgetting a
 			// repository's runs is not refused by the entries that name
 			// them.
-			// landing_claimed_at is the claim a landing takes before it starts
-			// the run, written once by ClaimKeptWorkLanding and only on an
-			// entry answered land, so two answers landing one entry start one
-			// run between them: the second finds the first's claim. The run
-			// is recorded only after a claim.
 			`ALTER TABLE kept_work ADD COLUMN landing_claimed_at TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN landing_by TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN landed_run TEXT`,
-			`CREATE TRIGGER kept_work_landing_is_claimed_once
-				BEFORE UPDATE OF landing_claimed_at ON kept_work
-				WHEN OLD.landing_claimed_at IS NOT NULL OR OLD.answer IS NOT 'land' OR NEW.landing_claimed_at IS NULL
+			`CREATE TRIGGER kept_work_landing_is_claimed_whole
+				BEFORE UPDATE OF landing_claimed_at, landing_by ON kept_work
+				WHEN (NEW.landing_claimed_at IS NOT OLD.landing_claimed_at OR NEW.landing_by IS NOT OLD.landing_by)
+					AND NOT (OLD.answer IS NULL AND OLD.closure IS NULL AND NEW.answer IS NULL AND (
+						(OLD.landing_claimed_at IS NULL AND OLD.landing_by IS NULL
+							AND NEW.landing_claimed_at IS NOT NULL AND NEW.landing_by IS NOT NULL)
+						OR (OLD.landing_claimed_at IS NOT NULL AND OLD.landing_by IS NOT NULL
+							AND NEW.landing_claimed_at IS NULL AND NEW.landing_by IS NULL)))
 				BEGIN
-					SELECT RAISE(ABORT, 'store: a kept work entry''s landing is claimed once, and only once it is answered land');
+					SELECT RAISE(ABORT, 'store: a kept work entry''s landing is claimed whole on an open entry and withdrawn whole while it is unanswered');
+				END`,
+			`CREATE TRIGGER kept_work_land_answer_is_its_run
+				BEFORE UPDATE OF answer ON kept_work
+				WHEN NEW.answer = 'land' AND (NEW.landed_run IS NULL OR NEW.landing_claimed_at IS NULL)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is answered land only with the run its landing started');
 				END`,
 			`CREATE TRIGGER kept_work_lands_once
 				BEFORE UPDATE OF landed_run ON kept_work
-				WHEN OLD.landed_run IS NOT NULL OR OLD.answer IS NOT 'land' OR OLD.landing_claimed_at IS NULL OR NEW.landed_run IS NULL
+				WHEN OLD.landed_run IS NOT NULL OR NEW.landed_run IS NULL OR NEW.landing_claimed_at IS NULL OR NEW.answer IS NOT 'land'
 				BEGIN
-					SELECT RAISE(ABORT, 'store: a kept work entry records the run its landing started once, after its landing was claimed');
+					SELECT RAISE(ABORT, 'store: a kept work entry records the run its landing started once, with its land answer, after its landing was claimed');
 				END`,
 		},
 	},

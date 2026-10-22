@@ -95,16 +95,10 @@ func TestKeptWorkIsAnsweredOnceAndOtherwiseSealed(t *testing.T) {
 		t.Fatalf("surfacing an unknown entry = %v; want ErrNotFound", err)
 	}
 
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, "keep", ResolvedByMachineInterface()); !errors.Is(err, ErrUnknownKeptAnswer) {
-		t.Fatalf("an answer outside the set = %v; want ErrUnknownKeptAnswer", err)
-	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, Resolver{}); !errors.Is(err, ErrNoResolver) {
+	if _, err := s.ClaimKeptWorkLanding(ctx, entry.ID, Resolver{}); !errors.Is(err, ErrNoResolver) {
 		t.Fatalf("an answer from nobody = %v; want ErrNoResolver", err)
 	}
-	answered, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, ResolvedByMachineInterface())
-	if err != nil {
-		t.Fatalf("AnswerKeptWork: %v", err)
-	}
+	answered := landKept(t, s, entry.ID)
 	if answered.Answer.Or("") != KeptLand || answered.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || !answered.AnsweredAt.IsKnown() {
 		t.Fatalf("answered = %+v; want land by the machine interface, timed", answered)
 	}
@@ -149,9 +143,7 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, answered.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
+	landKept(t, s, answered.ID)
 	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run.ID, Proof: Known(CleanupProofRemoteBranch), Examined: []string{"aaaa"}}); err != nil {
 		t.Fatal(err)
 	}

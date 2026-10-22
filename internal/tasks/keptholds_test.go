@@ -152,7 +152,10 @@ func TestAnAnsweredEntryIsNotEstablishedLater(t *testing.T) {
 	if err != nil || !got.Recorded || got.Entry.Established() {
 		t.Fatalf("Keep = %+v, %v; want a new unestablished entry", got, err)
 	}
-	if _, err := s.store.AnswerKeptWork(ctx, got.Entry.ID, store.KeptLand, store.ResolvedByMachineInterface()); err != nil {
+	if _, err := s.store.ClaimKeptWorkLanding(ctx, got.Entry.ID, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.RecordKeptWorkLanding(ctx, got.Entry.ID, "run-landing"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(s.upstream+".gone", s.upstream); err != nil {

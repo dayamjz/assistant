@@ -43,7 +43,8 @@ paths: ["internal/store/**"]
   (`ErrKeptWorkAnswered`, `ErrKeptWorkClosed`), as the trigger does;
   `KeptWorkOf` is the read of the entry standing for a copy state. It is
   otherwise written once;
-  its one revision closes it, once: a person's answer (`AnswerKeptWork`) or
+  its one revision closes it, once: a person's answer, written only with
+  its outcome after a claim or confirmation on the open entry, or
   the program's `KeptRemovedOnProof`, written only by `MarkCleanupRemoved`
   and `MarkRunCleanupRemoved` in the removal's transaction, never a discard.
   `surfaced_at` is the one other column that moves, only forward. `ForgetRepository` and
@@ -60,9 +61,15 @@ paths: ["internal/store/**"]
   whose project has an open entry; `BeginDispatchAttempt`
   and `ClaimAttemptLaunch` (the last write before a worker starts) refuse
   it with `*DispatchHeldError` in their own transactions, and
-  `BeginTaskAttempt`, the relaunch claim, is never held. Migration 53's `landed_run` is the run a
-  land answer started, written once by `RecordKeptWorkLanding` and only on
-  an entry answered land; `KeptWork.Key` and `ParseKeptWorkKey` are the one
+  `BeginTaskAttempt`, the relaunch claim, is never held. Every answer is
+  two facts, so an entry closes only in the write that records its
+  outcome and an answer under way leaves it open and listed. Migration 54
+  records a landing so: the claim (`landing_claimed_at`, who and when),
+  written whole on an open entry by `ClaimKeptWorkLanding`, once, so two
+  landings of an entry claim once between them, and withdrawn whole by
+  `WithdrawKeptWorkLanding` when no run could be started; and the answer,
+  written only with `landed_run` by `RecordKeptWorkLanding`, which the
+  triggers enforce. `KeptWork.Key` and `ParseKeptWorkKey` are the one
   spelling of `--hold kept-work/N`. Migration 55 records a carry on as two
   facts: the claim (`carried_on_task`, the task's reserved identifier, with
   the copy's identity, who and when), written whole on an open entry by
@@ -83,8 +90,8 @@ paths: ["internal/store/**"]
   carried out, a claim or confirmation on the entry itself included
   (`ErrKeptWorkCopyOwed`), and
   `TransitionTaskShape` refuses a promotion over one. Each
-  answer's record is its own accessor, and `AnswerKeptWork` takes land
-  alone. `TransitionTaskShape` answers the promoted task's own copy's open
+  answer's claim and outcome are its own accessors, and there is no
+  generic answer write. `TransitionTaskShape` answers the promoted task's own copy's open
   entries carry-on, naming that task, claim, answer and adoption in one
   write in the flip's transaction, as PRD
   section 6's promotion paragraph says; it takes the promoter's `Resolver`

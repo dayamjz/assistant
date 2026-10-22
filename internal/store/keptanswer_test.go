@@ -3,11 +3,26 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 )
+
+// landKept answers the entry land the way a landing does: claimed, then
+// answered with the run it started, named after the entry.
+func landKept(t *testing.T, s *Store, id int64) KeptWork {
+	t.Helper()
+	if _, err := s.ClaimKeptWorkLanding(context.Background(), id, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	k, err := s.RecordKeptWorkLanding(context.Background(), id, fmt.Sprintf("run-landing-%d", id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
 
 // An entry's key round-trips through ParseKeptWorkKey and nothing else
 // parses: a hold's key, a finding id, a sign, a zero and an empty number are
@@ -25,13 +40,18 @@ func TestAKeptWorkKeyIsParsedOnlyAsKeyWritesIt(t *testing.T) {
 	}
 }
 
-// A land answer's run is recorded once, only on an entry answered land and
-// only after the landing was claimed, which is itself claimed once: an open
-// entry and one answered otherwise are refused, a run before the claim is
-// refused, the first run stands against a second, the same run again is
-// accepted and writes nothing, the owed listing drops the entry once its
-// run is named, and the schema's seals refuse a direct rewrite of either.
-func TestALandingRunIsRecordedOnceOnAnEntryAnsweredLand(t *testing.T) {
+// A landing is two facts. The claim records who answered land on an open
+// entry, once, and leaves it open, listed and owed: a second claim, a claim
+// on an entry answered otherwise and the nobody resolver are refused, and
+// no other answer is taken on it. It can be withdrawn while unanswered,
+// which leaves the entry open with none. The answer is written only with
+// the run, from the claim, once: a run on an open entry with no claim and
+// on one answered otherwise is refused, the first run stands against a
+// second and the same run again is accepted and writes nothing, and the
+// owed listing drops the entry once its run is named. The schema refuses
+// an entry answered land without its run, a claim written or withdrawn in
+// part or under an answer, and a rewrite of either fact.
+func TestALandingIsClaimedAndThenAnsweredWithItsRun(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
@@ -45,7 +65,7 @@ func TestALandingRunIsRecordedOnceOnAnEntryAnsweredLand(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.RecordKeptWorkLanding(ctx, land.ID, run.ID); !errors.Is(err, ErrKeptWorkNotLand) {
-		t.Fatalf("a landing on an open entry = %v; want ErrKeptWorkNotLand", err)
+		t.Fatalf("a landing on an open entry with no claim = %v; want ErrKeptWorkNotLand", err)
 	}
 	if _, err := s.ConfirmKeptWorkDiscard(ctx, other.ID, "shown", nil, ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
@@ -53,37 +73,58 @@ func TestALandingRunIsRecordedOnceOnAnEntryAnsweredLand(t *testing.T) {
 	if _, err := s.MarkKeptWorkDiscarded(ctx, other.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RecordKeptWorkLanding(ctx, other.ID, run.ID); !errors.Is(err, ErrKeptWorkNotLand) {
-		t.Fatalf("a landing on an entry answered discard = %v; want ErrKeptWorkNotLand", err)
+	if _, err := s.RecordKeptWorkLanding(ctx, other.ID, run.ID); !errors.Is(err, ErrKeptWorkAnswered) {
+		t.Fatalf("a landing on an entry answered discard = %v; want ErrKeptWorkAnswered", err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, land.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
+	if _, err := s.ClaimKeptWorkLanding(ctx, other.ID, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkAnswered) {
+		t.Fatalf("a claim on an entry answered discard = %v; want ErrKeptWorkAnswered", err)
+	}
+	if _, err := s.ClaimKeptWorkLanding(ctx, land.ID, Resolver{}); !errors.Is(err, ErrNoResolver) {
+		t.Fatalf("a claim by nobody = %v; want ErrNoResolver", err)
+	}
+	claimed, err := s.ClaimKeptWorkLanding(ctx, land.ID, ResolvedByMachineInterface())
+	if err != nil || !claimed.LandingClaimed() || !claimed.Open() || claimed.LandingBy.Or(Resolver{}) != ResolvedByMachineInterface() ||
+		claimed.LandedRun.IsKnown() {
+		t.Fatalf("claiming the landing = %+v, %v; want it open and claimed", claimed, err)
+	}
+	if open, err := s.OpenKeptWork(ctx); err != nil || !slices.ContainsFunc(open, func(k KeptWork) bool { return k.ID == land.ID }) {
+		t.Fatalf("OpenKeptWork = %+v, %v; want the claimed entry listed", open, err)
 	}
 	if owed, err := s.KeptWorkLandingsOwed(ctx); err != nil || len(owed) != 1 || owed[0].ID != land.ID {
 		t.Fatalf("KeptWorkLandingsOwed = %+v, %v; want the land entry", owed, err)
 	}
-	if _, err := s.RecordKeptWorkLanding(ctx, land.ID, "run-landing"); !errors.Is(err, ErrKeptWorkLandingUnclaimed) {
-		t.Fatalf("a landing recorded before its claim = %v; want ErrKeptWorkLandingUnclaimed", err)
+	if _, err := s.ClaimKeptWorkLanding(ctx, land.ID, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkLandingClaimed) ||
+		!errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a second claim = %v; want ErrKeptWorkLandingClaimed and ErrKeptWorkCopyOwed", err)
 	}
-	if _, err := s.ClaimKeptWorkLanding(ctx, other.ID); !errors.Is(err, ErrKeptWorkNotLand) {
-		t.Fatalf("a claim on an entry answered discard = %v; want ErrKeptWorkNotLand", err)
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, land.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a discard on a claimed entry = %v; want ErrKeptWorkCopyOwed", err)
 	}
-	claimed, err := s.ClaimKeptWorkLanding(ctx, land.ID)
-	if err != nil || !claimed.LandingClaimedAt.IsKnown() || claimed.LandedRun.IsKnown() {
-		t.Fatalf("claiming the landing = %+v, %v", claimed, err)
+	withdrawn, err := s.WithdrawKeptWorkLanding(ctx, land.ID)
+	if err != nil || !withdrawn.Open() || withdrawn.LandingClaimed() || withdrawn.LandingBy.IsKnown() {
+		t.Fatalf("withdrawing the claim = %+v, %v; want the entry open with none", withdrawn, err)
 	}
-	if _, err := s.ClaimKeptWorkLanding(ctx, land.ID); !errors.Is(err, ErrKeptWorkLandingClaimed) {
-		t.Fatalf("a second claim = %v; want ErrKeptWorkLandingClaimed", err)
+	if _, err := s.WithdrawKeptWorkLanding(ctx, land.ID); !errors.Is(err, ErrKeptWorkNotLand) {
+		t.Fatalf("withdrawing no claim = %v; want ErrKeptWorkNotLand", err)
 	}
-	if owed, err := s.KeptWorkLandingsOwed(ctx); err != nil || len(owed) != 1 {
-		t.Fatalf("KeptWorkLandingsOwed after the claim = %+v, %v; want the entry still owed", owed, err)
+	reclaimed, err := s.ClaimKeptWorkLanding(ctx, land.ID, ResolvedByMachineInterface())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET landing_claimed_at = '2020-01-01T00:00:00Z' WHERE id = ?`, land.ID); err == nil {
-		t.Fatal("the schema let the landing claim be rewritten")
+	for name, statement := range map[string]string{
+		"answered land without the run": `UPDATE kept_work SET answer = 'land', answered_by = landing_by, answered_at = landing_claimed_at WHERE id = ?`,
+		"the claim withdrawn in part":   `UPDATE kept_work SET landing_by = NULL WHERE id = ?`,
+		"the claim rewritten":           `UPDATE kept_work SET landing_claimed_at = '2020-01-01T00:00:00Z' WHERE id = ?`,
+		"a run with no land answer":     `UPDATE kept_work SET landed_run = 'run-direct' WHERE id = ?`,
+	} {
+		if _, err := s.write.ExecContext(ctx, statement, land.ID); err == nil {
+			t.Errorf("the schema let %s be written", name)
+		}
 	}
 	got, err := s.RecordKeptWorkLanding(ctx, land.ID, "run-landing")
-	if err != nil || got.LandedRun.Or("") != "run-landing" {
-		t.Fatalf("recording the landing = %+v, %v", got, err)
+	if err != nil || got.Answer.Or("") != KeptLand || got.LandedRun.Or("") != "run-landing" ||
+		got.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || !got.AnsweredAt.Or(time.Time{}).Equal(reclaimed.LandingClaimedAt.Or(time.Time{})) {
+		t.Fatalf("recording the landing = %+v, %v; want it answered land from the claim, naming the run", got, err)
 	}
 	if _, err := s.RecordKeptWorkLanding(ctx, land.ID, "run-landing"); err != nil {
 		t.Fatalf("the same landing again = %v; want it accepted", err)
@@ -91,8 +132,14 @@ func TestALandingRunIsRecordedOnceOnAnEntryAnsweredLand(t *testing.T) {
 	if _, err := s.RecordKeptWorkLanding(ctx, land.ID, "run-second"); !errors.Is(err, ErrKeptWorkLanded) {
 		t.Fatalf("a second landing run = %v; want ErrKeptWorkLanded", err)
 	}
+	if _, err := s.WithdrawKeptWorkLanding(ctx, land.ID); !errors.Is(err, ErrKeptWorkAnswered) {
+		t.Fatalf("withdrawing an answered landing = %v; want ErrKeptWorkAnswered", err)
+	}
 	if owed, err := s.KeptWorkLandingsOwed(ctx); err != nil || len(owed) != 0 {
 		t.Fatalf("KeptWorkLandingsOwed = %+v, %v; want none once the run is named", owed, err)
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET landing_claimed_at = '2020-01-01T00:00:00Z' WHERE id = ?`, land.ID); err == nil {
+		t.Fatal("the schema let the landing claim be rewritten")
 	}
 	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET landed_run = 'run-other' WHERE id = ?`, land.ID); err == nil {
 		t.Fatal("the schema let a landing run be rewritten")
@@ -123,9 +170,6 @@ func TestACarryOnIsClaimedAndThenAnsweredWithItsAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptCarryOn, ResolvedByMachineInterface()); err == nil {
-		t.Fatal("a carry-on answer naming no task was recorded")
-	}
 	if _, err := s.ClaimKeptWorkCarryOn(ctx, entry.ID, "not-a-task", "planted-copy", ResolvedByMachineInterface()); err == nil {
 		t.Fatal("a carry-on claim naming an invalid task was recorded")
 	}
@@ -154,10 +198,10 @@ func TestACarryOnIsClaimedAndThenAnsweredWithItsAdoption(t *testing.T) {
 		!errors.Is(err, ErrKeptWorkCarryOnClaimed) {
 		t.Fatalf("a second claim = %v; want ErrKeptWorkCopyOwed and ErrKeptWorkCarryOnClaimed", err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+	if _, err := s.ClaimKeptWorkLanding(ctx, entry.ID, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
 		t.Fatalf("a land on a claimed entry = %v; want ErrKeptWorkCopyOwed", err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, sibling.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+	if _, err := s.ClaimKeptWorkLanding(ctx, sibling.ID, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
 		t.Fatalf("a land on another entry of the claimed copy = %v; want ErrKeptWorkCopyOwed", err)
 	}
 	if _, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
@@ -231,9 +275,7 @@ func TestACarryOnIsClaimedAndThenAnsweredWithItsAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, land.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
+	landKept(t, s, land.ID)
 	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET carried_on_task = 'taskother000', carried_on_copy = 'c', carry_on_by = 'machine',
 		carry_on_claimed_at = '2020-01-01T00:00:00Z' WHERE id = ?`, land.ID); err == nil {
 		t.Fatal("the schema let a carry-on claim be written on an entry answered land")
@@ -274,9 +316,6 @@ func TestADiscardIsConfirmedAndThenAnsweredWithItsRemoval(t *testing.T) {
 		}
 		return got
 	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface()); err == nil {
-		t.Fatal("a discard answer with no removal was recorded")
-	}
 	if _, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, " ", nil, ResolvedByMachineInterface()); err == nil {
 		t.Fatal("a discard confirmation with an empty digest was recorded")
 	}
@@ -305,7 +344,7 @@ func TestADiscardIsConfirmedAndThenAnsweredWithItsRemoval(t *testing.T) {
 	if _, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, "def456", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkDiscardConfirmed) {
 		t.Fatalf("a second confirmation = %v; want ErrKeptWorkDiscardConfirmed", err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+	if _, err := s.ClaimKeptWorkLanding(ctx, entry.ID, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
 		t.Fatalf("a land over the confirmation = %v; want ErrKeptWorkCopyOwed", err)
 	}
 	if _, err := s.WithdrawKeptWorkDiscard(ctx, entry.ID, "def456"); !errors.Is(err, ErrKeptWorkNotConfirmed) {
@@ -347,9 +386,7 @@ func TestADiscardIsConfirmedAndThenAnsweredWithItsRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, land.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
+	landKept(t, s, land.ID)
 	for name, write := range map[string]struct {
 		statement string
 		id        int64
@@ -407,7 +444,7 @@ func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) 
 	}
 	land, second, third := record("/worktrees/g", "g111"), record("/worktrees/g", "g222"), record("/worktrees/g", "g333")
 	elsewhere := record("/worktrees/h", "h111")
-	if _, err := s.AnswerKeptWork(ctx, land.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
+	if _, err := s.ClaimKeptWorkLanding(ctx, land.ID, ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ConfirmKeptWorkDiscard(ctx, second.ID, "shown", []string{"g222"}, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
@@ -418,9 +455,6 @@ func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) 
 	}
 	if got := read(second); !got.Open() || got.DiscardConfirmed() || !read(third).Open() {
 		t.Fatalf("the refused answers wrote: %+v, %+v", got, read(third))
-	}
-	if _, err := s.ClaimKeptWorkLanding(ctx, land.ID); err != nil {
-		t.Fatal(err)
 	}
 	if _, err := s.RecordKeptWorkLanding(ctx, land.ID, "run-landing"); err != nil {
 		t.Fatal(err)
@@ -439,7 +473,7 @@ func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) 
 		t.Fatalf("a second confirmation of the copy = %v; want ErrKeptWorkCopyOwed", err)
 	}
 	late := record("/worktrees/g", "g444")
-	if _, err := s.AnswerKeptWork(ctx, late.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+	if _, err := s.ClaimKeptWorkLanding(ctx, late.ID, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
 		t.Fatalf("a land while a discard of the copy is confirmed = %v; want ErrKeptWorkCopyOwed", err)
 	}
 
@@ -463,7 +497,7 @@ func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) 
 	if owed, err := s.KeptWorkDiscardsOwed(ctx); err != nil || len(owed) != 0 {
 		t.Fatalf("KeptWorkDiscardsOwed = %+v, %v; want none once the copy is marked gone", owed, err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, late.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
+	if _, err := s.ClaimKeptWorkLanding(ctx, late.ID, ResolvedByMachineInterface()); err != nil {
 		t.Fatalf("the late entry once nothing of its copy is owed: %v", err)
 	}
 }

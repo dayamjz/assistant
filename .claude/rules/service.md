@@ -61,9 +61,11 @@ paths: ["internal/service/**"]
   removal asks again (`redispatchAfterRemoval`); `taskView` and `report`
   name the entries.
   `keptanswer.go` is the answer (`keptwork.answer`, reached by section 9's
-  hold answer with `--hold kept-work/N`): land, recorded once on the row,
-  claimed once (`ClaimKeptWorkLanding`) and carried out through
-  `startPushedBranch`; carry on (`keptcarryon.go`), claimed first with the
+  hold answer with `--hold kept-work/N`): every answer is claimed or
+  confirmed on the open entry first and written only with its outcome, so
+  an answer under way never hides the entry. Land, claimed once
+  (`ClaimKeptWorkLanding`), carried out through `startPushedBranch` and
+  answered with its run, the claim withdrawn when no run could start; carry on (`keptcarryon.go`), claimed first with the
   entry left open, which creates a new task through `queue.Create` with
   the identifier the claim named and adopts the kept copy, the answer
   written only with the adoption and the claim withdrawn when intake

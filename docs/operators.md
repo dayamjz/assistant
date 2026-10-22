@@ -539,8 +539,11 @@ entry's branch starts at it, as a push to the gate would start one, and the
 entry's tasks start. A landing is refused, recording nothing, when the copy
 holds a change no commit records, a file no commit records or a stash,
 because a landing carries commits only; and for an investigation's copy,
-whose delivery is a promotion. A land answer a stopped service recorded and
-did not carry out is carried out at the next start. A landing carries the
+whose delivery is a promotion. The entry stays open and listed until the
+run has started, and only then is it answered land; if the run cannot be
+started, the answer is refused naming why and the entry stays open for
+another answer. A land answer a stopped service recorded and did not carry
+out is carried out at the next start. A landing carries the
 copy's HEAD, so an entry recorded holding a commit HEAD does not reach is
 refused naming it.
 

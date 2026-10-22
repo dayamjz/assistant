@@ -51,14 +51,17 @@ import (
 // and nothing about what of it is at risk, so it is refused too, naming
 // why, until a later cleanup of the unchanged copy establishes it.
 //
-// The checks run before the answer is recorded, so a refused land records
-// nothing. The answer is then recorded through store.AnswerKeptWork, which
-// lets exactly one answer stand, and the landing is carried out under an
-// anchored claim: store.ClaimKeptWorkLanding is written once before the
-// run is started, so two answers landing one entry start one run between
-// them, and store.RecordKeptWorkLanding names the run on the row after. The
-// claim alone does not close the window between it and the record, where
-// a second answer finds the claim written and no run yet: that window is
+// The checks run before anything is recorded, so a refused land records
+// nothing. A landing is then recorded as two facts, so the entry is never
+// answered land before its run exists. The claim is written first,
+// store.ClaimKeptWorkLanding, once, with who gave the answer, and leaves
+// the entry open: status, the catch-up read and the supervisor loop list
+// it, and its project's new tasks still wait on it. Then the run is
+// started through startPushedBranch, and the entry is answered land naming
+// the run in one write, store.RecordKeptWorkLanding, which is when it
+// closes and the project's tasks dispatch. Two answers landing one entry
+// get one claim between them, and the window between the claim and the
+// record, where a second answer finds the claim written and no run yet, is
 // held in this service's memory, landings, which completeLanding takes for
 // the entry before it reads the claim and gives back when it has recorded
 // the run or failed, so a second answer or the open-time completer meeting
@@ -66,22 +69,24 @@ import (
 // starting a second run. One service holds a home, so the memory is the
 // whole of it; the claim covers a service that stopped inside the window.
 //
-// A service that stops between the answer and the record leaves an entry
-// answered land with no landing run, and the next call or the next start
-// completes it: an entry not yet claimed is landed from the start, and one
-// claimed but naming no run has completeLanding look for the run the claim
-// started, a run of the branch at the copy's commit recorded since the
-// claim whose submitted reference stands in the gate at that commit and
-// which has started validation, a checkpoint recorded (landedRunSince),
-// which it names rather than starting twice. A run with no reference or no
-// checkpoint, a create stopped before its reference was written, pending or
-// ended, is not that run: nothing of the work reached validation through
-// it, so the retry starts another. What that does not cover: a copy that
-// changed after the answer lands what it holds when the landing is
-// completed.
-//
-// Once the answer is recorded the entry no longer holds its project's
-// dispatch, so a held task is asked for again through dispatchInBackground.
+// A run that cannot be started, the copy's commit not brought into the gate
+// or the run refused, leaves nothing to land through, so the claim is
+// withdrawn (store.WithdrawKeptWorkLanding) and the answer is refused
+// naming why, with the entry open as it was. A service that stops between
+// the claim and the record leaves an open entry with a claim and no run,
+// and the next call or the next start completes it: completeLanding first
+// looks for the run the claim started, a run of the branch at the copy's
+// commit recorded since the claim whose submitted reference stands in the
+// gate at that commit and which has started validation, a checkpoint
+// recorded (landedRunSince), which it names rather than starting twice. A
+// run with no reference or no checkpoint, a create stopped before its
+// reference was written, pending or ended, is not that run: nothing of the
+// work reached validation through it, so the retry starts another. What
+// that does not cover: a copy that changed after the claim lands what it
+// holds when the landing is completed; and a completion that cannot read
+// what it would land leaves the claim standing, the entry open and listed
+// and no other answer taken on the copy, until a later call or start
+// carries it out.
 
 // answerKeptWork is MethodKeptWorkAnswer, on this file's terms.
 func (s *Service) answerKeptWork(ctx context.Context, req ipc.Request, r machine.KeptWorkAnswerRequest) (machine.KeptWorkAnswered, error) {
@@ -153,18 +158,23 @@ func (s *Service) landKeptWork(ctx context.Context, req ipc.Request, entry store
 	if !entry.Open() && entry.Answer.Or("") != store.KeptLand {
 		return machine.KeptWorkAnswered{}, refusedAnswered(entry)
 	}
-	if entry.Open() {
+	// A claim this answer finds standing, one a stopped service or another
+	// answer left, is completed rather than claimed again.
+	if entry.Open() && !entry.LandingClaimed() {
 		if _, err := s.landingOf(ctx, entry); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
-		answered, err := s.store.AnswerKeptWork(ctx, entry.ID, store.KeptLand, req.HoldResolver())
+		claimed, err := s.store.ClaimKeptWorkLanding(ctx, entry.ID, req.HoldResolver())
 		switch {
-		case errors.Is(err, store.ErrKeptWorkAnswered) || errors.Is(err, store.ErrKeptWorkClosed):
+		case errors.Is(err, store.ErrKeptWorkAnswered) || errors.Is(err, store.ErrKeptWorkClosed) ||
+			errors.Is(err, store.ErrKeptWorkLandingClaimed):
+			// Answered, closed or claimed by another answer in between: a
+			// landing it reads is completed, anything else refused.
 			again, readErr := s.store.KeptWorkEntry(ctx, entry.ID)
 			if readErr != nil {
 				return machine.KeptWorkAnswered{}, readErr
 			}
-			if again.Answer.Or("") != store.KeptLand {
+			if again.Answer.Or("") != store.KeptLand && !again.LandingClaimed() {
 				return machine.KeptWorkAnswered{}, refusedAnswered(again)
 			}
 			entry = again
@@ -173,8 +183,7 @@ func (s *Service) landKeptWork(ctx context.Context, req ipc.Request, entry store
 		case err != nil:
 			return machine.KeptWorkAnswered{}, err
 		default:
-			entry = answered
-			s.dispatchInBackground()
+			entry = claimed
 		}
 	}
 	return s.completeLanding(ctx, entry)
@@ -303,6 +312,13 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 	if run, ok := entry.LandedRun.Get(); ok {
 		return machine.KeptWorkAnswered{Entry: entry, Effect: machine.KeptWorkLanded, Run: run}, nil
 	}
+	if !entry.LandingClaimed() {
+		// Withdrawn, or answered otherwise, by another answer in between.
+		if entry.Answered() || entry.Closure.IsKnown() {
+			return machine.KeptWorkAnswered{}, refusedAnswered(entry)
+		}
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: the landing of kept work entry %d was withdrawn; the entry is open", ipc.ErrRefused, entry.ID)
+	}
 	plan, err := s.landingOf(ctx, entry)
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
@@ -315,43 +331,29 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 	if err != nil {
 		return machine.KeptWorkAnswered{}, fmt.Errorf("service: opening the gate of %s: %w", plan.repository.ID, err)
 	}
-	run := ""
-	if entry.LandingClaimedAt.IsKnown() {
-		// A claim with no run is a landing that stopped between the two,
-		// whose run is looked for before another is started.
-		if run, err = s.landedRunSince(ctx, entry, plan, bare); err != nil {
-			return machine.KeptWorkAnswered{}, err
-		}
-	} else {
-		claimed, err := s.store.ClaimKeptWorkLanding(ctx, entry.ID)
-		if errors.Is(err, store.ErrKeptWorkLandingClaimed) {
-			again, readErr := s.store.KeptWorkEntry(ctx, entry.ID)
-			if readErr != nil {
-				return machine.KeptWorkAnswered{}, readErr
-			}
-			if landed, ok := again.LandedRun.Get(); ok {
-				return machine.KeptWorkAnswered{Entry: again, Effect: machine.KeptWorkLanded, Run: landed}, nil
-			}
-			return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d is being landed by another answer now", ipc.ErrRefused, entry.ID)
-		} else if err != nil {
-			return machine.KeptWorkAnswered{}, err
-		}
-		entry = claimed
+	// A claim may be one a landing that stopped between its run and its
+	// record left, whose run is looked for before another is started.
+	run, err := s.landedRunSince(ctx, entry, plan, bare)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
 	}
 	if run == "" {
 		if s.betweenLandingClaimAndStart != nil {
 			s.betweenLandingClaimAndStart()
 		}
-		ref := fmt.Sprintf("refs/assistant/kept/%d", entry.ID)
-		if err := bare.Fetch(ctx, vcs.FetchSpec{Remote: entry.CopyPath, Refspecs: []string{"+" + plan.head + ":" + ref}}); err != nil {
-			return machine.KeptWorkAnswered{}, fmt.Errorf("service: bringing kept work entry %d's commit into the gate: %w", entry.ID, err)
-		}
-		started, err := s.startPushedBranch(ctx, subject{workingPath: plan.repository.WorkingPath, repository: plan.repository},
-			plan.branch, plan.head, plan.intent)
+		started, err := s.startLanding(ctx, entry, plan, bare)
 		if err != nil {
-			return machine.KeptWorkAnswered{}, err
+			// No run was handed to execution, here or by a landing before
+			// (none was found), so the claim is withdrawn and the entry is
+			// open again, listed and holding its project's dispatch as it
+			// was all along.
+			if _, withdrawErr := s.store.WithdrawKeptWorkLanding(ctx, entry.ID); withdrawErr != nil {
+				return machine.KeptWorkAnswered{}, fmt.Errorf("%w; the landing of kept work entry %d stands, owed: %w", err, entry.ID, withdrawErr)
+			}
+			s.log.Printf("kept work entry %d was not landed: its run could not be started (%v); the claim was withdrawn", entry.ID, err)
+			return machine.KeptWorkAnswered{}, fmt.Errorf("%w; kept work entry %d was not landed, and is open again", err, entry.ID)
 		}
-		run = started.Run
+		run = started
 		if s.betweenLandingStartAndRecord != nil {
 			if err := s.betweenLandingStartAndRecord(run); err != nil {
 				return machine.KeptWorkAnswered{}, err
@@ -363,7 +365,29 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 		return machine.KeptWorkAnswered{}, err
 	}
 	s.log.Printf("kept work entry %d was answered land: run %s validates %s on %s", entry.ID, run, plan.head, plan.branch)
+	// The entry is answered now, so it no longer holds its project's
+	// dispatch.
+	s.dispatchInBackground()
 	return machine.KeptWorkAnswered{Entry: landed, Effect: machine.KeptWorkLanded, Run: run}, nil
+}
+
+// startLanding brings the copy's commit into the gate and starts the run of
+// the landing's branch at it, the path a push to the gate takes, and
+// returns the run. An error means no run was handed to execution:
+// startPushedBranch hands it over only after its last step that can fail.
+// A create that failed part way can leave a run's row with no reference or
+// no checkpoint, which landedRunSince never takes for the landing's run.
+func (s *Service) startLanding(ctx context.Context, entry store.KeptWork, plan landing, bare *vcs.Repository) (string, error) {
+	ref := fmt.Sprintf("refs/assistant/kept/%d", entry.ID)
+	if err := bare.Fetch(ctx, vcs.FetchSpec{Remote: entry.CopyPath, Refspecs: []string{"+" + plan.head + ":" + ref}}); err != nil {
+		return "", fmt.Errorf("service: bringing kept work entry %d's commit into the gate: %w", entry.ID, err)
+	}
+	started, err := s.startPushedBranch(ctx, subject{workingPath: plan.repository.WorkingPath, repository: plan.repository},
+		plan.branch, plan.head, plan.intent)
+	if err != nil {
+		return "", err
+	}
+	return started.Run, nil
 }
 
 // takeLanding takes the entry's landing slot in this service, and reports
@@ -434,7 +458,7 @@ func (s *Service) completeLandingsAtOpen(ctx context.Context) {
 	}
 	for _, entry := range owed {
 		if _, err := s.completeLanding(ctx, entry); err != nil {
-			s.log.Printf("kept work entry %d was answered land and its landing could not be completed: %v", entry.ID, err)
+			s.log.Printf("kept work entry %d holds a landing claim that could not be completed: %v", entry.ID, err)
 		}
 	}
 }
