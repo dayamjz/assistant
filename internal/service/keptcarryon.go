@@ -618,10 +618,20 @@ func (s *Service) reshapeAdoptedCopy(ctx context.Context, path string, plan carr
 	return nil
 }
 
-// carryOnInstructions is what the new task is created with: the text the
-// coordinator wrote at the outlived task's intake, as intakeInstructions
-// reads it, or a line saying what the task is for when that cannot be read.
+// carryOnInstructions is what the new task is created with: what the
+// outlived task was last asked to do. For a promoted task that is the
+// intent its promotion recorded, store.Task.DeliveryIntent, and nothing of
+// the investigation's intake text, which the promotion replaced and which
+// may forbid the very change the delivery is for; the new task is a
+// delivery task created through intake, whose intake text is its intent,
+// so its runs carry the promotion's intent as the outlived task's did
+// (taskIntent). For any other task it is the text the coordinator wrote at
+// intake, as intakeInstructions reads it, or a line saying what the task is
+// for when that cannot be read.
 func (s *Service) carryOnInstructions(old store.Task) string {
+	if intent, ok := old.DeliveryIntent.Get(); ok && strings.TrimSpace(intent) != "" {
+		return strings.TrimSpace(intent) + "\n"
+	}
 	path, err := s.home.TaskInstructions(old.ID)
 	if err == nil {
 		var raw []byte

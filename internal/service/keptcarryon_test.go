@@ -38,6 +38,19 @@ func plantKeptInvestigation(t *testing.T, h *home.Home, subject, repositoryID st
 // configured now.
 func plantKeptInvestigationAs(t *testing.T, h *home.Home, subject, repositoryID, role string) (string, store.KeptWork) {
 	t.Helper()
+	id, head := plantInvestigationCopy(t, h, subject, repositoryID, role)
+	entry := keepTaskCopy(t, h, id)
+	if !entry.Established() || !slices.Equal(entry.Lacks, []string{head}) || entry.Reason != string(tasks.ReasonUnproven) {
+		t.Fatalf("the real Keep recorded %+v; want an unproven entry lacking the worker's commit %s alone", entry, head)
+	}
+	return id, entry
+}
+
+// plantInvestigationCopy is plantKeptInvestigationAs up to the keep: the
+// reported investigation, its instructions and its copy holding the
+// worker's commit, which it returns with the task.
+func plantInvestigationCopy(t *testing.T, h *home.Home, subject, repositoryID, role string) (string, string) {
+	t.Helper()
 	ctx := t.Context()
 	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
@@ -92,11 +105,7 @@ func plantKeptInvestigationAs(t *testing.T, h *home.Home, subject, repositoryID,
 		t.Fatal(err)
 	}
 	_ = records.Close()
-	entry := keepTaskCopy(t, h, id)
-	if !entry.Established() || !slices.Equal(entry.Lacks, []string{head}) || entry.Reason != string(tasks.ReasonUnproven) {
-		t.Fatalf("the real Keep recorded %+v; want an unproven entry lacking the worker's commit %s alone", entry, head)
-	}
-	return id, entry
+	return id, head
 }
 
 // carryOnRequest is the answer that carries an entry of a task's copy on.
@@ -194,6 +203,86 @@ func TestCarryingKeptWorkOnCreatesATaskWhoseWorkerStartsInTheKeptCopy(t *testing
 		}
 		if n := taskCount(t, h); n != 2 {
 			t.Fatalf("the home records %d tasks, want the outlived one and the one carrying it on", n)
+		}
+	})
+}
+
+// Carrying on a promoted task's copy hands the new task what the delivery
+// is to do, the intent the promotion recorded, and not the investigation's
+// intake text, the reviewer's sequence: an investigation told not to change
+// code is promoted, in the store's own shape transition with the brief
+// appended to its instructions as promotion appends it, with the intent to
+// implement the fix; its copy is then kept by the real cleanup and Keep and
+// carried on through the socket. The new task is a delivery task on the
+// branch whose instructions open with the intent and carry nothing of the
+// investigation's text. Without the transfer the new task is told only not
+// to change code.
+func TestCarryingOnAPromotedTaskTransfersItsDeliveryIntent(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, _ := plantInvestigationCopy(t, h, subject, repository.ID, "")
+	instructions, err := h.TaskInstructions(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(instructions, "Investigate the parser. Do not change code.\n"); err != nil {
+		t.Fatal(err)
+	}
+	const branch, intent = "task/promoted", "Implement the parser fix."
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := records.TaskEvents(t.Context(), old, 0, 0)
+	if err != nil || len(events) == 0 {
+		t.Fatalf("reading the investigation's history: %v (%d entries)", err, len(events))
+	}
+	if _, _, err := records.TransitionTaskShape(t.Context(), old, store.TaskInvestigation, store.TaskDelivery, repository.ID, branch,
+		config.DeliveryGated, intent, events[len(events)-1].Sequence, "promoted in the test", store.ResolvedByMachineInterface()); err != nil {
+		t.Fatalf("promoting the investigation: %v", err)
+	}
+	_ = records.Close()
+	f, err := os.OpenFile(instructions, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("\n\n" + tasks.PromotionBrief(branch, intent, "true")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	entry := keepTaskCopy(t, h, old)
+	if !entry.Open() {
+		t.Fatalf("the promoted task's copy was kept as %+v; want an open entry", entry)
+	}
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err != nil {
+			t.Fatalf("carrying the promoted task's copy on: %v", err)
+		}
+		created, err := recordsOf(t, h).Task(ctx, out.Task)
+		if err != nil || created.Shape != store.TaskDelivery || created.Branch.Or("") != branch {
+			t.Fatalf("the new task reads %+v, %v; want a delivery task on %s", created, err, branch)
+		}
+		path, err := h.TaskInstructions(out.Task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(string(text), intent) || strings.Contains(string(text), "Do not change code") {
+			t.Fatalf("the new task's instructions do not open with the promotion's intent alone:\n%s", text)
 		}
 	})
 }
