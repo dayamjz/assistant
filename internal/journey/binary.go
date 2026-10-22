@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
@@ -88,7 +89,7 @@ func resolveBinary() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir, err := os.MkdirTemp("", "assistant-binary")
+	dir, err := standin.TempDir("bin")
 	if err != nil {
 		return "", fmt.Errorf("journey: making a directory to build the binary into: %w", err)
 	}

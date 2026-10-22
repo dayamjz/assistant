@@ -58,6 +58,25 @@
 // it is safe to call unconditionally and nothing else in TestMain has to know
 // about it.
 //
+// A package whose tests make a temporary directory does so with TempDir.
+// TestMain calls RegisterTempTag before anything that calls TempDir,
+// including a child re-execution that makes a directory, and calls
+// SweepTempDirs after every mode that makes this binary another process
+// and before the tests run. RegisterTempTag records the caller's directory,
+// inside the module, as the namespace. '_' in that directory and a slash
+// between directories encode differently, so two directories do not share
+// one. An absolute path is made relative by walking up to go.mod. A
+// non-absolute path is accepted only when it begins with the main module
+// path recorded in the binary, which is the form -trimpath leaves, and that
+// path is not opened. TempDir and SweepTempDirs use only that namespace and
+// refuse when none is recorded, so a call cannot stamp
+// another package's directories. SweepTempDirs removes a directory whose
+// recorded owner is gone and leaves a live owner and a name it cannot
+// parse. SocketDir, the tmux wrapper RunOwned installs, and a library a
+// test calls (storetest's database template) call TempDir, which stamps
+// the namespace the running TestMain recorded, so the next start of that
+// package reclaims them.
+//
 // A package that forgets it would otherwise read the resulting agent failures
 // as the code under test misbehaving. The first New in a process refuses
 // instead: it puts one handshake invocation through the adapter, and a binary
