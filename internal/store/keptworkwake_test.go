@@ -208,3 +208,34 @@ func TestAKeptWorkWakesIdentifierIsNotReusedAfterItsRepositoryIsForgotten(t *tes
 		t.Fatalf("the queued kept-work wakes are %+v, %v; want the new one, still queued", queued, err)
 	}
 }
+
+// A task's wake that raises a kept work entry records the entry's surfaced
+// instant in its own transaction, so no entry is left raised on a task and
+// not recorded as surfaced; an entry that does not exist refuses the whole
+// append. TaskWakeKeyed then finds that wake by its kind and marker.
+func TestATaskWakeRaisingAnEntryRecordsItsSurfacedInstantWithIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	entry := keptRunEntry(t, s, "/worktrees/run")
+	task := seedTask(t, s, "taskraiseskp")
+	inc := incarnationOf(t, s)
+	if _, err := s.AppendWakeWithMarkers(ctx, inc, WakeRequest{TaskID: task.ID, Kind: "kept-work", Marker: "kept-work:99",
+		Surfaces: Known(int64(99))}, MarkerAdvance{}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a task wake raising no entry that exists = %v, want ErrNotFound", err)
+	}
+	if _, found, err := s.TaskWakeKeyed(ctx, "kept-work", "kept-work:99"); err != nil || found {
+		t.Fatalf("the refused append left a wake (%v, %v)", found, err)
+	}
+	appended, err := s.AppendWakeWithMarkers(ctx, inc, WakeRequest{TaskID: task.ID, Kind: "kept-work", Marker: "kept-work:1",
+		Surfaces: Known(entry.ID)}, MarkerAdvance{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || after.SurfacedAt != Known(appended.Wake.CreatedAt) {
+		t.Fatalf("after the task's wake the entry reads %+v, %v; want it surfaced at the wake's creation", after, err)
+	}
+	if w, found, err := s.TaskWakeKeyed(ctx, "kept-work", "kept-work:1"); err != nil || !found || w.ID != appended.Wake.ID {
+		t.Fatalf("TaskWakeKeyed = %+v, %v, %v; want wake %d", w, found, err, appended.Wake.ID)
+	}
+}

@@ -90,6 +90,12 @@ type WakeRequest struct {
 	Kind string
 	// Marker is the detector's idempotency component.
 	Marker string
+	// Surfaces names the kept work entry the wake raises, unknown for a
+	// wake that raises none. When the wake is appended the entry's
+	// surfaced_at is recorded in the same transaction, on
+	// AppendKeptWorkWake's terms, so no entry is left raised and not
+	// recorded as surfaced. An entry that does not exist is ErrNotFound.
+	Surfaces Optional[int64]
 }
 
 // WakeDisposition is what AppendWakeWithMarkers did with the wake. The zero
@@ -264,16 +270,22 @@ func (s *Store) AppendWakeWithMarkers(ctx context.Context, inc Incarnation, w Wa
 		case !isNoRows(err):
 			return err
 		}
+		now := nowUTC()
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO wake (task_id, kind, marker, created_at, handled_at, acknowledged_by)
 			VALUES (?, ?, ?, ?, NULL, NULL)`,
-			w.TaskID, w.Kind, w.Marker, encodeTime(nowUTC()))
+			w.TaskID, w.Kind, w.Marker, encodeTime(now))
 		if err != nil {
 			return err
 		}
 		id, err := result.LastInsertId()
 		if err != nil {
 			return err
+		}
+		if entry, ok := w.Surfaces.Get(); ok {
+			if err := markKeptWorkSurfacedTx(ctx, tx, entry, now); err != nil {
+				return err
+			}
 		}
 		appended, err := scanWake(tx.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE id = ?`, id))
 		if err != nil {

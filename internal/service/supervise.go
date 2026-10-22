@@ -77,11 +77,10 @@ import (
 // is raised on the queue's third shape instead, after the tasks, on
 // keptworkwake.go's terms. An entry surfaces once whichever shape carries
 // it: one whose surfaced instant is recorded is raised on neither again,
-// because attribution can move between passes. A gap: on a task's wake
-// when the entry surfaced is written after the wake, in a transaction of
-// its own, so a service that stops between the two leaves the wake with no
-// instant on the entry, and an entry whose attribution then moves to no
-// task is raised a second time, on the third shape.
+// because attribution can move between passes. Both shapes record that
+// instant in the wake's own transaction. A database a build before that
+// left with a task's wake and no instant is read on keptworkwake.go's
+// terms, from the task wake keyed by the entry.
 //
 // A watched task's terminal is read only where supervisor.TerminalWatched
 // says so, which is every state but Reported, Landed and Complete. A task
@@ -697,25 +696,19 @@ func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 		}
 		surfaced++
 		ctx, cancel := s.sup.bound(c.ctx)
-		appended, err := s.store.AppendWakeWithMarkers(ctx, c.inc,
-			store.WakeRequest{TaskID: id, Kind: string(det.Kind), Marker: det.Marker}, d.advance)
+		request := store.WakeRequest{TaskID: id, Kind: string(det.Kind), Marker: det.Marker}
+		if entry, ok := d.keptWork[det.Marker]; ok && det.Kind == supervisor.KindKeptWork {
+			// The entry's surfaced instant is written in the wake's own
+			// transaction, so no entry is raised and left unrecorded.
+			request.Surfaces = store.Known(entry)
+		}
+		appended, err := s.store.AppendWakeWithMarkers(ctx, c.inc, request, d.advance)
 		cancel()
 		if err != nil {
 			out.Err = err
 			return out
 		}
 		out.Detections[i].Disposition = appended.Disposition
-		if entry, ok := d.keptWork[det.Marker]; ok && det.Kind == supervisor.KindKeptWork {
-			// When the entry last surfaced is its own column, written after
-			// the wake that raised it, in a transaction of its own; a
-			// service that stops between the two leaves the wake and no
-			// instant, which supervise.go's header names.
-			ctx, cancel := s.sup.bound(c.ctx)
-			if err := s.store.MarkKeptWorkSurfaced(ctx, entry, appended.Wake.CreatedAt); err != nil {
-				s.log.Printf("when kept work entry %d surfaced could not be recorded: %v", entry, err)
-			}
-			cancel()
-		}
 		if appended.Disposition == store.WakeAppended {
 			s.wakeBell.ring()
 			ctx, cancel := s.sup.bound(c.ctx)

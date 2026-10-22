@@ -22,6 +22,12 @@ import (
 // wake's own transaction. An entry whose surfaced instant is already
 // recorded is not raised again, whichever shape raised it, so an entry
 // raised on a task's wake and then attributed to no task is raised once.
+// An entry with no instant recorded is first looked for on the task wakes,
+// keyed by the entry: a task's wake and its instant are one transaction
+// now, but a build before wrote the instant in a transaction of its own, so
+// a service that stopped between the two left a task's wake and no instant.
+// Such an entry surfaced already: its instant is completed from that wake
+// and it is not raised again.
 // An entry answered or closed between the pass's read and the append is
 // owed no wake, and the store refuses it with nothing written. A row
 // appended rings wakeBell, so an armed wakes.wait and the notifier read
@@ -42,7 +48,7 @@ import (
 func (s *Service) superviseUntaskedKeptWork(c *incarnation, untasked []store.KeptWork) map[int64]taskReport {
 	var out map[int64]taskReport
 	for _, k := range untasked {
-		if k.SurfacedAt.IsKnown() {
+		if k.SurfacedAt.IsKnown() || s.surfacedOnATask(c, k) {
 			continue
 		}
 		wake, _ := supervisor.Of(supervisor.KindKeptWork)
@@ -57,6 +63,27 @@ func (s *Service) superviseUntaskedKeptWork(c *incarnation, untasked []store.Kep
 		out[k.ID] = s.recordUntaskedKeptWork(c, k, det)
 	}
 	return out
+}
+
+// surfacedOnATask reports whether a task's wake already raised the entry,
+// and when one did, records the entry's surfaced instant from that wake. A
+// read that fails is logged and answers true, so the entry is asked again
+// at the next pass rather than raised a second time on a guess.
+func (s *Service) surfacedOnATask(c *incarnation, k store.KeptWork) bool {
+	ctx, cancel := s.sup.bound(c.ctx)
+	defer cancel()
+	w, found, err := s.store.TaskWakeKeyed(ctx, string(supervisor.KindKeptWork), s.sup.redactor.Redact(keptWorkMarker(k.ID)))
+	if err != nil {
+		s.log.Printf("whether kept work entry %d surfaced on a task could not be read, and it is asked again at the next pass: %v", k.ID, err)
+		return true
+	}
+	if !found {
+		return false
+	}
+	if err := s.store.MarkKeptWorkSurfaced(ctx, k.ID, w.CreatedAt); err != nil {
+		s.log.Printf("kept work entry %d surfaced on task %s's wake %d, and its surfaced instant could not be recorded: %v", k.ID, w.TaskID, w.ID, err)
+	}
+	return true
 }
 
 // recordUntaskedKeptWork makes the pass's write for one entry, on record's

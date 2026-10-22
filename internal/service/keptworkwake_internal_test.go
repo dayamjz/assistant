@@ -159,3 +159,45 @@ func TestAKeptWorkEntryRaisedOnATaskIsNotRaisedAgainOnceNoTaskNamesIt(t *testing
 		t.Fatalf("the kept-work wakes are %+v, %v; want none, since the entry already surfaced on its task", rows, err)
 	}
 }
+
+// An entry raised on a task's wake whose surfaced instant was never
+// recorded, which a service stopping between the wake and that write left
+// behind before the two were one transaction, is not raised a second time
+// on the queue's third shape once no task names its run: the task wake
+// keyed by the entry is the record that it surfaced, and the pass reads it
+// and completes the instant from it. Without that read the pass appends a
+// second wake about the same entry.
+func TestAnEntryRaisedOnATaskWakeWithNoSurfacedInstantIsNotRaisedAgain(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	h, records := loopHome(t)
+	ctx := t.Context()
+	entry := plantKeptRun(t, records, "run-raised-on-a-task", "work")
+	task := plantRunning(t, records, "raisedearlie", "").ID
+	inc, err := records.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raised, err := records.AppendWakeWithMarkers(ctx, inc, store.WakeRequest{TaskID: task, Kind: string(supervisor.KindKeptWork),
+		Marker: keptWorkMarker(entry.ID)}, store.MarkerAdvance{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planted, err := records.KeptWorkEntry(ctx, entry.ID); err != nil || planted.SurfacedAt.IsKnown() {
+		t.Fatalf("the planted entry reads %+v, %v; want it raised on a task with no surfaced instant", planted, err)
+	}
+	l := openLoop(t, h, records, newScriptedTerminals(), &fakeClock{now: time.Now()})
+	defer func() { _ = l.service.Close() }()
+
+	for _, r := range []passReport{l.nextPass(t), l.pass(t)} {
+		if got := keptWorkWakeDetections(r, entry.ID); len(got) != 0 {
+			t.Fatalf("the pass raised entry %d again on the third shape: %+v", entry.ID, got)
+		}
+	}
+	if rows, err := l.records(t).KeptWorkWakes(ctx); err != nil || len(rows) != 0 {
+		t.Fatalf("the kept-work wakes are %+v, %v; want none, since the entry surfaced on task %s", rows, err, task)
+	}
+	if after, err := l.records(t).KeptWorkEntry(ctx, entry.ID); err != nil || after.SurfacedAt != store.Known(raised.Wake.CreatedAt) {
+		t.Fatalf("the entry reads %+v, %v; want its surfaced instant completed from the task wake, %s", after, err, raised.Wake.CreatedAt)
+	}
+}
