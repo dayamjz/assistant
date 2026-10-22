@@ -253,6 +253,9 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   ack; `handouts` only counts deliveries. Read the task before every act.
 - Act on each wake, then acknowledge it by its `id` - every id you acted on,
   including one you decided needs nothing further after reading the task.
+  A row of `domain_wakes` or `kept_work_wakes` is numbered apart from the
+  task wakes, so name it `dNUMBER` or `kNUMBER`: a bare number always names
+  a task's wake, and would close a different wake or none.
   Acknowledging is the only thing that records a wake as handled, and a wake
   keeps its task counted as in flight until you do.
 - A wake you were handed and did not acknowledge is handed out again: after
@@ -267,7 +270,7 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   or the program already relaunched that one, do not call `task.relaunch`
   again. A marker carrying `:again:` is a resurface reminder for the same
   silence, not a second relaunch. Case `unobservable` means probe or wait;
-  never `task.relaunch` on it — only `dead` is a crashed worker the program
+  never `task.relaunch` on it; only `dead` is a crashed worker the program
   relaunches. For `hold-opened`, answer with
   `assistant --task ID --answer ...`, with one exception: a local delivery
   task's approval hold, keyed `task/ID/local-approval/...`, is the person's
@@ -394,10 +397,11 @@ A subordinate still running across a restart is placed from its record and
 its process, so it stays the subordinate of its domain and `end-delegation`
 ends it.
 Wakes about a domain are listed under `domain_wakes` with numbers of their
-own and acknowledged as `dNUMBER`:
+own and acknowledged as `dNUMBER`; wakes about kept work no task names are
+listed under `kept_work_wakes` and acknowledged as `kNUMBER`:
 
 ```sh
-assistant coordinator acknowledge 12 d3
+assistant coordinator acknowledge 12 d3 k5
 assistant --domain DOMAIN --answer retry     # begin its coordinator once more
 assistant --domain DOMAIN --answer stop      # end the delegation
 ```

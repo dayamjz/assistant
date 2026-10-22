@@ -17,6 +17,7 @@ import (
 // already in the record when the service opens: the person's listing,
 // assistant coordinator wakes, names it by the branch its entry was kept on
 // and phrases it, where it otherwise printed the count and nothing else;
+// a drain's plain answer says to name it kNUMBER (and a domain's dNUMBER);
 // the coordinator's --json drain carries it under kept_work_wakes; and
 // assistant coordinator acknowledge kNUMBER closes exactly it, where the
 // command line otherwise refused the prefix and a bare number named a task
@@ -69,6 +70,13 @@ func TestAKeptWorkWakeInTheRecordIsListedAndAcknowledgedAsKNumber(t *testing.T) 
 	line := branch + ": " + machine.QueuedKeptWorkWakePhrase(appended.Wake).String()
 	if listing := run(t, h, subject, "coordinator", "wakes"); !strings.Contains(listing.stdout, line) {
 		t.Fatalf("the person's listing does not read %q:\n%s%s", line, listing.stdout, listing.stderr)
+	}
+	// A drain read by a person says how a kept-work wake is named on the
+	// acknowledge line, since its number is its own and a bare number names
+	// a task's wake.
+	if awaited := run(t, h, subject, "coordinator", "await", "--timeout", "5s"); !strings.Contains(awaited.stdout, "kNUMBER") ||
+		!strings.Contains(awaited.stdout, "dNUMBER") {
+		t.Fatalf("a drain's plain answer does not say how a kept-work or domain notice is acknowledged:\n%s%s", awaited.stdout, awaited.stderr)
 	}
 	var drained machine.Wakes
 	coordinate(t, h, subject, &drained, "wakes")

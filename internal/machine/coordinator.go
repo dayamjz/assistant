@@ -172,7 +172,9 @@ func DelegationEndedPhrase(DelegationEnded) Phrase { return phraseDelegationEnde
 // WakesPhrase is what a person reads about a drain of the wake queue: how
 // many rows the drain handed out, or that none were on offer. A drain closes
 // nothing, so the phrase says the rows stay waiting until each is
-// acknowledged, and that a row not acknowledged comes back. Which work each
+// acknowledged, and that a row not acknowledged comes back, and how each
+// shape is named on the acknowledge line, since a domain's and a kept work
+// entry's notices are numbered apart from a task's. Which work each
 // row is about and what kind of notice it is are the structured rendering's,
 // because a kind is a word the derived forbidden set keeps from a person.
 func WakesPhrase(w Wakes) Phrase {
@@ -183,7 +185,7 @@ func WakesPhrase(w Wakes) Phrase {
 	return Phrase{
 		Outcome:     fmt.Sprintf("%d notice(s) about the fleet were handed to the coordinator, oldest first, and none is recorded as handled yet.", n),
 		Consequence: "Each stays waiting until it is acknowledged, and one not acknowledged is handed out again if the coordinator goes away first.",
-		Decision:    "Act on each, then run assistant coordinator acknowledge with the numbers the --json form lists.",
+		Decision:    "Act on each, then run assistant coordinator acknowledge with the numbers the --json form lists, a notice about a domain as dNUMBER and one about work left in a local copy as kNUMBER.",
 	}
 }
 
