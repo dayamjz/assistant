@@ -698,17 +698,23 @@ func (w *tmuxWorker) await(ctx context.Context, ok func(screenState) bool) error
 			return nil
 		case errors.Is(err, ErrTerminalClientTimedOut):
 			return fmt.Errorf("%w: %w", ErrTerminalNotReady, err)
+		case ctx.Err() != nil:
+			// ctx is read once the reading has returned and before any
+			// select, so a tick already waiting can never start another
+			// reading under the ended ctx. A reading ctx cut short is
+			// runTmux's answer, which already wraps ctx's error and keeps
+			// the client's failure beside it, so it is returned whole.
+			if err != nil && errors.Is(err, ctx.Err()) {
+				return fmt.Errorf("%w: %w", ErrTerminalNotReady, err)
+			}
+			return fmt.Errorf("%w: %w", ErrTerminalNotReady, ctx.Err())
 		}
 		select {
 		case <-w.done:
 			return ErrWorkerEnded
 		case <-ctx.Done():
-			// A reading ctx cut short is runTmux's answer, which already
-			// wraps ctx's error and keeps the client's failure beside it, so
-			// it is returned whole rather than replaced by ctx's error alone.
-			if err != nil && errors.Is(err, ctx.Err()) {
-				return fmt.Errorf("%w: %w", ErrTerminalNotReady, err)
-			}
+			// No reading was cut here: ctx ended while the wait was idle
+			// between readings.
 			return fmt.Errorf("%w: %w", ErrTerminalNotReady, ctx.Err())
 		case <-tick.C:
 		}

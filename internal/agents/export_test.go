@@ -82,4 +82,6 @@ const (
 	TmuxReadBound   = tmuxReadBound
 	TmuxEndBound    = tmuxEndBound
 	TmuxClientGrace = tmuxClientGrace
+	// TerminalPoll is how often a readiness wait reads the screen again.
+	TerminalPoll = terminalPoll
 )

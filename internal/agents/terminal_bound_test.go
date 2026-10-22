@@ -427,11 +427,22 @@ func TestAClaudeTerminalSendCancelledDuringItsReadingKeepsTheClientsFailure(t *t
 	defer cancel()
 	done := make(chan error, 1)
 	returned := make(chan struct{})
+	sent := time.Now()
 	go func() {
 		done <- worker.Send(ctx, "refused")
 		close(returned)
 	}()
 	ids := w.wedgedClient(t, returned)
+	// The wait's poll ticker starts before its first reading, so once more
+	// than one interval has passed since the send began, its tick is
+	// waiting while the reading still hangs. The cancellation then ends the
+	// reading with both the tick and ctx ready, which is the case where a
+	// wait that chose between them could read again under the ended ctx and
+	// replace the reading's failure. This wait makes the tick ready; the
+	// ticker, not this wait, is what orders it.
+	if wait := 2*agents.TerminalPoll - time.Since(sent); wait > 0 {
+		time.Sleep(wait)
+	}
 	cancel()
 	within := 3*agents.TmuxClientGrace + 2*time.Second
 	select {
