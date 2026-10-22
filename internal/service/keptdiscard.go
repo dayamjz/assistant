@@ -38,7 +38,8 @@ import (
 // internal/tasks' Discard removes the copy, checking on the way that it
 // holds exactly what the digest sealed and that what the default branch
 // lacks of it now is among what was shown; then the entry is marked
-// discarded. A default branch that only moved since is no reason to refuse. A service that stops between the answer and the mark leaves an
+// discarded. A default branch that only moved since is no reason to
+// refuse. A service that stops between the answer and the mark leaves an
 // entry answered discard with a digest and no instant, which the next call
 // or the next start completes (completeDiscardsAtOpen): the copy is removed
 // if it still holds exactly what the digest was shown for, or is already
@@ -46,6 +47,24 @@ import (
 // discard whose copy changed before it was removed, which is never removed
 // by the program and is named in the service log at each start; the
 // answer stands, so it cannot be shown and confirmed again.
+//
+// # Every entry of the copy
+//
+// A copy kept again at another state has an entry per state, and a
+// discard removes the copy whole, which is what was shown and confirmed.
+// So the answer is written on every open entry of the copy in the one write
+// (store.AnswerKeptWorkDiscard), none of them left holding the project's
+// new tasks over a copy that is gone, and the mark marks every entry of the
+// copy answered discard in the one write with the removal's record
+// (store.MarkKeptWorkDiscarded); completeDiscard reads its entry again
+// first, so the open-time completer meets a sibling already marked as done.
+// And no answer of any kind is written while another entry of the copy
+// holds one not yet carried out, a land whose run is not named, a carry on
+// not marked or a discard not marked (store.ErrKeptWorkCopyOwed, refused
+// with refusedOwed): each still needs the copy where it stands. What is
+// left: the copy is read and then removed, so an entry a cleanup records
+// for it between the two, which it can only do for a copy that changed in
+// that window, stays open over a copy that is gone.
 //
 // # What "person-only" is enforced by, and what it is not
 //
@@ -120,6 +139,8 @@ func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry st
 				return machine.KeptWorkAnswered{}, refusedAnswered(again)
 			}
 			entry = again
+		case errors.Is(err, store.ErrKeptWorkCopyOwed):
+			return machine.KeptWorkAnswered{}, refusedOwed(entry, err)
 		case err != nil:
 			return machine.KeptWorkAnswered{}, err
 		default:
@@ -167,6 +188,13 @@ func lossOf(l tasks.Loss) machine.KeptWorkLoss {
 // entry, on this file's terms: the copy is removed while it still holds
 // exactly what the answer was shown, and the entry is marked.
 func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
+	// Read again: another entry of the same copy completed may have marked
+	// this one with it.
+	again, err := s.store.KeptWorkEntry(ctx, entry.ID)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	entry = again
 	digest, ok := entry.DiscardDigest.Get()
 	if !ok {
 		return machine.KeptWorkAnswered{}, fmt.Errorf("service: kept work entry %d is answered discard and records nothing it was shown", entry.ID)

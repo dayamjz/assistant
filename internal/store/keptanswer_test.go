@@ -218,3 +218,91 @@ func TestADiscardAnswerRecordsWhatItWasShownOnceAndIsCarriedOutOnce(t *testing.T
 		t.Fatal("the schema let the commits a discard was shown be written on an entry answered land")
 	}
 }
+
+// A discard answer settles every entry of its copy, and no entry is
+// answered while another of its copy holds an answer not yet carried out.
+// Three entries name one copy and a fourth another: with the first
+// answered land and its run not named, a discard and a carry on of the
+// others are refused with ErrKeptWorkCopyOwed and write nothing; once the
+// landing is recorded, a discard of the second answers the third discard
+// in the same write with the same digest, commits and resolver, and
+// leaves the land entry and the other copy's entry as they were; an entry
+// of the copy recorded after that is refused while the discard is owed;
+// and marking the second discarded marks the third with it and nothing
+// else, after which the late entry can be answered. Without the siblings
+// in the answer's write the third is left open over a copy that is gone.
+func TestADiscardSettlesEveryEntryOfItsCopyAndWaitsOnAnOwedAnswer(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+	record := func(path, holds string) KeptWork {
+		t.Helper()
+		k, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: path, Holds: []string{holds}, Reason: "unproven", Against: "mmmm"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	read := func(k KeptWork) KeptWork {
+		t.Helper()
+		got, err := s.KeptWorkEntry(ctx, k.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	land, second, third := record("/worktrees/g", "g111"), record("/worktrees/g", "g222"), record("/worktrees/g", "g333")
+	elsewhere := record("/worktrees/h", "h111")
+	if _, err := s.AnswerKeptWork(ctx, land.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AnswerKeptWorkDiscard(ctx, second.ID, "shown", []string{"g222"}, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a discard while a land of the copy is owed = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	if _, err := s.AnswerKeptWorkCarryOn(ctx, third.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a carry on while a land of the copy is owed = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	if !read(second).Open() || !read(third).Open() {
+		t.Fatalf("the refused answers wrote: %+v, %+v", read(second), read(third))
+	}
+	if _, err := s.ClaimKeptWorkLanding(ctx, land.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordKeptWorkLanding(ctx, land.ID, "run-landing"); err != nil {
+		t.Fatal(err)
+	}
+
+	answered, err := s.AnswerKeptWorkDiscard(ctx, second.ID, "shown", []string{"g222"}, ResolvedByMachineInterface())
+	if err != nil || answered.Answer.Or("") != KeptDiscard {
+		t.Fatalf("the discard once the landing is recorded = %+v, %v", answered, err)
+	}
+	sibling := read(third)
+	if sibling.Answer.Or("") != KeptDiscard || sibling.DiscardDigest.Or("") != "shown" || !slices.Equal(sibling.DiscardLacks, []string{"g222"}) ||
+		sibling.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || sibling.DiscardedAt.IsKnown() {
+		t.Fatalf("the copy's other open entry reads %+v; want it answered discard with what the discard was shown", sibling)
+	}
+	if got := read(land); got.Answer.Or("") != KeptLand || got.DiscardDigest.IsKnown() {
+		t.Fatalf("the land entry reads %+v; want it as it was", got)
+	}
+	if !read(elsewhere).Open() {
+		t.Fatalf("another copy's entry reads %+v; want it open", read(elsewhere))
+	}
+
+	late := record("/worktrees/g", "g444")
+	if _, err := s.AnswerKeptWork(ctx, late.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("a land while a discard of the copy is owed = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	if _, err := s.MarkKeptWorkDiscarded(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !read(third).DiscardedAt.IsKnown() || read(land).DiscardedAt.IsKnown() || read(late).DiscardedAt.IsKnown() {
+		t.Fatalf("after the mark: %+v, %+v, %+v; want the sibling marked and nothing else", read(third), read(land), read(late))
+	}
+	if owed, err := s.KeptWorkDiscardsOwed(ctx); err != nil || len(owed) != 0 {
+		t.Fatalf("KeptWorkDiscardsOwed = %+v, %v; want none once the copy is marked gone", owed, err)
+	}
+	if _, err := s.AnswerKeptWork(ctx, late.ID, KeptLand, ResolvedByMachineInterface()); err != nil {
+		t.Fatalf("the late entry once nothing of its copy is owed: %v", err)
+	}
+}

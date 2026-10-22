@@ -67,7 +67,11 @@ paths: ["internal/store/**"]
   named with the carry-on answer (`AnswerKeptWorkCarryOn`) and
   `carried_on_at` once the task owns the copy; migration 56's
   `discard_digest` is what the discard answer was shown
-  (`AnswerKeptWorkDiscard`) and `discarded_at` once the copy went. Each
+  (`AnswerKeptWorkDiscard`) and `discarded_at` once the copy went. Carry
+  on and discard each move or remove the whole copy, so each answers every
+  other open entry of the same copy in its write and its mark marks them
+  all; and no answer is written while another entry of the copy holds one
+  not yet carried out (`ErrKeptWorkCopyOwed`). Each
   answer's record is its own accessor, and `AnswerKeptWork` takes land
   alone. `TransitionTaskShape` answers the promoted task's own copy's open
   entries carry-on, naming that task, in the flip's transaction, as PRD

@@ -73,7 +73,9 @@ import (
 // copy is checked to be that copy before it is moved, too. Carrying on moves the whole
 // copy, so the answer carries on every open entry of the same copy, the copy
 // kept again at another state, in the same write, and the mark marks them
-// all.
+// all; and it is refused while another entry of the copy holds an answer
+// not yet carried out, as every answer is (keptdiscard.go's "Every entry of
+// the copy").
 //
 // # The order, and what a stop leaves
 //
@@ -141,6 +143,8 @@ func (s *Service) carryOnKeptWork(ctx context.Context, req ipc.Request, entry st
 				return machine.KeptWorkAnswered{}, refusedAnswered(again)
 			}
 			entry = again
+		case errors.Is(err, store.ErrKeptWorkCopyOwed):
+			return machine.KeptWorkAnswered{}, refusedOwed(entry, err)
 		case err != nil:
 			return machine.KeptWorkAnswered{}, err
 		default:

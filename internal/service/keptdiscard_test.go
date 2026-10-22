@@ -271,3 +271,119 @@ func TestADiscardDigestSealsTheWholeStashList(t *testing.T) {
 		}
 	})
 }
+
+// Discarding a copy settles every entry of it, the reviewer's sequence:
+// an investigation's copy is kept at the worker's commit A, the worker
+// commits B, and the copy is kept again, both through the real cleanup and
+// Keep, so two open entries name the one copy. Discarding the first, shown
+// and confirmed, removes the copy and answers and marks both discarded with
+// the digest the person confirmed, so neither is left holding the
+// project's new tasks over a copy that is gone, and answering the second
+// discard again reports it discarded. Without the siblings in the answer's
+// and the mark's writes the second entry stays open, and every answer to it
+// is refused because its copy is gone.
+func TestDiscardingACopySettlesEveryEntryOfIt(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, first := plantKeptInvestigation(t, h, subject, repository.ID)
+	if err := writeFile(first.CopyPath+"/more.txt", "what the worker found next\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, first.CopyPath, "add", "-A")
+	git(t, first.CopyPath, "commit", "--quiet", "-m", "the worker's second commit")
+	second := keepTaskCopy(t, h, old)
+	if second.ID == first.ID || second.CopyPath != first.CopyPath || !second.Open() || !first.Open() {
+		t.Fatalf("the copy kept again reads %+v beside %+v; want a second open entry of the same copy", second, first)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: first.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		request.Confirm = shown.Loss.Digest
+		var done machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &done); err != nil || done.Effect != machine.KeptWorkDiscarded {
+			t.Fatalf("the confirmed discard = %+v, %v", done, err)
+		}
+		if _, err := os.Lstat(first.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the discarded copy still stands: %v", err)
+		}
+		for _, id := range []int64{first.ID, second.ID} {
+			got, err := recordsOf(t, h).KeptWorkEntry(ctx, id)
+			if err != nil || got.Open() || got.Answer.Or("") != store.KeptDiscard || got.DiscardDigest.Or("") != shown.Loss.Digest ||
+				!got.DiscardedAt.IsKnown() {
+				t.Fatalf("entry %d reads %+v, %v; want it answered discard with the digest %s and marked discarded", id, got, err, shown.Loss.Digest)
+			}
+		}
+		var again machine.KeptWorkAnswered
+		other := machine.KeptWorkAnswerRequest{Task: old, Hold: second.Key(), Answer: string(store.KeptDiscard)}
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, other, &again); err != nil || again.Effect != machine.KeptWorkDiscarded {
+			t.Fatalf("answering the second entry discard = %+v, %v; want it reported discarded", again, err)
+		}
+	})
+}
+
+// A discard of a copy with two entries that a stopped service recorded and
+// did not carry out is completed at the next start for both: the answer is
+// written as the stopped service left it, which answers the copy's other
+// entry with it, and the next start removes the copy once and marks both,
+// the second read again after the first's mark took it, so nothing is
+// logged as left undone. Without reading the entry again the second's mark
+// is refused as already discarded and logged as a discard not completed.
+func TestADiscardOfTwoEntriesAStoppedServiceLeftIsCompletedOnceForBoth(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, first := plantKeptInvestigation(t, h, subject, repository.ID)
+	if err := writeFile(first.CopyPath+"/more.txt", "what the worker found next\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, first.CopyPath, "add", "-A")
+	git(t, first.CopyPath, "commit", "--quiet", "-m", "the worker's second commit")
+	second := keepTaskCopy(t, h, old)
+	var shown machine.KeptWorkLoss
+	withService(t, h, func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: first.Key(), Answer: string(store.KeptDiscard)}
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, request, &out); err != nil || out.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", out, err)
+		}
+		shown = *out.Loss
+	})
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.AnswerKeptWorkDiscard(t.Context(), first.ID, shown.Digest, shown.Lacks, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	_ = records.Close()
+
+	withService(t, h, func(under serviceUnderTest) {
+		for _, id := range []int64{first.ID, second.ID} {
+			if got, err := recordsOf(t, h).KeptWorkEntry(t.Context(), id); err != nil || !got.DiscardedAt.IsKnown() {
+				t.Fatalf("after the start entry %d reads %+v, %v; want it marked discarded", id, got, err)
+			}
+		}
+		if _, err := os.Lstat(first.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the discarded copy still stands: %v", err)
+		}
+		if log := readServiceLog(t, h); strings.Contains(log, "could not be completed") {
+			t.Fatalf("the start logged a discard left undone:\n%s", log)
+		}
+	})
+}
