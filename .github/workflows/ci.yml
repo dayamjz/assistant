@@ -164,13 +164,26 @@ jobs:
           # watched temp roots. The only things set aside are macOS's own
           # Apple launchd jobs, XPC services and temp entries, each printed;
           # the script says which.
+          # Each package the check runs is recorded, and every package go test
+          # reports ok must be among them, so a lost -exec fails the step.
           per_package=()
           if [ "$RUNNER_OS" = "Linux" ]; then
             per_package=(-exec "python3 $PWD/scripts/leak-check.py package --")
+            export LEAK_CHECK_RECORD="$RUNNER_TEMP/per-package-checked.txt"
           fi
           "${run[@]}" python3 scripts/leak-check.py self-test
+          if [ -n "${LEAK_CHECK_RECORD:-}" ]; then : > "$LEAK_CHECK_RECORD"; fi
           "${run[@]}" python3 scripts/leak-check.py run -- \
             go test "${per_package[@]}" -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            passed=$(grep -cE '^ok[[:space:]]' test.log || true)
+            checked=$(wc -l < "$LEAK_CHECK_RECORD")
+            echo "leak-check: $checked package(s) ran through the per-package check; go test reported $passed ok"
+            if [ "$checked" -lt "$passed" ] || [ "$passed" -eq 0 ]; then
+              echo "::error::fewer packages ran through the per-package check than passed"
+              status=${status:-1}
+            fi
+          fi
           grep -E '^(ok|FAIL|--- FAIL|panic:|\?|LEAK|leak-check:)[[:space:]]' test.log || true
           if [ -n "${status:-}" ]; then
             echo "::group::full test output"

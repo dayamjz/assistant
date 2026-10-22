@@ -447,6 +447,10 @@ def package_run(command):
     children are signalled, so no pid can have been reused, and what each
     leaves is reparented here for the next round, until no child remains.
 
+    When LEAK_CHECK_RECORD names a file, the package's directory is appended
+    to it before the binary starts, so a caller can tell every package went
+    through this check rather than trusting the -exec flag reached go test.
+
     The binary's exit status is passed on, or 1 when it was 0 and something
     was left; a binary ended by a signal ends this process with the same
     signal. A process the package had started through a service manager or
@@ -462,6 +466,10 @@ def package_run(command):
     if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
         code = ctypes.get_errno()
         raise OSError(code, "prctl(PR_SET_CHILD_SUBREAPER)")
+    record = os.environ.get("LEAK_CHECK_RECORD")
+    if record:
+        with open(record, "a", encoding="utf-8") as out:
+            out.write(os.getcwd() + "\n")
     child = os.posix_spawnp(command[0], command, os.environ)
 
     def forward(signum, _frame):
