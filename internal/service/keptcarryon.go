@@ -277,6 +277,11 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 		if err := os.Rename(entry.CopyPath, newPath); err != nil {
 			return machine.KeptWorkAnswered{}, fmt.Errorf("service: moving the kept copy to task %s: %w", id, err)
 		}
+		if s.betweenCarryOnMoveAndMark != nil {
+			if err := s.betweenCarryOnMoveAndMark(); err != nil {
+				return machine.KeptWorkAnswered{}, err
+			}
+		}
 	} else if err != nil {
 		return machine.KeptWorkAnswered{}, fmt.Errorf("service: reading the copy of task %s at %s: %w", id, newPath, err)
 	} else if err := s.verifyAdopted(ctx, entry, newPath); err != nil {
@@ -302,10 +307,14 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 
 // verifyAdopted refuses to take a copy already standing at the new task's
 // path as the kept one unless it is: the kept copy's own path is gone, which
-// a rename of it leaves, and the copy at the new path holds every commit the
-// entry recorded the kept copy's references and HEAD standing on, which a
-// clone cut from elsewhere does not. Either failing is refused with
-// ipc.ErrRefused, the entry stays owed and the task stays held on it.
+// a rename of it leaves, and the copy at the new path still contains every
+// commit the entry recorded the kept copy's references and HEAD standing on,
+// each reachable from its HEAD or one of its references, which a clone cut
+// from elsewhere does not. Reachable and not a tip, since the kept copy may
+// have gone on to commits past those after it was kept, and its references
+// moving forward is the copy carrying on, not another copy. Either failing
+// is refused with ipc.ErrRefused, the entry stays owed and the task stays
+// held on it.
 func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPath string) error {
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: kept work entry %d was not carried on: %s", ipc.ErrRefused, entry.ID, why)
@@ -324,13 +333,27 @@ func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPa
 	if err != nil {
 		return fmt.Errorf("service: reading the copy at %s: %w", newPath, err)
 	}
-	have := map[string]bool{inv.Head.Commit: true}
+	tips := []string{}
+	if inv.Head.Commit != "" {
+		tips = append(tips, inv.Head.Commit)
+	}
 	for _, ref := range inv.Refs {
-		have[ref.Commit] = true
+		tips = append(tips, ref.Commit)
 	}
 	for _, h := range entry.Holds {
-		if !have[h] {
-			return refuse(fmt.Sprintf("the copy at %s does not stand on %s, which the kept copy did, so it is not the kept work", newPath, h))
+		contained := false
+		for _, tip := range tips {
+			reaches, err := adopted.IsAncestor(ctx, h, tip)
+			if err != nil && !errors.Is(err, vcs.ErrRefNotFound) {
+				return fmt.Errorf("service: reading whether the copy at %s contains %s: %w", newPath, h, err)
+			}
+			if err == nil && reaches {
+				contained = true
+				break
+			}
+		}
+		if !contained {
+			return refuse(fmt.Sprintf("the copy at %s does not contain %s, which the kept copy stood on, so it is not the kept work", newPath, h))
 		}
 	}
 	return nil

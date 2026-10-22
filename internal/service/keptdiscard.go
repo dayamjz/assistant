@@ -20,12 +20,11 @@ import (
 //
 // # What is shown, and what is confirmed
 //
-// internal/tasks' Loss reads what would be lost: the commits the default
-// branch lacks, from the entry's basis, and the three indicators of what no
-// commit records, read from the copy now, with a digest over the copy's
-// state. An entry whose basis is not established is refused rather than
-// shown a list that may overstate or understate, naming why, until a later
-// cleanup of the unchanged copy establishes it. A discard given a digest is
+// internal/tasks' Loss reads what would be lost from the copy now: the
+// commits the default branch, read fresh, lacks, and the three indicators of
+// what no commit records, with a digest over the copy's state and those
+// commits. A default branch that cannot be read now is refused rather than
+// shown a list that may overstate or understate, naming why. A discard given a digest is
 // compared against that read again: a copy that changed since, by a commit,
 // an edit, a file or a stash, digests differently and is refused, and the
 // person is told to look again. Nothing is recorded for a discard shown or
@@ -33,11 +32,13 @@ import (
 //
 // # The order, and what a stop leaves
 //
-// The answer is recorded first, with the digest it was shown
-// (store.AnswerKeptWorkDiscard), which closes the entry so the project's
-// new tasks no longer wait on it; then internal/tasks' Discard removes the
-// copy, checking the digest again on the way; then the entry is marked
-// discarded. A service that stops between the answer and the mark leaves an
+// The answer is recorded first, with the digest it was shown and the
+// commits it was shown as lost (store.AnswerKeptWorkDiscard), which closes
+// the entry so the project's new tasks no longer wait on it; then
+// internal/tasks' Discard removes the copy, checking on the way that it
+// holds exactly what the digest sealed and that what the default branch
+// lacks of it now is among what was shown; then the entry is marked
+// discarded. A default branch that only moved since is no reason to refuse. A service that stops between the answer and the mark leaves an
 // entry answered discard with a digest and no instant, which the next call
 // or the next start completes (completeDiscardsAtOpen): the copy is removed
 // if it still holds exactly what the digest was shown for, or is already
@@ -108,7 +109,7 @@ func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry st
 				"copy's as it stands, %s, so either the copy changed since it was shown or the digest is another's; answer discard "+
 				"without a confirmation to see what it holds now", ipc.ErrRefused, entry.ID, confirm, loss.Digest)
 		}
-		answered, err := s.store.AnswerKeptWorkDiscard(ctx, entry.ID, confirm, req.HoldResolver())
+		answered, err := s.store.AnswerKeptWorkDiscard(ctx, entry.ID, confirm, loss.Lacks, req.HoldResolver())
 		switch {
 		case errors.Is(err, store.ErrKeptWorkAnswered) || errors.Is(err, store.ErrKeptWorkClosed):
 			again, readErr := s.store.KeptWorkEntry(ctx, entry.ID)
@@ -187,7 +188,7 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 			return machine.KeptWorkAnswered{}, err
 		}
 	}
-	lost, err := s.cleaner.Discard(ctx, entry, digest, gatePath)
+	lost, err := s.cleaner.Discard(ctx, entry, digest, entry.DiscardLacks, gatePath)
 	if errors.Is(err, tasks.ErrLossChanged) {
 		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d is answered discard and its copy was not removed: %w",
 			ipc.ErrRefused, entry.ID, err)

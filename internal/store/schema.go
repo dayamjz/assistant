@@ -2306,14 +2306,19 @@ var schema = []migration{
 			// who discarded what". discard_digest is the confirmation of
 			// what was shown, written with the discard answer by
 			// AnswerKeptWorkDiscard, so the row says what the person was
-			// shown; discarded_at is when the copy went, written once by
-			// MarkKeptWorkDiscarded, and an entry answered discard with none
-			// is a discard not yet carried out.
+			// shown; discard_lacks is the commits it was shown as lost,
+			// written in the same write, which the removal holds what would
+			// be lost then to; discarded_at is when the copy went, written
+			// once by MarkKeptWorkDiscarded, and an entry answered discard
+			// with none is a discard not yet carried out.
 			`ALTER TABLE kept_work ADD COLUMN discard_digest TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN discard_lacks TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN discarded_at TEXT`,
 			`CREATE TRIGGER kept_work_discard_is_shown_once
-				BEFORE UPDATE OF discard_digest ON kept_work
-				WHEN NEW.discard_digest IS NOT OLD.discard_digest AND (OLD.discard_digest IS NOT NULL OR NEW.answer IS NOT 'discard')
+				BEFORE UPDATE OF discard_digest, discard_lacks ON kept_work
+				WHEN (NEW.discard_digest IS NOT OLD.discard_digest OR NEW.discard_lacks IS NOT OLD.discard_lacks)
+					AND (OLD.discard_digest IS NOT NULL OR OLD.discard_lacks IS NOT NULL OR NEW.answer IS NOT 'discard'
+						OR NEW.discard_digest IS NULL OR NEW.discard_lacks IS NULL)
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a kept work entry records what its discard was shown once, with its discard answer');
 				END`,

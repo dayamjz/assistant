@@ -191,7 +191,7 @@ func TestKeptWorkOfReadsTheEntryStandingForACopyState(t *testing.T) {
 	if _, err := s.KeptWorkOf(ctx, "/w/of", []string{"bbbb", "aaaa"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("KeptWorkOf with the commits in another order = %v; want ErrNotFound, as the write keys them", err)
 	}
-	if _, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, "shown", ResolvedByMachineInterface()); err != nil {
+	if _, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, "shown", nil, ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.KeptWorkOf(ctx, "/w/of", []string{"aaaa", "bbbb"}); err != nil || got.ID != entry.ID || !got.Answered() {

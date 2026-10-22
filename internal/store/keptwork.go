@@ -171,11 +171,13 @@ type KeptWork struct {
 	CarriedOnTask Optional[string]    `json:"carried_on_task"`
 	CarriedOnAt   Optional[time.Time] `json:"carried_on_at"`
 	// DiscardDigest is the confirmation of what a discard answer was
-	// shown, written with the answer by AnswerKeptWorkDiscard, and
-	// DiscardedAt is when the copy went, written by MarkKeptWorkDiscarded.
-	// An entry answered discard with a digest and no instant is a discard
-	// not yet carried out.
+	// shown, and DiscardLacks the commits it was shown as lost, nil for
+	// an entry not answered discard; both are written with the answer by
+	// AnswerKeptWorkDiscard. DiscardedAt is when the copy went, written by
+	// MarkKeptWorkDiscarded. An entry answered discard with a digest and
+	// no instant is a discard not yet carried out.
 	DiscardDigest Optional[string]    `json:"discard_digest"`
+	DiscardLacks  []string            `json:"discard_lacks"`
 	DiscardedAt   Optional[time.Time] `json:"discarded_at"`
 }
 
@@ -563,19 +565,23 @@ func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 	case KeptDiscard:
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a discard answer records what it was shown, through AnswerKeptWorkDiscard", id)
 	}
-	return s.answerKeptWork(ctx, id, a, by, "", "")
+	return s.answerKeptWork(ctx, id, a, by, "", "", nil)
 }
 
 // AnswerKeptWorkDiscard is AnswerKeptWork for the discard answer, which
-// records what the answer was shown, the digest of what the copy holds that
-// would be lost, in the same write: PRD section 6's "recording who
-// discarded what". An empty digest is refused. It records and removes
-// nothing; the removal is the caller's, against the digest.
-func (s *Store) AnswerKeptWorkDiscard(ctx context.Context, id int64, digest string, by Resolver) (KeptWork, error) {
+// records what the answer was shown in the same write, the digest of what
+// the copy holds and would lose and the commits it was shown as lost: PRD
+// section 6's "recording who discarded what". An empty digest is refused;
+// lacks may be empty, and is recorded as shown. It records and removes
+// nothing; the removal is the caller's, against both.
+func (s *Store) AnswerKeptWorkDiscard(ctx context.Context, id int64, digest string, lacks []string, by Resolver) (KeptWork, error) {
 	if strings.TrimSpace(digest) == "" {
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a discard answer records what it was shown, and was shown nothing", id)
 	}
-	return s.answerKeptWork(ctx, id, KeptDiscard, by, "", digest)
+	if lacks == nil {
+		lacks = []string{}
+	}
+	return s.answerKeptWork(ctx, id, KeptDiscard, by, "", digest, lacks)
 }
 
 // AnswerKeptWorkCarryOn is AnswerKeptWork for the carry-on answer, which
@@ -590,19 +596,27 @@ func (s *Store) AnswerKeptWorkCarryOn(ctx context.Context, id int64, task string
 	if err := home.ValidTaskID(task); err != nil {
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: the task carrying it on: %w", id, err)
 	}
-	return s.answerKeptWork(ctx, id, KeptCarryOn, by, task, "")
+	return s.answerKeptWork(ctx, id, KeptCarryOn, by, task, "", nil)
 }
 
 // answerKeptWork is the one write of an answer, with the carry-on task
 // beside a carry-on answer, the digest beside a discard, and nothing beside
 // land.
-func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver, task, digest string) (KeptWork, error) {
+func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver, task, digest string, shown []string) (KeptWork, error) {
 	if !a.Recognized() {
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: %w: %q", id, ErrUnknownKeptAnswer, a)
 	}
 	who, err := resolverText(by)
 	if err != nil {
 		return KeptWork{}, fmt.Errorf("store: answering kept work entry %d: %w", id, err)
+	}
+	var shownLacks Optional[string]
+	if shown != nil {
+		encoded, err := encodeExamined(shown)
+		if err != nil {
+			return KeptWork{}, err
+		}
+		shownLacks = Known(encoded)
 	}
 	var out KeptWork
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
@@ -617,8 +631,8 @@ func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 			return ErrKeptWorkClosed
 		}
 		at := encodeTime(nowUTC())
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?, discard_digest = ? WHERE id = ?`,
-			string(a), who, at, optionalText(task), optionalText(digest), id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?, discard_digest = ?, discard_lacks = ? WHERE id = ?`,
+			string(a), who, at, optionalText(task), optionalText(digest), shownLacks, id); err != nil {
 			return err
 		}
 		if a == KeptCarryOn {
@@ -643,15 +657,15 @@ func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 
 const keptWorkColumns = `SELECT id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
 	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, lacks, against, unestablished,
-	landing_claimed_at, landed_run, carried_on_task, carried_on_at, discard_digest, discarded_at`
+	landing_claimed_at, landed_run, carried_on_task, carried_on_at, discard_digest, discard_lacks, discarded_at`
 
 func scanKeptWork(sc scanner) (KeptWork, error) {
 	var k KeptWork
 	var holds, kept string
-	var surfaced, answer, by, answered, closure, proof, closed, lacks, landingClaimed, carriedOn, discarded Optional[string]
+	var surfaced, answer, by, answered, closure, proof, closed, lacks, landingClaimed, carriedOn, discardLacks, discarded Optional[string]
 	if err := sc.Scan(&k.ID, &k.TaskID, &k.RunID, &k.RepositoryID, &k.Branch, &k.CopyPath, &holds, &k.Reason, &k.Detail,
 		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &lacks, &k.Against, &k.Unestablished,
-		&landingClaimed, &k.LandedRun, &k.CarriedOnTask, &carriedOn, &k.DiscardDigest, &discarded); err != nil {
+		&landingClaimed, &k.LandedRun, &k.CarriedOnTask, &carriedOn, &k.DiscardDigest, &discardLacks, &discarded); err != nil {
 		return KeptWork{}, err
 	}
 	if err := json.Unmarshal([]byte(holds), &k.Holds); err != nil {
@@ -663,6 +677,14 @@ func scanKeptWork(sc scanner) (KeptWork, error) {
 		}
 		if k.Lacks == nil {
 			k.Lacks = []string{}
+		}
+	}
+	if encoded, ok := discardLacks.Get(); ok {
+		if err := json.Unmarshal([]byte(encoded), &k.DiscardLacks); err != nil {
+			return KeptWork{}, fmt.Errorf("column discard_lacks: %w", err)
+		}
+		if k.DiscardLacks == nil {
+			k.DiscardLacks = []string{}
 		}
 	}
 	var err error

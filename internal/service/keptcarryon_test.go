@@ -445,7 +445,7 @@ func TestAFailedAdoptionHoldsTheTaskAndAFreshCloneIsNotTakenForTheCopy(t *testin
 			t.Fatal(err)
 		}
 		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "does not stand on "+entry.Lacks[0]) {
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "does not contain "+entry.Lacks[0]) {
 			t.Fatalf("the carry on over a fresh clone with the kept copy away = %+v, %v; want it refused naming %s", out, err, entry.Lacks[0])
 		}
 		if err := os.Rename(away, entry.CopyPath); err != nil {
@@ -512,5 +512,64 @@ func TestCarryingOnAnswersEveryEntryOfTheCopy(t *testing.T) {
 			}
 		}
 		waitLaunched(t, h, out.Task)
+	})
+}
+
+// A carry on stopped after the copy was moved is completed by the next
+// start though the copy went on past what it was kept at, the reviewer's
+// sequence: a detached investigation's copy is kept at the worker's commit
+// A, the worker then commits B on it with no second Keep, so A is B's
+// ancestor and no longer a tip, and the carry on is answered and stopped
+// through the seam right after the move. The next start takes the copy at
+// the new task's path as the kept one, since it still contains A, marks
+// the entry, and the task's worker starts. Without reading containment
+// rather than tips the moved copy is refused and the task is held forever.
+func TestACarryOnStoppedAfterTheMoveAdoptsACopyThatWentOn(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	kept := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	if !slices.Contains(entry.Holds, kept) {
+		t.Fatalf("the entry holds %v; want the worker's commit %s among them", entry.Holds, kept)
+	}
+	if err := writeFile(entry.CopyPath+"/more.txt", "what the worker found next\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "add", "-A")
+	git(t, entry.CopyPath, "commit", "--quiet", "-m", "the worker's second commit")
+
+	stopped := errors.New("the service stopped between the copy's move and the entry's mark")
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, service.WithCarryOnInterruptForTest(t, o, func() error { return stopped }), func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err == nil || !strings.Contains(err.Error(), "stopped between") {
+			t.Fatalf("the carry on past the stopped seam = %+v, %v; want the stop", out, err)
+		}
+	})
+	answered, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+	if err != nil || answered.CarriedOnAt.IsKnown() {
+		t.Fatalf("after the stop the entry reads %+v, %v; want it owed", answered, err)
+	}
+	reserved := answered.CarriedOnTask.Or("")
+	newPath, err := h.TaskCopy(reserved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(newPath + "/more.txt"); err != nil {
+		t.Fatalf("after the stop the copy is not at task %s's path: %v", reserved, err)
+	}
+
+	o, _ = workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		if done := waitCarriedOn(t, h, entry.ID); done.CarriedOnTask.Or("") != reserved {
+			t.Fatalf("the completed carry on names task %s, want %s", done.CarriedOnTask.Or(""), reserved)
+		}
+		waitLaunched(t, h, reserved)
 	})
 }

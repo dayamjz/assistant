@@ -51,6 +51,16 @@ func WithLandingInterruptForTest(tb testing.TB, o Options, f func(run string) er
 	return o
 }
 
+// WithCarryOnInterruptForTest returns o with a carry on's seam between the
+// copy's move to the new task and the entry's mark set to f, for this
+// package's external tests: a carry on whose f returns an error ends with
+// the copy at the new task's path and the entry owed, as a service that
+// stopped there leaves it.
+func WithCarryOnInterruptForTest(tb testing.TB, o Options, f func() error) Options {
+	o.carryOnTest, o.interruptCarryOn = tb, f
+	return o
+}
+
 // WithBeforeStaleRemovalReleaseForTest returns o with recovery's seam between
 // reading a dead eject's removal reservation and releasing it set to f, for
 // this package's external tests.

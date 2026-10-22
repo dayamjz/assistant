@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -10,7 +11,9 @@ import (
 	"hash"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -51,7 +54,10 @@ import (
 // its link's target, or that it is gone; for an untracked directory, which
 // is how git reports a nested repository, every file under it by the
 // filesystem, its own .git included, since git will not look inside), the
-// commits lacking, and the three indicators. The same copy in the same state
+// commits lacking, and the three indicators (seal). The default branch's
+// tip is not in it: it is not the copy's, and a discard answered and
+// stopped before its removal would otherwise be refused for good by an
+// unrelated commit landing upstream. The same copy in the same state
 // digests the same, and a commit, a reference moved, an edit to a tracked
 // file, a change staged, a file added, edited or removed, or a stash made
 // or dropped since changes it, which is what lets Discard refuse a copy that
@@ -85,8 +91,11 @@ type Loss struct {
 	// as it stands now: a tracked change, a file no commit records, and a
 	// stash, none of which a commit the default branch could lack records.
 	Dirty, Untracked, Stash bool
-	// Digest is the confirmation of exactly this: the copy's state as shown.
+	// Digest is the confirmation of exactly this: the copy's state and the
+	// commits lacking, as shown (seal).
 	Digest string
+	// state is the copy's state the digest seals, record by record.
+	state [][]string
 }
 
 // ErrLossUnestablished is returned by Loss and Discard when what the
@@ -143,20 +152,29 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 			return Loss{}, err
 		}
 	}
+	// The default branch is fetched under a namespace of this read's own,
+	// never the cleanup decision's: a cleanup of the same copy may run at
+	// once (recovery asks it of every finished run's standing copy), and
+	// its forget would delete the reference this read is about to resolve.
+	if l.namespace, err = discardNamespace(entry); err != nil {
+		return Loss{}, err
+	}
 	held := lacking(ctx, l, reaches)
 	if !held.established() {
 		return Loss{}, fmt.Errorf("%w: %s", ErrLossUnestablished, held.unestablished)
 	}
 	loss := Loss{Head: inv.Head.Commit, Lacks: held.lacks, Dirty: inv.Dirty, Untracked: inv.Untracked, Stash: inv.Stash}
-	d := newDigest()
-	d.record("copy", entry.CopyPath, inv.Head.Commit)
-	d.record("against", held.against)
+	// The copy's state, every record of it; the default branch's tip is
+	// not among them, since it is not the copy's (the seal's comment says
+	// why).
+	record := func(fields ...string) { loss.state = append(loss.state, fields) }
+	record("copy", entry.CopyPath, inv.Head.Commit)
 	for _, ref := range inv.Refs {
 		// A task's clone has references of its own; a run's worktree reads
 		// the gate's, which are not the copy's state, so of those only the
 		// stash, which is the copy's, is read.
 		if entry.TaskID.IsKnown() || ref.Name == "refs/stash" {
-			d.record("ref", ref.Name, ref.Commit)
+			record("ref", ref.Name, ref.Commit)
 		}
 	}
 	entries, err := copied.IndexEntries(ctx)
@@ -164,7 +182,7 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 		return Loss{}, fmt.Errorf("tasks: reading the index of the kept copy at %s: %w", entry.CopyPath, err)
 	}
 	for _, e := range entries {
-		d.record("index", e.Mode, e.Object, strconv.Itoa(e.Stage), e.Path)
+		record("index", e.Mode, e.Object, strconv.Itoa(e.Stage), e.Path)
 	}
 	changes, err := copied.Changes(ctx)
 	if err != nil {
@@ -175,12 +193,42 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 		if err != nil {
 			return Loss{}, fmt.Errorf("tasks: reading %s in the kept copy at %s: %w", p.Path, entry.CopyPath, err)
 		}
-		d.record("path", p.Path, strconv.FormatBool(p.Untracked), strconv.FormatBool(p.Gone), content)
+		record("path", p.Path, strconv.FormatBool(p.Untracked), strconv.FormatBool(p.Gone), content)
 	}
-	d.record(append([]string{"lacks"}, loss.Lacks...)...)
-	d.record("indicators", strconv.FormatBool(inv.Dirty), strconv.FormatBool(inv.Untracked), strconv.FormatBool(inv.Stash))
-	loss.Digest = d.sum()[:12]
+	record("indicators", strconv.FormatBool(inv.Dirty), strconv.FormatBool(inv.Untracked), strconv.FormatBool(inv.Stash))
+	loss.Digest = seal(loss.state, loss.Lacks)
 	return loss, nil
+}
+
+// discardNamespace is a namespace no other read uses, under which one Loss
+// fetches what it compares against: the entry's owner and a random suffix,
+// so two reads of one copy at once never share a reference either.
+func discardNamespace(entry store.KeptWork) (string, error) {
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return "", fmt.Errorf("tasks: naming the references a discard reads under: %w", err)
+	}
+	owner := "run/" + entry.RunID.Or("")
+	if id, ok := entry.TaskID.Get(); ok {
+		owner = "task/" + id
+	}
+	return "refs/assistant/discard/" + owner + "/" + hex.EncodeToString(suffix[:]), nil
+}
+
+// seal is the digest a discard is shown and confirmed with: the copy's
+// state, every record of it, and the commits shown as lost. The default
+// branch's tip is not sealed. It is not the copy's, so a commit landing on
+// it that the copy does not hold changes nothing a discard destroys, and
+// sealing it would refuse a recorded discard for good whenever the
+// upstream moved before the removal. What it can change is what of the
+// copy is lost, which Discard holds to what was shown instead.
+func seal(state [][]string, lacks []string) string {
+	d := newDigest()
+	for _, r := range state {
+		d.record(r...)
+	}
+	d.record(append([]string{"lacks"}, lacks...)...)
+	return d.sum()[:12]
 }
 
 // digest is the framing every digest here is written in: each record is a
@@ -284,10 +332,21 @@ func hashFile(path string) (string, error) {
 }
 
 // Discard removes the entry's copy when it still holds exactly what digest
-// was shown for, on this file's terms, and returns what was lost. gate is
-// the gate repository a run's copy is a worktree of, and is not read for a
-// task's. A copy already gone returns the zero Loss and no error.
-func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest, gatePath string) (Loss, error) {
+// was shown for, on this file's terms, and returns what was lost. shown is
+// the commits the discard was shown as lost, which digest seals with the
+// copy's state: the copy read now must seal with them to digest, so it
+// holds exactly what it held when shown, and what the default branch read
+// now lacks of it must be among them, so a commit that would be lost now
+// and was not shown is refused with ErrLossChanged. gate is the gate repository a run's
+// copy is a worktree of, and is not read for a task's. A copy already gone
+// returns the zero Loss and no error.
+//
+// What the commit check does not cover: a default branch that moved only
+// forward over commits the copy does not hold changes nothing here, and one
+// that took up commits the copy holds shrinks the loss, both of which
+// proceed; one that was rewound or force-pushed past a commit it had can
+// make the copy the only place that commit is, which is refused.
+func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest string, shown []string, gatePath string) (Loss, error) {
 	loss, err := c.Loss(ctx, entry)
 	if errors.Is(err, ErrCopyGone) {
 		return Loss{}, nil
@@ -295,8 +354,17 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest, gat
 	if err != nil {
 		return Loss{}, err
 	}
-	if loss.Digest != digest {
-		return Loss{}, fmt.Errorf("%w: it was shown as %s and is %s now", ErrLossChanged, digest, loss.Digest)
+	if sealed := seal(loss.state, shown); sealed != digest {
+		return Loss{}, fmt.Errorf("%w: it was shown as %s and holds what digests as %s now", ErrLossChanged, digest, sealed)
+	}
+	var unshown []string
+	for _, commit := range loss.Lacks {
+		if !slices.Contains(shown, commit) {
+			unshown = append(unshown, commit)
+		}
+	}
+	if len(unshown) > 0 {
+		return Loss{}, fmt.Errorf("%w: the default branch now lacks %s, which the discard was not shown as lost", ErrLossChanged, strings.Join(unshown, ", "))
 	}
 	if entry.TaskID.IsKnown() {
 		if err := os.RemoveAll(entry.CopyPath); err != nil {

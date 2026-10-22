@@ -36,7 +36,9 @@ func TestADiscardIsConfirmedOnlyFromATerminalsForeground(t *testing.T) {
 		ctx := t.Context()
 		raw, code := callDetached(t, under, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""))
 		if code != "" {
-			t.Fatalf("the preview from a peer with no terminal was refused with %q", code)
+			var out machine.KeptWorkAnswered
+			again := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &out)
+			t.Fatalf("the preview from a peer with no terminal was refused with %q (the same preview in process answers %v)", code, again)
 		}
 		var shown machine.KeptWorkAnswered
 		if err := json.Unmarshal(raw, &shown); err != nil || shown.Loss == nil || shown.Loss.Digest == "" {

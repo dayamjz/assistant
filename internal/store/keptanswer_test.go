@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -44,7 +45,7 @@ func TestALandingRunIsRecordedOnceOnAnEntryAnsweredLand(t *testing.T) {
 	if _, err := s.RecordKeptWorkLanding(ctx, land.ID, run.ID); !errors.Is(err, ErrKeptWorkNotLand) {
 		t.Fatalf("a landing on an open entry = %v; want ErrKeptWorkNotLand", err)
 	}
-	if _, err := s.AnswerKeptWorkDiscard(ctx, other.ID, "shown", ResolvedByMachineInterface()); err != nil {
+	if _, err := s.AnswerKeptWorkDiscard(ctx, other.ID, "shown", nil, ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.RecordKeptWorkLanding(ctx, other.ID, run.ID); !errors.Is(err, ErrKeptWorkNotLand) {
@@ -170,15 +171,16 @@ func TestADiscardAnswerRecordsWhatItWasShownOnceAndIsCarriedOutOnce(t *testing.T
 	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface()); err == nil {
 		t.Fatal("a discard answer shown nothing was recorded")
 	}
-	if _, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, " ", ResolvedByMachineInterface()); err == nil {
+	if _, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, " ", nil, ResolvedByMachineInterface()); err == nil {
 		t.Fatal("a discard answer with an empty digest was recorded")
 	}
 	if _, err := s.MarkKeptWorkDiscarded(ctx, entry.ID); !errors.Is(err, ErrKeptWorkNotDiscard) {
 		t.Fatalf("marking an open entry discarded = %v; want ErrKeptWorkNotDiscard", err)
 	}
-	answered, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, "abc123", ResolvedByMachineInterface())
-	if err != nil || answered.Answer.Or("") != KeptDiscard || answered.DiscardDigest.Or("") != "abc123" || answered.DiscardedAt.IsKnown() {
-		t.Fatalf("the discard answer = %+v, %v; want discard shown abc123, not yet discarded", answered, err)
+	answered, err := s.AnswerKeptWorkDiscard(ctx, entry.ID, "abc123", []string{"eeee"}, ResolvedByMachineInterface())
+	if err != nil || answered.Answer.Or("") != KeptDiscard || answered.DiscardDigest.Or("") != "abc123" ||
+		!slices.Equal(answered.DiscardLacks, []string{"eeee"}) || answered.DiscardedAt.IsKnown() {
+		t.Fatalf("the discard answer = %+v, %v; want discard shown abc123 losing eeee, not yet discarded", answered, err)
 	}
 	if owed, err := s.KeptWorkDiscardsOwed(ctx); err != nil || len(owed) != 1 || owed[0].ID != entry.ID {
 		t.Fatalf("KeptWorkDiscardsOwed = %+v, %v; want the entry", owed, err)
@@ -196,6 +198,9 @@ func TestADiscardAnswerRecordsWhatItWasShownOnceAndIsCarriedOutOnce(t *testing.T
 	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discard_digest = 'other' WHERE id = ?`, entry.ID); err == nil {
 		t.Fatal("the schema let what the discard was shown be rewritten")
 	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discard_lacks = '[]' WHERE id = ?`, entry.ID); err == nil {
+		t.Fatal("the schema let the commits the discard was shown as lost be rewritten")
+	}
 	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discarded_at = '2020-01-01T00:00:00Z' WHERE id = ?`, entry.ID); err == nil {
 		t.Fatal("the schema let the discarded instant be rewritten")
 	}
@@ -208,5 +213,8 @@ func TestADiscardAnswerRecordsWhatItWasShownOnceAndIsCarriedOutOnce(t *testing.T
 	}
 	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discard_digest = 'abc' WHERE id = ?`, land.ID); err == nil {
 		t.Fatal("the schema let a discard digest be written on an entry answered land")
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE kept_work SET discard_lacks = '[]' WHERE id = ?`, land.ID); err == nil {
+		t.Fatal("the schema let the commits a discard was shown be written on an entry answered land")
 	}
 }

@@ -3,6 +3,7 @@ package service_test
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -146,11 +147,14 @@ func TestADiscardRefusesAnUnestablishedEntryAndRemovesATasksClone(t *testing.T) 
 }
 
 // A discard answer recorded by a service that stopped before it removed
-// the copy is completed by the next start: the entry answered discard with
-// the digest it was shown, written as the stopped service left it, has its
-// copy removed at open while the copy still holds exactly that, and is
-// marked discarded. Without the completion at open the copy stands and the
-// entry stays owed.
+// the copy is completed by the next start, though the upstream moved in
+// between: the entry answered discard with the digest and the commits it
+// was shown, written as the stopped service left it, and then a commit the
+// copy does not hold lands on the default branch upstream; the next start
+// removes the copy, which still holds exactly what was shown, and marks the
+// entry discarded. Without the completion at open the copy stands and the
+// entry stays owed; with the default branch's tip sealed in the digest the
+// moved upstream refuses the removal for good.
 func TestADiscardAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -161,22 +165,23 @@ func TestADiscardAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testi
 	subject := newSubject(t)
 	recordRepository(t, h, subject)
 	entry := keptEntryOf(t, h, subject)
-	var digest string
+	var shown machine.KeptWorkLoss
 	withService(t, h, func(under serviceUnderTest) {
 		var out machine.KeptWorkAnswered
 		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &out); err != nil || out.Loss == nil {
 			t.Fatalf("the discard shown = %+v, %v", out, err)
 		}
-		digest = out.Loss.Digest
+		shown = *out.Loss
 	})
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.AnswerKeptWorkDiscard(t.Context(), entry.ID, digest, store.ResolvedByMachineInterface()); err != nil {
+	if _, err := records.AnswerKeptWorkDiscard(t.Context(), entry.ID, shown.Digest, shown.Lacks, store.ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	_ = records.Close()
+	advanceUpstream(t, git(t, subject, "remote", "get-url", "origin"), "unrelated.txt")
 
 	withService(t, h, func(under serviceUnderTest) {
 		deadline := time.Now().Add(30 * time.Second)
@@ -194,4 +199,19 @@ func TestADiscardAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testi
 			time.Sleep(20 * time.Millisecond)
 		}
 	})
+}
+
+// advanceUpstream lands a commit on the upstream's main that no copy holds,
+// from a clone of its own, the way another person's push moves it.
+func advanceUpstream(t *testing.T, upstream, file string) string {
+	t.Helper()
+	pusher := filepath.Join(t.TempDir(), "pusher")
+	git(t, filepath.Dir(pusher), "clone", "--quiet", upstream, pusher)
+	if err := writeFile(filepath.Join(pusher, file), "someone else's work\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, pusher, "add", "-A")
+	git(t, pusher, "commit", "--quiet", "-m", "someone else's work")
+	git(t, pusher, "push", "--quiet", "origin", "HEAD:main")
+	return git(t, pusher, "rev-parse", "HEAD")
 }
