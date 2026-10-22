@@ -299,15 +299,16 @@ func (l landing) allReached(ctx context.Context, tip, where string, absent func(
 	return examined, ""
 }
 
-// reached answers whether commit w is reachable from tip: itself, or through
-// a rebase record of the task's runs, in record order, whose submitted commit
-// w is in the history of, read in the copy, and whose published head is
-// reachable from tip. It returns the record's submitted commit and published
-// head when it followed one, and nothing when w is reachable itself. A commit
-// a record names that the copy does not hold is not a way there, since the
-// tip's history is in the copy once it is fetched; any other failure is a
-// detail and never an answer. A commit not reached is stated with absent,
-// followed by how many records were looked through.
+// reached answers whether commit w is reached from tip: reachable itself, or
+// carried through a rebase record of the task's runs, in record order, on
+// follows' terms, which include a content check of w against the record's
+// published head and not ancestry alone. It returns the record's submitted
+// commit and published head when it followed one, and nothing when w is
+// reachable itself. A commit a record names that the copy does not hold is
+// not a way there, since the tip's history is in the copy once it is
+// fetched; any other failure is a detail and never an answer. A commit not
+// reached is stated with absent, followed by how many records were looked
+// through.
 func (l landing) reached(ctx context.Context, w, tip, where string, absent func(string) string) ([]string, string) {
 	direct, err := l.repo.IsAncestor(ctx, w, tip)
 	if err != nil {

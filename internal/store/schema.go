@@ -2223,8 +2223,13 @@ var schema = []migration{
 			// (after). A row is written only when the stage established that
 			// before carries the commit the run was submitted (submitted,
 			// which RecordRunRebase holds to the run row's own) and that
-			// integrating before into after would change nothing, so a row says
-			// that the run's own rebase carried the submitted work into after.
+			// integrating before into after, and submitted into after, would
+			// each change nothing. So a row says that after holds what the
+			// run's own rebase replayed and what the run was submitted; it
+			// does not say that before's history contains submitted, since a
+			// later row's before may be a fix round's head on an earlier
+			// row's after. internal/stages' rebaserecord.go owns those checks,
+			// and nothing here enforces them.
 			// It is what lets internal/tasks' cleanup proofs follow a task's
 			// commit to the commit the gate published for it after rewriting
 			// it, from what the program itself did rather than from matching
