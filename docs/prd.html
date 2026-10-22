@@ -839,8 +839,9 @@ flowchart TD
   fix --> conv{"Did anything <br />actually change?"}
   conv -- no --> park
   conv -- yes --> run
-  hold --> act["Approve, fix a selection, skip, or cancel"]
+  hold --> act["Approve, fix a selection, retry, skip, or cancel"]
   act -->|fix| fix
+  act -->|retry| run
   act -->|approve| done
   act -->|skip| done
     </pre>
@@ -860,12 +861,13 @@ flowchart TD
 
   <h3 class="text-xl font-semibold mb-3">What you do at a hold</h3>
   <p class="mb-4 opacity-90">
-    A hold offers up to four actions, and they are the same whether you act through the terminal
+    A hold offers up to five actions, and they are the same whether you act through the terminal
     interface or an agent acts through the machine interface. Approve, skip, and cancel are offered
     at every hold. Fix is offered at the six stages before push, intent through lint, and not at
     push, pull request, or checks, for the reason section 14 decision 8 records: a round at push
     would push its result before you saw it, and a round at the two stages after push would leave
-    a commit nothing pushes.
+    a commit nothing pushes. Retry is offered only at a hold the usage ceiling raised (section 10),
+    at whichever stage it holds, for the reason section 14 decision 25 records.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
     <table class="table table-sm table-zebra">
@@ -873,6 +875,7 @@ flowchart TD
       <tbody>
         <tr><td><b>Approve</b></td><td>Accept the findings as they stand and advance.</td></tr>
         <tr><td><b>Fix</b></td><td>Run one fix round over the findings you selected, with any notes you attached and any findings you wrote yourself. The stage re-runs and holds again so you see the result.</td></tr>
+        <tr><td><b>Retry</b></td><td>Run the stage again once the usage ceiling has room: the calls in its window have aged out, or you raised the ceiling and restarted the service. The stage runs from the top. If its agent call is refused again it holds again on the same question, and otherwise it goes on as it would have. A hold a fix round left for the stage's next execution is kept, except the ceiling's own, so a round you asked for is still shown to you.</td></tr>
         <tr><td><b>Skip</b></td><td>Mark this stage skipped for this run only.</td></tr>
         <tr><td><b>Cancel</b></td><td>End the run. Work stays recoverable.</td></tr>
       </tbody>
@@ -2685,7 +2688,7 @@ flowchart TB
         <tr><td><code>session_provider</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>pipe</code></td><td>Which terminal session provider the service starts every worker through: <code>pipe</code>, the reference provider, or <code>tmux</code>. It chooses which program starts every worker, and so which process starts with your credentials, and it is one choice for the whole service, so no repository copy, trusted or pushed, may set it (P7).</td></tr>
         <tr><td><code>session_reuse</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
         <tr><td><code>decision_model</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>evaluate</code></td><td>The mode of the checks in section 5, "Checks a decision model may add": <code>evaluate</code>, <code>enforce</code>, or <code>off</code>. They run against the one supported provider, and only where the provider's key is in the operator's environment, never in a configuration file; with the key present they send the changed lines of every reviewed file to that provider.</td></tr>
-        <tr><td><code>usage_ceiling.window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>How far back from each comparison the usage ceiling sums section 8's agent invocation record. The ceiling is the home's, not a run's: it is compared against that record across every run within the window, and it is not one of the three loop bounds, so it parks nothing. Before every agent call a stage body or a fix round starts, the service compares it, and when it refuses, that call is not started and the run holds for you on an <code>ask</code> whose remedy lies outside the change, which standing consent leaves alone. Equal counts as reached. A record that cannot be read, or a call in the window that did not report a count a ceiling is set on, refuses too, because missing information is never read as room. What it bounds is section 14, decision 17. The limits table bounds it on both sides. No repository copy, trusted or pushed, may set it or any other <code>usage_ceiling</code> key; a repository file naming one is refused at parse time (P7).</td></tr>
+        <tr><td><code>usage_ceiling.window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>How far back from each comparison the usage ceiling sums section 8's agent invocation record. The ceiling is the home's, not a run's: it is compared against that record across every run within the window, and it is not one of the three loop bounds, so it parks nothing. Before every agent call a stage body or a fix round starts, the service compares it, and when it refuses, that call is not started and the run holds for you on an <code>ask</code> whose remedy lies outside the change, which standing consent leaves alone. Once there is room, because calls aged out of the window or you raised the ceiling and restarted the service, answering that hold <code>retry</code> runs the refused stage again in the same run (section 5). Equal counts as reached. A record that cannot be read, or a call in the window that did not report a count a ceiling is set on, refuses too, because missing information is never read as room. What it bounds is section 14, decision 17. The limits table bounds it on both sides. No repository copy, trusted or pushed, may set it or any other <code>usage_ceiling</code> key; a repository file naming one is refused at parse time (P7).</td></tr>
         <tr><td><code>usage_ceiling.input_tokens</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">0</code></td><td>The ceiling on recorded input tokens, a whole number. Zero is no ceiling on that count. <code>usage_ceiling.window</code> says what it is compared against and what reaching it does.</td></tr>
         <tr><td><code>usage_ceiling.output_tokens</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">0</code></td><td>The ceiling on recorded output tokens, on the same terms.</td></tr>
         <tr><td><code>usage_ceiling.cache_read_tokens</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">0</code></td><td>The ceiling on recorded cache read tokens, on the same terms.</td></tr>
@@ -3218,6 +3221,11 @@ flowchart TB
           <td class="prd-num">23</td>
           <td>A role may name <b>a context window</b>, beside its effort, from a closed set.</td>
           <td>Decided 2026-10-21 (AGE-418). This extends decision 14: a role still names one agent, one triple, and one effort, and may name one context window, <code>standard</code> or <code>1m</code>. Two alternatives were rejected: a version cell such as <code>5.5-1m</code>, which would make a window a release of the model and double every cell that has one, and a window a display infers from the model identifier, which nothing could check. The window needs a complete triple, because each adapter declares its windows per version cell, and a launch the adapter cannot express is refused rather than started at the standard window. Section 10 gains the field and the declaration, section 8's agent invocation record gains the window, older rows reading unknown, and section 9's usage view totals it. It exists because a fleet's workers ran at the long window only through a launcher outside the program, so the role table and what ran disagreed.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">25</td>
+          <td>A run held on the usage ceiling <b>is retried in place</b> once there is room, rather than cancelled and started again.</td>
+          <td>Decided 2026-10-19 (#375). Section 5's hold gains a fifth action, Retry, offered only at a hold the usage ceiling raised, and section 10's ceiling row points at it. It runs the stage whose agent call the ceiling refused again, in the same run, so the work before that stage is not repeated. It is a second cycle through the stage, like Fix, and bounded the same way: each retry leaves the hold back into the stage and counts toward that exit's bound, three per stage per run, a fixed number with no key in section 10. An answer asking for a fourth is refused while the hold is still open, so approve, skip, and cancel remain, and the run-wide budget counts every one. A retry while there is still no room is refused by the ceiling again and holds on the same question; it does not loop. Standing consent never gives it, because the ceiling's hold is one whose remedy lies outside the change. The answer does not check for room itself: the stage's call is admitted or refused by the ceiling as any call is.</td>
         </tr>
       </tbody>
     </table>
