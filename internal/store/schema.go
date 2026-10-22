@@ -2280,12 +2280,17 @@ var schema = []migration{
 			// written once the task owns the copy, by MarkKeptWorkCarriedOn,
 			// and an entry answered carry-on with none is a carry on not yet
 			// carried out. Neither holds a foreign key: the task row may not
-			// exist yet when the entry names it.
+			// exist yet when the entry names it. carried_on_copy is what
+			// only the kept copy itself has, read by the caller when it
+			// answers and opaque here, written in the same write, so the
+			// task adopts that copy and no other.
 			`ALTER TABLE kept_work ADD COLUMN carried_on_task TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carried_on_copy TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN carried_on_at TEXT`,
 			`CREATE TRIGGER kept_work_carries_on_once
-				BEFORE UPDATE OF carried_on_task ON kept_work
-				WHEN NEW.carried_on_task IS NOT OLD.carried_on_task AND (OLD.carried_on_task IS NOT NULL OR NEW.answer IS NOT 'carry-on')
+				BEFORE UPDATE OF carried_on_task, carried_on_copy ON kept_work
+				WHEN (NEW.carried_on_task IS NOT OLD.carried_on_task OR NEW.carried_on_copy IS NOT OLD.carried_on_copy)
+					AND (OLD.carried_on_task IS NOT NULL OR OLD.carried_on_copy IS NOT NULL OR NEW.answer IS NOT 'carry-on')
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a kept work entry names the task carrying it on once, with its carry-on answer');
 				END`,

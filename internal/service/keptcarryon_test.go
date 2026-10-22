@@ -259,7 +259,11 @@ func TestACarryOnAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.AnswerKeptWorkCarryOn(t.Context(), entry.ID, reserved, store.ResolvedByMachineInterface()); err != nil {
+	kept, err := tasks.IdentifyCopy(entry.CopyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.AnswerKeptWorkCarryOn(t.Context(), entry.ID, reserved, kept.String(), store.ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	_ = records.Close()
@@ -374,7 +378,7 @@ func TestACarryOnStoppedInsideIntakeIsCompletedAtTheNextStart(t *testing.T) {
 // the entry it carries on. A fresh clone of the upstream is then put at the
 // new task's path while the kept copy still stands, and the answer again is
 // refused and marks nothing, and so it is with the kept copy away from its
-// path, since the clone does not stand on the worker's commit. With the
+// path, since the clone is another directory than the one the answer read. With the
 // clone gone and the directory writable, the next start carries the copy on
 // and the task's worker starts in it. Without the hold on the entry a dispatch pass cuts the task a
 // fresh clone without the kept work; without the identity check the clone
@@ -424,8 +428,8 @@ func TestAFailedAdoptionHoldsTheTaskAndAFreshCloneIsNotTakenForTheCopy(t *testin
 
 		git(t, filepath.Dir(newPath), "clone", "--quiet", repository.UpstreamURL, newPath)
 		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "still stands") {
-			t.Fatalf("the carry on over a fresh clone at the new path = %+v, %v; want it refused while the kept copy stands", out, err)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "is not the kept copy") {
+			t.Fatalf("the carry on over a fresh clone at the new path = %+v, %v; want it refused as not the kept copy", out, err)
 		}
 		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || still.CarriedOnAt.IsKnown() {
 			t.Fatalf("after the refusal the entry reads %+v, %v; want it owed", still, err)
@@ -436,7 +440,7 @@ func TestAFailedAdoptionHoldsTheTaskAndAFreshCloneIsNotTakenForTheCopy(t *testin
 		}
 
 		// With the kept copy away from its path, the clone at the new path
-		// is still not taken: it does not stand on the worker's commit.
+		// is still not taken: it is another directory.
 		if err := os.Chmod(oldDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -445,8 +449,8 @@ func TestAFailedAdoptionHoldsTheTaskAndAFreshCloneIsNotTakenForTheCopy(t *testin
 			t.Fatal(err)
 		}
 		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "does not contain "+entry.Lacks[0]) {
-			t.Fatalf("the carry on over a fresh clone with the kept copy away = %+v, %v; want it refused naming %s", out, err, entry.Lacks[0])
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "is not the kept copy") {
+			t.Fatalf("the carry on over a fresh clone with the kept copy away = %+v, %v; want it refused as not the kept copy", out, err)
 		}
 		if err := os.Rename(away, entry.CopyPath); err != nil {
 			t.Fatal(err)
@@ -569,6 +573,102 @@ func TestACarryOnStoppedAfterTheMoveAdoptsACopyThatWentOn(t *testing.T) {
 	withServiceOptions(t, o, func(under serviceUnderTest) {
 		if done := waitCarriedOn(t, h, entry.ID); done.CarriedOnTask.Or("") != reserved {
 			t.Fatalf("the completed carry on names task %s, want %s", done.CarriedOnTask.Or(""), reserved)
+		}
+		waitLaunched(t, h, reserved)
+	})
+}
+
+// Containment is not identity: a fresh clone of an upstream that took the
+// recorded commits up is not taken for the kept copy, the reviewer's
+// sequence. A detached investigation's copy is kept at the worker's commit
+// A, the worker commits B with no second Keep, and A lands upstream with an
+// unrelated C after it, so a clone of the upstream contains every commit
+// the entry records. The carry on is stopped through the seam right after
+// the move; the moved copy is then put aside and a fresh clone of the
+// upstream put at the new task's path. The next start refuses the clone,
+// leaves the entry owed and the task undispatched. With the kept copy back
+// at the path, which went on to B and is still the same directory, the
+// start after adopts it and the task's worker starts. Without the identity
+// the clone is taken for the kept copy and the task starts without B.
+func TestACarryOnTakesTheKeptCopyByIdentityAndNotAnUpstreamClone(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	a := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	if err := writeFile(entry.CopyPath+"/more.txt", "what the worker found next\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "add", "-A")
+	git(t, entry.CopyPath, "commit", "--quiet", "-m", "the worker's second commit")
+	b := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	git(t, entry.CopyPath, "push", "--quiet", repository.UpstreamURL, a+":refs/heads/main")
+	advanceUpstream(t, repository.UpstreamURL, "c.txt")
+
+	stopped := errors.New("the service stopped between the copy's move and the entry's mark")
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, service.WithCarryOnInterruptForTest(t, o, func() error { return stopped }), func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err == nil || !strings.Contains(err.Error(), "stopped between") {
+			t.Fatalf("the carry on past the stopped seam = %+v, %v; want the stop", out, err)
+		}
+	})
+	answered, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+	if err != nil || answered.CarriedOnAt.IsKnown() {
+		t.Fatalf("after the stop the entry reads %+v, %v; want it owed", answered, err)
+	}
+	reserved := answered.CarriedOnTask.Or("")
+	newPath, err := h.TaskCopy(reserved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	away := filepath.Join(t.TempDir(), "kept-copy-away")
+	if err := os.Rename(newPath, away); err != nil {
+		t.Fatal(err)
+	}
+	git(t, filepath.Dir(newPath), "clone", "--quiet", repository.UpstreamURL, newPath)
+	// The clone contains every commit the entry records, so containment
+	// alone would take it; git fails the test here if it does not.
+	for _, held := range entry.Holds {
+		git(t, newPath, "merge-base", "--is-ancestor", held, "HEAD")
+	}
+
+	o, _ = workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		deadline := time.Now().Add(5 * time.Second)
+		for !strings.Contains(readServiceLog(t, h), "is not the kept copy") {
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the next start did not refuse the clone; the log reads:\n%s", readServiceLog(t, h))
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || still.CarriedOnAt.IsKnown() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it owed", still, err)
+		}
+		under.service.DispatchDueForTest(t.Context())
+		if attempts := attemptsOfTask(t, h, reserved); len(attempts) != 0 {
+			t.Fatalf("task %s was dispatched (%+v) over a clone that is not the kept copy", reserved, attempts)
+		}
+	})
+
+	if err := os.RemoveAll(newPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(away, newPath); err != nil {
+		t.Fatal(err)
+	}
+	o, _ = workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		if done := waitCarriedOn(t, h, entry.ID); done.CarriedOnTask.Or("") != reserved {
+			t.Fatalf("the completed carry on names task %s, want %s", done.CarriedOnTask.Or(""), reserved)
+		}
+		if head := git(t, newPath, "rev-parse", "HEAD"); head != b {
+			t.Fatalf("the adopted copy stands at %s, want the worker's second commit %s", head, b)
 		}
 		waitLaunched(t, h, reserved)
 	})

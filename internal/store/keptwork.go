@@ -168,7 +168,13 @@ type KeptWork struct {
 	// CarriedOnAt is when that task came to own the copy, written by
 	// MarkKeptWorkCarriedOn. An entry answered carry-on with a task and no
 	// instant is a carry on not yet carried out.
-	CarriedOnTask Optional[string]    `json:"carried_on_task"`
+	CarriedOnTask Optional[string] `json:"carried_on_task"`
+	// CarriedOnCopy is the kept copy's own identity as the carry-on answer
+	// read it, written with the answer by AnswerKeptWorkCarryOn and opaque
+	// here: internal/tasks' CopyIdentity says what it is. It is unknown for
+	// an entry not answered carry-on, and for one a promotion answered,
+	// whose copy never moves.
+	CarriedOnCopy Optional[string]    `json:"carried_on_copy"`
 	CarriedOnAt   Optional[time.Time] `json:"carried_on_at"`
 	// DiscardDigest is the confirmation of what a discard answer was
 	// shown, and DiscardLacks the commits it was shown as lost, nil for
@@ -565,7 +571,7 @@ func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 	case KeptDiscard:
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a discard answer records what it was shown, through AnswerKeptWorkDiscard", id)
 	}
-	return s.answerKeptWork(ctx, id, a, by, "", "", nil)
+	return s.answerKeptWork(ctx, id, a, by, "", "", "", nil)
 }
 
 // AnswerKeptWorkDiscard is AnswerKeptWork for the discard answer, which
@@ -581,7 +587,7 @@ func (s *Store) AnswerKeptWorkDiscard(ctx context.Context, id int64, digest stri
 	if lacks == nil {
 		lacks = []string{}
 	}
-	return s.answerKeptWork(ctx, id, KeptDiscard, by, "", digest, lacks)
+	return s.answerKeptWork(ctx, id, KeptDiscard, by, "", "", digest, lacks)
 }
 
 // AnswerKeptWorkCarryOn is AnswerKeptWork for the carry-on answer, which
@@ -590,19 +596,24 @@ func (s *Store) AnswerKeptWorkDiscard(ctx context.Context, id int64, digest stri
 // carrying on moves the whole copy: the task's
 // identifier is reserved by the caller and its row may not exist yet, which
 // is what lets a stop between this write and the task's creation be
-// completed from the entry (P6). A task identifier home.ValidTaskID refuses
-// is refused.
-func (s *Store) AnswerKeptWorkCarryOn(ctx context.Context, id int64, task string, by Resolver) (KeptWork, error) {
+// completed from the entry (P6). copyIdentity is the kept copy's own
+// identity as the caller read it, recorded opaque so the task adopts that
+// copy and no other; an empty one is refused, as is a task identifier
+// home.ValidTaskID refuses.
+func (s *Store) AnswerKeptWorkCarryOn(ctx context.Context, id int64, task, copyIdentity string, by Resolver) (KeptWork, error) {
 	if err := home.ValidTaskID(task); err != nil {
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: the task carrying it on: %w", id, err)
 	}
-	return s.answerKeptWork(ctx, id, KeptCarryOn, by, task, "", nil)
+	if strings.TrimSpace(copyIdentity) == "" {
+		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a carry-on answer records which copy it carries on, and was given none", id)
+	}
+	return s.answerKeptWork(ctx, id, KeptCarryOn, by, task, copyIdentity, "", nil)
 }
 
 // answerKeptWork is the one write of an answer, with the carry-on task
 // beside a carry-on answer, the digest beside a discard, and nothing beside
 // land.
-func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver, task, digest string, shown []string) (KeptWork, error) {
+func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by Resolver, task, copyIdentity, digest string, shown []string) (KeptWork, error) {
 	if !a.Recognized() {
 		return KeptWork{}, fmt.Errorf("store: kept work entry %d: %w: %q", id, ErrUnknownKeptAnswer, a)
 	}
@@ -631,8 +642,9 @@ func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 			return ErrKeptWorkClosed
 		}
 		at := encodeTime(nowUTC())
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?, discard_digest = ?, discard_lacks = ? WHERE id = ?`,
-			string(a), who, at, optionalText(task), optionalText(digest), shownLacks, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?, carried_on_copy = ?,
+			discard_digest = ?, discard_lacks = ? WHERE id = ?`,
+			string(a), who, at, optionalText(task), optionalText(copyIdentity), optionalText(digest), shownLacks, id); err != nil {
 			return err
 		}
 		if a == KeptCarryOn {
@@ -640,9 +652,9 @@ func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 			// of the same copy, the copy kept again at another state, is
 			// carried on by the same task in this same write; none is left
 			// holding the project's dispatch with its copy gone.
-			if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?
+			if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?, carried_on_copy = ?
 				WHERE copy_path = ? AND id <> ? AND answer IS NULL AND closure IS NULL`,
-				string(a), who, at, task, k.CopyPath, id); err != nil {
+				string(a), who, at, task, copyIdentity, k.CopyPath, id); err != nil {
 				return err
 			}
 		}
@@ -657,7 +669,7 @@ func (s *Store) answerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 
 const keptWorkColumns = `SELECT id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
 	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, lacks, against, unestablished,
-	landing_claimed_at, landed_run, carried_on_task, carried_on_at, discard_digest, discard_lacks, discarded_at`
+	landing_claimed_at, landed_run, carried_on_task, carried_on_copy, carried_on_at, discard_digest, discard_lacks, discarded_at`
 
 func scanKeptWork(sc scanner) (KeptWork, error) {
 	var k KeptWork
@@ -665,7 +677,7 @@ func scanKeptWork(sc scanner) (KeptWork, error) {
 	var surfaced, answer, by, answered, closure, proof, closed, lacks, landingClaimed, carriedOn, discardLacks, discarded Optional[string]
 	if err := sc.Scan(&k.ID, &k.TaskID, &k.RunID, &k.RepositoryID, &k.Branch, &k.CopyPath, &holds, &k.Reason, &k.Detail,
 		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &lacks, &k.Against, &k.Unestablished,
-		&landingClaimed, &k.LandedRun, &k.CarriedOnTask, &carriedOn, &k.DiscardDigest, &discardLacks, &discarded); err != nil {
+		&landingClaimed, &k.LandedRun, &k.CarriedOnTask, &k.CarriedOnCopy, &carriedOn, &k.DiscardDigest, &discardLacks, &discarded); err != nil {
 		return KeptWork{}, err
 	}
 	if err := json.Unmarshal([]byte(holds), &k.Holds); err != nil {

@@ -114,13 +114,13 @@ func TestACarryOnAnswerNamesItsTaskOnceAndIsCarriedOutOnce(t *testing.T) {
 	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptCarryOn, ResolvedByMachineInterface()); err == nil {
 		t.Fatal("a carry-on answer naming no task was recorded")
 	}
-	if _, err := s.AnswerKeptWorkCarryOn(ctx, entry.ID, "not-a-task", ResolvedByMachineInterface()); err == nil {
+	if _, err := s.AnswerKeptWorkCarryOn(ctx, entry.ID, "not-a-task", "planted-copy", ResolvedByMachineInterface()); err == nil {
 		t.Fatal("a carry-on answer naming an invalid task was recorded")
 	}
 	if _, err := s.MarkKeptWorkCarriedOn(ctx, entry.ID); !errors.Is(err, ErrKeptWorkNotCarryOn) {
 		t.Fatalf("marking an open entry carried on = %v; want ErrKeptWorkNotCarryOn", err)
 	}
-	answered, err := s.AnswerKeptWorkCarryOn(ctx, entry.ID, "taskcarrying", ResolvedByMachineInterface())
+	answered, err := s.AnswerKeptWorkCarryOn(ctx, entry.ID, "taskcarrying", "planted-copy", ResolvedByMachineInterface())
 	if err != nil || answered.Answer.Or("") != KeptCarryOn || answered.CarriedOnTask.Or("") != "taskcarrying" || answered.CarriedOnAt.IsKnown() {
 		t.Fatalf("the carry-on answer = %+v, %v; want carry-on naming taskcarrying, not yet carried on", answered, err)
 	}

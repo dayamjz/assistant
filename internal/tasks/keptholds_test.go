@@ -152,7 +152,7 @@ func TestAnAnsweredEntryIsNotEstablishedLater(t *testing.T) {
 	if err != nil || !got.Recorded || got.Entry.Established() {
 		t.Fatalf("Keep = %+v, %v; want a new unestablished entry", got, err)
 	}
-	if _, err := s.store.AnswerKeptWorkCarryOn(ctx, got.Entry.ID, "taskcarrying", store.ResolvedByMachineInterface()); err != nil {
+	if _, err := s.store.AnswerKeptWorkCarryOn(ctx, got.Entry.ID, "taskcarrying", "planted-copy", store.ResolvedByMachineInterface()); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(s.upstream+".gone", s.upstream); err != nil {

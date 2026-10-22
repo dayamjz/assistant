@@ -51,9 +51,13 @@ import (
 // adoption that fails, a rename the old task's directory refuses among the
 // ways, leaves the answer owed and the task undispatched, so no dispatch
 // cuts it a fresh clone without the kept work. Completion takes a copy that
-// already stands at the new task's path only when it is the kept one by what
-// it holds (verifyAdopted): the old path gone and every commit the entry
-// recorded the kept copy standing on present. Carrying on moves the whole
+// already stands at the new task's path only when it is the kept one
+// (verifyAdopted): the copy the answer was given for by its file identity,
+// tasks.CopyIdentity, which the answer records, with the old path gone and
+// every commit the entry recorded still contained in it. Containment alone
+// is not identity: a fresh clone of an upstream that took the recorded
+// commits up contains them all and lacks the copy's own work. The kept
+// copy is checked to be that copy before it is moved, too. Carrying on moves the whole
 // copy, so the answer carries on every open entry of the same copy, the copy
 // kept again at another state, in the same write, and the mark marks them
 // all.
@@ -105,11 +109,15 @@ func (s *Service) carryOnKeptWork(ctx context.Context, req ipc.Request, entry st
 		if err := s.assertKeptCopy(ctx, entry, plan); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
+		kept, err := tasks.IdentifyCopy(entry.CopyPath)
+		if err != nil {
+			return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d was not carried on: %w", ipc.ErrRefused, entry.ID, err)
+		}
 		id, err := home.NewTaskID()
 		if err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
-		answered, err := s.store.AnswerKeptWorkCarryOn(ctx, entry.ID, id, req.HoldResolver())
+		answered, err := s.store.AnswerKeptWorkCarryOn(ctx, entry.ID, id, kept.String(), req.HoldResolver())
 		switch {
 		case errors.Is(err, store.ErrKeptWorkAnswered) || errors.Is(err, store.ErrKeptWorkClosed):
 			again, readErr := s.store.KeptWorkEntry(ctx, entry.ID)
@@ -271,6 +279,9 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 		if err := s.assertKeptCopy(ctx, entry, plan); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
+		if err := s.isCarriedOnCopy(entry, entry.CopyPath); err != nil {
+			return machine.KeptWorkAnswered{}, err
+		}
 		if err := os.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
 			return machine.KeptWorkAnswered{}, fmt.Errorf("service: creating the directory of task %s: %w", id, err)
 		}
@@ -305,9 +316,33 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	return done(marked), nil
 }
 
+// isCarriedOnCopy refuses the copy at path unless it is the one the
+// carry-on answer read, by tasks.CopyIdentity, never by its path or what it
+// holds: a copy put in the kept one's place, or at the new task's path, is
+// another copy whatever commits it shares with the kept one.
+func (s *Service) isCarriedOnCopy(entry store.KeptWork, path string) error {
+	refuse := func(why string) error {
+		return fmt.Errorf("%w: kept work entry %d was not carried on: %s", ipc.ErrRefused, entry.ID, why)
+	}
+	recorded, err := tasks.ParseCopyIdentity(entry.CarriedOnCopy.Or(""))
+	if err != nil {
+		return refuse("the answer records no copy it carries on that can be read: " + err.Error())
+	}
+	standing, err := tasks.IdentifyCopy(path)
+	if err != nil {
+		return refuse(err.Error())
+	}
+	if !standing.Same(recorded) {
+		return refuse(fmt.Sprintf("the copy at %s is not the kept copy the answer was given for: it is another directory, whatever it holds", path))
+	}
+	return nil
+}
+
 // verifyAdopted refuses to take a copy already standing at the new task's
-// path as the kept one unless it is: the kept copy's own path is gone, which
-// a rename of it leaves, and the copy at the new path still contains every
+// path as the kept one unless it is: it is the copy the answer was given for
+// by its identity (isCarriedOnCopy), which a clone put there is not however
+// much history it shares; the kept copy's own path is gone, which a rename
+// of it leaves; and the copy at the new path still contains every
 // commit the entry recorded the kept copy's references and HEAD standing on,
 // each reachable from its HEAD or one of its references, which a clone cut
 // from elsewhere does not. Reachable and not a tip, since the kept copy may
@@ -318,6 +353,9 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPath string) error {
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: kept work entry %d was not carried on: %s", ipc.ErrRefused, entry.ID, why)
+	}
+	if err := s.isCarriedOnCopy(entry, newPath); err != nil {
+		return err
 	}
 	if _, err := os.Lstat(entry.CopyPath); err == nil {
 		return refuse(fmt.Sprintf("the kept copy still stands at %s and something else stands at %s, so which is the kept work cannot be told by path",
