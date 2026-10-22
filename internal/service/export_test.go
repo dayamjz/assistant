@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -33,6 +34,19 @@ func WithCleanupInterruptForTest(tb testing.TB, o Options, f func() error) Optio
 	return o
 }
 
+// WithCleanupAskSpacingForTest returns o with the spacing the supervisor
+// pass leaves between two asks of one landed task's cleanup set to d, for
+// this package's external tests, which cannot wait landedAskSpacing.
+func WithCleanupAskSpacingForTest(o Options, d time.Duration) Options {
+	o.cleanupAskSpacing = d
+	return o
+}
+
+// LandedCleanupAsks is landedAsks, the most times the cleanup decision is
+// asked for one landed task under one Dead terminal in a service's life, for
+// this package's external tests to count against.
+const LandedCleanupAsks = landedAsks
+
 // WithBeforeStaleRemovalReleaseForTest returns o with recovery's seam between
 // reading a dead eject's removal reservation and releasing it set to f, for
 // this package's external tests.
@@ -55,6 +69,14 @@ func WithAfterIntakeBranchReleaseForTest(o Options, f func()) Options {
 // release or another task.create could.
 func (s *Service) DispatchDueForTest(ctx context.Context) {
 	s.dispatchDue(ctx)
+}
+
+// ReadPersonMergesForTest runs one pass of mergeread.go's read for merges a
+// person made, readPersonMerges, for this package's external tests, which
+// use it to read a merge they scripted the code host to report without
+// waiting mergeReadInterval for the next pass.
+func (s *Service) ReadPersonMergesForTest(ctx context.Context) {
+	s.readPersonMerges(ctx)
 }
 
 // SetBeforeRefusalEndForTest installs beforeRefusalEnd for this
@@ -123,6 +145,33 @@ func RequireSweepClearsHere(t *testing.T, unestablished string) {
 func FatalUnlessSweepsStoppedClearing(t *testing.T, unestablished, format string, args ...any) {
 	t.Helper()
 	fatalUnlessSweepsStoppedClearing(t, unestablished, format, args...)
+}
+
+// SweepsAsked is sweepsAsked for this package's external tests: every sweep
+// a service asks of a copy, each answered by the real sweep.
+type SweepsAsked struct{ asked *sweepsAsked }
+
+// WithSweepsRecordedForTest returns o with every sweep the service asks of a
+// copy answered by an agents.Sweeper over o.Home with reapGrace, which is
+// the sweep the product asks, and recorded in the SweepsAsked it returns. It
+// is set on the options because recovery sweeps inside Open, before a test
+// holds the Service.
+func WithSweepsRecordedForTest(o Options) (Options, *SweepsAsked) {
+	asked := &sweepsAsked{sweeper: agents.NewSweeper(o.Home, reapGrace, nil)}
+	o.sweepCopy = asked.sweep
+	return o, &SweepsAsked{asked: asked}
+}
+
+// Of counts the sweeps the service has asked of dir.
+func (s *SweepsAsked) Of(dir string) int { return s.asked.of(dir) }
+
+// UntilClear is untilClear over the latest sweep asked of dir, for a test
+// that left nothing of its own running in dir and holds nothing of each
+// sweep beyond untilClear's own checks. again must make the service ask
+// exactly one more sweep of dir.
+func (s *SweepsAsked) UntilClear(t *testing.T, unestablished, dir string, again func()) {
+	t.Helper()
+	s.asked.untilClear(t, unestablished, dir, nil, func(agents.SweepResult) {}, again)
 }
 
 // SeedDatabase is seedDatabase for this package's external tests.

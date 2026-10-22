@@ -72,14 +72,38 @@ func hostBlockers(t *testing.T) []agents.Blocker {
 }
 
 // requireClearUnlessHostBlocks fails the test unless r left nothing it
-// could read survived or undecided, and, where hostBlockers found none on
-// this host, unless r is clear.
-func requireClearUnlessHostBlocks(t *testing.T, r agents.SweepResult, blockers []agents.Blocker, what string) {
+// could read survived or undecided, and unless every process r was blocked
+// by is the host's. host starts as what hostBlockers found.
+//
+// hostBlockers samples the host once, before the test starts anything, and
+// the host can start a process of this user afterwards whose working
+// directory cannot be read while it starts (#513): r is then rightly not
+// clear, and the code under test has done nothing wrong. So a process r was
+// blocked by that is neither one of mine, the processes the test started,
+// nor on this test's parent chain is taken as the host's and added to
+// *host, and hostLimit records it as it records the sample. That reading
+// rests on every copy under test being a directory the test made fresh, so
+// a process the test did not start there is one it did not put there; it
+// cannot tell such a process from one that really runs in the copy, which
+// is why the test only records the clear as unestablished rather than
+// passing it. A blocker the test started, or one on the parent chain, which
+// the first carve-out sets aside, fails the test whatever the host is.
+func requireClearUnlessHostBlocks(t testing.TB, r agents.SweepResult, host *[]agents.Blocker, what string, mine ...agents.Identity) {
 	t.Helper()
 	if len(r.Survived) != 0 || len(r.Unverified) != 0 {
 		t.Fatalf("%s did %s (%+v), want nothing survived or left undecided", what, r, r)
 	}
-	if len(blockers) == 0 && !r.Clear() {
+	for _, b := range r.UnreadableBlocking {
+		switch {
+		case slices.Contains(mine, b.Identity):
+			t.Fatalf("%s did %s (%+v), and %s, which this test started, blocks it", what, r, r, b.Identity)
+		case onParentChain(b.Identity):
+			t.Fatalf("%s did %s (%+v), and %s, on this test's parent chain, blocks it", what, r, r, b.Identity)
+		case !slices.ContainsFunc(*host, func(h agents.Blocker) bool { return h.Identity == b.Identity }):
+			*host = append(*host, b)
+		}
+	}
+	if len(*host) == 0 && !r.Clear() {
 		t.Fatalf("%s did %s (%+v) on a host whose empty copy sweeps clear, want it clear", what, r, r)
 	}
 }
@@ -91,7 +115,7 @@ func requireClearUnlessHostBlocks(t *testing.T, r agents.SweepResult, blockers [
 // a log shows which processes they were. Where standin.RequireSweepClearVar
 // is set it fails the test instead, so the lane CI sets it on cannot leave
 // the clear unasserted. It does nothing where there were none.
-func hostLimit(t *testing.T, blockers []agents.Blocker, unestablished string) {
+func hostLimit(t testing.TB, blockers []agents.Blocker, unestablished string) {
 	t.Helper()
 	if len(blockers) == 0 {
 		return
@@ -357,7 +381,7 @@ func TestASweepEndsADetachedDescendantUnderTheCopyAndNothingElse(t *testing.T) {
 	if len(r.Ended) != 1 || r.Ended[0] != inTarget.id || r.Dir != target {
 		t.Fatalf("the sweep of %s did %s (%+v), want a sweep that ended %s", target, r, r, inTarget.id)
 	}
-	requireClearUnlessHostBlocks(t, r, blockers, "the sweep of "+target)
+	requireClearUnlessHostBlocks(t, r, &blockers, "the sweep of "+target, inTarget.id, inNeighbour.id, inElsewhere.id)
 	waitEnded(t, inTarget, "the process under the swept copy was reported ended")
 	for _, d := range []detached{inNeighbour, inElsewhere} {
 		if mentions(r, d.id) {
@@ -370,7 +394,7 @@ func TestASweepEndsADetachedDescendantUnderTheCopyAndNothingElse(t *testing.T) {
 	if err != nil || len(again.Ended) != 0 {
 		t.Fatalf("a second sweep of %s did %s, %v, want nothing ended", target, again, err)
 	}
-	requireClearUnlessHostBlocks(t, again, blockers, "a second sweep of "+target)
+	requireClearUnlessHostBlocks(t, again, &blockers, "a second sweep of "+target, inTarget.id, inNeighbour.id, inElsewhere.id)
 	hostLimit(t, blockers, "that a sweep which ended everything under its copy clears")
 }
 
@@ -501,7 +525,7 @@ func TestASweepOfACopyWithASpaceInItsPathEndsWhatRunsThereAndThenClears(t *testi
 	if len(r.Ended) != 1 || r.Ended[0] != inTarget.id || r.Dir != target {
 		t.Fatalf("the sweep of %s did %s (%+v), want a sweep that ended %s", target, r, r, inTarget.id)
 	}
-	requireClearUnlessHostBlocks(t, r, blockers, "the sweep of "+target)
+	requireClearUnlessHostBlocks(t, r, &blockers, "the sweep of "+target, inTarget.id, inBeside.id)
 	waitEnded(t, inTarget, "the process under the swept copy was reported ended")
 	if mentions(r, inBeside.id) {
 		t.Fatalf("the sweep of %s mentions %s, which runs in %s beside it: %+v", target, inBeside.id, beside, r)
@@ -512,6 +536,6 @@ func TestASweepOfACopyWithASpaceInItsPathEndsWhatRunsThereAndThenClears(t *testi
 	if err != nil || len(again.Ended) != 0 {
 		t.Fatalf("a second sweep of %s did %s, %v, want nothing ended", target, again, err)
 	}
-	requireClearUnlessHostBlocks(t, again, blockers, "a second sweep of "+target)
+	requireClearUnlessHostBlocks(t, again, &blockers, "a second sweep of "+target, inTarget.id, inBeside.id)
 	hostLimit(t, blockers, "that a sweep of a copy with a space in its path clears once nothing runs there")
 }
