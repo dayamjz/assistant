@@ -96,9 +96,11 @@ func TestTheBuildGroupEndsWhenThePipeCloses(t *testing.T) {
 // harness starts. An unbounded exec.Command of go survives the testing
 // alarm: with the package's owner watch running, a hanging go that becomes
 // /bin/sleep was still alive under PID 1 twelve seconds later, because the
-// sweep cannot read that program's environment. RunHeld is what the harness
-// uses, and this process exiting closes its pipe. P15: when the owner ends,
-// the process it started ends with it.
+// sweep cannot read that program's environment. The helper is not started
+// under RunHeld. That wrapper would own the compiler's process group and
+// kill it when the helper's alarm exits, so a compiler that leaked would
+// still look dead. P15: when the owner ends, the process it started ends
+// with it.
 func TestTheHarnessCompileDoesNotOutliveTheProcess(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	root, err := ModuleRoot()
@@ -115,7 +117,10 @@ func TestTheHarnessCompileDoesNotOutliveTheProcess(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(hangDir, "go"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out, runErr := RunHeld(root, compileHoldEnv(hangDir, pidFile, root), bin, "-test.timeout=1s", "-test.run=^TestCompile$", "-test.count=1", "-test.v")
+	cmd := exec.Command(bin, "-test.timeout=1s", "-test.run=^TestCompile$", "-test.count=1", "-test.v")
+	cmd.Dir = root
+	cmd.Env = compileHoldEnv(hangDir, pidFile, root)
+	out, runErr := cmd.CombinedOutput()
 	t.Cleanup(func() {
 		if pid, err := readPID(pidFile); err == nil {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
@@ -175,7 +180,13 @@ func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(hangDir, "go"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out, runErr := RunHeld(root, hangEnv(hangDir, pidFile), helper, "-test.timeout=1s", "-test.run=^TestHang$", "-test.count=1", "-test.v")
+	// The helper is not started under RunHeld. That wrapper would own the
+	// build's process group and kill it when the helper's alarm exits, so a
+	// build that leaked would still look dead.
+	cmd := exec.Command(helper, "-test.timeout=1s", "-test.run=^TestHang$", "-test.count=1", "-test.v")
+	cmd.Dir = root
+	cmd.Env = hangEnv(hangDir, pidFile)
+	out, runErr := cmd.CombinedOutput()
 	t.Cleanup(func() {
 		if pid, err := readPID(pidFile); err == nil {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
