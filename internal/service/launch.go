@@ -9,7 +9,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
@@ -148,10 +147,10 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
 	}
 	model := ""
-	if role.Provider != "" {
-		model, err = agents.Translate(selection.Resolution.Name, role.Provider, role.Type, role.Version)
+	if role.Provider != "" || role.ContextWindow != "" {
+		model, err = agents.Translate(selection.Resolution.Name, role.Provider, role.Type, role.Version, role.ContextWindow)
 		if err != nil {
-			return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, err)
+			return nil, s.refuseRoute(ctx, d.id, d.attempt, d.anchor, fmt.Errorf("service: the %s role: %w", config.TaskRoleName(task.Role), err))
 		}
 	}
 	if err := agents.AcceptsEffort(selection.Resolution.Name, role.Effort); err != nil {
@@ -328,7 +327,7 @@ func (s *Service) assertAtLaunch(ctx context.Context, d dispatched) (tasks.Isola
 func (s *Service) assertCopy(ctx context.Context, id string, attempt, anchor int64, copyPath string,
 	want tasks.Expectation) (tasks.Isolation, error) {
 	env := agents.WorkerEnvironment(os.Environ(), nil)
-	obs, err := vcs.Observe(ctx, copyPath, vcs.WithRedactor(redact.New()))
+	obs, err := vcs.Observe(ctx, copyPath, s.git()...)
 	if err != nil {
 		if errors.Is(err, vcs.ErrNotARepository) {
 			return tasks.Isolation{}, s.refuseIsolation(ctx, id, attempt, anchor, taskstate.RefusedNotIsolated, err)

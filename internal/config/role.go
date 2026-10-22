@@ -22,18 +22,48 @@ const (
 // Intake wraps it so the task is not created.
 var ErrTaskRole = errors.New("config: the task's role cannot be run")
 
-// Role is one configured role: the agent it runs, and the model triple and
-// effort when it names them. An empty Agent means the role uses the agent
-// list. An empty Provider means the role names no model, and the agent uses
-// its own. An empty Effort means the role names no effort.
+// Role is one configured role: the agent it runs, and the model triple,
+// effort, and context window when it names them. An empty Agent means the
+// role uses the agent list. An empty Provider means the role names no model,
+// and the agent uses its own. An empty Effort means the role names no
+// effort. An empty ContextWindow means the role names no window, and the
+// agent starts the named model at its own; a named one is always beside a
+// complete triple, because an adapter declares its windows per model cell.
 type Role struct {
 	Agent    string
 	Provider string
 	Type     string
 	Version  string
 	Effort   string
-	// Fallback names one backup with its own agent, model and effort.
+	// ContextWindow is the role's "context", one of ContextWindows.
+	ContextWindow string
+	// Fallback names one backup with its own agent, model, effort, and
+	// context window. It inherits none of them from the primary.
 	Fallback *Role
+}
+
+// The context windows a role may name. standard is the model's standard
+// window and 1m its one-million-token window. Which of them an adapter can
+// start a model cell at is that adapter's declaration, not this package's.
+const (
+	ContextStandard = "standard"
+	Context1M       = "1m"
+)
+
+// ContextWindows is the closed set a role's context window is drawn from, in
+// the order the PRD lists it. A window outside it fails at parse time.
+// Adding one is adding it here.
+func ContextWindows() []string { return []string{ContextStandard, Context1M} }
+
+// KnownContextWindow reports whether window is one of ContextWindows. The
+// empty string is not a window: it is a role that named none.
+func KnownContextWindow(window string) bool {
+	for _, have := range ContextWindows() {
+		if window == have {
+			return true
+		}
+	}
+	return false
 }
 
 // defaultFixAgent is the fixer used when no document names the fix role.
@@ -78,10 +108,7 @@ func (r Role) equal(other Role) bool {
 // configured is the agent list, with no model and no effort. Any other
 // missing name is refused.
 func (r Roles) ForTask(name string) (Role, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = RoleWorker
-	}
+	name = TaskRoleName(name)
 	if name == RoleReview || name == RoleFix {
 		return Role{}, fmt.Errorf("%w: a task cannot name %s", ErrTaskRole, name)
 	}
@@ -96,6 +123,17 @@ func (r Roles) ForTask(name string) (Role, error) {
 		return Role{}, fmt.Errorf("%w: %q is not a configured role", ErrTaskRole, name)
 	}
 	return role, nil
+}
+
+// TaskRoleName is the role name a task's recorded role runs under: the name
+// itself, or worker when the task named none. It decides nothing about
+// whether that role can run; ForTask does.
+func TaskRoleName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return RoleWorker
+	}
+	return name
 }
 
 // ModelCell is one provider, type, and version the role table allows.
@@ -226,7 +264,7 @@ func decodeOneRole(k Key, root any, name string, v any) (Role, error) {
 	if !ok {
 		return Role{}, keyErr(k, root, "role "+quote(name)+" must be an object")
 	}
-	if extra, found := unknownField(obj, "agent", "provider", "type", "version", "effort", "fallback"); found {
+	if extra, found := unknownField(obj, "agent", "provider", "type", "version", "effort", "context", "fallback"); found {
 		return Role{}, keyErr(k, root, "role "+quote(name)+" has an unrecognized field "+quote(extra))
 	}
 	agent, err := roleString(k, root, name, obj, "agent")
@@ -246,6 +284,10 @@ func decodeOneRole(k Key, root any, name string, v any) (Role, error) {
 		return Role{}, err
 	}
 	effort, err := roleString(k, root, name, obj, "effort")
+	if err != nil {
+		return Role{}, err
+	}
+	window, err := roleString(k, root, name, obj, "context")
 	if err != nil {
 		return Role{}, err
 	}
@@ -269,6 +311,11 @@ func decodeOneRole(k Key, root any, name string, v any) (Role, error) {
 	if agent == "" && (named != 0 || effort != "") {
 		return Role{}, keyErr(k, root, "role "+quote(name)+" names a provider, type, version, or effort and names no agent")
 	}
+	// A context needs a triple, and a triple needs an agent, so this also
+	// refuses a context on a role that names no agent.
+	if window != "" && named == 0 {
+		return Role{}, keyErr(k, root, "role "+quote(name)+" names context "+quote(window)+" and no provider, type, and version; a context window is a window of the model the role names")
+	}
 	if named == 3 && !KnownModel(provider, typ, version) {
 		return Role{}, keyErr(k, root, "role "+quote(name)+" names "+provider+" "+typ+" "+version+", which is not in the model table")
 	}
@@ -277,7 +324,10 @@ func decodeOneRole(k Key, root any, name string, v any) (Role, error) {
 	default:
 		return Role{}, keyErr(k, root, "role "+quote(name)+" has effort "+quote(effort)+"; effort is low, medium, or high")
 	}
-	role := Role{Agent: agent, Provider: provider, Type: typ, Version: version, Effort: effort}
+	if window != "" && !KnownContextWindow(window) {
+		return Role{}, keyErr(k, root, "role "+quote(name)+" has context "+quote(window)+"; context is "+strings.Join(ContextWindows(), " or "))
+	}
+	role := Role{Agent: agent, Provider: provider, Type: typ, Version: version, Effort: effort, ContextWindow: window}
 	if value, ok := obj["fallback"]; ok {
 		backup, valid := value.(map[string]any)
 		if !valid {

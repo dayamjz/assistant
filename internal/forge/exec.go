@@ -53,9 +53,13 @@ const DefaultProviderGrace = 2 * time.Second
 // handful of requests to the code host with an answer bounded by
 // DefaultMaxOutput, so a provider still running at two minutes is taken as
 // wedged rather than slow, and is ended with its process group. A caller's
-// own deadline is kept even when it is later. It is a fixed value rather than
-// a configuration key; whether an operator should be able to change it is an
-// open question for the owner (#430).
+// own deadline is kept even when it is later.
+//
+// This package reads no configuration. The operator's gh_deadline reaches an
+// adapter only through WithInvocationDeadline, which internal/service passes
+// to the GitHub host it builds; a host built without it, as the command
+// line's own probe is, runs under this value, which is gh_deadline's default
+// (config.DefaultGHDeadline; a test in internal/config holds the two equal).
 const DefaultInvocationDeadline = 2 * time.Minute
 
 // providerEnv is applied over the base environment of every invocation.
