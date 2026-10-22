@@ -80,8 +80,9 @@ import (
 // (store.KeptWork, written by internal/tasks' Keep); recovery reaches it too,
 // through reclaimAtRecovery, for a finished run whose copy still stands. What
 // surfaces the entry is the supervisor loop, as a kept-work wake about the
-// task the entry's owner is or is attributed to, and the status and catch-up
-// reads, which list every open entry; supervise.go and catchup.go own
+// task the entry's owner is or is attributed to, or about the entry itself
+// when no task names it, and the status and catch-up reads, which list
+// every open entry; supervise.go, keptworkwake.go and catchup.go own
 // those. An entry closes without an answer only when its copy is removed
 // on a P12 proof: internal/store's MarkCleanupRemoved and
 // MarkRunCleanupRemoved close the owner's open entries in the transaction

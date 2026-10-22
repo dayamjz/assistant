@@ -157,6 +157,9 @@
 // keyed by the domain wake, with the same seals and the same accessors
 // under Domain names (PendingDomainNotifications, ClaimDomainNotification,
 // SettleDomainNotification), one implementation serving both tables.
+// Migration 55's kept_work_notification is the same record for the third
+// shape, keyed by the kept-work wake, under KeptWork names, on the same
+// implementation.
 //
 // # The kept work record
 //
@@ -325,6 +328,26 @@
 // offered none, since every kind here is about a subordinate.
 // UnacknowledgedDomainWakes is the count internal/supervisor's InFlightOf
 // adds to the per-task one.
+//
+// A wake about a kept work entry no task names is the queue's third shape,
+// migration 55's kept_work_wake, PRD section 8's kept-work wake: domain_wake's
+// columns with the delegation replaced by the entry, which owns the row
+// (P14), its project and branch read off the entry at every read, the same
+// seals, a sequence of its own, and no markers, since it is raised once per
+// entry, which its unique key holds. AppendKeptWorkWake is the one append;
+// it refuses an entry answered or closed, and records the entry's
+// surfaced_at in the wake's own transaction, as AppendWakeWithMarkers does
+// for a task's wake naming the entry in WakeRequest.Surfaces, so the
+// supervisor loop reads whether an entry surfaced from the entry whichever
+// shape raised it; TaskWakeKeyed is the read of a task's wake by kind and
+// marker, for a database an earlier build left with a task's wake and no
+// instant.
+// untaskedShape is the one implementation of the offer, the handout, the
+// count and the acknowledgement for the two shapes about no task, and
+// DrainAll and AcknowledgeAll take all three shapes in one transaction. A
+// kept-work wake and its notification go only with a closed run entry
+// whose run is gone, which only ForgetRepository removes, and it refuses
+// while the wake is unacknowledged (ErrKeptWorkWakeQueued).
 //
 // A wake's recipient is decided at the drain and stored on no row (P14):
 // DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain
