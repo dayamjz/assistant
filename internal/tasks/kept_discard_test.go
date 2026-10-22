@@ -573,8 +573,9 @@ func TestADiscardPreviewLeavesTheCleanupsReferencesAlone(t *testing.T) {
 // it and refuses the digest shown before it, with HEAD, every branch and
 // every indicator the same: the stash list gaining an entry under a tip
 // stored back where it was (the reviewer's sequence); a commit reset away,
-// which only HEAD's and the branch's reflogs still name; a file git is
-// told to ignore, created and then edited; a hook written into the
+// which only HEAD's and the branch's reflogs still name, and both of these
+// add what they hold to the commits shown lacking, since the removal
+// destroys it and nothing else holds it; a file git is told to ignore, created and then edited; a hook written into the
 // repository directory; a remote added to its configuration; and a
 // reference outside the branches and tags, which keeps no log. Two reads of the copy in
 // between, each of which fetches the default branch into it, digest the
@@ -607,13 +608,19 @@ func TestADiscardDigestCoversEverythingTheRemovalDeletes(t *testing.T) {
 		}
 		return l
 	}
-	moves := func(when string, before Loss, change func()) Loss {
+	// moves makes the change and holds the loss to it: another digest, the
+	// same HEAD and indicators, and the same commits lost, or, when the
+	// change commits what only a stash or a reflog names (gains), more.
+	moves := func(when string, before Loss, gains bool, change func()) Loss {
 		t.Helper()
 		change()
 		after := shown(when)
-		if after.Digest == before.Digest || after.Head != before.Head || !slices.Equal(after.Lacks, before.Lacks) ||
-			after.Dirty != before.Dirty || after.Untracked != before.Untracked {
-			t.Fatalf("%s: Loss = %+v after %+v; want another digest and the same HEAD, commits lost and indicators", when, after, before)
+		if after.Digest == before.Digest || after.Head != before.Head || after.Dirty != before.Dirty || after.Untracked != before.Untracked {
+			t.Fatalf("%s: Loss = %+v after %+v; want another digest and the same HEAD and indicators", when, after, before)
+		}
+		grew := len(after.Lacks) > len(before.Lacks) && !slices.ContainsFunc(before.Lacks, func(c string) bool { return !slices.Contains(after.Lacks, c) })
+		if gains && !grew || !gains && !slices.Equal(after.Lacks, before.Lacks) {
+			t.Fatalf("%s: the commits lost read %v after %v; want them to grow: %v", when, after.Lacks, before.Lacks, gains)
 		}
 		if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, ""); !errors.Is(err, ErrLossChanged) {
 			t.Fatalf("%s: a discard on the digest shown before = %v; want ErrLossChanged", when, err)
@@ -638,12 +645,12 @@ func TestADiscardDigestCoversEverythingTheRemovalDeletes(t *testing.T) {
 	rawGit(t, tk.copy, "stash", "--quiet")
 	saved := rawGit(t, tk.copy, "rev-parse", "refs/stash")
 	l := shown("one stash")
-	l = moves("new work stashed under the saved tip stored back", l, func() {
+	l = moves("new work stashed under the saved tip stored back", l, true, func() {
 		write(tracked, "stashed after the discard was shown\n")
 		rawGit(t, tk.copy, "stash", "--quiet")
 		rawGit(t, tk.copy, "stash", "store", "--quiet", "-m", "stored back", saved)
 	})
-	moves("a commit reset away", l, func() {
+	moves("a commit reset away", l, true, func() {
 		// The files the commit and the reset write beside the reflogs are
 		// put back as they were, so the reflogs alone carry the change.
 		gitDir := filepath.Join(tk.copy, ".git")
@@ -669,11 +676,11 @@ func TestADiscardDigestCoversEverythingTheRemovalDeletes(t *testing.T) {
 	})
 	write(filepath.Join(tk.copy, ".git", "info", "exclude"), "secret.env\n")
 	l = shown("an ignored name")
-	l = moves("an ignored file created", l, func() { write(filepath.Join(tk.copy, "secret.env"), "TOKEN=one\n") })
-	l = moves("an ignored file edited", l, func() { write(filepath.Join(tk.copy, "secret.env"), "TOKEN=two\n") })
-	l = moves("a hook written", l, func() { write(filepath.Join(tk.copy, ".git", "hooks", "pre-push"), "#!/bin/sh\nexit 0\n") })
-	l = moves("a remote added", l, func() { rawGit(t, tk.copy, "remote", "add", "elsewhere", s.upstream) })
-	moves("a reference outside the branches and tags", l, func() { rawGit(t, tk.copy, "update-ref", "refs/aside/kept", "HEAD") })
+	l = moves("an ignored file created", l, false, func() { write(filepath.Join(tk.copy, "secret.env"), "TOKEN=one\n") })
+	l = moves("an ignored file edited", l, false, func() { write(filepath.Join(tk.copy, "secret.env"), "TOKEN=two\n") })
+	l = moves("a hook written", l, false, func() { write(filepath.Join(tk.copy, ".git", "hooks", "pre-push"), "#!/bin/sh\nexit 0\n") })
+	l = moves("a remote added", l, false, func() { rawGit(t, tk.copy, "remote", "add", "elsewhere", s.upstream) })
+	moves("a reference outside the branches and tags", l, false, func() { rawGit(t, tk.copy, "update-ref", "refs/aside/kept", "HEAD") })
 }
 
 // Loss names every path the removal of a task's clone destroys whose
@@ -859,5 +866,78 @@ func TestAFileWrittenAfterADiscardsLastReadIsDestroyedUnshown(t *testing.T) {
 	}
 	if inside.Entry.ID != got.Entry.ID {
 		t.Fatalf("a cleanup inside the window kept %+v; want entry %d, the one standing", inside.Entry, got.Entry.ID)
+	}
+}
+
+// Loss lists every commit the removal destroys that the default branch
+// lacks, whatever names it, and every object a name points at that is not
+// a commit, the reviewer's sequence on #475 and its kin: in a kept clone a
+// commit is made and reset away, so only the reflogs name it; two stashes
+// are made, so the older is named only by the stash's reflog; an annotated
+// tag is put on HEAD; and a reference is pointed at a blob. The commits
+// lost name the commit reset away and both stashes' commits, and the
+// objects name the tag object and the blob, each with the names that
+// point at it. The digest shown removes the clone. Without the reflogs
+// among the names, the commit reset away and the older stash are destroyed
+// unshown.
+func TestALossListsWhatOnlyAReflogOrANameHolds(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/names")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	head := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "HEAD"))
+	commit(t, tk.copy, "away.txt", "reset away\n", "a commit only the reflogs name")
+	away := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "HEAD"))
+	rawGit(t, tk.copy, "reset", "--quiet", "--hard", head)
+	tracked := filepath.Join(tk.copy, "own.txt")
+	if err := os.WriteFile(tracked, []byte("stashed first\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "stash", "--quiet")
+	older := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "refs/stash"))
+	if err := os.WriteFile(tracked, []byte("stashed second\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "stash", "--quiet")
+	rawGit(t, tk.copy, "tag", "--annotate", "--message", "a note on the work", "noted", "HEAD")
+	tag := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "refs/tags/noted"))
+	blob := strings.TrimSpace(rawGit(t, tk.copy, "hash-object", "-w", "own.txt"))
+	rawGit(t, tk.copy, "update-ref", "refs/aside/blob", blob)
+
+	l, err := s.cleaner.Loss(ctx, got.Entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{head, away, older} {
+		if !slices.Contains(l.Lacks, c) {
+			t.Errorf("Loss lists the commits lost as %v; want %s among them", l.Lacks, c)
+		}
+	}
+	want := []LostObject{{Object: tag, Type: "tag", Names: []string{"refs/tags/noted"}}, {Object: blob, Type: "blob", Names: []string{"refs/aside/blob"}}}
+	for _, w := range want {
+		if !slices.ContainsFunc(l.Objects, func(o LostObject) bool {
+			return o.Object == w.Object && o.Type == w.Type && slices.Equal(o.Names, w.Names)
+		}) {
+			t.Errorf("Loss lists the objects lost as %+v; want %+v among them", l.Objects, w)
+		}
+	}
+	if len(l.Objects) != len(want) {
+		t.Errorf("Loss lists the objects lost as %+v; want exactly %+v", l.Objects, want)
+	}
+	if _, err := s.cleaner.Discard(ctx, got.Entry, l.Digest, l.Lacks, ""); err != nil {
+		t.Fatalf("Discard on the digest shown: %v", err)
+	}
+	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the discarded clone still stands: %v", err)
 	}
 }

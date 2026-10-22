@@ -35,18 +35,20 @@ import (
 //
 // Loss is what the copy holds that is nowhere safe as far as this program
 // can see, read from the copy as it stands when it is shown: the commits
-// its references and HEAD reach that the default branch, read fresh as Keep
-// reads it (lacking), lacks; every path the removal destroys whose content
-// or deletion nothing else holds, a file git ignores and a deletion git
-// has not staged among them, decided from what the copy holds on
-// lostPaths' terms (kept_lost.go); and the three indicators
-// vcs.Inventory reads as git reports them, a tracked change, a file no
-// commit records that git does not ignore, and a stash. The entry's
-// recorded basis is not what is shown, because the copy may hold more
-// since it was kept and a discard destroys the copy as it is. A default
-// branch that cannot be read now refuses the preview with
-// ErrLossUnestablished rather than showing a list that may overstate or
-// understate. A copy that is gone is ErrCopyGone.
+// that any name the removal destroys reaches, HEAD, a reference or a reflog
+// entry, a commit reset away and every stash among them, and that the
+// default branch, read fresh as Keep reads it, lacks, with every object such
+// a name points at that is not a commit (lostFrom), all decided by git from
+// the copy's own objects; every path the removal destroys whose content or
+// deletion nothing else holds, a file git ignores and a deletion git has not
+// staged among them, decided from what the copy holds on lostPaths' terms
+// (kept_lost.go); and the three indicators vcs.Inventory reads as git
+// reports them, a tracked change, a file no commit records that git does not
+// ignore, and a stash. The entry's recorded basis is not what is shown,
+// because the copy may hold more since it was kept and a discard destroys
+// the copy as it is. A default branch that cannot be read now refuses the
+// preview with ErrLossUnestablished rather than showing a list that may
+// overstate or understate. A copy that is gone is ErrCopyGone.
 //
 // The digest is over the copy's state as a discard would destroy it
 // (copyState), each piece a framed record (digest), so no name, target or
@@ -87,12 +89,9 @@ import (
 // reference, reflog entry or index entry, is not sealed: one written since
 // the discard was shown leaves the digest as it was, and a stash dropped
 // before it and not yet pruned, which only git fsck finds, is destroyed
-// with the copy and named by neither the digest nor the list. What is
-// shown is narrower than what is sealed in one respect: a commit only a
-// reflog names (one reset away, a stash under the newest) is destroyed and
-// not listed among the commits lacking, though the stash indicator says a
-// stash is there and a change to any reflog since it was shown refuses the
-// confirmation. A run's
+// with the copy and named by neither the digest nor the list. A tree, a
+// blob or an annotated tag a name points at is listed whatever else holds
+// it, which fails toward showing. A run's
 // worktree's stash is the gate's, which the removal leaves standing; it is
 // sealed all the same, so a stash made in another worktree of the gate in
 // between refuses the confirmation, which is shown again. And git's own
@@ -123,10 +122,13 @@ import (
 type Loss struct {
 	// Head is the commit the copy's HEAD stands on.
 	Head string
-	// Lacks is the commits the default branch lacks, read from the copy
-	// as it stands, the way Keep reads it (HEAD and every reference of a
-	// task's clone, HEAD of a run's worktree), never the entry's record of
-	// it when it was kept.
+	// Lacks is the commits the default branch lacks that any name the
+	// removal destroys reaches (lostFrom), read from the copy as it
+	// stands, never the entry's record of it when it was kept: for a
+	// task's clone HEAD, every reference and every reflog entry, the stash
+	// list whole among them; for a run's worktree HEAD, its own references
+	// and their reflogs and HEAD's. It is wider than what Keep records,
+	// which leaves the stash and the reflogs out.
 	Lacks []string
 	// Dirty, Untracked and Stash are the inventory's indicators of the copy
 	// as it stands now, as git reports them: a tracked change, a file no
@@ -138,6 +140,10 @@ type Loss struct {
 	// nothing else holds, decided from what the copy holds (lostPaths), in
 	// Kind's order and by path within it.
 	Files []LostPath
+	// Objects is every object a name the removal destroys points at that
+	// is not a commit, an annotated tag, a tree or a blob, with the names
+	// that point at it, in the order they are named (lostFrom).
+	Objects []LostObject
 	// Digest is the confirmation of exactly this: the copy's state, the
 	// commits lacking and the files, as shown (seal).
 	Digest string
@@ -154,6 +160,18 @@ type Loss struct {
 type LostPath struct {
 	Kind LostKind
 	Path string
+}
+
+// LostObject is an object a name the removal destroys points at that is
+// not a commit: its identifier, its type as git records it (tag, tree or
+// blob), and every name the removal destroys that points at it, HEAD, a
+// reference's full name, or a reflog entry as ref@{n}. It is listed
+// whatever else holds it, failing toward showing: an annotated tag the
+// upstream holds under its own name too is listed all the same.
+type LostObject struct {
+	Object string
+	Type   string
+	Names  []string
 }
 
 // LostKind is why a path is lost. The set is closed.
@@ -217,12 +235,15 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	if err != nil {
 		return Loss{}, fmt.Errorf("tasks: reading the kept copy at %s: %w", entry.CopyPath, err)
 	}
-	// What the default branch lacks is read from the copy now, the way Keep
-	// reads it, so what is shown is what the copy holds when it is shown
+	// What is lost is read from the copy now, from every name the removal
+	// destroys, so what is shown is what the copy holds when it is shown
 	// and the digest seals exactly that, never the entry's record of the
 	// copy when it was kept.
+	refs, logs, err := copyNames(ctx, entry, copied)
+	if err != nil {
+		return Loss{}, err
+	}
 	var l landing
-	reaches := committedTips(inv)
 	if taskID, ok := entry.TaskID.Get(); ok {
 		task, err := c.store.Task(ctx, taskID)
 		if err != nil {
@@ -236,7 +257,6 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 		if err != nil {
 			return Loss{}, err
 		}
-		reaches = []string{inv.Head.Commit}
 		if l, err = c.runLanding(ctx, run, copied, nil); err != nil {
 			return Loss{}, err
 		}
@@ -248,16 +268,81 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	if l.namespace, err = discardNamespace(entry); err != nil {
 		return Loss{}, err
 	}
-	held := lacking(ctx, l, reaches)
+	named := namesOf(inv.Head.Commit, refs, logs)
+	held, others := lostFrom(ctx, l, named.objects)
 	if !held.established() {
 		return Loss{}, fmt.Errorf("%w: %s", ErrLossUnestablished, held.unestablished)
 	}
 	loss := Loss{Head: inv.Head.Commit, Lacks: held.lacks, Dirty: inv.Dirty, Untracked: inv.Untracked, Stash: inv.Stash}
-	if loss.state, loss.Files, err = copyState(ctx, entry, copied, inv); err != nil {
+	for _, object := range others {
+		kind, err := copied.ObjectType(ctx, object)
+		if err != nil {
+			return Loss{}, fmt.Errorf("tasks: reading what %s is in the kept copy at %s: %w", object, entry.CopyPath, err)
+		}
+		loss.Objects = append(loss.Objects, LostObject{Object: object, Type: kind, Names: named.names[object]})
+	}
+	if loss.state, loss.Files, err = copyState(ctx, entry, copied, inv, refs, logs); err != nil {
 		return Loss{}, err
 	}
-	loss.Digest = seal(loss.state, loss.Lacks, loss.Files)
+	loss.Digest = seal(loss.state, loss.Lacks, loss.Files, loss.Objects)
 	return loss, nil
+}
+
+// copyNames is every name the removal destroys, read from the copy: for a
+// task's clone, removed whole, every reference in it, the program's own
+// included, and every reflog it keeps; for a run's worktree, its own
+// references (runWorktreeRefs) and the reflogs of HEAD and of those.
+func copyNames(ctx context.Context, entry store.KeptWork, copied *vcs.Repository) ([]vcs.Ref, []vcs.ReflogEntry, error) {
+	var refs []vcs.Ref
+	var logs []vcs.ReflogEntry
+	var err error
+	if entry.TaskID.IsKnown() {
+		if refs, err = copied.ListRefs(ctx); err != nil {
+			return nil, nil, fmt.Errorf("tasks: reading the references of the kept copy at %s: %w", entry.CopyPath, err)
+		}
+		if logs, err = copied.AllReflogs(ctx); err != nil {
+			return nil, nil, fmt.Errorf("tasks: reading the reflogs of the kept copy at %s: %w", entry.CopyPath, err)
+		}
+		return refs, logs, nil
+	}
+	if refs, err = copied.ListRefs(ctx, runWorktreeRefs...); err != nil {
+		return nil, nil, fmt.Errorf("tasks: reading the references of the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	names := []string{"HEAD"}
+	for _, ref := range refs {
+		names = append(names, ref.Name)
+	}
+	if logs, err = copied.Reflogs(ctx, names...); err != nil {
+		return nil, nil, fmt.Errorf("tasks: reading the reflogs of the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	return refs, logs, nil
+}
+
+// names is every object a name the removal destroys points at directly, in
+// the order they are named (HEAD, each reference, each reflog entry), each
+// once, and the names of each: HEAD, a reference's full name, and a reflog
+// entry as its reference and position, ref@{n}.
+type names struct {
+	objects []string
+	names   map[string][]string
+}
+
+func namesOf(head string, refs []vcs.Ref, logs []vcs.ReflogEntry) names {
+	n := names{names: map[string][]string{}}
+	add := func(object, name string) {
+		if _, ok := n.names[object]; !ok {
+			n.objects = append(n.objects, object)
+		}
+		n.names[object] = append(n.names[object], name)
+	}
+	add(head, "HEAD")
+	for _, ref := range refs {
+		add(ref.Object, ref.Name)
+	}
+	for _, l := range logs {
+		add(l.Object, l.Ref+"@{"+strconv.Itoa(l.Index)+"}")
+	}
+	return n
 }
 
 // gitDirSealedByContent is the entries of a repository directory whose
@@ -287,33 +372,10 @@ var runWorktreeRefs = []string{"refs/worktree/", "refs/bisect/", "refs/rewritten
 // walked by the filesystem whatever git ignores or reports, and git is
 // asked only for what its own files hold in a form they are rewritten in
 // (gitDirSealedByContent) and for HEAD's tree.
-func copyState(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, inv vcs.Inventory) (string, []LostPath, error) {
+func copyState(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, inv vcs.Inventory, refs []vcs.Ref,
+	logs []vcs.ReflogEntry) (string, []LostPath, error) {
 	d := newDigest()
 	d.record("copy", entry.CopyPath, inv.Head.Commit)
-	var refs []vcs.Ref
-	var logs []vcs.ReflogEntry
-	var err error
-	if entry.TaskID.IsKnown() {
-		// A task's clone is removed whole: every reference in it, the
-		// program's own included, and every reflog it keeps.
-		if refs, err = copied.ListRefs(ctx); err != nil {
-			return "", nil, fmt.Errorf("tasks: reading the references of the kept copy at %s: %w", entry.CopyPath, err)
-		}
-		if logs, err = copied.AllReflogs(ctx); err != nil {
-			return "", nil, fmt.Errorf("tasks: reading the reflogs of the kept copy at %s: %w", entry.CopyPath, err)
-		}
-	} else {
-		if refs, err = copied.ListRefs(ctx, runWorktreeRefs...); err != nil {
-			return "", nil, fmt.Errorf("tasks: reading the references of the kept copy at %s: %w", entry.CopyPath, err)
-		}
-		names := []string{"HEAD"}
-		for _, ref := range refs {
-			names = append(names, ref.Name)
-		}
-		if logs, err = copied.Reflogs(ctx, names...); err != nil {
-			return "", nil, fmt.Errorf("tasks: reading the reflogs of the kept copy at %s: %w", entry.CopyPath, err)
-		}
-	}
 	for _, ref := range refs {
 		d.record("ref", ref.Name, ref.Object, ref.Commit)
 	}
@@ -386,12 +448,15 @@ func discardNamespace(entry store.KeptWork) (string, error) {
 // destroys, and sealing it would refuse a recorded discard for good
 // whenever the upstream moved before the removal. What it can change is
 // what of the copy is lost, which Discard holds to what was shown instead.
-func seal(state string, lacks []string, files []LostPath) string {
+func seal(state string, lacks []string, files []LostPath, objects []LostObject) string {
 	d := newDigest()
 	d.record("state", state)
 	d.record(append([]string{"lacks"}, lacks...)...)
 	for _, f := range files {
 		d.record("file", string(f.Kind), f.Path)
+	}
+	for _, o := range objects {
+		d.record(append([]string{"object", o.Object, o.Type}, o.Names...)...)
 	}
 	return d.sum()[:12]
 }
@@ -519,7 +584,7 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 	if err != nil {
 		return Loss{}, err
 	}
-	if sealed := seal(loss.state, shown, loss.Files); sealed != digest {
+	if sealed := seal(loss.state, shown, loss.Files, loss.Objects); sealed != digest {
 		return Loss{}, fmt.Errorf("%w: it was shown as %s and holds what digests as %s now", ErrLossChanged, digest, sealed)
 	}
 	var unshown []string

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -78,5 +79,70 @@ func TestBlobObjectIsGitsIdentityOfTheEntry(t *testing.T) {
 	}
 	if _, err := vcs.BlobObject("md5", t.TempDir()); !errors.Is(err, vcs.ErrInvalidArgument) {
 		t.Errorf("BlobObject in an unknown format = %v; want ErrInvalidArgument", err)
+	}
+}
+
+// NotReachedFrom lists what named objects hold that a commit does not
+// reach, by object, as git decides it: in a repository with a commit kept
+// and one past it that a reset left named only by the reflog, the commit
+// past it is listed among the commits, and every named object that is not a
+// commit is listed as one, whatever holds it: the kept commit's own tree and
+// blob, a tree it does not hold, a loose blob, an annotated tag on the kept
+// commit and one on the commit past it. A commit named twice is listed once,
+// a commit the kept one reaches is not listed, and an object the repository
+// does not hold is an error rather than an empty answer. ObjectType reads
+// each type as git records it.
+func TestNotReachedFromListsWhatOnlyTheNamesHold(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", ".")
+	writeFile(t, filepath.Join(dir, "kept.txt"), "kept\n")
+	rawGit(t, dir, "add", "-A")
+	rawGit(t, dir, "commit", "--quiet", "-m", "kept")
+	kept := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD"))
+	writeFile(t, filepath.Join(dir, "past.txt"), "past\n")
+	rawGit(t, dir, "add", "-A")
+	rawGit(t, dir, "commit", "--quiet", "-m", "past it")
+	past := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD"))
+	pastTree := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD^{tree}"))
+	rawGit(t, dir, "tag", "--annotate", "--message", "on the past", "on-past", past)
+	rawGit(t, dir, "reset", "--quiet", "--hard", kept)
+	keptTree := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD^{tree}"))
+	rawGit(t, dir, "tag", "--annotate", "--message", "on the kept", "on-kept", kept)
+	onKept := strings.TrimSpace(rawGit(t, dir, "rev-parse", "on-kept"))
+	onPast := strings.TrimSpace(rawGit(t, dir, "rev-parse", "on-past"))
+	blob := strings.TrimSpace(rawGit(t, dir, "hash-object", "-w", "kept.txt"))
+	writeFile(t, filepath.Join(dir, "loose.txt"), "a blob only a name holds\n")
+	loose := strings.TrimSpace(rawGit(t, dir, "hash-object", "-w", "loose.txt"))
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	names := []string{kept, past, past, keptTree, pastTree, blob, loose, onKept, onPast}
+	commits, others, err := repo.NotReachedFrom(ctx(t), names, kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(commits, []string{past}) {
+		t.Errorf("commits = %v; want only %s, the commit past the kept one", commits, past)
+	}
+	if want := []string{keptTree, pastTree, blob, loose, onKept, onPast}; !slices.Equal(others, want) {
+		t.Errorf("others = %v; want %v, every named object that is not a commit", others, want)
+	}
+	if commits, others, err := repo.NotReachedFrom(ctx(t), []string{kept}, kept); err != nil || len(commits) != 0 || len(others) != 0 {
+		t.Errorf("NotReachedFrom of the kept commit alone = %v, %v, %v; want nothing", commits, others, err)
+	}
+	missing := strings.Repeat("1", len(kept))
+	if _, _, err := repo.NotReachedFrom(ctx(t), []string{missing}, kept); err == nil {
+		t.Error("NotReachedFrom of an object the repository does not hold succeeded; want an error")
+	}
+	for object, want := range map[string]string{past: "commit", pastTree: "tree", loose: "blob", onPast: "tag"} {
+		if got, err := repo.ObjectType(ctx(t), object); err != nil || got != want {
+			t.Errorf("ObjectType(%s) = %q, %v; want %s", object, got, err, want)
+		}
+	}
+	if _, err := repo.ObjectType(ctx(t), missing); err == nil {
+		t.Error("ObjectType of an object the repository does not hold succeeded; want an error")
 	}
 }

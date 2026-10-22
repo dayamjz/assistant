@@ -554,6 +554,57 @@ func TestADiscardShowsTheDeletionsItDestroys(t *testing.T) {
 	})
 }
 
+// A discard shows the commits it destroys that only a reflog names, the
+// reviewer's sequence on #475: the kept clone's worker commits once more
+// and resets the commit away, so no reference reaches it and HEAD's reflog
+// does, and a file it writes keeps the copy's state moving as the
+// reviewer's untracked note did. The commit is lost with the copy and
+// nothing else holds it, so it is among the commits shown as lacking, and
+// confirming the digest shown removes the copy. Without the reflogs read,
+// the preview lists the worker's first commit alone and the confirmation
+// destroys the second unshown.
+func TestADiscardShowsACommitOnlyAReflogNames(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	if err := writeFile(filepath.Join(entry.CopyPath, "second.txt"), "a second finding\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "add", "second.txt")
+	git(t, entry.CopyPath, "commit", "--quiet", "-m", "the worker's second commit")
+	reset := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	git(t, entry.CopyPath, "reset", "--quiet", "--hard", "HEAD~1")
+	if err := writeFile(filepath.Join(entry.CopyPath, "note.txt"), "an untracked note\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		if !slices.Contains(shown.Loss.Lacks, reset) {
+			t.Fatalf("the discard shown = %+v; want %s, the commit only HEAD's reflog names, among the commits lacking", *shown.Loss, reset)
+		}
+		request.Confirm = shown.Loss.Digest
+		var done machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &done); err != nil || done.Effect != machine.KeptWorkDiscarded {
+			t.Fatalf("the confirmed discard = %+v, %v", done, err)
+		}
+		if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the discarded copy still stands: %v", err)
+		}
+	})
+}
+
 // A discard a stopped service confirmed and did not carry out, over a copy
 // that changed before the next start, is never silent, the reviewer's
 // sequence: the discard is shown and confirmed, and the service stops

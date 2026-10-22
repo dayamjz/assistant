@@ -273,14 +273,8 @@ func (h held) established() bool { return h.against != "" }
 func lacking(ctx context.Context, l landing, reaches []string) held {
 	defer l.forget(ctx)
 	unestablished := func(detail string) held { return held{unestablished: detail} }
-	if l.upstream == "" {
-		return unestablished("the record names no repository, so there is no default branch to read")
-	}
-	tip, detail := l.defaultTip(ctx)
+	tip, detail := keptDefaultTip(ctx, l)
 	if detail != "" {
-		return unestablished(detail)
-	}
-	if detail := l.fetch(ctx, tip, keptDefaultRef); detail != "" {
 		return unestablished(detail)
 	}
 	lacks := []string{}
@@ -297,4 +291,46 @@ func lacking(ctx context.Context, l landing, reaches []string) held {
 		}
 	}
 	return held{lacks: lacks, against: tip}
+}
+
+// keptDefaultTip is the default branch tip a kept copy is compared against,
+// read now and fetched into the copy by identifier, on lacking's terms, or
+// why it could not be.
+func keptDefaultTip(ctx context.Context, l landing) (string, string) {
+	if l.upstream == "" {
+		return "", "the record names no repository, so there is no default branch to read"
+	}
+	tip, detail := l.defaultTip(ctx)
+	if detail != "" {
+		return "", detail
+	}
+	if detail := l.fetch(ctx, tip, keptDefaultRef); detail != "" {
+		return "", detail
+	}
+	return tip, ""
+}
+
+// lostFrom is what a discard of the copy loses that the default branch
+// lacks, decided from the copy's own objects and every name the removal
+// destroys (names: HEAD, the references and every reflog entry, as
+// copyNames reads them) rather than from the references Keep reads: the
+// commits any of them reaches that the default branch does not, a commit
+// only a reflog or the stash names among them, and every named object
+// that is not a commit (vcs.NotReachedFrom). The default branch is read on
+// lacking's terms, and any step that fails leaves it unestablished.
+func lostFrom(ctx context.Context, l landing, names []string) (held, []string) {
+	defer l.forget(ctx)
+	tip, detail := keptDefaultTip(ctx, l)
+	if detail != "" {
+		return held{unestablished: detail}, nil
+	}
+	commits, others, err := l.repo.NotReachedFrom(ctx, names, tip)
+	if err != nil {
+		return held{unestablished: "which commits and objects the copy's names hold that the default branch at " + tip +
+			" lacks could not be read: " + err.Error()}, nil
+	}
+	if commits == nil {
+		commits = []string{}
+	}
+	return held{lacks: commits, against: tip}, others
 }

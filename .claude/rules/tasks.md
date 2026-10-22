@@ -37,7 +37,9 @@ paths: ["internal/tasks/**"]
   refusals are a copy kept for its work; `kept_test.go` places every reason.
 - `kept_discard.go` is the copy's half of PRD section 6's discard: `Loss`
   reads what removing the copy would lose, the commits the default branch
-  lacks read from the copy now, every path whose content or deletion nothing
+  lacks that any name the removal destroys reaches (HEAD, a reference, a
+  reflog entry) and every other object such a name points at, read from
+  the copy now (`lostFrom`), every path whose content or deletion nothing
   else holds (`kept_lost.go`, decided from the copy against HEAD's tree, the
   index and what git writes into a new repository, ignored files and
   deletions included) and the

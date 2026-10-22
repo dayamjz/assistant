@@ -38,8 +38,15 @@ type KeptWorkAnswerRequest struct {
 type KeptWorkLoss struct {
 	// Head is the commit the copy's HEAD stands on.
 	Head string `json:"head"`
-	// Lacks is the commits the copy holds that the default branch lacks.
+	// Lacks is the commits the removal destroys that the default branch
+	// lacks: every commit HEAD, a reference or a reflog entry of the copy
+	// reaches that the default branch does not, a commit reset away or a
+	// stash under the newest among them.
 	Lacks []string `json:"lacks"`
+	// Objects is every object a name the removal destroys points at that
+	// is not a commit, an annotated tag, a tree or a blob, with its type
+	// and the names that point at it, listed whatever else holds it.
+	Objects []KeptWorkLostObject `json:"objects"`
 	// Files is every path the removal destroys whose content or deletion
 	// nothing else holds, decided from what the copy holds and not from
 	// what git reports, a file git ignores among them: each with why it is
@@ -62,6 +69,16 @@ type KeptWorkLoss struct {
 	// Digest confirms exactly this: a discard given it removes the copy
 	// only while the copy still holds what it digests.
 	Digest string `json:"digest"`
+}
+
+// KeptWorkLostObject is one object a discard destroys a name of that is
+// not a commit, and every name of it the discard destroys: HEAD, a
+// reference's full name, or a reflog entry as ref@{n}
+// (KeptWorkLoss.Objects).
+type KeptWorkLostObject struct {
+	Object string   `json:"object"`
+	Type   string   `json:"type"`
+	Names  []string `json:"names"`
 }
 
 // KeptWorkLostPath is one path a discard destroys whose content or

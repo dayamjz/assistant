@@ -9,6 +9,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -111,4 +112,64 @@ func objectHash(format string) (hash.Hash, error) {
 		return sha256.New(), nil
 	}
 	return nil, &argumentError{what: "object format", value: format, reason: "is neither sha1 nor sha256"}
+}
+
+// NotReachedFrom returns what the named objects hold that incorporated does
+// not, decided by git from this repository's own objects: the commits they
+// reach that incorporated does not, as git rev-list lists them, most recent
+// first, a tag followed to the commit it points at; and every named object
+// that is not a commit, an annotated tag, a tree or a blob, in names' order,
+// whatever incorporated holds, so a tree or blob named here is listed even
+// when a commit of incorporated holds the same one: the answer fails toward
+// listing. names are object identifiers, each once in the result however
+// often it is named; incorporated is anything that names a commit. It is
+// git rev-list names ^incorporated for the commits and git rev-list
+// --no-walk names for which names are commits. An object named that the
+// repository does not hold is an error, never an empty answer.
+func (r *Repository) NotReachedFrom(ctx context.Context, names []string, incorporated string) (commits, others []string, err error) {
+	i, err := r.ResolveCommit(ctx, incorporated)
+	if err != nil {
+		return nil, nil, err
+	}
+	var unique []string
+	for _, name := range names {
+		if err := checkArg("object", name); err != nil {
+			return nil, nil, err
+		}
+		if !slices.Contains(unique, name) {
+			unique = append(unique, name)
+		}
+	}
+	if len(unique) == 0 {
+		return nil, nil, nil
+	}
+	out, err := r.run(ctx, "commits-not-reached", append(append([]string{"rev-list", "--end-of-options"}, unique...), "^"+i)...)
+	if err != nil {
+		return nil, nil, err
+	}
+	commits = strings.Fields(string(out))
+	out, err = r.run(ctx, "named-commits", append([]string{"rev-list", "--no-walk", "--end-of-options"}, unique...)...)
+	if err != nil {
+		return nil, nil, err
+	}
+	named := strings.Fields(string(out))
+	for _, name := range unique {
+		if !slices.Contains(named, name) {
+			others = append(others, name)
+		}
+	}
+	return commits, others, nil
+}
+
+// ObjectType is the type git records object under: commit, tag, tree or
+// blob. An object the repository does not hold is an error.
+func (r *Repository) ObjectType(ctx context.Context, object string) (string, error) {
+	if err := checkArg("object", object); err != nil {
+		return "", err
+	}
+	out, err := r.run(ctx, "object-type", "cat-file", "-t", "--end-of-options", object)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }

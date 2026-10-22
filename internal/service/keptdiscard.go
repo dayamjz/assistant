@@ -20,16 +20,17 @@ import (
 //
 // # What is shown, and what is confirmed
 //
-// internal/tasks' Loss reads what would be lost from the copy now: the
-// commits the default branch, read fresh, lacks, every path whose content
-// or deletion nothing else holds, ignored files and deletions included, and
-// the three indicators git reports, with a digest over the copy's state,
-// those commits and those paths. A default branch that cannot be read now
-// is refused rather than shown a list that may overstate or understate,
-// naming why. A discard given a digest is compared against that read
-// again: a copy that changed since, by a commit, an edit, a deletion, a
-// file or a stash, digests differently and is refused, and the person is
-// told to look again. Nothing is recorded for a discard shown or
+// internal/tasks' Loss reads what would be lost from the copy now: the commits
+// the default branch, read fresh, lacks that anything in the copy names, a
+// reference, a reflog entry or HEAD, with every tag, tree or blob such a name
+// points at, every path whose content or deletion nothing else holds, ignored
+// files and deletions included, and the three indicators git reports, with a
+// digest over the copy's state, those commits and those paths. A default branch
+// that cannot be read now is refused rather than shown a list that may
+// overstate or understate, naming why. A discard given a digest is compared
+// against that read again: a copy that changed since, by a commit, an edit, a
+// deletion, a file or a stash, digests differently and is refused, and the
+// person is told to look again. Nothing is recorded for a discard shown or
 // refused.
 //
 // # The order, and what a stop leaves
@@ -225,8 +226,12 @@ func lossOf(l tasks.Loss) machine.KeptWorkLoss {
 	for i, f := range l.Files {
 		files[i] = machine.KeptWorkLostPath{Kind: string(f.Kind), Path: f.Path}
 	}
-	return machine.KeptWorkLoss{Head: l.Head, Lacks: l.Lacks, Files: files, Dirty: l.Dirty, Untracked: l.Untracked, Stash: l.Stash,
-		Digest: l.Digest}
+	objects := make([]machine.KeptWorkLostObject, len(l.Objects))
+	for i, o := range l.Objects {
+		objects[i] = machine.KeptWorkLostObject{Object: o.Object, Type: o.Type, Names: o.Names}
+	}
+	return machine.KeptWorkLoss{Head: l.Head, Lacks: l.Lacks, Objects: objects, Files: files, Dirty: l.Dirty, Untracked: l.Untracked,
+		Stash: l.Stash, Digest: l.Digest}
 }
 
 // discardWithdrawn is completeDiscard's account of a confirmation it took
