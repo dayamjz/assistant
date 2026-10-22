@@ -60,9 +60,12 @@ import (
 // # The claim is the attempt, and the dispatched entry is not it
 //
 // Two dispatchers of one task cannot both cut: the dispatch is claimed by
-// store.BeginTaskAttempt, anchored to the highest attempt this dispatcher
-// read, and the loser is refused with ErrTaskMoved before it reads the
-// primary or touches the path. The "dispatched" entry intake or Release
+// store.BeginFirstTaskAttempt for a task with no attempt, and by
+// store.BeginTaskAttempt for a retry, each anchored to the highest attempt
+// this dispatcher read, and the loser is refused with ErrTaskMoved before it
+// reads the primary or touches the path. The first claim records the task's
+// machine, and it is always this one: this build reads no remote host, so it
+// places every task here, and a retry stays where the first claim put it. The "dispatched" entry intake or Release
 // appended is the state fact the dispatch is decided from, and it is never
 // the claim: it says the task is to be dispatched, not that anyone is.
 //
@@ -512,7 +515,12 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	if s.betweenAttemptReadAndClaim != nil {
 		s.betweenAttemptReadAndClaim()
 	}
-	attempt, err := s.store.BeginTaskAttempt(ctx, id, latest)
+	var attempt store.TaskAttempt
+	if latest == 0 {
+		attempt, err = s.store.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine())
+	} else {
+		attempt, err = s.store.BeginTaskAttempt(ctx, id, latest)
+	}
 	if err != nil {
 		return dispatched{}, err
 	}

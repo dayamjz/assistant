@@ -293,7 +293,7 @@ func TestARetryAfterACrashRefusesTheHalfWrittenCopyAndLeavesIt(t *testing.T) {
 		records := openRecords(t, h)
 		defer func() { _ = records.Close() }()
 		for _, id := range []string{half, wrong} {
-			if _, err := records.BeginTaskAttempt(t.Context(), id, 0); err != nil {
+			if _, err := records.BeginFirstTaskAttempt(t.Context(), id, store.OnThisMachine()); err != nil {
 				t.Fatalf("beginning the crashed attempt: %v", err)
 			}
 		}
