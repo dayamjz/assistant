@@ -229,12 +229,15 @@ type heldChildRun struct {
 // own owner (RunOwned). The child and the held process are killed in
 // cleanup if they are still running.
 //
-// The child's TMPDIR is a directory inside this test's own, so this test's
-// removal of it takes whatever temporary entries the child made. A child
-// that is killed or times out runs none of its cleanup, and before #454 its
-// TestMain's gitconfig directory and its test's TempDir outlived the whole
-// run. The removal is registered before the cleanup that kills and waits for
-// the child, so it runs after the child has exited.
+// A child that is killed or times out runs none of its cleanup, and before
+// #454 its TestMain's gitconfig directory and its test's TempDir outlived
+// the whole run. Two cleanups take them, each registered before the one that
+// kills and waits for the child, so each runs after the child has exited:
+// the child's TMPDIR is a directory inside this test's own, whose removal
+// takes what the child made there, its tests' TempDir among them; and what
+// the child made with standin.TempDir, its TestMain's gitconfig directory
+// among them, is in /tmp whatever TMPDIR says, so standin.SweepTempDirs
+// reclaims it once its owner, the child, is gone.
 func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 	t.Helper()
 	self, err := os.Executable()
@@ -266,6 +269,11 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 		t.Fatal(err)
 	}
 	go func() { r.err = r.cmd.Wait(); close(r.exited) }()
+	t.Cleanup(func() {
+		if err := standin.SweepTempDirs(); err != nil {
+			t.Errorf("reclaiming the temporary directories of the child test binary: %v", err)
+		}
+	})
 	t.Cleanup(func() {
 		_ = r.cmd.Process.Kill()
 		<-r.exited
