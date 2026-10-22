@@ -262,7 +262,7 @@ func (f *fakeMessages) awaitReceived(t *testing.T, w agents.Worker, parts ...str
 // It runs once for each credential StartInTerminal accepts, the API key and
 // the OAuth token, each alone in the environment. Each run starts with the
 // conformance suite's own terminal probe, the one
-// TestTheShippedAdapterConformsToItsDeclaration runs against the stand-in,
+// TestEveryShippedAdapterConformsToItsDeclaration runs against the stand-in,
 // and then asks what the stand-in's model rests on: instructions beginning
 // with a dash reach the model, a multi-line send reaches it as one message,
 // and a send

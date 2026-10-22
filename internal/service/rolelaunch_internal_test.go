@@ -365,8 +365,9 @@ type argumentFactory struct {
 	args  []string
 }
 
-func (f argumentFactory) Name() string       { return f.inner.Name() }
-func (f argumentFactory) AutoEligible() bool { return false }
+func (f argumentFactory) Name() string                  { return f.inner.Name() }
+func (f argumentFactory) AutoEligible() bool            { return false }
+func (f argumentFactory) Declares() agents.Capabilities { return f.inner.Declares() }
 func (f argumentFactory) New(ctx context.Context, args []string) (agents.Runner, error) {
 	return f.inner.New(ctx, append(args, f.args...))
 }

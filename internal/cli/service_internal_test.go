@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/service"
@@ -82,7 +83,7 @@ func TestAVerbThatAnswersNothingWritesNoDocument(t *testing.T) {
 // newTestHome returns a home root short enough to hold a local socket path.
 func newTestHome(t *testing.T) *home.Home {
 	t.Helper()
-	root, err := os.MkdirTemp("", "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}

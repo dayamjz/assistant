@@ -1,6 +1,7 @@
 package journey_test
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -34,6 +35,14 @@ func TestMain(m *testing.M) {
 	// places one by a terminal's foreground on the pushing chain, which
 	// README.md's running section states.
 	standin.AtTerminal()
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	os.Exit(standin.RunOwned(func() int {
 		code := m.Run()
 		// The fixture, the shims and the product binary belong to the process

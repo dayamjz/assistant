@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -103,6 +104,126 @@ func TestARunAfterTheUsageCeilingIsReachedHoldsForAPerson(t *testing.T) {
 			t.Fatalf("the hold's detail %q does not carry the row and %q", ask.Description, want)
 		}
 	})
+}
+
+// TestACeilingOnACountTheAgentDoesNotReportLeavesItsCallsAlone is #375's
+// second item on the path a run takes: the production OpenAI adapter over the
+// stand-in, whose result object carries an input and an output count and no
+// cache count, under an operator ceiling on cache read tokens alone. The
+// adapter declares it does not report that count, so the first review's
+// silence on it does not refuse the second run's review, which starts and
+// passes, and the usage view's ceiling line stands under with both calls
+// left out of that count rather than unestablished. Before the declaration
+// existed the second review was never started: the run held on the
+// ceiling's ask while nothing had been spent against it.
+//
+// The control is the same two runs against the Claude Code adapter, which
+// declares it reports cache reads, with the stand-in leaving that count out
+// of every envelope. A count the agent says it reports and did not report is
+// still missing information, so the second run holds at review on the
+// ceiling's ask exactly as before, and the stand-in is asked once. The
+// exemption is the agent's declaration, which the capability table owns and
+// the refusal and the usage view both read, never one call's silence.
+func TestACeilingOnACountTheAgentDoesNotReportLeavesItsCallsAlone(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P14)
+	requiresIdentifiedPeer(t)
+	review := standin.Step{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly")}
+
+	t.Run("an agent that declares it does not report the count", func(t *testing.T) {
+		t.Parallel()
+		recorder := &service.LateRecorder{}
+		agent := standin.New(t, standin.Script{Steps: []standin.Step{review}})
+		openai, err := agents.OpenAIFactory(agents.WithOpenAIBinary(testCommand(t)), agents.WithOpenAIRecorder(recorder)).
+			New(t.Context(), agent.Arguments())
+		if err != nil {
+			t.Fatalf("building the openai adapter over the stand-in: %v", err)
+		}
+		held, usage := twoRunsUnderACacheReadCeiling(t, openai, agent.Runner(), recorder)
+		if held != nil {
+			t.Fatalf("the second run holds at %s on %+v, want its review run under the ceiling", held.Stage, held.Findings)
+		}
+		if got := len(agent.Calls()); got != 2 {
+			t.Fatalf("the stand-in was asked %d times, want both reviews", got)
+		}
+		if usage.Ceiling.Standing != machine.CeilingUnder || len(usage.Ceiling.Counts) != 1 {
+			t.Fatalf("the usage view weighs the ceiling as %+v, want it under", usage.Ceiling)
+		}
+		count := usage.Ceiling.Counts[0]
+		if count.Standing != machine.CeilingUnder || count.Exempt != 2 || count.Recorded != usage.Total.CacheReadTokens {
+			t.Fatalf("the ceiling weighs %+v beside the view's %+v, want under with both calls left out", count, usage.Total.CacheReadTokens)
+		}
+		if figures := usage.Ceiling.Figures(); !strings.Contains(figures, "2 of 2 calls by agents that do not report it left out") {
+			t.Fatalf("the figures %q do not say which calls the count leaves out", figures)
+		}
+	})
+
+	t.Run("an agent that declares it reports the count and left it out", func(t *testing.T) {
+		t.Parallel()
+		recorder := &service.LateRecorder{}
+		silent := standin.DefaultUsage()
+		silent.CacheReadTokens = agents.Count{}
+		step := review
+		step.Reply = review.Reply.WithUsage(silent)
+		agent := standin.New(t, standin.Script{Steps: []standin.Step{step}}, agents.WithRecorder(recorder))
+		held, usage := twoRunsUnderACacheReadCeiling(t, agent.Runner(), agent.Runner(), recorder)
+		if held == nil {
+			t.Fatal("the second run's review ran, want the ceiling to refuse a count the agent left out")
+		}
+		if got := len(agent.Calls()); got != 1 {
+			t.Fatalf("the stand-in was asked %d times, want the ceiling to have refused the second review", got)
+		}
+		if usage.Ceiling.Standing != machine.CeilingUnestablished || usage.Ceiling.Counts[0].Exempt != 0 {
+			t.Fatalf("the usage view weighs the ceiling as %+v, want it unestablished with nothing left out", usage.Ceiling)
+		}
+	})
+}
+
+// twoRunsUnderACacheReadCeiling starts two runs on two branches under an
+// operator ceiling of one cache read token, with reviewer as the adapter
+// "auto" resolves and fixer as the default fixer, which has to keep a
+// session, and recorder bound to the service, and returns the hold the second
+// run stands at the review stage on, nil when its review ran, and the usage
+// view read afterwards. The first run's review must run and pass, since the
+// window holds no call when it starts.
+func twoRunsUnderACacheReadCeiling(t *testing.T, reviewer, fixer agents.Runner, recorder *service.LateRecorder) (*machine.Decision, machine.Usage) {
+	t.Helper()
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	writeOperatorConfig(t, h.ConfigFile(), "usage_ceiling:\n  window: 24h\n  cache_read_tokens: 1\n")
+	opts := options(t, h)
+	opts.Catalog = agents.NewCatalog(fixedFactory{runner: reviewer}, cursorFactory{runner: fixer})
+
+	var held *machine.Decision
+	var usage machine.Usage
+	withServiceOptions(t, opts, func(running serviceUnderTest) {
+		recorder.Bind(running.service)
+
+		first := startRun(t, running.client, subject)
+		if review := stageView(t, first, pipeline.StageReview); review.Outcome != pipeline.OutcomePassed || !review.Ran {
+			t.Fatalf("the first review came back %s (ran %v), want it run and passed", review.Outcome, review.Ran)
+		}
+
+		commitOn(t, subject, "after-the-first-review", "after.txt")
+		second := startRun(t, running.client, subject)
+		if second.Decision != nil && second.Decision.Stage == pipeline.StageReview.String() {
+			decision := holdingAt(t, second, pipeline.StageReview)
+			held = &decision
+		} else if review := stageView(t, second, pipeline.StageReview); review.Outcome != pipeline.OutcomePassed || !review.Ran {
+			t.Fatalf("the second review came back %s (ran %v), want it run and passed or held on the ceiling", review.Outcome, review.Ran)
+		}
+		if held != nil && !slices.ContainsFunc(held.Findings, func(f findings.Finding) bool {
+			return f.ID == machine.UsageCeilingFindingID && f.Holds()
+		}) {
+			t.Fatalf("the second run holds at review on %+v, want the ceiling's ask", held.Findings)
+		}
+
+		if err := running.client.Call(t.Context(), ipc.MethodUsageRead, machine.UsageRequest{Window: "1d"}, &usage); err != nil {
+			t.Fatalf("usage.read: %v", err)
+		}
+	})
+	return held, usage
 }
 
 // TestACeilingIsWeighedAgainstWhatCursorReports is #510 on the path a run

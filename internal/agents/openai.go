@@ -125,6 +125,10 @@ func (f *openaiFactory) Name() string { return OpenAIName }
 // Code, so this one resolves only when an entry names it.
 func (f *openaiFactory) AutoEligible() bool { return false }
 
+// Declares is what every runner this factory builds declares, which
+// openaiRunner's Capabilities states and explains.
+func (f *openaiFactory) Declares() Capabilities { return openaiDeclaration }
+
 // New reports whether OpenAI can be run here, and returns a Runner when
 // it can.
 //
@@ -172,9 +176,19 @@ func (r *openaiRunner) Name() string { return OpenAIName }
 // while reporting that it did, which is the substitution PRD section 8 refuses.
 // Leaving it undeclared is what lets internal/pipeline refuse a run that asks
 // for suppression against this adapter before it launches one.
-func (r *openaiRunner) Capabilities() Capabilities {
-	return Capabilities{}
-}
+//
+// Of the token counts, input and output are declared, because the reader
+// reads the usage object's prompt_tokens and completion_tokens and nothing
+// else. The two cache counts are not: the reader names no key for either, so
+// a record of this adapter's call never carries one, and a usage ceiling on
+// either does not hold this adapter's calls to it. No output of a CLI this
+// adapter runs was recorded, so this states what the reader reads and not
+// what an installed CLI prints.
+func (r *openaiRunner) Capabilities() Capabilities { return openaiDeclaration }
+
+// openaiDeclaration is what Capabilities and the factory's Declares both
+// return.
+var openaiDeclaration = Declare(CapabilityReportsInputTokens, CapabilityReportsOutputTokens)
 
 // Run executes one invocation with no session. OpenAI does not support
 // sessions, so every invocation is independent and the record always reads
