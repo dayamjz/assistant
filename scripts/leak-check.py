@@ -488,6 +488,7 @@ SZOMB = 5  # extern_proc.p_stat of a process that has exited, from sys/proc.h
 SANDBOX_FILTER_PATH = 1  # sandbox_check's filter for a path argument
 SANDBOX_CHECK_NO_REPORT = 0x40000000  # sandbox_check: do not log a denial
 SETTLE_READINGS = 64
+SETUID_OUTSIDE = "/bin/ps"  # the set-user-ID program Sandbox lets run outside it
 
 
 def darwin_records(mib):
@@ -540,11 +541,20 @@ class Sandbox:
     The profile allows everything except reading one file, inside, so a
     process in it denies inside and allows outside, two empty files in a
     directory of their own. A process outside it allows both, and one in
-    another sandbox that denies both is not marked either. macOS gives a
-    process's sandbox to every process it starts, across sessions, reparenting
-    and exec, and refuses to apply a second sandbox inside one, so nothing the
-    package starts leaves the mark. sandbox_check reads it for any pid; for a
-    pid that is gone it answers denied for both files, which is not the mark.
+    another sandbox that denies both is not marked either. A process started
+    under the profile is in it after a new session, its parent's exit and
+    exec, and sandbox-exec run inside it fails before starting its command,
+    so a process the package starts cannot leave the mark that way; the
+    guard's tests check each of these on the machine they run on.
+
+    A sandboxed process cannot exec a set-user-ID program, so a test that
+    runs one would fail here and not elsewhere. The one such program this
+    module's tests run, /bin/ps (SETUID_OUTSIDE), is let run outside the
+    sandbox instead: a ps the package leaves running is not marked and not
+    seen. Any other set-user-ID program fails to start with EPERM under the
+    check, which a package must answer by naming it here or not running it.
+    sandbox_check reads the mark of any pid; for a pid that is gone it
+    answers denied for both files, which is not the mark.
     """
 
     def __init__(self):
@@ -555,7 +565,9 @@ class Sandbox:
         self.outside.touch()
         if '"' in str(self.inside) or "\\" in str(self.inside):
             raise RuntimeError(f"cannot quote {self.inside} in a sandbox profile")
-        self.profile = f'(version 1)(allow default)(deny file-read-data (literal "{self.inside}"))'
+        self.profile = ("(version 1)(allow default)"
+                        f'(deny file-read-data (literal "{self.inside}"))'
+                        f'(allow process-exec (literal "{SETUID_OUTSIDE}") (with no-sandbox))')
         self.check = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True).sandbox_check
         self.check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
         self.check.restype = ctypes.c_int
@@ -590,8 +602,8 @@ def darwin_marked(sandbox):
     started a process before it went that the listing could not hold, so the
     table is listed again, and only a listing in which every process settled
     ends the reading. A process that exits before its mark is read, and
-    started nothing, is not found. Every SETTLE_READINGS listing without
-    settling is an error.
+    started nothing, is not found. SETTLE_READINGS listings without one that
+    settles are an error.
     """
     found, settled = set(), set()
     for _ in range(SETTLE_READINGS):
@@ -674,7 +686,8 @@ def package_run(command):
     Neither sees a process the package had started through a service manager
     or another process outside its tree (launchd, systemd, a running daemon),
     since that process is not its descendant, nor one that exits between the
-    binary's exit and the check's first read of it. The comparison around the
+    binary's exit and the check's first read of it, nor, on macOS, a /bin/ps
+    (Sandbox says why). The comparison around the
     whole run (run) still covers this user's processes and the temp roots at
     the end.
 

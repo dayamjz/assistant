@@ -449,6 +449,27 @@ class PerPackageTest(unittest.TestCase):
             self.assertIs(sandbox.marks(outside.pid), False)
             self.assertIs(sandbox.marks(both.pid), False)
             self.assertIs(sandbox.marks(gone.pid), False)
+            # A process in the package's sandbox cannot move to another one:
+            # sandbox-exec run inside it fails before it starts its command.
+            nested = subprocess.run(
+                ["/usr/bin/sandbox-exec", "-p", sandbox.profile,
+                 "/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)", "true"],
+                capture_output=True, text=True, check=False, timeout=30)
+            self.assertNotEqual(nested.returncode, 0, nested)
+            self.assertIn("sandbox_apply", nested.stderr)
+            # A sandboxed process cannot exec a set-user-ID program. /bin/ps,
+            # which a test lists processes with, runs outside the sandbox;
+            # every other one, such as sudo, is refused.
+            ps = subprocess.run(["/usr/bin/sandbox-exec", "-p", sandbox.profile, "/bin/sh", "-c",
+                                 "ps -o pid= -p $$"], capture_output=True, text=True,
+                                check=False, timeout=30)
+            self.assertEqual(ps.returncode, 0, ps)
+            self.assertTrue(ps.stdout.strip().isdigit(), ps)
+            sudo = subprocess.run(["/usr/bin/sandbox-exec", "-p", sandbox.profile,
+                                   "/usr/bin/sudo", "-n", "true"], capture_output=True,
+                                  text=True, check=False, timeout=30)
+            self.assertNotEqual(sudo.returncode, 0, sudo)
+            self.assertIn("Operation not permitted", sudo.stderr)
         finally:
             for process in started:
                 process.kill()
