@@ -26,7 +26,7 @@ import (
 func TestMain(m *testing.M) {
 	// Before any mode that calls RunOwned, including the tmux-owner child,
 	// so the wrapper it installs is stamped with this package's tag.
-	if err := RegisterTempTag(TempTagStandin); err != nil {
+	if err := RegisterTempTag(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 	atTerminalMain()
 	tmuxOwnerMain()
 	unownedMain(m)
-	if err := SweepTempDirs(TempTagStandin); err != nil {
+	if err := SweepTempDirs(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

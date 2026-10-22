@@ -171,7 +171,7 @@ func loopHome(t *testing.T) (*home.Home, *store.Store) {
 // stated, for a test that needs the loop's windows apart.
 func loopHomeConfigured(t *testing.T, document string) (*home.Home, *store.Store) {
 	t.Helper()
-	root, err := standin.TempDir(standin.TempTagService, "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}

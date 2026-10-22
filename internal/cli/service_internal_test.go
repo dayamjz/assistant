@@ -83,7 +83,7 @@ func TestAVerbThatAnswersNothingWritesNoDocument(t *testing.T) {
 // newTestHome returns a home root short enough to hold a local socket path.
 func newTestHome(t *testing.T) *home.Home {
 	t.Helper()
-	root, err := standin.TempDir(standin.TempTagCLI, "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}

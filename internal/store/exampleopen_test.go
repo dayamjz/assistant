@@ -14,7 +14,7 @@ import (
 // homeDir stands in for the one root PRD section 8 puts everything under. The
 // examples create a temporary one so they can run.
 func homeDir() (string, error) {
-	return standin.TempDir(standin.TempTagStore, "example")
+	return standin.TempDir("example")
 }
 
 // openForExample returns a store and the func that closes it and removes the

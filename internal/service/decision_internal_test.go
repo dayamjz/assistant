@@ -19,7 +19,7 @@ import (
 // env, with its client pointed at provider.
 func openDecisionService(t *testing.T, env map[string]string, provider *judgetest.Provider) *Service {
 	t.Helper()
-	root, err := standin.TempDir(standin.TempTagService, "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}

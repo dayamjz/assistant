@@ -21,7 +21,7 @@ import (
 func Example() {
 	ctx := context.Background()
 
-	home, err := standin.TempDir(standin.TempTagCheckpoints, "chk")
+	home, err := standin.TempDir("chk")
 	if err != nil {
 		log.Fatal(err)
 	}

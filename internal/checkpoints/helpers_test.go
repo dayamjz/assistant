@@ -23,7 +23,11 @@ import (
 // TestMain reclaims a directory a killed run of this package left before the
 // examples and tests make another.
 func TestMain(m *testing.M) {
-	if err := standin.SweepTempDirs(standin.TempTagCheckpoints); err != nil {
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

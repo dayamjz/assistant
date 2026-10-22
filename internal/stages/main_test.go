@@ -28,7 +28,11 @@ import (
 func TestMain(m *testing.M) {
 	standin.Main()
 	forgetest.Main()
-	if err := standin.SweepTempDirs(standin.TempTagStages); err != nil {
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -47,7 +51,7 @@ func TestMain(m *testing.M) {
 // maintenance.auto to false, which the later lines win. It returns what
 // removes the file.
 func maintenanceOff() (func(), error) {
-	dir, err := standin.TempDir(standin.TempTagStages, "gitconfig")
+	dir, err := standin.TempDir("gitconfig")
 	if err != nil {
 		return nil, err
 	}

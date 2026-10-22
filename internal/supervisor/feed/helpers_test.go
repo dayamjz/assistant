@@ -20,7 +20,7 @@ const instance = "0123456789abcdef"
 // createdHome is a home that exists on disk with its layout made.
 func createdHome(t *testing.T) *home.Home {
 	t.Helper()
-	root, err := standin.TempDir(standin.TempTagFeed, "feed")
+	root, err := standin.TempDir("feed")
 	if err != nil {
 		t.Fatalf("making a root: %v", err)
 	}

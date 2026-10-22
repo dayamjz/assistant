@@ -116,7 +116,7 @@ func installShims() (string, error) {
 		return "", fmt.Errorf("journey: locating this test binary, which is what stands in for the "+
 			"executables this product resolves off PATH: %w", err)
 	}
-	dir, err := standin.TempDir(standin.TempTagJourney, "shim")
+	dir, err := standin.TempDir("shim")
 	if err != nil {
 		return "", fmt.Errorf("journey: making a directory for the shims: %w", err)
 	}

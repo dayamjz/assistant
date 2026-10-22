@@ -35,11 +35,11 @@ func TestMain(m *testing.M) {
 	// places one by a terminal's foreground on the pushing chain, which
 	// README.md's running section states.
 	standin.AtTerminal()
-	if err := standin.RegisterTempTag(standin.TempTagJourney); err != nil {
+	if err := standin.RegisterTempTag(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := standin.SweepTempDirs(standin.TempTagJourney); err != nil {
+	if err := standin.SweepTempDirs(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

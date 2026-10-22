@@ -31,7 +31,7 @@ var built struct {
 // subject a run is pointed at is not part of what ships.
 func Subject() (*fixture.Fixture, error) {
 	built.once.Do(func() {
-		built.root, built.err = standin.TempDir(standin.TempTagJourney, "fix")
+		built.root, built.err = standin.TempDir("fix")
 		if built.err != nil {
 			built.err = fmt.Errorf("journey: making a directory to build the fixture into: %w", built.err)
 			return

@@ -41,12 +41,16 @@ var (
 // here rather than lazily so that a failure to build is one reported failure
 // rather than one per test.
 func TestMain(m *testing.M) {
-	if err := standin.SweepTempDirs(standin.TempTagFixture); err != nil {
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	if _, err := exec.LookPath("git"); err == nil {
-		root, err := standin.TempDir(standin.TempTagFixture, "shared")
+		root, err := standin.TempDir("shared")
 		if err != nil {
 			panic(err)
 		}

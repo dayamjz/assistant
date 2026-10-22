@@ -10,7 +10,11 @@ import (
 
 // TestMain reclaims a socket directory a killed run of this package left.
 func TestMain(m *testing.M) {
-	if err := standin.SweepTempDirs(standin.TempTagIPC); err != nil {
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -21,7 +25,7 @@ func TestMain(m *testing.M) {
 // and reclaimed at the next start if the test binary is killed first.
 func ipcDir(t *testing.T) string {
 	t.Helper()
-	dir, err := standin.TempDir(standin.TempTagIPC, "ipc")
+	dir, err := standin.TempDir("ipc")
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}

@@ -52,18 +52,14 @@ func Tmux(tb testing.TB) string {
 }
 
 // SocketDir is a short directory, owner-only, for terminal sockets a test
-// starts, removed when the test ends. It is stamped with the tag
+// starts, removed when the test ends. It is stamped with the namespace
 // RegisterTempTag recorded, so the package whose tests made it reclaims it
 // at their next start when the test binary is killed before that cleanup.
 // It is made under tempRoot rather than the test's own directory, because a
 // test's directory carries the test's name and a local socket path is bounded.
 func SocketDir(tb testing.TB) string {
 	tb.Helper()
-	tag, err := RegisteredTempTag()
-	if err != nil {
-		tb.Fatalf("making a directory for terminal sockets: %v", err)
-	}
-	dir, err := TempDir(tag, "tx")
+	dir, err := TempDir("tx")
 	if err != nil {
 		tb.Fatalf("making a directory for terminal sockets: %v", err)
 	}

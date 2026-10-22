@@ -25,7 +25,11 @@ func TestMain(m *testing.M) {
 	if root := os.Getenv(holdLockVar); root != "" {
 		os.Exit(holdLock(root))
 	}
-	if err := standin.SweepTempDirs(standin.TempTagFeed); err != nil {
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

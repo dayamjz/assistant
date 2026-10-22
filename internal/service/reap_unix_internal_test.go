@@ -57,7 +57,7 @@ func holdingAgent(t *testing.T) *standin.Agent {
 // pending, which is where a run stands before anything executes it.
 func reapHome(t *testing.T, runIDs ...string) *home.Home {
 	t.Helper()
-	root, err := standin.TempDir(standin.TempTagService, "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}

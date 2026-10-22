@@ -83,7 +83,7 @@ var databaseTemplate struct {
 // templateDatabase returns the template's path, making it on first use.
 func templateDatabase() (string, error) {
 	databaseTemplate.once.Do(func() {
-		dir, err := standin.TempDir(standin.TempTagStore, "storetemplate")
+		dir, err := standin.TempDir("storetemplate")
 		if err != nil {
 			databaseTemplate.err = err
 			return
@@ -134,7 +134,11 @@ func seedDatabase(t *testing.T, path string) {
 // TestMain reclaims a template a killed run left, then removes the one this
 // run made once every test has returned.
 func TestMain(m *testing.M) {
-	if err := standin.SweepTempDirs(standin.TempTagStore); err != nil {
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

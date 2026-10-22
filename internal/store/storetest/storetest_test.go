@@ -14,11 +14,11 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if err := standin.RegisterTempTag(standin.TempTagStoretest); err != nil {
+	if err := standin.RegisterTempTag(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := standin.SweepTempDirs(standin.TempTagStoretest); err != nil {
+	if err := standin.SweepTempDirs(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

@@ -75,7 +75,7 @@ func resolveBinary() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir, err := standin.TempDir(standin.TempTagJourney, "bin")
+	dir, err := standin.TempDir("bin")
 	if err != nil {
 		return "", fmt.Errorf("journey: making a directory to build the binary into: %w", err)
 	}
