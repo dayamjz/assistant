@@ -369,11 +369,11 @@ func plantRunning(t *testing.T, records *store.Store, id, ref string) store.Task
 	if _, err := records.AppendTaskEvent(ctx, id, "started", ""); err != nil {
 		t.Fatalf("starting task %s: %v", id, err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatalf("beginning the attempt of %s: %v", id, err)
 	}
 	if ref != "" {
-		if err := records.SetAttemptSession(ctx, id, 1, ref); err != nil {
+		if err := records.SetAttemptSession(ctx, id, 1, ref, store.SessionHost{}); err != nil {
 			t.Fatalf("recording the session of %s: %v", id, err)
 		}
 	}

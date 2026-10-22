@@ -56,10 +56,17 @@ func newTask(t *testing.T, s *store.Store, id string, withBranch bool) store.Tas
 	return task
 }
 
-// beginAttempt records the next attempt of a task, anchored to expected.
+// beginAttempt records the next attempt of a task, anchored to expected: the
+// dispatch, on this machine, for zero.
 func beginAttempt(t *testing.T, s *store.Store, id string, expected int64) store.TaskAttempt {
 	t.Helper()
-	a, err := s.BeginTaskAttempt(context.Background(), id, expected)
+	var a store.TaskAttempt
+	var err error
+	if expected == 0 {
+		a, err = s.BeginFirstTaskAttempt(context.Background(), id, store.OnThisMachine())
+	} else {
+		a, err = s.BeginTaskAttempt(context.Background(), id, expected)
+	}
 	if err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}
@@ -280,7 +287,7 @@ func TestTheReaderConsultsTheProbeForTasksWithASession(t *testing.T) {
 	newTask(t, s, "notyetaaaaaa", false)
 	appendEvents(t, s, "withsessiona", "started")
 	first := beginAttempt(t, s, "withsessiona", 0)
-	if err := s.SetAttemptSession(ctx, "withsessiona", first.Sequence, "pane-1"); err != nil {
+	if err := s.SetAttemptSession(ctx, "withsessiona", first.Sequence, "pane-1", store.SessionHost{}); err != nil {
 		t.Fatalf("SetAttemptSession: %v", err)
 	}
 	beginAttempt(t, s, "notyetaaaaaa", 0)

@@ -161,7 +161,7 @@ func (s *promotionSubject) cut(t *testing.T, blocker store.Optional[string]) tas
 	}, store.Disposition{Blocker: blocker}); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if _, err := s.store.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := s.store.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {

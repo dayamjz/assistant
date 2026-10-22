@@ -315,7 +315,7 @@ func countProbes() []probe {
 // since no count can be checked against nothing.
 func countsRead(t testing.TB, r agents.Runner) agents.Usage {
 	t.Helper()
-	dir, err := standin.TempDir("conform-counts-")
+	dir, err := standin.TempDir("counts")
 	if err != nil {
 		t.Fatalf("making a directory for the count probe: %v", err)
 	}

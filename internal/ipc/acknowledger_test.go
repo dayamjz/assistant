@@ -71,7 +71,7 @@ func TestMessageSenderIsDerivedFromTheSurfaceAndNeverRead(t *testing.T) {
 	if _, err := records.CreateTask(ctx, store.Task{ID: "abcdefghijkm", Shape: store.TaskInvestigation, Project: "one", Mode: "m", WorktreePath: "/w"}, store.Disposition{}); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	attempt, err := records.BeginTaskAttempt(ctx, "abcdefghijkm", 0)
+	attempt, err := records.BeginFirstTaskAttempt(ctx, "abcdefghijkm", store.OnThisMachine())
 	if err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}

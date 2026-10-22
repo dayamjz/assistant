@@ -69,7 +69,10 @@
 // anchor above protects, and not the read.
 //
 // The attempt's session_ref is the one record of which session an attempt
-// had, filled once by SetAttemptSession after the process starts. The
+// had, filled once by SetAttemptSession after the process starts, with, for
+// a task on a remote host and only there, the identity of the herdr server
+// hosting it in the same write (taskMachineMigration's host_pid and
+// host_start, the one record of that server). The
 // attempt's adapter, route_reason and route_skipped are the one record of
 // which coding agent agents.Route selected for the worker, why, and what it
 // passed over, filled once by SetAttemptRoute before the process starts.
@@ -78,6 +81,28 @@
 // session_ref column migration 1 gave the task table is neither written nor
 // read by this build: it stays declared because a migration may not remove a
 // column, and holds NULL for every task created here.
+//
+// # The machine a task runs on
+//
+// PRD section 8's task record holds the machine a task runs on, and
+// taskMachineMigration's task.machine is the one place it is stored (P14):
+// a remote host's name, NULL for this machine, which is what every row
+// written before the column reads as. BeginFirstTaskAttempt is the
+// dispatch: it writes the machine, for a remote host, in the transaction
+// that records the first attempt, anchored to no attempt, so of two
+// dispatchers that both found none, one records the attempt and the machine
+// together and the other is refused. BeginTaskAttempt begins only the attempts
+// after it, a relaunch or a dispatch retried after an attempt that never
+// launched, and writes no machine; promotion writes none either. The schema
+// refuses the column at intake and every write of it once the task has an
+// attempt; that nothing writes it between intake and the dispatch is the
+// accessor's, since no other accessor names it. A carry on is placed by
+// CarriedOnFrom, which names the kept work entry and reads the machine off
+// the task it outlived, so the new task gets the kept copy's machine and the
+// caller states none. Everything else points at the task row: a session
+// reference names its task and never a machine, and a kept work entry's
+// machine is read off its owner task's row on every read, this machine for
+// a run's.
 //
 // # What the terminal tier reads
 //

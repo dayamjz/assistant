@@ -83,8 +83,8 @@ func TestAccessorsRefuseAfterClose(t *testing.T) {
 			_, _, _, err := s.CurrentIncarnation(ctx)
 			return err
 		},
-		"BeginTaskAttempt":  func() error { _, err := s.BeginTaskAttempt(ctx, "taskaaaaaaab", 0); return err },
-		"SetAttemptSession": func() error { return s.SetAttemptSession(ctx, "taskaaaaaaab", 1, "pane") },
+		"BeginTaskAttempt":  func() error { _, err := s.BeginFirstTaskAttempt(ctx, "taskaaaaaaab", OnThisMachine()); return err },
+		"SetAttemptSession": func() error { return s.SetAttemptSession(ctx, "taskaaaaaaab", 1, "pane", SessionHost{}) },
 		"SetAttemptRoute":   func() error { return s.SetAttemptRoute(ctx, "taskaaaaaaab", 1, "claude", "ordered", AttemptLaunch{}) },
 		"TaskAttempts":      func() error { _, err := s.TaskAttempts(ctx, "taskaaaaaaab"); return err },
 		"RecordTaskCleanup": func() error {

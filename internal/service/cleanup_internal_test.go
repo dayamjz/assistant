@@ -87,7 +87,7 @@ func TestAMergeRecordCallsTheLandedTasksCleanup(t *testing.T) {
 	}, store.Disposition{}); err != nil {
 		t.Fatalf("recording the task: %v", err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, "landedaaaaaa", 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, "landedaaaaaa", store.OnThisMachine()); err != nil {
 		t.Fatalf("beginning the attempt: %v", err)
 	}
 	build, err := store.CurrentBuild()
