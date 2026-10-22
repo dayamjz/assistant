@@ -85,6 +85,70 @@ func endHeld(t *testing.T, dir string, held agents.Identity) {
 	}
 }
 
+// releasedHeld is a held process a test's shell runs from a command line
+// heldReleased built and that the test's cleanup releases rather than
+// kills: the release file it waits on, the record its identity is written
+// to, and the identity read from that record (holding).
+type releasedHeld struct {
+	release, record string
+	id              agents.Identity
+}
+
+// heldReleased returns the held process for a shell in dir to run, waiting
+// on a release file there and recording its identity there first, and
+// registers the cleanup that releases it. The cleanup writes the release
+// and then waits for the process to exit, so it has read its release
+// before anything registered earlier, the removal of dir among them, runs.
+// Before #467 the release was written and dir removed straight after, and a
+// held process that had not yet read the file found it gone and waited on
+// its owner, the whole test binary, past the package's check.
+//
+// The test calls holding once its shell has been asked to run the command:
+// it waits for the record, so the test does not go on, and end, before the
+// held process is running. A cleanup that finds no identity read fails t
+// unless t has already failed, since without one the release cannot be
+// ordered before the removal.
+func heldReleased(t *testing.T, dir string) (string, *releasedHeld) {
+	t.Helper()
+	h := &releasedHeld{release: filepath.Join(dir, "release"), record: filepath.Join(dir, "held")}
+	t.Cleanup(func() { h.end(t) })
+	return standin.HeldWaitIdentified(t, h.release, h.record), h
+}
+
+// holding waits for the held process to record its identity and returns
+// it, failing t if no whole record appears.
+func (h *releasedHeld) holding(t *testing.T) agents.Identity {
+	t.Helper()
+	waitFile(t, h.record)
+	id, err := standin.ReadHeldIdentity(h.record)
+	if err != nil {
+		t.Fatalf("the held process's identity: %v", err)
+	}
+	h.id = id
+	return id
+}
+
+// end is heldReleased's cleanup: it releases the held process and waits
+// for it to exit, killing it and failing t if it has not within
+// standin.EndGrace.
+func (h *releasedHeld) end(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(h.release, nil, 0o600); err != nil {
+		t.Errorf("releasing the held process: %v", err)
+	}
+	if h.id.PID == 0 {
+		if !t.Failed() {
+			t.Errorf("the held process's identity was never read (holding), so its release could not be ordered before the removal of %s", filepath.Dir(h.release))
+		}
+		return
+	}
+	p := standin.Process{Identity: h.id}
+	if !p.GoneWithin(standin.EndGrace) {
+		p.End()
+		t.Errorf("held process %d was still running %v after its release", h.id.PID, standin.EndGrace)
+	}
+}
+
 // Variables the outer tests below start this binary's tests with, to run
 // TestHeldShellChild in the mode named and record the held process's
 // identifier in the file named.

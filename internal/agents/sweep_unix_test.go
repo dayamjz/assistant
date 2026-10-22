@@ -151,8 +151,11 @@ func makeCopyOf(t *testing.T, h *home.Home, id string) string {
 }
 
 // detached is one process the "detach" mode left running: its identity, and
-// a channel closed when the descriptor it holds is closed, which is when it
-// has exited.
+// a channel closed when the last copy of the descriptor it holds is closed,
+// which it does as it exits. The close is not the end of its exit: under
+// load a killed process has read as running after it (#465), so a test that
+// needs the process gone from the process table reads that, or starts the
+// process as its own child (startChild) and waits on the reap.
 type detached struct {
 	id    agents.Identity
 	ended <-chan struct{}
@@ -224,6 +227,53 @@ func waitEnded(t *testing.T, d detached, why string) {
 	case <-d.ended:
 	case <-time.After(sweepEnded):
 		t.Fatalf("%s: process %d is still holding its descriptor", why, d.id.PID)
+	}
+}
+
+// child is a process in the "hold" mode that this test started and is the
+// parent of, so its exit and its reap are events the test waits on rather
+// than states it reads: nothing else can reap it, and its identity cannot
+// be given to another process until the test has.
+type child struct {
+	id     agents.Identity
+	cmd    *exec.Cmd
+	reaped bool
+}
+
+// startChild starts a child in the "hold" mode with dir as its working
+// directory. The cleanup kills and reaps it unless the test already has.
+func startChild(t *testing.T, dir string) *child {
+	t.Helper()
+	cmd := exec.Command(helperBinary(t))
+	cmd.Env = []string{helperModeVar + "=hold"}
+	cmd.Dir = dir
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting the held stand-in: %v", err)
+	}
+	c := &child{cmd: cmd}
+	t.Cleanup(func() {
+		if !c.reaped {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
+	id, found, err := agents.Identify(cmd.Process.Pid)
+	if err != nil || !found {
+		t.Fatalf("identifying the held stand-in %d: %+v, %v, %v", cmd.Process.Pid, id, found, err)
+	}
+	c.id = id
+	return c
+}
+
+// reap waits for the child to exit and collects it, failing t if the wait
+// reports a clean exit, which a child in the "hold" mode only makes when
+// nothing killed it.
+func (c *child) reap(t *testing.T) {
+	t.Helper()
+	err := c.cmd.Wait()
+	c.reaped = true
+	if err == nil {
+		t.Fatalf("the held stand-in %d exited cleanly, so nothing killed it", c.id.PID)
 	}
 }
 

@@ -81,6 +81,19 @@ var LsofOutput = systemLsof.run
 // LsofDeadline is the deadline the listing's lsof run carries.
 const LsofDeadline = lsofDeadline
 
+// LsofGrace is the grace an lsof run under deadline gives procgroup.Run,
+// which is how long output held open past lsof's exit is waited on.
+var LsofGrace = lsofGrace
+
+// LsofCleanupShare is the part of a run's deadline kept back for ending its
+// group: lsof is killed once the deadline less one LsofCleanupShare-th of it
+// has passed.
+const LsofCleanupShare = lsofCleanupShare
+
+// ErrLsofNoSelf is the listing's refusal of lsof output that does not report
+// this process's own working directory.
+var ErrLsofNoSelf = errLsofNoSelf
+
 // ReadCwdsWithLsof is the listing's read of the working directories, made
 // through the same run with program in place of /usr/sbin/lsof and
 // deadline in place of LsofDeadline, so a test can cancel ctx partway.
