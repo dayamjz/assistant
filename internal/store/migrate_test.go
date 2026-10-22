@@ -476,14 +476,15 @@ const taskBlockersMigration = "task blockers, attempts and cleanup records"
 // database is taken back to the shape the migration before it left, a task
 // is written there with the columns migration 1 declared, the way an earlier
 // build wrote one, and the shipped migration is then applied over it: the
-// task carries no blocker, no attempt, and no cleanup record, and its
-// session_ref is not read. The control is a task this build creates with a
+// task carries no blocker, no attempt, and no cleanup record, its
+// session_ref is not read, and it reads as on this machine, which is what
+// taskMachineMigration says every row written before it reads as. The control is a task this build creates with a
 // blocker, which reads it back.
 func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
-	var blockers, route, model, skips, knowledge migration
+	var blockers, route, model, skips, knowledge, machine migration
 	for _, m := range schema {
 		switch m.name {
 		case taskBlockersMigration:
@@ -496,6 +497,8 @@ func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 			skips = m
 		case taskAttemptKnowledgeMigration:
 			knowledge = m
+		case taskMachineMigration:
+			machine = m
 		}
 	}
 	if blockers.version == 0 {
@@ -513,12 +516,19 @@ func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 	if knowledge.version == 0 {
 		t.Fatalf("the shipped schema has no migration named %q", taskAttemptKnowledgeMigration)
 	}
+	if machine.version == 0 {
+		t.Fatalf("the shipped schema has no migration named %q", taskMachineMigration)
+	}
 
 	// Back to the shape migration 13 left. A migration may not do this, which
 	// is why it is done here by hand and not through one.
+	// taskMachineMigration's triggers on task read task_attempt, and those
+	// on task_attempt read task.machine, so the first go before the table
+	// and the column after it; it is forgotten with the rest below.
 	for _, stmt := range []string{
+		`DROP TRIGGER task_machine_is_not_written_at_intake`, `DROP TRIGGER task_machine_is_written_once_at_dispatch`,
 		`DROP TABLE task_cleanup`, `DROP TABLE task_attempt`, `DROP INDEX task_branch`,
-		`ALTER TABLE task DROP COLUMN blocker_task`,
+		`ALTER TABLE task DROP COLUMN machine`, `ALTER TABLE task DROP COLUMN blocker_task`,
 	} {
 		if _, err := s.write.ExecContext(ctx, stmt); err != nil {
 			t.Fatalf("rolling the schema back: %s: %v", stmt, err)
@@ -528,8 +538,8 @@ func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 	// task_attempt, so re-applying creates the table and then adds the
 	// columns the current accessors select. taskRoleMigration alters task
 	// and is left recorded: that column is still on the table.
-	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version IN (?, ?, ?, ?, ?)`,
-		blockers.version, route.version, model.version, skips.version, knowledge.version); err != nil {
+	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version IN (?, ?, ?, ?, ?, ?)`,
+		blockers.version, route.version, model.version, skips.version, knowledge.version, machine.version); err != nil {
 		t.Fatalf("forgetting the migration: %v", err)
 	}
 	if _, err := s.write.ExecContext(ctx, `
@@ -548,6 +558,9 @@ func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
 	}
 	if old.BlockerTask.IsKnown() {
 		t.Fatalf("an old row reads a blocker: %v", old.BlockerTask)
+	}
+	if old.Machine != "" {
+		t.Fatalf("an old row reads machine %q, not this machine", old.Machine)
 	}
 	if attempts, err := s.TaskAttempts(ctx, "oldaaaaaaaaa"); err != nil || len(attempts) != 0 {
 		t.Fatalf("an old row has attempts %v (%v)", attempts, err)

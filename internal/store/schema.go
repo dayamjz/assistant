@@ -184,6 +184,12 @@ const runRebaseMigration = "run rebase record"
 // reason sealCheckpointTableMigration is a constant.
 const keptWorkWakesMigration = "kept work wakes"
 
+// taskMachineMigration names the migration that adds the machine a task runs
+// on and, beside a remote worker's session reference, the identity of the
+// herdr server hosting it, for the reason sealCheckpointTableMigration is a
+// constant.
+const taskMachineMigration = "task machine and remote session host"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2366,6 +2372,78 @@ var schema = []migration{
 							OR EXISTS (SELECT 1 FROM run WHERE run.id = k.run_id)))
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a notification is kept and is not deleted while its kept work wake stands');
+				END`,
+		},
+	},
+	{
+		version: 56,
+		name:    taskMachineMigration,
+		statements: []string{
+			// PRD section 8's task record: "the machine it runs on, written
+			// once at dispatch and kept by promotion and relaunch, empty for
+			// this machine", the one place a task's machine is stored (P14).
+			// It is the remote host's name as the global remote_hosts
+			// setting gives it, and NULL for this machine, which is what
+			// every row written before this column reads as. An intake
+			// never writes it, which the insert trigger holds. The dispatch
+			// claim, BeginFirstTaskAttempt, writes it in the transaction
+			// that inserts the task's first attempt, before that insert, and
+			// the update trigger seals it from the first attempt on, so a
+			// relaunch, a dispatch retried after an attempt that never
+			// launched, and a promotion all find it as the dispatch left
+			// it. That no write reaches it between intake and the first
+			// attempt is the accessor's, since no other accessor names the
+			// column; the trigger does not see which transaction it is in.
+			`ALTER TABLE task ADD COLUMN machine TEXT`,
+			`CREATE TRIGGER task_machine_is_not_written_at_intake
+				BEFORE INSERT ON task
+				WHEN NEW.machine IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s machine is written at its dispatch and never at intake');
+				END`,
+			`CREATE TRIGGER task_machine_is_written_once_at_dispatch
+				BEFORE UPDATE OF machine ON task
+				WHEN OLD.machine IS NOT NULL OR NEW.machine IS NULL OR NEW.machine = ''
+					OR EXISTS (SELECT 1 FROM task_attempt WHERE task_attempt.task_id = OLD.id)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s machine is written once, by its dispatch, and is not rewritten');
+				END`,
+			// Beside a remote worker's session reference, the identity of
+			// the herdr server hosting it: its identifier and start time
+			// on the remote host's kernel, as migration 49 records a
+			// subordinate's tmux server beside its delegation attempt's
+			// reference. It is the one record of that server. Both are
+			// written in the one update that records session_ref, and only
+			// then, so the reference and its server are one fact; a
+			// session of a task on a remote host is refused without one,
+			// and one on this machine with one, since a local worker's
+			// server is recorded nowhere here. The session reference names
+			// its task and never the machine, which is read off the task's
+			// row. SetAttemptSession already admits the reference once;
+			// the first trigger holds that against a direct rewrite too,
+			// so the host can never be left beside a reference it did not
+			// come with.
+			`ALTER TABLE task_attempt ADD COLUMN host_pid INTEGER`,
+			`ALTER TABLE task_attempt ADD COLUMN host_start INTEGER`,
+			`CREATE TRIGGER task_attempt_session_is_recorded_once
+				BEFORE UPDATE OF session_ref ON task_attempt
+				WHEN OLD.session_ref IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task attempt''s session is recorded once and is not rewritten');
+				END`,
+			`CREATE TRIGGER task_attempt_host_is_written_with_its_session
+				BEFORE UPDATE OF host_pid, host_start ON task_attempt
+				WHEN OLD.session_ref IS NOT NULL OR OLD.host_pid IS NOT NULL OR OLD.host_start IS NOT NULL
+					OR NEW.session_ref IS NULL OR ((NEW.host_pid IS NULL) <> (NEW.host_start IS NULL))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task attempt''s session host is written once, whole, with its session reference');
+				END`,
+			`CREATE TRIGGER task_attempt_host_is_a_remote_workers
+				BEFORE UPDATE OF session_ref, host_pid, host_start ON task_attempt
+				WHEN NEW.session_ref IS NOT NULL
+					AND ((NEW.host_pid IS NULL) = ((SELECT machine FROM task WHERE task.id = NEW.task_id) IS NOT NULL))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a session host is recorded beside the session of a task on a remote host, and only there');
 				END`,
 		},
 	},

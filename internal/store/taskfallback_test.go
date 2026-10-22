@@ -17,7 +17,7 @@ func TestTaskFallbackIsAnchoredAndWrittenOnce(t *testing.T) {
 	if _, has, err := s.TaskFallback(ctx, task.ID); err != nil || has {
 		t.Fatalf("initial fallback: %v %v", has, err)
 	}
-	a, err := s.BeginTaskAttempt(ctx, task.ID, 0)
+	a, err := s.BeginFirstTaskAttempt(ctx, task.ID, OnThisMachine())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestHandoffHoldCannotBlockANewerAttempt(t *testing.T) {
 	s := openStore(t)
 	ctx := t.Context()
 	task := seedTask(t, s, "taskaaaaaaab")
-	first, err := s.BeginTaskAttempt(ctx, task.ID, 0)
+	first, err := s.BeginFirstTaskAttempt(ctx, task.ID, OnThisMachine())
 	if err != nil {
 		t.Fatal(err)
 	}
