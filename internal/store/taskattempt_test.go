@@ -23,7 +23,7 @@ func TestAttemptsAreAnchoredToTheLatestSeen(t *testing.T) {
 	if got, err := s.TaskAttempts(ctx, task.ID); err != nil || len(got) != 0 {
 		t.Fatalf("a new task has attempts %v (%v)", got, err)
 	}
-	first, err := s.BeginTaskAttempt(ctx, task.ID, 0)
+	first, err := s.BeginFirstTaskAttempt(ctx, task.ID, OnThisMachine())
 	if err != nil || first.Sequence != 1 || first.SessionRef.IsKnown() {
 		t.Fatalf("the first attempt = %+v, %v", first, err)
 	}
@@ -40,10 +40,10 @@ func TestAttemptsAreAnchoredToTheLatestSeen(t *testing.T) {
 	if moved.Task != task.ID || moved.Anchor != AnchoredAttempt || moved.Expected != 1 || moved.Stands != 2 {
 		t.Fatalf("the refusal names %+v, want task-1's attempts standing at 2 against an anchor of 1", moved)
 	}
-	if _, err := s.BeginTaskAttempt(ctx, task.ID, 0); !errors.Is(err, ErrTaskMoved) {
+	if _, err := s.BeginFirstTaskAttempt(ctx, task.ID, OnThisMachine()); !errors.Is(err, ErrTaskMoved) {
 		t.Fatalf("a zero anchor on a task with attempts = %v, want ErrTaskMoved", err)
 	}
-	if _, err := s.BeginTaskAttempt(ctx, "nosuchtaskaa", 0); !errors.Is(err, ErrNotFound) {
+	if _, err := s.BeginFirstTaskAttempt(ctx, "nosuchtaskaa", OnThisMachine()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an attempt of a missing task = %v, want ErrNotFound", err)
 	}
 
@@ -66,7 +66,7 @@ func TestTwoCallersCannotBothBeginTheNextAttempt(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
-	first, err := s.BeginTaskAttempt(ctx, task.ID, 0)
+	first, err := s.BeginFirstTaskAttempt(ctx, task.ID, OnThisMachine())
 	if err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}
@@ -124,21 +124,21 @@ func TestAnAttemptsSessionIsFilledOnce(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
-	a, err := s.BeginTaskAttempt(ctx, task.ID, 0)
+	a, err := s.BeginFirstTaskAttempt(ctx, task.ID, OnThisMachine())
 	if err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}
 
-	if err := s.SetAttemptSession(ctx, task.ID, a.Sequence, " "); err == nil {
+	if err := s.SetAttemptSession(ctx, task.ID, a.Sequence, " ", SessionHost{}); err == nil {
 		t.Fatal("SetAttemptSession accepted an empty reference")
 	}
-	if err := s.SetAttemptSession(ctx, task.ID, a.Sequence+1, "pane-9"); !errors.Is(err, ErrNotFound) {
+	if err := s.SetAttemptSession(ctx, task.ID, a.Sequence+1, "pane-9", SessionHost{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetAttemptSession on a missing attempt = %v, want ErrNotFound", err)
 	}
-	if err := s.SetAttemptSession(ctx, task.ID, a.Sequence, "pane-1"); err != nil {
+	if err := s.SetAttemptSession(ctx, task.ID, a.Sequence, "pane-1", SessionHost{}); err != nil {
 		t.Fatalf("SetAttemptSession: %v", err)
 	}
-	if err := s.SetAttemptSession(ctx, task.ID, a.Sequence, "pane-2"); !errors.Is(err, ErrAttemptSessionRecorded) {
+	if err := s.SetAttemptSession(ctx, task.ID, a.Sequence, "pane-2", SessionHost{}); !errors.Is(err, ErrAttemptSessionRecorded) {
 		t.Fatalf("a second fill = %v, want ErrAttemptSessionRecorded", err)
 	}
 	got, err := s.TaskAttempts(ctx, task.ID)
@@ -158,7 +158,7 @@ func TestAnAttemptsRouteIsFilledOnce(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
-	a, err := s.BeginTaskAttempt(ctx, task.ID, 0)
+	a, err := s.BeginFirstTaskAttempt(ctx, task.ID, OnThisMachine())
 	if err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestAnAttemptsKnowledgeRevisionIsFilledOnce(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab")
-	a, err := s.BeginTaskAttempt(ctx, task.ID, 0)
+	a, err := s.BeginFirstTaskAttempt(ctx, task.ID, OnThisMachine())
 	if err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}

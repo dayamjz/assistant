@@ -49,7 +49,7 @@ func TestATasksRunMovingToHeldWakesTheCoordinator(t *testing.T) {
 	if _, err := records.AppendTaskEvent(ctx, task, "started", ""); err != nil {
 		t.Fatalf("starting the task: %v", err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, task, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, task, store.OnThisMachine()); err != nil {
 		t.Fatalf("beginning the attempt: %v", err)
 	}
 	build, _ := store.CurrentBuild()
@@ -175,7 +175,7 @@ func TestCreatingATaskQueuesNoWakeForItsOwnEntries(t *testing.T) {
 	}, store.Disposition{}); err != nil {
 		t.Fatalf("creating the task: %v", err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, task, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, task, store.OnThisMachine()); err != nil {
 		t.Fatalf("beginning the attempt: %v", err)
 	}
 	l := openLoop(t, h, records, nil, nil)

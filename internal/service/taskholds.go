@@ -213,7 +213,8 @@ import (
 //   - AnswerRetryUndispatchable's "nothing will begin it" rests on every
 //     path that begins an attempt reading the record through expectationOf
 //     before its claim, which is structure and not a recorded fact: a third
-//     caller of store.BeginTaskAttempt that skipped that read would falsify
+//     caller of store.BeginFirstTaskAttempt or store.BeginTaskAttempt that
+//     skipped that read would falsify
 //     it with nothing here noticing. The answer stands unspent, so once the
 //     record is put right a later start may act on it; nothing tells the
 //     person when that happens, and nothing watches the record for the
@@ -680,8 +681,8 @@ func (s *Service) holdIfPastBound(ctx context.Context, id string) (store.Hold, b
 // A refusal of errTaskRecord is AnswerRetryUndispatchable, and nothing
 // begins the work while what it read stands, because of where the read sits
 // rather than because anything records it. An attempt is begun only by
-// store.BeginTaskAttempt, whose two callers here are dispatchClaimed and
-// relaunchClaimed, and a worker is launched only from the dispatched value
+// store.BeginFirstTaskAttempt and store.BeginTaskAttempt, whose callers here
+// are dispatchClaimed and relaunchClaimed, and a worker is launched only from the dispatched value
 // one of them returns; both call expectationOf before they claim, and it
 // refuses with errTaskRecord, recording nothing, a record naming no
 // repository, a reserved copy path that is not home.TaskCopy, a missing

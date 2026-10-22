@@ -195,7 +195,9 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		return nil, fmt.Errorf("service: launching task %s attempt %d: %w", d.id, d.attempt, err)
 	}
 	reference := launched.Reference().String()
-	if err := s.store.SetAttemptSession(ctx, d.id, d.attempt, reference); err != nil {
+	// Every task this build dispatches is on this machine, whose worker's
+	// server the store does not record.
+	if err := s.store.SetAttemptSession(ctx, d.id, d.attempt, reference, store.SessionHost{}); err != nil {
 		if closeErr := host.Close(launched); closeErr != nil {
 			s.log.Printf("the worker of task %s, whose session could not be recorded, was not ended either: %v",
 				d.id, closeErr)

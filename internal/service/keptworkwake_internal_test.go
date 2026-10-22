@@ -127,7 +127,7 @@ func TestAKeptWorkEntryRaisedOnATaskIsNotRaisedAgainOnceNoTaskNamesIt(t *testing
 	if _, err := records.AppendTaskEvent(ctx, task, "started", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, task, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, task, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
 	entry := plantKeptRun(t, records, "run-of-the-task", "task/one")
