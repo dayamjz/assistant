@@ -1,7 +1,6 @@
 package stages_test
 
 import (
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -211,11 +210,9 @@ func mergeOnlyContent(t *testing.T, run *pushRun) string {
 	return "important.go"
 }
 
-// tryGit runs git in dir and returns its output and error, for a question
-// whose answer is the exit status.
+// tryGit runs git in dir on gitCommand's terms and returns its output and
+// error, for a question whose answer is the exit status.
 func tryGit(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
+	out, err := gitCommand(dir, args...).CombinedOutput()
 	return string(out), err
 }
