@@ -229,6 +229,16 @@ type heldChildRun struct {
 // it runs its tests itself rather than running itself again, and it is its
 // own owner (RunOwned). The child and the held process are killed in
 // cleanup if they are still running.
+//
+// A child that is killed or times out runs none of its cleanup, and before
+// #454 its TestMain's gitconfig directory and its test's TempDir outlived
+// the whole run. Two cleanups take them, each registered before the one that
+// kills and waits for the child, so each runs after the child has exited:
+// the child's TMPDIR is a directory inside this test's own, whose removal
+// takes what the child made there, its tests' TempDir among them; and what
+// the child made with standin.TempDir, its TestMain's gitconfig directory
+// among them, is in /tmp whatever TMPDIR says, so standin.SweepTempDirs
+// reclaims it once its owner, the child, is gone.
 func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 	t.Helper()
 	self, err := os.Executable()
@@ -236,6 +246,10 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
+	childTemp := filepath.Join(dir, "tmp")
+	if err := os.Mkdir(childTemp, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	binary := filepath.Join(dir, "child.test")
 	raw, err := os.ReadFile(self)
 	if err != nil {
@@ -246,13 +260,21 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 	}
 	record := filepath.Join(dir, "held")
 	r := &heldChildRun{exited: make(chan struct{}), out: &lockedOutput{}}
-	r.cmd = exec.Command(binary, append([]string{"-test.run=^TestHeldShellChild$", "-test.count=1"}, extra...)...)
-	r.cmd.Env = append(os.Environ(), heldModeVar+"="+mode, heldRecordVar+"="+record)
-	r.cmd.Stdout, r.cmd.Stderr = r.out, r.out
-	if err := r.cmd.Start(); err != nil {
+	r.cmd, err = standin.StartCopied(func() (*exec.Cmd, error) {
+		cmd := exec.Command(binary, append([]string{"-test.run=^TestHeldShellChild$", "-test.count=1"}, extra...)...)
+		cmd.Env = append(os.Environ(), heldModeVar+"="+mode, heldRecordVar+"="+record, "TMPDIR="+childTemp)
+		cmd.Stdout, cmd.Stderr = r.out, r.out
+		return cmd, cmd.Start()
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	go func() { r.err = r.cmd.Wait(); close(r.exited) }()
+	t.Cleanup(func() {
+		if err := standin.SweepTempDirs(); err != nil {
+			t.Errorf("reclaiming the temporary directories of the child test binary: %v", err)
+		}
+	})
 	t.Cleanup(func() {
 		_ = r.cmd.Process.Kill()
 		<-r.exited
