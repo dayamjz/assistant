@@ -427,6 +427,90 @@ func TestARetryOverARefusedRoundHoldsUntilTheBound(t *testing.T) {
 	}
 }
 
+// TestTheRetryBoundIsSpentBeforeTheRerunEntrysBound is rerunEntry's bound
+// against the worst case the mechanism allows: every retry runs the stage,
+// which takes the refused round again over rerunEntry, and the ceiling
+// refuses that round too. Read off the run's counters, the hold's retry exit
+// and rerunEntry reach RetryRounds together, and the retry that would let
+// rerunEntry be taken a fourth time is refused with the decision still open,
+// so the run never parks on rerunEntry's bound. The count of three on
+// rerunEntry is also the positive control that the edge was really taken
+// rather than left at zero.
+func TestTheRetryBoundIsSpentBeforeTheRerunEntrysBound(t *testing.T) {
+	c := newCalls()
+	all := recordingStages(c)
+	set(&all, StageLint, recording(c, nil, nil, func(Input, int) (Output, error) {
+		return Output{Report: reportWith(findings.ActionFix, "lint exits 1")}, nil
+	}))
+	p := build(t, Options{
+		Stages: all,
+		Fixer: recordingFixer(c, nil, nil, func(FixInput, int) (FixOutput, error) {
+			return FixOutput{Summary: "no fix round ran", Holds: []findings.Finding{notStartedHold()}}, nil
+		}),
+		Rounds: rounds(3),
+		Budget: 200,
+	})
+	retryExit, rerun := -1, -1
+	for i, e := range p.Graph().Edges() {
+		switch {
+		case e.From == StageLint.HoldNode() && e.To == StageLint.RetryNode():
+			retryExit = i
+		case e.From == StageLint.Node() && e.Guard != nil &&
+			e.Guard.Value.Equal(graph.TextValue(string(OutcomeRerun))):
+			rerun = i
+		}
+	}
+	if retryExit < 0 || rerun < 0 {
+		t.Fatalf("the lint stage has no retry exit (%d) or no rerun entry (%d)", retryExit, rerun)
+	}
+	if got := p.Graph().Edges()[rerun].Rounds; got != RetryRounds {
+		t.Fatalf("rerunEntry is bounded at %d, want RetryRounds", got)
+	}
+	store := graph.NewMemoryStore()
+	exec, err := p.Executor(store)
+	if err != nil {
+		t.Fatalf("Executor: %v", err)
+	}
+	state, err := p.NewState(complete())
+	if err != nil {
+		t.Fatalf("NewState: %v", err)
+	}
+	if _, err := exec.Run(context.Background(), "run", state); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for i := 1; i <= RetryRounds; i++ {
+		again, err := exec.Answer(context.Background(), "run", string(OutcomeRetry))
+		if err != nil {
+			t.Fatalf("retry %d: %v", i, err)
+		}
+		if again.Status != graph.StatusHalted || again.Position != StageLint.HoldNode() {
+			t.Fatalf("after retry %d the run is %s at %q (%s), want held at lint again",
+				i, again.Status, again.Position, again.Reason)
+		}
+	}
+	cp, err := store.Latest(context.Background(), "run")
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if got := cp.Counters.Traversals[retryExit]; got != RetryRounds {
+		t.Fatalf("the hold's retry exit was taken %d times, want %d", got, RetryRounds)
+	}
+	if got := cp.Counters.Traversals[rerun]; got != RetryRounds {
+		t.Fatalf("rerunEntry was taken %d times, want %d, once per retry", got, RetryRounds)
+	}
+	if _, err := exec.Answer(context.Background(), "run", string(OutcomeRetry)); !errors.Is(err, graph.ErrRoundsSpent) {
+		t.Fatalf("the retry past the bound returned %v, want graph.ErrRoundsSpent", err)
+	}
+	after, err := store.Latest(context.Background(), "run")
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if after.Position != StageLint.HoldNode() || after.Counters.Traversals[rerun] != RetryRounds {
+		t.Fatalf("after the refused retry the run stands at %q with rerunEntry taken %d times, want the hold unchanged",
+			after.Position, after.Counters.Traversals[rerun])
+	}
+}
+
 // TestARetryDoesNotRunARefusedRequestedRoundAgain is the other refused round:
 // one a person asked for, which the ceiling refused. Its request is not what
 // a retry carries, so the retry runs no round; it drops the ceiling's hold

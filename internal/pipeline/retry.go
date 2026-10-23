@@ -187,12 +187,22 @@ func retryNode(stage Stage) graph.Node {
 // counted there again, and the rounds that start still never pass that limit:
 // a round goes this way only while RerunKey says the last round was refused,
 // a refused round sets that key and one that starts clears it, so every round
-// taken this way stands for one refused before it. Its own bound is
-// RetryRounds. A retry takes it at most once, because after the round the
-// stage either holds on the ceiling again or owes nothing, and a fourth
-// traversal needs the ceiling to have refused the stage's round at least four
-// times in the run; past it the run parks rounds-exhausted in front of the
-// fixer, as the round limit parks it.
+// taken this way stands for one refused before it.
+//
+// Its own bound is RetryRounds. The build requires one, because the edge
+// enters the stage's fix cycle, and the run never reaches it: the hold's
+// retry exit spends the same bound first. A traversal needs RerunKey set and
+// a stage report holding nothing, and the stage adds its held key to every
+// report, so the ceiling's hold the refused round left there has to leave
+// that key first. Only the retry node removes it without leaving a hold in
+// its place, because a requested round always adds its own. After the
+// traversal the round either starts, which clears RerunKey, or is refused
+// again, which puts the ceiling's hold back. So every traversal follows a
+// pass through the retry node that no earlier traversal followed, the
+// traversals never outnumber the retries, and the retry past RetryRounds is
+// refused with the hold still open rather than reaching this edge.
+// TestTheRetryBoundIsSpentBeforeTheRerunEntrysBound drives the worst case, a
+// refusal on every round, to that point.
 //
 // It is built at every stage, among the stage's own edges, so the edge
 // vector's shape does not depend on the fix round limits, which doc.go's
