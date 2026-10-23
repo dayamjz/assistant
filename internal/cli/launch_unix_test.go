@@ -9,6 +9,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 )
@@ -20,10 +21,12 @@ import (
 // which is what a stop or an outright kill ends it by, and a stop asked of
 // the surface ends it, read gone by identity once the stop has answered.
 //
-// It runs serially, as the other tests that start a service do: a start
-// waits on a bound for the service to answer, which the load of the
-// package's parallel tests could exhaust.
+// It runs serially, as the other tests that start a service do: its start
+// waits for the service to answer through
+// cli.AwaitReadinessUntilTheTestsDeadline rather than on a bound a slow host
+// misses (#543), which changes a package variable.
 func TestALaunchedServiceLeadsItsOwnGroupAndItsStopEndsIt(t *testing.T) {
+	cli.AwaitReadinessUntilTheTestsDeadline(t)
 	principles.Cite(t, principles.P15)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
