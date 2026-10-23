@@ -236,7 +236,7 @@ class FakeGitHub:
         self.flaky = dict(flaky or {})  # job id -> server errors before it answers
         self.repo = "dayamjz/assistant"
         self.read = []
-        self.pull_list = []  # pull request objects, as the pulls API returns them
+        self.pull_list = self.data["pulls"]  # pull request objects, as the pulls API returns them
 
     def runs(self, workflow, limit, branch=None, since=None):
         return self.data["runs"][:limit]
@@ -285,6 +285,12 @@ class FakeGitHub:
 LOGS = {120256178246: "rerun-attempt-1.log", 120265317855: "rerun-attempt-2.log",
         120342424178: "job-timeout.log", 120290002840: "superseded-macos.log",
         120290002917: "superseded-ubuntu.log"}
+
+
+def log_lines(name, first=1, last=None):
+    """Lines first..last (1-based, inclusive) of a recorded log, verbatim."""
+    lines = (DATA / name).read_text(encoding="utf-8").split("\n")
+    return lines[first - 1:last]
 
 
 def set_steps(github, job_id, conclusions):
@@ -545,6 +551,84 @@ class LedgerTest(unittest.TestCase):
         _, data, _ = run_report(github)
         prs = {o["pr"] for f in data["failures"] for o in f["occurrences"] if o["run_id"] == 39905430594}
         self.assertEqual(prs, {601})
+
+    def two_failed_steps(self, folder, failed_second=True):
+        # The recorded judge failure's job through its Test step (verbatim,
+        # ending in that step's exit line), then its Skipped tests step,
+        # which runs always(), failing too.
+        stamp = "2026-10-23T13:54:03.2321910Z"
+        lines = log_lines("judge-test-failure.log", 1, 137) + [
+            f"{stamp} No test skipped on macos-latest.",
+            f"{stamp} ##[error]grep: test.log: Input/output error"]
+        if failed_second:
+            lines.append(f"{stamp} ##[error]Process completed with exit code 2.")
+        log = Path(folder) / "two-failed-steps.log"
+        log.write_text("\n".join(lines) + "\n")
+        github = FakeGitHub({**LOGS, 120256178246: log})
+        set_steps(github, 120256178246, {"Test": "failure", "Skipped tests": "failure"})
+        return github
+
+    def test_every_failed_step_counts_though_another_named_a_failure(self):
+        with tempfile.TemporaryDirectory() as folder:
+            status, data, text = run_report(self.two_failed_steps(folder))
+        self.assertEqual(status, 0, text)
+        failures = {f["key"]: f for f in data["failures"]}
+        attempt_1 = {k for k, f in failures.items() if any(o["job_id"] == 120256178246 for o in f["occurrences"])}
+        self.assertIn("step: check (macos-latest) step Skipped tests", attempt_1)
+        self.assertIn("test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient", attempt_1)
+        # The Test step's failure is the named test, not a step row too.
+        self.assertNotIn("step: check (macos-latest) step Test", attempt_1)
+        self.assertEqual(failures["step: check (macos-latest) step Skipped tests"]["details"],
+                         ["grep: test.log: Input/output error"])
+
+    def test_failed_steps_that_cannot_be_told_apart_are_all_counted(self):
+        # Two failed steps, one exit line: which step printed the named test
+        # is unknown, so both steps are counted rather than one assumed.
+        with tempfile.TemporaryDirectory() as folder:
+            _, data, _ = run_report(self.two_failed_steps(folder, failed_second=False))
+        keys = {f["key"] for f in data["failures"]
+                if any(o["job_id"] == 120256178246 for o in f["occurrences"])}
+        self.assertTrue({"step: check (macos-latest) step Test", "step: check (macos-latest) step Skipped tests",
+                         "test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient"} <= keys, keys)
+
+    def test_a_test_whose_package_never_reported_is_counted(self):
+        # The superseded job, cancelled while cat test.log printed: one
+        # complete failing package (the recorded judge failure), then
+        # another package's failing test (the recorded dispatch failure),
+        # and the cancel before that package's summary line.
+        lines = (log_lines("judge-test-failure.log", 1, 109)
+                 + log_lines("rerun-attempt-2.log", 116, 120)
+                 + ["2026-10-23T07:19:57.7514310Z ##[error]The operation was canceled."])
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "cut-off.log"
+            log.write_text("\n".join(lines) + "\n")
+            github = FakeGitHub({**LOGS, 120290002840: log})
+            status, data, text = run_report(github)
+        self.assertEqual(status, 0, text)
+        keys = {f["key"] for f in data["failures"]
+                if any(o["job_id"] == 120290002840 for o in f["occurrences"])}
+        self.assertEqual(keys, {"test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient",
+                                "test: (output cut off) TestConcurrentDispatchOfOneTaskClaimsOneAttempt"})
+
+    def pr_of(self, created_at, named=None):
+        # The recorded run, moved onto the branch #154 and then #257 used.
+        github = FakeGitHub(LOGS)
+        run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
+        run["head_branch"], run["created_at"] = "claude/prd-owner-decisions", created_at
+        if named:
+            run["pull_requests"] = [{"number": named}]
+        _, data, _ = run_report(github)
+        return {o["pr"] for f in data["failures"] for o in f["occurrences"] if o["run_id"] == 39905430594}
+
+    def test_a_reused_branchs_run_is_its_own_pull_requests(self):
+        # 38522563333 ran at 06:30:04 on 10-14, while #154 was open.
+        self.assertEqual(self.pr_of("2026-10-14T06:30:04Z"), {154})
+        self.assertEqual(self.pr_of("2026-10-15T14:33:28Z"), {257})
+        # Between the two, neither was open: unknown, not a guess.
+        self.assertEqual(self.pr_of("2026-10-15T00:00:00Z"), {None})
+
+    def test_the_pull_request_a_run_names_is_its_own(self):
+        self.assertEqual(self.pr_of("2026-10-15T14:33:28Z", named=154), {154})
 
     def test_a_cancelled_job_whose_tests_name_nothing_fails_the_ledger(self):
         # The superseded job's Test step printed its output and named no
