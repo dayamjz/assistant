@@ -185,6 +185,29 @@ class RealGoTestOutputTest(unittest.TestCase):
 
 
 class LoudTest(unittest.TestCase):
+    def test_every_per_package_leak_shape_the_leak_check_prints_is_read(self):
+        # scripts/leak-check.py prints both on Linux (linux_package_run).
+        package = "/home/runner/work/assistant/assistant/internal/service"
+        lines = framed([
+            f"LEAK package={package} process pid=4242 start=12345 command=/tmp/x/child.test --flag",
+            f"LEAK package={package} a process was running after the binary exited "
+            "and exited before the check read it",
+            "FAIL\tgithub.com/dayamjz/assistant/internal/service\t3.2s"])
+        records, unattributed, _ = ledger.parse_lines(lines)
+        self.assertEqual(sorted(r.key for r in records), [
+            "leak: internal/service a process was running after the binary exited and exited before "
+            "the check read it",
+            "leak: internal/service child.test"])
+        self.assertFalse(unattributed)
+
+    def test_a_leak_line_of_a_shape_never_seen_is_still_a_record(self):
+        lines = framed(["LEAK package=/home/runner/work/assistant/assistant/internal/vcs something new 77",
+                        "LEAK socket-ish /tmp/x9999", "ok  \tgithub.com/dayamjz/assistant/internal/vcs\t1s"])
+        records, _, _ = ledger.parse_lines(lines)
+        self.assertEqual(sorted(r.key for r in records), [
+            "leak: internal/vcs something new 77",
+            "run-leak: (whole run) unparsed LEAK socket-ish /tmp/xN"])
+
     def test_a_group_with_nothing_named_in_it_is_unattributed(self):
         records, unattributed, _ = ledger.parse_lines(framed(["something went wrong", "FAIL"]))
         self.assertEqual(records, [])
@@ -192,7 +215,8 @@ class LoudTest(unittest.TestCase):
 
     def test_leftovers_the_parser_cannot_read_are_still_a_failure(self):
         lines = framed(["ok  \tgithub.com/example/m/pass\t0.1s",
-                        "LEAK widget something new", "leak-check: 1 leftover(s); command exit=0"])
+                        "LEFTOVER widget, named some way this parser has not seen",
+                        "leak-check: 1 leftover(s); command exit=0"])
         records, unattributed, _ = ledger.parse_lines(lines)
         self.assertEqual([r.key for r in records], ["run-leak: (whole run) (unparsed leftovers)"])
         self.assertFalse(unattributed)
@@ -201,8 +225,9 @@ class LoudTest(unittest.TestCase):
 class FakeGitHub:
     """Serves the recorded responses in api.json and the fixture logs."""
 
-    def __init__(self, logs, unreadable=(), flaky=None):
+    def __init__(self, logs, unreadable=(), flaky=None, broken=()):
         self.data = json.loads((DATA / "api.json").read_text())
+        self.broken = set(broken)  # names of reads that fail for good
         self.logs = logs
         self.unreadable = set(unreadable)
         self.flaky = dict(flaky or {})  # job id -> server errors before it answers
@@ -225,9 +250,13 @@ class FakeGitHub:
         return self.data["annotations"][str(job_id)]
 
     def issues(self):
+        if "issues" in self.broken:
+            raise ledger.GitHubError("gh api repos/dayamjz/assistant/issues: HTTP 503")
         return self.data["issues"]
 
     def pulls(self):
+        if "pulls" in self.broken:
+            raise ledger.GitHubError("gh api repos/dayamjz/assistant/pulls: HTTP 503")
         return []
 
     def job_log(self, job_id):
@@ -243,7 +272,8 @@ class FakeGitHub:
 
 
 LOGS = {120256178246: "rerun-attempt-1.log", 120265317855: "rerun-attempt-2.log",
-        120342424178: "job-timeout.log"}
+        120342424178: "job-timeout.log", 120290002840: "superseded-macos.log",
+        120290002917: "superseded-ubuntu.log"}
 
 
 def run_report(github, *extra):
@@ -257,6 +287,29 @@ def run_report(github, *extra):
 
 
 class LedgerTest(unittest.TestCase):
+    def test_an_issue_read_that_fails_still_prints_and_writes_the_ledger(self):
+        with mock.patch.object(ledger, "pause"):
+            status, data, text = run_report(FakeGitHub(LOGS, broken={"issues", "pulls"}))
+        self.assertEqual(status, 2)
+        self.assertIn("test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt",
+                      [f["key"] for f in data["failures"]])
+        self.assertTrue(any("issues: HTTP 503" in p for p in data["problems"]), data["problems"])
+        # Unknown, not "none": a failed read is no evidence that no issue exists.
+        self.assertTrue(all(f["issues"] is None for f in data["failures"]))
+        self.assertIn("unknown", text)
+        self.assertNotIn("**none**", text)
+
+    def test_a_cancelled_jobs_failed_tests_are_counted(self):
+        # A Test step that failed and printed its output, then a newer push
+        # cancelled the job in a later step: the cancel is the job's result,
+        # the failure is still in its log.
+        github = FakeGitHub({**LOGS, 120290002840: "judge-test-failure.log"})
+        _, data, _ = run_report(github)
+        failure = next(f for f in data["failures"]
+                       if f["key"] == "test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient")
+        self.assertEqual(failure["occurrences"][0]["job_id"], 120290002840)
+        self.assertEqual(data["cancelled_jobs_not_counted"], {"superseded": 1, "cancelled": 0})
+
     def test_failures_a_green_rerun_passed_over_are_counted_and_marked(self):
         status, data, text = run_report(FakeGitHub(LOGS))
         self.assertEqual(status, 0, text)
@@ -298,6 +351,12 @@ class LedgerTest(unittest.TestCase):
             (1, "leak: internal/supervisor mdworker_shared"),
             (2, "test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt")])
         self.assertIn("## Re-run past with no open issue", text)
+
+    def test_a_rerun_check_without_the_issues_does_not_pass(self):
+        with mock.patch.object(ledger, "pause"):
+            status, _, _ = run_report(FakeGitHub(LOGS, broken={"issues"}), "--run", "39905430594",
+                                      "--require-open-issues")
+        self.assertEqual(status, 2)
 
     def test_an_open_issue_lets_a_rerun_pass(self):
         github = FakeGitHub(LOGS)

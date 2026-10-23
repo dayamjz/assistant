@@ -1,0 +1,2 @@
+# Real CI job logs, kept verbatim: their trailing spaces are what GitHub served.
+*.log -whitespace
