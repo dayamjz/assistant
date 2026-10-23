@@ -27,8 +27,9 @@ import (
 // ORIG_HEAD, a reflog entry by either of its values, or HEAD; for a run's
 // worktree never the gate's shared references or reflogs, which stand
 // after it, but the stash entries it made) and that neither the default
-// branch, read fresh, nor what the upstream advertises, nor a
-// remote-tracking reference reaches, with every tag, tree or blob such a
+// branch, read fresh, nor what the upstream holds now reaches, a
+// remote-tracking reference holding nothing of itself, with every tag,
+// tree or blob such a
 // name or value records that none of those is, every path whose content
 // or deletion nothing else holds, as git would store it, ignored files and
 // deletions included, and the three indicators git reports, with a digest over exactly what is shown, each path by what it

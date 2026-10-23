@@ -1196,7 +1196,8 @@ func TestADiscardSealsTheIndicatorsItShows(t *testing.T) {
 // advertises as that very tag object, not feature's commit, and not a.bat,
 // which git would store as HEAD's blob though its bytes differ. An
 // annotated tag only the copy holds, on the task's commit or on main, is
-// listed, and so is an edit to a.bat. Without the upstream read as held,
+// listed, and so is an edit to a.bat. A remote-tracking reference holds
+// only what the upstream still reaches. Without the upstream read as held,
 // v1 and feature's commit are listed; without git's stored blob, a.bat is.
 func TestALossTakesWhatTheUpstreamHoldsAsHeld(t *testing.T) {
 	principles.Cite(t, principles.P15)
@@ -1272,13 +1273,41 @@ func TestALossTakesWhatTheUpstreamHoldsAsHeld(t *testing.T) {
 	}
 	rawGit(t, tk.copy, "rm", "-q", "-f", "b.bat")
 
-	// A remote-tracking reference records a remote's branch, as a delivery
-	// copy's records the gate's, which the removal leaves: a commit only
-	// one names is held, though the upstream does not advertise it.
-	tracked := strings.TrimSpace(rawGit(t, tk.copy, "commit-tree", "-p", own, "-m", "on the gate alone", own+"^{tree}"))
+	// A remote-tracking reference is the copy's record of a remote as last
+	// fetched and holds nothing of itself. A commit only one names, which
+	// no remote holds, is listed. One whose branch the upstream moved on
+	// since is held through the commit that branch stands on now, which
+	// the copy does not hold and Loss fetches. One whose branch the
+	// upstream deleted, and whose objects the upstream's collection then
+	// pruned, is listed: the reviewer's sequence, in which the stale
+	// reference was taken as holding it, Loss omitted it and a discard
+	// removed the only copy of it.
+	tracked := strings.TrimSpace(rawGit(t, tk.copy, "commit-tree", "-p", own, "-m", "on no remote", own+"^{tree}"))
 	rawGit(t, tk.copy, "update-ref", "refs/remotes/gate-copy/side", tracked)
-	if l, err := s.cleaner.Loss(ctx, got.Entry); err != nil || slices.Contains(l.Lacks, tracked) {
-		t.Errorf("Loss lacks %v, %v; want %s, which a remote-tracking reference names, held", l.Lacks, err, tracked)
+	rawGit(t, seed, "switch", "-q", "-c", "moving", "main")
+	moved := commit(t, seed, "moving.txt", "first\n", "a branch the upstream moves on")
+	rawGit(t, seed, "switch", "-q", "-c", "doomed", "main")
+	doomed := commit(t, seed, "doomed.txt", "pushed and then deleted\n", "a branch the upstream deletes")
+	rawGit(t, seed, "push", "-q", "origin", "moving", "doomed")
+	rawGit(t, tk.copy, "fetch", "-q", s.upstream, "+refs/heads/*:refs/remotes/upstream/*")
+	rawGit(t, seed, "switch", "-q", "moving")
+	movedOn := commit(t, seed, "moving.txt", "second\n", "the branch moves on")
+	rawGit(t, seed, "push", "-q", "origin", "moving", ":doomed")
+	rawGit(t, s.upstream, "reflog", "expire", "--expire=now", "--all")
+	rawGit(t, s.upstream, "gc", "-q", "--prune=now")
+	if _, err := rawGitErr(s.upstream, "cat-file", "-e", doomed); err == nil {
+		t.Fatalf("the upstream still holds %s after the branch was deleted and pruned: the case would test nothing", doomed)
+	}
+	if _, err := rawGitErr(tk.copy, "cat-file", "-e", movedOn); err == nil {
+		t.Fatalf("the copy already holds %s: the moved branch's case would test no fetch", movedOn)
+	}
+	if l, err := s.cleaner.Loss(ctx, got.Entry); err != nil || !slices.Contains(l.Lacks, tracked) || !slices.Contains(l.Lacks, doomed) ||
+		slices.Contains(l.Lacks, moved) {
+		t.Errorf("Loss lacks %v, %v; want %s, named by a remote-tracking reference alone, and %s, whose branch the upstream deleted, "+
+			"and not %s, which the upstream's moved branch still reaches", l.Lacks, err, tracked, doomed, moved)
+	}
+	if refs := rawGit(t, tk.copy, "for-each-ref", "refs/assistant/"); refs != "" {
+		t.Errorf("Loss left references behind in the copy:\n%s", refs)
 	}
 
 	// A commit shown as lost that the upstream takes up before the
@@ -1297,5 +1326,28 @@ func TestALossTakesWhatTheUpstreamHoldsAsHeld(t *testing.T) {
 	}
 	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the copy still stands after the confirmed discard: %v", err)
+	}
+}
+
+// A copy's reference is looked up on the upstream as every branch it could
+// stand for: a branch as itself, a remote-tracking reference as every
+// branch its name could end in, since a remote's name may hold a slash,
+// and as the upstream's HEAD when it ends in HEAD. A tag and any other
+// reference stand for none.
+func TestUpstreamBranchNamesAreEveryBranchAReferenceCouldStandFor(t *testing.T) {
+	t.Parallel()
+	for ref, want := range map[string][]string{
+		"refs/heads/task/kept":              {"refs/heads/task/kept"},
+		"refs/remotes/origin/main":          {"refs/heads/main"},
+		"refs/remotes/origin/HEAD":          {"HEAD"},
+		"refs/remotes/team/gate/feature/x":  {"refs/heads/gate/feature/x", "refs/heads/feature/x", "refs/heads/x"},
+		"refs/remotes/origin/":              nil,
+		"refs/remotes/origin":               nil,
+		"refs/tags/v1":                      nil,
+		"refs/assistant/discard/task/a/b/c": nil,
+	} {
+		if got := upstreamBranchNames(ref); !slices.Equal(got, want) {
+			t.Errorf("upstreamBranchNames(%q) = %q, want %q", ref, got, want)
+		}
 	}
 }

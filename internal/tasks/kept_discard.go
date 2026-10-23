@@ -47,11 +47,16 @@ import (
 // stash among them, that nothing held reaches, with every object such a
 // name or value records that is not a commit and is not itself held
 // (lostFrom), all decided by git from the copy's own objects. Held is the
-// default branch, read fresh as Keep reads it; every object the copy names
-// that the upstream advertises now, compared by identifier, a tag cloned
-// with the copy and a branch the upstream also has among them; and every
-// remote-tracking reference the copy holds, which records a remote's own
-// branches. And every
+// default branch, read fresh as Keep reads it; and what the upstream holds
+// now (upstreamHeld): every object the copy names that the upstream
+// advertises now, compared by identifier, a tag cloned with the copy and a
+// branch the upstream also has among them, and everything the commit the
+// upstream's branch of the same name as one of the copy's branches or
+// remote-tracking references stands on now reaches, fetched by identifier
+// when the copy does not hold it. A remote-tracking reference holds nothing
+// of itself: it is the copy's record of a remote at its last fetch, so what
+// it names that the upstream no longer reaches, a branch deleted or rewound
+// there since, is lost with the copy. And every
 // path the removal destroys whose content or deletion nothing else holds, a
 // file git ignores and a deletion git has not staged among them, decided
 // from what the copy holds on lostPaths' terms (kept_lost.go); and the
@@ -110,18 +115,23 @@ import (
 // rather than showing less. And git's own
 // maintenance, which a fetch may start, can expire the one reflog entry
 // that keeps a commit shown in the copy, which refuses the confirmation the
-// same way: each of these fails toward keeping. What is held is taken as
-// held without asking more of it: a remote-tracking reference is the
-// copy's record of the remote at its last fetch, so a branch the remote
-// has since deleted or moved, or a reference written there by hand, holds
-// what it names though nothing outside the copy may; and a commit shown
-// as lost that the upstream took up afterwards through a name the copy no
-// longer holds reads as gone, which refuses the confirmation. A stash entry
-// records no worktree, so a run's own entries are the ones made on its
-// HEAD or on a commit its own reflogs record: one another worktree made on
-// the same commit is shown as this one's, and one this worktree made on a
-// commit its reflogs no longer record is not shown, nor destroyed, since
-// the gate's stash stands.
+// same way: each of these fails toward keeping. The upstream is the one
+// repository read as holding anything beyond the default branch: a commit
+// the person's checkout or the gate holds and the upstream does not is
+// shown as lost though the removal leaves it there, which fails toward
+// showing. What the upstream holds is read as it advertises it now,
+// through what the copy names: a commit the upstream holds only under a
+// reference whose object the copy does not name and whose name no branch
+// or remote-tracking reference of the copy's ends in is shown as lost,
+// which fails toward showing too. A commit shown as lost
+// that the upstream took up afterwards through a name the copy no longer
+// holds reads as gone, which refuses the confirmation. A stash entry
+// records no worktree, so a run's own entries are the ones made on a
+// commit its own names record (ownStash), a commit the gate's reflogs
+// record too among them: one another worktree made on such a commit is
+// shown as this one's, and one this worktree made on a commit its names no
+// longer record is not shown, nor destroyed, since the gate's stash
+// stands.
 //
 // # The removal
 //
@@ -156,8 +166,10 @@ type Loss struct {
 	// root references, and the values of the reflogs git reads for it alone
 	// less the ones the gate's own reflogs record, which stand after the
 	// removal, and the stash entries it made (ownStash), never another
-	// worktree's. It is wider than what Keep records, which leaves the
-	// stash and the reflogs out.
+	// worktree's. Held is the default branch and what the upstream holds
+	// now (upstreamHeld); a remote-tracking reference holds nothing of
+	// itself. It is wider than what Keep records, which leaves the stash
+	// and the reflogs out.
 	Lacks []string
 	// Dirty, Untracked and Stash are the inventory's indicators of the copy
 	// as it stands now, as git reports them: a tracked change, a file no
@@ -198,9 +210,9 @@ type LostPath struct {
 // not a commit: its identifier, its type as git records it (tag, tree or
 // blob), and every name the removal destroys that points at it, HEAD, a
 // reference's full name, a root reference's name such as AUTO_MERGE, or a
-// reflog entry as ref@{n}. One the upstream advertises, or a
-// remote-tracking reference names, is held and not listed; any other is
-// listed whatever else holds it, failing toward showing.
+// reflog entry as ref@{n}. One the upstream advertises now is held and not
+// listed; any other is listed whatever else holds it, a remote-tracking
+// reference's among them, failing toward showing.
 type LostObject struct {
 	Object string
 	Type   string
@@ -320,7 +332,7 @@ func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, shown []string
 	// count: those are its work, and nothing else will ever name them.
 	stash := inv.Stash
 	if !entry.TaskID.IsKnown() {
-		own, err := ownStash(ctx, entry, copied, inv.Head.Commit, values)
+		own, err := ownStash(ctx, entry, copied, slices.Clone(named.objects))
 		if err != nil {
 			return Loss{}, nil, err
 		}
@@ -329,18 +341,12 @@ func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, shown []string
 		}
 		stash = len(own) > 0
 	}
-	var remotes []string
-	for _, ref := range refs {
-		if strings.HasPrefix(ref.Name, "refs/remotes/") {
-			remotes = append(remotes, ref.Object)
-		}
-	}
 	// Besides every name read, every value a reflog the removal destroys
 	// records, and for a task's clone, removed whole, every reference and
 	// every worktree's HEAD as git walks them.
 	objects := append(slices.Clone(named.objects), values...)
 	reach := vcs.Reach{Objects: objects, Refs: entry.TaskID.IsKnown()}
-	held, others, gone := lostFrom(ctx, l, reach, objects, remotes, shown)
+	held, others, gone := lostFrom(ctx, l, reach, objects, refs, shown)
 	if !held.established() {
 		return Loss{}, nil, fmt.Errorf("%w: %s", ErrLossUnestablished, held.unestablished)
 	}
@@ -433,13 +439,19 @@ func (n *names) add(object, name string) {
 
 // ownStash is, for a run's worktree, the entries of the stash it shares
 // with the gate that it made: each whose base, the commit the stash was
-// made on (its first parent), is the worktree's HEAD or a value its own
-// reflogs record (mine, reflogValues' for a run). git records no worktree
-// on a stash entry, so this is the closest the stash says: an entry another
-// worktree made on the same commit is taken for this one's, which fails
-// toward showing, and one this worktree made on a commit its reflogs no
-// longer record is not.
-func ownStash(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, head string, mine []string) ([]vcs.ReflogEntry, error) {
+// made on (its first parent), is one of mine, what the worktree's own names
+// record: its HEAD, its own references and root references, and the value
+// each entry of their reflogs moved to (namesOf over copyNames' read for a
+// run). Those are the worktree's alone, so a base the gate's shared
+// references or their reflogs record too is still its own when one of
+// them records it, and a base only the shared ones record is not. git
+// records no worktree on a stash entry, so this is the closest the stash
+// says: an entry another worktree made on a commit this one's names record
+// is taken for this one's, which fails toward showing, and one this
+// worktree made on a commit its names no longer record, the value an
+// expired reflog entry moved to or the one the oldest standing entry moved
+// from among them, is not.
+func ownStash(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, mine []string) ([]vcs.ReflogEntry, error) {
 	fail := func(err error) ([]vcs.ReflogEntry, error) {
 		return nil, fmt.Errorf("tasks: reading the stash the kept copy at %s shares: %w", entry.CopyPath, err)
 	}
@@ -460,7 +472,7 @@ func ownStash(ctx context.Context, entry store.KeptWork, copied *vcs.Repository,
 		if err != nil {
 			return fail(err)
 		}
-		if base == head || slices.Contains(mine, base) {
+		if slices.Contains(mine, base) {
 			own = append(own, e)
 		}
 	}

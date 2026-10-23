@@ -57,8 +57,10 @@ import (
 // stash or recorded only by a reflog entry's either value, a commit amended
 // or rebased away among them, and an annotated tag only the copy holds,
 // which a landing never carries. Nothing Loss takes as held refuses it, so
-// what the upstream holds, a tag or a branch cloned with the copy among
-// it, and what a remote-tracking reference names, is not left behind; nor
+// what the upstream holds now, a tag or a branch cloned with the copy and
+// what a remote-tracking reference names that the upstream's branch still
+// reaches among it, is not left behind, while a commit only a stale
+// remote-tracking reference names refuses it; nor
 // is a file git reports clean whose bytes its line-ending conversion or
 // filters changed. A default branch or an upstream that cannot be read now
 // refuses it as not established. A run's worktree is read as a discard

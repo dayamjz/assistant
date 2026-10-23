@@ -41,19 +41,21 @@ type KeptWorkLoss struct {
 	// Lacks is the commits the removal destroys that exist nowhere it
 	// leaves intact: every commit HEAD, a reference, a root reference such
 	// as ORIG_HEAD or a reflog entry of the copy, by the value it moved to
-	// or the one it moved from, reaches that neither the default branch,
-	// nor anything the copy names that the upstream advertises now, nor a
-	// remote-tracking reference reaches, a commit reset away or a stash
-	// under the newest among them. For a run's worktree only what its
+	// or the one it moved from, reaches that neither the default branch
+	// nor what the upstream holds now reaches: anything the copy names
+	// that the upstream advertises, and the commit the upstream's branch
+	// of the same name as a branch or remote-tracking reference of the
+	// copy's stands on. A commit reset away, a stash under the newest, and
+	// one only a remote-tracking reference names that the upstream no
+	// longer reaches are among them. For a run's worktree only what its
 	// removal destroys counts, and the stash entries it made: never a
 	// commit the gate's own references or their reflogs, or another
 	// worktree's stash entries, still record.
 	Lacks []string `json:"lacks"`
 	// Objects is every object a name the removal destroys points at that
 	// is not a commit, an annotated tag, a tree or a blob, with its type
-	// and the names that point at it, unless the upstream advertises it or
-	// a remote-tracking reference names it, and otherwise listed whatever
-	// else holds it.
+	// and the names that point at it, unless the upstream advertises it
+	// now, and otherwise listed whatever else holds it.
 	Objects []KeptWorkLostObject `json:"objects"`
 	// Files is every path the removal destroys whose content or deletion
 	// nothing else holds, decided from what the copy holds and not from

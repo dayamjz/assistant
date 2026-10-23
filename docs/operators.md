@@ -624,8 +624,10 @@ commits anything in the copy names that neither the default branch nor
 the upstream holds, a commit reset away, one only `ORIG_HEAD` or an old
 reflog entry still records, and every stash included, and any tag, tree
 or blob a reference or a reflog entry points at directly that the
-upstream does not have; what the upstream advertises, and what the copy's
-remote-tracking branches name, is held and not listed (for a run's copy,
+upstream does not have; what the upstream holds now is held and not
+listed, a commit one of the copy's remote-tracking branches names
+included while the upstream's branch of that name still reaches it, so
+one whose branch the upstream has since deleted or rewound is listed (for a run's copy,
 only what removing its worktree destroys: the gate's branches and their
 reflogs stay, so they are not listed, but the stash entries made in that
 worktree are); every file

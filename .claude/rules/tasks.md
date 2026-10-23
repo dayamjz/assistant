@@ -48,9 +48,12 @@ paths: ["internal/tasks/**"]
   entry by either of its values, `vcs.ReflogValues`; for a run's worktree
   only its own and the stash entries it made, `ownStash`, never the gate's
   shared references or their reflogs, which the removal leaves) and
-  nothing held reaches, the default branch, every object the copy names
-  that the upstream advertises by identity, and its remote-tracking
-  references (`upstreamHeld`), and every other object such a name or value
+  nothing held reaches, the default branch and what the upstream holds
+  now: every object the copy names that it advertises, by identity, and
+  the commit its branch of the same name as one of the copy's branches or
+  remote-tracking references stands on, fetched by identifier
+  (`upstreamHeld`; a remote-tracking reference holds nothing of itself),
+  and every other object such a name or value
   records that is not itself held, read from the copy now (`lostFrom`),
   every path whose content or deletion nothing else holds (`kept_lost.go`,
   decided from the copy against HEAD's tree, the index and what git writes

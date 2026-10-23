@@ -750,6 +750,73 @@ func TestALandingTakesTheUpstreamsOtherBranchesAsHeld(t *testing.T) {
 	landsAt(t, h, id, entry, own)
 }
 
+// A remote-tracking reference holds only what the upstream still holds,
+// the first sequence of the review of 4d0b93f: a delivery task's clone
+// holds the upstream's branches doomed and moving as remote-tracking
+// references beside its own commit; the upstream then moves moving on,
+// and deletes doomed and prunes it, so the copy alone holds doomed's
+// commit. The landing is refused naming that commit and records nothing.
+// moving's commit, which the upstream's branch still reaches though the
+// copy does not hold where it stands now, is held: with the stale
+// reference to doomed deleted, the copy lands. Without the upstream read
+// now, the stale reference held doomed's commit and the landing started
+// at HEAD, leaving the only copy of it to be removed with the copy.
+func TestALandingRefusesWhatOnlyAStaleRemoteTrackingReferenceNames(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	branch := func(name, file string) string {
+		t.Helper()
+		git(t, subject, "checkout", "--quiet", "-b", name, "main")
+		if err := writeFile(filepath.Join(subject, file), name+"'s work\n"); err != nil {
+			t.Fatal(err)
+		}
+		git(t, subject, "add", "-A")
+		git(t, subject, "commit", "--quiet", "-m", name+"'s commit")
+		git(t, subject, "push", "--quiet", "origin", name)
+		return git(t, subject, "rev-parse", "HEAD")
+	}
+	doomed := branch("doomed", "doomed.txt")
+	moving := branch("moving", "moving.txt")
+	git(t, subject, "checkout", "--quiet", "work")
+	id, copyPath, own, entry := plantKeptDelivery(t, h, repository, "task/kept")
+	for name, at := range map[string]string{"doomed": doomed, "moving": moving} {
+		if got := git(t, copyPath, "rev-parse", "refs/remotes/origin/"+name); got != at {
+			t.Fatalf("the clone's origin/%s is at %s; want %s", name, got, at)
+		}
+	}
+	git(t, subject, "checkout", "--quiet", "moving")
+	if err := writeFile(filepath.Join(subject, "moving.txt"), "moving's work, moved on\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, subject, "commit", "--quiet", "-am", "moving moves on")
+	git(t, subject, "push", "--quiet", "origin", "moving", ":doomed")
+	git(t, subject, "checkout", "--quiet", "work")
+	git(t, subject, "branch", "--quiet", "-D", "doomed")
+	git(t, repository.UpstreamURL, "reflog", "expire", "--expire=now", "--all")
+	git(t, repository.UpstreamURL, "gc", "--quiet", "--prune=now")
+	if objects := git(t, repository.UpstreamURL, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"); strings.Contains(objects, doomed) {
+		t.Fatalf("the upstream still holds %s after its branch was deleted and pruned: the case would test nothing", doomed)
+	}
+	withService(t, h, func(under serviceUnderTest) {
+		if out, err := landTask(under, t, id, entry); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), doomed) ||
+			strings.Contains(err.Error(), moving) {
+			t.Fatalf("landing a copy whose stale origin/doomed alone holds %s = %+v, %v; want it refused naming it and not moving's %s",
+				doomed, out, err, moving)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() || still.LandingClaimed() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open and unclaimed", still, err)
+		}
+	})
+	git(t, copyPath, "update-ref", "-d", "refs/remotes/origin/doomed")
+	landsAt(t, h, id, entry, own)
+}
+
 // A path is clean or changed as git stores it, the reviewer's third
 // sequence: the upstream's default branch holds a.bat under a
 // .gitattributes that checks it out with CRLF line endings, so the clone's
@@ -843,6 +910,77 @@ func TestALandingRefusesARunsOwnStash(t *testing.T) {
 		}
 		if run, err := recordsOf(t, h).Run(t.Context(), out.Run); err != nil || run.SubmittedHead != submitted {
 			t.Fatalf("the landing's run reads %+v, %v; want it at %s", run, err, submitted)
+		}
+	})
+}
+
+// A run's stash entry is its own though the commit it was made on is one a
+// reflog of the gate records too, the second sequence of the review of
+// 4d0b93f: the run's worktree stands at the commit the run was submitted,
+// which a gate branch's reflog records as well; an edit is stashed there
+// and a commit made after it, so the worktree's HEAD has moved past the
+// stash's base. The discard shown lists the stash's commit and reads the
+// stash, and the landing is refused naming the stash, recording nothing;
+// with the entry dropped the copy lands at the new commit. Without the
+// worktree's own reflog values read whole, the base was taken out of them
+// as the gate's, the entry was taken for another worktree's, and the
+// landing started at HEAD with the stashed edit never validated.
+func TestALandingRefusesARunsOwnStashMadeOnACommitTheGateRecords(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	submitted := git(t, subject, "rev-parse", "HEAD")
+	entry := keptEntryOf(t, h, subject)
+	gate := git(t, entry.CopyPath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if head := git(t, entry.CopyPath, "rev-parse", "HEAD"); head != submitted {
+		t.Fatalf("the run's worktree stands at %s; want the submitted %s", head, submitted)
+	}
+	git(t, gate, "update-ref", "--create-reflog", "refs/heads/recorded", submitted)
+	if logged := git(t, gate, "reflog", "show", "--format=%H", "refs/heads/recorded"); logged != submitted {
+		t.Fatalf("the gate's branch reflog records %q; want %s, or the case would test nothing", logged, submitted)
+	}
+	if err := writeFile(filepath.Join(entry.CopyPath, "file.txt"), "an edit stashed in the run's worktree\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "stash", "push", "--quiet", "-m", "the run's own edit")
+	stashed := git(t, gate, "rev-parse", "refs/stash")
+	if err := writeFile(filepath.Join(entry.CopyPath, "later.txt"), "a commit after the stash\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "add", "later.txt")
+	git(t, entry.CopyPath, "commit", "--quiet", "-m", "a commit after the stash")
+	later := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	land := func(under serviceUnderTest) (machine.KeptWorkAnswered, error) {
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+			Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptLand)}, &out)
+		return out, err
+	}
+	withService(t, h, func(under serviceUnderTest) {
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &shown); err != nil || shown.Loss == nil ||
+			!shown.Loss.Stash || !slices.Contains(shown.Loss.Lacks, stashed) {
+			t.Fatalf("the discard shown = %+v, %v; want the stash read and its commit %s lost", shown.Loss, err, stashed)
+		}
+		if out, err := land(under); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "stash") {
+			t.Fatalf("landing a run's copy with its edit stashed on a commit the gate records = %+v, %v; want it refused naming the stash", out, err)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() || still.LandingClaimed() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open and unclaimed", still, err)
+		}
+	})
+	git(t, entry.CopyPath, "stash", "drop", "--quiet")
+	withService(t, h, func(under serviceUnderTest) {
+		out, err := land(under)
+		if err != nil || out.Run == "" {
+			t.Fatalf("landing the run's copy with the stash dropped = %+v, %v; want a run", out, err)
+		}
+		if run, err := recordsOf(t, h).Run(t.Context(), out.Run); err != nil || run.SubmittedHead != later {
+			t.Fatalf("the landing's run reads %+v, %v; want it at %s", run, err, later)
 		}
 	})
 }
