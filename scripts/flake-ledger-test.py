@@ -236,6 +236,7 @@ class FakeGitHub:
         self.flaky = dict(flaky or {})  # job id -> server errors before it answers
         self.repo = "dayamjz/assistant"
         self.read = []
+        self.pull_list = []  # pull request objects, as the pulls API returns them
 
     def runs(self, workflow, limit, branch=None, since=None):
         return self.data["runs"][:limit]
@@ -250,6 +251,8 @@ class FakeGitHub:
         return self.data["attempts"][f"{run_id}/{attempt}"]["jobs"]
 
     def annotations(self, job_id):
+        if "annotations" in self.broken:
+            raise ledger.GitHubError(f"gh api repos/dayamjz/assistant/check-runs/{job_id}/annotations: HTTP 502")
         return self.data["annotations"][str(job_id)]
 
     def issues(self):
@@ -260,7 +263,7 @@ class FakeGitHub:
     def pulls(self):
         if "pulls" in self.broken:
             raise ledger.GitHubError("gh api repos/dayamjz/assistant/pulls: HTTP 503")
-        return []
+        return self.pull_list
 
     def job_log(self, job_id):
         self.read.append(job_id)
@@ -478,6 +481,40 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(data["failed_jobs"], 4)
         self.assertIn("4 failed job(s)", text)
 
+    def test_a_cancel_with_no_reason_recorded_is_not_said_to_be_by_hand(self):
+        # No annotation and no steps: cancelled before a runner took it.
+        github = FakeGitHub(LOGS)
+        github.data["annotations"]["120290002840"] = []
+        job = next(j for a in github.data["attempts"].values() for j in a["jobs"] if j["id"] == 120290002840)
+        job["steps"] = []
+        status, data, text = run_report(github)
+        self.assertEqual(status, 0, text)
+        self.assertEqual(data["cancelled_jobs_not_counted"], {"superseded": 1, "cancelled": 1})
+        self.assertIn("1 cancelled for another reason (by hand, or before it started).", text)
+        self.assertNotIn("by hand.", text)
+
+    def test_a_job_whose_annotations_cannot_be_read_is_not_said_to_have_an_unreadable_log(self):
+        with mock.patch.object(ledger, "pause"):
+            status, data, _ = run_report(FakeGitHub(LOGS, broken={"annotations"}))
+        self.assertEqual(status, 2)
+        reasons = {u["job_id"]: u["reason"] for u in data["unattributed"]}
+        self.assertEqual(sorted(reasons), [120290002840, 120290002917, 120342424178])
+        for reason in reasons.values():
+            self.assertTrue(reason.startswith("not read: gh api repos/dayamjz/assistant/check-runs/"), reason)
+
+    def test_a_run_is_matched_to_its_own_pull_request_not_a_forks_of_the_same_branch_name(self):
+        github = FakeGitHub(LOGS)
+        run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
+        run["head_branch"], run["head_repository"] = "main", {"full_name": "someone/assistant"}
+        github.pull_list = [
+            {"number": 600, "head": {"ref": "main", "repo": {"full_name": "other/assistant"}}},
+            {"number": 601, "head": {"ref": "main", "repo": {"full_name": "someone/assistant"}}},
+            {"number": 602, "head": {"ref": "main", "repo": None}},  # a deleted fork
+        ]
+        _, data, _ = run_report(github)
+        prs = {o["pr"] for f in data["failures"] for o in f["occurrences"] if o["run_id"] == 39905430594}
+        self.assertEqual(prs, {601})
+
     def test_a_cancelled_job_whose_tests_name_nothing_fails_the_ledger(self):
         # The superseded job's Test step printed its output and named no
         # failure: a cancel later in the job does not make that complete.
@@ -544,6 +581,35 @@ wait
 """
 
 
+# A gh that answers the API from the recorded responses, as GitHub would,
+# and blocks on a job log with a child of its own, as a stalled download.
+FAKE_GH_API = """
+import json, os, re, subprocess, sys, time
+args = [a for a in sys.argv[1:] if a not in ("-H", "Accept: application/vnd.github+json")]
+if args[:2] == ["api", "--help"]:
+    print("--allow-escape-sequences"); sys.exit(0)
+data = json.load(open(os.environ["FAKE_GH_DATA"]))
+path = args[-1]
+if path.endswith("/logs"):
+    with open(os.environ["FAKE_GH_PIDS"], "a") as pids:
+        child = subprocess.Popen(["sleep", "600"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        pids.write(f"{os.getpid()}\\n{child.pid}\\n")
+    time.sleep(600)
+elif "/workflows/" in path:
+    page = int(re.search(r"[?&]page=(\\d+)", path).group(1))
+    print(json.dumps({"workflow_runs": data["runs"] if page == 1 else []}))
+elif m := re.search(r"runs/(\\d+)/attempts/(\\d+)/jobs", path):
+    print(json.dumps([{"jobs": data["attempts"][f"{m[1]}/{m[2]}"]["jobs"]}]))
+elif m := re.search(r"runs/(\\d+)/attempts/(\\d+)", path):
+    print(json.dumps(data["attempts"][f"{m[1]}/{m[2]}"]))
+elif m := re.search(r"check-runs/(\\d+)/annotations", path):
+    print(json.dumps(data["annotations"][m[1]]))
+else:
+    sys.stderr.write(f"fake gh: no answer for {path}\\n"); sys.exit(1)
+"""
+
+
 class GhProcessTest(unittest.TestCase):
     """P15: every gh the ledger starts runs under a deadline and ends, with
     what it started, when the ledger ends. The gh here is a real program
@@ -577,13 +643,13 @@ class GhProcessTest(unittest.TestCase):
             time.sleep(0.1)
         self.assertEqual(alive, [], "gh or its child outlived its bound")
 
-    def wait_for_gh(self, ledger_process):
+    def wait_for_gh(self, ledger_process, count=2):
         deadline = time.monotonic() + 30
-        while self.started() is None:
+        while self.started(count) is None:
             self.assertIsNone(ledger_process.poll(), "the ledger exited before starting gh")
             self.assertLess(time.monotonic(), deadline, "gh never started")
             time.sleep(0.1)
-        return self.started()
+        return self.started(count)
 
     def test_a_gh_call_past_its_deadline_is_ended_with_its_child(self):
         raised = []
@@ -625,8 +691,32 @@ class GhProcessTest(unittest.TestCase):
         self.assert_ended(self.started())
 
     def ledger(self):
-        return subprocess.Popen([sys.executable, str(SCRIPT), "--repo", "dayamjz/assistant", "--no-cache"],
-                                env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = subprocess.Popen([sys.executable, str(SCRIPT), "--repo", "dayamjz/assistant", "--no-cache"],
+                                   env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait()))
+        return process
+
+    def interrupted_promptly(self, process, pids):
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.fail("an interrupted ledger waited for its gh's deadline")
+        self.assertEqual(process.returncode, 130)
+        self.assert_ended(pids, within=5)
+
+    def test_an_interrupted_ledger_ends_its_gh_at_once(self):
+        # Ctrl+C while the run listing blocks, with the real 120 s deadline.
+        process = self.ledger()
+        self.interrupted_promptly(process, self.wait_for_gh(process))
+
+    def test_an_interrupted_ledger_ends_the_log_reads_its_workers_hold(self):
+        gh = Path(self.env["PATH"].split(os.pathsep)[0]) / "gh"
+        gh.write_text(f"#!{sys.executable}\n" + FAKE_GH_API)
+        self.env["FAKE_GH_DATA"] = str(DATA / "api.json")
+        process = self.ledger()
+        pids = self.wait_for_gh(process, count=4)  # two log reads on worker threads, each with a child
+        self.interrupted_promptly(process, pids)
 
     def test_a_terminated_ledger_ends_its_gh_and_what_gh_started(self):
         process = self.ledger()
@@ -652,11 +742,12 @@ def alive_pid(pid):
 
 
 class ClosedIssueTest(unittest.TestCase):
-    def dispatch(self, branch, completed_at=None, closed_at=None, event=None, head_repository=None):
+    def dispatch(self, branch, completed_at=None, closed_at=None, event=None, head_repository=None, repo=None):
         # The failure is attempt 2's, in job 120265317855; moving when that
         # job ended moves when it failed. The run itself was created earlier.
         # A run of main is a push; a branch's run is its pull request's.
         github = FakeGitHub(LOGS)
+        github.repo = repo or github.repo
         run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
         run["head_branch"] = branch
         run["event"] = event or ("push" if branch == "main" else "pull_request")
@@ -695,6 +786,12 @@ class ClosedIssueTest(unittest.TestCase):
         flagged, _ = self.dispatch("main", "2026-10-23T10:00:00Z", event="pull_request")
         self.assertEqual((flagged, self.entry["on_main"]), ([], 0))
         self.assertEqual(self.entry["by_branch"], {"main (pull request)": 1})
+
+    def test_this_repository_named_in_another_case_is_still_its_own(self):
+        # GitHub's names are case-insensitive: --repo Dayamjz/Assistant is
+        # dayamjz/assistant, which the API's run objects name.
+        flagged, _ = self.dispatch("main", "2026-10-23T10:00:00Z", repo="Dayamjz/Assistant")
+        self.assertEqual((flagged, self.entry["on_main"]), ([552], 1))
 
     def test_a_failure_before_the_close_or_off_main_is_not(self):
         self.assertEqual(self.dispatch("main")[0], [])
