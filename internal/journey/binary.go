@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
@@ -36,13 +37,23 @@ const buildGrace = 5 * time.Second
 // checkout.
 const BinaryVariable = "ASSISTANT_BINARY"
 
-// productBinary is resolved once per process. Which binary is under test is a
-// fact about the run rather than about a test, and building it once is the
-// difference between one compile and one per test.
-var productBinary struct {
+// productBinaryState is one resolution of the assistant binary. Binary keeps
+// the process on a single state. resetProductBinary replaces it, which a test
+// does so a selector it resolved, or a checkout build, does not become the
+// binary the rest of the process drives.
+type productBinaryState struct {
 	once sync.Once
 	path string
 	err  error
+}
+
+// productBinary is the resolution Binary returns. resetProductBinary replaces
+// it. A caller that never replaces it resolves once, which is one compile for
+// the process rather than one per call.
+var productBinary atomic.Pointer[productBinaryState]
+
+func init() {
+	productBinary.Store(&productBinaryState{})
 }
 
 // Binary returns the assistant binary this harness drives.
@@ -59,10 +70,18 @@ var productBinary struct {
 // separation and the home's lock behave differently across platforms, and only
 // a real process finds those differences.
 func Binary() (string, error) {
-	productBinary.once.Do(func() {
-		productBinary.path, productBinary.err = resolveBinary()
+	state := productBinary.Load()
+	state.once.Do(func() {
+		state.path, state.err = resolveBinary()
 	})
-	return productBinary.path, productBinary.err
+	return state.path, state.err
+}
+
+// resetProductBinary forgets the binary this process resolved. The next
+// Binary resolves again. A test uses it so the selector or checkout build
+// it resolved does not stay in the cache after the test returns.
+func resetProductBinary() {
+	productBinary.Store(&productBinaryState{})
 }
 
 // resolveBinary is Binary without the memoization, so the whole answer is in
@@ -232,7 +251,7 @@ func Cleanup() {
 			_ = os.RemoveAll(dir)
 		}
 	}
-	if productBinary.path != "" && os.Getenv(BinaryVariable) == "" {
-		_ = os.RemoveAll(filepath.Dir(productBinary.path))
+	if state := productBinary.Load(); state != nil && state.path != "" && os.Getenv(BinaryVariable) == "" {
+		_ = os.RemoveAll(filepath.Dir(state.path))
 	}
 }
