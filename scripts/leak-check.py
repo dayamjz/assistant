@@ -7,7 +7,10 @@ Per package as well:
   python3 scripts/leak-check.py run -- \
     go test -exec "python3 $PWD/scripts/leak-check.py package --" ./...
 Prove both reject planted leftovers: python3 scripts/leak-check.py self-test
-Only Linux and macOS are supported. Inspection errors fail closed.
+Only Linux and macOS are supported. Inspection errors fail closed. On macOS
+27, where Apple's agents keep folders in the per-user temp dir that this user
+cannot list, run passes only as CI runs it, with a TMPDIR of its own and
+--per-package, which reads nothing under them (guarded_run).
 
 run compares one snapshot taken before the command with one taken after it,
 so it reports what is still there when the command ends: for go test, the
@@ -30,7 +33,8 @@ or app extension launchd started from a bundle only root can have made
 run --per-package, entries with Apple's names in the per-user temp dir, where
 the per-package check denies every package's processes writes (guarded_run).
 On macOS run with a TMPDIR of its own, as CI does; without one, those temp
-entries are reported rather than set aside.
+entries are reported rather than set aside, and run reads what is under
+each, so one this user cannot list fails the run (temp_entries).
 """
 
 import argparse
@@ -288,7 +292,8 @@ def apple_owned(new_pids):
 # A name proves nothing about who made the entry, so one is set aside, with
 # everything under it, only in that directory, only when TMPDIR is another
 # directory, and only by run --per-package, whose packages cannot write there
-# (guarded_run). Any other new name there is still reported.
+# (guarded_run). So is an entry there flagged SF_NOUNLINK, whatever its name
+# (apple_temp_entry). Any other new name there is still reported.
 APPLE_TEMP_NAMES = {
     "xcrun_db",             # xcrun's lookup cache, written by the cgo toolchain
     ".LINKS",               # Apple framework hard-link staging
@@ -317,15 +322,25 @@ def apple_temp_root():
 
 def apple_temp_entry(path, root):
     """Whether path is, or is under, an entry directly in root with one of
-    the names Apple's tools use there (APPLE_TEMP_NAMES, APPLE_TEMP_PREFIX).
-    The name is all it reads."""
+    the names Apple's tools use there (APPLE_TEMP_NAMES, APPLE_TEMP_PREFIX),
+    or one flagged SF_NOUNLINK, which only the superuser can set (the guard's
+    tests check that this user cannot). On macOS 27 Apple's agents keep a
+    folder flagged so there, some without an Apple name (gamed, heard), with
+    a TemporaryItems inside that this user cannot list. It reads the name and
+    the flags of that entry, not their contents; an entry that is gone by
+    then is not Apple's."""
     if root is None:
         return False
     try:
         top = Path(path).relative_to(root).parts[0]
     except (ValueError, IndexError):
         return False
-    return top in APPLE_TEMP_NAMES or top.startswith(APPLE_TEMP_PREFIX)
+    if top in APPLE_TEMP_NAMES or top.startswith(APPLE_TEMP_PREFIX):
+        return True
+    try:
+        return bool(getattr(os.lstat(Path(root) / top), "st_flags", 0) & SF_NOUNLINK)
+    except FileNotFoundError:
+        return False
 
 
 def temp_roots():
@@ -340,8 +355,18 @@ def temp_roots():
     return sorted(roots)
 
 
-def temp_entries(roots):
-    """Walk temp directories without following symlinks, including nested sockets."""
+def temp_entries(roots, unread=None):
+    """Walk temp directories without following symlinks, including nested sockets.
+
+    unread, given a path, says whether the walk records that entry but reads
+    nothing under it: guarded_run passes the Apple entries it sets aside
+    (apple_temp_entry), since everything under one is set aside with it.
+    Everything else is read. A directory under a root that this user cannot
+    list is an error when this user owns it or can enter it, whatever
+    refused the listing: an Apple folder seen in the per-user temp dir on
+    macOS 27 refused this user listing it and still let this user create
+    entries in it, so a leftover inside would go unseen.
+    """
     found = {}
     visited = set()
 
@@ -355,13 +380,15 @@ def temp_entries(roots):
             if required:
                 raise
             return
-        except PermissionError:
+        except PermissionError as error:
             # A foreign private directory this user cannot enter cannot
             # receive this user's leaks. Execute-only trees can conceal a
             # writable descendant, so those and owned trees fail closed.
             if (required or path.stat().st_uid == os.geteuid() or
                     os.access(path, os.X_OK)):
-                raise
+                raise PermissionError(
+                    error.errno, f"{error.strerror}; this user cannot list it, "
+                    "so nothing under it can be checked", str(path)) from error
             return
         for child in children:
             try:
@@ -372,7 +399,7 @@ def temp_entries(roots):
                     "socket" if stat.S_ISSOCK(info.st_mode) else
                     "symlink" if stat.S_ISLNK(info.st_mode) else "file")
             found[str(child)] = (info.st_dev, info.st_ino, kind)
-            if kind == "directory":
+            if kind == "directory" and not (unread and unread(child)):
                 visit(child)
 
     for root in roots:
@@ -380,8 +407,8 @@ def temp_entries(roots):
     return found
 
 
-def snapshot(roots):
-    return processes(), temp_entries(roots)
+def snapshot(roots, unread=None):
+    return processes(), temp_entries(roots, unread)
 
 
 def differences(before, after, jobs=None, apple_root=None):
@@ -423,8 +450,11 @@ def guarded_run(command, per_package=False):
     whose sandbox denies all of the package's processes writes there
     (Sandbox), and only when TMPDIR is elsewhere (apple_temp_root). run does
     not check that claim; CI's step does, by failing unless every package go
-    test reported ok went through package. Without per_package, every new
-    entry there is reported. What the sandbox does not cover is an entry made
+    test reported ok went through package. Nothing under an entry set aside
+    is read (temp_entries), so one this user cannot list does not stop the
+    run. Without per_package, every new entry there is reported and
+    everything under each is read, so one that cannot be listed fails the
+    run. What the sandbox does not cover is an entry made
     there by a process outside every package's tree, such as a launchd job a
     test submitted (package_run), whose entry is set aside when its name is
     one of Apple's.
@@ -435,9 +465,13 @@ def guarded_run(command, per_package=False):
     if per_package and apple_root is not None:
         print(f"leak-check: Apple entries in {apple_root} are set aside; the per-package "
               "check denies every package's processes writes there", flush=True)
-    before = snapshot(roots)
+
+    def unread(path):
+        return apple_temp_entry(path, apple_root)
+
+    before = snapshot(roots, unread)
     result = subprocess.run(command, check=False)
-    after = snapshot(roots)
+    after = snapshot(roots, unread)
     new_pids = {pid for pid, start in after[0] if (pid, start) not in before[0]}
     messages, aside = differences(before, after, apple_owned(new_pids), apple_root)
     for message in aside:
@@ -450,7 +484,11 @@ def guarded_run(command, per_package=False):
 
 
 def self_test():
-    """The guard's positive control: the real CLI must reject and name both leaks."""
+    """The guard's positive control: the real CLI, run as CI runs it (run
+    --per-package, with a TMPDIR of its own), must reject and name both leaks.
+    Run that way it reads nothing under the Apple entries of the per-user
+    temp dir (guarded_run), as CI's own run does not, so a folder there this
+    user cannot list does not fail the control when it would not fail CI."""
     with tempfile.TemporaryDirectory(prefix="leak-check-self-test-") as folder:
         root = Path(folder).resolve()
         pid_file = root / "pid"
@@ -467,9 +505,9 @@ pathlib.Path(sys.argv[2]).mkdir()
         pid = None
         try:
             result = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve()), "run", "--",
+                [sys.executable, str(Path(__file__).resolve()), "run", "--per-package", "--",
                  sys.executable, "-c", code, str(pid_file), str(leaked)],
-                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                env=dict(os.environ, TMPDIR=str(root)), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 check=False, timeout=60,
             )
             print(result.stdout, end="", flush=True)

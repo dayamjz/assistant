@@ -198,8 +198,17 @@ class LeakCheckTest(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "darwin", "the per-user temp dir is macOS's")
     def test_an_apple_name_in_the_user_temp_dir_is_set_aside_only_per_package(self):
+        # Without --per-package, run reads everything in the per-user temp
+        # dir, so where a directory there cannot be listed (Apple's
+        # TemporaryItems folders on macOS 27) it fails naming one, before it
+        # runs the command, and never sets the new entry aside.
         user_temp = Path(subprocess.check_output(["getconf", "DARWIN_USER_TEMP_DIR"],
                                                  text=True).strip()).resolve()
+        try:
+            check.temp_entries([user_temp])
+            unlistable = None
+        except PermissionError as error:
+            unlistable = error.filename
         with tempfile.TemporaryDirectory(dir="/tmp") as folder:
             env = dict(os.environ, TMPDIR=folder)
             for flag, expected in (([], "LEAK directory {}"),
@@ -209,11 +218,115 @@ class LeakCheckTest(unittest.TestCase):
                     result = subprocess.run(
                         [sys.executable, str(SCRIPT), "run", *flag, "--", "mkdir", str(made)],
                         env=env, text=True, capture_output=True, check=False, timeout=300)
+                    if not flag and unlistable is not None:
+                        # It refuses at its first reading, before the command.
+                        self.assertEqual(result.returncode, 2, result)
+                        self.assertIn("this user cannot list it", result.stderr)
+                        self.assertNotIn("set aside", result.stdout)
+                        self.assertFalse(made.exists(), result)
+                        continue
                     self.assertTrue(made.is_dir(), result)
                     self.assertIn(expected.format(made), result.stdout)
+                    self.assertNotIn("inspection failed", result.stderr)
                 finally:
                     if made.is_dir():
                         made.rmdir()
+
+    def test_an_unreadable_directory_fails_the_walk_only_where_it_is_watched(self):
+        # Real directories this user owns and cannot list (mode 000): one
+        # under an Apple-named entry, which run --per-package sets aside with
+        # everything under it and so does not read, and one under a watched
+        # entry, which it must read. A root of the test's own stands for the
+        # per-user temp dir.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            aside = root / "com.apple.leak-check-test" / "sealed"
+            watched = root / "watched" / "sealed"
+            for sealed in (aside, watched):
+                sealed.mkdir(parents=True)
+                sealed.chmod(0)
+            try:
+                self.assertFalse(os.access(aside, os.X_OK),
+                                 "a mode 000 directory reads as enterable; "
+                                 "this user (root?) cannot be refused one")
+
+                def unread(path):
+                    return check.apple_temp_entry(path, root)
+
+                with self.assertRaises(PermissionError) as caught:
+                    check.temp_entries([root], unread)
+                self.assertEqual(caught.exception.filename, str(watched))
+                self.assertIn("this user cannot list it", str(caught.exception))
+                watched.chmod(0o700)
+                entries = check.temp_entries([root], unread)
+                self.assertIn(str(aside.parent), entries)
+                self.assertNotIn(str(aside), entries)
+                self.assertIn(str(watched), entries)
+                # Read everywhere, as run reads without --per-package.
+                with self.assertRaises(PermissionError) as caught:
+                    check.temp_entries([root])
+                self.assertEqual(caught.exception.filename, str(aside))
+            finally:
+                for sealed in (aside, watched):
+                    sealed.chmod(0o700)
+
+    @unittest.skipUnless(sys.platform == "darwin", "the per-user temp dir is macOS's")
+    def test_the_real_check_reads_nothing_it_sets_aside_and_all_it_watches(self):
+        # The real CLI as CI runs it (run --per-package, TMPDIR elsewhere),
+        # over the real per-user temp dir: a mode 000 directory under an
+        # Apple-named entry there does not stop it, and one in the watched
+        # TMPDIR fails it naming that directory. Other runs on this machine
+        # may leave entries of their own, so the first asserts no
+        # inspection failure, not a clean exit.
+        user_temp = Path(subprocess.check_output(["getconf", "DARWIN_USER_TEMP_DIR"],
+                                                 text=True).strip()).resolve()
+        with tempfile.TemporaryDirectory(dir="/tmp") as folder:
+            env = dict(os.environ, TMPDIR=folder)
+            aside = user_temp / f"com.apple.leak-check-test-{os.getpid()}" / "sealed"
+            watched = Path(folder).resolve() / "sealed"
+            aside.mkdir(parents=True)
+            watched.mkdir()
+            try:
+                aside.chmod(0)
+
+                def run():
+                    return subprocess.run(
+                        [sys.executable, str(SCRIPT), "run", "--per-package", "--", "true"],
+                        env=env, text=True, capture_output=True, check=False, timeout=300)
+
+                result = run()
+                self.assertNotIn("inspection failed", result.stderr, result)
+                self.assertIn(result.returncode, (0, 1), result)
+                watched.chmod(0)
+                result = run()
+                self.assertEqual(result.returncode, 2, result)
+                self.assertIn(f"this user cannot list it, so nothing under it can be checked: "
+                              f"'{watched}'", result.stderr)
+            finally:
+                for sealed in (aside, watched):
+                    sealed.chmod(0o700)
+                    sealed.rmdir()
+                aside.parent.rmdir()
+
+    @unittest.skipUnless(sys.platform == "darwin", "SF_NOUNLINK is set aside on macOS")
+    def test_only_an_entry_flagged_against_removal_is_set_aside_by_its_flag(self):
+        # /private/var/folders, where every per-user temp dir lives, is
+        # flagged SF_NOUNLINK and /private/var/tmp is not: with /private/var
+        # standing for the per-user temp dir, an entry under the first is
+        # set aside whatever its name, and one under the second is not.
+        var = Path("/private/var")
+        self.assertTrue(os.lstat(var / "folders").st_flags & check.SF_NOUNLINK,
+                        "/private/var/folders is not flagged here, so this shows nothing")
+        self.assertFalse(os.lstat(var / "tmp").st_flags & check.SF_NOUNLINK)
+        self.assertTrue(check.apple_temp_entry(var / "folders" / "anything", var))
+        self.assertFalse(check.apple_temp_entry(var / "tmp" / "anything", var))
+        self.assertFalse(check.apple_temp_entry(var / "gone-leak-check-test" / "x", var))
+        # This user cannot set the flag, so no test can make an entry that
+        # carries it.
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaises(PermissionError):
+                os.chflags(folder, check.SF_NOUNLINK)
+            self.assertFalse(os.lstat(folder).st_flags & check.SF_NOUNLINK)
 
     def test_an_orphan_is_not_an_apple_bundle_service(self):
         with subprocess.Popen(["sleep", "300"], start_new_session=True) as child:
