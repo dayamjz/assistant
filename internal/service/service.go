@@ -419,6 +419,25 @@ type Service struct {
 	// package's tests, which use it to look at the stream at the point a
 	// service that stopped there would have left it.
 	afterConsentRegistered func()
+	// beforeSessionRecord runs in launchTask once the session is held
+	// pending and immediately before the store write that records the
+	// attempt's session reference, outside mu, with the task and the
+	// reference. It is nil in production and set only by this package's
+	// tests, which use it to make that write wait on a held store or to read
+	// the service while the session is pending.
+	beforeSessionRecord func(id, ref string)
+	// afterSessionRecorded runs in launchTask once the store write that
+	// records the attempt's session reference has succeeded and before the
+	// pending mark is settled, outside mu, with the task and the reference.
+	// It is nil in production and set only by this package's tests, which
+	// use it to hold a launch at the point the record names a session still
+	// pending.
+	afterSessionRecorded func(id, ref string)
+	// awaitingSessionRecord runs in sessionOf when the session it found is
+	// still pending, just before it waits for the record's write, with the
+	// task. It is nil in production and set only by this package's tests,
+	// which use it to know a reader is waiting rather than guess.
+	awaitingSessionRecord func(id string)
 	// sweepCopy stands in for the sweep this service asks of a copy: the
 	// one relaunch.go and dispatch.go ask of a task's standing copy, and the
 	// one runsweep.go asks of a finished run's. It is nil in production,
