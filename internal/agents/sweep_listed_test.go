@@ -16,6 +16,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // realRefusal is a real unreadable working directory on this platform,
@@ -215,7 +216,7 @@ func namedHelper(t *testing.T, name string) string {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(path, raw, 0o700); err != nil {
+	if err := procgroup.WriteProgram(path, raw, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return path

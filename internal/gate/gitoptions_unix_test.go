@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -30,7 +31,7 @@ func TestGitOptionsReachTheWorkingCopyAndTheGateRepository(t *testing.T) {
 	log := filepath.Join(dir, "calls")
 	logging := filepath.Join(dir, "git")
 	script := "#!/bin/sh\necho \"$*\" >> '" + log + "'\nexec '" + real + "' \"$@\"\n"
-	if err := os.WriteFile(logging, []byte(script), 0o700); err != nil {
+	if err := procgroup.WriteProgram(logging, []byte(script), 0o700); err != nil {
 		t.Fatalf("writing the logging git: %v", err)
 	}
 	command, _ := recorderCommand(t, 0)

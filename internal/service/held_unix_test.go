@@ -17,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // A process a test has a shell hold until it is released is
@@ -254,7 +255,7 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(binary, raw, 0o700); err != nil {
+	if err := procgroup.WriteProgram(binary, raw, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	record := filepath.Join(dir, "held")

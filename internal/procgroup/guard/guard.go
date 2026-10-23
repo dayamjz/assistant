@@ -31,6 +31,19 @@
 //   - Files no loaded platform compiles. Load reads the module once per
 //     platform in Platforms, and a file built only for another platform is
 //     read by none of them.
+//
+// # Programs written
+//
+// LoadWrites asks a second question of the same type checker, tests
+// included: every use of a mode setter in ModeSetters whose mode carries an
+// execute bit or is not a constant, which CheckWrites holds to
+// procgroup.WriteProgram and WriteExceptions (#539). It does not see a file
+// made executable through an API not in ModeSetters, such as os.Create
+// followed by a call outside this module or a shell's chmod, a program a
+// child process writes, or a write in a file only Windows builds, which
+// LoadWrites does not read because a start there does not fork. A row of
+// WriteExceptions excuses its whole function, so a program written there is
+// excused with it.
 package guard
 
 import (
