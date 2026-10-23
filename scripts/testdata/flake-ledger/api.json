@@ -44,6 +44,8 @@
      "run_attempt": 1,
      "name": "check (ubuntu-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:42:59Z",
      "conclusion": "success",
      "labels": [
       "ubuntu-latest"
@@ -121,6 +123,8 @@
      "run_attempt": 1,
      "name": "check (macos-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T05:22:54Z",
+     "completed_at": "2026-10-23T05:52:16Z",
      "conclusion": "failure",
      "labels": [
       "macos-latest"
@@ -198,6 +202,8 @@
      "run_attempt": 1,
      "name": "lint",
      "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:25:25Z",
      "conclusion": "success",
      "labels": [
       "ubuntu-latest"
@@ -264,6 +270,8 @@
      "run_attempt": 2,
      "name": "check (macos-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T05:54:13Z",
+     "completed_at": "2026-10-23T06:18:38Z",
      "conclusion": "failure",
      "labels": [
       "macos-latest"
@@ -341,6 +349,8 @@
      "run_attempt": 2,
      "name": "lint",
      "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:25:25Z",
      "conclusion": "success",
      "labels": [
       "ubuntu-latest"
@@ -402,6 +412,8 @@
      "run_attempt": 2,
      "name": "check (ubuntu-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:42:59Z",
      "conclusion": "success",
      "labels": [
       "ubuntu-latest"
@@ -484,6 +496,8 @@
      "run_attempt": 3,
      "name": "check (macos-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T06:19:34Z",
+     "completed_at": "2026-10-23T06:51:57Z",
      "conclusion": "success",
      "labels": [
       "macos-latest"
@@ -561,6 +575,8 @@
      "run_attempt": 3,
      "name": "check (ubuntu-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:42:59Z",
      "conclusion": "success",
      "labels": [
       "ubuntu-latest"
@@ -638,6 +654,8 @@
      "run_attempt": 3,
      "name": "lint",
      "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:25:25Z",
      "conclusion": "success",
      "labels": [
       "ubuntu-latest"
@@ -704,6 +722,8 @@
      "run_attempt": 1,
      "name": "lint",
      "status": "completed",
+     "started_at": "2026-10-23T09:27:53Z",
+     "completed_at": "2026-10-23T09:41:42Z",
      "conclusion": "success",
      "labels": [
       "ubuntu-latest"
@@ -765,6 +785,8 @@
      "run_attempt": 1,
      "name": "check (ubuntu-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T09:27:53Z",
+     "completed_at": "2026-10-23T09:58:08Z",
      "conclusion": "success",
      "labels": [
       "ubuntu-latest"
@@ -842,6 +864,8 @@
      "run_attempt": 1,
      "name": "check (macos-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T09:27:53Z",
+     "completed_at": "2026-10-23T10:08:08Z",
      "conclusion": "cancelled",
      "labels": [
       "macos-latest"
@@ -924,6 +948,8 @@
      "run_attempt": 2,
      "name": "check (macos-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T10:18:16Z",
+     "completed_at": "2026-10-23T10:50:01Z",
      "conclusion": "success",
      "labels": [
       "macos-latest"
@@ -1001,6 +1027,8 @@
      "run_attempt": 2,
      "name": "lint",
      "status": "completed",
+     "started_at": "2026-10-23T09:27:53Z",
+     "completed_at": "2026-10-23T09:41:42Z",
      "conclusion": "success",
      "labels": [
       "ubuntu-latest"
@@ -1062,6 +1090,8 @@
      "run_attempt": 2,
      "name": "check (ubuntu-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T09:27:53Z",
+     "completed_at": "2026-10-23T09:58:08Z",
      "conclusion": "success",
      "labels": [
       "ubuntu-latest"
@@ -1144,6 +1174,8 @@
      "run_attempt": 1,
      "name": "lint",
      "status": "completed",
+     "started_at": "2026-10-23T07:11:04Z",
+     "completed_at": "2026-10-23T07:13:20Z",
      "conclusion": "success",
      "labels": [
       "ubuntu-latest"
@@ -1205,6 +1237,8 @@
      "run_attempt": 1,
      "name": "check (macos-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T07:11:04Z",
+     "completed_at": "2026-10-23T07:20:10Z",
      "conclusion": "cancelled",
      "labels": [
       "macos-latest"
@@ -1282,6 +1316,8 @@
      "run_attempt": 1,
      "name": "check (ubuntu-latest)",
      "status": "completed",
+     "started_at": "2026-10-23T07:11:04Z",
+     "completed_at": "2026-10-23T07:19:59Z",
      "conclusion": "cancelled",
      "labels": [
       "ubuntu-latest"
