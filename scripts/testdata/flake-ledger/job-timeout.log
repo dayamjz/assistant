@@ -1,0 +1,41 @@
+﻿2026-10-23T09:27:53.8362020Z Current runner version: '2.338.0'
+2026-10-23T09:27:53.8400480Z ##[group]Runner Image Provisioner
+2026-10-23T09:27:53.8401290Z Hosted Compute Agent
+2026-10-23T09:27:53.8405220Z ##[endgroup]
+2026-10-23T09:27:53.8410580Z ##[endgroup]
+2026-10-23T09:27:53.8421710Z ##[endgroup]
+2026-10-23T09:27:53.8432840Z ##[endgroup]
+2026-10-23T09:27:56.0214140Z ##[group]Run actions/checkout@v4
+2026-10-23T09:27:56.0231870Z ##[endgroup]
+2026-10-23T09:27:56.6108960Z ##[endgroup]
+2026-10-23T09:27:56.6892190Z ##[endgroup]
+2026-10-23T09:27:56.7009450Z ##[endgroup]
+2026-10-23T09:27:57.0437270Z ##[endgroup]
+2026-10-23T09:27:58.6981460Z ##[endgroup]
+2026-10-23T09:27:58.6983880Z ##[endgroup]
+2026-10-23T09:27:58.9486560Z ##[endgroup]
+2026-10-23T09:27:59.0007260Z ##[group]Run actions/setup-go@v6
+2026-10-23T09:27:59.0010720Z ##[endgroup]
+2026-10-23T09:28:17.2907750Z ##[endgroup]
+2026-10-23T09:37:59.5107900Z ##[group]Run if ! command -v tmux >/dev/null 2>&1; then
+2026-10-23T09:37:59.5364530Z ##[endgroup]
+2026-10-23T09:38:10.6918760Z ##[group]Run unformatted=$(gofmt -l .)
+2026-10-23T09:38:10.6957840Z ##[endgroup]
+2026-10-23T09:38:11.5150190Z ##[group]Run go vet ./...
+2026-10-23T09:38:11.5218870Z ##[endgroup]
+2026-10-23T09:39:04.9444770Z ##[group]Run python3 scripts/leak-check-test.py -v
+2026-10-23T09:39:04.9925650Z ##[endgroup]
+2026-10-23T09:39:25.6959960Z ##[group]Run set -o pipefail
+2026-10-23T09:39:25.7033520Z ##[endgroup]
+2026-10-23T09:39:26.1102750Z leak-check: watching /Users/runner/work/_temp/tmp.KSfVTS/leak-check-self-test-enfjiwuv, /private/tmp, /private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T
+2026-10-23T09:39:26.1306450Z LEAK process pid=16963 start=1792748365.973353 command=sleep 300
+2026-10-23T09:39:26.1406670Z LEAK directory /Users/runner/work/_temp/tmp.KSfVTS/leak-check-self-test-enfjiwuv/planted-directory
+2026-10-23T09:39:26.1507570Z leak-check: 2 leftover(s); command exit=0
+2026-10-23T09:39:26.5361390Z leak-check self-test: expected failure observed; planted leaks removed
+2026-10-23T09:39:26.5667830Z LEAK package=/Users/runner/work/assistant/assistant process pid=16972 start=1792748366.317099 command=sleep 300
+2026-10-23T09:39:26.5771120Z leak-check: package /Users/runner/work/assistant/assistant left processes running
+2026-10-23T09:39:26.5873900Z leak-check self-test: per-package check failed, named and ended its planted process, and left a process outside the package alone
+2026-10-23T09:39:26.5975400Z leak-check self-test: per-package check refused a write in /private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T
+2026-10-23T10:08:01.9471310Z ##[error]The operation was canceled.
+2026-10-23T10:08:01.9645150Z ##[group]Run if [ ! -f test.log ]; then
+2026-10-23T10:08:02.3140410Z ##[endgroup]
