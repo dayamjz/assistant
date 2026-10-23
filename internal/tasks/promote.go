@@ -580,18 +580,10 @@ func PromotionBrief(branch, intent, line string) string {
 		"one remote a delivery copy has.\n\n    " + line + "\n"
 }
 
-// appendPromotion appends the brief to the instructions file. The file is
-// the one thing the worker was started with, and a worker told to re-read
-// it, or a worker begun on the task later, is told there what the contract
-// now is.
+// appendPromotion appends the brief to the instructions file, once and
+// whole (AppendNote). The file is the one thing the worker was started
+// with, and a worker told to re-read it, or a worker begun on the task
+// later, is told there what the contract now is.
 func appendPromotion(path, brief string) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	if _, err := f.WriteString("\n\n" + brief); err != nil {
-		return err
-	}
-	return f.Sync()
+	return AppendNote(path, PromotionHeading, brief)
 }

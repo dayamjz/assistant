@@ -106,9 +106,10 @@ import (
 // task's slot withdraws its claim, so a claim that names the task under the
 // slot stands until that call marks or withdraws it.
 // Every step after the claim is idempotent on what it finds (the row stands,
-// the instructions file stands, the copy stands at the new path, the note is in
-// the file), so a service that stops anywhere in it is completed by the next
-// call or the next start from the entry alone, which names the task:
+// the instructions file stands, the copy stands at the new path, the whole
+// note is in the file: tasks.AppendNote completes a note an earlier append
+// left partial), so a service that stops anywhere in it is completed by the
+// next call or the next start from the entry alone, which names the task:
 // completeCarryOnsAtOpen reads every claim not marked. A stop before the task's
 // row is written leaves an open entry naming a task that does not exist yet,
 // which the completion creates, or withdraws if intake refuses it; a stop
@@ -486,7 +487,7 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
-	if err := appendOnce(instructions, carryOnHeading, carryOnNote(entry, plan.old)); err != nil {
+	if err := tasks.AppendNote(instructions, carryOnHeading, carryOnNote(entry, plan.old)); err != nil {
 		return machine.KeptWorkAnswered{}, fmt.Errorf("service: writing the carry-on note into the instructions of task %s: %w", id, err)
 	}
 	marked, err := s.store.MarkKeptWorkCarriedOn(ctx, entry.ID, id)
@@ -659,27 +660,6 @@ func carryOnNote(entry store.KeptWork, old store.Task) string {
 		"ended (" + entry.Reason + "), so the copy was kept rather than discarded and you are to carry that work on. " +
 		"When it was kept it held " + holds + ". Read the copy's history and tree before you change anything, and continue " +
 		"from what is there rather than starting over.\n"
-}
-
-// appendOnce appends text to the file at path unless the file already
-// carries heading at the start of a line.
-func appendOnce(path, heading, text string) error {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	if strings.HasPrefix(string(raw), heading) || strings.Contains(string(raw), "\n"+heading) {
-		return nil
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	if _, err := f.WriteString("\n\n" + text); err != nil {
-		return err
-	}
-	return f.Sync()
 }
 
 // completeCarryOnsAtOpen completes every carry-on answer a stopped service

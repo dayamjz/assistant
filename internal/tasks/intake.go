@@ -491,6 +491,45 @@ func writeWhole(path string, content []byte) error {
 	return removePartials(path)
 }
 
+// AppendNote appends note, a section the program writes into a task's
+// instructions under heading, to the instructions file at path once and
+// whole. The file is rewritten through writeWhole, so a write that fails,
+// a filesystem taking only part of it among them, leaves the file as it
+// was, never part of the note, and the next call writes it again. The file
+// already holds the note when it holds it whole after a blank line, and is
+// then left as it is; a note an earlier append left partial, the file
+// ending in the blank line, the heading and less than the rest of the
+// note, is completed rather than taken for the note or written a second
+// time. The heading alone is never read as the note, so an earlier
+// section under the same heading, another task's note copied into this
+// one's text, is no reason not to write this one. A note that does not
+// begin with heading is refused before anything is read, and so is a
+// path that stands as a symbolic link, with an *InstructionsLinkError.
+func AppendNote(path, heading, note string) error {
+	if heading == "" || !strings.HasPrefix(note, heading) {
+		return fmt.Errorf("tasks: a note appended to the instructions begins with its heading %q", heading)
+	}
+	if err := refuseLink(path); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	text := string(raw)
+	whole := "\n\n" + note
+	if strings.Contains(text, whole) {
+		return nil
+	}
+	for n := len(whole) - 1; n >= len("\n\n"+heading); n-- {
+		if strings.HasSuffix(text, whole[:n]) {
+			text = text[:len(text)-n]
+			break
+		}
+	}
+	return writeWhole(path, []byte(text+whole))
+}
+
 // refuseLink refuses a path that stands as a symbolic link, and reports
 // nothing for one that is a file or is not there.
 func refuseLink(path string) error {

@@ -613,3 +613,100 @@ func TestIntakeWritesNeverGoThroughALink(t *testing.T) {
 		t.Fatalf("the refused write replaced the link: %v, %v", info, err)
 	}
 }
+
+// A note is appended to the instructions once and whole: the first append
+// writes it after a blank line and a second leaves the file as it is; a
+// note an earlier append left partial is completed, not taken for the note
+// and not written twice; an earlier section under the same heading, another
+// note, is no reason not to write this one. A write that fails leaves the
+// file as it was, so the next call writes the note: the positive control
+// for the failure is a directory that refuses the write, after which the
+// file still reads as before and no partial is left beside it. A note not
+// beginning with its heading, and a path standing as a symbolic link, are
+// refused.
+func TestANoteIsAppendedToTheInstructionsOnceAndWhole(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	const heading = "## A note, written by the program"
+	const note = heading + "\n\nWhat the worker is told, in full.\n"
+	const written = "What the coordinator wrote.\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "instructions.md")
+	read := func() string {
+		t.Helper()
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	write := func(text string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write(written)
+	for range 2 {
+		if err := AppendNote(path, heading, note); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(); got != written+"\n\n"+note {
+			t.Fatalf("after the append the file reads %q; want the note once", got)
+		}
+	}
+	for _, cut := range []int{len("\n\n" + heading), len("\n\n"+note) - 1} {
+		write(written + ("\n\n" + note)[:cut])
+		if err := AppendNote(path, heading, note); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(); got != written+"\n\n"+note {
+			t.Fatalf("a note left %d bytes long was completed to %q; want the note once, whole", cut, got)
+		}
+	}
+	earlier := "\n\n" + heading + "\n\nAn earlier task's note.\n"
+	write(written + earlier)
+	if err := AppendNote(path, heading, note); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got != written+earlier+"\n\n"+note {
+		t.Fatalf("with an earlier note under the heading the file reads %q; want this note after it", got)
+	}
+
+	write(written)
+	if os.Geteuid() != 0 {
+		if err := os.Chmod(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		err := AppendNote(path, heading, note)
+		if chErr := os.Chmod(dir, 0o700); chErr != nil {
+			t.Fatal(chErr)
+		}
+		if err == nil {
+			t.Fatal("an append into a directory that refuses the write reported success")
+		}
+		if got := read(); got != written {
+			t.Fatalf("after the failed append the file reads %q; want it as it was", got)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+			t.Fatalf("the failed append left %d entries beside the file", len(entries)-1)
+		}
+		if err := AppendNote(path, heading, note); err != nil || read() != written+"\n\n"+note {
+			t.Fatalf("the next append = %v, the file %q; want the note written", err, read())
+		}
+	} else {
+		t.Log("running as root, a directory's mode refuses no write, so a failed append is not exercised here")
+	}
+
+	if err := AppendNote(path, heading, "Not under its heading.\n"); err == nil {
+		t.Fatal("a note not beginning with its heading was appended")
+	}
+	link := filepath.Join(dir, "link.md")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendNote(link, heading, note); !errors.Is(err, ErrInstructionsLink) {
+		t.Fatalf("an append through a link = %v; want ErrInstructionsLink", err)
+	}
+}

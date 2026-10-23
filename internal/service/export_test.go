@@ -261,3 +261,7 @@ func (r *LateRecorder) RecordInvocation(rec agents.Record) {
 // store read can, so a test can put a failed reading at the point it needs
 // one. It exists only in the tests.
 func (s *Service) FailUsageReadsForTest(n int32) { s.usageReadFaults.Store(n) }
+
+// CarryOnHeading is the heading of the note a carry on appends to the new
+// task's instructions, for this package's external tests.
+const CarryOnHeading = carryOnHeading

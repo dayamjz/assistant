@@ -825,6 +825,81 @@ func TestACarryOnStoppedAfterTheMoveAdoptsACopyThatWentOn(t *testing.T) {
 	})
 }
 
+// A carry-on note is written whole or not at all, and a retry completes a
+// note an earlier append left partial, the final review of 3088420: the
+// carry on is stopped between the copy's move and the entry's mark with the
+// new task's instructions holding the note's heading and its first words
+// alone, as an append the filesystem took only part of leaves them. The
+// next start completes the carry on with the whole note in the file, once,
+// and marks the entry only then. Without the note compared whole, the
+// heading was taken as the note, the entry was marked and the worker would
+// start without what the note tells it.
+func TestACarryOnCompletesACarryOnNoteAnAppendLeftPartial(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	partial := "\n\n" + service.CarryOnHeading + "\n\nYou were started in the working copy of an earl"
+	stopped := errors.New("the service stopped while the carry-on note was appended")
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, service.WithCarryOnInterruptForTest(t, o, func() error {
+		owed, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+		if err != nil {
+			return err
+		}
+		instructions, err := h.TaskInstructions(owed.CarriedOnTask.Or(""))
+		if err != nil {
+			return err
+		}
+		f, err := os.OpenFile(instructions, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = f.Close() }()
+		if _, err := f.WriteString(partial); err != nil {
+			return err
+		}
+		return stopped
+	}), func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err == nil || !strings.Contains(err.Error(), "stopped while") {
+			t.Fatalf("the carry on past the stopped seam = %+v, %v; want the stop", out, err)
+		}
+	})
+	owed, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+	if err != nil || owed.CarriedOnAt.IsKnown() {
+		t.Fatalf("after the stop the entry reads %+v, %v; want it owed", owed, err)
+	}
+	reserved := owed.CarriedOnTask.Or("")
+	instructions, err := h.TaskInstructions(reserved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(instructions); err != nil || !strings.HasSuffix(string(raw), partial) {
+		t.Fatalf("after the stop the instructions read %q, %v; want them ending in the partial note", raw, err)
+	}
+
+	o, _ = workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		waitCarriedOn(t, h, entry.ID)
+	})
+	raw, err := os.ReadFile(instructions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if strings.Count(text, service.CarryOnHeading) != 1 || !strings.HasSuffix(text, "rather than starting over.\n") ||
+		!strings.Contains(text, "You were started in the working copy of an earlier task, "+old+",") {
+		t.Fatalf("the completed carry on left the instructions reading:\n%s\nwant the whole note, once", text)
+	}
+}
+
 // Containment is not identity: a fresh clone of an upstream that took the
 // recorded commits up is not taken for the kept copy, the reviewer's
 // sequence. A detached investigation's copy is kept at the worker's commit
