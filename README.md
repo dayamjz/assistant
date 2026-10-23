@@ -121,7 +121,7 @@ roles:
     effort: high
 
 run_usage_budget:
-  output_tokens: 200000   # parks any single run that reports more
+  output_tokens: 200000   # parks a run once its own calls reach this many output tokens
 
 usage_ceiling:
   window: 168h            # sums every run's calls over 7 days
