@@ -1,0 +1,121 @@
+name: Repeat
+
+# A pull request that changes a package that has regressed on main runs
+# that package's tests REPEAT_COUNT times under the race detector, on both
+# OSes, in CI's own test environment, before it can merge. Its tests passing
+# once in the check job is what every regression on main did first (#549,
+# #552, #558). scripts/repeat-plan.py says which packages, and why each.
+#
+# The required check is the one job named "repeat". It passes when the plan
+# runs nothing, so it can be required of every pull request; the per-OS jobs
+# are not required by name, because a matrix job skipped as a whole reports
+# a name GitHub never expands.
+#
+# What it does not cover: a test in another package that a change breaks
+# (#569: a standin change failed a cli test). The daily stress run, which
+# runs the whole suite, is where that surfaces.
+
+on:
+  pull_request:
+
+concurrency:
+  group: repeat-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Each package's tests run this many times in one go test, with -count.
+  # The cost per package is in the pull request that set it (#576).
+  REPEAT_COUNT: "3"
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      packages: ${{ steps.plan.outputs.packages }}
+      leak_check_tests: ${{ steps.plan.outputs.leak_check_tests }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Plan
+        id: plan
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -o pipefail
+          git diff --name-only "$BASE...$HEAD" > changed.txt
+          echo "$(wc -l < changed.txt) changed path(s) since the merge base with $BASE"
+          python3 scripts/repeat-plan.py --github-output "$GITHUB_OUTPUT" < changed.txt
+
+  run:
+    name: run (${{ matrix.os }})
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/test-env
+      - name: Repeat the leak check's tests
+        if: needs.plan.outputs.leak_check_tests == 'true'
+        shell: bash
+        run: |
+          failed=0
+          for i in $(seq "$REPEAT_COUNT"); do
+            echo "::group::leak-check-test.py, run $i of $REPEAT_COUNT"
+            python3 scripts/leak-check-test.py -v || failed=$((failed + 1))
+            echo "::endgroup::"
+          done
+          echo "leak-check-test.py failed $failed of $REPEAT_COUNT runs"
+          [ "$failed" -eq 0 ]
+      - name: Test
+        if: needs.plan.outputs.packages != ''
+        shell: bash
+        env:
+          CI_TEST_PACKAGES: ${{ needs.plan.outputs.packages }}
+          CI_TEST_COUNT: ${{ env.REPEAT_COUNT }}
+          # go test's bound is per package binary, and -count runs every
+          # test that many times inside one binary.
+          CI_TEST_TIMEOUT: 55m
+        run: bash scripts/ci-test.sh
+
+  repeat:
+    name: repeat
+    needs: [plan, run]
+    # Not when the run itself was cancelled (a newer push replaced it); a
+    # job of it that was cancelled or timed out still fails the verdict.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verdict
+        env:
+          PLAN: ${{ needs.plan.result }}
+          RUN: ${{ needs.run.result }}
+          PLANNED: ${{ needs.plan.outputs.run }}
+          PACKAGES: ${{ needs.plan.outputs.packages }}
+          LEAK: ${{ needs.plan.outputs.leak_check_tests }}
+        run: |
+          echo "plan: $PLAN; run: $RUN; packages: ${PACKAGES:-none}; leak check tests: ${LEAK:-false}"
+          if [ "$PLAN" != success ]; then
+            echo "::error::the plan did not finish ($PLAN), so what this change needs is unknown"
+            exit 1
+          fi
+          if [ "$PLANNED" = true ] && [ "$RUN" != success ]; then
+            echo "::error::the repeated runs did not pass ($RUN)"
+            exit 1
+          fi
+          if [ "$PLANNED" != true ]; then
+            echo "This change touches no package the gate covers (scripts/repeat-plan.py)."
+          fi
