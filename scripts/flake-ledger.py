@@ -29,7 +29,8 @@ What it reads, and from where:
 - Any other failed step (vet, gofmt, lint) as a step failure naming the step
   and its last error line.
 
-It is loud where it cannot see: a log or API read that fails makes it exit 2,
+It is loud where it cannot see: a log or API read that fails makes it exit 2
+(a failed issue read leaves each failure's issues unknown, never "none"),
 and a failed job whose log shows tests ran but in which nothing was named
 makes it exit 3 (listed under "Unattributed"). Both still print the ledger.
 
@@ -72,7 +73,10 @@ TEST_TEMPDIR = re.compile(r"^(Test[A-Za-z0-9_]+?)\d+$")
 GO_TIMEOUT = re.compile(r"^panic: test timed out after (\S+)")
 GO_RUNNING = re.compile(r"^\s+(Test\S*|Example\S*|Fuzz\S*|Benchmark\S*) \(")
 GO_PANIC = re.compile(r"^panic: (.*)")
-LEAK_PACKAGE = re.compile(r"^LEAK package=(\S+) process pid=\d+ start=\S+ command=(.*)$")
+# Every line the leak check prints for a package starts so; the processes it
+# names carry a command, and a process it saw too late to read does not.
+LEAK_PACKAGE = re.compile(r"^LEAK package=(\S+) (.*)$")
+LEAK_PACKAGE_PROCESS = re.compile(r"^process pid=\d+ start=\S+ command=(.*)$")
 LEAK_PROCESS = re.compile(r"^LEAK process pid=\d+ start=\S+ command=(.*)$")
 LEAK_ENTRY = re.compile(r"^LEAK (directory|file|socket|symlink|fifo|entry) (.+)$")
 LEAK_TOTAL = re.compile(r"^leak-check: (\d+) leftover\(s\); command exit=")
@@ -274,7 +278,9 @@ class LogParser:
             return
         leak = LEAK_PACKAGE.match(line)
         if leak:
-            self.block_leaks.append((package_of(leak.group(1)), leak.group(2)))
+            # Recorded where it is read, from the line's own package, so a
+            # leak is counted whatever its package's verdict line says.
+            self._package_leak(package_of(leak.group(1)), leak.group(2))
             return
         process = LEAK_PROCESS.match(line)
         if process:
@@ -284,6 +290,10 @@ class LogParser:
         if entry:
             self.run_leaks.append((entry.group(1), normalize_path(entry.group(2)), entry.group(2)))
             return
+        if line.startswith("LEAK "):
+            # A shape this parser does not know is still a leftover.
+            self.run_leaks.append(("unparsed", re.sub(r"\d{4,}", "N", line), line))
+            return
         total = LEAK_TOTAL.match(line)
         if total:
             self.run_leak_total = int(total.group(1))
@@ -291,6 +301,21 @@ class LogParser:
         end = GO_PACKAGE_END.match(line)
         if end and "/" in end.group(2):
             self._end_package(end.group(1), short_package(end.group(2)), end.group(3) or "")
+
+    def _package_leak(self, package, rest):
+        self.block_leaks.append(rest)
+        process = LEAK_PACKAGE_PROCESS.match(rest)
+        if not process:
+            name = re.sub(r"\d{4,}", "N", rest)
+            self.records.append(Record("leak", package, name, rest[:200]))
+            return
+        command = process.group(1)
+        name, test = command_name(command), tempdir_test(command)
+        if test:
+            self.records.append(Record("leak", package, f"{name} from {test}", command[:200],
+                                       token=test, prefix=True))
+        else:
+            self.records.append(Record("leak", package, name, command[:200], token=name))
 
     def _end_package(self, verdict, package, suffix):
         if verdict == "FAIL":
@@ -317,14 +342,7 @@ class LogParser:
         if self.timeout and not running:
             self.records.append(Record("timeout", package, "(package)",
                                        f"test timed out after {self.timeout[0]}"))
-        for _, command in self.block_leaks:
-            name, test = command_name(command), tempdir_test(command)
-            if test:
-                self.records.append(Record("leak", package, f"{name} from {test}", command[:200],
-                                           token=test, prefix=True))
-            else:
-                self.records.append(Record("leak", package, name, command[:200], token=name))
-        if len(self.records) == before:
+        if len(self.records) == before and not self.block_leaks:
             if suffix.startswith("["):
                 self.records.append(Record("build", package, suffix.strip("[]")))
             else:
@@ -338,7 +356,7 @@ class LogParser:
             for kind, stable, full in self.run_leaks:
                 if any(full.startswith(d + "/") for d in directories):
                     continue  # inside a leftover directory already reported
-                token = stable if kind == "process" else os.path.basename(stable.rstrip("/"))
+                token = stable if kind in ("process", "unparsed") else os.path.basename(stable.rstrip("/"))
                 self.records.append(Record("run-leak", "(whole run)", f"{kind} {stable}",
                                            full[:200], token=token))
         if self.run_leak_total and not self.run_leaks:
@@ -530,10 +548,15 @@ def read_job(github, cache, job):
                 "job-timeout", job["name"], "exceeded timeout-minutes",
                 f"cancelled in step {running[0]}" if running else "cancelled at its bound",
                 token="timeout-minutes").to_dict())
+    # A log that fails part way is parsed again from its start. A cancelled
+    # job's log is read too: a cancel in a later step is the job's result
+    # even when its Test step had already failed and printed why.
+    records, unattributed, errors = retried(lambda: parse_lines(github.job_log(job["id"])))
+    if result["cancel"]:
+        result["records"] += [r.to_dict() for r in records]
+        result["unattributed"] = unattributed
         cache.put(f"job-{job['id']}", result)
         return result
-    # A log that fails part way is parsed again from its start.
-    records, unattributed, errors = retried(lambda: parse_lines(github.job_log(job["id"])))
     if not records:
         steps = failed_steps(job) or ["(no failed step reported)"]
         last = next((e for e in reversed(errors) if not e.startswith("Process completed")),
@@ -633,7 +656,8 @@ def matcher(issues):
 
 
 def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, pulls, completed=None):
-    find = matcher(issues)
+    # Without the issues, which issue names a failure is unknown, not "none".
+    find = matcher(issues) if issues is not None else (lambda token, prefix=False: None)
     prs = {}
     for pull in sorted(pulls, key=lambda p: p["number"]):
         prs[pull["head"]["ref"]] = pull["number"]
@@ -641,7 +665,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
     unattributed, cancelled = [], {"superseded": 0, "cancelled": 0}
     for run, job in jobs:
         result = results.get(job["id"]) or {"records": [], "error": "not read"}
-        if result.get("cancel") in cancelled:
+        if result.get("cancel") in cancelled and not result["records"] and not result.get("error"):
             cancelled[result["cancel"]] += 1
             continue
         final = run.get("run_attempt") or 1
@@ -693,7 +717,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
         # the close may predate the fix, so only main counts.
         main_runs = [o["created_at"] for o in occ if o["branch"] == "main"]
         entry["failed_on_main_after_close"] = [
-            i["number"] for i in entry["issues"]["closed"]
+            i["number"] for i in (entry["issues"] or {"closed": []})["closed"]
             if i.get("closed_at") and any(stamp > i["closed_at"] for stamp in main_runs)]
         entry["occurrences"].sort(key=lambda o: o["created_at"], reverse=True)
         failures.append(entry)
@@ -731,6 +755,8 @@ def local_time(stamp, zone):
 
 def issue_text(entry):
     found = entry["issues"]
+    if found is None:
+        return "unknown (the issues could not be read)"
     parts = [f"#{i['number']}" for i in found["open"]]
     parts += [f"~~#{i['number']}~~" + (" **failed on main since it closed**"
                                        if i["number"] in entry["failed_on_main_after_close"] else "")
@@ -832,7 +858,15 @@ def report(args, github=None):
         return 2
     cache = Cache(None if args.no_cache else args.cache)
     jobs, results, reruns, problems, completed = collect(github, cache, runs)
-    issues, pulls = github.issues(), github.pulls()
+    issues, pulls = None, []
+    try:
+        issues = github.issues()
+    except GitHubError as error:
+        problems.append(f"issues: {error}")
+    try:
+        pulls = github.pulls()
+    except GitHubError as error:
+        problems.append(f"pull requests: {error}")
     workflow = os.path.basename(runs[0].get("path") or "") if args.run else args.workflow
     ledger = build_ledger(github.repo, workflow or args.workflow, runs, jobs, results, reruns, problems,
                           issues, pulls, completed)
