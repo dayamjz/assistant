@@ -107,6 +107,57 @@ The gate's pipeline also accounts for rebase, safety, scope, and host checks. It
 
 Assistant exposes human-readable and structured status, active task and run views, and recorded agent usage broken down by agent, role, model, provider, and effort. Run-level output-token budgets and home-wide usage ceilings provide distinct controls: a run budget can park an individual run, while a home ceiling can hold further agent starts.
 
+### Example: one validated change and what it cost
+
+This is a real execution, not a mock-up. A small Go repository with a local upstream pushed one branch through the gate. The operator's `~/.assistant/config.yaml` pinned the review role and set both controls:
+
+```yaml
+roles:
+  review:
+    agent: claude
+    provider: anthropic
+    type: opus
+    version: "5.5"
+    effort: high
+
+run_usage_budget:
+  output_tokens: 200000   # parks any single run that reports more
+
+usage_ceiling:
+  window: 168h            # sums every run's calls over 7 days
+  output_tokens: 2000000  # holds further agent starts once reached
+```
+
+The run passed review, test, document, lint and push. Afterwards, `assistant runs --usage=24h` reported:
+
+```text
+What the agent calls made to vet your changes cost follows, in the exact terms each call was recorded in. It counts those calls and nothing else: a worker's own turns are not in it, it carries no price, and a count the agent did not report is shown as unreported rather than as nothing. Nothing to decide from it alone.
+Window     24h: calls started since 2026-10-22T00:32:58Z, read at 2026-10-23T00:32:58Z
+Counts     stage-agent-calls; not worker-turns, price
+Ceiling    Agent use recorded for this home is under the ceiling you set. Agent calls go on starting until it is reached. Nothing to decide.
+           usage ceiling under over the last 7d; output_tokens 994 of 2000000 (under)
+Total
+      calls 1, failed none, took 14.255s
+      input 6, output 994, cache read 77801, cache written 20219
+
+By agent, model, purpose, role, provider, type, version, effort and context window
+  claude  claude-opus-5-5  review  role review  anthropic opus 5.5  effort high  context (not named)
+      calls 1, failed none, took 14.255s
+      input 6, output 994, cache read 77801, cache written 20219
+
+By run and stage
+  run b4543e55cc849343  stage review
+      calls 1, failed none, took 14.255s
+      input 6, output 994, cache read 77801, cache written 20219
+```
+
+How to read it:
+
+- **Counts are what each agent reported, not a price.** Assistant records token counts in the agent's own terms and never estimates cost. A count an agent does not report shows as unreported, not zero.
+- **Only the gate's own agent calls are counted.** Here that is one review call; test, document, lint and push ran commands, not agents. A task worker's own turns are not included.
+- **The breakdown shows the role pin in effect.** The review call ran on `claude-opus-5-5` at high effort because the `review` role named it.
+- **The ceiling line shows how much room is left.** 994 of 2,000,000 output tokens were used over the last 7 days, so agent calls keep starting. `assistant --json runs --usage=24h` returns the same report as one JSON document.
+
 ## Quick start
 
 **Prerequisites:** Go, Git, and at least one supported coding-agent CLI installed and authenticated. For hosted PR/MR operations, install and authenticate the relevant code-host tooling. macOS and Linux are the primary supported environments.
