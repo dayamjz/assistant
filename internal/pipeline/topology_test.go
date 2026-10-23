@@ -165,8 +165,13 @@ func TestEveryStageHasAHaltPointItStopsBefore(t *testing.T) {
 
 // TestEveryCycleEdgeCarriesTheStagesRoundLimit reads the bounds off the built
 // topology. It is what says the fix loop cannot be built unbounded, since the
-// graph refuses a back edge with no bound and this asserts the number is the
-// stage's own limit rather than some other number that would also build.
+// graph refuses a back edge with no bound and this asserts each number is the
+// one its edge owes rather than some other number that would also build. A
+// stage taking rounds has three: the edge a fix-eligible outcome takes into
+// the fixer, bounded by the stage's own limit; rerunEntry, the edge a round
+// the usage ceiling refused is taken again by, bounded by RetryRounds; and the
+// fixer's way back, bounded by their sum, since every return follows an entry
+// one of the two counted.
 func TestEveryCycleEdgeCarriesTheStagesRoundLimit(t *testing.T) {
 	limits := config.FixRounds{Rebase: 2, Review: 1, Test: 4, Lint: 3, Checks: 5}
 	p := build(t, Options{
@@ -176,30 +181,55 @@ func TestEveryCycleEdgeCarriesTheStagesRoundLimit(t *testing.T) {
 		Budget: 100,
 	})
 	want := map[Stage]int{StageRebase: 2, StageReview: 1, StageTest: 4, StageLint: 3, StageCI: 5}
-	seen := map[Stage]int{}
-	for i, e := range p.Graph().Edges() {
-		for stage, limit := range want {
-			if e.To != stage.FixNode() && e.From != stage.FixNode() {
-				continue
-			}
-			if e.Rounds != limit {
-				t.Errorf("edge %q -> %q bounds %d rounds, want %d", e.From, e.To, e.Rounds, limit)
-			}
-			seen[stage]++
-			if e.From == stage.FixNode() && !p.Graph().IsBackEdge(i) {
-				t.Errorf("edge %q -> %q is not the back edge the loop closes with", e.From, e.To)
-			}
-		}
+	type role struct {
+		name  string
+		bound func(limit int) int
+		match func(e graph.Edge, stage Stage) bool
+	}
+	roles := []role{
+		{"the round-limit entry", func(limit int) int { return limit }, func(e graph.Edge, stage Stage) bool {
+			return e.From == stage.Node() && e.To == stage.FixNode() && guardsOutcome(e, OutcomeFixable)
+		}},
+		{"the rerun entry", func(int) int { return RetryRounds }, func(e graph.Edge, stage Stage) bool {
+			return e.From == stage.Node() && e.To == stage.FixNode() && guardsOutcome(e, OutcomeRerun)
+		}},
+		{"the return", func(limit int) int { return limit + RetryRounds }, func(e graph.Edge, stage Stage) bool {
+			return e.From == stage.FixNode() && e.To == stage.Node()
+		}},
 	}
 	for stage, limit := range want {
-		if seen[stage] != 2 {
-			t.Errorf("%s (limit %d) has %d bounded cycle edges, want 2", stage, limit, seen[stage])
+		cycle := 0
+		for _, e := range p.Graph().Edges() {
+			if e.To == stage.FixNode() || e.From == stage.FixNode() {
+				cycle++
+			}
+		}
+		if cycle != len(roles) {
+			t.Errorf("%s (limit %d) has %d edges into or out of its fixer, want %d", stage, limit, cycle, len(roles))
+		}
+		for _, r := range roles {
+			found := 0
+			for i, e := range p.Graph().Edges() {
+				if !r.match(e, stage) {
+					continue
+				}
+				found++
+				if e.Rounds != r.bound(limit) {
+					t.Errorf("%s's %s %q -> %q bounds %d rounds, want %d", stage, r.name, e.From, e.To, e.Rounds, r.bound(limit))
+				}
+				if e.From == stage.FixNode() && !p.Graph().IsBackEdge(i) {
+					t.Errorf("edge %q -> %q is not the back edge the loop closes with", e.From, e.To)
+				}
+			}
+			if found != 1 {
+				t.Errorf("%s has %d edges that are %s, want one", stage, found, r.name)
+			}
 		}
 	}
 }
 
 // backEdgeOwners returns, for every edge index the built graph reports as a
-// back edge, the stage whose fix, request or hold node that edge leaves, or
+// back edge, the stage whose fix, request, retry or hold node that edge leaves, or
 // whose own node it leaves for the path back to rebase. The owner is read off
 // the topology - the node the edge starts at - rather than computed from any
 // formula, so what it reports is what the graph is rather than what a
@@ -214,7 +244,7 @@ func backEdgeOwners(t *testing.T, g *graph.Graph) map[int]Stage {
 		found := false
 		for _, stage := range Order() {
 			switch {
-			case e.From == stage.FixNode() || e.From == stage.RequestNode(),
+			case e.From == stage.FixNode() || e.From == stage.RequestNode() || e.From == stage.RetryNode(),
 				// The path back from the checks stage to rebase, and the hold
 				// exits the graph reads as back edges because that path exists;
 				// repush.go says why.
@@ -228,7 +258,7 @@ func backEdgeOwners(t *testing.T, g *graph.Graph) map[int]Stage {
 			}
 		}
 		if !found {
-			t.Fatalf("edge %d, %q -> %q, is a back edge leaving no stage's fix, request or hold node "+
+			t.Fatalf("edge %d, %q -> %q, is a back edge leaving no stage's fix, request, retry or hold node "+
 				"and not the path back to rebase", i, e.From, e.To)
 		}
 	}
@@ -284,11 +314,13 @@ func TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations(t *testing.T) {
 			Budget: 100,
 		})
 		owners := backEdgeOwners(t, p.Graph())
-		// One per stage taking automatic rounds, and one per requestable
-		// stage for the rounds a person may ask for at its hold, since a
-		// fixer was given.
-		requestable, rebasing := 0, 0
+		// One per stage taking automatic rounds, one per requestable stage
+		// for the rounds a person may ask for at its hold, since a fixer was
+		// given, and one per stage for the retry a person may answer its
+		// hold with.
+		requestable, rebasing, retrying := 0, 0, 0
 		for _, stage := range Order() {
+			retrying++
 			// The path back to review is one back edge, built only where the
 			// stage that repairs after the push takes rounds.
 			if stage.RepairsAfterPush() && slices.Contains(taking, stage.String()) {
@@ -306,7 +338,7 @@ func TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations(t *testing.T) {
 				rebasing++
 			}
 		}
-		if want := len(taking) + requestable + rebasing; len(owners) != want {
+		if want := len(taking) + requestable + rebasing + retrying; len(owners) != want {
 			t.Errorf("configuration %q has %d back edges, want %d", name, len(owners), want)
 		}
 		for i, stage := range owners {
