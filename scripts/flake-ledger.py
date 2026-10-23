@@ -31,7 +31,10 @@ What it reads, and from where:
 
 It is loud where it cannot see: a log or API read that fails makes it exit 2,
 and a failed job whose log shows tests ran but in which nothing was named
-makes it exit 3 (listed under "Unattributed"). Both still print the ledger.
+makes it exit 3 (listed under "Unattributed"). With --run, a cancelled job
+of the run's latest attempt is exit 2 too. With --require-open-issues, a
+failure an earlier attempt had that no open issue names is exit 4: a re-run
+may pass a test, but not silently. Each still prints the ledger.
 
 Issues are matched by text: an issue whose title or body contains a record's
 match token (a test's top-level name, a leaked command's base name, or the
@@ -638,11 +641,14 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
     for pull in sorted(pulls, key=lambda p: p["number"]):
         prs[pull["head"]["ref"]] = pull["number"]
     entries = {}
-    unattributed, cancelled = [], {"superseded": 0, "cancelled": 0}
+    unattributed, cancelled, cancelled_jobs = [], {"superseded": 0, "cancelled": 0}, []
     for run, job in jobs:
         result = results.get(job["id"]) or {"records": [], "error": "not read"}
         if result.get("cancel") in cancelled:
             cancelled[result["cancel"]] += 1
+            cancelled_jobs.append({"run_id": run["id"], "job_id": job["id"], "job": job["name"],
+                                   "attempt": job.get("run_attempt", 1),
+                                   "final_attempt": run.get("run_attempt") or 1, "reason": result["cancel"]})
             continue
         final = run.get("run_attempt") or 1
         hidden = job.get("run_attempt", 1) < final and run["conclusion"] == "success"
@@ -718,6 +724,14 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
                    "last": max((r["created_at"] for r in runs), default=None)},
         "failed_jobs": sum(1 for _, j in jobs if (results.get(j["id"]) or {}).get("cancel") not in cancelled),
         "cancelled_jobs_not_counted": cancelled,
+        "cancelled_jobs": cancelled_jobs,
+        # Failures an earlier attempt had that no open issue names: what a
+        # re-run would otherwise pass over in silence.
+        "rerun_without_issue": [
+            dict(zip(("run_id", "attempt", "job", "key", "token"), row)) for row in sorted({
+                (o["run_id"], o["attempt"], o["job"], e["key"], e["token"])
+                for e in failures for o in e["occurrences"]
+                if o["attempt"] < o["final_attempt"] and not e["issues"]["open"]})],
         "failures": failures, "unattributed": unattributed, "reruns": rerun_rows, "problems": problems,
     }
 
@@ -787,6 +801,13 @@ def markdown(ledger, zone):
     if not ledger["failures"]:
         out.append("| 0 | no failures in this window | | | | | | | | |")
     out.append("")
+    if ledger["rerun_without_issue"]:
+        out.append("## Re-run past with no open issue")
+        out.append("")
+        for r in ledger["rerun_without_issue"]:
+            out.append(f"- run {r['run_id']} attempt {r['attempt']}, {r['job']}: {r['key']} "
+                       f"(no open issue contains `{r['token']}`)")
+        out.append("")
     if ledger["reruns"]:
         out.append("## Re-run attempts")
         out.append("")
@@ -844,13 +865,19 @@ def report(args, github=None):
         print(markdown(ledger, zone_of(args.tz)))
     if ledger["problems"] or any(u["reason"].startswith("log unreadable") for u in ledger["unattributed"]):
         return 2
-    cancelled = sum(ledger["cancelled_jobs_not_counted"].values())
-    if args.run and cancelled:
-        # One run's summary cannot say its tests passed when some of its jobs
-        # never finished them, whatever cancelled them.
-        print(f"flake-ledger: {cancelled} job(s) of run {args.run} were cancelled, "
-              "so this run's results are incomplete", file=sys.stderr)
+    latest = [c for c in ledger["cancelled_jobs"] if c["attempt"] == c["final_attempt"]]
+    if args.run and latest:
+        # One run's summary cannot say its tests passed when some of its
+        # latest attempt's jobs never finished them, whatever cancelled them.
+        print(f"flake-ledger: {len(latest)} job(s) of run {args.run}'s latest attempt were cancelled, "
+              "so its results are incomplete", file=sys.stderr)
         return 2
+    if args.require_open_issues and ledger["rerun_without_issue"]:
+        for r in ledger["rerun_without_issue"]:
+            print(f"::error::run {r['run_id']} attempt {r['attempt']} ({r['job']}) failed {r['key']}, and no "
+                  f"open issue names it; file one containing {r['token']} before re-running past it",
+                  file=sys.stderr)
+        return 4
     if ledger["unattributed"]:
         return 3
     return 0
@@ -882,6 +909,8 @@ def main(argv=None, github=None):
     parser.add_argument("--since", help="only runs created on or after this date (YYYY-MM-DD)")
     parser.add_argument("--run", type=int, metavar="ID",
                         help="only this run, finished or not (its finished jobs); for a workflow's own summary")
+    parser.add_argument("--require-open-issues", action="store_true",
+                        help="exit 4 when a failure of an attempt before a run's latest has no open issue")
     parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
     parser.add_argument("--json", metavar="PATH", help="also write the JSON ledger here")
     parser.add_argument("--tz", help="time zone for the markdown (default: this machine's)")

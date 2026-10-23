@@ -288,6 +288,32 @@ class LedgerTest(unittest.TestCase):
         status, _, _ = run_report(FakeGitHub(LOGS))
         self.assertEqual(status, 0, "over many runs a superseded job is only counted")
 
+    def test_a_rerun_past_a_failure_needs_an_open_issue_for_it(self):
+        # The recorded issues name both of run 39905430594's earlier failures,
+        # but #551 and #552 are closed, so neither has an open issue.
+        status, data, text = run_report(FakeGitHub(LOGS), "--run", "39905430594", "--require-open-issues")
+        self.assertEqual(status, 4)
+        self.assertEqual([(r["attempt"], r["key"]) for r in data["rerun_without_issue"]], [
+            (1, "leak: internal/supervisor mdworker_shared"),
+            (2, "test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt")])
+        self.assertIn("## Re-run past with no open issue", text)
+
+    def test_an_open_issue_lets_a_rerun_pass(self):
+        github = FakeGitHub(LOGS)
+        for issue in github.data["issues"]:
+            issue["state"], issue["closed_at"] = "open", None
+        status, data, _ = run_report(github, "--run", "39905430594", "--require-open-issues")
+        self.assertEqual(status, 0)
+        self.assertEqual(data["rerun_without_issue"], [])
+
+    def test_an_earlier_attempts_cancel_does_not_make_a_run_incomplete(self):
+        # Run 39932040317's attempt 1 timed out (a failure, with #559 open);
+        # attempt 2 finished every job.
+        status, data, _ = run_report(FakeGitHub(LOGS), "--run", "39932040317", "--require-open-issues")
+        self.assertEqual(status, 0)
+        self.assertEqual([f["key"] for f in data["failures"]],
+                         ["job-timeout: check (macos-latest) exceeded timeout-minutes"])
+
     def test_a_running_attempts_jobs_are_not_cached(self):
         with tempfile.TemporaryDirectory() as folder:
             github = FakeGitHub(LOGS)
