@@ -236,7 +236,7 @@ class FakeGitHub:
         self.flaky = dict(flaky or {})  # job id -> server errors before it answers
         self.repo = "dayamjz/assistant"
         self.read = []
-        self.pull_list = []  # pull request objects, as the pulls API returns them
+        self.pull_list = self.data["pulls"]  # pull request objects, as the pulls API returns them
 
     def runs(self, workflow, limit, branch=None, since=None):
         return self.data["runs"][:limit]
@@ -285,6 +285,20 @@ class FakeGitHub:
 LOGS = {120256178246: "rerun-attempt-1.log", 120265317855: "rerun-attempt-2.log",
         120342424178: "job-timeout.log", 120290002840: "superseded-macos.log",
         120290002917: "superseded-ubuntu.log"}
+
+
+def log_lines(name, first=1, last=None):
+    """Lines first..last (1-based, inclusive) of a recorded log, verbatim."""
+    lines = (DATA / name).read_text(encoding="utf-8").split("\n")
+    return lines[first - 1:last]
+
+
+def set_steps(github, job_id, conclusions):
+    """Gives the recorded job's named steps these conclusions."""
+    job = next(j for a in github.data["attempts"].values() for j in a["jobs"] if j["id"] == job_id)
+    for step in job["steps"]:
+        step["conclusion"] = conclusions.get(step["name"], step["conclusion"])
+    return job
 
 
 def stopped_after_attempt_2(github):
@@ -385,6 +399,53 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(data["rerun_without_issue"], [])
 
+    def rerun_check_failed_in_attempt_2(self, folder):
+        # Run 39905430594 with its attempt 2 holding a failed re-runs job, as
+        # ci.yml's job fails: the step that runs this check exits 4 after
+        # printing the ledger's own ::error:: line.
+        stamp = "2026-10-23T06:20:01.0000000Z"
+        log = Path(folder) / "rerun-check-failed.log"
+        log.write_text("\n".join([
+            f"{stamp} ##[group]Run set -o pipefail",
+            f"{stamp} ##[endgroup]",
+            f"{stamp} ##[error]run 39905430594 attempt 1 (check (macos-latest)) failed leak: internal/supervisor "
+            "mdworker_shared, and no open issue names it; file one containing mdworker_shared before re-running past it",
+            f"{stamp} ##[error]Process completed with exit code 4."]) + "\n")
+        github = FakeGitHub({**LOGS, 99000000001: log})
+        github.data["attempts"]["39905430594/2"]["jobs"].append({
+            "id": 99000000001, "run_attempt": 2, "name": "re-runs", "status": "completed", "conclusion": "failure",
+            "started_at": "2026-10-23T06:19:50Z", "completed_at": "2026-10-23T06:20:02Z", "labels": ["ubuntu-latest"],
+            "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/99000000001",
+            "steps": [{"name": "Set up job", "conclusion": "success"},
+                      {"name": "Run actions/checkout@v4", "conclusion": "success"},
+                      {"name": "Every earlier attempt's failure has an open issue", "conclusion": "failure"},
+                      {"name": "Complete job", "conclusion": "success"}]})
+        # The issue the check asked for is filed: every earlier failure is covered.
+        for issue in github.data["issues"]:
+            issue["state"], issue["closed_at"] = "open", None
+        return github
+
+    def test_the_rerun_checks_own_earlier_failure_needs_no_issue(self):
+        with tempfile.TemporaryDirectory() as folder:
+            github = self.rerun_check_failed_in_attempt_2(folder)
+            status, data, text = run_report(github, "--run", "39905430594", "--require-open-issues",
+                                            "--own-job", "re-runs")
+        self.assertEqual(status, 0, text)
+        self.assertEqual(data["rerun_without_issue"], [])
+
+    def test_another_jobs_earlier_failure_still_needs_an_issue(self):
+        # The positive control: --own-job sets aside only that job.
+        with tempfile.TemporaryDirectory() as folder:
+            github = self.rerun_check_failed_in_attempt_2(folder)
+            for issue in github.data["issues"]:
+                if issue["number"] == 552:
+                    issue["state"] = "closed"
+            status, data, _ = run_report(github, "--run", "39905430594", "--require-open-issues",
+                                         "--own-job", "re-runs")
+        self.assertEqual(status, 4)
+        self.assertEqual([r["key"] for r in data["rerun_without_issue"]],
+                         ["test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt"])
+
     def test_an_earlier_attempts_cancel_does_not_make_a_run_incomplete(self):
         # Run 39932040317's attempt 1 timed out (a failure, with #559 open);
         # attempt 2 finished every job.
@@ -402,6 +463,29 @@ class LedgerTest(unittest.TestCase):
         _, data, _ = run_report(FakeGitHub({**LOGS, 120342424178: "job-timeout-unfinished.log"}))
         after = next(f for f in data["failures"] if f["key"] == timeout)
         self.assertEqual(after["details"], ["cancelled in step Test; not reported: internal/runs internal/service"])
+
+    def test_one_run_with_a_job_that_timed_out_is_incomplete(self):
+        # Run 39932040317 as it stood after attempt 1: its macOS job ran into
+        # timeout-minutes. The timeout is a failure record, and the suite
+        # never finished, so the run's summary cannot pass.
+        github = FakeGitHub(LOGS)
+        run = github.run(39932040317)
+        run["run_attempt"], run["conclusion"] = 1, "cancelled"
+        del github.data["attempts"]["39932040317/2"]
+        status, data, _ = run_report(github, "--run", "39932040317")
+        self.assertEqual(status, 2)
+        self.assertEqual([(c["job_id"], c["reason"]) for c in data["cancelled_jobs"]], [(120342424178, "timeout")])
+        self.assertIn("job-timeout: check (macos-latest) exceeded timeout-minutes", [f["key"] for f in data["failures"]])
+
+    def test_one_run_with_a_job_cancelled_after_a_failure_is_incomplete(self):
+        # Run 39916130926 with its macOS job's log holding the recorded judge
+        # failure, and its ubuntu job finished: the cancel still cut the
+        # macOS suite short.
+        github = FakeGitHub({**LOGS, 120290002840: "judge-test-failure.log"})
+        set_steps(github, 120290002917, {})["conclusion"] = "success"
+        status, data, _ = run_report(github, "--run", "39916130926")
+        self.assertEqual(status, 2)
+        self.assertEqual([(c["job_id"], c["reason"]) for c in data["cancelled_jobs"]], [(120290002840, "superseded")])
 
     def test_a_running_attempts_jobs_are_not_cached(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -556,6 +640,84 @@ class LedgerTest(unittest.TestCase):
         _, data, _ = run_report(github)
         prs = {o["pr"] for f in data["failures"] for o in f["occurrences"] if o["run_id"] == 39905430594}
         self.assertEqual(prs, {601})
+
+    def two_failed_steps(self, folder, failed_second=True):
+        # The recorded judge failure's job through its Test step (verbatim,
+        # ending in that step's exit line), then its Skipped tests step,
+        # which runs always(), failing too.
+        stamp = "2026-10-23T13:54:03.2321910Z"
+        lines = log_lines("judge-test-failure.log", 1, 137) + [
+            f"{stamp} No test skipped on macos-latest.",
+            f"{stamp} ##[error]grep: test.log: Input/output error"]
+        if failed_second:
+            lines.append(f"{stamp} ##[error]Process completed with exit code 2.")
+        log = Path(folder) / "two-failed-steps.log"
+        log.write_text("\n".join(lines) + "\n")
+        github = FakeGitHub({**LOGS, 120256178246: log})
+        set_steps(github, 120256178246, {"Test": "failure", "Skipped tests": "failure"})
+        return github
+
+    def test_every_failed_step_counts_though_another_named_a_failure(self):
+        with tempfile.TemporaryDirectory() as folder:
+            status, data, text = run_report(self.two_failed_steps(folder))
+        self.assertEqual(status, 0, text)
+        failures = {f["key"]: f for f in data["failures"]}
+        attempt_1 = {k for k, f in failures.items() if any(o["job_id"] == 120256178246 for o in f["occurrences"])}
+        self.assertIn("step: check (macos-latest) step Skipped tests", attempt_1)
+        self.assertIn("test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient", attempt_1)
+        # The Test step's failure is the named test, not a step row too.
+        self.assertNotIn("step: check (macos-latest) step Test", attempt_1)
+        self.assertEqual(failures["step: check (macos-latest) step Skipped tests"]["details"],
+                         ["grep: test.log: Input/output error"])
+
+    def test_failed_steps_that_cannot_be_told_apart_are_all_counted(self):
+        # Two failed steps, one exit line: which step printed the named test
+        # is unknown, so both steps are counted rather than one assumed.
+        with tempfile.TemporaryDirectory() as folder:
+            _, data, _ = run_report(self.two_failed_steps(folder, failed_second=False))
+        keys = {f["key"] for f in data["failures"]
+                if any(o["job_id"] == 120256178246 for o in f["occurrences"])}
+        self.assertTrue({"step: check (macos-latest) step Test", "step: check (macos-latest) step Skipped tests",
+                         "test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient"} <= keys, keys)
+
+    def test_a_test_whose_package_never_reported_is_counted(self):
+        # The superseded job, cancelled while cat test.log printed: one
+        # complete failing package (the recorded judge failure), then
+        # another package's failing test (the recorded dispatch failure),
+        # and the cancel before that package's summary line.
+        lines = (log_lines("judge-test-failure.log", 1, 109)
+                 + log_lines("rerun-attempt-2.log", 116, 120)
+                 + ["2026-10-23T07:19:57.7514310Z ##[error]The operation was canceled."])
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "cut-off.log"
+            log.write_text("\n".join(lines) + "\n")
+            github = FakeGitHub({**LOGS, 120290002840: log})
+            status, data, text = run_report(github)
+        self.assertEqual(status, 0, text)
+        keys = {f["key"] for f in data["failures"]
+                if any(o["job_id"] == 120290002840 for o in f["occurrences"])}
+        self.assertEqual(keys, {"test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient",
+                                "test: (output cut off) TestConcurrentDispatchOfOneTaskClaimsOneAttempt"})
+
+    def pr_of(self, created_at, named=None):
+        # The recorded run, moved onto the branch #154 and then #257 used.
+        github = FakeGitHub(LOGS)
+        run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
+        run["head_branch"], run["created_at"] = "claude/prd-owner-decisions", created_at
+        if named:
+            run["pull_requests"] = [{"number": named}]
+        _, data, _ = run_report(github)
+        return {o["pr"] for f in data["failures"] for o in f["occurrences"] if o["run_id"] == 39905430594}
+
+    def test_a_reused_branchs_run_is_its_own_pull_requests(self):
+        # 38522563333 ran at 06:30:04 on 10-14, while #154 was open.
+        self.assertEqual(self.pr_of("2026-10-14T06:30:04Z"), {154})
+        self.assertEqual(self.pr_of("2026-10-15T14:33:28Z"), {257})
+        # Between the two, neither was open: unknown, not a guess.
+        self.assertEqual(self.pr_of("2026-10-15T00:00:00Z"), {None})
+
+    def test_the_pull_request_a_run_names_is_its_own(self):
+        self.assertEqual(self.pr_of("2026-10-15T14:33:28Z", named=154), {154})
 
     def test_a_cancelled_job_whose_tests_name_nothing_fails_the_ledger(self):
         # The superseded job's Test step printed its output and named no
