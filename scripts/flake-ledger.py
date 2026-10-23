@@ -41,7 +41,8 @@ was named makes it exit 3 (listed under "Unattributed"). With --run, a job
 of the run's latest attempt that timed out or was cancelled is exit 2 too,
 whatever it recorded before it stopped: its suite did not finish. With
 --require-open-issues, a failure an earlier attempt had that no open issue
-names is exit 4: a re-run may pass a test, but not silently. Each still
+names is exit 4: a re-run may pass a test, but not silently. The check's
+own job (--own-job) failing in an earlier attempt is not such a failure. Each still
 prints the ledger.
 
 Every gh it starts runs under a deadline (API_DEADLINE, LOG_DEADLINE) in a
@@ -1078,6 +1079,11 @@ def report(args, github=None):
     workflow = os.path.basename(runs[0].get("path") or "") if args.run else args.workflow
     ledger = build_ledger(github.repo, workflow or args.workflow, runs, jobs, results, reruns, problems,
                           issues, pulls, completed)
+    if args.own_job:
+        # The check's own job failing in an earlier attempt was its verdict
+        # on the other failures, which this run judges again; it is not a
+        # failure that needs an issue of its own.
+        ledger["rerun_without_issue"] = [r for r in ledger["rerun_without_issue"] if r["job"] != args.own_job]
     if args.json:
         Path(args.json).write_text(json.dumps(ledger, indent=2) + "\n")
     if args.format == "json":
@@ -1135,6 +1141,9 @@ def main(argv=None, github=None):
                         help="only this run, finished or not (its finished jobs); for a workflow's own summary")
     parser.add_argument("--require-open-issues", action="store_true",
                         help="exit 4 when a failure of an attempt before a run's latest has no open issue")
+    parser.add_argument("--own-job", metavar="NAME",
+                        help="with --require-open-issues, the job running this check: its earlier failures "
+                             "need no issue")
     parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
     parser.add_argument("--json", metavar="PATH", help="also write the JSON ledger here")
     parser.add_argument("--tz", help="time zone for the markdown (default: this machine's)")
