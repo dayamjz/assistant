@@ -623,12 +623,16 @@ def alive_pid(pid):
 
 
 class ClosedIssueTest(unittest.TestCase):
-    def dispatch(self, branch, completed_at=None, closed_at=None):
+    def dispatch(self, branch, completed_at=None, closed_at=None, event=None, head_repository=None):
         # The failure is attempt 2's, in job 120265317855; moving when that
         # job ended moves when it failed. The run itself was created earlier.
+        # A run of main is a push; a branch's run is its pull request's.
         github = FakeGitHub(LOGS)
         run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
         run["head_branch"] = branch
+        run["event"] = event or ("push" if branch == "main" else "pull_request")
+        if head_repository:
+            run["head_repository"] = {"full_name": head_repository}
         if completed_at:
             job = next(j for j in github.data["attempts"]["39905430594/2"]["jobs"] if j["id"] == 120265317855)
             job["completed_at"] = completed_at
@@ -636,6 +640,7 @@ class ClosedIssueTest(unittest.TestCase):
             next(i for i in github.data["issues"] if i["number"] == 552)["closed_at"] = closed_at
         _, data, text = run_report(github)
         entry = next(f for f in data["failures"] if f["name"] == "TestConcurrentDispatchOfOneTaskClaimsOneAttempt")
+        self.entry = entry
         return entry["failed_on_main_after_close"], text
 
     def test_a_failure_on_main_after_its_issue_closed_is_flagged(self):
@@ -648,6 +653,19 @@ class ClosedIssueTest(unittest.TestCase):
         # The run was created at 05:22:50Z; its attempt 2 failed at
         # 06:18:38Z, after an issue closed at 06:00Z.
         self.assertEqual(self.dispatch("main", closed_at="2026-10-23T06:00:00Z")[0], [552])
+
+    def test_a_forks_main_is_not_this_repositorys_main(self):
+        # A pull request from a fork whose branch is named main.
+        flagged, text = self.dispatch("main", "2026-10-23T10:00:00Z", event="pull_request",
+                                      head_repository="someone/assistant")
+        self.assertEqual((flagged, self.entry["on_main"]), ([], 0))
+        self.assertEqual(self.entry["by_branch"], {"someone:main": 1})
+        self.assertIn("someone:main (1)", text)
+
+    def test_a_pull_request_from_this_repositorys_main_is_not_a_run_of_main(self):
+        flagged, _ = self.dispatch("main", "2026-10-23T10:00:00Z", event="pull_request")
+        self.assertEqual((flagged, self.entry["on_main"]), ([], 0))
+        self.assertEqual(self.entry["by_branch"], {"main (pull request)": 1})
 
     def test_a_failure_before_the_close_or_off_main_is_not(self):
         self.assertEqual(self.dispatch("main")[0], [])

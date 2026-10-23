@@ -748,6 +748,20 @@ def matcher(issues):
     return find
 
 
+def branch_of(run, repo):
+    """The run's branch as the ledger names it. A fork's branch carries its
+    owner (someone:main), and a pull request's run of a branch named main is
+    "main (pull request)", so "main" alone is only this repository's main
+    run for itself: a push, schedule or dispatch."""
+    branch = run.get("head_branch") or ""
+    head = (run.get("head_repository") or {}).get("full_name")
+    if head and head != repo:
+        return f"{head.split('/')[0]}:{branch}"
+    if branch == "main" and run.get("event") in ("pull_request", "pull_request_target"):
+        return "main (pull request)"
+    return branch
+
+
 def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, pulls):
     # Without the issues, which issue names a failure is unknown, not "none".
     find = matcher(issues) if issues is not None else (lambda token, prefix=False: None)
@@ -769,7 +783,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
         occurrence = {
             "run_id": run["id"], "attempt": job.get("run_attempt", 1), "final_attempt": final,
             "job_id": job["id"], "job": job["name"], "platform": platform_of(job),
-            "branch": run.get("head_branch") or "", "event": run.get("event"),
+            "branch": branch_of(run, repo), "event": run.get("event"),
             "pr": prs.get(run.get("head_branch")) if run.get("event") == "pull_request" else None,
             "sha": run.get("head_sha"), "created_at": run.get("created_at"),
             # When the job that failed ended; a completed job always has it.
@@ -832,7 +846,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
                    for e in failures for o in e["occurrences"]
                    if o["run_id"] == run["id"] and o["attempt"] < o["final_attempt"]]
         rerun_rows.append({
-            "run_id": run["id"], "branch": run.get("head_branch"), "url": run.get("html_url"),
+            "run_id": run["id"], "branch": branch_of(run, repo), "url": run.get("html_url"),
             "created_at": run.get("created_at"), "attempts": item["attempts"],
             "final_conclusion": run["conclusion"],
             "earlier_failures": sorted(earlier, key=lambda f: (f["attempt"], f["job"], f["key"]))})
