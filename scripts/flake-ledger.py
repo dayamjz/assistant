@@ -9,8 +9,11 @@ GitHub serves it, or raw `go test -v` output with --raw)
 The ledger reads every attempt of every completed run of a workflow (ci.yml
 by default), not only the latest: `gh run list` reports a run's last attempt,
 so a test that failed in attempt 1 and passed in attempt 2 is invisible to
-anything that reads conclusions. Each failure a later attempt of the same run
-passed over is marked hidden by a re-run.
+anything that reads conclusions. A failure in an earlier attempt that the
+run's final attempt does not show is marked hidden by a re-run, whatever the
+final attempt concluded: the final attempt is all a run's checks show. Each
+failure is timed by the job it failed in, since a re-run can come hours after
+its run was created.
 
 What it reads, and from where:
 - Go tests, from the Test step's `full test output` group, which ci.yml
@@ -711,15 +714,16 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
                                    "final_attempt": run.get("run_attempt") or 1, "reason": result["cancel"]})
             continue
         final = run.get("run_attempt") or 1
-        hidden = job.get("run_attempt", 1) < final and run["conclusion"] == "success"
         occurrence = {
             "run_id": run["id"], "attempt": job.get("run_attempt", 1), "final_attempt": final,
             "job_id": job["id"], "job": job["name"], "platform": platform_of(job),
             "branch": run.get("head_branch") or "", "event": run.get("event"),
             "pr": prs.get(run.get("head_branch")) if run.get("event") == "pull_request" else None,
             "sha": run.get("head_sha"), "created_at": run.get("created_at"),
+            # When the job that failed ended; a completed job always has it.
+            "failed_at": job.get("completed_at") or job.get("started_at") or run.get("created_at"),
             "url": job.get("html_url") or run.get("html_url"),
-            "run_conclusion": run["conclusion"], "hidden_by_rerun": hidden,
+            "run_conclusion": run["conclusion"],
         }
         if result.get("error"):
             # Records known without the log (a timeout's annotation) still count.
@@ -735,10 +739,15 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
             entry["subtests"].update(record.subtests)
             if record.detail and record.detail not in entry["details"] and len(entry["details"]) < 3:
                 entry["details"].append(record.detail)
-            entry["occurrences"].append(occurrence)
+            entry["occurrences"].append(dict(occurrence))
     failures = []
     for entry in entries.values():
         occ = entry["occurrences"]
+        # Hidden: failed in an earlier attempt, and the final attempt, which
+        # is what the run's checks show, does not have this failure.
+        shown = {o["run_id"] for o in occ if o["attempt"] == o["final_attempt"]}
+        for o in occ:
+            o["hidden_by_rerun"] = o["attempt"] < o["final_attempt"] and o["run_id"] not in shown
         by_platform, by_branch = {}, {}
         for o in occ:
             by_platform[o["platform"]] = by_platform.get(o["platform"], 0) + 1
@@ -750,24 +759,24 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
             "by_branch": by_branch,
             "on_main": by_branch.get("main", 0),
             "hidden_by_rerun": sum(1 for o in occ if o["hidden_by_rerun"]),
-            "first_seen": min(o["created_at"] for o in occ),
-            "last_seen": max(o["created_at"] for o in occ),
+            "first_seen": min(o["failed_at"] for o in occ),
+            "last_seen": max(o["failed_at"] for o in occ),
             "issues": find(entry["token"], entry["prefix"]),
         })
         # A closed issue's failure seen on main after it closed: the fix did
         # not hold, or the issue named the wrong cause. A branch's run after
         # the close may predate the fix, so only main counts.
-        main_runs = [o["created_at"] for o in occ if o["branch"] == "main"]
+        on_main = [o["failed_at"] for o in occ if o["branch"] == "main"]
         entry["failed_on_main_after_close"] = [
             i["number"] for i in (entry["issues"] or {"closed": []})["closed"]
-            if i.get("closed_at") and any(stamp > i["closed_at"] for stamp in main_runs)]
-        entry["occurrences"].sort(key=lambda o: o["created_at"], reverse=True)
+            if i.get("closed_at") and any(stamp > i["closed_at"] for stamp in on_main)]
+        entry["occurrences"].sort(key=lambda o: o["failed_at"], reverse=True)
         failures.append(entry)
     failures.sort(key=lambda e: (-e["count"], -e["on_main"], e["key"]))
     rerun_rows = []
     for item in reruns:
         run = item["run"]
-        earlier = [{"attempt": o["attempt"], "job": o["job"], "key": e["key"]}
+        earlier = [{"attempt": o["attempt"], "job": o["job"], "key": e["key"], "hidden": o["hidden_by_rerun"]}
                    for e in failures for o in e["occurrences"]
                    if o["run_id"] == run["id"] and o["attempt"] < o["final_attempt"]]
         rerun_rows.append({
@@ -847,7 +856,8 @@ def markdown(ledger, zone):
     out.append("## Failures")
     out.append("")
     out.append("One row per failure, most frequent first; each count is failed jobs. *Hidden* counts failures "
-               "a later attempt of the same run passed over. Struck-through issues are closed.")
+               "from an earlier attempt that the run's final attempt does not show; *last seen* is when the "
+               "job that failed ended. Struck-through issues are closed.")
     out.append("")
     out.append("| Count | Failure | Kind | ubuntu | macos | main | hidden | other branches | last seen | issues |")
     out.append("|---:|---|---|---:|---:|---:|---:|---|---|---|")
@@ -880,7 +890,7 @@ def markdown(ledger, zone):
             out.append(f"- run [{row['run_id']}]({row['url']}) on {row['branch']}, "
                        f"{local_time(row['created_at'], zone)}: {attempts}")
             for failure in row["earlier_failures"]:
-                hidden = " (hidden: the run ended green)" if row["final_conclusion"] == "success" else ""
+                hidden = " (hidden: the final attempt does not show it)" if failure["hidden"] else ""
                 out.append(f"  - attempt {failure['attempt']}, {failure['job']}: {failure['key']}{hidden}")
         out.append("")
     return "\n".join(out)
