@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -44,10 +45,13 @@ func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
 	if err = os.WriteFile(sentinel, []byte("keep this work"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// The backup's launch is held at the moment its reference is recorded
-	// until the loop below has read the service, so every run reads it in
-	// the order #538 lost on CI rather than wherever the poll happens to land.
+	// The backup's launch is held at the moment its reference is recorded,
+	// before its hold is settled, until a reader is waiting on that
+	// settlement, so the loop below reads the service in the order #538 lost
+	// on CI rather than wherever the poll happens to land. The first
+	// recording is the primary's, which this goroutine makes.
 	release := make(chan struct{})
+	var letGo sync.Once
 	var recordings atomic.Int32
 	s.afterSessionRecorded = func(string, string) {
 		if recordings.Add(1) == 1 {
@@ -58,6 +62,8 @@ func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
 		case <-s.stopCtx.Done():
 		}
 	}
+	s.awaitingSessionRecord = func(string) { letGo.Do(func() { close(release) }) }
+	t.Cleanup(func() { letGo.Do(func() { close(release) }) })
 	first, err := s.launchTask(t.Context(), d)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +80,8 @@ func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
 				t.Fatalf("backup attributed to %s", adapter)
 			}
 			// launchTask holds a session before it records the reference,
-			// so a record naming the backup's session is a session held.
+			// so a record naming the backup's session is a session held;
+			// sessionOf answers it once the hold is settled.
 			_, current, held := s.sessionOf(sub.task)
 			if !held || current == nil {
 				t.Fatalf("attempt %d records session %v and this service holds no session for task %s",
@@ -86,7 +93,6 @@ func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
 			if current.Reference() == first.Reference() {
 				t.Fatal("worker was not replaced")
 			}
-			close(release)
 			break
 		}
 		if time.Now().After(deadline) {

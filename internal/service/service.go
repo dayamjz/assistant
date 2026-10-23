@@ -330,8 +330,7 @@ type Service struct {
 
 	// mu guards the lazily built driver and topologies, the set of runs being
 	// advanced, and the branch gates. It is never held across a run's
-	// execution. The one store write made under it is launch.go's record of
-	// a worker's session, and that file's comment says why and at what cost.
+	// execution.
 	mu    sync.Mutex
 	built *driver
 	// topologies caches one built pipeline and executor per resolved run
@@ -420,13 +419,25 @@ type Service struct {
 	// package's tests, which use it to look at the stream at the point a
 	// service that stopped there would have left it.
 	afterConsentRegistered func()
-	// afterSessionRecorded runs in launchTask once the attempt's session
-	// reference is recorded and the session held, outside mu and before the
-	// launch goes on, with the task and the reference. It is nil in
-	// production and set only by this package's tests, which use it to hold
-	// a launch, or to read the service, at the point the record names the
-	// session.
+	// beforeSessionRecord runs in launchTask once the session is held
+	// pending and immediately before the store write that records the
+	// attempt's session reference, outside mu, with the task and the
+	// reference. It is nil in production and set only by this package's
+	// tests, which use it to make that write wait on a held store or to read
+	// the service while the session is pending.
+	beforeSessionRecord func(id, ref string)
+	// afterSessionRecorded runs in launchTask once the store write that
+	// records the attempt's session reference has succeeded and before the
+	// pending mark is settled, outside mu, with the task and the reference.
+	// It is nil in production and set only by this package's tests, which
+	// use it to hold a launch at the point the record names a session still
+	// pending.
 	afterSessionRecorded func(id, ref string)
+	// awaitingSessionRecord runs in sessionOf when the session it found is
+	// still pending, just before it waits for the record's write, with the
+	// task. It is nil in production and set only by this package's tests,
+	// which use it to know a reader is waiting rather than guess.
+	awaitingSessionRecord func(id string)
 	// sweepCopy stands in for the sweep this service asks of a copy: the
 	// one relaunch.go and dispatch.go ask of a task's standing copy, and the
 	// one runsweep.go asks of a finished run's. It is nil in production,

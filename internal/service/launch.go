@@ -67,29 +67,47 @@ import (
 //
 // The attempt row is dispatch's claim, and it exists before Create is asked
 // for anything; the route is recorded on it before Create. Once Create
-// returns, Session.Reference is recorded through store.SetAttemptSession,
-// which is the one record of which terminal a task's attempt runs in and
-// the reference internal/taskstate's probe reads, and the session is held
-// in the launched map, the two as one step under mu. So a reader that reads
-// the reference off the record and then asks this service about that
-// worker - a probe through heldTerminals, a message, a peek, a stop, the
-// landed pass - finds the session held, because asking takes mu; and a
-// reader that finds the session held, by task alone, finds it recorded.
-// Recorded and then held in two steps, as this file once did (#538), each
-// of the first kind answered in between as for a worker this service did
-// not start: the probe Unobserved over a live worker, the message and the
-// peek refused, a stop ending the group by identity as an earlier
-// service's worker (on every launch whose slot was settled before it,
-// which is all but workerfallback.go's handoff), a landed worker left
-// running. Held and then recorded, the second kind would find a session a
-// record that may yet fail does not name. The one step is the one store
-// write this service makes under mu: internal/store runs none of this
-// package's code while it holds its connection, so nothing that write
-// waits on waits on mu, and what everything else that takes mu pays is
-// waiting that write out. A reference that cannot be recorded is never
-// held and its session is ended before the failure is reported, so no
-// process this service started stands behind an attempt whose row does not
-// name it. Between Create returning and the row being written, a crash
+// returns, the session is put in the launched map under a pending mark,
+// Session.Reference is recorded through store.SetAttemptSession, which is
+// the one record of which terminal a task's attempt runs in and the
+// reference internal/taskstate's probe reads, and the mark is then settled:
+// the entry kept when the record was written and removed when it was not.
+// mu is taken for the hold and for the settlement and never across the
+// write, so a store that is slow to take it holds no reader of mu, and in
+// particular not Shutdown, whose knownGroups reads the map under mu before
+// it starts Close or waits on its deadline (#546's first round held mu
+// across the write, and a forced stop then waited on the store past every
+// bound P15 sets).
+//
+// The two kinds of reader are each answered from a settled fact:
+//
+//   - A reader that reads the reference off the record and then asks this
+//     service about that worker - a probe through heldTerminals, a message,
+//     a peek, a stop, the landed pass - finds the session, because it was
+//     held before the write began. Recorded first and held after, as this
+//     file did until #538, each of those answered in between as for a
+//     worker this service did not start: the probe Unobserved over a live
+//     worker, the message and the peek refused, a stop ending the group by
+//     identity as an earlier service's worker (on every launch whose slot
+//     was settled before it, which is all but workerfallback.go's handoff),
+//     a landed worker left running.
+//   - A reader that asks by task alone through sessionOf, with no reference
+//     to compare, is answered once the record's write has returned, so a
+//     session it reports held is one the record names. Held first with no
+//     such wait, a reader could find a session whose record then failed, as
+//     a launch Close cancels does, which is how a reorder alone fails.
+//
+// What stays open: a reader that read the record before the write sees the
+// attempt with no reference and answers as for a worker not yet launched;
+// sessionOf's wait is as long as the write, bounded by the launch's context
+// and the store and not by anything here, so a status read about a task
+// whose launch is recording can wait on a slow store as its own reads of
+// that store would; and knownGroups and closeSessions read a pending entry
+// without waiting, so a stop forces and ends a worker whose record may not
+// be written. A reference that cannot be recorded leaves the session no
+// longer held and ended before the failure is reported, so no process this
+// service started stands behind an attempt whose row does not name it.
+// Between Create returning and the row being written, a crash
 // leaves the process internal/session's doc describes: one no record names.
 // The dispatch that retries the task sweeps the standing copy before its
 // claim, on sweep.go's terms, which finds such a process by its working
@@ -128,21 +146,45 @@ import (
 // the copy.
 
 // launchedWorker is one task's held session host and session. The host is
-// built over the routed adapter for that launch.
+// built over the routed adapter for that launch. recording is non-nil while
+// the session's reference is being recorded, and is closed once the entry
+// shows how that ended: settled with recording nil when the record was
+// written, gone when it was not.
 type launchedWorker struct {
-	host    session.Host
-	session *session.Session
+	host      session.Host
+	session   *session.Session
+	recording chan struct{}
+}
+
+// settleRecording ends launched's pending mark once its record's write has
+// returned: when it was written the entry is kept, no longer pending, and
+// when it was not the entry is removed. Either is done only while the entry
+// is still that session, so an entry a stop, a supersession or Close took
+// while the record was written is left as they left it.
+func (s *Service) settleRecording(id string, launched *session.Session, recorded bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, ok := s.launched[id]
+	if !ok || current.session != launched {
+		return
+	}
+	if !recorded {
+		delete(s.launched, id)
+		return
+	}
+	current.recording = nil
+	s.launched[id] = current
 }
 
 // launchTask launches the worker for a dispatch that reached proven: it
 // asserts the copy again, routes a worker adapter, records the route,
 // creates the terminal session with the task's instructions and the route
-// back to this service, on route.go's terms, and records the session's
-// reference on the attempt and holds the session as one step, on the file
+// back to this service, on route.go's terms, holds the session pending,
+// records its reference on the attempt and settles the hold, on the file
 // comment's terms. A copy that fails the assertion is an *isolationRefused,
 // recorded; a routing refusal is a *routeRefused, recorded; a session whose
-// reference could not be recorded is ended, never held, before the error is
-// reported.
+// reference could not be recorded is no longer held and is ended before the
+// error is reported.
 func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Session, error) {
 	instructions, err := os.ReadFile(d.instructions)
 	if err != nil {
@@ -213,27 +255,35 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		return nil, fmt.Errorf("service: launching task %s attempt %d: %w", d.id, d.attempt, err)
 	}
 	reference := launched.Reference().String()
-	// Recorded and held as one step, under mu, on the file comment's terms.
+	// Held before it is recorded, under a pending mark, and settled after,
+	// on the file comment's terms; mu is never held across the write.
+	recording := make(chan struct{})
+	s.mu.Lock()
+	if s.launched == nil {
+		s.launched = make(map[string]launchedWorker)
+	}
+	s.launched[d.id] = launchedWorker{host: host, session: launched, recording: recording}
+	s.mu.Unlock()
+	if s.beforeSessionRecord != nil {
+		s.beforeSessionRecord(d.id, reference)
+	}
 	// Every task this build dispatches is on this machine, whose worker's
 	// server the store does not record.
-	s.mu.Lock()
 	recordErr := s.store.SetAttemptSession(ctx, d.id, d.attempt, reference, store.SessionHost{})
-	if recordErr == nil {
-		if s.launched == nil {
-			s.launched = make(map[string]launchedWorker)
-		}
-		s.launched[d.id] = launchedWorker{host: host, session: launched}
+	if recordErr == nil && s.afterSessionRecorded != nil {
+		s.afterSessionRecorded(d.id, reference)
 	}
-	s.mu.Unlock()
+	s.settleRecording(d.id, launched, recordErr == nil)
+	close(recording)
 	if recordErr != nil {
-		if closeErr := host.Close(launched); closeErr != nil {
+		// ErrNotHeld is a session something else ended while it was held
+		// pending, Close's closeSessions among them, which leaves nothing
+		// here to end.
+		if closeErr := host.Close(launched); closeErr != nil && !errors.Is(closeErr, session.ErrNotHeld) {
 			s.log.Printf("the worker of task %s, whose session could not be recorded, was not ended either: %v",
 				d.id, closeErr)
 		}
 		return nil, fmt.Errorf("service: recording the session of task %s attempt %d: %w", d.id, d.attempt, recordErr)
-	}
-	if s.afterSessionRecorded != nil {
-		s.afterSessionRecorded(d.id, reference)
 	}
 	s.log.Printf("task %s attempt %d was routed to %s (%s)", d.id, d.attempt, selection.Resolution.Name, selection.Reason)
 	s.watchWorkerFallback(task, d.attempt, host, launched, selection.Resolution.Name)
@@ -373,16 +423,29 @@ func (s *Service) assertCopy(ctx context.Context, id string, attempt, anchor int
 }
 
 // sessionOf reports the session this service launched for a task and the
-// host holding it, and whether it launched one. It is the one reader of
-// the launched map outside Close.
+// host holding it, and whether it launched one. A session whose reference
+// is still being recorded is answered once that write has returned, outside
+// mu: held when it was recorded and not when it was not, so a session it
+// reports held is one the attempt's record names. That wait is as long as
+// the record's write, which is bounded by the launch's context and nothing
+// else here; knownGroups and closeSessions, which a stop reaches, read the
+// map without it.
 func (s *Service) sessionOf(id string) (session.Host, *session.Session, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	launched, ok := s.launched[id]
-	if !ok || launched.host == nil || launched.session == nil {
-		return nil, nil, false
+	for {
+		s.mu.Lock()
+		launched, ok := s.launched[id]
+		s.mu.Unlock()
+		if !ok || launched.host == nil || launched.session == nil {
+			return nil, nil, false
+		}
+		if launched.recording == nil {
+			return launched.host, launched.session, true
+		}
+		if s.awaitingSessionRecord != nil {
+			s.awaitingSessionRecord(id)
+		}
+		<-launched.recording
 	}
-	return launched.host, launched.session, true
 }
 
 // closeSessions ends every session this service launched and still holds,
