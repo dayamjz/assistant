@@ -147,3 +147,34 @@ jobs:
         with:
           version: v2.12.2
           skip-cache: true
+
+  # A re-run that passes turns a run green with the failure it re-ran past
+  # out of sight. From the second attempt on, this job lists every failure
+  # of the earlier attempts (scripts/flake-ledger.py) and fails for one that
+  # no open issue names, so a test may pass on a re-run but never silently.
+  # On a first attempt it is skipped, which a required check reads as
+  # passing. Re-running failed jobs re-runs this one too, since it needs
+  # them.
+  reruns:
+    # --own-job below names this job, so its own earlier failure is not
+    # one more failure that needs an issue.
+    name: re-runs
+    needs: [check, lint]
+    if: ${{ !cancelled() && github.run_attempt > 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every earlier attempt's failure has an open issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          python3 scripts/flake-ledger.py --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" \
+            --require-open-issues --own-job re-runs --no-cache --tz America/Los_Angeles \
+            | tee -a "$GITHUB_STEP_SUMMARY"

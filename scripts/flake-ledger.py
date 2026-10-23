@@ -41,9 +41,12 @@ It is loud where it cannot see: a log or API read that fails makes it exit 2
 (a failed issue read leaves each failure's issues unknown, never "none"),
 and a failed or cancelled job whose log shows tests ran but in which nothing
 was named makes it exit 3 (listed under "Unattributed"). With --run, a job
-of the run that timed out or was cancelled is exit 2 too, whatever it
-recorded before it stopped: its suite did not finish. Each still prints the
-ledger.
+of the run's latest attempt that timed out or was cancelled is exit 2 too,
+whatever it recorded before it stopped: its suite did not finish. With
+--require-open-issues, a failure an earlier attempt had that no open issue
+names is exit 4: a re-run may pass a test, but not silently. The check's
+own job (--own-job) failing in an earlier attempt is not such a failure. Each still
+prints the ledger.
 
 Every gh it starts runs under a deadline (API_DEADLINE, LOG_DEADLINE) in a
 process group of its own, watched by a small watchdog that ends the group at
@@ -909,7 +912,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
     find = matcher(issues) if issues is not None else (lambda token, prefix=False: None)
     pr_of = pull_request_finder(pulls)
     entries = {}
-    unattributed, cancelled, counted, cancelled_jobs = [], {"superseded": 0, "cancelled": 0}, 0, []
+    unattributed, cancelled, cancelled_jobs, counted = [], {"superseded": 0, "cancelled": 0}, [], 0
     for run, job in jobs:
         result = results.get(job["id"]) or {"records": [], "error": "not read"}
         if result.get("cancel"):
@@ -1006,6 +1009,15 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
         "failed_jobs": counted,
         "cancelled_jobs_not_counted": cancelled,
         "cancelled_jobs": cancelled_jobs,
+        # Failures an earlier attempt had that no open issue names: what a
+        # re-run would otherwise pass over in silence.
+        "rerun_without_issue": [
+            dict(zip(("run_id", "attempt", "job", "key", "token"), row)) for row in sorted({
+                (o["run_id"], o["attempt"], o["job"], e["key"], e["token"])
+                for e in failures for o in e["occurrences"]
+                # Unknown issues are no answer here; the failed read makes the
+                # ledger exit 2 before --require-open-issues could pass it.
+                if o["attempt"] < o["final_attempt"] and e["issues"] is not None and not e["issues"]["open"]})],
         "failures": failures, "unattributed": unattributed, "reruns": rerun_rows, "problems": problems,
     }
 
@@ -1078,6 +1090,13 @@ def markdown(ledger, zone):
     if not ledger["failures"]:
         out.append("| 0 | no failures in this window | | | | | | | | |")
     out.append("")
+    if ledger["rerun_without_issue"]:
+        out.append("## Re-run past with no open issue")
+        out.append("")
+        for r in ledger["rerun_without_issue"]:
+            out.append(f"- run {r['run_id']} attempt {r['attempt']}, {r['job']}: {r['key']} "
+                       f"(no open issue contains `{r['token']}`)")
+        out.append("")
     if ledger["reruns"]:
         out.append("## Re-run attempts")
         out.append("")
@@ -1134,6 +1153,11 @@ def report(args, github=None):
     workflow = os.path.basename(runs[0].get("path") or "") if args.run else args.workflow
     ledger = build_ledger(github.repo, workflow or args.workflow, runs, jobs, results, reruns, problems,
                           issues, pulls, completed)
+    if args.own_job:
+        # The check's own job failing in an earlier attempt was its verdict
+        # on the other failures, which this run judges again; it is not a
+        # failure that needs an issue of its own.
+        ledger["rerun_without_issue"] = [r for r in ledger["rerun_without_issue"] if r["job"] != args.own_job]
     if args.json:
         Path(args.json).write_text(json.dumps(ledger, indent=2) + "\n")
     if args.format == "json":
@@ -1142,15 +1166,22 @@ def report(args, github=None):
         print(markdown(ledger, zone_of(args.tz)))
     if ledger["problems"] or any(u["reason"].startswith("not read") for u in ledger["unattributed"]):
         return 2
-    if args.run and ledger["cancelled_jobs"]:
-        # One run's summary cannot say its tests passed when some of its jobs
-        # never finished them, whatever cancelled them and whatever they
-        # recorded first: a timeout is a failure record and still an
-        # unfinished suite.
-        reasons = ", ".join(f"{c['job']} ({c['reason']})" for c in ledger["cancelled_jobs"])
-        print(f"flake-ledger: {len(ledger['cancelled_jobs'])} job(s) of run {args.run} did not finish: "
-              f"{reasons}, so this run's results are incomplete", file=sys.stderr)
+    latest = [c for c in ledger["cancelled_jobs"] if c["attempt"] == c["final_attempt"]]
+    if args.run and latest:
+        # One run's summary cannot say its tests passed when some of its
+        # latest attempt's jobs never finished them, whatever cancelled them
+        # and whatever they recorded first: a timeout is a failure record and
+        # still an unfinished suite. An earlier attempt's cancel was re-run.
+        reasons = ", ".join(f"{c['job']} ({c['reason']})" for c in latest)
+        print(f"flake-ledger: {len(latest)} job(s) of run {args.run}'s latest attempt did not finish: "
+              f"{reasons}, so its results are incomplete", file=sys.stderr)
         return 2
+    if args.require_open_issues and ledger["rerun_without_issue"]:
+        for r in ledger["rerun_without_issue"]:
+            print(f"::error::run {r['run_id']} attempt {r['attempt']} ({r['job']}) failed {r['key']}, and no "
+                  f"open issue names it; file one containing {r['token']} before re-running past it",
+                  file=sys.stderr)
+        return 4
     if ledger["unattributed"]:
         return 3
     return 0
@@ -1182,6 +1213,11 @@ def main(argv=None, github=None):
     parser.add_argument("--since", help="only runs created on or after this date (YYYY-MM-DD)")
     parser.add_argument("--run", type=int, metavar="ID",
                         help="only this run, finished or not (its finished jobs); for a workflow's own summary")
+    parser.add_argument("--require-open-issues", action="store_true",
+                        help="exit 4 when a failure of an attempt before a run's latest has no open issue")
+    parser.add_argument("--own-job", metavar="NAME",
+                        help="with --require-open-issues, the job running this check: its earlier failures "
+                             "need no issue")
     parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
     parser.add_argument("--json", metavar="PATH", help="also write the JSON ledger here")
     parser.add_argument("--tz", help="time zone for the markdown (default: this machine's)")
