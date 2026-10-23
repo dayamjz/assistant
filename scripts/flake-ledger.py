@@ -544,6 +544,11 @@ def read_job(github, cache, job):
                 "job-timeout", job["name"], "exceeded timeout-minutes",
                 f"cancelled in step {running[0]}" if running else "cancelled at its bound",
                 token="timeout-minutes").to_dict())
+        if not job.get("steps"):
+            # Cancelled before a runner took it: no step ran, so there is no
+            # output to read and GitHub keeps no log (it answers 404).
+            cache.put(f"job-{job['id']}", result)
+            return result
     # A log that fails part way is parsed again from its start. A cancelled
     # job's log is read too: a cancel in a later step is the job's result
     # even when its Test step had already failed and printed why.
