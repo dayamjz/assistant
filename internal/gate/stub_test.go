@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,7 +13,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 )
 
 // The hooks a gate installs invoke a command by absolute path, so what these
@@ -68,12 +71,24 @@ func exeSuffix() string {
 }
 
 // TestMain runs the stand-in command when the environment asks for it, and the
-// tests otherwise.
+// tests otherwise. For the tests it registers this package's temporary
+// directory namespace, which the database template internal/store/storetest
+// makes lives in, and removes the template once every test has run.
 func TestMain(m *testing.M) {
 	if os.Getenv(stubMode) != "" {
 		os.Exit(stubMain())
 	}
-	os.Exit(m.Run())
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	code := m.Run()
+	storetest.Remove()
+	os.Exit(code)
 }
 
 // stubMain is the stand-in command a gate's hooks invoke. It appends one line

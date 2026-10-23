@@ -37,7 +37,8 @@ func (p Process) String() string {
 // never split out of a listing, so a path or an argument with a space in it
 // is read whole. The list is a settled reading of the process table
 // (processesWhere), so a process that exits while the table is read makes
-// it read again rather than being passed over. A list that cannot be read,
+// it read again rather than being passed over, unless the listing had
+// already read it whole and refused it. A list that cannot be read,
 // or that no reading settles for, is an error and never an empty list; a
 // process of another user's (foreignProcess) whose command line cannot be
 // read is passed over, and one of this user's is read again (processesWhere).
@@ -160,10 +161,21 @@ const settleReadings = 64
 // case processesWhere reads the table again, reusing what it read of a
 // process it already read whole, until a reading settles or settleReadings
 // have run, which is an error naming what left the last reading unsettled.
+//
+// One exit does not unsettle a reading: that of a process the reading
+// before read as running and as one this listing had read whole and match
+// refused. What a refused process starts once a reading has begun is read
+// only by a later reading whose table names it, whether the refused process
+// goes on running or exits, so its exit tells the listing nothing its
+// running would not. Every other process's exit does unsettle the reading
+// it is first read in. Without this a reading settles only when no process
+// it names exits during it, and on CI, where other packages' tests start
+// and end processes beside the listing, none of 64 readings did (#569).
+//
 // So every process of this user's running when a settled reading began was
-// read whole, as one match accepts or refuses, and a process that exited
-// during an earlier reading after starting another has that other read
-// whole in a later one.
+// read whole, as one match accepts or refuses, and a process that match
+// accepted, or that was never read whole, and that exited during an earlier
+// reading after starting another has that other read whole in a later one.
 //
 // When no reading settles, the error is an unsettledError naming the
 // process number that kept the most readings in a row from settling,
@@ -175,10 +187,18 @@ const settleReadings = 64
 // What that does not cover: a process of another user's whose command line
 // cannot be read is passed over, and so is what it starts unless that is
 // read whole itself; a process of this user's whose reads keep failing
-// fails every listing, which is loud rather than silent; and a process
-// match refuses can start one match would accept after the reading, which
-// carrying's match refuses only for a process not read as carrying the
-// identity (carrying).
+// fails every listing, which is loud rather than silent; a process match
+// refuses can start one match would accept once a reading has begun, which
+// that reading does not list, whether the refused process goes on running
+// or exits, and which carrying's match refuses only for a process not read
+// as carrying the identity (carrying); a process read whole is not read
+// again within a listing, so one that execs another program after it was
+// read keeps what it was read as; a refused process's exit is told from
+// another's by the process number the reading before read it under, so
+// another process given that number, started and ended between the two
+// readings, would be taken for it; and processes the listing never read
+// whole that keep exiting, one in every reading, still keep every reading
+// from settling.
 func processesWhere(table processTable, match func(processTable, int) (bool, error)) ([]Process, error) {
 	exclude := map[int]bool{}
 	for pid := os.Getpid(); pid > 1 && !exclude[pid]; {
@@ -190,9 +210,13 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 		pid = lineage.Parent
 	}
 	// read is every process read whole so far, with what it was read as:
-	// a process match accepts, or nil for one it refuses or passes over.
+	// a process match accepts, or nil for one it refuses or passes over;
+	// refused is those of them read whole that match refused.
 	read := map[agents.Identity]*Process{}
-	stopped := map[int]bool{}
+	refused := map[agents.Identity]bool{}
+	// stopped is the process numbers the last reading read as not running,
+	// and wasRefused those it read as a running process in refused.
+	stopped, wasRefused := map[int]bool{}, map[int]bool{}
 	// causes is what kept the last reading from settling, one per process
 	// number in the order the table named them, and standing is, for each
 	// of those numbers, how many readings in a row through the last it kept
@@ -209,7 +233,7 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 		unsettle := func(pid int, err error) {
 			causes = append(causes, unsettledCause{pid: pid, err: err})
 		}
-		nowStopped := map[int]bool{}
+		nowStopped, nowRefused := map[int]bool{}, map[int]bool{}
 		for _, pid := range pids {
 			if exclude[pid] {
 				continue
@@ -221,7 +245,7 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			}
 			if !running {
 				nowStopped[pid] = true
-				if !stopped[pid] {
+				if !stopped[pid] && !wasRefused[pid] {
 					unsettle(pid, fmt.Errorf("process %d read as not running for the first time", pid))
 				}
 				continue
@@ -229,6 +253,9 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			if p, ok := read[id]; ok {
 				if p != nil {
 					found = append(found, *p)
+				}
+				if refused[id] {
+					nowRefused[pid] = true
 				}
 				continue
 			}
@@ -258,6 +285,10 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			}
 			if failed != nil || !matched || isSweep(args) {
 				read[id] = nil
+				if failed == nil && !matched {
+					refused[id] = true
+					nowRefused[pid] = true
+				}
 				continue
 			}
 			p := Process{Identity: id, Args: args}
@@ -267,7 +298,7 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 		if len(causes) == 0 {
 			return found, nil
 		}
-		stopped = nowStopped
+		stopped, wasRefused = nowStopped, nowRefused
 		nowStanding := make(map[int]int, len(causes))
 		for _, c := range causes {
 			nowStanding[c.pid] = standing[c.pid] + 1
@@ -447,8 +478,9 @@ func stayed(ps []Process, grace time.Duration) []Process {
 // After that, nothing this check can see is left to start a process:
 // RunOwned has this binary start nothing more first (stopStarting), and
 // each listing is one settled reading of the process table (leftRunning),
-// so a process that starts another and exits while the table is read makes
-// the listing read it again, and the process it started is listed. A
+// so a process of this binary, or one carrying the owner identity, that
+// starts another and exits while the table is read makes the listing read
+// it again, and the process it started is listed. A
 // listing that still finds a process after sweepRounds of them fails the
 // package, naming and ending what it found, so the check ends.
 //
@@ -457,7 +489,8 @@ func stayed(ps []Process, grace time.Duration) []Process {
 // wrapper ran (ownProcesses) or a process in that tmux's panes, or before
 // ownership was recorded, or whose environment the read cannot find, which
 // on some macOS machines is a whole program's (carrying); what such a
-// process starts once the check has listed for the last time; a process of
+// process starts once the check's last listing has begun, whether it goes
+// on running or exits (processesWhere); a process of
 // another user's whose command line cannot be read (processesWhere), and
 // what it starts; and anything at all
 // once this binary is gone, so the binary AtTerminal ran again outliving a
