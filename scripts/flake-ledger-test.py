@@ -211,6 +211,22 @@ class LoudTest(unittest.TestCase):
             "leak: internal/vcs something new 77",
             "run-leak: (whole run) unparsed LEAK socket-ish /tmp/xN"])
 
+    def test_a_failed_subtest_names_its_test_without_the_parents_line(self):
+        # go test -v prints a parent's --- FAIL line before its subtests'
+        # (checked with Go 1.26, parallel subtests included), so output cut
+        # between the two still names the parent. The parser does not rely
+        # on that order: a failed subtest alone names its test.
+        lines = framed(["=== RUN   TestParent", "=== RUN   TestParent/sub_a",
+                        "    x_test.go:6: sub a broke", "    --- FAIL: TestParent/sub_a (0.00s)"])
+        start = next(i for i, l in enumerate(lines) if l.endswith(ledger.GROUP_START))
+        end = next(i for i, l in enumerate(lines) if i > start and l.endswith(ledger.GROUP_END))
+        records, unattributed, _ = ledger.parse_lines(lines[:end])  # cut before the group ends
+        keys = {r.key: r for r in records}
+        self.assertFalse(unattributed)
+        self.assertEqual(sorted(keys), ["test: (output cut off) TestParent"])
+        self.assertEqual(keys["test: (output cut off) TestParent"].subtests, ["TestParent/sub_a"])
+        self.assertEqual(keys["test: (output cut off) TestParent"].token, "TestParent")
+
     def test_a_group_with_nothing_named_in_it_is_unattributed(self):
         records, unattributed, _ = ledger.parse_lines(framed(["something went wrong", "FAIL"]))
         self.assertEqual(records, [])

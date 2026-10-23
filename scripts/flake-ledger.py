@@ -366,7 +366,11 @@ class LogParser:
         before = len(self.records)
         running = self.timeout[1] if self.timeout else []
         running_tops = {t.split("/", 1)[0] for t in running}
-        for top in sorted(self.failed_tops | running_tops):
+        # A failed subtest names its test even when the test's own --- FAIL
+        # line never printed (go test -v prints it first, but output can be
+        # cut anywhere).
+        sub_tops = {s.split("/", 1)[0] for s in self.failed_subs}
+        for top in sorted(self.failed_tops | running_tops | sub_tops):
             subtests = [s for s in self.failed_subs | set(running) if s.startswith(top + "/")]
             if top in running_tops:
                 detail = f"test timed out after {self.timeout[0]}"
