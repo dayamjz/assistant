@@ -1,0 +1,80 @@
+﻿2026-10-23T00:31:01.4472130Z Current runner version: '2.338.0'
+2026-10-23T00:31:01.4500890Z ##[group]Runner Image Provisioner
+2026-10-23T00:31:01.4501710Z Hosted Compute Agent
+2026-10-23T00:31:01.4505980Z ##[endgroup]
+2026-10-23T00:31:01.4509330Z ##[endgroup]
+2026-10-23T00:31:01.4514210Z ##[endgroup]
+2026-10-23T00:31:01.4518570Z ##[endgroup]
+2026-10-23T00:31:03.0784440Z ##[group]Run actions/checkout@v4
+2026-10-23T00:31:03.0792860Z ##[endgroup]
+2026-10-23T00:31:03.7207110Z ##[endgroup]
+2026-10-23T00:31:03.7971230Z ##[endgroup]
+2026-10-23T00:31:03.8061110Z ##[endgroup]
+2026-10-23T00:31:04.3460490Z ##[endgroup]
+2026-10-23T00:31:05.3833340Z ##[endgroup]
+2026-10-23T00:31:05.3839190Z ##[endgroup]
+2026-10-23T00:31:05.8000070Z ##[endgroup]
+2026-10-23T00:31:05.9141950Z ##[group]Run actions/setup-go@v6
+2026-10-23T00:31:05.9147420Z ##[endgroup]
+2026-10-23T00:31:25.3214970Z ##[endgroup]
+2026-10-23T00:31:25.4081340Z ##[group]Run if ! command -v tmux >/dev/null 2>&1; then
+2026-10-23T00:31:25.4320780Z ##[endgroup]
+2026-10-23T00:31:40.4693710Z ##[group]Run unformatted=$(gofmt -l .)
+2026-10-23T00:31:40.4758480Z ##[endgroup]
+2026-10-23T00:31:41.5156080Z ##[group]Run go vet ./...
+2026-10-23T00:31:41.5190470Z ##[endgroup]
+2026-10-23T00:31:57.7594220Z ##[group]Run python3 scripts/leak-check-test.py -v
+2026-10-23T00:31:57.7594730Z [36;1mpython3 scripts/leak-check-test.py -v[0m
+2026-10-23T00:31:57.7689190Z shell: /bin/bash -e {0}
+2026-10-23T00:31:57.7689590Z env:
+2026-10-23T00:31:57.7689840Z   GOTOOLCHAIN: local
+2026-10-23T00:31:57.7690340Z ##[endgroup]
+2026-10-23T00:31:58.3575770Z test_all_temp_roots_are_included_and_canonical (__main__.LeakCheckTest.test_all_temp_roots_are_included_and_canonical) ... ok
+2026-10-23T00:32:02.4536180Z test_an_apple_label_alone_does_not_set_a_job_aside (__main__.LeakCheckTest.test_an_apple_label_alone_does_not_set_a_job_aside) ... ok
+2026-10-23T00:32:03.1849910Z test_an_apple_name_in_the_user_temp_dir_is_set_aside_only_per_package (__main__.LeakCheckTest.test_an_apple_name_in_the_user_temp_dir_is_set_aside_only_per_package) ... ok
+2026-10-23T00:32:05.6441270Z test_an_orphan_is_not_an_apple_bundle_service (__main__.LeakCheckTest.test_an_orphan_is_not_an_apple_bundle_service) ... 
+2026-10-23T00:32:05.6544540Z   test_an_orphan_is_not_an_apple_bundle_service (__main__.LeakCheckTest.test_an_orphan_is_not_an_apple_bundle_service) (kind='changeable') ... skipped 'no XPC service or app extension from /Applications runs here'
+2026-10-23T00:32:05.6646190Z test_apple_temp_entries_are_set_aside_only_in_their_root (__main__.LeakCheckTest.test_apple_temp_entries_are_set_aside_only_in_their_root) ... ok
+2026-10-23T00:32:05.7355410Z test_apple_temp_root_is_off_when_tmpdir_shares_it (__main__.LeakCheckTest.test_apple_temp_root_is_off_when_tmpdir_shares_it) ... ok
+2026-10-23T00:32:05.8073590Z test_command_failure_survives_clean_comparison (__main__.LeakCheckTest.test_command_failure_survives_clean_comparison) ... ok
+2026-10-23T00:32:05.8376640Z test_inspection_failure_cannot_pass (__main__.LeakCheckTest.test_inspection_failure_cannot_pass) ... ok
+2026-10-23T00:32:05.8477810Z test_launchd_jobs_are_read_only_on_macos (__main__.LeakCheckTest.test_launchd_jobs_are_read_only_on_macos) ... ok
+2026-10-23T00:32:05.8580070Z test_missing_root_is_an_error (__main__.LeakCheckTest.test_missing_root_is_an_error) ... ok
+2026-10-23T00:32:06.0116050Z test_native_identity_and_effective_user (__main__.LeakCheckTest.test_native_identity_and_effective_user) ... ok
+2026-10-23T00:32:06.0221910Z test_only_an_apple_launchd_job_is_set_aside (__main__.LeakCheckTest.test_only_an_apple_launchd_job_is_set_aside) ... ok
+2026-10-23T00:32:06.0323760Z test_only_foreign_unenterable_subtrees_can_be_set_aside (__main__.LeakCheckTest.test_only_foreign_unenterable_subtrees_can_be_set_aside) ... ok
+2026-10-23T00:32:06.0425940Z test_only_root_can_change_a_definition_under_roots_directories (__main__.LeakCheckTest.test_only_root_can_change_a_definition_under_roots_directories) ... ok
+2026-10-23T00:32:06.0528860Z test_owned_unreadable_tree_is_an_error (__main__.LeakCheckTest.test_owned_unreadable_tree_is_an_error) ... ok
+2026-10-23T00:32:06.0631500Z test_pid_reuse_is_a_new_process (__main__.LeakCheckTest.test_pid_reuse_is_a_new_process) ... ok
+2026-10-23T00:32:06.2230540Z test_real_tmux_server_and_socket_in_existing_directory (__main__.LeakCheckTest.test_real_tmux_server_and_socket_in_existing_directory) ... ok
+2026-10-23T00:32:06.2291040Z test_recursive_socket_symlink_and_replaced_entry (__main__.LeakCheckTest.test_recursive_socket_symlink_and_replaced_entry) ... ok
+2026-10-23T00:32:06.9279800Z test_self_test_requires_the_real_cli_to_fail (__main__.LeakCheckTest.test_self_test_requires_the_real_cli_to_fail) ... ok
+2026-10-23T00:32:06.9380450Z test_a_child_that_exits_before_it_is_read_still_fails_the_package (__main__.PerPackageTest.test_a_child_that_exits_before_it_is_read_still_fails_the_package) ... skipped "the subreaper is Linux's"
+2026-10-23T00:32:08.4584890Z test_a_package_cannot_write_in_the_user_temp_dir (__main__.PerPackageTest.test_a_package_cannot_write_in_the_user_temp_dir) ... ok
+2026-10-23T00:32:09.9062850Z test_a_process_started_as_its_parent_exits_mid_reading_is_found (__main__.PerPackageTest.test_a_process_started_as_its_parent_exits_mid_reading_is_found) ... 
+2026-10-23T00:32:09.9163180Z   test_a_process_started_as_its_parent_exits_mid_reading_is_found (__main__.PerPackageTest.test_a_process_started_as_its_parent_exits_mid_reading_is_found) (order='held') ... FAIL
+2026-10-23T00:32:10.7800750Z test_a_ps_a_package_leaves_blocked_on_its_output_cannot_pass (__main__.PerPackageTest.test_a_ps_a_package_leaves_blocked_on_its_output_cannot_pass) ... ok
+2026-10-23T00:32:14.5072540Z test_an_early_packages_detached_process_fails_that_package (__main__.PerPackageTest.test_an_early_packages_detached_process_fails_that_package) ... ok
+2026-10-23T00:32:14.6791210Z test_only_the_packages_own_sandbox_marks_a_process (__main__.PerPackageTest.test_only_the_packages_own_sandbox_marks_a_process) ... ok
+2026-10-23T00:32:14.6794490Z test_the_per_package_check_refuses_elsewhere (__main__.PerPackageTest.test_the_per_package_check_refuses_elsewhere) ... skipped 'the per-package check runs here'
+2026-10-23T00:32:14.6796720Z 
+2026-10-23T00:32:14.6798170Z ======================================================================
+2026-10-23T00:32:14.6801080Z FAIL: test_a_process_started_as_its_parent_exits_mid_reading_is_found (__main__.PerPackageTest.test_a_process_started_as_its_parent_exits_mid_reading_is_found) (order='held')
+2026-10-23T00:32:14.6803710Z ----------------------------------------------------------------------
+2026-10-23T00:32:14.6805870Z Traceback (most recent call last):
+2026-10-23T00:32:14.6808200Z   File "/Users/runner/work/assistant/assistant/scripts/leak-check-test.py", line 613, in test_a_process_started_as_its_parent_exits_mid_reading_is_found
+2026-10-23T00:32:14.6810900Z     self.assertIn(f"started {pid} and {said}", result.stdout,
+2026-10-23T00:32:14.6812610Z     ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-10-23T00:32:14.6814890Z                   "the parent's exit never fell where this order needs it, "
+2026-10-23T00:32:14.6817300Z                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-10-23T00:32:14.6819340Z                   "so this shows nothing")
+2026-10-23T00:32:14.6821060Z                   ^^^^^^^^^^^^^^^^^^^^^^^^
+2026-10-23T00:32:14.6825280Z AssertionError: 'started 7911 and was still exiting when the check ended' not found in 'process 7909 started 7911 and was not held in its exit\nLEAK package=/Users/runner/work/assistant/assistant process pid=7911 start=1792715529.626621 command=sleep 300\nleak-check: package /Users/runner/work/assistant/assistant left processes running\n' : the parent's exit never fell where this order needs it, so this shows nothing
+2026-10-23T00:32:14.6829090Z 
+2026-10-23T00:32:14.6832670Z ----------------------------------------------------------------------
+2026-10-23T00:32:14.6833700Z Ran 26 tests in 16.325s
+2026-10-23T00:32:14.6834240Z 
+2026-10-23T00:32:14.6834640Z FAILED (failures=1, skipped=3)
+2026-10-23T00:32:14.7269970Z ##[error]Process completed with exit code 1.
+2026-10-23T00:32:14.7489510Z ##[group]Run if [ ! -f test.log ]; then
+2026-10-23T00:32:14.7555890Z ##[endgroup]

@@ -95,6 +95,13 @@ jobs:
       - name: Leak guard tests
         run: python3 scripts/leak-check-test.py -v
 
+      # The flake ledger's tests (scripts/flake-ledger.py, which the CI lanes
+      # read failures from). They run the real go test, so they come after
+      # setup-go; nothing in the parser depends on the platform it runs on.
+      - name: Flake ledger tests
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 scripts/flake-ledger-test.py -v
+
       # The race detector is the point of this job, so it is not optional.
       # The timeout is explicit because internal/service has run past go
       # test's ten-minute default on a macOS runner, which fails the package

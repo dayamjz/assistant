@@ -1,0 +1,141 @@
+﻿2026-10-23T10:29:33.9518270Z Current runner version: '2.338.0'
+2026-10-23T10:29:33.9539830Z ##[group]Runner Image Provisioner
+2026-10-23T10:29:33.9540610Z Hosted Compute Agent
+2026-10-23T10:29:33.9544370Z ##[endgroup]
+2026-10-23T10:29:33.9547550Z ##[endgroup]
+2026-10-23T10:29:33.9552460Z ##[endgroup]
+2026-10-23T10:29:33.9556240Z ##[endgroup]
+2026-10-23T10:29:35.7328290Z ##[group]Run actions/checkout@v4
+2026-10-23T10:29:35.7355270Z ##[endgroup]
+2026-10-23T10:29:36.2621140Z ##[endgroup]
+2026-10-23T10:29:36.3190620Z ##[endgroup]
+2026-10-23T10:29:36.3278610Z ##[endgroup]
+2026-10-23T10:29:36.7576570Z ##[endgroup]
+2026-10-23T10:29:37.8572380Z ##[endgroup]
+2026-10-23T10:29:37.8576560Z ##[endgroup]
+2026-10-23T10:29:38.1814120Z ##[endgroup]
+2026-10-23T10:29:38.2588360Z ##[group]Run actions/setup-go@v6
+2026-10-23T10:29:38.2593170Z ##[endgroup]
+2026-10-23T10:30:02.2994190Z ##[endgroup]
+2026-10-23T10:30:02.3204040Z ##[group]Run if ! command -v tmux >/dev/null 2>&1; then
+2026-10-23T10:30:02.3310900Z ##[endgroup]
+2026-10-23T10:30:17.4826480Z ##[group]Run unformatted=$(gofmt -l .)
+2026-10-23T10:30:17.4893430Z ##[endgroup]
+2026-10-23T10:30:18.6900500Z ##[group]Run go vet ./...
+2026-10-23T10:30:18.6939020Z ##[endgroup]
+2026-10-23T10:30:37.9952740Z ##[group]Run python3 scripts/leak-check-test.py -v
+2026-10-23T10:30:38.0015610Z ##[endgroup]
+2026-10-23T10:31:02.3315810Z ##[group]Run set -o pipefail
+2026-10-23T10:31:02.3469450Z ##[endgroup]
+2026-10-23T10:31:02.9706890Z leak-check: watching /Users/runner/work/_temp/tmp.CoxOoW/leak-check-self-test-u6cwbefz, /private/tmp, /private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T
+2026-10-23T10:31:03.0012660Z LEAK process pid=6477 start=1792751462.722043 command=sleep 300
+2026-10-23T10:31:03.0113260Z LEAK directory /Users/runner/work/_temp/tmp.CoxOoW/leak-check-self-test-u6cwbefz/planted-directory
+2026-10-23T10:31:03.0319260Z leak-check: 2 leftover(s); command exit=0
+2026-10-23T10:31:03.4948040Z leak-check self-test: expected failure observed; planted leaks removed
+2026-10-23T10:31:03.5251830Z LEAK package=/Users/runner/work/assistant/assistant process pid=6491 start=1792751463.222820 command=sleep 300
+2026-10-23T10:31:03.5352680Z leak-check: package /Users/runner/work/assistant/assistant left processes running
+2026-10-23T10:31:03.5456860Z leak-check self-test: per-package check failed, named and ended its planted process, and left a process outside the package alone
+2026-10-23T10:31:03.5558740Z leak-check self-test: per-package check refused a write in /private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T
+2026-10-23T11:02:25.4932460Z leak-check:       41 package(s) ran through the per-package check; go test reported 40 ok
+2026-10-23T11:02:25.5161650Z leak-check: watching /Users/runner/work/_temp/tmp.CoxOoW, /private/tmp, /private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T
+2026-10-23T11:02:25.5196070Z ok  	github.com/dayamjz/assistant/internal/agents	287.572s
+2026-10-23T11:02:25.5197050Z ok  	github.com/dayamjz/assistant/internal/agents/route	1.521s
+2026-10-23T11:02:25.5198240Z ok  	github.com/dayamjz/assistant/internal/agents/standin	151.299s
+2026-10-23T11:02:25.5199340Z ok  	github.com/dayamjz/assistant/internal/buildinfo	7.512s
+2026-10-23T11:02:25.5214850Z ok  	github.com/dayamjz/assistant/internal/checkpoints	101.404s
+2026-10-23T11:02:25.5216670Z ok  	github.com/dayamjz/assistant/internal/cli	391.657s
+2026-10-23T11:02:25.5218190Z ok  	github.com/dayamjz/assistant/internal/config	1.642s
+2026-10-23T11:02:25.5220320Z ok  	github.com/dayamjz/assistant/internal/custody	24.285s
+2026-10-23T11:02:25.5222090Z ok  	github.com/dayamjz/assistant/internal/findings	1.535s
+2026-10-23T11:02:25.5223510Z ok  	github.com/dayamjz/assistant/internal/fixture	29.194s
+2026-10-23T11:02:25.5226820Z ok  	github.com/dayamjz/assistant/internal/forge	108.383s
+2026-10-23T11:02:25.5227380Z ok  	github.com/dayamjz/assistant/internal/forge/forgetest	26.020s
+2026-10-23T11:02:25.5229510Z ok  	github.com/dayamjz/assistant/internal/forge/specifier	1.320s
+2026-10-23T11:02:25.5230510Z ok  	github.com/dayamjz/assistant/internal/gate	616.298s
+2026-10-23T11:02:25.5231530Z ok  	github.com/dayamjz/assistant/internal/graph	1.590s
+2026-10-23T11:02:25.5232510Z ok  	github.com/dayamjz/assistant/internal/home	2.469s
+2026-10-23T11:02:25.5233490Z ok  	github.com/dayamjz/assistant/internal/ipc	30.527s
+2026-10-23T11:02:25.5235270Z ok  	github.com/dayamjz/assistant/internal/journey	125.781s
+2026-10-23T11:02:25.5238120Z ok  	github.com/dayamjz/assistant/internal/judge	9.415s
+2026-10-23T11:02:25.5242020Z ok  	github.com/dayamjz/assistant/internal/knowledge	1.251s
+2026-10-23T11:02:25.5242520Z ok  	github.com/dayamjz/assistant/internal/machine	11.264s
+2026-10-23T11:02:25.5243590Z ok  	github.com/dayamjz/assistant/internal/managed	2.023s
+2026-10-23T11:02:25.5244070Z ok  	github.com/dayamjz/assistant/internal/outcomes	1.396s
+2026-10-23T11:02:25.5245360Z ok  	github.com/dayamjz/assistant/internal/pipeline	7.264s
+2026-10-23T11:02:25.5246600Z ok  	github.com/dayamjz/assistant/internal/principles	3.408s
+2026-10-23T11:02:25.5247750Z ok  	github.com/dayamjz/assistant/internal/procgroup	11.532s
+2026-10-23T11:02:25.5248970Z ok  	github.com/dayamjz/assistant/internal/procgroup/guard	86.759s
+2026-10-23T11:02:25.5250000Z ok  	github.com/dayamjz/assistant/internal/redact	6.017s
+2026-10-23T11:02:25.5251140Z ok  	github.com/dayamjz/assistant/internal/runs	697.625s
+2026-10-23T11:02:25.5252000Z ok  	github.com/dayamjz/assistant/internal/safety	1.285s
+2026-10-23T11:02:25.5252920Z ok  	github.com/dayamjz/assistant/internal/scope	1.285s
+2026-10-23T11:02:25.5256460Z LEAK package=/Users/runner/work/assistant/assistant/internal/service process pid=16462 start=1792752950.080757 command=/Users/runner/work/_temp/tmp.CoxOoW/TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out4138430518/001/child.test --standin-sweep=16455:1792752950030505 --standin-sweep-dir=/tmp/atinternal_1service-cp3-hnh7c2xsix-tmux-2916605583
+2026-10-23T11:02:25.5260640Z leak-check: package /Users/runner/work/assistant/assistant/internal/service left processes running
+2026-10-23T11:02:25.5263030Z FAIL	github.com/dayamjz/assistant/internal/service	857.197s
+2026-10-23T11:02:25.5265480Z ok  	github.com/dayamjz/assistant/internal/session	27.277s
+2026-10-23T11:02:25.5266590Z ok  	github.com/dayamjz/assistant/internal/stages	461.917s
+2026-10-23T11:02:25.5267190Z ok  	github.com/dayamjz/assistant/internal/store	204.389s
+2026-10-23T11:02:25.5267670Z ok  	github.com/dayamjz/assistant/internal/store/storetest	16.585s
+2026-10-23T11:02:25.5268310Z ok  	github.com/dayamjz/assistant/internal/supervisor	1.470s
+2026-10-23T11:02:25.5268990Z ok  	github.com/dayamjz/assistant/internal/supervisor/feed	45.585s
+2026-10-23T11:02:25.5269510Z ok  	github.com/dayamjz/assistant/internal/tasks	401.306s
+2026-10-23T11:02:25.5269990Z ok  	github.com/dayamjz/assistant/internal/taskstate	61.679s
+2026-10-23T11:02:25.5270450Z ok  	github.com/dayamjz/assistant/internal/vcs	147.432s
+2026-10-23T11:02:25.5339370Z leak-check: 0 leftover(s); command exit=1
+2026-10-23T11:02:25.5358190Z ##[group]full test output
+2026-10-23T11:02:25.5473120Z leak-check: watching /Users/runner/work/_temp/tmp.CoxOoW, /private/tmp, /private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T
+2026-10-23T11:02:25.6474120Z ok  	github.com/dayamjz/assistant/internal/agents	287.572s
+2026-10-23T11:02:25.6500080Z ok  	github.com/dayamjz/assistant/internal/agents/route	1.521s
+2026-10-23T11:02:25.6730510Z ok  	github.com/dayamjz/assistant/internal/agents/standin	151.299s
+2026-10-23T11:02:25.6735560Z ok  	github.com/dayamjz/assistant/internal/buildinfo	7.512s
+2026-10-23T11:02:25.6786290Z ok  	github.com/dayamjz/assistant/internal/checkpoints	101.404s
+2026-10-23T11:02:25.7781100Z ok  	github.com/dayamjz/assistant/internal/cli	391.657s
+2026-10-23T11:02:25.8040600Z ok  	github.com/dayamjz/assistant/internal/config	1.642s
+2026-10-23T11:02:25.8048740Z ok  	github.com/dayamjz/assistant/internal/custody	24.285s
+2026-10-23T11:02:25.8189290Z ok  	github.com/dayamjz/assistant/internal/findings	1.535s
+2026-10-23T11:02:25.8204790Z ok  	github.com/dayamjz/assistant/internal/fixture	29.194s
+2026-10-23T11:02:25.8351730Z ok  	github.com/dayamjz/assistant/internal/forge	108.383s
+2026-10-23T11:02:25.8367820Z ok  	github.com/dayamjz/assistant/internal/forge/forgetest	26.020s
+2026-10-23T11:02:25.8374180Z ok  	github.com/dayamjz/assistant/internal/forge/specifier	1.320s
+2026-10-23T11:02:25.8471820Z ok  	github.com/dayamjz/assistant/internal/gate	616.298s
+2026-10-23T11:02:25.8626600Z ok  	github.com/dayamjz/assistant/internal/graph	1.590s
+2026-10-23T11:02:25.8643370Z ok  	github.com/dayamjz/assistant/internal/home	2.469s
+2026-10-23T11:02:25.8702710Z ok  	github.com/dayamjz/assistant/internal/ipc	30.527s
+2026-10-23T11:02:25.8823730Z ok  	github.com/dayamjz/assistant/internal/journey	125.781s
+2026-10-23T11:02:25.8860850Z ok  	github.com/dayamjz/assistant/internal/judge	9.415s
+2026-10-23T11:02:25.8864850Z ok  	github.com/dayamjz/assistant/internal/knowledge	1.251s
+2026-10-23T11:02:25.8922160Z ok  	github.com/dayamjz/assistant/internal/machine	11.264s
+2026-10-23T11:02:25.8932400Z ok  	github.com/dayamjz/assistant/internal/managed	2.023s
+2026-10-23T11:02:25.8961650Z ok  	github.com/dayamjz/assistant/internal/outcomes	1.396s
+2026-10-23T11:02:25.9054800Z ok  	github.com/dayamjz/assistant/internal/pipeline	7.264s
+2026-10-23T11:02:25.9073270Z ok  	github.com/dayamjz/assistant/internal/principles	3.408s
+2026-10-23T11:02:25.9091700Z ok  	github.com/dayamjz/assistant/internal/procgroup	11.532s
+2026-10-23T11:02:25.9096510Z ok  	github.com/dayamjz/assistant/internal/procgroup/guard	86.759s
+2026-10-23T11:02:25.9133940Z ok  	github.com/dayamjz/assistant/internal/redact	6.017s
+2026-10-23T11:02:25.9222850Z ok  	github.com/dayamjz/assistant/internal/runs	697.625s
+2026-10-23T11:02:25.9313380Z ok  	github.com/dayamjz/assistant/internal/safety	1.285s
+2026-10-23T11:02:25.9325380Z ok  	github.com/dayamjz/assistant/internal/scope	1.285s
+2026-10-23T11:02:25.9349860Z === RUN   TestADispatchersTrustedReadIsItsOwn
+2026-10-23T11:02:25.9908260Z === CONT  TestADispatchersTrustedReadIsItsOwn
+2026-10-23T11:02:25.9908470Z     dispatch_internal_test.go:193: claims PRD principle P7
+2026-10-23T11:02:25.9911290Z     dispatch_internal_test.go:229: a dispatcher failed for a reason other than the claim: service: task yhiutwkjsciw gets no worker because its standing copy was not cleared: swept /Users/runner/work/_temp/tmp.CoxOoW/TestADispatchersTrustedReadIsItsOwn2196104214/001/tasks/yhiutwkjsciw/copy: 0 ended, 0 exited before a signal, 0 replaced, 0 survived, 0 unverified, 270 not readable of which 1 could be in it (pid 987 uids 501/0/0 name "sudo")
+2026-10-23T11:02:25.9911450Z --- FAIL: TestADispatchersTrustedReadIsItsOwn (2.24s)
+2026-10-23T11:02:26.0013120Z FAIL
+2026-10-23T11:02:26.0015810Z LEAK package=/Users/runner/work/assistant/assistant/internal/service process pid=16462 start=1792752950.080757 command=/Users/runner/work/_temp/tmp.CoxOoW/TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out4138430518/001/child.test --standin-sweep=16455:1792752950030505 --standin-sweep-dir=/tmp/atinternal_1service-cp3-hnh7c2xsix-tmux-2916605583
+2026-10-23T11:02:26.0016810Z leak-check: package /Users/runner/work/assistant/assistant/internal/service left processes running
+2026-10-23T11:02:26.0017000Z FAIL	github.com/dayamjz/assistant/internal/service	857.197s
+2026-10-23T11:02:26.0027740Z ok  	github.com/dayamjz/assistant/internal/session	27.277s
+2026-10-23T11:02:26.0551010Z ok  	github.com/dayamjz/assistant/internal/stages	461.917s
+2026-10-23T11:02:26.0888670Z ok  	github.com/dayamjz/assistant/internal/store	204.389s
+2026-10-23T11:02:26.0890480Z ok  	github.com/dayamjz/assistant/internal/store/storetest	16.585s
+2026-10-23T11:02:26.0924820Z ok  	github.com/dayamjz/assistant/internal/supervisor	1.470s
+2026-10-23T11:02:26.0959480Z ok  	github.com/dayamjz/assistant/internal/supervisor/feed	45.585s
+2026-10-23T11:02:26.1084200Z ok  	github.com/dayamjz/assistant/internal/tasks	401.306s
+2026-10-23T11:02:26.1139150Z ok  	github.com/dayamjz/assistant/internal/taskstate	61.679s
+2026-10-23T11:02:26.1208860Z ok  	github.com/dayamjz/assistant/internal/vcs	147.432s
+2026-10-23T11:02:26.1208920Z FAIL
+2026-10-23T11:02:26.1221010Z leak-check: 0 leftover(s); command exit=1
+2026-10-23T11:02:26.1221440Z ##[endgroup]
+2026-10-23T11:02:26.1279660Z ##[error]Process completed with exit code 1.
+2026-10-23T11:02:26.1577470Z ##[group]Run if [ ! -f test.log ]; then
+2026-10-23T11:02:26.1935980Z ##[endgroup]
