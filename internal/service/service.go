@@ -330,7 +330,8 @@ type Service struct {
 
 	// mu guards the lazily built driver and topologies, the set of runs being
 	// advanced, and the branch gates. It is never held across a run's
-	// execution.
+	// execution. The one store write made under it is launch.go's record of
+	// a worker's session, and that file's comment says why and at what cost.
 	mu    sync.Mutex
 	built *driver
 	// topologies caches one built pipeline and executor per resolved run
@@ -419,6 +420,13 @@ type Service struct {
 	// package's tests, which use it to look at the stream at the point a
 	// service that stopped there would have left it.
 	afterConsentRegistered func()
+	// afterSessionRecorded runs in launchTask once the attempt's session
+	// reference is recorded and the session held, outside mu and before the
+	// launch goes on, with the task and the reference. It is nil in
+	// production and set only by this package's tests, which use it to hold
+	// a launch, or to read the service, at the point the record names the
+	// session.
+	afterSessionRecorded func(id, ref string)
 	// sweepCopy stands in for the sweep this service asks of a copy: the
 	// one relaunch.go and dispatch.go ask of a task's standing copy, and the
 	// one runsweep.go asks of a finished run's. It is nil in production,
