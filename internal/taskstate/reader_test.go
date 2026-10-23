@@ -13,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 )
 
 const (
@@ -23,7 +24,10 @@ const (
 
 func openStore(t *testing.T) *store.Store {
 	t.Helper()
-	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), store.WithRedactor(redact.New()))
+	// Seeded for time alone, as internal/store/storetest's comment says.
+	path := filepath.Join(t.TempDir(), "state.db")
+	storetest.Seed(t, path)
+	s, err := store.Open(context.Background(), path, store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
