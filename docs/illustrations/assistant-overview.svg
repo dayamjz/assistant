@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="350" viewBox="0 0 1200 350" role="img" aria-labelledby="title desc">
+<title id="title">Assistant: orchestrate, execute, validate</title>
+<desc id="desc">A three-step illustration of coordinator orchestration, specialized isolated workers, and validation-gated delivery. Remote workers are in development.</desc>
+<rect width="1200" height="350" rx="24" fill="#0f172a"/>
+<text x="48" y="52" fill="#f8fafc" font-family="Arial,sans-serif" font-size="27" font-weight="bold">From intent to validated code</text>
+<text x="48" y="78" fill="#94a3b8" font-family="Arial,sans-serif" font-size="15">Model-aware orchestration • isolated execution • review before delivery</text>
+<g font-family="Arial,sans-serif">
+<rect x="46" y="110" width="326" height="190" rx="17" fill="#1e293b" stroke="#475569"/>
+<rect x="437" y="110" width="326" height="190" rx="17" fill="#1e293b" stroke="#475569"/>
+<rect x="828" y="110" width="326" height="190" rx="17" fill="#1e293b" stroke="#475569"/>
+<text x="70" y="145" font-size="14" font-weight="bold" fill="#5eead4">01  ORCHESTRATE</text>
+<text x="70" y="180" font-size="22" font-weight="bold" fill="#fff">Delegate by role</text>
+<text x="70" y="209" font-size="16" fill="#cbd5e1">Coordinator → domains → tasks</text>
+<text x="70" y="238" font-size="15" fill="#cbd5e1">Choose provider, model &amp; effort</text>
+<text x="70" y="267" font-size="15" fill="#94a3b8">Escalate human decisions</text>
+<text x="461" y="145" font-size="14" font-weight="bold" fill="#93c5fd">02  EXECUTE</text>
+<text x="461" y="180" font-size="22" font-weight="bold" fill="#fff">Work in parallel</text>
+<text x="461" y="209" font-size="16" fill="#cbd5e1">Independent repository copies</text>
+<text x="461" y="238" font-size="15" fill="#cbd5e1">Supervised, durable progress</text>
+<text x="461" y="267" font-size="15" fill="#94a3b8">Remote machines: in development</text>
+<text x="852" y="145" font-size="14" font-weight="bold" fill="#fcd34d">03  VALIDATE</text>
+<text x="852" y="180" font-size="22" font-weight="bold" fill="#fff">Ship with evidence</text>
+<text x="852" y="209" font-size="16" fill="#cbd5e1">Independent review &amp; checks</text>
+<text x="852" y="238" font-size="15" fill="#cbd5e1">Bounded fixes and human holds</text>
+<text x="852" y="267" font-size="15" fill="#94a3b8">GitHub / GitLab delivery</text>
+<path d="M382 203 H426" stroke="#5eead4" stroke-width="4" stroke-linecap="round"/>
+<path d="M415 192 L428 203 L415 214" stroke="#5eead4" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M773 203 H817" stroke="#5eead4" stroke-width="4" stroke-linecap="round"/>
+<path d="M806 192 L819 203 L806 214" stroke="#5eead4" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</g></svg>
