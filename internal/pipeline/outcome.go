@@ -29,10 +29,14 @@ const (
 	// round the usage ceiling refused, which RerunKey records: the round
 	// never started, so the fixer takes it now as that round, over the edge
 	// rerunEntry builds, and the stage's round limit is not charged for it a
-	// second time. It stands only while that round runs, so a parked run
-	// shows it for the stage only when a budget, the run-wide steps or the
-	// run's usage, parks the run before that round starts; rerunEntry's own
-	// bound never parks it, for the reason rerunEntry gives.
+	// second time. Like OutcomeFixable, it stands until the stage's next
+	// execution records what it found, because the fix node writes no
+	// outcome. So a parked run shows it for the stage when a budget, the
+	// run-wide steps or the run's usage, parks the run anywhere in between:
+	// in front of the fixer, before the round starts, or after the fix node,
+	// whether the round ran or the ceiling refused it again, before the stage
+	// runs again. rerunEntry's own bound never parks it, for the reason
+	// rerunEntry gives.
 	OutcomeRerun Outcome = "rerun"
 	// OutcomeHeld means the stage found something a person has to decide, so
 	// the run halts before the hold node runs.

@@ -645,3 +645,96 @@ func TestARoundTakenAgainSpendsTheRoundTheRefusalCounted(t *testing.T) {
 		t.Fatalf("the fixer ran %d times, want the refused round and the one taken in its place", n)
 	}
 }
+
+// TestARunParkedAfterARetryShowsRerunUntilTheStageRunsAgain pins when
+// OutcomeRerun is what a parked run shows for a stage: from the execution
+// that records it until the stage's next execution, because the fix node
+// writes no outcome. Lint's automatic round is refused, a person retries,
+// lint still reports the finding, so the round is taken again over
+// rerunEntry, and it starts and completes. The run-wide step budget is swept
+// so it parks the run at every step after the retry, among them the one
+// review found: the round has run and RerunKey is false again, but lint has
+// not run to verify it.
+//
+// Each park must show OutcomeRerun exactly when lint's third execution, the
+// one that recorded it, is lint's last. The two positive controls are a park
+// in front of the fixer, before the round starts, and a park after the round
+// completed, before lint's verification; the sweep fails if it finds either
+// one missing.
+func TestARunParkedAfterARetryShowsRerunUntilTheStageRunsAgain(t *testing.T) {
+	type park struct {
+		budget   int
+		position string
+		stageRan int
+		fixRan   int
+		outcome  Outcome
+		owed     bool
+	}
+	var parks []park
+	for budget := 1; budget <= 80; budget++ {
+		c := newCalls()
+		all := recordingStages(c)
+		set(&all, StageLint, recording(c, nil, nil, func(_ Input, call int) (Output, error) {
+			if call >= 4 {
+				return Output{Report: passing()}, nil
+			}
+			return Output{Report: reportWith(findings.ActionFix, "lint exits 1")}, nil
+		}))
+		p := build(t, Options{
+			Stages: all,
+			Fixer: recordingFixer(c, nil, nil, func(_ FixInput, call int) (FixOutput, error) {
+				if call == 1 {
+					return FixOutput{Summary: "no fix round ran", Holds: []findings.Finding{notStartedHold()}}, nil
+				}
+				return FixOutput{Summary: "fixed the lint"}, nil
+			}),
+			Rounds: rounds(1),
+			Budget: budget,
+		})
+		exec, held := start(t, p, complete())
+		if held.Status != graph.StatusHalted || held.Position != StageLint.HoldNode() {
+			continue // this budget parks the run before it reaches the ceiling's hold
+		}
+		after, err := exec.Answer(context.Background(), "run", string(OutcomeRetry))
+		if err != nil {
+			t.Fatalf("budget %d: answering with a retry: %v", budget, err)
+		}
+		if after.Status != graph.StatusBudgetExhausted {
+			continue
+		}
+		owed, _ := mustGet(t, after.State, StageLint.RerunKey()).Bool()
+		parks = append(parks, park{
+			budget:   budget,
+			position: after.Position,
+			stageRan: c.stageCount(StageLint),
+			fixRan:   c.fixCount(StageLint),
+			outcome:  StageOutcome(after.State, StageLint),
+			owed:     owed,
+		})
+	}
+	beforeRound, afterRound := false, false
+	for _, pk := range parks {
+		recordedLast := pk.stageRan == 3
+		if (pk.outcome == OutcomeRerun) != recordedLast {
+			t.Errorf("budget %d parked at %q after lint ran %d times shows lint %q, want %q exactly while "+
+				"lint's third execution is its last", pk.budget, pk.position, pk.stageRan, pk.outcome, OutcomeRerun)
+		}
+		if !recordedLast {
+			continue
+		}
+		switch {
+		case pk.fixRan == 1 && pk.position == StageLint.FixNode() && pk.owed:
+			beforeRound = true
+		case pk.fixRan == 2 && pk.position == StageLint.Node() && !pk.owed:
+			afterRound = true
+			t.Logf("budget %d parks after the retried round completed, before lint verifies it, showing %q",
+				pk.budget, pk.outcome)
+		}
+	}
+	if !beforeRound {
+		t.Errorf("no budget parked the run in front of the fixer before the retried round started: %+v", parks)
+	}
+	if !afterRound {
+		t.Errorf("no budget parked the run after the retried round completed and before lint ran again: %+v", parks)
+	}
+}
