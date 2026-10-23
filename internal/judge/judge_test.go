@@ -116,13 +116,29 @@ func TestAFailedCallIsNeverAnAnswer(t *testing.T) {
 // among the idle ones before the client has its response, so a sibling
 // subtest's provider stopping at that moment turned "an empty body" into a
 // transport failure. The trace hook PutIdleConn runs at that moment, so the
-// test stops a sibling there on every request rather than waiting for chance
-// to line the two up.
+// test stops a sibling there rather than waiting for chance to line the two
+// up.
+//
+// The hook does not run on every request, and the test does not ask it to.
+// net/http pools a connection only once its writer has reported the request
+// written, and waits 50ms for that report; a writer descheduled past that
+// (a loaded runner) gets its connection closed instead, and the hook is never
+// called (#568). Such a request still has to come back unreadable, but it
+// stopped no sibling in flight, so it does not count: the test runs until a
+// sibling has stopped in flight on wantStopped requests, and fails if that
+// has not happened within attempts, since a run where connections never go
+// idle tests nothing.
 func TestAnotherProviderStoppingDoesNotReachAClient(t *testing.T) {
 	t.Parallel()
+	const wantStopped, attempts = 200, 2000
 	provider := judgetest.New(t, judgetest.Always(judgetest.Raw(http.StatusOK, "")))
 	c := client(provider)
-	for range 200 {
+	stopped := 0
+	for attempt := 0; stopped < wantStopped; attempt++ {
+		if attempt == attempts {
+			t.Fatalf("a sibling stopped in flight on only %d of %d requests, want %d: connections are not going idle, so nothing was tested",
+				stopped, attempts, wantStopped)
+		}
 		sibling := httptest.NewServer(http.NotFoundHandler())
 		var once sync.Once
 		ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
@@ -133,12 +149,10 @@ func TestAnotherProviderStoppingDoesNotReachAClient(t *testing.T) {
 			},
 		})
 		assertFailed(t, c.Screen(ctx, "notes.md", diff), judge.FailureUnreadable)
-		// The hook firing is what makes this test test anything: without it
-		// no sibling stopped while the reply was in flight.
-		stopped := true
-		once.Do(func() { stopped = false })
-		if !stopped {
-			t.Fatal("no connection went idle during the request, so no sibling stopped while it was in flight")
+		fired := true
+		once.Do(func() { fired = false })
+		if fired {
+			stopped++
 		}
 		sibling.Close()
 	}

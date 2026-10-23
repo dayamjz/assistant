@@ -855,7 +855,9 @@ flowchart TD
   act -->|skip| done
   hold -->|"retry, offered only at the usage ceiling's hold"| retry
   retry --> run
-  act -->|fix| fix
+  reqfix["Fixer applies the findings you selected, <br />at most three per stage per run"]
+  act -->|fix a selection| reqfix
+  reqfix --> run
     </pre>
   </div>
 
