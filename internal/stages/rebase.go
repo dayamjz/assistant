@@ -63,6 +63,9 @@ import (
 // the commit the rebase is stopped on and continues, so the conflicting
 // commit is not replayed again ahead of the fix. A resolution that matches
 // that commit skips the step, and a step already replayed stays. A round that
+// leaves any conflicted file as the conflict left it commits nothing and
+// leaves the rebase stopped, so the next execution reports the conflict
+// again. A round that
 // leaves the index and the worktree unchanged aborts the rebase when the
 // copy's HEAD is not the head the run already records, and the next
 // execution starts a new one. When HEAD is that recorded head, the round
@@ -423,7 +426,10 @@ func rebaseConflictReport(branch, base, target string) pipeline.Output {
 			"with the conflicts in the working tree, and the rebase is still in progress. "+
 			"The branch %s could not be replayed onto %s as it stands.\n\n"+
 			"Resolve the conflicted files in place. The resolution is recorded on this "+
-			"base. Leave the files unchanged if the conflict cannot be resolved.",
+			"base. Leave a file unchanged if its conflict cannot be resolved: while any "+
+			"conflicted file is left as the conflict left it, nothing is recorded and the "+
+			"rebase stays stopped. If a conflicted file's current content already is its "+
+			"resolution, stage it with git add.",
 		target, branch, base)
 
 	return pipeline.Output{

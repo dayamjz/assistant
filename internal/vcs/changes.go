@@ -137,7 +137,11 @@ func parseChanges(out string) (Changes, error) {
 // file contributes its type bits and is not read, so a FIFO that replaced
 // the file after the stat does not hold the call. On a platform whose open
 // cannot ask not to wait, that replacement can still block, and the context
-// does not end the wait. Staging a path changes the result even when its
+// does not end the wait. Otherwise the context is checked before each path
+// and before each read of a regular file's bytes, so a large file does not
+// keep the call reading after the context ends: the call returns the
+// context's error. A single stat, open, or read already started is not
+// interrupted. Staging a path changes the result even when its
 // worktree bytes do not,
 // because the index stages are part of it. Ignored files are not part of
 // it, which is the same gap Changes leaves. The result is not a git object
@@ -184,6 +188,53 @@ func (r *Repository) UncommittedDigest(ctx context.Context) (string, error) {
 	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
+// ConflictRecords maps each path the index holds an unresolved conflict for
+// to a record of that path: its conflict stages in the index, and its
+// worktree state as UncommittedDigest records a path. Equal records for one
+// path mean neither changed. A path whose conflict was resolved in the index
+// is not in the map, and neither is a path with no conflict. An empty map is
+// an index with no unresolved conflict. A record is not a git object name.
+//
+// It reads the worktree on UncommittedDigest's terms, including how the
+// context ends it and the wait it cannot end.
+func (r *Repository) ConflictRecords(ctx context.Context) (map[string]string, error) {
+	if r.kind != KindWorktree {
+		return nil, &openError{path: r.path, kind: KindWorktree}
+	}
+	out, err := r.run(ctx, "unmerged-stages", "ls-files", "--unmerged", "-z")
+	if err != nil {
+		return nil, err
+	}
+	stages := make(map[string][]string)
+	for entry := range strings.SplitSeq(string(out), "\x00") {
+		if entry == "" {
+			continue
+		}
+		meta, path, found := strings.Cut(entry, "\t")
+		if !found || meta == "" || path == "" {
+			return nil, &outputError{op: "ls-files", detail: "unrecognized entry " + entry}
+		}
+		stages[path] = append(stages[path], meta)
+	}
+	records := make(map[string]string, len(stages))
+	for path, lines := range stages {
+		sum := sha256.New()
+		for _, line := range lines {
+			if err := digestWrite(sum, []byte(line)); err != nil {
+				return nil, err
+			}
+			if err := digestWrite(sum, []byte{0}); err != nil {
+				return nil, err
+			}
+		}
+		if err := hashWorktreeList(ctx, r, sum, r.path, path); err != nil {
+			return nil, err
+		}
+		records[path] = hex.EncodeToString(sum.Sum(nil))
+	}
+	return records, nil
+}
+
 // digestWrite records b and returns the writer's error. A hash writer does
 // not fail, and the check is what keeps a later writer from dropping bytes.
 func digestWrite(sum io.Writer, b []byte) error {
@@ -203,11 +254,15 @@ func digestWrite(sum io.Writer, b []byte) error {
 // type bits and is not read, so a FIFO that replaced the file after the
 // stat does not hold the call. On a platform whose open cannot ask not to
 // wait, that replacement can still block, and the context does not end the
-// wait.
+// wait. ctx is checked before each path and before each read of a regular
+// file's bytes, and an ended context returns its error.
 func hashWorktreeList(ctx context.Context, r *Repository, sum io.Writer, root, listed string) error {
 	for path := range strings.SplitSeq(listed, "\x00") {
 		if path == "" {
 			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		full, err := worktreePath(root, path)
 		if err != nil {
@@ -262,7 +317,7 @@ func hashWorktreeList(ctx context.Context, r *Repository, sum io.Writer, root, l
 				if err := digestSpecial(sum, info); err != nil {
 					return err
 				}
-			} else if err := digestRegular(sum, full); err != nil {
+			} else if err := digestRegular(ctx, sum, full); err != nil {
 				return err
 			}
 		}
@@ -285,8 +340,11 @@ var digestBeforeRegularOpen func(path string)
 // The descriptor is classified again, and one that is not a regular file
 // contributes its type bits instead of its bytes. On a platform whose open
 // cannot ask not to wait, a path replaced by a blocking special file after
-// the stat can still block this call.
-func digestRegular(sum io.Writer, full string) error {
+// the stat can still block this call. The bytes are read under ctx, which
+// is checked before each read, so an ended context returns its error
+// rather than reading the rest of the file. A read already started is not
+// interrupted.
+func digestRegular(ctx context.Context, sum io.Writer, full string) error {
 	if digestBeforeRegularOpen != nil {
 		digestBeforeRegularOpen(full)
 	}
@@ -322,7 +380,7 @@ func digestRegular(sum io.Writer, full string) error {
 	if writeErr == nil {
 		writeErr = digestWrite(sum, length[:])
 	}
-	written, copyErr := io.Copy(sum, io.LimitReader(f, n))
+	written, copyErr := io.Copy(sum, contextReader{ctx: ctx, r: io.LimitReader(f, n)})
 	closeErr := f.Close()
 	if writeErr != nil {
 		return writeErr
@@ -337,6 +395,20 @@ func digestRegular(sum io.Writer, full string) error {
 		return fmt.Errorf("vcs: digest read %d bytes of %s, want %d", written, full, n)
 	}
 	return nil
+}
+
+// contextReader reads from r until ctx ends, and from then on returns the
+// context's error without reading.
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c contextReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
 
 // digestSpecial records the type bits of a file that is not read. info is

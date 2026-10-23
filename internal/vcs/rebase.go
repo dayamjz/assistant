@@ -22,6 +22,10 @@ type RebaseSpec struct {
 //
 // It returns ErrRebaseConflict when the rebase stops due to conflicts.
 // The caller must resolve conflicts or abort the rebase.
+//
+// The replay is started in the merge backend with --merge on the command
+// line, whatever rebase.backend the configuration names, because that is the
+// backend RebaseContinue's contract is stated for and tested against.
 func (r *Repository) Rebase(ctx context.Context, spec RebaseSpec) error {
 	if r.kind != KindWorktree {
 		return errors.New("vcs: rebase requires a working copy")
@@ -30,7 +34,7 @@ func (r *Repository) Rebase(ctx context.Context, spec RebaseSpec) error {
 	if err != nil {
 		return err
 	}
-	args := []string{"rebase", "--no-autostash"}
+	args := []string{"rebase", "--no-autostash", "--merge"}
 	if spec.Upstream != "" {
 		upstream, err := r.ResolveCommit(ctx, spec.Upstream)
 		if err != nil {
@@ -69,9 +73,16 @@ func (r *Repository) RebaseAbort(ctx context.Context) error {
 // one whose conflicts are still unmerged, returns an error and leaves the
 // rebase in progress. The editor every invocation runs exits non-zero, so a
 // continue that still has to ask for a commit message fails rather than waits.
+//
+// That contract is stated for the merge backend, which Rebase starts. A
+// rebase-apply directory, which Rebase does not create, is refused with
+// ErrRebaseBackend before git runs, and the copy is left as it was.
 func (r *Repository) RebaseContinue(ctx context.Context) error {
 	if r.kind != KindWorktree {
 		return errors.New("vcs: rebase requires a working copy")
+	}
+	if _, err := r.rebaseInProgress(ctx); err != nil {
+		return err
 	}
 	_, code, err := r.runExpecting(ctx, "rebase-continue", []int{1}, "rebase", "--continue")
 	if err != nil {
@@ -107,10 +118,13 @@ func (r *Repository) RebaseSkip(ctx context.Context) error {
 
 // RebaseStatus reports whether a rebase is in progress.
 //
-// It is in progress when the rebase-merge directory or the rebase-apply
-// directory git names for this working copy is present. Those are the
-// directories a later abort or continue acts on. Neither being present is a
-// false result, including for a clean copy, and that absence is not an error.
+// It is in progress when the rebase-merge directory git names for this
+// working copy is present. That is the directory a later abort or continue
+// acts on. A rebase-apply directory, which Rebase does not create and
+// RebaseContinue refuses, is refused here too with ErrRebaseBackend, rather
+// than reported as in progress to a caller that would go on to continue it.
+// Neither being present is a false result, including for a clean copy, and
+// that absence is not an error.
 //
 // REBASE_HEAD is not the signal. A rebase paused before any commit is picked
 // has the directory and no such name, and abort still succeeds.
@@ -118,7 +132,14 @@ func (r *Repository) RebaseStatus(ctx context.Context) (inProgress bool, err err
 	if r.kind != KindWorktree {
 		return false, errors.New("vcs: rebase requires a working copy")
 	}
-	for _, name := range []string{"rebase-merge", "rebase-apply"} {
+	return r.rebaseInProgress(ctx)
+}
+
+// rebaseInProgress is RebaseStatus's answer, including its refusal of the
+// apply backend. The apply directory is read first, so a copy holding both
+// directories is refused.
+func (r *Repository) rebaseInProgress(ctx context.Context) (bool, error) {
+	for _, name := range []string{"rebase-apply", "rebase-merge"} {
 		out, err := r.run(ctx, "rebase-status", "rev-parse", "--git-path", name)
 		if err != nil {
 			return false, err
@@ -138,6 +159,9 @@ func (r *Repository) RebaseStatus(ctx context.Context) (inProgress bool, err err
 			return false, err
 		}
 		if info.IsDir() {
+			if name == "rebase-apply" {
+				return false, ErrRebaseBackend
+			}
 			return true, nil
 		}
 	}

@@ -34,6 +34,10 @@ var (
 	ErrNoMergeBase = errors.New("vcs: commits have no common ancestor")
 	// ErrRebaseConflict is returned when a rebase stops due to conflicts.
 	ErrRebaseConflict = errors.New("vcs: rebase stopped due to conflicts")
+	// ErrRebaseBackend is returned by RebaseStatus and RebaseContinue when
+	// the working copy holds a rebase-apply directory, which Rebase does not
+	// create. Nothing is changed.
+	ErrRebaseBackend = errors.New("vcs: the copy holds a rebase-apply directory, which this package's rebase does not create")
 	// ErrInvalidArgument is returned when an argument would be read by git as
 	// an option, is empty where a value is required, or contains a byte that
 	// cannot survive the wire format the operation parses. The refusal happens

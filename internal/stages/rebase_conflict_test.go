@@ -763,3 +763,274 @@ func (f submoduleMoveFixer) Apply(ctx context.Context, inv agents.Invocation) (a
 	git(f.t, f.dir, "-C", "lib", "update-ref", "refs/heads/main", f.commit)
 	return f.inner.Apply(ctx, inv)
 }
+
+// conflictOnUpstream gives s an upstream whose main branch edits the named
+// files of the subject's base, so the submitted commit conflicts on each of
+// them when it is replayed there.
+func conflictOnUpstream(t *testing.T, s *subject, files map[string]string) {
+	t.Helper()
+	git(t, s.dir, "config", "user.name", "test")
+	git(t, s.dir, "config", "user.email", "test@example.invalid")
+	upstream := filepath.Join(t.TempDir(), "upstream.git")
+	git(t, filepath.Dir(upstream), "init", "--quiet", "--bare", "-b", "main", upstream)
+	git(t, s.dir, "remote", "add", stages.UpstreamRemote, upstream)
+	git(t, s.dir, "push", "--quiet", stages.UpstreamRemote, s.base+":refs/heads/main")
+	other := t.TempDir()
+	git(t, other, "clone", "--quiet", upstream, other)
+	for path, content := range files {
+		write(t, other, path, content)
+	}
+	git(t, other, "add", "-A")
+	git(t, other, "commit", "--quiet", "-m", "edit the same lines on main")
+	git(t, other, "push", "--quiet", "origin", "main")
+}
+
+// runRebaseRounds drives s through the real rebase stage and fix body, with
+// wrap given the fixer the round opens and inspect called after each round.
+// It returns what the run returned.
+func runRebaseRounds(t *testing.T, s *subject, reply string,
+	wrap func(agents.Fixer) agents.Fixer,
+	inspect func(round int, out pipeline.FixOutput, err error)) (graph.Result, error) {
+	t.Helper()
+	agent := standin.New(t, script(standin.Text(reply)))
+	cfg := config.Defaults()
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, cfg, nil, redact.New())
+	fixDeps := stages.NewFixDeps(func(ctx context.Context, _ string) (agents.Fixer, error) {
+		inner, err := agents.OpenFixer(ctx, agent.Runner(), "")
+		if err != nil {
+			return nil, err
+		}
+		return wrap(inner), nil
+	}, s.home, cfg, nil, redact.New())
+	all := pipeline.ConstantStages("nothing to report")
+	all.Rebase = stages.Rebase(deps)
+	fixer := stages.Fix(fixDeps)
+	fixBody := fixer.NewBody()
+	var round int
+	fixer.NewBody = func() pipeline.FixBody {
+		return func(ctx context.Context, in pipeline.FixInput) (pipeline.FixOutput, error) {
+			round++
+			out, err := fixBody(ctx, in)
+			inspect(round, out, err)
+			return out, err
+		}
+	}
+	p, err := pipeline.New(pipeline.Options{
+		Stages: all, Rounds: config.FixRounds{Rebase: 3},
+		Budget: config.DefaultRunBudget, Fixer: fixer,
+	})
+	if err != nil {
+		t.Fatalf("building the pipeline: %v", err)
+	}
+	exec, err := p.Executor(graph.NewMemoryStore())
+	if err != nil {
+		t.Fatalf("building the executor: %v", err)
+	}
+	state, err := p.NewState(s.start())
+	if err != nil {
+		t.Fatalf("building the run state: %v", err)
+	}
+	return exec.Run(t.Context(), s.run, state)
+}
+
+// TestARebaseResolutionFinishesUnderTheApplyBackendSetting is the resolved
+// conflict with rebase.backend=apply in the copy's configuration. The round
+// commits the resolution and continues, and that continue has to finish the
+// rebase. One that stops with nothing to apply leaves the run without the
+// resolution on the new base. P6 keeps the submitted commit.
+func TestARebaseResolutionFinishesUnderTheApplyBackendSetting(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	git(t, s.dir, "config", "rebase.backend", "apply")
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal})
+	result, err := runRebaseRounds(t, s, "resolved the conflict on the new base",
+		func(inner agents.Fixer) agents.Fixer { return resolvingFixer{inner: inner, dir: s.dir, t: t} },
+		func(round int, _ pipeline.FixOutput, err error) {
+			if err != nil {
+				t.Errorf("fix round %d: %v", round, err)
+			}
+		})
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	head := git(t, s.dir, "rev-parse", "HEAD")
+	base := git(t, s.dir, "rev-parse", "refs/remotes/"+stages.UpstreamRemote+"/main")
+	if result.Status != graph.StatusCompleted || !isAncestor(t, s.dir, base, head) {
+		t.Fatalf("status %s, head %s, upstream %s is ancestor %v; the resolution has to land on the new base",
+			result.Status, head, base, isAncestor(t, s.dir, base, head))
+	}
+	if got := git(t, s.dir, "show", "HEAD:"+totalPath); got != strings.TrimSpace(resolvedTotal) {
+		t.Fatalf("HEAD's %s =\n%s\nwant the resolution", totalPath, got)
+	}
+	if git(t, s.dir, "cat-file", "-t", s.head) != "commit" {
+		t.Fatalf("the submitted commit %s is gone", s.head)
+	}
+}
+
+// TestAConflictLeftUntouchedIsNotCommittedAsResolved is one commit that
+// conflicts on two files. The fixer resolves one and leaves the other as the
+// conflict left it, which the conflict finding asks of a file it cannot
+// resolve. Committing every path would stage that file's conflict markers as
+// its resolution and finish the rebase with them. The round has to leave the
+// rebase stopped on the conflict and report no head, and no commit the run
+// records may carry the markers.
+func TestAConflictLeftUntouchedIsNotCommittedAsResolved(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal, readmePath: upstreamReadme})
+	result, err := runRebaseRounds(t, s, "resolved the code and left the README",
+		func(inner agents.Fixer) agents.Fixer { return resolvingFixer{inner: inner, dir: s.dir, t: t} },
+		func(round int, out pipeline.FixOutput, err error) {
+			if err != nil {
+				t.Errorf("fix round %d: %v", round, err)
+				return
+			}
+			if round != 1 {
+				return
+			}
+			if head, ok := out.Writes[pipeline.KeyHead]; ok {
+				t.Errorf("the first round reported head %v with %s still conflicted", head, readmePath)
+			}
+			if unmerged := git(t, s.dir, "ls-files", "-u", "--", readmePath); unmerged == "" {
+				t.Errorf("after the first round %s is no longer conflicted in the index", readmePath)
+			}
+			repo, err := vcs.OpenWorktree(t.Context(), s.dir)
+			if err != nil {
+				t.Fatalf("opening the copy after the first round: %v", err)
+			}
+			if active, err := repo.RebaseStatus(t.Context()); err != nil || !active {
+				t.Errorf("after the first round, rebase in progress %v, error %v; want it stopped on the conflict", active, err)
+			}
+		})
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	if result.Status == graph.StatusCompleted {
+		t.Fatalf("the run completed with %s never resolved", readmePath)
+	}
+	recorded := textAt(t, result.State, pipeline.KeyHead)
+	for _, commit := range []string{recorded, git(t, s.dir, "rev-parse", "HEAD")} {
+		if readme := git(t, s.dir, "show", commit+":"+readmePath); strings.Contains(readme, "<<<<<<<") {
+			t.Fatalf("commit %s records conflict markers in %s:\n%s", commit, readmePath, readme)
+		}
+	}
+	if git(t, s.dir, "cat-file", "-t", s.head) != "commit" {
+		t.Fatalf("the submitted commit %s is gone", s.head)
+	}
+	t.Logf("the run stopped with %s at recorded head %s", result.Status, recorded)
+}
+
+// TestEveryConflictResolvedIsCommitted is the positive control for the
+// untouched-conflict guard: the same two conflicted files, both resolved by
+// the fixer, commit and finish the rebase on the new base.
+func TestEveryConflictResolvedIsCommitted(t *testing.T) {
+	s := newSubject(t)
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal, readmePath: upstreamReadme})
+	const resolvedReadme = "Total sums every value it is given, on the newer base.\n"
+	result, err := runRebaseRounds(t, s, "resolved both conflicted files",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				write(t, s.dir, totalPath, resolvedTotal)
+				write(t, s.dir, readmePath, resolvedReadme)
+			}}
+		},
+		func(round int, _ pipeline.FixOutput, err error) {
+			if err != nil {
+				t.Errorf("fix round %d: %v", round, err)
+			}
+		})
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	head := git(t, s.dir, "rev-parse", "HEAD")
+	base := git(t, s.dir, "rev-parse", "refs/remotes/"+stages.UpstreamRemote+"/main")
+	if result.Status != graph.StatusCompleted || !isAncestor(t, s.dir, base, head) {
+		t.Fatalf("status %s, head %s, upstream %s is ancestor %v; both resolutions have to land on the new base",
+			result.Status, head, base, isAncestor(t, s.dir, base, head))
+	}
+	if got := git(t, s.dir, "show", "HEAD:"+readmePath); got != strings.TrimSpace(resolvedReadme) {
+		t.Fatalf("HEAD's %s = %q, want the resolution", readmePath, got)
+	}
+}
+
+// TestConflictsResolvedOverTwoRoundsAreCommitted is the same two conflicted
+// files resolved one per round. The first round leaves the README untouched,
+// so it commits nothing. The second resolves the README and leaves the code
+// as the first round wrote it. That earlier resolution is not an untouched
+// conflict, so the second round commits both and finishes the rebase.
+func TestConflictsResolvedOverTwoRoundsAreCommitted(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal, readmePath: upstreamReadme})
+	const resolvedReadme = "Total sums every value it is given, on the newer base.\n"
+	var calls int
+	result, err := runRebaseRounds(t, s, "resolved one conflicted file",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				calls++
+				if calls == 1 {
+					write(t, s.dir, totalPath, resolvedTotal)
+					return
+				}
+				write(t, s.dir, readmePath, resolvedReadme)
+			}}
+		},
+		func(round int, _ pipeline.FixOutput, err error) {
+			if err != nil {
+				t.Errorf("fix round %d: %v", round, err)
+			}
+		})
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	head := git(t, s.dir, "rev-parse", "HEAD")
+	base := git(t, s.dir, "rev-parse", "refs/remotes/"+stages.UpstreamRemote+"/main")
+	if result.Status != graph.StatusCompleted || !isAncestor(t, s.dir, base, head) {
+		t.Fatalf("status %s after %d round(s), head %s, upstream %s is ancestor %v; the two rounds' resolutions have to land on the new base",
+			result.Status, calls, head, base, isAncestor(t, s.dir, base, head))
+	}
+	if got := git(t, s.dir, "show", "HEAD:"+totalPath); got != strings.TrimSpace(resolvedTotal) {
+		t.Fatalf("HEAD's %s =\n%s\nwant the first round's resolution", totalPath, got)
+	}
+	if got := git(t, s.dir, "show", "HEAD:"+readmePath); got != strings.TrimSpace(resolvedReadme) {
+		t.Fatalf("HEAD's %s = %q, want the second round's resolution", readmePath, got)
+	}
+}
+
+// TestARebaseTheFixerEndedIsNotCommitted is a fixer that aborts the rebase
+// it was given and then edits a file. The round has to fail before it
+// commits, so nothing the fixer left is recorded on the submitted commit
+// and the run reports no head for it. P6 keeps the submitted commit.
+func TestARebaseTheFixerEndedIsNotCommitted(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal})
+	var roundErr error
+	_, err := runRebaseRounds(t, s, "aborted the rebase and edited the code",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				git(t, s.dir, "rebase", "--abort")
+				write(t, s.dir, totalPath, resolvedTotal)
+			}}
+		},
+		func(_ int, _ pipeline.FixOutput, err error) { roundErr = err })
+	if err == nil || roundErr == nil || !strings.Contains(roundErr.Error(), "no longer in progress") {
+		t.Fatalf("run error %v, round error %v; want the round to refuse the rebase the fixer ended", err, roundErr)
+	}
+	if head := git(t, s.dir, "rev-parse", "HEAD"); head != s.head {
+		t.Fatalf("HEAD = %s, want the submitted commit %s with nothing committed onto it", head, s.head)
+	}
+}
+
+// editingFixer runs edit while the real fixer invocation runs.
+type editingFixer struct {
+	inner agents.Fixer
+	edit  func()
+}
+
+func (f editingFixer) Reference() string { return f.inner.Reference() }
+
+func (f editingFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Result, error) {
+	f.edit()
+	return f.inner.Apply(ctx, inv)
+}

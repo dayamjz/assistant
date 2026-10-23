@@ -160,6 +160,91 @@ func TestRebaseContinueCommitsTheResolutionOntoTheNewBase(t *testing.T) {
 	}
 }
 
+// TestRebaseContinueFinishesUnderTheApplyBackendSetting is the continue test
+// with rebase.backend=apply in the repository's configuration. The replay
+// Rebase starts is still one whose continue accepts a step that is already
+// committed, so a committed resolution finishes the rebase.
+func TestRebaseContinueFinishesUnderTheApplyBackendSetting(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
+	rawGit(t, dir, "config", "rebase.backend", "apply")
+	commitFile(t, dir, "clash.txt", "base\n", "base")
+	rawGit(t, dir, "checkout", "--quiet", "-b", "topic")
+	commitFile(t, dir, "clash.txt", "topic\n", "topic")
+	rawGit(t, dir, "checkout", "--quiet", "main")
+	main := commitFile(t, dir, "clash.txt", "main\n", "main")
+	rawGit(t, dir, "checkout", "--quiet", "topic")
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Rebase(ctx(t), vcs.RebaseSpec{Onto: main}); !errors.Is(err, vcs.ErrRebaseConflict) {
+		t.Fatalf("rebasing onto %s: %v, want a conflict", main, err)
+	}
+	writeFile(t, filepath.Join(dir, "clash.txt"), "topic and main\n")
+	committed, err := repo.CommitAll(ctx(t), "resolve the conflict")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RebaseContinue(ctx(t)); err != nil {
+		t.Fatalf("continuing after the resolution was committed: %v", err)
+	}
+	if active, err := repo.RebaseStatus(ctx(t)); err != nil || active {
+		t.Fatalf("after continue: active %v, error %v; want the rebase finished", active, err)
+	}
+	if head, err := repo.ResolveCommit(ctx(t), "HEAD"); err != nil || head != committed {
+		t.Fatalf("HEAD = %s, %v; want the resolution %s", head, err, committed)
+	}
+}
+
+// TestAnApplyBackendRebaseIsRefusedBeforeItIsContinued is a rebase this
+// package did not start, stopped in the apply backend with its resolution
+// committed. RebaseContinue's contract is not stated for that backend, so
+// status and continue refuse it with ErrRebaseBackend, and the rebase and
+// HEAD are left as they were.
+func TestAnApplyBackendRebaseIsRefusedBeforeItIsContinued(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
+	commitFile(t, dir, "clash.txt", "base\n", "base")
+	rawGit(t, dir, "checkout", "--quiet", "-b", "topic")
+	commitFile(t, dir, "clash.txt", "topic\n", "topic")
+	rawGit(t, dir, "checkout", "--quiet", "main")
+	commitFile(t, dir, "clash.txt", "main\n", "main")
+	rawGit(t, dir, "checkout", "--quiet", "topic")
+	if _, err := tryRawGit(dir, "-c", "rebase.backend=apply", "rebase", "main"); err == nil {
+		t.Fatal("the apply-backend rebase applied cleanly, want a conflict")
+	}
+	applying := strings.TrimSpace(rawGit(t, dir, "rev-parse", "--git-path", "rebase-apply"))
+	if !filepath.IsAbs(applying) {
+		applying = filepath.Join(dir, applying)
+	}
+	if info, err := os.Stat(applying); err != nil || !info.IsDir() {
+		t.Fatalf("the rebase did not stop in the apply backend: %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "clash.txt"), "topic and main\n")
+	rawGit(t, dir, "add", "clash.txt")
+	rawGit(t, dir, "commit", "--quiet", "-m", "resolve the conflict")
+	committed := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD"))
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.RebaseStatus(ctx(t)); !errors.Is(err, vcs.ErrRebaseBackend) {
+		t.Fatalf("status of an apply-backend rebase: %v, want ErrRebaseBackend", err)
+	}
+	if err := repo.RebaseContinue(ctx(t)); !errors.Is(err, vcs.ErrRebaseBackend) {
+		t.Fatalf("continuing an apply-backend rebase: %v, want ErrRebaseBackend", err)
+	}
+	if info, err := os.Stat(applying); err != nil || !info.IsDir() {
+		t.Fatalf("the refused rebase is no longer in progress: %v", err)
+	}
+	if head := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD")); head != committed {
+		t.Fatalf("HEAD = %s after the refusal, want the committed resolution %s", head, committed)
+	}
+}
+
 // TestRebaseSkipDropsAnEmptyStepAndKeepsAnEarlierCommit is a conflict whose
 // resolution matches the commit the rebase stopped on. Skipping that step
 // finishes the rebase and keeps the commit that already applied. The step
