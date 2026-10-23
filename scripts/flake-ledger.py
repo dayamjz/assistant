@@ -19,7 +19,9 @@ What it reads, and from where:
   prints only when that step fails. `--- FAIL` lines name tests and
   subtests; `panic: test timed out` names the tests still running; a
   `FAIL <package>` line with no failing test under it is a package failure
-  (a build failure, a panic outside a test, or a per-package leak).
+  (a build failure, a panic outside a test, or a per-package leak). A
+  failure the output stopped after, before its package's result line (a
+  cancel during the print), is counted under the package "(output cut off)".
 - The leak check's leftovers, from the same group: `LEAK package=...` is a
   per-package leak, a `LEAK` line without `package=` a whole-run leftover.
   The self-test's planted leftovers print outside the group and are not
@@ -30,8 +32,9 @@ What it reads, and from where:
   before the cancel counts; a cancelled job with nothing failed in it
   (superseded by a newer run of the same ref, or cancelled otherwise) is not
   a failure and is only counted.
-- Any other failed step (vet, gofmt, lint) as a step failure naming the step
-  and its last error line, in a failed or a cancelled job.
+- Any other failed step (vet, gofmt, lint, a step after Test) as a step
+  failure naming the step and its last error line, in a failed or a
+  cancelled job, whatever else the job named (unexplained_steps).
 
 It is loud where it cannot see: a log or API read that fails makes it exit 2
 (a failed issue read leaves each failure's issues unknown, never "none"),
@@ -99,6 +102,10 @@ TIMEOUT_ANNOTATION = "exceeded the maximum execution time"
 SUPERSEDED_ANNOTATION = "higher priority waiting request"
 # The error line the runner prints in the step a cancel stops.
 CANCEL_ERROR = "The operation was canceled"
+# The error line that ends a run step that failed, in every recorded log.
+FAILED_STEP_END = "Process completed with exit code"
+# The package of a failure whose package's result line the log never printed.
+CUT_OFF_PACKAGE = "(output cut off)"
 MODULE_ROOT = re.compile(r"^/(?:Users|home)/runner/work/[^/]+/[^/]+")
 
 
@@ -165,6 +172,9 @@ class Record:
         self.token = token or self.key
         # A prefix token is matched by any test name in an issue that it starts with.
         self.prefix = prefix
+        # Which failed step's part of the log it was read in (LogParser.section);
+        # used while reading one job, not stored.
+        self.section = None
 
     @property
     def key(self):
@@ -208,6 +218,14 @@ class LogParser:
         self.run_leaks = []
         self.run_leak_total = None
         self.group_lines = 0
+        # The log in sections, each ended by the exit line a failed step
+        # prints (FAILED_STEP_END): section k is the k-th failed step's part.
+        self.section = 0
+        self.run_leak_total_section = 0
+
+    def _add(self, record, section=None):
+        record.section = self.section if section is None else section
+        self.records.append(record)
 
     def feed(self, line):
         line = clean(line)
@@ -230,7 +248,9 @@ class LogParser:
             message = error.group(1).strip()
             self.errors.append(message)
             if GUARD_ERROR in message:
-                self.records.append(Record("guard", "(per-package check)", GUARD_ERROR))
+                self._add(Record("guard", "(per-package check)", GUARD_ERROR))
+            if message.startswith(FAILED_STEP_END):
+                self.section += 1
             return
         self._unittest_line(line)
 
@@ -249,7 +269,7 @@ class LogParser:
         name = f"{parts[-1]}.{method}" if parts and parts[-1] != "__main__" else method
         script = next((w for w in self.step.split() if w.endswith(".py")), self.step or "(unittest)")
         detail = f"{match.group(1)}" + (f" ({params})" if params else "")
-        self.records.append(Record("unittest", script, name, detail, token=method))
+        self._add(Record("unittest", script, name, detail, token=method))
 
     def _go_line(self, line):
         if self.reading_running:
@@ -297,19 +317,20 @@ class LogParser:
             return
         process = LEAK_PROCESS.match(line)
         if process:
-            self.run_leaks.append(("process", command_name(process.group(1)), process.group(1)))
+            self.run_leaks.append(("process", command_name(process.group(1)), process.group(1), self.section))
             return
         entry = LEAK_ENTRY.match(line)
         if entry:
-            self.run_leaks.append((entry.group(1), normalize_path(entry.group(2)), entry.group(2)))
+            self.run_leaks.append((entry.group(1), normalize_path(entry.group(2)), entry.group(2), self.section))
             return
         if line.startswith("LEAK "):
             # A shape this parser does not know is still a leftover.
-            self.run_leaks.append(("unparsed", re.sub(r"\d{4,}", "N", line), line))
+            self.run_leaks.append(("unparsed", re.sub(r"\d{4,}", "N", line), line, self.section))
             return
         total = LEAK_TOTAL.match(line)
         if total:
             self.run_leak_total = int(total.group(1))
+            self.run_leak_total_section = self.section
             return
         end = GO_PACKAGE_END.match(line)
         if end and "/" in end.group(2):
@@ -320,15 +341,15 @@ class LogParser:
         process = LEAK_PACKAGE_PROCESS.match(rest)
         if not process:
             name = re.sub(r"\d{4,}", "N", rest)
-            self.records.append(Record("leak", package, name, rest[:200]))
+            self._add(Record("leak", package, name, rest[:200]))
             return
         command = process.group(1)
         name, test = command_name(command), tempdir_test(command)
         if test:
-            self.records.append(Record("leak", package, f"{name} from {test}", command[:200],
-                                       token=test, prefix=True))
+            self._add(Record("leak", package, f"{name} from {test}", command[:200],
+                             token=test, prefix=True))
         else:
-            self.records.append(Record("leak", package, name, command[:200], token=name))
+            self._add(Record("leak", package, name, command[:200], token=name))
 
     def _end_package(self, verdict, package, suffix):
         if verdict == "FAIL":
@@ -349,33 +370,38 @@ class LogParser:
             subtests = [s for s in self.failed_subs | set(running) if s.startswith(top + "/")]
             if top in running_tops:
                 detail = f"test timed out after {self.timeout[0]}"
-                self.records.append(Record("timeout", package, top, detail, subtests, token=top))
+                self._add(Record("timeout", package, top, detail, subtests, token=top))
             else:
-                self.records.append(Record("test", package, top, self.first.get(top, ""), subtests, token=top))
+                self._add(Record("test", package, top, self.first.get(top, ""), subtests, token=top))
         if self.timeout and not running:
-            self.records.append(Record("timeout", package, "(package)",
-                                       f"test timed out after {self.timeout[0]}"))
+            self._add(Record("timeout", package, "(package)",
+                             f"test timed out after {self.timeout[0]}"))
         if len(self.records) == before and not self.block_leaks:
             if suffix.startswith("["):
-                self.records.append(Record("build", package, suffix.strip("[]")))
+                self._add(Record("build", package, suffix.strip("[]")))
             else:
                 detail = f"panic: {self.block_panic}" if self.block_panic else "no failing test was named"
-                self.records.append(Record("package", package, "(package)", detail))
+                self._add(Record("package", package, "(package)", detail))
 
     def finish(self):
         """The records, plus whether tests visibly ran but nothing was named."""
+        if self.failed_tops or self.failed_subs or self.timeout or self.block_panic:
+            # The output stopped (a cancel during `cat test.log`) after a
+            # failure but before its package's result line: the failure is
+            # still one, under a package the log never named.
+            self._fail_package(CUT_OFF_PACKAGE, "")
         if self.run_leaks:
-            directories = [full for kind, _, full in self.run_leaks if kind == "directory"]
-            for kind, stable, full in self.run_leaks:
+            directories = [full for kind, _, full, _ in self.run_leaks if kind == "directory"]
+            for kind, stable, full, section in self.run_leaks:
                 if any(full.startswith(d + "/") for d in directories):
                     continue  # inside a leftover directory already reported
                 token = stable if kind in ("process", "unparsed") else os.path.basename(stable.rstrip("/"))
-                self.records.append(Record("run-leak", "(whole run)", f"{kind} {stable}",
-                                           full[:200], token=token))
+                self._add(Record("run-leak", "(whole run)", f"{kind} {stable}", full[:200], token=token),
+                          section)
         if self.run_leak_total and not self.run_leaks:
-            self.records.append(Record("run-leak", "(whole run)", "(unparsed leftovers)",
-                                       f"leak-check reported {self.run_leak_total} leftover(s) "
-                                       "that this parser did not read"))
+            self._add(Record("run-leak", "(whole run)", "(unparsed leftovers)",
+                             f"leak-check reported {self.run_leak_total} leftover(s) "
+                             "that this parser did not read"), self.run_leak_total_section)
         # One record per failure per job: the summary and the leak check can
         # print one failure more than once.
         unique = {}
@@ -654,6 +680,41 @@ def failed_steps(job):
     return [s["name"] for s in job.get("steps") or [] if s.get("conclusion") == "failure"]
 
 
+def step_detail(errors):
+    """A failed step's last error line, its exit line only when it has nothing else."""
+    return next((e for e in reversed(errors) if not e.startswith((FAILED_STEP_END, CANCEL_ERROR))),
+                next((e for e in reversed(errors) if e.startswith(FAILED_STEP_END)), ""))[:200]
+
+
+def unexplained_steps(job, records, errors, cancel):
+    """A step record for each failed step no record was read from: a failed
+    step (vet, gofmt, a second step after Test) is a failure whatever else
+    in the job was named, in a cancelled job too.
+
+    The log is split at each failed step's exit line, in step order. When
+    there are as many exit lines as failed steps, the k-th section is the
+    k-th failed step's, and a step with a record in its section is explained
+    by it. When the counts differ, which step a record came from is unknown,
+    so every failed step is counted rather than one assumed explained."""
+    failed = failed_steps(job)
+    if not failed:
+        # Nothing failed by name: a failed job is still a failure; a cancel
+        # with nothing in it is only a cancel.
+        if records or cancel:
+            return []
+        return [Record("step", job["name"], "step (no failed step reported)", step_detail(errors))]
+    ends = [i for i, e in enumerate(errors) if e.startswith(FAILED_STEP_END)]
+    if len(ends) != len(failed):
+        return [Record("step", job["name"], f"step {s}", step_detail(errors)) for s in failed]
+    explained = {r.section for r in records}
+    steps = []
+    for k, name in enumerate(failed):
+        if k not in explained:
+            own = errors[(ends[k - 1] + 1 if k else 0):ends[k] + 1]
+            steps.append(Record("step", job["name"], f"step {name}", step_detail(own)))
+    return steps
+
+
 def read_job(github, cache, job):
     """Records for one failed or cancelled job: {"records": [...], "unattributed": bool,
     "cancel": None | "timeout" | "superseded" | "cancelled", "error": None | str}."""
@@ -693,16 +754,7 @@ def read_job(github, cache, job):
         # so it is not cached and the next run reads the log again.
         result["error"] = str(error)
         return result
-    if not records:
-        # A step that failed and named nothing the parser reads (vet, gofmt,
-        # lint) is a failure of that step, in a cancelled job too: a cancel
-        # in a later step does not undo it. A cancelled job with no failed
-        # step is only a cancel.
-        steps = failed_steps(job) or ([] if result["cancel"] else ["(no failed step reported)"])
-        last = next((e for e in reversed(errors) if not e.startswith(("Process completed", CANCEL_ERROR))),
-                    next((e for e in reversed(errors) if e.startswith("Process completed")), ""))
-        records = [Record("step", job["name"], f"step {s}", last[:200])
-                   for s in steps]
+    records = records + unexplained_steps(job, records, errors, result["cancel"])
     result["records"] += [r.to_dict() for r in records]
     result["unattributed"] = unattributed
     cache.put(f"job-{job['id']}", result)
@@ -812,15 +864,38 @@ def branch_of(run, repo):
     return branch
 
 
+def pull_request_finder(pulls):
+    """Returns a function from a run to its pull request's number, or None.
+    A run that names its pull request (the API's pull_requests, which GitHub
+    leaves empty once a pull request closes, and for a fork's) has that one.
+    Otherwise it is the one pull request of the run's head repository and
+    branch that was open when the run was created: a branch can be reused by
+    a later pull request. None when no such pull request, or more than one,
+    was open then: unknown, never a guess."""
+    by_head = {}
+    for pull in pulls:
+        head = pull.get("head") or {}
+        key = (((head.get("repo") or {}).get("full_name") or "").lower(), head.get("ref"))
+        by_head.setdefault(key, []).append(pull)
+
+    def find(run):
+        if run.get("event") not in ("pull_request", "pull_request_target"):
+            return None
+        named = [p.get("number") for p in run.get("pull_requests") or [] if p.get("number")]
+        if len(named) == 1:
+            return named[0]
+        key = (((run.get("head_repository") or {}).get("full_name") or "").lower(), run.get("head_branch"))
+        at = run.get("created_at") or ""
+        open_then = [p["number"] for p in by_head.get(key, [])
+                     if (p.get("created_at") or "") <= at and (not p.get("closed_at") or at <= p["closed_at"])]
+        return open_then[0] if len(open_then) == 1 else None
+    return find
+
+
 def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, pulls):
     # Without the issues, which issue names a failure is unknown, not "none".
     find = matcher(issues) if issues is not None else (lambda token, prefix=False: None)
-    # A pull request is found by its head repository and branch: a fork's
-    # main is not this repository's main (GitHub's names ignore case).
-    prs = {}
-    for pull in sorted(pulls, key=lambda p: p["number"]):
-        head = pull.get("head") or {}
-        prs[(((head.get("repo") or {}).get("full_name") or "").lower(), head.get("ref"))] = pull["number"]
+    pr_of = pull_request_finder(pulls)
     entries = {}
     unattributed, cancelled, counted = [], {"superseded": 0, "cancelled": 0}, 0
     for run, job in jobs:
@@ -837,8 +912,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
             "run_id": run["id"], "attempt": job.get("run_attempt", 1), "final_attempt": final,
             "job_id": job["id"], "job": job["name"], "platform": platform_of(job),
             "branch": branch_of(run, repo), "event": run.get("event"),
-            "pr": prs.get((((run.get("head_repository") or {}).get("full_name") or "").lower(),
-                           run.get("head_branch"))) if run.get("event") == "pull_request" else None,
+            "pr": pr_of(run),
             "sha": run.get("head_sha"), "created_at": run.get("created_at"),
             # When the job that failed ended; a completed job always has it.
             "failed_at": job.get("completed_at") or job.get("started_at") or run.get("created_at"),
