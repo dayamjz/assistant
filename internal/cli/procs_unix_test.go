@@ -17,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // A service a test starts through the surface is this binary, launched by the
@@ -143,7 +144,7 @@ func TestTheCheckReportsALiveProcessOfABinaryWhosePathHasASpace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(copied, content, 0o755); err != nil {
+	if err := procgroup.WriteProgram(copied, content, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	h := newHomeNamed(t, "h s")

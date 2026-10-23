@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -833,9 +834,11 @@ func TestInitBareIgnoresAnInheritedTemplateDirectory(t *testing.T) {
 
 	template := filepath.Join(t.TempDir(), "templates")
 	const hook = "#!/bin/sh\nexit 1\n"
-	writeFile(t, filepath.Join(template, "hooks", "pre-receive"), hook)
-	if err := os.Chmod(filepath.Join(template, "hooks", "pre-receive"), 0o755); err != nil {
-		t.Fatalf("make the template hook executable: %v", err)
+	if err := os.MkdirAll(filepath.Join(template, "hooks"), 0o755); err != nil {
+		t.Fatalf("mkdir for the template hook: %v", err)
+	}
+	if err := procgroup.WriteProgram(filepath.Join(template, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
+		t.Fatalf("write the template hook: %v", err)
 	}
 	writeFile(t, filepath.Join(template, "planted.txt"), "content the environment chose\n")
 

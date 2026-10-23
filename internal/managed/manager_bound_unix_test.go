@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // TestAManagerCommandThatNeverAnswersIsEndedWithItsGroupAtItsBound holds
@@ -50,7 +51,7 @@ func TestAManagerCommandThatNeverAnswersIsEndedWithItsGroupAtItsBound(t *testing
 				"    while :; do wait; done\n" +
 				"  fi\n" +
 				"done\n"
-			if err := os.WriteFile(filepath.Join(dir, c.command), []byte(script), 0o755); err != nil {
+			if err := procgroup.WriteProgram(filepath.Join(dir, c.command), []byte(script), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			m, err := forKind(c.kind, env(userHome, dir), filepath.Join(userHome, ".assistant"), os.Getuid())
