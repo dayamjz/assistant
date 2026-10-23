@@ -186,6 +186,83 @@ func TestAListingSettlesBesideAZombie(t *testing.T) {
 	reaped = true
 }
 
+// refusedExitsEachReading is a processTable that passes every read through
+// to the kernel and orders real processes' lives around its reads of the
+// table: each reading starts a process before the table is read, so the
+// reading names it running and reads it whole, and ends and reaps the one
+// the reading before started once the table is read, so the reading names
+// it and finds it gone. The first reading ends unread instead, a process
+// started before the listing that no reading named running.
+type refusedExitsEachReading struct {
+	kernel
+	t        *testing.T
+	readings int
+	// current is the process the last reading started, unread is the one
+	// the first reading ends, and ended is each process a reading named and
+	// then ended.
+	current, unread *exec.Cmd
+	ended           []int
+}
+
+func (r *refusedExitsEachReading) start() *exec.Cmd {
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		r.t.Fatal(err)
+	}
+	r.t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	return cmd
+}
+
+func (r *refusedExitsEachReading) ids() ([]int, error) {
+	r.readings++
+	previous := r.unread
+	if r.readings > 1 {
+		previous = r.current
+	}
+	r.current = r.start()
+	pids, err := r.kernel.ids()
+	if err != nil {
+		return nil, err
+	}
+	if slices.Contains(pids, previous.Process.Pid) {
+		r.ended = append(r.ended, previous.Process.Pid)
+	}
+	_ = previous.Process.Kill()
+	_ = previous.Wait()
+	return pids, nil
+}
+
+// A process the listing read whole and refused that exits does not keep a
+// reading from settling (P15, #569): what it started once the reading began
+// is read only by a later reading whether it exits or goes on running, so
+// its exit says nothing new, and on CI, where other packages' tests start and
+// end processes beside the listing, counting those exits left no reading of
+// 64 settled. Here a real process the listing has read and refused exits in
+// every reading after the first, and the listing settles. Before #569 every
+// reading was unsettled and the listing failed. The control is that the
+// exit of a process no reading had read whole still unsettles the first
+// reading, so the listing read the table at least twice, and that the
+// table named every process it ended before ending it.
+func TestAListingSettlesWhileProcessesItRefusedExit(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	table := &refusedExitsEachReading{t: t}
+	table.unread = table.start()
+	refuseAll := func(table processTable, pid int) (bool, error) {
+		_, _, err := table.commandLine(pid)
+		return false, err
+	}
+	if _, err := processesWhere(table, refuseAll); err != nil {
+		t.Fatalf("a listing while processes it refused exit, one in each reading: %v", err)
+	}
+	if table.readings < 2 {
+		t.Fatalf("the listing read the table %d time(s): the exit of a process no reading had read whole did not unsettle the first, so this shows nothing", table.readings)
+	}
+	if len(table.ended) != table.readings {
+		t.Fatalf("the table named %d of the %d processes it ended, so not every reading had an exit in it", len(table.ended), table.readings)
+	}
+}
+
 // ProcessesMatching lists a process by its arguments whatever it runs: a real
 // shell, not this binary, started with an argument of this test's own that
 // holds spaces, is listed once with exactly the arguments it was started

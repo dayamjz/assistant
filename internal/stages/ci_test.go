@@ -22,6 +22,7 @@ import (
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 )
 
 // checksTimeout is the checks_timeout the wait tests run under. It is short
@@ -180,7 +181,10 @@ func newChecksRun(t *testing.T) *checksRun {
 	}
 	git(t, source, "worktree", "add", "--quiet", "--detach", copied, "HEAD")
 
-	opened, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "state.db"), store.WithRedactor(redact.New()))
+	// Seeded for time alone, as internal/store/storetest's comment says.
+	path := filepath.Join(t.TempDir(), "state.db")
+	storetest.Seed(t, path)
+	opened, err := store.Open(t.Context(), path, store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening a store: %v", err)
 	}
