@@ -310,7 +310,15 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		// The child reads the identity while the process runs, since a
-		// failing child may have ended it before this read could.
+		// failing child may have ended it before this read could. The
+		// record is read again once the child has exited, since it may have
+		// written it just before.
+		exited := false
+		select {
+		case <-r.exited:
+			exited = true
+		default:
+		}
 		if raw, err := os.ReadFile(record); err == nil {
 			if _, err := fmt.Sscanf(string(raw), "%d %d %d %d", &r.held.PID, &r.held.Start, &r.sweep.PID, &r.sweep.Start); err != nil ||
 				r.held.Start == 0 || r.sweep.Start == 0 {
@@ -318,10 +326,30 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 			}
 			return r
 		}
+		if exited {
+			t.Fatalf("the child exited (%v) before it recorded its held process: %s", r.err, r.out)
+		}
 		if !time.Now().Before(deadline) {
-			t.Fatalf("the child never recorded its held process: %s", r.out)
+			t.Fatalf("the child never recorded its held process; what it was doing (%s): %s", r.quit(), r.out)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// quit asks a child that has not recorded its held process what it is
+// doing: it sends the child SIGQUIT, on which the Go runtime writes every
+// goroutine's stack to the child's standard error, which is r.out, and
+// exits, and waits for it to exit. It says whether the child exited on it
+// within 10s, so a failure that shows no stacks says why.
+func (r *heldChildRun) quit() string {
+	if err := r.cmd.Process.Signal(syscall.SIGQUIT); err != nil {
+		return fmt.Sprintf("the child could not be sent SIGQUIT: %v", err)
+	}
+	select {
+	case <-r.exited:
+		return fmt.Sprintf("its stacks on SIGQUIT, after which it exited %v", r.err)
+	case <-time.After(10 * time.Second):
+		return "it was sent SIGQUIT and had not exited 10s later"
 	}
 }
 
