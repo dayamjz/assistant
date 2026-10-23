@@ -13,17 +13,17 @@ name: Stress
 # pull requests share, and takes about 80 minutes.
 
 on:
-  # A change to this workflow, or to what it runs, runs it, so the change
-  # shows it works before it lands (workflow_dispatch reaches only what is
-  # already on main). For the leak check this is the exposure its own tests
-  # cannot give: #551's false positive showed only against the real suite.
+  # A change to this workflow, or to the environment it runs, runs it, so
+  # the change shows it works before it lands (workflow_dispatch reaches
+  # only what is already on main). For the leak check this is the exposure
+  # its own tests cannot give: #551's false positive showed only against the
+  # real suite.
   pull_request:
     paths:
       - .github/workflows/stress.yml
       - .github/actions/test-env/**
       - scripts/ci-test.sh
       - scripts/leak-check.py
-      - scripts/flake-ledger.py
   schedule:
     # 14:00 UTC, 07:00 PDT: one of the quieter hours for pull request CI.
     - cron: "0 14 * * *"
@@ -36,9 +36,11 @@ on:
         description: "go test -count in each job; with more than 1, name fewer packages so a job ends inside 60 minutes"
         default: "1"
 
+# A newer push to a pull request replaces its stress run; a scheduled or
+# dispatched run is never cut short by the next one.
 concurrency:
   group: stress-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
