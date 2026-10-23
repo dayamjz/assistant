@@ -121,6 +121,7 @@ func SweepWithLsof(ctx context.Context, s *Sweeper, dir, program string, deadlin
 }
 
 // LsofShare is the part of a run's deadline lsof itself is given before its
-// group is ended, so a run that answers ErrSweepTimedOut answers no earlier
-// than this past its start.
+// group is ended. A run whose lsof is still running when it passes answers
+// no earlier than this past its start; one whose lsof exited sooner, with
+// its output still held open a grace later, answers ErrSweepTimedOut then.
 var LsofShare = lsofShare
