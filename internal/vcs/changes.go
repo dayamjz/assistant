@@ -3,6 +3,7 @@ package vcs
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -119,8 +120,10 @@ func parseChanges(out string) (Changes, error) {
 // files.
 //
 // Equal results mean that state is unchanged. The worktree record of a path
-// is its mode and its bytes, so a mode-only change counts. A symlink
-// contributes its target text. A directory that holds a submodule checkout
+// is its mode and its bytes, so a mode-only change counts. A regular file's
+// bytes are preceded by their length, so one file's contents cannot stand
+// in for the next path's record. A symlink contributes its target text. A
+// directory that holds a submodule checkout
 // contributes the commit that checkout has checked out, which is what
 // rev-parse HEAD prints there. A symbolic reference is followed to that
 // commit, and the reference's own text is not recorded. The invocation
@@ -190,7 +193,8 @@ func digestWrite(sum io.Writer, b []byte) error {
 
 // hashWorktreeList mixes the worktree state of each NUL-separated path into
 // sum. A missing path is recorded as absent. A symlink contributes its mode
-// and target text. A regular file contributes its mode and bytes. A
+// and target text. A regular file contributes its mode, the length of its
+// bytes, and those bytes. A
 // submodule directory contributes its mode and the commit it has checked out.
 // Any other file type contributes its mode and its type bits and is not
 // opened. A path classified as a regular file is opened without waiting for
@@ -304,8 +308,21 @@ func digestRegular(sum io.Writer, full string) error {
 		}
 		return digestSpecial(sum, info)
 	}
+	n := info.Size()
+	if n < 0 {
+		closeErr := f.Close()
+		if closeErr != nil {
+			return closeErr
+		}
+		return fmt.Errorf("vcs: digest of %s has size %d", full, n)
+	}
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(n))
 	writeErr := digestWrite(sum, []byte{3})
-	_, copyErr := io.Copy(sum, f)
+	if writeErr == nil {
+		writeErr = digestWrite(sum, length[:])
+	}
+	written, copyErr := io.Copy(sum, io.LimitReader(f, n))
 	closeErr := f.Close()
 	if writeErr != nil {
 		return writeErr
@@ -313,7 +330,13 @@ func digestRegular(sum io.Writer, full string) error {
 	if copyErr != nil {
 		return copyErr
 	}
-	return closeErr
+	if closeErr != nil {
+		return closeErr
+	}
+	if written != n {
+		return fmt.Errorf("vcs: digest read %d bytes of %s, want %d", written, full, n)
+	}
+	return nil
 }
 
 // digestSpecial records the type bits of a file that is not read. info is
