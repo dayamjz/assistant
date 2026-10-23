@@ -26,15 +26,21 @@ What it reads, and from where:
   read.
 - Python unittest failures (`FAIL: test_x (...)`) anywhere in the log.
 - A job cancelled at its timeout-minutes bound, from the job's annotations.
-  A job cancelled because a newer run of the same ref superseded it is not a
-  failure and is only counted.
+  A cancelled job's log is read like a failed one's, and what failed in it
+  before the cancel counts; a cancelled job with nothing failed in it
+  (superseded by a newer run of the same ref, or cancelled otherwise) is not
+  a failure and is only counted.
 - Any other failed step (vet, gofmt, lint) as a step failure naming the step
-  and its last error line.
+  and its last error line, in a failed or a cancelled job.
 
 It is loud where it cannot see: a log or API read that fails makes it exit 2
 (a failed issue read leaves each failure's issues unknown, never "none"),
 and a failed job whose log shows tests ran but in which nothing was named
 makes it exit 3 (listed under "Unattributed"). Both still print the ledger.
+
+Every gh it starts runs under a deadline (API_DEADLINE, LOG_DEADLINE) in a
+process group of its own, watched by a small watchdog that ends the group at
+the deadline or as soon as the ledger exits, however it exits (start_gh).
 
 Issues are matched by text: an issue whose title or body contains a record's
 match token (a test's top-level name, a leaked command's base name, or the
@@ -52,6 +58,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -88,6 +95,8 @@ ERROR_LINE = re.compile(r"^##\[error\](.*)")
 GUARD_ERROR = "fewer packages ran through the per-package check than passed"
 TIMEOUT_ANNOTATION = "exceeded the maximum execution time"
 SUPERSEDED_ANNOTATION = "higher priority waiting request"
+# The error line the runner prints in the step a cancel stops.
+CANCEL_ERROR = "The operation was canceled"
 MODULE_ROOT = re.compile(r"^/(?:Users|home)/runner/work/[^/]+/[^/]+")
 
 
@@ -406,8 +415,81 @@ def retried(read, tries=3):
             pause(2 ** attempt)
 
 
+# Seconds one gh call may take before it is ended: an API read (a paginated
+# one included), and one job's log, which can run to megabytes.
+API_DEADLINE = 120
+LOG_DEADLINE = 300
+
+# Runs one gh in a process group of its own and ends that group, gh and what
+# gh started, when gh exits, when the deadline passes, or when the ledger's end
+# of stdin closes, which the kernel does however the ledger exits, killed
+# included. The watchdog runs in a session of its own, so a signal meant for
+# the ledger's terminal does not stop it before it has ended gh.
+WATCHDOG = r"""
+import os, signal, subprocess, sys, threading
+deadline, command = float(sys.argv[1]), sys.argv[2:]
+child = subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True)
+
+def end(status, message=None):
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    if message:
+        sys.stderr.write(message + "\n")
+        sys.stderr.flush()
+    os._exit(status)
+
+def owner_gone():
+    sys.stdin.buffer.read()
+    end(125, "the flake ledger exited")
+
+threading.Thread(target=owner_gone, daemon=True).start()
+try:
+    status = child.wait(timeout=deadline)
+except subprocess.TimeoutExpired:
+    end(124, f"timed out after {deadline:g}s")
+end(status if status >= 0 else 128 - status)
+"""
+
+
+def start_gh(args, deadline):
+    """A running gh under the watchdog: stdout a pipe, stderr a file, and
+    stdin the pipe whose closing ends it. A gh call ends with everything it
+    started at its deadline or when the ledger exits; a program gh starts
+    that leaves gh's process group is not followed."""
+    errors = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+    process = subprocess.Popen(
+        [sys.executable, "-I", "-c", WATCHDOG, str(deadline), "gh", *args],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
+        text=True, encoding="utf-8", errors="replace", start_new_session=True)
+    return process, errors
+
+
+def finish_gh(process, errors):
+    """gh's exit status and what it printed on stderr, once it has ended."""
+    status = process.wait()
+    process.stdin.close()
+    errors.seek(0)
+    message = errors.read().strip()
+    errors.close()
+    return status, message
+
+
+def gh_output(args, deadline=None):
+    """(status, stdout, stderr) of one bounded gh call."""
+    process, errors = start_gh(args, API_DEADLINE if deadline is None else deadline)
+    try:
+        output = process.stdout.read()
+    finally:
+        process.stdout.close()
+        status, message = finish_gh(process, errors)
+    return status, output, message
+
+
 class GitHub:
-    """The few GitHub reads the ledger makes, all through the gh CLI."""
+    """The few GitHub reads the ledger makes, all through the gh CLI, each
+    under a deadline (start_gh)."""
 
     def __init__(self, repo):
         self.repo = repo
@@ -415,10 +497,10 @@ class GitHub:
 
     def _gh(self, args):
         def read():
-            result = subprocess.run(["gh", *args], capture_output=True, text=True)
-            if result.returncode != 0:
-                raise GitHubError(f"gh {' '.join(args)}: {result.stderr.strip() or result.returncode}")
-            return result.stdout
+            status, output, message = gh_output(args)
+            if status != 0:
+                raise GitHubError(f"gh {' '.join(args)}: {message or status}")
+            return output
         return retried(read)
 
     def api(self, path, paginate=False):
@@ -465,21 +547,28 @@ class GitHub:
     def job_log(self, job_id):
         """Yields the job's log lines as gh streams them."""
         if self._escape_flag is None:
-            help_text = subprocess.run(["gh", "api", "--help"], capture_output=True, text=True).stdout
+            status, help_text, message = gh_output(["api", "--help"])
+            if status != 0:
+                raise GitHubError(f"gh api --help: {message or status}")
             self._escape_flag = "--allow-escape-sequences" in help_text
-        args = ["gh", "api"] + (["--allow-escape-sequences"] if self._escape_flag else [])
+        args = ["api"] + (["--allow-escape-sequences"] if self._escape_flag else [])
         args.append(f"repos/{self.repo}/actions/jobs/{job_id}/logs")
-        process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, encoding="utf-8", errors="replace")
+        process, errors = start_gh(args, LOG_DEADLINE)
+        read_to_end = False
         try:
             for line in process.stdout:
                 yield line
+            read_to_end = True
         finally:
             process.stdout.close()
-            stderr = process.stderr.read()
-            process.stderr.close()
-            if process.wait() != 0:
-                raise GitHubError(f"log of job {job_id}: {stderr.strip() or process.returncode}")
+            if not read_to_end:
+                # The reader stopped early: end gh now rather than at its
+                # deadline. After a full read, stdin stays open until gh has
+                # exited, so its own status is the one reported.
+                process.stdin.close()
+            status, message = finish_gh(process, errors)
+        if status != 0:
+            raise GitHubError(f"log of job {job_id}: {message or status}")
 
 
 def platform_of(job):
@@ -562,18 +651,17 @@ def read_job(github, cache, job):
         # so it is not cached and the next run reads the log again.
         result["error"] = str(error)
         return result
-    if result["cancel"]:
-        result["records"] += [r.to_dict() for r in records]
-        result["unattributed"] = unattributed
-        cache.put(f"job-{job['id']}", result)
-        return result
     if not records:
-        steps = failed_steps(job) or ["(no failed step reported)"]
-        last = next((e for e in reversed(errors) if not e.startswith("Process completed")),
-                    errors[-1] if errors else "")
+        # A step that failed and named nothing the parser reads (vet, gofmt,
+        # lint) is a failure of that step, in a cancelled job too: a cancel
+        # in a later step does not undo it. A cancelled job with no failed
+        # step is only a cancel.
+        steps = failed_steps(job) or ([] if result["cancel"] else ["(no failed step reported)"])
+        last = next((e for e in reversed(errors) if not e.startswith(("Process completed", CANCEL_ERROR))),
+                    next((e for e in reversed(errors) if e.startswith("Process completed")), ""))
         records = [Record("step", job["name"], f"step {s}", last[:200])
                    for s in steps]
-    result["records"] = [r.to_dict() for r in records]
+    result["records"] += [r.to_dict() for r in records]
     result["unattributed"] = unattributed
     cache.put(f"job-{job['id']}", result)
     return result
@@ -660,6 +748,20 @@ def matcher(issues):
     return find
 
 
+def branch_of(run, repo):
+    """The run's branch as the ledger names it. A fork's branch carries its
+    owner (someone:main), and a pull request's run of a branch named main is
+    "main (pull request)", so "main" alone is only this repository's main
+    run for itself: a push, schedule or dispatch."""
+    branch = run.get("head_branch") or ""
+    head = (run.get("head_repository") or {}).get("full_name")
+    if head and head != repo:
+        return f"{head.split('/')[0]}:{branch}"
+    if branch == "main" and run.get("event") in ("pull_request", "pull_request_target"):
+        return "main (pull request)"
+    return branch
+
+
 def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, pulls):
     # Without the issues, which issue names a failure is unknown, not "none".
     find = matcher(issues) if issues is not None else (lambda token, prefix=False: None)
@@ -667,7 +769,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
     for pull in sorted(pulls, key=lambda p: p["number"]):
         prs[pull["head"]["ref"]] = pull["number"]
     entries = {}
-    unattributed, cancelled = [], {"superseded": 0, "cancelled": 0}
+    unattributed, cancelled, counted = [], {"superseded": 0, "cancelled": 0}, 0
     for run, job in jobs:
         result = results.get(job["id"]) or {"records": [], "error": "not read"}
         # Set aside only a cancel with nothing in it: no failure, no read
@@ -676,11 +778,12 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
                 and not result.get("unattributed")):
             cancelled[result["cancel"]] += 1
             continue
+        counted += 1  # a failed job: a failure, a read problem, or output that named nothing
         final = run.get("run_attempt") or 1
         occurrence = {
             "run_id": run["id"], "attempt": job.get("run_attempt", 1), "final_attempt": final,
             "job_id": job["id"], "job": job["name"], "platform": platform_of(job),
-            "branch": run.get("head_branch") or "", "event": run.get("event"),
+            "branch": branch_of(run, repo), "event": run.get("event"),
             "pr": prs.get(run.get("head_branch")) if run.get("event") == "pull_request" else None,
             "sha": run.get("head_sha"), "created_at": run.get("created_at"),
             # When the job that failed ended; a completed job always has it.
@@ -743,7 +846,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
                    for e in failures for o in e["occurrences"]
                    if o["run_id"] == run["id"] and o["attempt"] < o["final_attempt"]]
         rerun_rows.append({
-            "run_id": run["id"], "branch": run.get("head_branch"), "url": run.get("html_url"),
+            "run_id": run["id"], "branch": branch_of(run, repo), "url": run.get("html_url"),
             "created_at": run.get("created_at"), "attempts": item["attempts"],
             "final_conclusion": run["conclusion"],
             "earlier_failures": sorted(earlier, key=lambda f: (f["attempt"], f["job"], f["key"]))})
@@ -753,7 +856,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
         "runs_scanned": len(runs),
         "window": {"first": min((r["created_at"] for r in runs), default=None),
                    "last": max((r["created_at"] for r in runs), default=None)},
-        "failed_jobs": sum(1 for _, j in jobs if (results.get(j["id"]) or {}).get("cancel") not in cancelled),
+        "failed_jobs": counted,
         "cancelled_jobs_not_counted": cancelled,
         "failures": failures, "unattributed": unattributed, "reruns": rerun_rows, "problems": problems,
     }
@@ -845,11 +948,10 @@ def default_cache():
 
 
 def detect_repo():
-    result = subprocess.run(["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
-                            capture_output=True, text=True)
-    if result.returncode != 0 or not result.stdout.strip():
-        raise GitHubError(f"cannot tell the repository; pass --repo ({result.stderr.strip()})")
-    return result.stdout.strip()
+    status, output, message = gh_output(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])
+    if status != 0 or not output.strip():
+        raise GitHubError(f"cannot tell the repository; pass --repo ({message})")
+    return output.strip()
 
 
 def zone_of(name):
