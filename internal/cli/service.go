@@ -26,11 +26,13 @@ import (
 // so this waits for the second rather than reporting the first.
 const readyTimeout = 10 * time.Second
 
-// readyWait is the bound waitReady holds its wait for an answer to. It is
-// readyTimeout; export_test.go's AwaitReadinessUntilTheTestsDeadline
-// replaces it for a test in this process whose subject is not that bound.
-// Nothing else reads it: stoppedAnswering and the managed start's wait keep
-// readyTimeout.
+// readyWait is the bound waitReady holds its wait for an answer to, which is
+// every wait for a service to answer: a start that launched the service, a
+// restart's wait for its successor, and a managed install's or start's wait
+// for the service the manager started. It is readyTimeout;
+// export_test.go's AwaitReadinessUntilTheTestsDeadline replaces it for a test
+// in this process whose subject is not that bound. The wait for a stop to be
+// observed, stoppedAnswering, does not read it and keeps readyTimeout.
 var readyWait = readyTimeout
 
 // readyPoll is how often the wait re-asks.

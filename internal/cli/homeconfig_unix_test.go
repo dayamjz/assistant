@@ -95,10 +95,10 @@ func TestAStartOnABadHomeConfigurationLaunchesNothingAndSaysWhy(t *testing.T) {
 // same restart goes through to a different process, which is the control
 // showing the refusal is the file's.
 //
-// It runs serially, unlike most tests here: its start waits for the service
-// to answer through cli.AwaitReadinessUntilTheTestsDeadline rather than on a
-// bound a slow host misses (#543), which changes a package variable, and
-// serial tests run before any parallel test resumes.
+// It runs serially, unlike most tests here: its start and its restarts wait
+// for a service to answer through cli.AwaitReadinessUntilTheTestsDeadline
+// rather than on a bound a slow host misses (#543), which changes a package
+// variable, and serial tests run before any parallel test resumes.
 func TestARestartOnABadHomeConfigurationLeavesTheServiceUp(t *testing.T) {
 	cli.AwaitReadinessUntilTheTestsDeadline(t)
 	requiresIdentifiedPeer(t)
