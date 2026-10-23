@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/procgroup"
 )
@@ -187,9 +188,21 @@ func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 	cmd.Dir = root
 	cmd.Env = hangEnv(hangDir, pidFile)
 	out, runErr := cmd.CombinedOutput()
+	helperPID := 0
+	if cmd.Process != nil {
+		helperPID = cmd.Process.Pid
+	}
 	t.Cleanup(func() {
 		if pid, err := readPID(pidFile); err == nil {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+		// The alarm kills the helper inside Binary, after TempDir and before
+		// Cleanup. The build directory is in the helper's namespace, and the
+		// helper is gone, so this process removes it.
+		if helperPID != 0 {
+			if err := standin.ReclaimProcess(helperPID); err != nil {
+				t.Error(err)
+			}
 		}
 	})
 	pid, err := readPID(pidFile)

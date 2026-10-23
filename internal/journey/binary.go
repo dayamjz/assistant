@@ -79,9 +79,36 @@ func Binary() (string, error) {
 
 // resetProductBinary forgets the binary this process resolved. The next
 // Binary resolves again. A test uses it so the selector or checkout build
-// it resolved does not stay in the cache after the test returns.
+// it resolved does not stay in the cache after the test returns. It does
+// not remove a directory a build created. Cleanup does, including one the
+// cache no longer names.
 func resetProductBinary() {
 	productBinary.Store(&productBinaryState{})
+}
+
+// productBuildDirs are the directories a successful resolveBinary created.
+// Cleanup removes them. The cache is a different fact: resetProductBinary
+// can forget a path, and a build the control makes through resolveBinary
+// is never stored there. A selector named by BinaryVariable is not recorded.
+var productBuildDirs struct {
+	mu   sync.Mutex
+	dirs []string
+}
+
+func recordProductBuildDir(dir string) {
+	productBuildDirs.mu.Lock()
+	productBuildDirs.dirs = append(productBuildDirs.dirs, dir)
+	productBuildDirs.mu.Unlock()
+}
+
+func removeProductBuildDirs() {
+	productBuildDirs.mu.Lock()
+	dirs := productBuildDirs.dirs
+	productBuildDirs.dirs = nil
+	productBuildDirs.mu.Unlock()
+	for _, dir := range dirs {
+		_ = os.RemoveAll(dir)
+	}
 }
 
 // resolveBinary is Binary without the memoization, so the whole answer is in
@@ -125,12 +152,12 @@ func resolveBinary() (string, error) {
 	ctx, cancel := binaryBuildContext(processStarted, testBinaryTimeout())
 	defer cancel()
 	if err := procgroup.Run(ctx, cmd, buildGrace); err != nil {
-		// Cleanup removes this directory by way of productBinary.path, which a
-		// failed build never sets, so a build that failed has to take its own
-		// directory with it or nothing ever will.
+		// A failed build is not recorded, so Cleanup will not see this
+		// directory. Remove it here.
 		_ = os.RemoveAll(dir)
 		return "", fmt.Errorf("journey: building the assistant binary from %s: %w\n%s", root, err, out.String())
 	}
+	recordProductBuildDir(dir)
 	return built, nil
 }
 
@@ -235,8 +262,8 @@ func ModuleRoot() (string, error) {
 }
 
 // Cleanup removes what this package created for the lifetime of the process:
-// the fixture it built, the copies of this binary it stood on a PATH, and the
-// product binary it built when it was not given one.
+// the fixture it built, the copies of this binary it stood on a PATH, and
+// every directory a successful product build created.
 //
 // A consuming package calls it from TestMain after the tests have run. None of
 // it belongs to any one test, so no test can clean it up, and a test binary
@@ -244,14 +271,12 @@ func ModuleRoot() (string, error) {
 // directory of whatever machine ran it.
 //
 // It removes nothing it did not create. A binary named by BinaryVariable is
-// somebody else's artifact and is left alone.
+// somebody else's artifact and is not among the directories a build recorded.
 func Cleanup() {
 	for _, dir := range []string{shims.dir, built.root} {
 		if dir != "" {
 			_ = os.RemoveAll(dir)
 		}
 	}
-	if state := productBinary.Load(); state != nil && state.path != "" && os.Getenv(BinaryVariable) == "" {
-		_ = os.RemoveAll(filepath.Dir(state.path))
-	}
+	removeProductBuildDirs()
 }
