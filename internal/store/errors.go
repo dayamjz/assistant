@@ -297,6 +297,36 @@ func (e *TaskMovedError) Unwrap() error { return ErrTaskMoved }
 // this one's record.
 var ErrAttemptSessionRecorded = errors.New("store: the attempt already names a session")
 
+// ErrRemoteSessionWithoutHost is returned by SetAttemptSession for a session
+// of a task on a remote host that names no herdr server hosting it. PRD
+// section 8 records that server beside the reference, as the one record of
+// it, and a reference recorded without it would leave a server no record
+// names. Nothing is written.
+var ErrRemoteSessionWithoutHost = errors.New("store: a session of a task on a remote host is recorded with the herdr server hosting it")
+
+// ErrSessionHostOnThisMachine is returned by SetAttemptSession for a session
+// of a task on this machine that names a host. The task record holds a
+// session's host only for a worker on a remote host, so a local worker's
+// server is recorded nowhere here. Nothing is written.
+var ErrSessionHostOnThisMachine = errors.New("store: a session host is recorded only for a task on a remote host")
+
+// ErrMachineAtIntake is returned by CreateTask for a task that states a
+// machine. A task's machine is written at its dispatch, by
+// BeginFirstTaskAttempt, and never at intake. Nothing is written.
+var ErrMachineAtIntake = errors.New("store: a task's machine is written at its dispatch, never at intake")
+
+// ErrFirstAttemptIsDispatch is returned by BeginTaskAttempt anchored to no
+// attempt. A task's first attempt is its dispatch, which places it, so it
+// is BeginFirstTaskAttempt's, and BeginTaskAttempt begins only the attempts
+// after it, on the machine the first one recorded. Nothing is written.
+var ErrFirstAttemptIsDispatch = errors.New("store: a task's first attempt is its dispatch, which BeginFirstTaskAttempt records with its machine")
+
+// ErrNotCarriedOn is returned by BeginFirstTaskAttempt for a placement by
+// CarriedOnFrom that names an entry the task cannot be carrying on: one not
+// answered carry on, one of the task's own copy, or one of another project
+// or branch. Nothing is written.
+var ErrNotCarriedOn = errors.New("store: the task is not carrying on that kept work entry")
+
 // ErrAttemptRouteRecorded is returned by SetAttemptRoute when the attempt
 // already names a routed adapter. The selection is filled once before the
 // process starts; a second selection on the same attempt would be a relaunch,

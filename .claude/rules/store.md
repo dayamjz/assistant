@@ -63,6 +63,15 @@ paths: ["internal/store/**"]
   run of a reserved repository (`ErrRepositoryBeingRemoved`), and nothing
   refuses a kept work entry over a reservation. internal/service releases a
   reservation whose owner is gone when it opens.
+- taskMachineMigration's `task.machine` is PRD section 8's machine a task
+  runs on, the one place it is stored: written once, for a remote host, by
+  `BeginFirstTaskAttempt` (the dispatch, the only first attempt; a carry on
+  names its entry through `CarriedOnFrom` and never a machine), sealed by
+  trigger from the first attempt on, and NULL for this machine. A remote
+  worker's herdr server (`host_pid`, `host_start`) is written with its
+  attempt's session reference by `SetAttemptSession` and only for a remote
+  task. A session reference and a kept work entry point at the task row and
+  hold no copy.
 - runRebaseMigration's `run_rebase` is the run rebase record the rebase
   stage writes through `RecordRunRebase`, held to the run row's submitted
   commit (`ErrRebaseNotOfRun`), written once, and gone only with its run.

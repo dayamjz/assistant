@@ -331,7 +331,7 @@ func TestReleaseWaitsOnBothTheClaimAndTheFloor(t *testing.T) {
 		other.Branch = "other"
 		zc := f.create(t, other)
 		f.beginAttempt(t, yc.Task.ID)
-		if _, err := f.store.BeginTaskAttempt(ctx, zc.Task.ID, 0); err != nil {
+		if _, err := f.store.BeginFirstTaskAttempt(ctx, zc.Task.ID, store.OnThisMachine()); err != nil {
 			t.Fatalf("BeginTaskAttempt: %v", err)
 		}
 		got := f.create(t, delivery(zc.Task.ID))
@@ -442,7 +442,7 @@ func TestOnePassReleasesOneTaskPerBranch(t *testing.T) {
 		t.Fatalf("with the earlier task dispatched the later got %+v, want waiting on it", got)
 	}
 	// Once the earlier task clears the later is released.
-	if _, err := f.store.BeginTaskAttempt(ctx, t1.Task.ID, 0); err != nil {
+	if _, err := f.store.BeginFirstTaskAttempt(ctx, t1.Task.ID, store.OnThisMachine()); err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}
 	f.runOn(t, "run-t1", store.RunFailed)

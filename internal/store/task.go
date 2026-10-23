@@ -113,6 +113,19 @@ type Task struct {
 	// CreateTask refuses a name home.ValidDomain refuses, and the schema
 	// refuses every later write of it.
 	Domain string `json:"domain,omitempty"`
+	// Machine is the machine the task runs on, PRD section 8's field and
+	// the one place a task's machine is stored (P14): a remote host's name,
+	// as the global remote_hosts setting gives it, and empty for this
+	// machine, which is also what every row written before the column
+	// reads as. It is written once, at dispatch, by BeginFirstTaskAttempt
+	// in the transaction that records the first attempt, and kept by
+	// promotion and relaunch, which never write it: the schema refuses it
+	// at intake and every write of it once the task has an attempt. A task
+	// not yet dispatched reads empty too, and has been placed nowhere: what
+	// tells the two apart is whether it has an attempt. A session
+	// reference and a kept work entry point here rather than holding it
+	// again. CreateTask refuses a task that states one.
+	Machine string `json:"machine,omitempty"`
 	// CreatedAt is when the task was recorded.
 	CreatedAt time.Time `json:"created_at"`
 	// StartSnapshot is what the task's isolated copy held when its latest
@@ -150,16 +163,25 @@ type Disposition struct {
 }
 
 const taskColumns = `SELECT rowid, id, shape, project, mode, worktree_path, run_id, pull_request,
-	repository_id, branch, blocker_task, created_at, start_snapshot, delivery, delivery_intent, role, domain`
+	repository_id, branch, blocker_task, created_at, start_snapshot, delivery, delivery_intent, role, domain, machine`
 
 func scanTask(sc scanner) (Task, error) {
 	var t Task
 	var shape, created string
-	var snapshot, delivery, role, domain Optional[string]
+	var snapshot, delivery, role, domain, machine Optional[string]
 	if err := sc.Scan(&t.Row, &t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath, &t.RunID,
 		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created, &snapshot, &delivery, &t.DeliveryIntent, &role,
-		&domain); err != nil {
+		&domain, &machine); err != nil {
 		return Task{}, err
+	}
+	if text, ok := machine.Get(); ok {
+		// The trigger refuses an empty name, so an empty one was not
+		// written by this package, and reading it as this machine would
+		// turn a row nobody can account for into a placement.
+		if err := validRemoteHost(text); err != nil {
+			return Task{}, fmt.Errorf("column machine: %w", err)
+		}
+		t.Machine = text
 	}
 	t.Shape = TaskShape(shape)
 	if text, ok := role.Get(); ok {
@@ -243,6 +265,9 @@ func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, er
 	}
 	if t.DeliveryIntent.IsKnown() {
 		return Task{}, fmt.Errorf("store: task %s: a delivery intent is recorded by promotion, never at intake", t.ID)
+	}
+	if t.Machine != "" {
+		return Task{}, fmt.Errorf("store: task %s: %w", t.ID, ErrMachineAtIntake)
 	}
 	if t.Domain != "" {
 		if err := home.ValidDomain(t.Domain); err != nil {

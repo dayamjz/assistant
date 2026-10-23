@@ -38,7 +38,7 @@ func (s *cleanupSubject) localTask(t *testing.T, branch string) (task, string) {
 	}, store.Disposition{}); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if _, err := s.store.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := s.store.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
