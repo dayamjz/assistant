@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -60,7 +61,7 @@ func TestRebaseStatusSeesARebasePausedBeforeAnyCommitIsPicked(t *testing.T) {
 	rawGit(t, dir, "checkout", "--quiet", "-b", "topic")
 	topic := commitFile(t, dir, "note.txt", "topic\n", "topic")
 	script := filepath.Join(t.TempDir(), "edit.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'break\\n' > \"$1\"\n"), 0o700); err != nil {
+	if err := procgroup.WriteProgram(script, []byte("#!/bin/sh\nprintf 'break\\n' > \"$1\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("git", "rebase", "-i", base)
@@ -216,7 +217,7 @@ func TestUncommittedDigestIgnoresATextconvThatCollapsesBytes(t *testing.T) {
 	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
 	marker := filepath.Join(t.TempDir(), "ran")
 	script := filepath.Join(t.TempDir(), "flat.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'x\\n' >> '"+marker+"'\nprintf 'flat\\n'\n"), 0o700); err != nil {
+	if err := procgroup.WriteProgram(script, []byte("#!/bin/sh\nprintf 'x\\n' >> '"+marker+"'\nprintf 'flat\\n'\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	commitFile(t, dir, ".gitattributes", "*.txt diff=flat\n", "attributes")

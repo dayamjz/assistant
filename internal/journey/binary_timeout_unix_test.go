@@ -115,7 +115,7 @@ func TestTheHarnessCompileDoesNotOutliveTheProcess(t *testing.T) {
 	hangDir := t.TempDir()
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	script := "#!/bin/sh\necho $$ > \"$HANG_PID\"\nexec /bin/sleep 300\n"
-	if err := os.WriteFile(filepath.Join(hangDir, "go"), []byte(script), 0o755); err != nil {
+	if err := procgroup.WriteProgram(filepath.Join(hangDir, "go"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(bin, "-test.timeout=1s", "-test.run=^TestCompile$", "-test.count=1", "-test.v")
@@ -178,7 +178,7 @@ func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 	hangDir := t.TempDir()
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	script := "#!/bin/sh\necho $$ > \"$JOURNEY_HANG_PID\"\nexec /bin/sleep 300\n"
-	if err := os.WriteFile(filepath.Join(hangDir, "go"), []byte(script), 0o755); err != nil {
+	if err := procgroup.WriteProgram(filepath.Join(hangDir, "go"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// The helper is not started under RunHeld. That wrapper would own the
