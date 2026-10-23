@@ -128,9 +128,14 @@ func parseChanges(out string) (Changes, error) {
 // hold one is recorded as a directory and its mode, not the files inside
 // it. A checkout whose HEAD does not resolve fails the digest. A file that
 // is not a regular file, a symlink, or a directory contributes its mode and
-// its type bits and is not opened. Opening a FIFO that has no writer waits
-// until one appears, and that wait does not observe this call's context.
-// Staging a path changes the result even when its worktree bytes do not,
+// its type bits and is not opened. A path classified as a regular file is
+// opened without waiting for a writer where the platform can ask for that,
+// and the descriptor is classified again. A descriptor that is not a regular
+// file contributes its type bits and is not read, so a FIFO that replaced
+// the file after the stat does not hold the call. On a platform whose open
+// cannot ask not to wait, that replacement can still block, and the context
+// does not end the wait. Staging a path changes the result even when its
+// worktree bytes do not,
 // because the index stages are part of it. Ignored files are not part of
 // it, which is the same gap Changes leaves. The result is not a git object
 // name.
@@ -188,7 +193,13 @@ func digestWrite(sum io.Writer, b []byte) error {
 // and target text. A regular file contributes its mode and bytes. A
 // submodule directory contributes its mode and the commit it has checked out.
 // Any other file type contributes its mode and its type bits and is not
-// opened, so a FIFO with no writer cannot hold the call past its context.
+// opened. A path classified as a regular file is opened without waiting for
+// a writer where the platform can ask for that, and the descriptor is
+// classified again. A descriptor that is not a regular file contributes its
+// type bits and is not read, so a FIFO that replaced the file after the
+// stat does not hold the call. On a platform whose open cannot ask not to
+// wait, that replacement can still block, and the context does not end the
+// wait.
 func hashWorktreeList(ctx context.Context, r *Repository, sum io.Writer, root, listed string) error {
 	for path := range strings.SplitSeq(listed, "\x00") {
 		if path == "" {
@@ -244,13 +255,7 @@ func hashWorktreeList(ctx context.Context, r *Repository, sum io.Writer, root, l
 			}
 		default:
 			if !info.Mode().IsRegular() {
-				if err := digestWrite(sum, []byte{4}); err != nil {
-					return err
-				}
-				kind := uint32(info.Mode() & os.ModeType)
-				if err := digestWrite(sum, []byte{
-					byte(kind >> 24), byte(kind >> 16), byte(kind >> 8), byte(kind),
-				}); err != nil {
+				if err := digestSpecial(sum, info); err != nil {
 					return err
 				}
 			} else if err := digestRegular(sum, full); err != nil {
@@ -264,12 +269,40 @@ func hashWorktreeList(ctx context.Context, r *Repository, sum io.Writer, root, l
 	return nil
 }
 
-// digestRegular records the bytes of a file the caller has classified as
-// regular. The type check is the caller's, from the stat that preceded it.
+// digestBeforeRegularOpen, when set, runs after a path has been classified
+// as a regular file and before that path is opened. A test sets it to
+// replace the path in that window. It is nil except in that test, and the
+// open that follows is the one the digest uses outside tests.
+var digestBeforeRegularOpen func(path string)
+
+// digestRegular records a path the caller classified as a regular file.
+//
+// The open does not wait for a writer where the platform can ask for that.
+// The descriptor is classified again, and one that is not a regular file
+// contributes its type bits instead of its bytes. On a platform whose open
+// cannot ask not to wait, a path replaced by a blocking special file after
+// the stat can still block this call.
 func digestRegular(sum io.Writer, full string) error {
-	f, err := os.Open(full)
+	if digestBeforeRegularOpen != nil {
+		digestBeforeRegularOpen(full)
+	}
+	f, err := openForDigest(full)
 	if err != nil {
 		return err
+	}
+	info, statErr := f.Stat()
+	if statErr != nil {
+		closeErr := f.Close()
+		if closeErr != nil {
+			return closeErr
+		}
+		return statErr
+	}
+	if !info.Mode().IsRegular() {
+		if err := f.Close(); err != nil {
+			return err
+		}
+		return digestSpecial(sum, info)
 	}
 	writeErr := digestWrite(sum, []byte{3})
 	_, copyErr := io.Copy(sum, f)
@@ -281,6 +314,18 @@ func digestRegular(sum io.Writer, full string) error {
 		return copyErr
 	}
 	return closeErr
+}
+
+// digestSpecial records the type bits of a file that is not read. info is
+// the stat of that file, from the path or from the descriptor that was opened.
+func digestSpecial(sum io.Writer, info os.FileInfo) error {
+	if err := digestWrite(sum, []byte{4}); err != nil {
+		return err
+	}
+	kind := uint32(info.Mode() & os.ModeType)
+	return digestWrite(sum, []byte{
+		byte(kind >> 24), byte(kind >> 16), byte(kind >> 8), byte(kind),
+	})
 }
 
 // modeBytes is the permission bits of info, so a mode-only change is part of
