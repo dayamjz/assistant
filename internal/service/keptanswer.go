@@ -9,7 +9,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -312,7 +311,7 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 		return refuse("its copy's HEAD names no commit")
 	}
 	out.head = loss.Head
-	behind, err := leftBehind(ctx, entry, loss)
+	behind, err := s.leftBehind(ctx, entry, loss)
 	if err != nil {
 		return landing{}, err
 	}
@@ -329,8 +328,8 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 // for a refusal: every commit lost that HEAD does not reach, and every
 // other object lost that HEAD's history does not hold (vcs.NotHeldBy), an
 // annotated tag always among them, since a landing carries no tag.
-func leftBehind(ctx context.Context, entry store.KeptWork, loss tasks.Loss) ([]string, error) {
-	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, vcs.WithRedactor(redact.New()))
+func (s *Service) leftBehind(ctx context.Context, entry store.KeptWork, loss tasks.Loss) ([]string, error) {
+	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, s.git()...)
 	if err != nil {
 		return nil, fmt.Errorf("service: opening the kept copy at %s: %w", entry.CopyPath, err)
 	}
@@ -394,7 +393,7 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
-	bare, err := vcs.OpenBare(ctx, gatePath, vcs.WithRedactor(redact.New()))
+	bare, err := vcs.OpenBare(ctx, gatePath, s.git()...)
 	if err != nil {
 		return machine.KeptWorkAnswered{}, fmt.Errorf("service: opening the gate of %s: %w", plan.repository.ID, err)
 	}

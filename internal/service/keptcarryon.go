@@ -13,7 +13,6 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -238,7 +237,7 @@ func (s *Service) assertKeptCopy(ctx context.Context, entry store.KeptWork, plan
 	if filepath.Clean(entry.CopyPath) != want.Copy {
 		return refuse(fmt.Sprintf("its copy at %s is not where this home keeps task %s's copy, %s", entry.CopyPath, plan.old.ID, want.Copy))
 	}
-	obs, err := vcs.Observe(ctx, entry.CopyPath, vcs.WithRedactor(redact.New()))
+	obs, err := vcs.Observe(ctx, entry.CopyPath, s.git()...)
 	if err != nil {
 		if errors.Is(err, vcs.ErrNotARepository) {
 			if _, statErr := os.Lstat(entry.CopyPath); errors.Is(statErr, os.ErrNotExist) {
@@ -261,7 +260,7 @@ func (s *Service) assertKeptCopy(ctx context.Context, entry store.KeptWork, plan
 		if why := unreshapeableRemotes(obs, plan); why != "" {
 			return refuse(fmt.Sprintf("its copy is not one a task's worker may be started in (%s): %s", tasks.ComparisonRemotes, why))
 		}
-		if why, err := unreshapeableHead(ctx, entry.CopyPath, obs, plan); err != nil {
+		if why, err := s.unreshapeableHead(ctx, entry.CopyPath, obs, plan); err != nil {
 			return fmt.Errorf("service: reading the branches of the kept copy at %s: %w", entry.CopyPath, err)
 		} else if why != "" {
 			return refuse(fmt.Sprintf("its copy is not one a task's worker may be started in (%s): %s", tasks.ComparisonHead, why))
@@ -308,11 +307,11 @@ func unreshapeableRemotes(obs vcs.Observation, plan carryOn) string {
 // one under that name or one that name sits under (task/kept/side or task
 // beside task/kept), beside which the branch cannot be created, since
 // carrying on renames no branch.
-func unreshapeableHead(ctx context.Context, path string, obs vcs.Observation, plan carryOn) (string, error) {
+func (s *Service) unreshapeableHead(ctx context.Context, path string, obs vcs.Observation, plan carryOn) (string, error) {
 	if plan.old.Shape != store.TaskDelivery || (!obs.Detached && obs.Branch == plan.branch) {
 		return "", nil
 	}
-	copied, err := vcs.OpenWorktree(ctx, path, vcs.WithRedactor(redact.New()))
+	copied, err := vcs.OpenWorktree(ctx, path, s.git()...)
 	if err != nil {
 		return "", err
 	}
@@ -345,7 +344,7 @@ func (s *Service) assertReshaped(ctx context.Context, entry store.KeptWork, id, 
 	if err != nil {
 		return err
 	}
-	obs, err := vcs.Observe(ctx, path, vcs.WithRedactor(redact.New()))
+	obs, err := vcs.Observe(ctx, path, s.git()...)
 	if err != nil {
 		return fmt.Errorf("%w: kept work entry %d was not carried on: the copy at %s cannot be read as a repository: %w",
 			ipc.ErrRefused, entry.ID, path, err)
@@ -547,7 +546,7 @@ func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPa
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("service: reading the kept copy at %s: %w", entry.CopyPath, err)
 	}
-	adopted, err := vcs.OpenWorktree(ctx, newPath, vcs.WithRedactor(redact.New()))
+	adopted, err := vcs.OpenWorktree(ctx, newPath, s.git()...)
 	if err != nil {
 		return refuse(fmt.Sprintf("what stands at %s is not a copy: %v", newPath, err))
 	}
@@ -586,11 +585,11 @@ func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPa
 // and the task's branch at HEAD, and for an investigation a detached HEAD.
 // A copy already shaped so is left as it is.
 func (s *Service) reshapeAdoptedCopy(ctx context.Context, path string, plan carryOn) error {
-	copied, err := vcs.OpenWorktree(ctx, path, vcs.WithRedactor(redact.New()))
+	copied, err := vcs.OpenWorktree(ctx, path, s.git()...)
 	if err != nil {
 		return fmt.Errorf("service: opening the adopted copy at %s: %w", path, err)
 	}
-	obs, err := vcs.Observe(ctx, path, vcs.WithRedactor(redact.New()))
+	obs, err := vcs.Observe(ctx, path, s.git()...)
 	if err != nil {
 		return fmt.Errorf("service: observing the adopted copy at %s: %w", path, err)
 	}

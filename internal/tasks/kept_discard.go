@@ -18,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/gate"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -280,7 +279,7 @@ func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, shown []string
 	if !standing {
 		return Loss{}, nil, fmt.Errorf("%w: nothing stands at %s", ErrCopyGone, entry.CopyPath)
 	}
-	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, vcs.WithRedactor(redact.New()))
+	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, c.git...)
 	if err != nil {
 		return Loss{}, nil, fmt.Errorf("tasks: opening the kept copy at %s: %w", entry.CopyPath, err)
 	}
@@ -322,7 +321,7 @@ func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, shown []string
 		return Loss{}, nil, err
 	}
 	named := namesOf(inv.Head.Commit, refs, logs)
-	values, err := reflogValues(ctx, entry, copied)
+	values, err := c.reflogValues(ctx, entry, copied)
 	if err != nil {
 		return Loss{}, nil, err
 	}
@@ -364,7 +363,7 @@ func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, shown []string
 		}
 		loss.Objects = append(loss.Objects, LostObject{Object: object, Type: kind, Names: named.names[object]})
 	}
-	if loss.files, err = copyFiles(ctx, entry, copied, inv); err != nil {
+	if loss.files, err = c.copyFiles(ctx, entry, copied, inv); err != nil {
 		return Loss{}, nil, err
 	}
 	loss.Files = make([]LostPath, len(loss.files))
@@ -521,7 +520,7 @@ var runWorktreeRefs = []string{"refs/worktree/", "refs/bisect/", "refs/rewritten
 // value the gate's own reads record, since the logs of the references the
 // worktree shares with the gate stand after the removal and so does what
 // they record.
-func reflogValues(ctx context.Context, entry store.KeptWork, copied *vcs.Repository) ([]string, error) {
+func (c *Cleaner) reflogValues(ctx context.Context, entry store.KeptWork, copied *vcs.Repository) ([]string, error) {
 	fail := func(err error) ([]string, error) {
 		return nil, fmt.Errorf("tasks: reading what the reflogs of the kept copy at %s record: %w", entry.CopyPath, err)
 	}
@@ -536,11 +535,11 @@ func reflogValues(ctx context.Context, entry store.KeptWork, copied *vcs.Reposit
 	if err != nil {
 		return fail(err)
 	}
-	obs, err := vcs.Observe(ctx, entry.CopyPath, vcs.WithRedactor(redact.New()))
+	obs, err := vcs.Observe(ctx, entry.CopyPath, c.git...)
 	if err != nil {
 		return fail(err)
 	}
-	gate, err := vcs.OpenBare(ctx, obs.CommonDir, vcs.WithRedactor(redact.New()))
+	gate, err := vcs.OpenBare(ctx, obs.CommonDir, c.git...)
 	if err != nil {
 		return fail(err)
 	}
@@ -559,12 +558,12 @@ func reflogValues(ctx context.Context, entry store.KeptWork, copied *vcs.Reposit
 // with it, a task's clone's .git or the directory the gate keeps for a
 // run's worktree, but for what git rewrites without changing what it holds
 // (gitDirShownAsObjects), and git is asked for HEAD's tree and the index.
-func copyFiles(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, inv vcs.Inventory) ([]lostFile, error) {
+func (c *Cleaner) copyFiles(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, inv vcs.Inventory) ([]lostFile, error) {
 	index, err := copied.IndexEntries(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("tasks: reading the index of the kept copy at %s: %w", entry.CopyPath, err)
 	}
-	obs, err := vcs.Observe(ctx, entry.CopyPath, vcs.WithRedactor(redact.New()))
+	obs, err := vcs.Observe(ctx, entry.CopyPath, c.git...)
 	if err != nil {
 		return nil, fmt.Errorf("tasks: finding the repository directory of the kept copy at %s: %w", entry.CopyPath, err)
 	}
@@ -587,7 +586,7 @@ func copyFiles(ctx context.Context, entry store.KeptWork, copied *vcs.Repository
 		return nil, fmt.Errorf("tasks: reading the kept copy at %s: %w", entry.CopyPath, err)
 	}
 	shownAsObjects := func(rel string, _ os.FileInfo) bool { return slices.Contains(gitDirShownAsObjects, rel) }
-	fresh, err := freshRepository(ctx, shownAsObjects)
+	fresh, err := freshRepository(ctx, shownAsObjects, c.git...)
 	if err != nil {
 		return nil, fmt.Errorf("tasks: reading what git writes into a new repository: %w", err)
 	}
@@ -780,7 +779,7 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 		}
 		return loss, nil
 	}
-	bare, err := vcs.OpenBare(ctx, gatePath, vcs.WithRedactor(redact.New()))
+	bare, err := vcs.OpenBare(ctx, gatePath, c.git...)
 	if err != nil {
 		return Loss{}, fmt.Errorf("tasks: opening the gate repository at %s: %w", gatePath, err)
 	}

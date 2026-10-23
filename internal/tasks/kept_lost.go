@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -346,15 +345,16 @@ func entryKind(info os.FileInfo) string {
 // read from one it initializes in a temporary directory this removes
 // afterwards, under the configuration the program's git runs under, which
 // chose the copy's templates when the copy was made; skip is the same
-// skip the copy's repository directory is walked with.
-func freshRepository(ctx context.Context, skip func(rel string, info os.FileInfo) bool) (map[string]freshEntry, error) {
+// skip the copy's repository directory is walked with, and git the options
+// the copy was opened with, its deadline among them.
+func freshRepository(ctx context.Context, skip func(rel string, info os.FileInfo) bool, git ...vcs.Option) (map[string]freshEntry, error) {
 	dir, err := os.MkdirTemp("", "assistant-fresh-")
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	path := filepath.Join(dir, "repository")
-	if _, err := vcs.InitBare(ctx, path, vcs.WithRedactor(redact.New())); err != nil {
+	if _, err := vcs.InitBare(ctx, path, git...); err != nil {
 		return nil, fmt.Errorf("initializing one: %w", err)
 	}
 	fresh := map[string]freshEntry{}

@@ -3,12 +3,15 @@ package tasks
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -1349,5 +1352,105 @@ func TestUpstreamBranchNamesAreEveryBranchAReferenceCouldStandFor(t *testing.T) 
 		if got := upstreamBranchNames(ref); !slices.Equal(got, want) {
 			t.Errorf("upstreamBranchNames(%q) = %q, want %q", ref, got, want)
 		}
+	}
+}
+
+// Loss runs every git it starts under the cleaner's configured deadline
+// (CleanupDeps.GitDeadline, the git_deadline key), the final review of
+// 3088420: an entry is kept against an upstream that answers, and its
+// repository record is then pointed at a git:// listener that accepts and
+// never answers, as a stalled upstream does. A cleaner built with a
+// two-second deadline refuses the loss as unestablished within its
+// deadline rather than waiting on the read. With the upstream back, the
+// same cleaner reads the loss, so the deadline is not what refuses it.
+// Without the cleaner's options on every repository Loss opens, the read
+// ran under vcs's ten-minute fallback and the loss never came back.
+func TestALossRunsGitUnderTheConfiguredDeadline(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/deadline")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	const deadline = 2 * time.Second
+	bounded, err := NewCleaner(CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge.Host(), GitDeadline: deadline})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var held sync.WaitGroup
+	var mu sync.Mutex
+	var conns []net.Conn
+	held.Add(1)
+	go func() {
+		defer held.Done()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
+		}
+	}()
+	release := func() {
+		_ = listener.Close()
+		mu.Lock()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+		mu.Unlock()
+		held.Wait()
+	}
+	defer release()
+	repository, err := s.store.Repository(ctx, cleanupRepository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stalled := repository
+	stalled.UpstreamURL = "git://" + listener.Addr().String() + "/stalled.git"
+	if _, err := s.store.UpsertRepository(ctx, stalled); err != nil {
+		t.Fatal(err)
+	}
+
+	type answer struct {
+		loss Loss
+		err  error
+	}
+	answered := make(chan answer, 1)
+	began := time.Now()
+	go func() {
+		l, err := bounded.Loss(ctx, got.Entry)
+		answered <- answer{l, err}
+	}()
+	select {
+	case a := <-answered:
+		if took := time.Since(began); !errors.Is(a.err, ErrLossUnestablished) || took > 30*time.Second {
+			t.Fatalf("Loss against a stalled upstream = %+v, %v after %s; want ErrLossUnestablished within the %s deadline", a.loss, a.err, took, deadline)
+		}
+	case <-time.After(60 * time.Second):
+		release()
+		a := <-answered
+		t.Fatalf("Loss against a stalled upstream had not answered after 60s under a %s git deadline (it answered %v once the upstream was closed)", deadline, a.err)
+	}
+
+	if _, err := s.store.UpsertRepository(ctx, repository); err != nil {
+		t.Fatal(err)
+	}
+	if l, err := bounded.Loss(ctx, got.Entry); err != nil || len(l.Lacks) == 0 {
+		t.Fatalf("Loss with the upstream answering = %+v, %v; want the task's commit lost", l, err)
 	}
 }
