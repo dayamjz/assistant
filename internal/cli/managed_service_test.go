@@ -18,6 +18,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/managed"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // managedWorld is a user home, a search path holding the stand-in service
@@ -52,7 +53,7 @@ func newManagedWorld(t *testing.T, h *home.Home) managedWorld {
 	for _, name := range []string{"systemctl", "launchctl"} {
 		script := "#!/bin/sh\n" + standInManagerDirVar + "='" + w.calls + "' " + standInManagerUnitsVar + "='" + units +
 			"' exec '" + self + "' \"$@\"\n"
-		if err := os.WriteFile(filepath.Join(w.bin, name), []byte(script), 0o755); err != nil {
+		if err := procgroup.WriteProgram(filepath.Join(w.bin, name), []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

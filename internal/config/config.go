@@ -134,6 +134,22 @@ type Config struct {
 	// KeyRunUsageBudgetOutputTokens says which count, who may set it, and how
 	// it differs from UsageCeiling.
 	RunUsageBudget int64
+	// RemoteHosts is the other machines workers may run on, at most
+	// MaxRemoteHosts of them; empty runs every worker on this machine.
+	// KeyRemoteHosts says who may set it, what parsing checks, and what reads
+	// it.
+	RemoteHosts []RemoteHost
+	// PlacementLocal is this machine's placement limits; its zero value
+	// limits nothing. KeyPlacementLocal says who may set it.
+	PlacementLocal PlacementLimits
+	// PlacementArch is the architectures the repository's tasks may run on,
+	// each a member of Architectures; empty allows every one.
+	// KeyPlacementArch says who may set it and what reads it.
+	PlacementArch []string
+	// RemoteDisconnectGrace is how long a bridge whose transport is gone
+	// keeps the workers it started. KeyRemoteDisconnectGrace says what it
+	// bounds and what it does not.
+	RemoteDisconnectGrace time.Duration
 	// Roles says which agent, model, effort, and context window each role runs. A Config from
 	// Resolve names the fixer as cursor unless the winning document named the
 	// fix role. A role that names no agent uses Agent. KeyRoles says which
@@ -294,6 +310,9 @@ const (
 	// 12's phase 1 names, so a home whose operator chose nothing runs its
 	// workers exactly as it did before the key existed.
 	DefaultSessionProvider = SessionProviderPipe
+	// DefaultRemoteDisconnectGrace is PRD section 10's default for
+	// remote_disconnect_grace. Chosen, not measured.
+	DefaultRemoteDisconnectGrace = 30 * time.Minute
 )
 
 // SessionProvider names a terminal session provider. The set is closed:
@@ -311,10 +330,17 @@ const (
 	// binary on the service's PATH and an agent adapter that declares
 	// terminal workers; internal/session's Tmux states both refusals.
 	SessionProviderTmux SessionProvider = "tmux"
+	// SessionProviderHerdr runs each worker in a herdr session of its own,
+	// on a server the program starts for that worker, PRD section 8's herdr
+	// session provider. It is the provider KeyRemoteHosts requires. This
+	// build has no herdr provider, so internal/service refuses a home that
+	// names it rather than start its workers some other way (its
+	// unhonored.go).
+	SessionProviderHerdr SessionProvider = "herdr"
 )
 
 // sessionProviders is the closed set, in the order a refusal names them.
-var sessionProviders = []SessionProvider{SessionProviderPipe, SessionProviderTmux}
+var sessionProviders = []SessionProvider{SessionProviderPipe, SessionProviderTmux, SessionProviderHerdr}
 
 // Recognized reports whether p is a member of the closed set.
 func (p SessionProvider) Recognized() bool { return slices.Contains(sessionProviders, p) }
@@ -545,7 +571,83 @@ const (
 	// MaxUsageCeilingWindow is the longest usage ceiling window, the same
 	// year checks_timeout is bounded by. Chosen, not measured.
 	MaxUsageCeilingWindow = 8760 * time.Hour
+	// MaxRemoteHosts is the number of entries remote_hosts may hold, PRD
+	// section 10's remote host count: one is what the development fleet
+	// runs and what the first increment is verified on, and section 12
+	// defers more. Chosen, not measured.
+	MaxRemoteHosts = 1
+	// MinRemoteDisconnectGrace is PRD section 10's floor for
+	// remote_disconnect_grace: below it a brief loss of the connection ends
+	// every remote worker. Chosen, not measured.
+	MinRemoteDisconnectGrace = time.Minute
+	// MaxRemoteDisconnectGrace is PRD section 10's ceiling for
+	// remote_disconnect_grace: above it an unreachable worker runs
+	// unobserved for a day. Chosen, not measured.
+	MaxRemoteDisconnectGrace = 24 * time.Hour
 )
+
+// RemoteHost is one entry of remote_hosts: another machine workers may run
+// on, PRD section 8's "Workers on another machine". Parsing establishes the
+// shape of each field and nothing about the host itself; KeyRemoteHosts says
+// what it leaves to the bridge.
+type RemoteHost struct {
+	// Host is the host as the operator's SSH configuration names it: one
+	// word of printable text that does not begin with "-", so it is never
+	// read as an option.
+	Host string
+	// Root is the absolute remote root on the host, written in its one clean
+	// spelling, and never "/" itself.
+	Root string
+	// Bridge is the absolute path, on the host, of the binary its bridge
+	// runs, written in its one clean spelling.
+	Bridge string
+	// Limits are the placement limits a dispatch to this host needs; the
+	// zero value limits nothing.
+	Limits PlacementLimits
+}
+
+// PlacementLimits are the three limits PRD section 8 places a task on a
+// machine by, for this machine (placement.local) or for a remote host. Each
+// is optional, and an unset one limits nothing. Zero is refused for each when
+// it is written, so a zero field is always an unset one: a limit is omitted
+// to set none, never written as zero.
+//
+// It says what the operator set and decides nothing. The readings each is
+// compared with, and when, are the dispatch's.
+type PlacementLimits struct {
+	// MaxWorkers is how many live workers of this home the machine takes, a
+	// whole number of at least one; zero is unset.
+	MaxWorkers int
+	// MinFreeDiskBytes is the free disk, in bytes, a dispatch to the machine
+	// needs, written in the document as a whole number with a unit, such as
+	// "20GiB"; zero is unset. decodeByteSize says which units.
+	MinFreeDiskBytes int64
+	// MaxLoad is the load average above which the machine takes no dispatch,
+	// a positive number; zero is unset. Which load average it is compared
+	// with is the dispatch's to state.
+	MaxLoad float64
+}
+
+// Set reports whether any limit is set. Limits that are not set compare
+// nothing.
+func (l PlacementLimits) Set() bool {
+	return l.MaxWorkers > 0 || l.MinFreeDiskBytes > 0 || l.MaxLoad > 0
+}
+
+// Architectures returns the names placement.arch accepts, sorted: the GOARCH
+// values Go's toolchain lists for its darwin and linux targets, the two
+// platforms this program supports. A machine's architecture is spelled the
+// way this program's own build names it (runtime.GOARCH), so "amd64" and not
+// "x86_64". The result is a copy.
+func Architectures() []string { return slices.Clone(architectures) }
+
+// architectures is Architectures' list. A test holds it to what `go tool dist
+// list` reports for darwin and linux under the toolchain the tests run with,
+// so a toolchain that adds or drops one fails there rather than here.
+var architectures = []string{
+	"386", "amd64", "arm", "arm64", "loong64", "mips", "mips64", "mips64le",
+	"mipsle", "ppc64", "ppc64le", "riscv64", "s390x",
+}
 
 // UsageCeiling is the operator's ceiling on recorded agent use: a window
 // measured back from each comparison, and one ceiling per token count the

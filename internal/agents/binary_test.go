@@ -2,7 +2,6 @@ package agents_test
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -10,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 func TestLookPathFirstPrefersTheEarliestCandidate(t *testing.T) {
@@ -18,7 +18,7 @@ func TestLookPathFirstPrefersTheEarliestCandidate(t *testing.T) {
 	}
 	dir := t.TempDir()
 	for _, name := range []string{"second", "first"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		if err := procgroup.WriteProgram(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -50,7 +50,7 @@ func TestCursorResolvesCursorAgentWhenThatIsWhatIsOnPath(t *testing.T) {
 	dir := t.TempDir()
 	// cursor-agent wins over historical "cursor"; bare "agent" is not a candidate.
 	for _, name := range []string{"cursor", "cursor-agent"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		if err := procgroup.WriteProgram(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -73,7 +73,7 @@ func TestCursorDoesNotResolveBareAgentAlone(t *testing.T) {
 	}
 	dir := t.TempDir()
 	// Grok's installer links "agent"; that must not satisfy CursorBinaries.
-	if err := os.WriteFile(filepath.Join(dir, "agent"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := procgroup.WriteProgram(filepath.Join(dir, "agent"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)

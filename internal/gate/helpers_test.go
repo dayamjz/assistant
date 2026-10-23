@@ -2,7 +2,6 @@ package gate_test
 
 import (
 	"context"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -174,9 +174,11 @@ func writeFile(t *testing.T, path, content string) {
 
 func writeScript(t *testing.T, path, content string) {
 	t.Helper()
-	writeFile(t, path, content)
-	if err := os.Chmod(path, 0o755); err != nil {
-		t.Fatalf("chmod %s: %v", path, err)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", path, err)
+	}
+	if err := procgroup.WriteProgram(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }
 
@@ -306,21 +308,12 @@ func stubCommand(t *testing.T, dir, name string, status int) (command, log strin
 // status beside itself, cannot be told it is somewhere it is not.
 func copyExecutable(t *testing.T, from, to string) {
 	t.Helper()
-	source, err := os.Open(from)
+	content, err := os.ReadFile(from)
 	if err != nil {
-		t.Fatalf("open %s: %v", from, err)
+		t.Fatalf("read %s: %v", from, err)
 	}
-	defer source.Close()
-	destination, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
-	if err != nil {
-		t.Fatalf("create %s: %v", to, err)
-	}
-	if _, err := io.Copy(destination, source); err != nil {
-		_ = destination.Close()
+	if err := procgroup.WriteProgram(to, content, 0o755); err != nil {
 		t.Fatalf("copy %s to %s: %v", from, to, err)
-	}
-	if err := destination.Close(); err != nil {
-		t.Fatalf("close %s: %v", to, err)
 	}
 }
 

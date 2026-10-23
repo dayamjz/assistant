@@ -86,7 +86,43 @@ func Parse(origin Origin, data []byte) (Layer, error) {
 	if err := walk(origin, "", obj, layer.values); err != nil {
 		return Layer{}, err
 	}
+	if err := requireHerdr(layer.values); err != nil {
+		return Layer{}, err
+	}
 	return layer, nil
+}
+
+// requireHerdr refuses a document that names a remote host under a session
+// provider other than herdr, the default included, naming KeyRemoteHosts and
+// the provider. PRD section 8 makes herdr the provider remote hosts require,
+// so the provider stays one choice for the whole service. It is the one rule
+// of the schema that reads two keys, and so the one that runs once a document
+// is decoded rather than in a decoder, which consults no other key.
+//
+// One document decides it completely: both keys are global-only, so the
+// operator's document is the only one that may set either, and a repository
+// file carrying either was refused before this runs. A document that names
+// no host, or an empty list of them, is not refused whatever its provider.
+func requireHerdr(values map[Key]any) error {
+	hosts, _ := values[KeyRemoteHosts].([]RemoteHost)
+	if len(hosts) == 0 {
+		return nil
+	}
+	provider, set := values[KeySessionProvider].(SessionProvider)
+	which := "session_provider is " + quote(string(provider))
+	if !set {
+		provider = specByKey[KeySessionProvider].def.(SessionProvider)
+		which = "session_provider is " + quote(string(provider)) + ", the default"
+	}
+	if provider == SessionProviderHerdr {
+		return nil
+	}
+	return &KeyError{
+		Key:   KeyRemoteHosts,
+		Value: jsonText(hosts[0].Host),
+		Detail: "host 0 is named while " + which + "; a remote host requires session_provider " +
+			quote(string(SessionProviderHerdr)),
+	}
 }
 
 // checkNoRepeatedNames refuses a member name that appears more than once in
