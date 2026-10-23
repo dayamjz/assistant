@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -51,11 +52,12 @@ func instanceOf(t *testing.T, h *home.Home) string {
 // which names the file and the key. The same home with the file corrected
 // starts, so the refusal is the file's and not the start's.
 //
-// It runs serially, unlike most tests here: it starts a service as a process
-// of its own and waits on a bound for it to answer, which the load of the
-// package's parallel tests could exhaust, and serial tests run before any
-// parallel test resumes.
+// It runs serially, unlike most tests here: its start waits for the service
+// to answer through cli.AwaitReadinessUntilTheTestsDeadline rather than on a
+// bound a slow host misses (#543), which changes a package variable, and
+// serial tests run before any parallel test resumes.
 func TestAStartOnABadHomeConfigurationLaunchesNothingAndSaysWhy(t *testing.T) {
+	cli.AwaitReadinessUntilTheTestsDeadline(t)
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P7)
 	h := newHome(t)
@@ -93,11 +95,12 @@ func TestAStartOnABadHomeConfigurationLaunchesNothingAndSaysWhy(t *testing.T) {
 // same restart goes through to a different process, which is the control
 // showing the refusal is the file's.
 //
-// It runs serially, unlike most tests here: it starts a service as a process
-// of its own and waits on a bound for it to answer, which the load of the
-// package's parallel tests could exhaust, and serial tests run before any
-// parallel test resumes.
+// It runs serially, unlike most tests here: its start and its restarts wait
+// for a service to answer through cli.AwaitReadinessUntilTheTestsDeadline
+// rather than on a bound a slow host misses (#543), which changes a package
+// variable, and serial tests run before any parallel test resumes.
 func TestARestartOnABadHomeConfigurationLeavesTheServiceUp(t *testing.T) {
+	cli.AwaitReadinessUntilTheTestsDeadline(t)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	if got := run(t, h, "", "service", "start"); got.code != machine.ExitOK {
@@ -175,11 +178,12 @@ func TestAServiceThatCannotStartWritesWhyToItsLog(t *testing.T) {
 // and the log holds the cause. Here the home's database is a directory, which
 // the start's own read of the configuration cannot foresee.
 //
-// It runs serially, unlike most tests here: it starts a service as a process
-// of its own and waits on a bound for it to answer, which the load of the
-// package's parallel tests could exhaust, and serial tests run before any
-// parallel test resumes.
+// It runs serially, unlike most tests here: its start waits for the service
+// to answer through cli.AwaitReadinessUntilTheTestsDeadline rather than on a
+// bound a slow host misses (#543), which changes a package variable, and
+// serial tests run before any parallel test resumes.
 func TestAStartWhoseServiceExitsSaysSoAndPointsAtTheLog(t *testing.T) {
+	cli.AwaitReadinessUntilTheTestsDeadline(t)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	if err := os.MkdirAll(h.Database(), 0o700); err != nil {

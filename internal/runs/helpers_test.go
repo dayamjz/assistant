@@ -2,6 +2,7 @@ package runs_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -18,9 +20,23 @@ import (
 // reaches an agent does it through internal/agents/standin, so what a Result,
 // a refusal, or a recorded call is built from is a process's output read by
 // the production adapter.
+//
+// It also registers this package's temporary directory namespace, which the
+// database template internal/store/storetest makes lives in, and removes the
+// template once every test has run.
 func TestMain(m *testing.M) {
 	standin.Main()
-	os.Exit(m.Run())
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	code := m.Run()
+	storetest.Remove()
+	os.Exit(code)
 }
 
 // seamUserinfo is the shape internal/store's redaction seam covers. A store
@@ -36,9 +52,14 @@ func redactor() vcs.Redactor {
 
 // openStore opens a fresh store in a temporary directory and returns it with
 // its path, so a test that wants a restart can reopen the same database.
+// The path is seeded from internal/store/storetest's template first, which
+// that package's comment says is for time alone: what a test here proves is
+// about runs, and creating a database from nothing stays internal/store's
+// to test.
 func openStore(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
+	storetest.Seed(t, path)
 	return openStoreAt(t, path), path
 }
 
