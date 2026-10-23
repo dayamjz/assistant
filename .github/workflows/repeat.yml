@@ -48,11 +48,7 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -o pipefail
-          git diff --name-only "$BASE...$HEAD" > changed.txt
-          echo "$(wc -l < changed.txt) changed path(s) since the merge base with $BASE"
-          python3 scripts/repeat-plan.py --github-output "$GITHUB_OUTPUT" < changed.txt
+        run: python3 scripts/repeat-plan.py --base "$BASE" --head "$HEAD" --github-output "$GITHUB_OUTPUT"
 
   run:
     name: run (${{ matrix.os }})

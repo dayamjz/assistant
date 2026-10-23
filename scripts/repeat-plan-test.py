@@ -68,5 +68,55 @@ class PlanTest(unittest.TestCase):
             self.assertTrue(list((root / package).glob("*.go")), f"{package} has no Go files")
 
 
+def git(repo, *args):
+    """git in a test repository, with automatic maintenance off so no
+    background git outlives the test (#119)."""
+    return subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "user.name=test",
+                           "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", *args],
+                          cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+
+
+class ChangedPathsTest(unittest.TestCase):
+    """The plan of a real change between two commits, as the workflow asks
+    for it: repeat-plan.py --base BASE --head HEAD in the checkout."""
+
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp(prefix="repeat-plan-"))
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(self.repo)], check=False))
+        git(self.repo, "init", "-q", "-b", "main")
+        source = next(p for p in sorted((SCRIPT.parent.parent / "internal/service").glob("*.go"))
+                      if not p.name.endswith("_test.go"))
+        (self.repo / "internal/service").mkdir(parents=True)
+        (self.repo / "internal/journey").mkdir(parents=True)
+        (self.repo / "internal/service/move.go").write_text(source.read_text())
+        (self.repo / "internal/journey/doc.go").write_text("package journey\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "base")
+        self.base = git(self.repo, "rev-parse", "HEAD")
+
+    def plan(self):
+        head = git(self.repo, "rev-parse", "HEAD")
+        result = subprocess.run([sys.executable, str(SCRIPT), "--base", self.base, "--head", head],
+                                cwd=self.repo, capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+
+    def test_a_file_moved_out_of_a_covered_package_runs_that_package(self):
+        # The file leaves internal/service for internal/journey, its package
+        # line changed: git would call it a rename and name only where it
+        # went, which the gate does not cover.
+        git(self.repo, "mv", "internal/service/move.go", "internal/journey/move.go")
+        moved = self.repo / "internal/journey/move.go"
+        moved.write_text(moved.read_text().replace("package service", "package journey", 1))
+        git(self.repo, "commit", "-q", "-am", "move")
+        self.assertIn("./internal/service", self.plan()["packages"].split())
+
+    def test_a_change_outside_the_covered_packages_runs_nothing(self):
+        # The positive control: the same setup with a change the gate does
+        # not cover plans no run.
+        (self.repo / "internal/journey/doc.go").write_text("package journey\n\n// Doc.\n")
+        git(self.repo, "commit", "-q", "-am", "doc")
+        self.assertEqual(self.plan()["run"], False)
+
+
 if __name__ == "__main__":
     unittest.main()

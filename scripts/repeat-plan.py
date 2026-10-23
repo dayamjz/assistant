@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """What the repeat gate runs for a pull request's change.
 
-Run: git diff --name-only BASE...HEAD | python3 scripts/repeat-plan.py [--github-output FILE]
+Run: python3 scripts/repeat-plan.py --base BASE --head HEAD [--github-output FILE]
+(in the checkout), or with changed paths on standard input instead.
 
-It reads changed paths on standard input and prints the plan as JSON:
+It reads the paths a pull request changes since its merge base (changed_paths)
+and prints the plan as JSON:
 the Go packages to run with -race -count=N on both OSes, whether to repeat
 the leak check's own tests, and why. With --github-output it also writes
 the plan as step outputs (run, packages, leak_check_tests).
@@ -19,6 +21,7 @@ every package here, so the gate's own pull request shows it working.
 import argparse
 import json
 import os
+import subprocess
 import sys
 
 RISKY = {
@@ -42,6 +45,15 @@ def package_of(path):
     if "testdata" in parts[:-1]:
         return "/".join(parts[:parts.index("testdata")])
     return os.path.dirname(path)
+
+
+def changed_paths(base, head):
+    """Every path the change from BASE's merge base to HEAD touches. Renames
+    are not detected, so a file moved out of a package names that package
+    too: with them, git names only where a moved file went."""
+    out = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z", f"{base}...{head}"],
+                         capture_output=True, text=True, check=True, timeout=120).stdout
+    return [path for path in out.split("\0") if path]
 
 
 def plan(paths):
@@ -76,8 +88,13 @@ def plan(paths):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--github-output", metavar="FILE", help="also append the plan as step outputs here")
+    parser.add_argument("--base", help="the pull request's base commit (with --head)")
+    parser.add_argument("--head", help="the pull request's head commit (with --base)")
     args = parser.parse_args(argv)
-    result = plan(sys.stdin)
+    if bool(args.base) != bool(args.head):
+        parser.error("--base and --head go together")
+    paths = changed_paths(args.base, args.head) if args.base else sys.stdin
+    result = plan(paths)
     print(json.dumps(result, indent=2))
     if args.github_output:
         with open(args.github_output, "a", encoding="utf-8") as out:
