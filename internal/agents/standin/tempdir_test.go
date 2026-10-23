@@ -519,9 +519,14 @@ func main() {
 	}
 }
 
+// buildNamespaceProbe builds the probe's package pkg from the module at root
+// into out, through that module's workspace. It passes -mod=readonly, the
+// workspace default, because workspace mode refuses -mod=mod, and a flag on
+// the command line overrides what GOFLAGS says, from the environment or the
+// go env file, so the build does not depend on the caller's setting (#593).
 func buildNamespaceProbe(t *testing.T, root, pkg, out string, trimpath bool) string {
 	t.Helper()
-	args := []string{"build", "-o", out}
+	args := []string{"build", "-mod=readonly", "-o", out}
 	if trimpath {
 		args = append(args, "-trimpath")
 	}
