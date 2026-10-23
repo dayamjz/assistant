@@ -307,6 +307,28 @@ func fetchTrusted(ctx context.Context, bare *vcs.Repository, repository store.Re
 // and deleted once read.
 func taskTrustedRef(taskID string) string { return "refs/assistant/trusted/task/" + taskID }
 
+// dispatchTrustedRef is the name the gate repository holds the default
+// branch's tip under while a dispatch reads it for the task it is about to
+// place (placeable). It is named apart from taskTrustedRef so a promotion
+// and a dispatch of one task cannot overwrite or delete each other's fetch,
+// and it is deleted once read.
+func dispatchTrustedRef(taskID string) string { return "refs/assistant/trusted/dispatch/" + taskID }
+
+// trustedTaskLayer is trustedLayerAt for a read made on a task's behalf: it
+// opens the repository's gate repository, fetches the default branch under
+// ref, reads the copy there, and deletes ref afterwards, best effort; one
+// left behind is overwritten by the next read under the same name and read
+// by nothing else. Its refusals are trustedLayerAt's.
+func (s *Service) trustedTaskLayer(ctx context.Context, repository store.Repository, ref, forWhat string) (config.Layer, error) {
+	bare, err := s.gateRepositoryOf(ctx, repository, forWhat)
+	if err != nil {
+		return config.Layer{}, err
+	}
+	defer func() { _ = bare.DeleteRef(context.WithoutCancel(ctx), ref) }()
+	trusted, _, _, err := s.trustedLayerAt(ctx, bare, repository, ref, forWhat)
+	return trusted, err
+}
+
 // projectPosture is internal/tasks' ProjectPosture: the delivery posture a
 // repository's tasks are held to, PRD section 10's delivery key resolved
 // from the operator's layer and the repository's trusted copy at a fresh
@@ -318,17 +340,10 @@ func taskTrustedRef(taskID string) string { return "refs/assistant/trusted/task/
 // cannot be fetched, a document that cannot be read or parsed, and a trusted
 // copy naming a lighter posture than the operator's are ErrTrustedConfig, and
 // internal/tasks refuses the intake or the promotion on it rather than
-// assuming a posture. The reference the fetch landed under is
-// deleted afterwards, best effort; one left behind is overwritten by the
-// next read for the same task and read by nothing.
+// assuming a posture. The fetch lands under taskTrustedRef, through
+// trustedTaskLayer.
 func (s *Service) projectPosture(ctx context.Context, repository store.Repository, taskID string) (config.Delivery, error) {
-	bare, err := s.gateRepositoryOf(ctx, repository, "task "+taskID)
-	if err != nil {
-		return "", err
-	}
-	ref := taskTrustedRef(taskID)
-	defer func() { _ = bare.DeleteRef(context.WithoutCancel(ctx), ref) }()
-	trusted, _, _, err := s.trustedLayerAt(ctx, bare, repository, ref, "task "+taskID)
+	trusted, err := s.trustedTaskLayer(ctx, repository, taskTrustedRef(taskID), "task "+taskID)
 	if err != nil {
 		return "", err
 	}

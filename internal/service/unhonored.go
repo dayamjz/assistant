@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // errUnhonored is the class of refusalUnhonored's and
@@ -63,12 +65,12 @@ func refusalUnhonored(global config.Layer, cfg config.Config) error {
 // machine reports is the placement's to read, not this build's to assume.
 //
 // trustedLayerAt calls it on every trusted copy it parses, which is every
-// read of one this service takes: a run's, a delivery task's intake and promotion, and standing
-// consent's. What it does not cover: an investigation task's intake reads no
-// trusted copy, so an investigation of such a repository still runs on this
-// machine; and a delivery task taken before its default branch gained the key
-// is not read again at dispatch. Placing at dispatch is what closes both, and
-// that change removes the row from unhonoredKeys.
+// read of one this service takes: a run's, a delivery task's intake and
+// promotion, standing consent's, and the one placeable makes before a task's
+// first claim. So an investigation, whose intake reads no trusted copy, and a
+// delivery task taken before its default branch gained the key are both kept
+// queued at dispatch rather than placed here. The change that places by
+// architecture removes the row from unhonoredKeys.
 func refusalUnhonoredRepository(trusted config.Layer) error {
 	if k, set := unhonoredSet(trusted); set {
 		return fmt.Errorf("%w: %s is set, and this build places every task on this machine and by no architecture yet; remove it from the default branch's %s",
@@ -85,4 +87,36 @@ func unhonoredSet(layer config.Layer) (config.Key, bool) {
 		}
 	}
 	return "", false
+}
+
+// errTaskUnplaced is the class of placeable's refusals: the task was not
+// dispatched, claimed no attempt, and still resolves Dispatched, so it stays
+// queued for a later dispatch pass.
+var errTaskUnplaced = errors.New("service: the task was not placed on this machine")
+
+// placeable reads the repository's trusted copy before a task's first claim,
+// which is the one moment a task is placed, and refuses with errTaskUnplaced
+// when the copy does not allow this machine or cannot be read. The read is
+// trustedLayerAt's through trustedTaskLayer, so a copy setting a key of
+// unhonoredKeys is refused on refusalUnhonoredRepository's terms, and a copy
+// that cannot be fetched, read or parsed refuses too (P7): either way the
+// task is left queued rather than placed here on a guess. The fetch lands
+// under dispatchTrustedRef.
+//
+// It is what keeps a task from reaching this machine under a placement.arch
+// set after its intake, or under one an investigation's intake never read.
+// dispatchTask gives the slot back on this refusal, so the next dispatch
+// pass, at the next intake, release or open, reads the copy again and
+// dispatches the task once the key is gone.
+//
+// What it does not do is surface the task: the refusal is written to the
+// service's log, and the task reads Dispatched to anyone who asks. PRD
+// section 10 surfaces such a task at once and again each escalation_window;
+// that is the dispatch's placement to add (#526).
+func (s *Service) placeable(ctx context.Context, repository store.Repository, id string) error {
+	forWhat := "the dispatch of task " + id
+	if _, err := s.trustedTaskLayer(ctx, repository, dispatchTrustedRef(id), forWhat); err != nil {
+		return fmt.Errorf("%w: %s reads its repository's trusted configuration first: %w", errTaskUnplaced, forWhat, err)
+	}
+	return nil
 }

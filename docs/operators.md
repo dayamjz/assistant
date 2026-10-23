@@ -955,10 +955,11 @@ build does not act on them yet. The service refuses to start on a
 workers some other way. A repository whose default branch's `assistant.json`
 sets `placement.arch` is refused the same way, naming the key, wherever the
 service reads that copy: a run, a delivery task's intake or promotion, and
-standing consent. An investigation task reads no trusted copy, so an
-investigation of such a repository still runs on this machine, and a delivery
-task taken before the key was added is not checked again when it is
-dispatched.
+standing consent. A task of such a repository that reaches dispatch, an
+investigation or a delivery task taken before the key was added, is not
+dispatched: it stays queued, and the next dispatch pass after the key is
+removed dispatches it. Only the service log says why it waits; `assistant`
+does not surface it yet.
 
 Each launch records which adapter it chose on the task attempt in the home's
 database, once, as `adapter`, `route_reason` and `route_skipped`; no command
