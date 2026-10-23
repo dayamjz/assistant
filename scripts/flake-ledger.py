@@ -755,7 +755,9 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
             dict(zip(("run_id", "attempt", "job", "key", "token"), row)) for row in sorted({
                 (o["run_id"], o["attempt"], o["job"], e["key"], e["token"])
                 for e in failures for o in e["occurrences"]
-                if o["attempt"] < o["final_attempt"] and not e["issues"]["open"]})],
+                # Unknown issues are no answer here; the failed read makes the
+                # ledger exit 2 before --require-open-issues could pass it.
+                if o["attempt"] < o["final_attempt"] and e["issues"] is not None and not e["issues"]["open"]})],
         "failures": failures, "unattributed": unattributed, "reruns": rerun_rows, "problems": problems,
     }
 

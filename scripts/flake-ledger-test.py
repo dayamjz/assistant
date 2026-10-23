@@ -352,6 +352,12 @@ class LedgerTest(unittest.TestCase):
             (2, "test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt")])
         self.assertIn("## Re-run past with no open issue", text)
 
+    def test_a_rerun_check_without_the_issues_does_not_pass(self):
+        with mock.patch.object(ledger, "pause"):
+            status, _, _ = run_report(FakeGitHub(LOGS, broken={"issues"}), "--run", "39905430594",
+                                      "--require-open-issues")
+        self.assertEqual(status, 2)
+
     def test_an_open_issue_lets_a_rerun_pass(self):
         github = FakeGitHub(LOGS)
         for issue in github.data["issues"]:
