@@ -258,6 +258,11 @@ class FakeGitHub:
 
     def job_log(self, job_id):
         self.read.append(job_id)
+        jobs = [j for a in self.data["attempts"].values() for j in a["jobs"] if j["id"] == job_id]
+        if jobs and not jobs[0].get("steps"):
+            # As GitHub answers for a job cancelled before a runner took it
+            # (jobs 120513403886 and 120517498243): no steps, so no log.
+            raise ledger.GitHubError(f"log of job {job_id}: gh: HTTP 404")
         if job_id in self.unreadable:
             raise ledger.GitHubError(f"log of job {job_id}: HTTP 410")
         if self.flaky.get(job_id):
@@ -364,6 +369,51 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual([u["reason"] for u in data["unattributed"]], ["tests ran but no failure was named"])
         failures = {f["key"] for f in data["failures"]}
         self.assertIn("step: check (macos-latest) step Test", failures)
+
+    def test_a_cancelled_job_whose_tests_name_nothing_fails_the_ledger(self):
+        # The superseded job's Test step printed its output and named no
+        # failure: a cancel later in the job does not make that complete.
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "empty-group.log"
+            log.write_text("\n".join(framed(["FAIL"])))
+            github = FakeGitHub({**LOGS, 120290002840: log})
+            status, data, _ = run_report(github)
+        self.assertEqual(status, 3)
+        self.assertEqual([(u["job_id"], u["reason"]) for u in data["unattributed"]],
+                         [(120290002840, "tests ran but no failure was named")])
+        self.assertEqual(data["cancelled_jobs_not_counted"], {"superseded": 1, "cancelled": 0})
+
+    def test_a_job_cancelled_before_it_started_is_set_aside_without_a_log(self):
+        github = FakeGitHub(LOGS)
+        for attempt in github.data["attempts"].values():
+            for job in attempt["jobs"]:
+                if job["id"] == 120290002840:
+                    job["steps"] = []
+        status, data, text = run_report(github)
+        self.assertEqual(status, 0, text)
+        self.assertNotIn(120290002840, github.read)
+        self.assertEqual(data["cancelled_jobs_not_counted"], {"superseded": 2, "cancelled": 0})
+
+    def test_a_timeout_known_from_its_annotation_survives_an_unreadable_log(self):
+        status, data, text = run_report(FakeGitHub(LOGS, unreadable={120342424178}))
+        self.assertEqual(status, 2)
+        self.assertIn("HTTP 410", text)
+        self.assertEqual([u["job_id"] for u in data["unattributed"]], [120342424178])
+        timeout = next(f for f in data["failures"]
+                       if f["key"] == "job-timeout: check (macos-latest) exceeded timeout-minutes")
+        self.assertEqual([o["job_id"] for o in timeout["occurrences"]], [120342424178])
+
+    def test_an_unreadable_log_is_not_cached(self):
+        # A timed-out job's partial result is not its answer: the next run
+        # reads its log again.
+        with tempfile.TemporaryDirectory() as folder:
+            first, second = FakeGitHub(LOGS, unreadable={120342424178}), FakeGitHub(LOGS)
+            statuses = []
+            for github in (first, second):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    statuses.append(ledger.main(["--cache", folder], github=github))
+        self.assertEqual(statuses, [2, 0])
+        self.assertEqual(second.read, [120342424178])
 
     def test_the_cache_reads_a_finished_job_once(self):
         with tempfile.TemporaryDirectory() as folder:
