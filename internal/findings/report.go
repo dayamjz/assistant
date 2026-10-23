@@ -326,6 +326,34 @@ func (r Report) HasHeld() bool {
 	return false
 }
 
+// HasHeldNotStarted reports whether any finding holds for a person's decision
+// and stands in for work that never started, Finding.NotStarted. It is what
+// says a stage's hold may be answered by running the stage again.
+func (r Report) HasHeldNotStarted() bool {
+	for _, f := range r.Findings {
+		if f.Holds() && f.NotStarted {
+			return true
+		}
+	}
+	return false
+}
+
+// agentWritten returns the report with Finding.NotStarted cleared on every
+// finding, which is what the parse entry points return: the mark is the
+// program's to set, so a report an agent printed never carries it.
+func (r Report) agentWritten() Report {
+	if len(r.Findings) == 0 {
+		return r
+	}
+	out := make([]Finding, len(r.Findings))
+	for i, f := range r.Findings {
+		f.NotStarted = false
+		out[i] = f
+	}
+	r.Findings = out
+	return r
+}
+
 // AllNotes reports whether every finding is informational, which is the
 // condition under which a stage is approved as it stands. It is true for a
 // report with no findings at all, and it is defined as the absence of any

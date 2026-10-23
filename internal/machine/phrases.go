@@ -1286,17 +1286,17 @@ var (
 		CeilingReached: {
 			Outcome:     "This step did not start the agent call it needed, because agent use recorded for this home has reached the ceiling you set.",
 			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
-			Decision:    "Raise the ceiling in your own configuration and restart the service, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+			Decision:    "Once recorded use has aged out of the ceiling's window, or you have raised the ceiling in your own configuration and restarted the service, answer retry to run this step again; or answer to go on without the check.",
 		},
 		CeilingUnestablished: {
 			Outcome:     "This step did not start the agent call it needed, because some recorded calls did not report a count the ceiling you set is on, so the ceiling could not be weighed.",
 			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
-			Decision:    "Set the ceiling on counts every agent reports and restart the service, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+			Decision:    "Once those calls have aged out of the ceiling's window, or you have set the ceiling on counts every agent reports and restarted the service, answer retry to run this step again; or answer to go on without the check.",
 		},
 		CeilingUnread: {
 			Outcome:     "This step did not start the agent call it needed, because the record of agent use could not be read to weigh against the ceiling you set.",
 			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
-			Decision:    "Run assistant doctor, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+			Decision:    "Run assistant doctor, and once the record can be read, answer retry to run this step again; or answer to go on without the check.",
 		},
 	}
 )

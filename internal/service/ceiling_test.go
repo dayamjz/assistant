@@ -2,7 +2,9 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -352,5 +354,284 @@ func writeOperatorConfig(t *testing.T, path, document string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
 		t.Fatalf("writing the operator's configuration: %v", err)
+	}
+}
+
+// TestARunHeldOnTheUsageCeilingIsRetriedOnceThereIsRoom is PRD section 5's
+// Retry at the hold the usage ceiling raised, on the path a person takes:
+// the real executor, the review stage's own body, the production adapter
+// over the scripted stand-in, and this service's own invocation recorder.
+//
+// The first run's review reaches the operator's ceiling, so the second run
+// holds at review on the ceiling's ask. A retry while there is still no
+// room re-runs the stage, whose call the ceiling refuses again, and the run
+// holds on the same question with the stand-in still unasked: it does not
+// loop. The operator then raises the ceiling and restarts the service, and
+// a retry runs the review in the same run, which passes, so the run goes
+// on past review instead of being cancelled and started again.
+//
+// The first run's later hold is the control: it is not over a refused call,
+// so it does not list the retry, and a retry there is refused as the
+// caller's error with the decision still open.
+func TestARunHeldOnTheUsageCeilingIsRetriedOnceThereIsRoom(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	cost, _ := standin.DefaultUsage().InputTokens.Value()
+	writeOperatorConfig(t, h.ConfigFile(), "usage_ceiling:\n  window: 24h\n  input_tokens: "+strconv.FormatInt(cost, 10)+"\n")
+
+	recorder := &service.LateRecorder{}
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{{
+		Match: standin.MatchReview(),
+		Times: standin.Always,
+		Reply: standin.Reviewed("the change reads cleanly"),
+	}}}, agents.WithRecorder(recorder))
+	opts := options(t, h)
+	opts.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
+
+	var heldID string
+	withServiceOptions(t, opts, func(running serviceUnderTest) {
+		recorder.Bind(running.service)
+		retry := string(pipeline.OutcomeRetry)
+		control := startRun(t, running.client, subject)
+		if control.Decision == nil || control.Decision.Stage == pipeline.StageReview.String() {
+			t.Fatalf("the run under the ceiling holds at %+v, want a later stage", control.Decision)
+		}
+		if slices.Contains(control.Decision.Options, retry) {
+			t.Fatalf("the %s hold, over no refused call, lists %v", control.Decision.Stage, control.Decision.Options)
+		}
+		var refused machine.Run
+		err := running.client.Call(t.Context(), ipc.MethodRunRespond, machine.RespondRequest{Run: control.Record.ID, Answer: retry}, &refused)
+		if !errors.Is(err, ipc.ErrInvalidRequest) || !strings.Contains(err.Error(), "usage ceiling") {
+			t.Fatalf("a retry at the %s hold returned %v, want it refused as the caller's error", control.Decision.Stage, err)
+		}
+		var still machine.Run
+		if err := running.client.Call(t.Context(), ipc.MethodRunGet, machine.RunRequest{Run: control.Record.ID}, &still); err != nil {
+			t.Fatalf("reading the control run: %v", err)
+		}
+		if still.Decision == nil || still.Decision.Stage != control.Decision.Stage {
+			t.Fatalf("after the refused retry the run reports %+v, want its decision still open", still.Decision)
+		}
+
+		commitOn(t, subject, "past-the-ceiling", "past.txt")
+		held := startRun(t, running.client, subject)
+		if decision := holdingAt(t, held, pipeline.StageReview); !slices.Contains(decision.Options, retry) {
+			t.Fatalf("the ceiling's hold lists %v, want the retry", decision.Options)
+		}
+		heldID = held.Record.ID
+
+		again := answer(t, running.client, heldID, string(pipeline.OutcomeRetry))
+		decision := holdingAt(t, again, pipeline.StageReview)
+		if !carriesCeilingAsk(decision) {
+			t.Fatalf("the retry with no room holds on %+v, want the ceiling's ask again", decision.Findings)
+		}
+		if got := len(agent.Calls()); got != 1 {
+			t.Fatalf("the stand-in was asked %d times, want the retry with no room refused before it", got)
+		}
+	})
+
+	writeOperatorConfig(t, h.ConfigFile(), "usage_ceiling:\n  window: 24h\n  input_tokens: "+strconv.FormatInt(10*cost, 10)+"\n")
+	withServiceOptions(t, opts, func(running serviceUnderTest) {
+		recorder.Bind(running.service)
+		retried := answer(t, running.client, heldID, string(pipeline.OutcomeRetry))
+		if retried.Record.ID != heldID {
+			t.Fatalf("the retry answered run %s, want the held run %s", retried.Record.ID, heldID)
+		}
+		if review := stageView(t, retried, pipeline.StageReview); review.Outcome != pipeline.OutcomePassed || !review.Ran {
+			t.Fatalf("the retried review came back %s (ran %v), want it run and passed", review.Outcome, review.Ran)
+		}
+		if retried.Decision != nil && retried.Decision.Stage == pipeline.StageReview.String() {
+			t.Fatalf("the retried run still holds at review on %+v", retried.Decision.Findings)
+		}
+		if got := len(agent.Calls()); got != 2 {
+			t.Fatalf("the stand-in was asked %d times, want the retried review to have run", got)
+		}
+	})
+}
+
+// carriesCeilingAsk reports whether a decision holds on the ceiling's ask.
+// It reads the program's own mark, findings.Finding.NotStarted, rather than
+// the finding's identifier, which a hold a refused fix round left does not
+// keep: the stage's report gives it one of its own.
+func carriesCeilingAsk(d machine.Decision) bool {
+	for _, f := range d.Findings {
+		if f.NotStarted && f.Holds() && f.RemedyOutsideChange {
+			return true
+		}
+	}
+	return false
+}
+
+// TestALintFixRoundTheCeilingRefusedIsRetriedWithoutParking is Retry over a
+// fix round rather than a stage body, on the path a person takes: the real
+// executor, the lint stage running the operator's lint command, the fixer
+// through the production adapter over the stand-in, and this service's
+// invocation recorder. Review's one call reaches the operator's ceiling, so
+// the lint command's failure is a fix-eligible finding whose round the
+// ceiling refuses, and the run holds at lint on the ceiling's ask.
+//
+// Two retries while there is still no room each run lint first, which still
+// fails, and take the refused round again, which the ceiling refuses again,
+// so each holds on the same question with the stand-in unasked: the second is
+// the one that used to park the run converged on the fix round's way back,
+// taking the hold and its answers with it. The operator then raises the
+// ceiling and the service restarts, and lint is left to fail once more and
+// then pass, as a fix round that worked would leave it, since the stand-in
+// edits nothing; a retry runs lint, which fails, the refused round, the
+// stand-in's second call, and lint again, which passes, so the run goes on
+// past lint.
+func TestALintFixRoundTheCeilingRefusedIsRetriedWithoutParking(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "lint-fails")
+	once := filepath.Join(dir, "lint-fails-once")
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Fatalf("planting the lint failure: %v", err)
+	}
+	cost, _ := standin.DefaultUsage().InputTokens.Value()
+	// Lint fails while marker stands, and once more for each time once is
+	// planted, which the command removes as it fails.
+	lint := "if [ -f " + once + " ]; then rm " + once + "; exit 1; fi; test ! -f " + marker
+	config := func(ceiling int64) string {
+		return "commands:\n  test: 'true'\n  lint: '" + lint + "'\nusage_ceiling:\n  window: 24h\n  input_tokens: " +
+			strconv.FormatInt(ceiling, 10) + "\n"
+	}
+	writeOperatorConfig(t, h.ConfigFile(), config(cost))
+
+	recorder := &service.LateRecorder{}
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{
+		{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly")},
+		{Times: standin.Always, Reply: standin.Text("resolved the selected findings")},
+	}}, agents.WithRecorder(recorder))
+	opts := options(t, h)
+	opts.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
+
+	var heldID string
+	withServiceOptions(t, opts, func(running serviceUnderTest) {
+		recorder.Bind(running.service)
+		// Document is skipped: its own agent call would meet the ceiling
+		// first, and the stage under test is lint.
+		held := startRunSkipping(t, running.client, subject, pipeline.StageDocument)
+		decision := holdingAt(t, held, pipeline.StageLint)
+		if !carriesCeilingAsk(decision) || !slices.Contains(decision.Options, string(pipeline.OutcomeRetry)) {
+			t.Fatalf("the lint hold is %+v, want the ceiling's ask with the retry offered", decision)
+		}
+		if got := len(agent.Calls()); got != 1 {
+			t.Fatalf("the stand-in was asked %d times, want review's call only", got)
+		}
+		heldID = held.Record.ID
+		for i := 1; i <= 2; i++ {
+			again := answer(t, running.client, heldID, string(pipeline.OutcomeRetry))
+			if again.Outcome != machine.OutcomeDecision {
+				t.Fatalf("retry %d with no room left the run %s, want it held at lint again", i, again.Outcome)
+			}
+			if decision := holdingAt(t, again, pipeline.StageLint); !carriesCeilingAsk(decision) {
+				t.Fatalf("retry %d with no room holds on %+v, want the ceiling's ask again", i, decision.Findings)
+			}
+			if got := len(agent.Calls()); got != 1 {
+				t.Fatalf("after retry %d the stand-in was asked %d times, want the round refused before it", i, got)
+			}
+		}
+	})
+
+	if err := os.Remove(marker); err != nil {
+		t.Fatalf("clearing the lint failure: %v", err)
+	}
+	if err := os.WriteFile(once, nil, 0o600); err != nil {
+		t.Fatalf("leaving lint one more failure: %v", err)
+	}
+	writeOperatorConfig(t, h.ConfigFile(), config(10*cost))
+	withServiceOptions(t, opts, func(running serviceUnderTest) {
+		recorder.Bind(running.service)
+		retried := answer(t, running.client, heldID, string(pipeline.OutcomeRetry))
+		if lint := stageView(t, retried, pipeline.StageLint); lint.Outcome != pipeline.OutcomePassed {
+			t.Fatalf("the retried lint stage came back %s, want it passed after the retried round", lint.Outcome)
+		}
+		if retried.Decision != nil && retried.Decision.Stage == pipeline.StageLint.String() {
+			t.Fatalf("the retried run still holds at lint on %+v", retried.Decision.Findings)
+		}
+		if got := len(agent.Calls()); got != 2 {
+			t.Fatalf("the stand-in was asked %d times, want the retried round to have run once", got)
+		}
+		if _, err := os.Stat(once); !os.IsNotExist(err) {
+			t.Fatalf("lint's one more failure is still planted (%v), so the retry did not run lint before the round", err)
+		}
+	})
+}
+
+// TestARetryRunsLintBeforeTheFixRoundTheCeilingRefused is PRD section 5's
+// Retry, "the stage runs from the top", end to end over a lint fix round the
+// ceiling refused: the operator's lint command fails, the stand-in fixer's
+// call is refused, and the failure clears before the person retries. The
+// retry runs lint first, which passes, so the run goes on past lint without
+// a fixer call, whether the ceiling has room again or not: with room no
+// code-writing call is made that nothing needed, and without it the run is
+// not held on a ceiling question about a round nothing needs.
+func TestARetryRunsLintBeforeTheFixRoundTheCeilingRefused(t *testing.T) {
+	t.Parallel()
+	for _, room := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no room", true: "room"}[room], func(t *testing.T) {
+			t.Parallel()
+			requiresIdentifiedPeer(t)
+			h := newHome(t)
+			subject := newSubject(t)
+			recordRepository(t, h, subject)
+			marker := filepath.Join(t.TempDir(), "lint-fails")
+			if err := os.WriteFile(marker, nil, 0o600); err != nil {
+				t.Fatalf("planting the lint failure: %v", err)
+			}
+			cost, _ := standin.DefaultUsage().InputTokens.Value()
+			config := func(ceiling int64) string {
+				return "commands:\n  test: 'true'\n  lint: 'test ! -f " + marker + "'\nusage_ceiling:\n  window: 24h\n  input_tokens: " +
+					strconv.FormatInt(ceiling, 10) + "\n"
+			}
+			writeOperatorConfig(t, h.ConfigFile(), config(cost))
+
+			recorder := &service.LateRecorder{}
+			agent := standin.New(t, standin.Script{Steps: []standin.Step{
+				{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly")},
+				{Times: standin.Always, Reply: standin.Text("resolved the selected findings")},
+			}}, agents.WithRecorder(recorder))
+			opts := options(t, h)
+			opts.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
+
+			var heldID string
+			withServiceOptions(t, opts, func(running serviceUnderTest) {
+				recorder.Bind(running.service)
+				// Document is skipped: its own agent call would meet the
+				// ceiling first, and the stage under test is lint.
+				held := startRunSkipping(t, running.client, subject, pipeline.StageDocument)
+				if decision := holdingAt(t, held, pipeline.StageLint); !carriesCeilingAsk(decision) {
+					t.Fatalf("the lint hold is %+v, want the ceiling's ask over the refused round", decision)
+				}
+				heldID = held.Record.ID
+			})
+
+			if err := os.Remove(marker); err != nil {
+				t.Fatalf("clearing the lint failure: %v", err)
+			}
+			if room {
+				writeOperatorConfig(t, h.ConfigFile(), config(10*cost))
+			}
+			withServiceOptions(t, opts, func(running serviceUnderTest) {
+				recorder.Bind(running.service)
+				retried := answer(t, running.client, heldID, string(pipeline.OutcomeRetry))
+				if lint := stageView(t, retried, pipeline.StageLint); lint.Outcome != pipeline.OutcomePassed {
+					t.Fatalf("the retried lint stage came back %s, want it passed with the failure cleared", lint.Outcome)
+				}
+				if retried.Decision != nil && retried.Decision.Stage == pipeline.StageLint.String() {
+					t.Fatalf("the retried run still holds at lint on %+v", retried.Decision.Findings)
+				}
+				if got := len(agent.Calls()); got != 1 {
+					t.Fatalf("the stand-in was asked %d times, want review's call only: lint passed before any round", got)
+				}
+			})
+		})
 	}
 }
