@@ -42,6 +42,7 @@ import ctypes
 import errno
 import os
 from pathlib import Path
+import secrets
 import signal
 import stat
 import struct
@@ -690,7 +691,7 @@ def linux_leftovers(package):
 KINFO_PROC_SIZE = 648  # sizeof(struct kinfo_proc) from sys/sysctl.h, 64-bit
 SZOMB = 5  # extern_proc.p_stat of a process that has exited, from sys/proc.h
 P_WEXIT = 0x00002000  # extern_proc.p_flag of a process working on exiting, from sys/proc.h
-SANDBOX_FILTER_PATH = 1  # sandbox_check's filter for a path argument
+SANDBOX_FILTER_GLOBAL_NAME = 2  # sandbox_check's filter for a Mach service name; the guard's tests fail if wrong
 SANDBOX_CHECK_NO_REPORT = 0x40000000  # sandbox_check: do not log a denial
 SETTLE_READINGS = 64
 
@@ -757,14 +758,29 @@ class Sandbox:
     """A sandbox profile that marks a package's processes, and the reads that
     tell them apart.
 
-    The profile allows everything except reading one file, inside, and the
-    writes below, so a process in it denies inside and allows outside, two empty files in a
-    directory of their own. A process outside it allows both, and one in
-    another sandbox that denies both is not marked either. A process started
-    under the profile is in it after a new session, its parent's exit and
-    exec, and sandbox-exec run inside it fails before starting its command,
-    so a process the package starts cannot leave the mark that way; the
-    guard's tests check each of these on the machine they run on.
+    The mark is two Mach service names, inside and outside, each
+    "leak-check." and 128 random bits in hex, new for each package: the
+    profile allows everything except looking up inside, and the writes
+    below, so a process in it is denied inside and allowed outside. A
+    process in no sandbox is allowed both, and one in a sandbox that denies
+    the lookups it was not granted is denied both. Reading as marked takes
+    a rule that tells these two names apart, or a grant of outside alone:
+    inside is named only in this profile, and outside is in no profile and
+    leaves this process in no argument, so no other process can name it in
+    a rule or be issued a grant for it, and a rule written without either
+    name tells two random names apart only by chance. The mark was once a
+    pair of files in TMPDIR, and Spotlight's mdworker_shared, whose sandbox
+    at times allowed reading one of them and not the other, read as marked
+    and was failed and killed as a package's process (#551). The check makes
+    no files now: the guard's tests fail if Sandbox makes any under TMPDIR,
+    and check that a process in another sandbox granted a read of one file
+    is not marked. The profile has no rule a sandbox extension lifts, so a
+    process in it that consumes a grant to inside is still marked.
+    A process started under the profile is in it after a new session, its
+    parent's exit and exec, and sandbox-exec run inside it fails before
+    starting its command, so a process the package starts cannot leave the
+    mark that way; the guard's tests check each of these on the machine they
+    run on.
 
     Given unwritable, a directory, the profile also denies every write under
     it: package_run passes the per-user temp dir when TMPDIR is elsewhere
@@ -779,29 +795,25 @@ class Sandbox:
     cannot see.
     sandbox_check reads the mark of any pid; for a pid that is gone, and for
     a process that has begun exiting (darwin_records), it answers denied for
-    both files, which is not the mark.
+    both names, which is not the mark.
     """
 
     def __init__(self, unwritable=None):
-        self.folder = Path(tempfile.mkdtemp(prefix="leak-check-package-")).resolve()
-        self.inside = self.folder / "inside"
-        self.outside = self.folder / "outside"
-        self.inside.touch()
-        self.outside.touch()
-        for path in (self.inside, unwritable):
-            if path is not None and ('"' in str(path) or "\\" in str(path)):
-                raise RuntimeError(f"cannot quote {path} in a sandbox profile")
+        self.inside = f"leak-check.{secrets.token_hex(16)}"
+        self.outside = f"leak-check.{secrets.token_hex(16)}"
+        if unwritable is not None and ('"' in str(unwritable) or "\\" in str(unwritable)):
+            raise RuntimeError(f"cannot quote {unwritable} in a sandbox profile")
         self.profile = ("(version 1)(allow default)"
-                        f'(deny file-read-data (literal "{self.inside}"))')
+                        f'(deny mach-lookup (global-name "{self.inside}"))')
         if unwritable is not None:
             self.profile += f'(deny file-write* (subpath "{unwritable}"))'
         self.check = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True).sandbox_check
         self.check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
         self.check.restype = ctypes.c_int
 
-    def denies(self, pid, path):
-        return self.check(pid, b"file-read-data",
-                          SANDBOX_FILTER_PATH | SANDBOX_CHECK_NO_REPORT, str(path).encode())
+    def denies(self, pid, name):
+        return self.check(pid, b"mach-lookup",
+                          SANDBOX_FILTER_GLOBAL_NAME | SANDBOX_CHECK_NO_REPORT, name.encode())
 
     def marks(self, pid):
         """True when pid is in this sandbox, False when it is not or is gone,
@@ -810,11 +822,6 @@ class Sandbox:
         if inside < 0 or outside < 0:
             return None
         return inside == 1 and outside == 0
-
-    def remove(self):
-        for path in (self.inside, self.outside):
-            path.unlink(missing_ok=True)
-        self.folder.rmdir()
 
 
 def darwin_marked(sandbox):
@@ -947,33 +954,29 @@ def package_run(command):
     else:
         raise RuntimeError("the per-package check runs on Linux and macOS, "
                            f"and this is {sys.platform}")
-    try:
-        record = os.environ.get("LEAK_CHECK_RECORD")
-        if record:
-            with open(record, "a", encoding="utf-8") as out:
-                out.write(os.getcwd() + "\n")
-        child = os.posix_spawnp(command[0], command, os.environ)
+    record = os.environ.get("LEAK_CHECK_RECORD")
+    if record:
+        with open(record, "a", encoding="utf-8") as out:
+            out.write(os.getcwd() + "\n")
+    child = os.posix_spawnp(command[0], command, os.environ)
 
-        def forward(signum, _frame):
-            try:
-                os.kill(child, signum)
-            except ProcessLookupError:
-                pass
+    def forward(signum, _frame):
+        try:
+            os.kill(child, signum)
+        except ProcessLookupError:
+            pass
 
-        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
-            signal.signal(signum, forward)
-        while True:
-            pid, status = os.waitpid(-1 if sandbox is None else child, 0)
-            if pid == child:
-                break
-        package = os.getcwd()
-        if sandbox is None:
-            left = linux_leftovers(package)
-        else:
-            left = darwin_leftovers(package, sandbox)
-    finally:
-        if sandbox is not None:
-            sandbox.remove()
+    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+        signal.signal(signum, forward)
+    while True:
+        pid, status = os.waitpid(-1 if sandbox is None else child, 0)
+        if pid == child:
+            break
+    package = os.getcwd()
+    if sandbox is None:
+        left = linux_leftovers(package)
+    else:
+        left = darwin_leftovers(package, sandbox)
     if left:
         print(f"leak-check: package {package} left processes running", flush=True)
     if os.WIFSIGNALED(status):
