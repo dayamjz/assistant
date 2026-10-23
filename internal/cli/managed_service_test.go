@@ -196,11 +196,13 @@ func removeCalls(m *managed.Manager) []string {
 // a service launched the ordinary way is up is refused, and writes and asks
 // nothing.
 //
-// It runs serially, unlike most tests here: it starts a service as a process
-// of its own and waits on a bound for it to answer, which the load of the
-// package's parallel tests could exhaust, and serial tests run before any
-// parallel test resumes.
+// It runs serially, unlike most tests here: its ordinary start, its install
+// and its managed start wait for a service to answer through
+// cli.AwaitReadinessUntilTheTestsDeadline rather than on a bound a slow host
+// misses (#543), which changes a package variable, and serial tests run
+// before any parallel test resumes.
 func TestAManagedServiceIsInstalledStartedAndRemovedThroughTheManager(t *testing.T) {
+	cli.AwaitReadinessUntilTheTestsDeadline(t)
 	requiresIdentifiedPeer(t)
 	vocabtest.Control(t)
 	h := newHome(t)
