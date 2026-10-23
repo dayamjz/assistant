@@ -18,14 +18,14 @@ import (
 // started with heldFlag, never a shell loop: #432 found 23 loops waiting on
 // a release file left running with parent 1 on macOS, and #440 found the
 // same loop in internal/cli. A loop is /bin/sh, whose start environment
-// macOS does not show, so neither the owner sweep nor the check RunOwned
-// runs could see it, and nothing ended it once its test binary was killed,
-// timed out, or failed before the release. The held process is started
-// through env with the owner identity assigned in its environment
-// (HeldWait), so its arguments are only this package's flags; it ends with
-// the owner that variable names (WatchOwner, which a consuming TestMain
-// arms before Main), and it is a process of this binary, which the check
-// lists by executable.
+// some macOS machines do not show (carrying), so there neither the owner
+// sweep nor the check RunOwned runs could see it, and nothing ended it once
+// its test binary was killed, timed out, or failed before the release. The
+// held process is started through env with the owner identity assigned in
+// its environment (HeldWait), so its arguments are only this package's
+// flags; it ends with the owner that variable names (WatchOwner, which a
+// consuming TestMain arms before Main), and it is a process of this binary,
+// which the check lists by executable.
 //
 // The property HeldWait needs is that the held process ends with an owner
 // that will look for it: the test binary whose RunOwned check follows the

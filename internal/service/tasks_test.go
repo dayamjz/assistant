@@ -32,7 +32,7 @@ func queuedBehindABlocker(t *testing.T, h *home.Home, repository store.Repositor
 	if err != nil {
 		t.Fatalf("recording the blocker: %v", err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, b.ID, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, b.ID, store.OnThisMachine()); err != nil {
 		t.Fatalf("beginning the blocker's attempt: %v", err)
 	}
 	s, err := records.CreateTask(ctx, store.Task{

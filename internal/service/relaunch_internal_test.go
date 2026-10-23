@@ -583,14 +583,14 @@ func TestATaskWhoseSessionIsAnotherHomesIsNotReconciled(t *testing.T) {
 	if _, err := records.CreateTask(ctx, store.Task{ID: id, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: copyPath}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := records.BeginTaskAttempt(ctx, id, 0)
+	attempt, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine())
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The other home's reference, naming a process that is not running, so
 	// the one thing keeping it from reading Dead is the home marker.
 	foreign := session.Reference{Home: session.HomeMarker(other), Task: id, PID: 1 << 30, Start: 1}
-	if err := records.SetAttemptSession(ctx, id, attempt.Sequence, foreign.String()); err != nil {
+	if err := records.SetAttemptSession(ctx, id, attempt.Sequence, foreign.String(), store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	agent := workerStandIn(t)

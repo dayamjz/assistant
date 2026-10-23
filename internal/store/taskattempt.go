@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -33,7 +34,15 @@ type TaskAttempt struct {
 	// is unknown until SetAttemptSession fills it, which happens once, after
 	// the process starts; an attempt whose process never started keeps it
 	// unknown, and that is the record of a relaunch that did not come up.
+	// It names its task and never the machine: which machine the session is
+	// on is the task's Machine, read off the task's row.
 	SessionRef Optional[string] `json:"session_ref"`
+	// Host is the herdr server hosting the session of a worker on a remote
+	// host, its identifier and start time on that host's kernel, recorded
+	// with SessionRef and the one record of that server. It is zero for a
+	// task on this machine, for an attempt with no session, and for one
+	// recorded before the column existed.
+	Host SessionHost `json:"host"`
 	// Adapter is the coding-agent name agents.Route selected for this
 	// attempt's worker. It is unknown until SetAttemptRoute fills it, which
 	// happens once, before the process starts; an attempt that never reached
@@ -72,15 +81,23 @@ type TaskAttempt struct {
 }
 
 const taskAttemptColumns = `SELECT task_id, sequence, started_at, session_ref, adapter, route_reason, route_skipped, role, model, effort, ` +
-	`knowledge_commit, knowledge_digest`
+	`knowledge_commit, knowledge_digest, host_pid, host_start`
 
 func scanTaskAttempt(sc scanner) (TaskAttempt, error) {
 	var a TaskAttempt
 	var started string
 	var skipped Optional[string]
+	var hostPID, hostStart Optional[int64]
 	if err := sc.Scan(&a.TaskID, &a.Sequence, &started, &a.SessionRef, &a.Adapter, &a.RouteReason, &skipped, &a.Role, &a.Model, &a.Effort,
-		&a.KnowledgeCommit, &a.KnowledgeDigest); err != nil {
+		&a.KnowledgeCommit, &a.KnowledgeDigest, &hostPID, &hostStart); err != nil {
 		return TaskAttempt{}, err
+	}
+	if pid, ok := hostPID.Get(); ok {
+		start, known := hostStart.Get()
+		if pid <= 0 || !known || start < 0 {
+			return TaskAttempt{}, fmt.Errorf("columns host_pid and host_start: %d and %v name no process", pid, hostStart)
+		}
+		a.Host = SessionHost{PID: int(pid), Start: uint64(start)}
 	}
 	var err error
 	if a.RouteSkipped, err = skippedValue("route_skipped", skipped); err != nil {
@@ -92,16 +109,21 @@ func scanTaskAttempt(sc scanner) (TaskAttempt, error) {
 	return a, nil
 }
 
-// BeginTaskAttempt records the next attempt of a task, anchored to the
-// highest attempt sequence the caller had seen, and returns it.
+// BeginTaskAttempt records the next attempt of a task after its first,
+// anchored to the highest attempt sequence the caller had seen, and returns
+// it. The first attempt is the dispatch, which places the task, and is
+// BeginFirstTaskAttempt's: an expectedLatest below one is refused with
+// ErrFirstAttemptIsDispatch before anything is read. Every attempt this
+// records runs on the machine the first one recorded, which it does not
+// write.
 //
-// expectedLatest is zero for a task the caller saw no attempt of. The anchor
-// is decided in the same transaction as the insert, on the single writer
-// connection, so two callers that both saw the same latest attempt cannot
-// both begin the next: one is accepted and assigned expectedLatest+1, and the
-// other is refused with a *TaskMovedError wrapping ErrTaskMoved that names
-// where the attempts actually stand. That is the dispatch claim and the
-// relaunch claim: whichever caller wins is the one the attempt belongs to.
+// The anchor is decided in the same transaction as the insert, on the single
+// writer connection, so two callers that both saw the same latest attempt
+// cannot both begin the next: one is accepted and assigned expectedLatest+1,
+// and the other is refused with a *TaskMovedError wrapping ErrTaskMoved that
+// names where the attempts actually stand. That is the relaunch claim, and
+// the claim of a dispatch retried after an attempt that never launched:
+// whichever caller wins is the one the attempt belongs to.
 //
 // It returns ErrNotFound, wrapped, for a task that does not exist. It records
 // no state and launches nothing: the record precedes the process, and the
@@ -110,26 +132,16 @@ func (s *Store) BeginTaskAttempt(ctx context.Context, taskID string, expectedLat
 	if strings.TrimSpace(taskID) == "" {
 		return TaskAttempt{}, fmt.Errorf("store: no task named")
 	}
+	if expectedLatest < 1 {
+		return TaskAttempt{}, fmt.Errorf("store: task %s: %w", taskID, ErrFirstAttemptIsDispatch)
+	}
 	now := nowUTC()
-	var sequence int64
+	sequence := expectedLatest + 1
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		if err := taskExists(ctx, tx, taskID); err != nil {
+		if err := anchorTaskAttemptTx(ctx, tx, taskID, expectedLatest); err != nil {
 			return err
 		}
-		var stands int64
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COALESCE(MAX(sequence), 0) FROM task_attempt WHERE task_id = ?`, taskID).
-			Scan(&stands); err != nil {
-			return err
-		}
-		if stands != expectedLatest {
-			return &TaskMovedError{Task: taskID, Anchor: AnchoredAttempt, Expected: expectedLatest, Stands: stands}
-		}
-		sequence = stands + 1
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO task_attempt (task_id, sequence, started_at, session_ref) VALUES (?, ?, ?, NULL)`,
-			taskID, sequence, encodeTime(now))
-		return err
+		return insertTaskAttemptTx(ctx, tx, taskID, sequence, now)
 	})
 	if err != nil {
 		var moved *TaskMovedError
@@ -141,29 +153,77 @@ func (s *Store) BeginTaskAttempt(ctx context.Context, taskID string, expectedLat
 	return TaskAttempt{TaskID: taskID, Sequence: sequence, StartedAt: now}, nil
 }
 
-// SetAttemptSession records the session the attempt's process runs in. It is
-// one revision an attempt's row takes, and it takes it once: a second call on
-// the same attempt is refused with ErrAttemptSessionRecorded, because a
-// process that was replaced is a new attempt. An empty reference is refused,
-// and an attempt that does not exist is ErrNotFound, wrapped.
-func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence int64, sessionRef string) error {
+// anchorTaskAttemptTx refuses, with a *TaskMovedError, a task whose highest
+// attempt is not expectedLatest, and with ErrNotFound one that does not
+// exist.
+func anchorTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, expectedLatest int64) error {
+	if err := taskExists(ctx, tx, taskID); err != nil {
+		return err
+	}
+	var stands int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(sequence), 0) FROM task_attempt WHERE task_id = ?`, taskID).
+		Scan(&stands); err != nil {
+		return err
+	}
+	if stands != expectedLatest {
+		return &TaskMovedError{Task: taskID, Anchor: AnchoredAttempt, Expected: expectedLatest, Stands: stands}
+	}
+	return nil
+}
+
+// insertTaskAttemptTx writes attempt sequence of the task, with no session.
+func insertTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, sequence int64, at time.Time) error {
+	_, err := tx.ExecContext(ctx,
+		`INSERT INTO task_attempt (task_id, sequence, started_at, session_ref) VALUES (?, ?, ?, NULL)`,
+		taskID, sequence, encodeTime(at))
+	return err
+}
+
+// SetAttemptSession records the session the attempt's process runs in and,
+// for a task on a remote host, the herdr server hosting it, in one write. It
+// is one revision an attempt's row takes, and it takes it once: a second call
+// on the same attempt is refused with ErrAttemptSessionRecorded, because a
+// process that was replaced is a new attempt, and the schema refuses a
+// rewrite of either on the same terms. An empty reference is refused, and an
+// attempt that does not exist is ErrNotFound, wrapped.
+//
+// The host goes with the task's machine, read in the same transaction: a
+// task on a remote host is refused with ErrRemoteSessionWithoutHost when host
+// names no process, and a task on this machine with
+// ErrSessionHostOnThisMachine when it names one. The reference itself names
+// no machine.
+func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence int64, sessionRef string, host SessionHost) error {
 	if strings.TrimSpace(sessionRef) == "" {
 		return fmt.Errorf("store: task %s attempt %d: the session reference is empty", taskID, sequence)
 	}
 	return s.inTx(ctx, func(tx *sql.Tx) error {
-		var recorded Optional[string]
+		var recorded, machine Optional[string]
 		err := tx.QueryRowContext(ctx,
-			`SELECT session_ref FROM task_attempt WHERE task_id = ? AND sequence = ?`, taskID, sequence).
-			Scan(&recorded)
+			`SELECT a.session_ref, t.machine FROM task_attempt a JOIN task t ON t.id = a.task_id
+			WHERE a.task_id = ? AND a.sequence = ?`, taskID, sequence).
+			Scan(&recorded, &machine)
 		if err != nil {
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, errNoRows(err))
 		}
 		if recorded.IsKnown() {
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrAttemptSessionRecorded)
 		}
+		var hostPID, hostStart any
+		switch name, remote := machine.Get(); {
+		case remote && !host.Known():
+			return fmt.Errorf("store: task %s attempt %d on %s: %w", taskID, sequence, name, ErrRemoteSessionWithoutHost)
+		case !remote && host.Known():
+			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrSessionHostOnThisMachine)
+		case remote:
+			if host.Start > math.MaxInt64 {
+				return fmt.Errorf("store: task %s attempt %d: the session host's start time %d does not fit the record", taskID, sequence, host.Start)
+			}
+			hostPID, hostStart = host.PID, int64(host.Start)
+		}
 		_, err = tx.ExecContext(ctx,
-			`UPDATE task_attempt SET session_ref = ? WHERE task_id = ? AND sequence = ?`,
-			sessionRef, taskID, sequence)
+			`UPDATE task_attempt SET session_ref = ?, host_pid = ?, host_start = ? WHERE task_id = ? AND sequence = ?`,
+			sessionRef, hostPID, hostStart, taskID, sequence)
 		if err != nil {
 			return fmt.Errorf("store: task %s attempt %d: recording its session: %w", taskID, sequence, err)
 		}
