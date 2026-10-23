@@ -272,10 +272,29 @@ func isSweep(args []string) bool {
 // the moment between that check and the signal; it does not close it. It
 // reports whether p had to be killed.
 func (p Process) End() bool {
+	if !p.signal(syscall.SIGTERM) {
+		return false
+	}
+	return p.killUnlessGone()
+}
+
+// signal sends p sig once its identity has been read to still name the
+// running process, End's check before each signal, and reports whether it
+// read so and sent sig; a process read as gone, or whose identity could not
+// be read, is sent nothing.
+func (p Process) signal(sig syscall.Signal) bool {
 	if presence, err := p.Presence(); err != nil || presence != agents.PresencePresent {
 		return false
 	}
-	_ = syscall.Kill(p.PID, syscall.SIGTERM)
+	_ = syscall.Kill(p.PID, sig)
+	return true
+}
+
+// killUnlessGone is the rest of End once p has been sent SIGTERM: it waits
+// up to EndGrace for p to go, then sends SIGKILL to its group when it leads
+// one and to it otherwise, after the same check of its identity, and
+// reports whether p had to be killed.
+func (p Process) killUnlessGone() bool {
 	if p.GoneWithin(EndGrace) {
 		return false
 	}
@@ -365,8 +384,10 @@ func stayed(ps []Process, grace time.Duration) []Process {
 // once this binary is gone, so the binary AtTerminal ran again outliving a
 // killed outer one is watchOuter's to end, and a terminal server outliving
 // a killed owner the owner sweep's, and no check in that run reports
-// either. A failed check ends what it names; what that ending starts, it
-// leaves to the sweep.
+// either. A failed check ends what it names as one set (endAll), so each
+// process it names has been sent its own SIGTERM before any child of its it
+// names is sent one; what that ending starts all the same, within what
+// endAll does not cover, it leaves to the sweep.
 func leftAfterTests() bool {
 	self, err := os.Executable()
 	if err != nil {

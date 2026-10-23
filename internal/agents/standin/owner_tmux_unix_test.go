@@ -257,7 +257,11 @@ func tmuxOwnerTests(dir, mode string) int {
 // shell first; and the shell, which the check names and ends itself where
 // its environment can be read, clears its EXIT trap on SIGTERM before it
 // exits (macOS's /bin/sh, which is bash, runs the EXIT trap on a signal
-// that ends it otherwise), so an ended chain starts nothing more.
+// that ends it otherwise). Its sleep ending first would run the shell on to
+// its EXIT trap all the same, which ending the three from goroutines of
+// their own let happen (#558); the check ends them as one set (endAll),
+// each before its children, so this process and then the shell have been
+// sent SIGTERM before the sleep is, and an ended chain starts nothing more.
 func trapExitMain() int {
 	self, err := os.Executable()
 	if err != nil {

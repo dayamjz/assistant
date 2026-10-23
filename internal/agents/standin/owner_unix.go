@@ -479,14 +479,88 @@ func sweep(value, wrapperDir string) int {
 	return code
 }
 
-// endAll ends every process in ps at once rather than one after another, so
-// a process that takes its whole EndGrace does not hold up the rest.
+// endAll ends every process in ps as one set (endSet), signalling each with
+// End's check of its identity first (Process.signal).
 func endAll(ps []Process) {
+	endSet(ps, Process.signal)
+}
+
+// endSet ends every process in ps as one set. It sends each SIGTERM with
+// send, which reports whether it sent it, every process before any child of
+// its in ps (parentsFirst), and only then gives each it signalled EndGrace to
+// exit, all at once rather than one after another, so one that takes its
+// whole EndGrace does not hold up the rest; one still running then is killed
+// as End kills one.
+//
+// The order is what makes the processes one set. A process can act on its
+// child's ending: a shell whose child ends runs on to its EXIT trap, which
+// can start a process no listing has seen. Each sent SIGTERM from a
+// goroutine of its own, as End once sent it here, whether the child or the
+// shell met its signal first was the scheduler's choice, and a check that
+// ended the last of a chain of such shells could start the next process
+// itself (#558). Sent parents first, a process has been sent its own
+// SIGTERM before any child of its in ps is sent one, however long the
+// sender is held between the two.
+//
+// What it does not cover: a process whose parent cannot be read is ordered
+// as though it had none in ps (parentsFirst); a process that learns of the
+// ending of one in ps that is not its child, a sibling's through a pipe for
+// one, can act on it before its own SIGTERM when that one comes first; and
+// what a process does on its own SIGTERM is its own, so what that starts is
+// left to whoever lists next.
+func endSet(ps []Process, send func(Process, syscall.Signal) bool) {
+	var signalled []Process
+	for _, p := range parentsFirst(ps) {
+		if send(p, syscall.SIGTERM) {
+			signalled = append(signalled, p)
+		}
+	}
 	var wg sync.WaitGroup
-	for _, p := range ps {
-		wg.Go(func() { p.End() })
+	for _, p := range signalled {
+		wg.Go(func() { p.killUnlessGone() })
 	}
 	wg.Wait()
+}
+
+// parentsFirst is ps ordered so that each process comes after the one in ps
+// that is its parent, and otherwise in ps's order. A process's parent is read
+// from the kernel (agents.ReadLineage), and the one in ps with that
+// identifier is taken for it only when the read is of the process ps names
+// and that one started no later than it, since a process starts after its
+// parent (agents.Lineage); a process whose parent cannot be read so is
+// ordered as though it had none in ps.
+func parentsFirst(ps []Process) []Process {
+	byPID := map[int]Process{}
+	for _, p := range ps {
+		byPID[p.PID] = p
+	}
+	parentOf := map[agents.Identity]Process{}
+	for _, p := range ps {
+		lineage, found, err := agents.ReadLineage(p.PID)
+		if err != nil || !found || lineage.Identity != p.Identity {
+			continue
+		}
+		if parent, ok := byPID[lineage.Parent]; ok && parent.Identity != p.Identity && parent.Start <= p.Start {
+			parentOf[p.Identity] = parent
+		}
+	}
+	ordered := make([]Process, 0, len(ps))
+	placed := map[agents.Identity]bool{}
+	var place func(Process)
+	place = func(p Process) {
+		if placed[p.Identity] {
+			return
+		}
+		placed[p.Identity] = true
+		if parent, ok := parentOf[p.Identity]; ok {
+			place(parent)
+		}
+		ordered = append(ordered, p)
+	}
+	for _, p := range ps {
+		place(p)
+	}
+	return ordered
 }
 
 // WatchOwner has this process end once the test binary named by OwnerVar is
