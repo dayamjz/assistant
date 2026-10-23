@@ -3,8 +3,10 @@
 ## Overview
 
 `assistant` drives coding agents through their CLIs. It does not call provider
-HTTP APIs directly. Supported adapters are Cursor (Agent CLI), Claude Code,
-OpenAI, and Grok Build.
+HTTP APIs directly. Adapters include Claude Code, Cursor Agent CLI, OpenAI Codex CLI,
+Grok Build, and a legacy OpenAI stub. Their supported worker/session
+capabilities differ; a supported adapter is not necessarily eligible for
+automatic selection.
 
 ## Pick the right section
 
@@ -95,8 +97,8 @@ named in `agent`. `assistant doctor` lists any that resolve on PATH under
 "named-only agents".
 
 ```yaml
-# .assistant.yaml
-# No agent configuration needed - uses auto → Claude when present
+# ~/.assistant/config.yaml (operator configuration)
+# No agent override needed: auto selects Claude when available
 ```
 
 ### Explicit Agent Selection
