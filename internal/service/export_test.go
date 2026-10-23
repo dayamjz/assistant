@@ -82,6 +82,17 @@ func WithDiscardInterruptForTest(tb testing.TB, o Options, f func() error) Optio
 	return o
 }
 
+// WithDiscardRemovalSeamsForTest returns o with a discard's seams set, for
+// this package's external tests: inWindow runs after the removal's last
+// read of the copy and before the removal, and beforeMark after the
+// removal and before the entry is marked, a discard whose beforeMark
+// returns an error ending with the copy gone and the entry unmarked, as a
+// service that stopped there leaves it. Either may be nil.
+func WithDiscardRemovalSeamsForTest(tb testing.TB, o Options, inWindow func(), beforeMark func() error) Options {
+	o.discardRemovalTest, o.inDiscardWindow, o.interruptDiscardMark = tb, inWindow, beforeMark
+	return o
+}
+
 // WithCleanupAskSpacingForTest returns o with the spacing the supervisor
 // pass leaves between two asks of one landed task's cleanup set to d, for
 // this package's external tests, which cannot wait landedAskSpacing.

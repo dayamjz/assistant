@@ -669,14 +669,16 @@ func (s *Store) ConfirmKeptWorkDiscard(ctx context.Context, id int64, digest str
 	return out, nil
 }
 
-// ErrKeptWorkNotConfirmed is returned by WithdrawKeptWorkDiscard for an
-// entry that holds no discard confirmation, or one of another digest.
+// ErrKeptWorkNotConfirmed is returned by WithdrawKeptWorkDiscard and
+// RecordKeptWorkDiscardRead for an entry that holds no discard
+// confirmation, or one of another digest.
 var ErrKeptWorkNotConfirmed = errors.New("store: the kept work entry holds no discard confirmation of that digest")
 
 // WithdrawKeptWorkDiscard takes back the discard confirmation of digest from
 // an entry still unanswered, which the caller does when the copy no longer
 // holds what the confirmation was shown: the entry is open again with no
-// confirmation, to be shown and answered afresh. An entry answered is
+// confirmation and no read recorded under it, to be shown and answered
+// afresh. An entry answered is
 // ErrKeptWorkAnswered, and one with no confirmation of that digest
 // ErrKeptWorkNotConfirmed. It removes nothing.
 func (s *Store) WithdrawKeptWorkDiscard(ctx context.Context, id int64, digest string) (KeptWork, error) {
@@ -693,7 +695,7 @@ func (s *Store) WithdrawKeptWorkDiscard(ctx context.Context, id int64, digest st
 			return ErrKeptWorkNotConfirmed
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET discard_digest = NULL, discard_lacks = NULL, discard_by = NULL,
-			discard_confirmed_at = NULL WHERE id = ?`, id); err != nil {
+			discard_confirmed_at = NULL, discard_read_at = NULL WHERE id = ?`, id); err != nil {
 			return err
 		}
 		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
@@ -1177,6 +1179,38 @@ func (s *Store) KeptWorkCarryOnsOwed(ctx context.Context) ([]KeptWork, error) {
 	return out, nil
 }
 
+// RecordKeptWorkDiscardRead records at as when the read of the copy the
+// removal of digest's confirmation is held to began, which the caller
+// writes once that read found the copy holding what the confirmation was
+// shown and before the removal: MarkKeptWorkDiscarded bounds the entries
+// it takes by it, so the bound is the read the removal was held to even
+// when the mark is left to a later call that finds the copy gone. A later
+// read of a copy still standing records its own. An entry answered is
+// ErrKeptWorkAnswered, one closed ErrKeptWorkClosed, and one holding no
+// confirmation of digest ErrKeptWorkNotConfirmed; nothing is written then.
+func (s *Store) RecordKeptWorkDiscardRead(ctx context.Context, id int64, digest string, at time.Time) error {
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		if err != nil {
+			return errNoRows(err)
+		}
+		switch {
+		case k.Answered():
+			return ErrKeptWorkAnswered
+		case k.Closure.IsKnown():
+			return ErrKeptWorkClosed
+		case digest == "" || k.DiscardDigest.Or("") != digest:
+			return ErrKeptWorkNotConfirmed
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE kept_work SET discard_read_at = ? WHERE id = ?`, encodeTime(at), id)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("store: recording when the read of kept work entry %d's copy for its discard began: %w", id, err)
+	}
+	return nil
+}
+
 // ErrKeptWorkNotDiscard is returned by MarkKeptWorkDiscarded for an entry
 // that holds no discard confirmation.
 var ErrKeptWorkNotDiscard = errors.New("store: the kept work entry holds no discard confirmation")
@@ -1189,18 +1223,22 @@ var ErrKeptWorkDiscarded = errors.New("store: the kept work entry is already dis
 // shown is gone, the discard's second fact, once: the entry is answered
 // discard, by who confirmed and as of when, with the instant the copy
 // went, in one write that also answers and marks every other open entry
-// of the same copy kept by read, or by the confirmation when that is
-// later, the copy kept again at another state, with the same
-// confirmation, since the copy is gone for all of them. read is when the
-// caller began the read of the copy its removal was held to: an entry kept
+// of the same copy kept by the read the removal was held to began, or by
+// the confirmation when that is later, the copy kept again at another
+// state, with the same confirmation, since the copy is gone for all of
+// them. The read is the one RecordKeptWorkDiscardRead recorded on the
+// entry, never the caller's clock, so a mark left to a call that finds the
+// copy gone is bounded by the read the removal was held to: an entry kept
 // by then was kept from a state that read covers, and one kept after it
-// may hold what the removal destroyed unread, and is left open. An entry already
+// may hold what the removal destroyed unread, and is left open. With no
+// read recorded, a copy that went without a removal of this confirmation,
+// the bound is the confirmation. An entry already
 // marked is ErrKeptWorkDiscarded, one answered otherwise
 // ErrKeptWorkAnswered, one closed on a proof ErrKeptWorkClosed, one with no
 // confirmation ErrKeptWorkNotDiscard, and an unknown identifier
 // ErrNotFound. It records and removes nothing else; the removal is the
 // caller's, made before this.
-func (s *Store) MarkKeptWorkDiscarded(ctx context.Context, id int64, read time.Time) (KeptWork, error) {
+func (s *Store) MarkKeptWorkDiscarded(ctx context.Context, id int64) (KeptWork, error) {
 	var out KeptWork
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
@@ -1218,11 +1256,12 @@ func (s *Store) MarkKeptWorkDiscarded(ctx context.Context, id int64, read time.T
 			return ErrKeptWorkNotDiscard
 		}
 		var digest, lacks, by, confirmed string
-		if err := tx.QueryRowContext(ctx, `SELECT discard_digest, discard_lacks, discard_by, discard_confirmed_at FROM kept_work WHERE id = ?`,
-			id).Scan(&digest, &lacks, &by, &confirmed); err != nil {
+		var read sql.NullString
+		if err := tx.QueryRowContext(ctx, `SELECT discard_digest, discard_lacks, discard_by, discard_confirmed_at, discard_read_at
+			FROM kept_work WHERE id = ?`, id).Scan(&digest, &lacks, &by, &confirmed, &read); err != nil {
 			return err
 		}
-		through := max(confirmed, encodeTime(read.UTC()))
+		through := max(confirmed, read.String)
 		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = 'discard', answered_by = ?, answered_at = ?, discard_digest = ?,
 			discard_lacks = ?, discard_by = ?, discard_confirmed_at = ?, discarded_at = ?
 			WHERE id = ? OR (copy_path = ? AND answer IS NULL AND closure IS NULL AND discard_digest IS NULL AND kept_at <= ?)`,

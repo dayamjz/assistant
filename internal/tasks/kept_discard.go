@@ -728,15 +728,17 @@ func hashFile(path string) (string, error) {
 // that would be lost now and was not shown is refused; and every one of
 // them must be lost now or held by the default branch, so one the copy no
 // longer holds is refused. Each refusal is ErrLossChanged. gate is the gate
-// repository a run's copy is a worktree of, and is not read for a task's. A
-// copy already gone returns the zero Loss and no error.
+// repository a run's copy is a worktree of, and is not read for a task's.
+// beforeRemoval, when not nil, runs once every check has passed and before
+// the removal, and an error it returns is returned with nothing removed. A
+// copy already gone returns the zero Loss and no error, and runs nothing.
 //
 // What the commit check does not cover: a default branch that moved only
 // forward over commits the copy does not hold changes nothing here, and one
 // that took up commits the copy holds shrinks the loss, both of which
 // proceed; one that was rewound or force-pushed past a commit it had can
 // make the copy the only place that commit is, which is refused.
-func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest string, shown []string, gatePath string) (Loss, error) {
+func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest string, shown []string, gatePath string, beforeRemoval func() error) (Loss, error) {
 	loss, gone, err := c.loss(ctx, entry, shown)
 	if errors.Is(err, ErrCopyGone) {
 		return Loss{}, nil
@@ -760,8 +762,10 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 		return Loss{}, fmt.Errorf("%w: the copy no longer holds %s, which the discard was shown as lost and the default branch does not hold",
 			ErrLossChanged, strings.Join(gone, ", "))
 	}
-	if c.betweenDiscardReadAndRemoval != nil {
-		c.betweenDiscardReadAndRemoval()
+	if beforeRemoval != nil {
+		if err := beforeRemoval(); err != nil {
+			return Loss{}, err
+		}
 	}
 	if entry.TaskID.IsKnown() {
 		if err := os.RemoveAll(entry.CopyPath); err != nil {

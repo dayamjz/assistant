@@ -655,7 +655,9 @@ changed meanwhile, your confirmation is withdrawn, the copy stays, and
 the entry is listed again for you to look at and answer afresh. A copy
 kept again at another state has an entry for each state; discarding the
 copy answers and closes all of them kept by the time its removal read the
-copy, as carrying it on does for those kept by the time you answered. While one entry of a copy has an answer still being
+copy, also when the service stopped after the removal and the next start
+finishes it, and one kept after that read stays listed; carrying it on
+does the same for those kept by the time you answered. While one entry of a copy has an answer still being
 carried out (a landing whose run is not started yet, a carry on or a
 discard not finished), the copy's other entries are not answered, and the
 task is not promoted; the answer under way finishes on its own or at the

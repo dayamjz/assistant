@@ -209,6 +209,11 @@ const keptWorkCarryOnMigration = "kept work carry-on task"
 // copy went, for the reason sealCheckpointTableMigration is a constant.
 const keptWorkDiscardMigration = "kept work discard"
 
+// keptWorkDiscardReadMigration names the migration that adds when the read
+// a discard's removal was held to began, for the reason
+// sealCheckpointTableMigration is a constant.
+const keptWorkDiscardReadMigration = "kept work discard read"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2643,6 +2648,36 @@ var schema = []migration{
 				WHEN OLD.discarded_at IS NOT NULL OR NEW.discarded_at IS NULL OR NEW.discard_digest IS NULL OR NEW.answer IS NOT 'discard'
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a kept work entry is discarded once, with its discard answer, on the confirmation that was shown what it loses');
+				END`,
+		},
+	},
+	{
+		version: 61,
+		name:    keptWorkDiscardReadMigration,
+		statements: []string{
+			// When the read of the copy a discard's removal was held to
+			// began, recorded by RecordKeptWorkDiscardRead once that read
+			// found the copy holding what the confirmation was shown and
+			// before the removal, so the mark bounds the entries it takes
+			// by that read even when a service that stopped after the
+			// removal leaves the mark to the next start, which finds the
+			// copy gone and reads nothing. It is written only under the
+			// confirmation of an entry neither answered nor closed, moved
+			// by each read a later call makes of a copy still standing,
+			// and withdrawn with the confirmation.
+			`ALTER TABLE kept_work ADD COLUMN discard_read_at TEXT`,
+			`CREATE TRIGGER kept_work_discard_read_is_under_its_confirmation
+				BEFORE UPDATE OF discard_read_at, discard_digest ON kept_work
+				WHEN NEW.discard_read_at IS NOT NULL AND NEW.discard_digest IS NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry records a discard''s read only under its confirmation');
+				END`,
+			`CREATE TRIGGER kept_work_discard_read_is_written_while_owed
+				BEFORE UPDATE OF discard_read_at ON kept_work
+				WHEN NEW.discard_read_at IS NOT OLD.discard_read_at
+					AND NOT (OLD.answer IS NULL AND (NEW.discard_read_at IS NULL OR OLD.closure IS NULL))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry''s discard read is written only while its discard is owed');
 				END`,
 		},
 	},

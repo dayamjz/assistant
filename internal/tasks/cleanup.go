@@ -351,11 +351,6 @@ type Cleaner struct {
 	// through InterruptBeforeMarkForTest; an error it returns stands in for
 	// a service that stopped there, and the removal is left unmarked.
 	betweenRemovalAndMark func() error
-	// betweenDiscardReadAndRemoval runs after Discard's last read of the
-	// copy and before the removal. It is nil in production and set only by
-	// this package's tests, which use it to change the copy inside that
-	// window.
-	betweenDiscardReadAndRemoval func()
 }
 
 // NewCleaner builds a Cleaner, refusing with ErrIncomplete when any

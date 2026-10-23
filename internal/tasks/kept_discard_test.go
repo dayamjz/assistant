@@ -62,7 +62,7 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	if err != nil || changed.Digest == first.Digest || !changed.Untracked {
 		t.Fatalf("with a file added Loss = %+v, %v; want the untracked indicator and another digest", changed, err)
 	}
-	if _, err := s.cleaner.Discard(ctx, entry, first.Digest, first.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+	if _, err := s.cleaner.Discard(ctx, entry, first.Digest, first.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("a discard on the digest shown before the file = %v; want ErrLossChanged", err)
 	}
 	if _, err := os.Stat(stray); err != nil {
@@ -74,7 +74,7 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	if back, err := s.cleaner.Loss(ctx, entry); err != nil || back.Digest != first.Digest {
 		t.Fatalf("with the file removed the copy digests %s (%v), want %s again", back.Digest, err, first.Digest)
 	}
-	if _, err := s.cleaner.Discard(ctx, entry, "not-the-digest", nil, ""); !errors.Is(err, ErrLossChanged) {
+	if _, err := s.cleaner.Discard(ctx, entry, "not-the-digest", nil, "", nil); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("a discard on another digest = %v; want ErrLossChanged", err)
 	}
 	// The contents, not the names: a dirty copy with an untracked file is
@@ -112,7 +112,7 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	if err != nil || edited.Digest == dirty.Digest || edited.Dirty != dirty.Dirty || edited.Untracked != dirty.Untracked {
 		t.Fatalf("after the edits Loss = %+v, %v; want the same indicators and another digest than %s", edited, err, dirty.Digest)
 	}
-	if _, err := s.cleaner.Discard(ctx, entry, dirty.Digest, dirty.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+	if _, err := s.cleaner.Discard(ctx, entry, dirty.Digest, dirty.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("a discard on the digest shown before the edits = %v; want ErrLossChanged", err)
 	}
 	// Then another file beside them.
@@ -123,7 +123,7 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	if err != nil || added.Digest == edited.Digest {
 		t.Fatalf("with a second file Loss = %+v, %v; want another digest than %s", added, err, edited.Digest)
 	}
-	if _, err := s.cleaner.Discard(ctx, entry, dirty.Digest, dirty.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+	if _, err := s.cleaner.Discard(ctx, entry, dirty.Digest, dirty.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("a discard on the digest shown before the edits and the file = %v; want ErrLossChanged", err)
 	}
 	if _, err := os.Stat(filepath.Join(tk.copy, "second.txt")); err != nil {
@@ -150,7 +150,7 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	if back, err := s.cleaner.Loss(ctx, entry); err != nil || back.Digest != first.Digest {
 		t.Fatalf("with everything undone the copy digests %s (%v), want %s again", back.Digest, err, first.Digest)
 	}
-	lost, err := s.cleaner.Discard(ctx, entry, first.Digest, first.Lacks, "")
+	lost, err := s.cleaner.Discard(ctx, entry, first.Digest, first.Lacks, "", nil)
 	if err != nil || lost.Digest != first.Digest {
 		t.Fatalf("Discard = %+v, %v; want the copy removed on its own digest", lost, err)
 	}
@@ -160,7 +160,7 @@ func TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown(t *testing.T)
 	if _, err := s.cleaner.Loss(ctx, entry); !errors.Is(err, ErrCopyGone) {
 		t.Fatalf("Loss of a gone copy = %v; want ErrCopyGone", err)
 	}
-	if gone, err := s.cleaner.Discard(ctx, entry, first.Digest, first.Lacks, ""); err != nil || gone.Digest != "" {
+	if gone, err := s.cleaner.Discard(ctx, entry, first.Digest, first.Lacks, "", nil); err != nil || gone.Digest != "" {
 		t.Fatalf("Discard of a gone copy = %+v, %v; want nothing to lose and no error", gone, err)
 	}
 }
@@ -281,7 +281,7 @@ func TestADiscardDigestCoversTheIndexAndUntrackedDirectories(t *testing.T) {
 	if err != nil || staged.Digest == conflicted.Digest {
 		t.Fatalf("with a resolution staged and the working version restored Loss = %+v, %v; want another digest than %s", staged, err, conflicted.Digest)
 	}
-	if _, err := s.cleaner.Discard(ctx, entry, conflicted.Digest, conflicted.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+	if _, err := s.cleaner.Discard(ctx, entry, conflicted.Digest, conflicted.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("a discard on the digest shown before the resolution was staged = %v; want ErrLossChanged", err)
 	}
 	_, _ = rawGitErr(tk.copy, "merge", "--abort")
@@ -315,7 +315,7 @@ func TestADiscardDigestCoversTheIndexAndUntrackedDirectories(t *testing.T) {
 	if err != nil || after.Digest == before.Digest {
 		t.Fatalf("with a file inside the nested repository edited Loss = %+v, %v; want another digest than %s", after, err, before.Digest)
 	}
-	if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+	if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("a discard on the digest shown before the nested edit = %v; want ErrLossChanged", err)
 	}
 	rawGit(t, nested, "add", "inner.txt")
@@ -400,7 +400,7 @@ func TestADiscardDigestIsFramedAndCarriesModes(t *testing.T) {
 	if forged.Digest == real.Digest {
 		t.Fatalf("a link whose target forges a second entry digests %s, the same as the link beside the file", real.Digest)
 	}
-	if _, err := s.cleaner.Discard(ctx, entry, forged.Digest, forged.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+	if _, err := s.cleaner.Discard(ctx, entry, forged.Digest, forged.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("a discard on the forged state's digest = %v; want ErrLossChanged", err)
 	}
 	if err := os.RemoveAll(forge); err != nil {
@@ -445,7 +445,7 @@ func TestADiscardDigestIsFramedAndCarriesModes(t *testing.T) {
 	if after.Digest == before.Digest {
 		t.Fatalf("chmod +x inside the nested repository left the digest at %s", before.Digest)
 	}
-	if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+	if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("a discard on the digest shown before the chmod = %v; want ErrLossChanged", err)
 	}
 }
@@ -510,7 +510,7 @@ func TestADiscardSealsTheCopyAndHoldsTheLossToWhatWasShown(t *testing.T) {
 	if err := os.WriteFile(stray, []byte("not committed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+	if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("a discard of a copy that changed = %v; want ErrLossChanged", err)
 	}
 	if err := os.Remove(stray); err != nil {
@@ -518,7 +518,7 @@ func TestADiscardSealsTheCopyAndHoldsTheLossToWhatWasShown(t *testing.T) {
 	}
 
 	rawGit(t, pusher, "push", "-q", "--force", "origin", base+":refs/heads/main")
-	if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, ""); !errors.Is(err, ErrLossChanged) || !strings.Contains(err.Error(), landed) {
+	if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, ErrLossChanged) || !strings.Contains(err.Error(), landed) {
 		t.Fatalf("a discard with the default branch rewound past %s = %v; want ErrLossChanged naming it", landed, err)
 	}
 	if _, err := os.Stat(tk.copy); err != nil {
@@ -526,7 +526,7 @@ func TestADiscardSealsTheCopyAndHoldsTheLossToWhatWasShown(t *testing.T) {
 	}
 
 	rawGit(t, pusher, "push", "-q", "--force", "origin", unrelated+":refs/heads/main")
-	lost, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "")
+	lost, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil)
 	if err != nil || !slices.Equal(lost.Lacks, []string{own}) {
 		t.Fatalf("the discard with the upstream back = %+v, %v; want the copy removed losing %s", lost, err, own)
 	}
@@ -626,7 +626,7 @@ func TestADiscardDigestCoversEverythingTheRemovalDeletes(t *testing.T) {
 		if gains && !grew || !gains && !slices.Equal(after.Lacks, before.Lacks) {
 			t.Fatalf("%s: the commits lost read %v after %v; want them to grow: %v", when, after.Lacks, before.Lacks, gains)
 		}
-		if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+		if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 			t.Fatalf("%s: a discard on the digest shown before = %v; want ErrLossChanged", when, err)
 		}
 		if _, err := os.Stat(tk.copy); err != nil {
@@ -797,13 +797,13 @@ func TestALossNamesEveryPathItDestroysThatNothingElseHolds(t *testing.T) {
 	if err := os.WriteFile(cfg, append(slices.Clone(original), []byte("[init]\n\ttemplateDir = "+empty+"\n")...), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.cleaner.Discard(ctx, entry, l.Digest, l.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+	if _, err := s.cleaner.Discard(ctx, entry, l.Digest, l.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("Discard once the list shown would name more = %v; want ErrLossChanged", err)
 	}
 	if err := os.WriteFile(cfg, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.cleaner.Discard(ctx, entry, l.Digest, l.Lacks, ""); err != nil {
+	if _, err := s.cleaner.Discard(ctx, entry, l.Digest, l.Lacks, "", nil); err != nil {
 		t.Fatalf("Discard on the digest shown: %v", err)
 	}
 	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
@@ -849,15 +849,16 @@ func TestAFileWrittenAfterADiscardsLastReadIsDestroyedUnshown(t *testing.T) {
 	}
 	secret := filepath.Join(tk.copy, "secret.txt")
 	var inside KeptEntry
-	s.cleaner.betweenDiscardReadAndRemoval = func() {
+	window := func() error {
 		if err := os.WriteFile(secret, []byte("written inside the window\n"), 0o600); err != nil {
 			t.Error(err)
 		}
 		if inside, err = s.cleaner.Keep(ctx, kept); err != nil {
 			t.Error(err)
 		}
+		return nil
 	}
-	lost, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "")
+	lost, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", window)
 	if err != nil {
 		t.Fatalf("Discard on the digest shown, a file written inside the window: %v", err)
 	}
@@ -937,7 +938,7 @@ func TestALossListsWhatOnlyAReflogOrANameHolds(t *testing.T) {
 	if len(l.Objects) != len(want) {
 		t.Errorf("Loss lists the objects lost as %+v; want exactly %+v", l.Objects, want)
 	}
-	if _, err := s.cleaner.Discard(ctx, got.Entry, l.Digest, l.Lacks, ""); err != nil {
+	if _, err := s.cleaner.Discard(ctx, got.Entry, l.Digest, l.Lacks, "", nil); err != nil {
 		t.Fatalf("Discard on the digest shown: %v", err)
 	}
 	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
@@ -997,7 +998,7 @@ func TestALossListsWhatOnlyAPreviousValueOrARootReferenceHolds(t *testing.T) {
 			t.Errorf("Loss lists the commits lost as %v; want %s among them", l.Lacks, c)
 		}
 	}
-	if _, err := s.cleaner.Discard(ctx, got.Entry, l.Digest, l.Lacks, ""); err != nil {
+	if _, err := s.cleaner.Discard(ctx, got.Entry, l.Digest, l.Lacks, "", nil); err != nil {
 		t.Fatalf("Discard on the digest shown: %v", err)
 	}
 	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
@@ -1108,7 +1109,7 @@ func TestADiscardSealsExactlyWhatItShows(t *testing.T) {
 	refused := func(when string, change func()) {
 		t.Helper()
 		change()
-		if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+		if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 			t.Fatalf("%s: a discard on the digest shown before = %v; want ErrLossChanged", when, err)
 		}
 		if _, err := os.Stat(tk.copy); err != nil {
@@ -1128,7 +1129,7 @@ func TestADiscardSealsExactlyWhatItShows(t *testing.T) {
 	refused("the tag given another name", func() { rawGit(t, tk.copy, "update-ref", "refs/aside/noted", tag) })
 	refused("a commit shown dropped from the copy", func() {
 		rawGit(t, tk.copy, "branch", "--quiet", "-D", "beside")
-		if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, ""); !errors.Is(err, ErrLossChanged) ||
+		if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, "", nil); !errors.Is(err, ErrLossChanged) ||
 			!strings.Contains(err.Error(), beside) {
 			t.Fatalf("a discard with %s dropped = %v; want ErrLossChanged naming it", beside, err)
 		}
@@ -1144,7 +1145,7 @@ func TestADiscardSealsExactlyWhatItShows(t *testing.T) {
 	refused("a deletion undone", func() { write(at("deleted.txt"), "deleted later\n") })
 	refused("a hook edited", func() { write(at(".git/hooks/pre-push"), "#!/bin/sh\nexit 1\n") })
 
-	if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, ""); err != nil {
+	if _, err := s.cleaner.Discard(ctx, entry, before.Digest, before.Lacks, "", nil); err != nil {
 		t.Fatalf("Discard on the last digest shown: %v", err)
 	}
 	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
@@ -1185,7 +1186,7 @@ func TestADiscardSealsTheIndicatorsItShows(t *testing.T) {
 	if err != nil || clean.Dirty || !slices.Equal(clean.Files, dirty.Files) || !slices.Equal(clean.Lacks, dirty.Lacks) {
 		t.Fatalf("with the file marked skip-worktree Loss = %+v, %v; want it clean with the paths and commits of %+v", clean, err, dirty)
 	}
-	if _, err := s.cleaner.Discard(ctx, got.Entry, dirty.Digest, dirty.Lacks, ""); !errors.Is(err, ErrLossChanged) {
+	if _, err := s.cleaner.Discard(ctx, got.Entry, dirty.Digest, dirty.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("a discard on the digest shown dirty = %v; want ErrLossChanged", err)
 	}
 }
@@ -1324,7 +1325,7 @@ func TestALossTakesWhatTheUpstreamHoldsAsHeld(t *testing.T) {
 		t.Fatalf("Loss lacks %v, %v; want the side commit %s", shown.Lacks, err, side)
 	}
 	s.push(t, tk.copy, "side")
-	if _, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, ""); err != nil {
+	if _, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", nil); err != nil {
 		t.Fatalf("confirming what was shown once the upstream holds %s = %v; want the copy removed", side, err)
 	}
 	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {

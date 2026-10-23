@@ -227,6 +227,14 @@ type Options struct {
 	// never does.
 	discardTest      testing.TB
 	interruptDiscard func() error
+	// discardRemovalTest, inDiscardWindow and interruptDiscardMark are a
+	// discard's seams inside the removal's window, after its last read of
+	// the copy and before the removal, and between the removal and the
+	// mark, which export_test.go's WithDiscardRemovalSeamsForTest sets and
+	// the product never does.
+	discardRemovalTest   testing.TB
+	inDiscardWindow      func()
+	interruptDiscardMark func() error
 	// cleanupAskSpacing replaces landedAskSpacing for this service, which
 	// export_test.go's WithCleanupAskSpacingForTest sets and the product
 	// never does; zero is landedAskSpacing.
@@ -459,6 +467,13 @@ type Service struct {
 	// stopped there leaves it. It is nil in production and set only
 	// through WithDiscardInterruptForTest.
 	betweenDiscardRecordAndRemoval func() error
+	// inDiscardWindow runs in a discard after its last read of the copy and
+	// before the removal, and betweenDiscardRemovalAndMark after the
+	// removal and before the mark, an error it returns ending the discard
+	// there, as a service that stopped there leaves it. Both are nil in
+	// production and set only through WithDiscardRemovalSeamsForTest.
+	inDiscardWindow              func()
+	betweenDiscardRemovalAndMark func() error
 	// landings is the kept work entries a landing is carrying out in this
 	// service now, keyed by entry: the in-process half of the landing's
 	// exactly-once, on keptanswer.go's terms. It is read and written under
@@ -849,6 +864,12 @@ func (s *Service) openParts(ctx context.Context, o Options, lookup func(string) 
 			return errors.New("service: the discard interrupt is a test's seam and takes the test")
 		}
 		s.betweenDiscardRecordAndRemoval = o.interruptDiscard
+	}
+	if o.inDiscardWindow != nil || o.interruptDiscardMark != nil {
+		if o.discardRemovalTest == nil {
+			return errors.New("service: the discard removal seams are a test's and take the test")
+		}
+		s.inDiscardWindow, s.betweenDiscardRemovalAndMark = o.inDiscardWindow, o.interruptDiscardMark
 	}
 	if o.interruptIntake != nil {
 		if err := s.queue.InterruptAfterRecordForTest(o.intakeTest, o.interruptIntake); err != nil {

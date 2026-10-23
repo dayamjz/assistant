@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -940,6 +941,120 @@ func TestADiscardAnswersAnEntryKeptBeforeItsRemovalRead(t *testing.T) {
 			t.Fatalf("the open kept work is %+v, %v; want none", open, err)
 		}
 	})
+}
+
+// A discard completed at the next start marks exactly the entries the
+// removal's own read covered, the final review of c04c40f: the discard of
+// a task's clone holding the worker's commit is shown and confirmed; after
+// the confirmation and before the removal reads the copy, its main branch,
+// at a commit the default branch holds, is deleted, so nothing shown
+// changes and the real cleanup's Keep records the copy again as a second
+// entry; inside the removal's window, after its last read of the copy, a
+// commit is made in the copy and Keep records a third; the removal
+// destroys that commit unshown, as the window allows, and the service
+// stops before the mark. The next start finds the copy gone and marks the
+// first two entries discarded, kept by the time the read began, and the
+// third stays open and listed, since what it holds was never shown. The
+// control, the same discard marked by the call that removed the copy,
+// does the same. Without the read's start recorded, the next start bounded
+// the mark by its own instant and marked the third discarded over work no
+// confirmation was shown; bounded by the confirmation, it left the second
+// open over a copy that is gone.
+func TestADiscardCompletedAtTheNextStartMarksOnlyWhatItsReadCovered(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	for _, stop := range []bool{false, true} {
+		h := newHome(t)
+		subject := newSubject(t)
+		repository := recordRepository(t, h, subject)
+		old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		// Each seam hands the test the copy and waits until it is done, so
+		// every git and every failure stays on the test's goroutine.
+		pause := func() (func() error, chan struct{}, func()) {
+			reached, resume := make(chan struct{}), make(chan struct{})
+			return func() error { close(reached); <-resume; return nil }, reached, sync.OnceFunc(func() { close(resume) })
+		}
+		beforeRead, atRead, releaseRead := pause()
+		inWindow, atWindow, releaseWindow := pause()
+		stopped := errors.New("the service stopped between the removal and the mark")
+		var beforeMark func() error
+		if stop {
+			beforeMark = func() error { return stopped }
+		}
+		o := service.WithDiscardInterruptForTest(t, options(t, h), beforeRead)
+		o = service.WithDiscardRemovalSeamsForTest(t, o, func() { _ = inWindow() }, beforeMark)
+		var covered, unread store.KeptWork
+		withServiceOptions(t, o, func(under serviceUnderTest) {
+			// A failure below must not leave the service waiting at a seam.
+			defer releaseRead()
+			defer releaseWindow()
+			var shown machine.KeptWorkAnswered
+			if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, request, &shown); err != nil || shown.Loss == nil {
+				t.Fatalf("the discard shown = %+v, %v", shown, err)
+			}
+			confirm := request
+			confirm.Confirm = shown.Loss.Digest
+			type answered struct {
+				out machine.KeptWorkAnswered
+				err error
+			}
+			done := make(chan answered, 1)
+			go func() {
+				var out machine.KeptWorkAnswered
+				err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, confirm, &out)
+				done <- answered{out, err}
+			}()
+			reach := func(at chan struct{}, where string) {
+				t.Helper()
+				select {
+				case <-at:
+				case got := <-done:
+					t.Fatalf("the confirmed discard ended before %s: %+v, %v", where, got.out, got.err)
+				}
+			}
+			reach(atRead, "the removal's read")
+			git(t, entry.CopyPath, "branch", "--quiet", "-D", "main")
+			covered = keepTaskCopy(t, h, old)
+			releaseRead()
+			reach(atWindow, "the removal's window")
+			git(t, entry.CopyPath, "commit", "--quiet", "--allow-empty", "-m", "written after the removal's last read")
+			unread = keepTaskCopy(t, h, old)
+			releaseWindow()
+			got := <-done
+			if covered.ID == entry.ID || unread.ID == entry.ID || unread.ID == covered.ID || !covered.Open() || !unread.Open() {
+				t.Fatalf("the copy kept before the read reads %+v and inside the window %+v; want two more open entries", covered, unread)
+			}
+			switch {
+			case stop && (got.err == nil || !strings.Contains(got.err.Error(), "between the removal and the mark")):
+				t.Fatalf("the confirmed discard past the stopped seam = %+v, %v; want the stop", got.out, got.err)
+			case !stop && (got.err != nil || got.out.Effect != machine.KeptWorkDiscarded):
+				t.Fatalf("the confirmed discard = %+v, %v; want it discarded", got.out, got.err)
+			}
+		})
+		if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the copy stands after the removal: %v", err)
+		}
+		withService(t, h, func(under serviceUnderTest) {
+			for _, id := range []int64{entry.ID, covered.ID} {
+				if got := waitDiscarded(t, h, id); got.Answer.Or("") != store.KeptDiscard {
+					t.Fatalf("stopped before the mark %v: entry %d reads %+v; want it answered discard", stop, id, got)
+				}
+			}
+			after, err := recordsOf(t, h).KeptWorkEntry(t.Context(), unread.ID)
+			if err != nil || !after.Open() || after.DiscardedAt.IsKnown() {
+				t.Fatalf("stopped before the mark %v: the entry kept after the removal's read reads %+v, %v; want it open",
+					stop, after, err)
+			}
+			open, err := recordsOf(t, h).OpenKeptWork(t.Context())
+			if err != nil || !slices.ContainsFunc(open, func(k store.KeptWork) bool { return k.ID == unread.ID }) {
+				t.Fatalf("stopped before the mark %v: the open kept work is %+v, %v; want entry %d listed", stop, open, err, unread.ID)
+			}
+		})
+	}
 }
 
 // waitDiscarded waits until the entry reads discarded and returns it.

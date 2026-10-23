@@ -80,7 +80,13 @@ import (
 // that is later, in its one write, none of them left holding the project's
 // new tasks over a copy that is gone: the removal went ahead only because
 // that read found nothing lost that was not shown, so it covers the state
-// each of them was kept from; completeDiscard reads its
+// each of them was kept from. That read's start is recorded on the entry
+// before the removal (store.RecordKeptWorkDiscardRead) and the mark takes
+// it from there, so a mark the next start completes over a copy already
+// gone is bounded by the read the removal was held to and never by its
+// own, which reads nothing; a copy gone with no read recorded, removed by
+// something other than this confirmation's removal, is marked by the
+// confirmation alone. completeDiscard reads its
 // entry again first, so a call that finds it marked reports it discarded.
 // No answer and no confirmation is written while another entry of the copy
 // holds one not yet carried out, a land whose run is not named, a carry on
@@ -317,8 +323,20 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 	}
 	// The removal is held to a read of the copy that begins now, so every
 	// entry of the copy kept by now was kept from a state that read covers.
+	// Once the read finds the copy holding what was shown, its start is
+	// recorded before the removal, so the mark is bounded by it even when
+	// a service that stops after the removal leaves the mark to the next
+	// start, which finds the copy gone, reads nothing and records nothing.
 	read := time.Now()
-	lost, err := s.cleaner.Discard(ctx, entry, digest, entry.DiscardLacks, gatePath)
+	lost, err := s.cleaner.Discard(ctx, entry, digest, entry.DiscardLacks, gatePath, func() error {
+		if err := s.store.RecordKeptWorkDiscardRead(ctx, entry.ID, digest, read); err != nil {
+			return err
+		}
+		if s.inDiscardWindow != nil {
+			s.inDiscardWindow()
+		}
+		return nil
+	})
 	if errors.Is(err, tasks.ErrLossChanged) {
 		open, werr := s.store.WithdrawKeptWorkDiscard(ctx, entry.ID, digest)
 		if werr != nil {
@@ -331,7 +349,12 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 	} else if err != nil {
 		return machine.KeptWorkAnswered{}, refusedLoss(entry, err)
 	}
-	marked, err := s.store.MarkKeptWorkDiscarded(ctx, entry.ID, read)
+	if s.betweenDiscardRemovalAndMark != nil {
+		if err := s.betweenDiscardRemovalAndMark(); err != nil {
+			return machine.KeptWorkAnswered{}, err
+		}
+	}
+	marked, err := s.store.MarkKeptWorkDiscarded(ctx, entry.ID)
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
