@@ -8,11 +8,13 @@ import io
 import os
 from pathlib import Path
 import select
+import signal
 import socket
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -363,6 +365,124 @@ class LeakCheckTest(unittest.TestCase):
         # is no Apple bundle whatever its path starts with.
         self.assertFalse(check.only_root_changes(f"/System/Volumes/Data{Path.home()}"))
 
+    def guarded(self, command, read):
+        """Run command through the real guarded_run as CI runs it (run
+        --per-package, with a TMPDIR of its own), with read in place of
+        apple_owned, and return its exit status and what it printed."""
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.dict(os.environ, {"TMPDIR": folder}), \
+                mock.patch.object(tempfile, "gettempdir", return_value=folder), \
+                mock.patch.object(check, "apple_owned", read), \
+                contextlib.redirect_stdout(out):
+            code = check.guarded_run(command, per_package=True)
+        return code, out.getvalue()
+
+    @unittest.skipUnless(sys.platform == "darwin", "launchd is macOS's")
+    def test_an_apple_job_that_exits_while_it_is_read_is_not_a_leftover(self):
+        """#572: launchd keeps no record of a job that is not running, so an
+        Apple job that exits between run's listing and its read of launchd
+        once read as no job and was reported, as helpd and Spotlight's
+        mdworker_shared were on CI. helpd is started through launchd here and
+        made to exit just before launchd is read. Positive controls: the same
+        job still running is set aside as launchd's, and a detached process
+        the command leaves is reported either way."""
+        for exits in (True, False):
+            with self.subTest(exits=exits), tempfile.TemporaryDirectory() as folder:
+                stop_launchd_job(HELPD)  # so that the command is what starts it
+                planted = Path(folder) / "planted"
+                real, seen = check.apple_owned, []
+
+                def read(new_pids):
+                    if not seen:
+                        seen.append(launchd_job_pid(HELPD))
+                        self.assertIn(seen[0], new_pids,
+                                      "helpd was not listed as new, so nothing was tested")
+                        if exits:
+                            stop_process(seen[0])
+                    return real(new_pids)
+
+                try:
+                    code, output = self.guarded(
+                        [sys.executable, "-c", KICKSTART_AND_PLANT,
+                         f"gui/{os.getuid()}/{HELPD}", str(planted)], read)
+                finally:
+                    if planted.exists() and planted.read_text():
+                        stop_process(int(planted.read_text()))
+                    stop_launchd_job(HELPD)
+                self.assertTrue(seen, output)
+                job = seen[0]
+                self.assertEqual(code, 1, output)
+                self.assertIn(f"LEAK process pid={planted.read_text()} ", output)
+                self.assertNotIn(f"LEAK process pid={job} ", output)
+                if exits:
+                    self.assertRegex(output, rf"(?m)^leak-check: pid={job} start=\S+ ended or "
+                                             "began exiting while it was read; listing again$")
+                    self.assertNotIn(f"launchd job {HELPD} pid={job}", output)
+                else:
+                    self.assertIn(f"set aside: launchd job {HELPD} pid={job}\n", output)
+
+    def test_what_a_process_starts_as_it_exits_mid_reading_is_reported(self):
+        """Why run lists again rather than leave out a process that exits
+        while it is read (settled_after): the process can have started one
+        the listing could not hold. Here a detached process the command
+        leaves starts a detached sleep and exits as run reads launchd, and the
+        sleep, which the first listing does not have, must be reported."""
+        with tempfile.TemporaryDirectory() as folder:
+            forker, child = Path(folder) / "forker", Path(folder) / "child"
+            seen = []
+            real = check.apple_owned
+
+            def read(new_pids):
+                if not seen:
+                    seen.append(int(forker.read_text()))
+                    self.assertIn(seen[0], new_pids,
+                                  "the forking process was not listed as new, so nothing was tested")
+                    os.kill(seen[0], signal.SIGUSR1)
+                    wait_for(lambda: child.exists() and child.read_text(), "the child's pid")
+                    wait_for(lambda: check.process_start(seen[0]) is None
+                             or not check.still_running((seen[0], check.process_start(seen[0]))),
+                             "the forking process to exit")
+                return real(new_pids)
+
+            try:
+                code, output = self.guarded(
+                    [sys.executable, "-c", DETACH, str(forker),
+                     sys.executable, "-c", FORK_THEN_EXIT, str(forker), str(child)], read)
+            finally:
+                for record in (child, forker):
+                    if record.exists() and record.read_text():
+                        stop_process(int(record.read_text()))
+            self.assertTrue(seen, output)
+            self.assertEqual(code, 1, output)
+            self.assertIn(f"LEAK process pid={child.read_text()} ", output)
+            self.assertNotIn(f"LEAK process pid={seen[0]} ", output)
+
+    def test_a_process_that_never_settles_is_reported_not_left_out(self):
+        """A process the listing shows that is never running when read again,
+        as one held in its exit is (darwin_records), never settles: after
+        SETTLE_READINGS listings it is reported rather than left out or set
+        aside, whatever launchd was read as saying while it was listed."""
+        held = (4242, "1792760000.000001")
+        listings = []
+
+        def listing():
+            listings.append(True)
+            return {held: "/usr/bin/held-in-exit"}
+
+        with mock.patch.object(check, "processes", side_effect=listing), \
+                mock.patch.object(check, "still_running", return_value=False), \
+                mock.patch.object(check, "apple_owned",
+                                  return_value={held[0]: "launchd job com.apple.agentd"}), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            after, jobs = check.settled_after({}, [])
+        self.assertEqual(len(listings), check.SETTLE_READINGS)
+        self.assertEqual(jobs, {})
+        self.assertEqual(check.differences(({}, {}), after, jobs)[0],
+                         [f"LEAK process pid={held[0]} start={held[1]} command=/usr/bin/held-in-exit"])
+        self.assertEqual(out.getvalue().count("listing again"), 1)
+        self.assertIn(f"did not settle in {check.SETTLE_READINGS} listings", out.getvalue())
+
     def test_missing_root_is_an_error(self):
         with tempfile.TemporaryDirectory() as folder:
             with self.assertRaises(FileNotFoundError):
@@ -453,7 +573,8 @@ class LeakCheckTest(unittest.TestCase):
 
     def test_command_failure_survives_clean_comparison(self):
         with mock.patch.object(check, "temp_roots", return_value=[]), \
-                mock.patch.object(check, "snapshot", return_value=({}, {})), \
+                mock.patch.object(check, "processes", return_value={}), \
+                mock.patch.object(check, "temp_entries", return_value={}), \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(check.guarded_run([sys.executable, "-c", "exit(7)"]), 7)
 
@@ -1171,6 +1292,101 @@ finally:
 sys.exit(code)
 """
 
+
+HELPD = "com.apple.helpd"  # an on-demand Apple agent CI saw reported (#572)
+
+
+def wait_for(condition, what, limit=60):
+    """Poll condition until it holds, failing loudly after limit seconds
+    rather than hanging the suite."""
+    deadline = time.monotonic() + limit
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        time.sleep(0.01)
+
+
+def launchd_job_pid(label):
+    """The pid launchctl list shows for label, or None when it is not running."""
+    for line in subprocess.check_output(["launchctl", "list"], text=True).splitlines()[1:]:
+        pid, _, name = line.split("\t", 2)
+        if name == label and pid != "-":
+            return int(pid)
+    return None
+
+
+def stop_process(pid):
+    """SIGKILL pid and wait until it is no longer running."""
+    start = check.process_start(pid)
+    if start is None:
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    wait_for(lambda: not check.still_running((pid, start)), f"pid {pid} to exit")
+
+
+def stop_launchd_job(label):
+    """End the job label if it runs, and wait until launchd shows it stopped."""
+    pid = launchd_job_pid(label)
+    if pid is not None:
+        stop_process(pid)
+        wait_for(lambda: launchd_job_pid(label) != pid, f"launchd to record {label} stopped")
+
+
+# Asks launchd to start the job argv[1] and waits until the process launchd
+# names for it runs (kickstart can return before the spawn), then leaves a
+# detached sleep and records its pid in argv[2].
+KICKSTART_AND_PLANT = """
+import pathlib, subprocess, sys, time
+subprocess.run(['launchctl', 'kickstart', sys.argv[1]], check=True)
+label, deadline = sys.argv[1].rsplit('/', 1)[1], time.monotonic() + 60
+while True:
+    listed = [line.split('\\t') for line in subprocess.check_output(
+        ['launchctl', 'list'], text=True).splitlines()[1:]]
+    pid = next((row[0] for row in listed if row[2] == label and row[0] != '-'), None)
+    if pid and subprocess.run(['ps', '-p', pid], capture_output=True).returncode == 0:
+        break
+    if time.monotonic() > deadline:
+        sys.exit(f'launchd never ran {label}')
+    time.sleep(0.01)
+p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+pathlib.Path(sys.argv[2]).write_text(str(p.pid))
+"""
+
+# Starts argv[2:] in a session of its own, waits until the file argv[1] has
+# content, and exits, so the program is left behind, reparented, and reaped
+# by its new parent.
+DETACH = """
+import pathlib, subprocess, sys, time
+record = pathlib.Path(sys.argv[1])
+subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                 stderr=subprocess.DEVNULL, start_new_session=True)
+deadline = time.monotonic() + 60
+while not (record.exists() and record.read_text()):
+    if time.monotonic() > deadline:
+        sys.exit('the detached program never recorded its pid')
+    time.sleep(0.01)
+"""
+
+# Records its pid in argv[1]; on SIGUSR1 starts a detached sleep, records
+# that pid in argv[2], and exits.
+FORK_THEN_EXIT = """
+import os, pathlib, signal, subprocess, sys
+def fork_and_exit(*_):
+    p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    pathlib.Path(sys.argv[2]).write_text(str(p.pid))
+    os._exit(0)
+signal.signal(signal.SIGUSR1, fork_and_exit)
+pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))
+while True:
+    signal.pause()
+"""
 
 if __name__ == "__main__":
     unittest.main()

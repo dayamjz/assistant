@@ -15,7 +15,8 @@ cannot list, run passes only as CI runs it, with a TMPDIR of its own and
 run compares one snapshot taken before the command with one taken after it,
 so it reports what is still there when the command ends: for go test, the
 end of the whole run. A process that outlives its package but exits before
-go test ends is not there, and neither is a temp entry removed by then.
+go test ends is not there, and neither is a temp entry removed by then, nor
+a process that exits while the snapshot after is being read (settled_after).
 
 package is P15's per-package check (CI fails when any process a test started
 outlives its package): go test runs each package's test binary through it,
@@ -412,6 +413,64 @@ def snapshot(roots, unread=None):
     return processes(), temp_entries(roots, unread)
 
 
+def still_running(key):
+    """Whether the process key, a (pid, start) from processes, is still that
+    process and running: on macOS not exiting or exited (darwin_process), on
+    Linux still in /proc with that start."""
+    pid, start = key
+    if sys.platform == "darwin":
+        return darwin_process(pid) == (start, RUNNING)
+    return process_start(pid) == start
+
+
+def settled_after(before_processes, roots, unread=None):
+    """The snapshot run compares with before once the command has ended, and
+    the new processes in it set aside as macOS's own, as apple_owned maps
+    them.
+
+    launchd is read after the process listing, and apple_launchd_jobs and
+    apple_bundle_service find nothing for a process that is no longer
+    running, so an Apple job that exited in between read as no job and was
+    reported though launchd ran it (#572 has the CI runs: Spotlight's
+    mdworker_shared and helpd). So each new process is read again once
+    launchd has been read for it, and that read settles it only when the
+    process is still the same and running then (still_running): set aside
+    as macOS's when launchd's record says so, and reported otherwise. One
+    that has exited, is exiting, or was replaced by then was read neither
+    way, and since it may have started a process the listing could not
+    hold, the processes are listed again; the snapshot is the first listing
+    in which every new process settled. A process that exits during the
+    reading is therefore not in it, as one that exited before the first
+    listing is not. One still unsettled after SETTLE_READINGS listings, as
+    a process held in its exit would be, is reported, not set aside.
+    """
+    settled, told = {}, set()
+    for _ in range(SETTLE_READINGS):
+        listed = processes()
+        new = [key for key in listed if key not in before_processes]
+        unread_pids = {pid for pid, start in new if (pid, start) not in settled}
+        jobs = apple_owned(unread_pids) if unread_pids else {}
+        unsettled = []
+        for key in new:
+            if key in settled:
+                continue
+            if still_running(key):
+                settled[key] = jobs.get(key[0])
+            else:
+                unsettled.append(key)
+        for pid, start in set(unsettled) - told:
+            print(f"leak-check: pid={pid} start={start} ended or began exiting while "
+                  "it was read; listing again", flush=True)
+        told.update(unsettled)
+        if not unsettled:
+            break
+    else:
+        print(f"leak-check: {len(unsettled)} process(es) did not settle in "
+              f"{SETTLE_READINGS} listings; reported, not set aside", flush=True)
+    aside = {pid: settled[(pid, start)] for pid, start in new if settled.get((pid, start))}
+    return (listed, temp_entries(roots, unread)), aside
+
+
 def differences(before, after, jobs=None, apple_root=None):
     """Return every new process identity and new or replaced filesystem entry,
     and, separately, the new ones set aside as taken for macOS's.
@@ -442,7 +501,8 @@ def differences(before, after, jobs=None, apple_root=None):
 
 def guarded_run(command, per_package=False):
     """Run command and fail for every runner-user process and temp entry it
-    left: new when it ends, and not set aside as macOS's own (differences).
+    left: new when it ends, and not set aside as macOS's own (settled_after,
+    differences).
 
     A name in the per-user temp dir is no proof of who made the entry, since
     a test can make com.apple.anything there as easily as an Apple agent. So
@@ -472,9 +532,8 @@ def guarded_run(command, per_package=False):
 
     before = snapshot(roots, unread)
     result = subprocess.run(command, check=False)
-    after = snapshot(roots, unread)
-    new_pids = {pid for pid, start in after[0] if (pid, start) not in before[0]}
-    messages, aside = differences(before, after, apple_owned(new_pids), apple_root)
+    after, jobs = settled_after(before[0], roots, unread)
+    messages, aside = differences(before, after, jobs, apple_root)
     for message in aside:
         print(f"leak-check: set aside: {message}", flush=True)
     for message in messages:
