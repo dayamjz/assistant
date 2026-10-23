@@ -17,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -458,7 +459,7 @@ func plantTripwire(t *testing.T, dir string) (script, fired string) {
 	script = "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 	quoted := "'" + strings.ReplaceAll(fired, "'", `'\''`) + "'"
 	body := "#!/bin/sh\nprintf 'fired\\n' >> " + quoted + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+	if err := procgroup.WriteProgram(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("planting the tripwire: %v", err)
 	}
 	return script, fired

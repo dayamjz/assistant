@@ -40,9 +40,12 @@ import (
 // A default branch that cannot be fetched, a trusted document that cannot be
 // read, and a trusted document that cannot be parsed all stop the run before
 // anything launches, wrapped in ErrTrustedConfig; falling back to defaults on
-// any of them is the guess PRD section 10 forbids. A commit whose tree holds
-// no document is the one case that is not a refusal: that is a repository
-// with no configuration, which is valid and resolves to the layers beneath.
+// any of them is the guess PRD section 10 forbids. So does a trusted document
+// that parses and sets a key this build does not act on yet, placement.arch
+// (unhonored.go owns which keys, why, and what that leaves uncovered). A
+// commit whose tree holds no document is the one case that is not a refusal:
+// that is a repository with no configuration, which is valid and resolves to
+// the layers beneath.
 //
 // A pushed document that cannot be parsed is refused too, wrapped in
 // ErrPushedConfig, and deliberately so even though its keys are mostly
@@ -62,7 +65,9 @@ import (
 // A document that was read and decided against is a refusal the caller must
 // handle, and refusedConfig is the one place that says so: a trusted or a
 // pushed copy internal/config refused (config.ErrMalformed, ErrInvalid or
-// ErrLoosened beneath ErrTrustedConfig or ErrPushedConfig), a knowledge
+// ErrLoosened beneath ErrTrustedConfig or ErrPushedConfig), a trusted copy
+// setting a key this build does not act on (errUnhonored beneath
+// ErrTrustedConfig), a knowledge
 // document internal/knowledge refused at the trusted copy (ErrTooLarge or
 // ErrNotText beneath ErrTrustedConfig, knowledge.go), and an agent
 // list or a roles table this build cannot honour, cross as ipc.ErrRefused
@@ -80,7 +85,8 @@ import (
 
 // ErrTrustedConfig reports that the trusted configuration copy could not be
 // established: the default branch could not be fetched, the document there
-// could not be read or parsed, or it loosened a key only the operator's own
+// could not be read or parsed, it sets a key this build does not act on yet
+// (refusalUnhonoredRepository), or it loosened a key only the operator's own
 // file may loosen (*config.LoosenError). PRD section 10 stops the run before
 // launching anything rather than guessing at defaults.
 var ErrTrustedConfig = errors.New("service: the trusted configuration could not be established; the run is stopped rather than run on guessed defaults")
@@ -239,10 +245,12 @@ func (s *Service) trustedLayer(ctx context.Context, bare *vcs.Repository, reposi
 
 // trustedLayerAt is trustedLayer for whoever reads a trusted copy: the fetch
 // lands under ref, which the caller names after what it reads for so two
-// reads cannot overwrite each other's, and every refusal names for.
+// reads cannot overwrite each other's, and every refusal names for. A copy
+// that parses and sets a key this build does not act on is refused too,
+// through refusalUnhonoredRepository, so every reader refuses it alike.
 func (s *Service) trustedLayerAt(ctx context.Context, bare *vcs.Repository, repository store.Repository,
 	ref, forWhat string) (config.Layer, string, []byte, error) {
-	at, err := fetchTrusted(ctx, bare, repository, ref, forWhat, ErrTrustedConfig)
+	at, err := s.fetchTrusted(ctx, bare, repository, ref, forWhat, ErrTrustedConfig)
 	if err != nil {
 		return config.Layer{}, "", nil, err
 	}
@@ -259,6 +267,10 @@ func (s *Service) trustedLayerAt(ctx context.Context, bare *vcs.Repository, repo
 		return config.Layer{}, "", nil, fmt.Errorf("%w: parsing %s at %s for %s: %w",
 			ErrTrustedConfig, config.RepositoryDocument, at, forWhat, err)
 	}
+	if err := refusalUnhonoredRepository(layer); err != nil {
+		return config.Layer{}, "", nil, fmt.Errorf("%w: %s at %s for %s: %w",
+			ErrTrustedConfig, config.RepositoryDocument, at, forWhat, err)
+	}
 	return layer, at, document, nil
 }
 
@@ -268,7 +280,7 @@ func (s *Service) trustedLayerAt(ctx context.Context, bare *vcs.Repository, repo
 // reads at. A record naming no default branch, a fetch that fails and a tip
 // that does not resolve are each reported under class, the reader's own
 // refusal, naming forWhat.
-func fetchTrusted(ctx context.Context, bare *vcs.Repository, repository store.Repository,
+func (s *Service) fetchTrusted(ctx context.Context, bare *vcs.Repository, repository store.Repository,
 	ref, forWhat string, class error) (string, error) {
 	if repository.DefaultBranch == "" {
 		return "", fmt.Errorf(
@@ -281,6 +293,9 @@ func fetchTrusted(ctx context.Context, bare *vcs.Repository, repository store.Re
 		return "", fmt.Errorf("%w: fetching %s from the upstream for %s: %w",
 			class, repository.DefaultBranch, forWhat, err)
 	}
+	if s.betweenTrustedFetchAndResolve != nil {
+		s.betweenTrustedFetchAndResolve(ref)
+	}
 	at, err := bare.ResolveCommit(ctx, ref)
 	if err != nil {
 		return "", fmt.Errorf("%w: resolving the fetched %s for %s: %w",
@@ -289,11 +304,28 @@ func fetchTrusted(ctx context.Context, bare *vcs.Repository, repository store.Re
 	return at, nil
 }
 
-// taskTrustedRef is the name the gate repository holds the default branch's
-// tip under while an intake or a promotion reads the posture of the task it
-// is creating or promoting. It is named for the task, on trustedRef's terms,
-// and deleted once read.
-func taskTrustedRef(taskID string) string { return "refs/assistant/trusted/task/" + taskID }
+// trustedTaskLayer is trustedLayerAt for a read made on task taskID's
+// behalf: it opens the repository's gate repository, fetches the default
+// branch under a reference of this read's own in namespace (readRef), reads
+// the copy there, and deletes the reference afterwards, best effort. The
+// namespace is the reader's, so an intake's or promotion's read and a
+// dispatch's are told apart by name, and the reference is this read's alone,
+// so two reads of one kind for one task - two dispatchers of it, which the
+// store's claim anchor decides between - cannot update or delete each
+// other's fetch before it is resolved (#552). One left behind is read by
+// nothing and removed at the next open (readrefs.go's sweepReadRefs). Its
+// refusals are trustedLayerAt's.
+func (s *Service) trustedTaskLayer(ctx context.Context, repository store.Repository,
+	namespace, taskID, forWhat string) (config.Layer, error) {
+	bare, err := s.gateRepositoryOf(ctx, repository, forWhat)
+	if err != nil {
+		return config.Layer{}, err
+	}
+	ref := readRef(namespace, taskID)
+	defer func() { _ = bare.DeleteRef(context.WithoutCancel(ctx), ref) }()
+	trusted, _, _, err := s.trustedLayerAt(ctx, bare, repository, ref, forWhat)
+	return trusted, err
+}
 
 // projectPosture is internal/tasks' ProjectPosture: the delivery posture a
 // repository's tasks are held to, PRD section 10's delivery key resolved
@@ -306,17 +338,10 @@ func taskTrustedRef(taskID string) string { return "refs/assistant/trusted/task/
 // cannot be fetched, a document that cannot be read or parsed, and a trusted
 // copy naming a lighter posture than the operator's are ErrTrustedConfig, and
 // internal/tasks refuses the intake or the promotion on it rather than
-// assuming a posture. The reference the fetch landed under is
-// deleted afterwards, best effort; one left behind is overwritten by the
-// next read for the same task and read by nothing.
+// assuming a posture. The fetch lands under postureReadNamespace, through
+// trustedTaskLayer.
 func (s *Service) projectPosture(ctx context.Context, repository store.Repository, taskID string) (config.Delivery, error) {
-	bare, err := s.gateRepositoryOf(ctx, repository, "task "+taskID)
-	if err != nil {
-		return "", err
-	}
-	ref := taskTrustedRef(taskID)
-	defer func() { _ = bare.DeleteRef(context.WithoutCancel(ctx), ref) }()
-	trusted, _, _, err := s.trustedLayerAt(ctx, bare, repository, ref, "task "+taskID)
+	trusted, err := s.trustedTaskLayer(ctx, repository, postureReadNamespace, taskID, "task "+taskID)
 	if err != nil {
 		return "", err
 	}
@@ -379,12 +404,13 @@ func unclassifiedRefusal(err error) error {
 // the wire, on the terms the file's opening comment states: a document that
 // was read and refused becomes configRefused, and every other failure is
 // returned as it is. A refusal is recognized by internal/config's and
-// internal/knowledge's own refusal classes beneath this file's two copy
-// classes, so a failed fetch or read, which wraps ErrTrustedConfig with no
-// document refusal beneath it, is not one.
+// internal/knowledge's own refusal classes, and errUnhonored, beneath this
+// file's two copy classes, so a failed fetch or read, which wraps
+// ErrTrustedConfig with no document refusal beneath it, is not one.
 func refusedConfig(err error) error {
 	documentRefused := errors.Is(err, config.ErrMalformed) ||
 		errors.Is(err, config.ErrInvalid) ||
+		errors.Is(err, errUnhonored) ||
 		errors.Is(err, config.ErrLoosened) ||
 		errors.Is(err, knowledge.ErrTooLarge) ||
 		errors.Is(err, knowledge.ErrNotText)

@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // A read of the installed CLI that never finishes fails, naming what it
@@ -52,7 +54,7 @@ func TestAHungInstalledCLIFailsItsReadAndLeavesNothingRunning(t *testing.T) {
 			dir := t.TempDir()
 			pids := filepath.Join(dir, "pids")
 			bin := filepath.Join(dir, "claude")
-			if err := os.WriteFile(bin, []byte(c.script), 0o755); err != nil {
+			if err := procgroup.WriteProgram(bin, []byte(c.script), 0o755); err != nil {
 				t.Fatalf("writing the stand-in: %v", err)
 			}
 			// Whatever this test fails on, nothing it started outlives it.

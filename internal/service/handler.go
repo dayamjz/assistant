@@ -732,7 +732,9 @@ func peerOf(req ipc.Request) string {
 // falling back to defaults: PRD section 10 makes invalid configuration a
 // parse-time failure that names the offending key. A document that is not
 // there is a different case and is the defaults, which that section says in as
-// many words.
+// many words. A document that parses and asks for something this build would
+// not do refuses too, through refusalUnhonored, rather than being read as if
+// it asked for something else.
 //
 // The repository layer is deliberately absent here. PRD section 10 reads its
 // two copies per run - the trusted one from the default branch at a freshly
@@ -756,6 +758,9 @@ func resolveConfig(path string) (config.Layer, config.Config, string, error) {
 	resolution, err := config.Resolve(global, config.Absent(config.OriginTrusted))
 	if err != nil {
 		return config.Layer{}, config.Config{}, "", err
+	}
+	if err := refusalUnhonored(global, resolution.Config); err != nil {
+		return config.Layer{}, config.Config{}, "", fmt.Errorf("service: %s: %w", path, err)
 	}
 	return global, resolution.Config, digestOf(document), nil
 }
