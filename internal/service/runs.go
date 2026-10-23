@@ -1442,6 +1442,10 @@ func (s *Service) reconcile(ctx context.Context, runID string) (store.Run, error
 // because it is continued, and the first read of the resumed wait reads the
 // pull request itself, which is step 1.
 func (s *Service) recover(ctx context.Context) {
+	// What a read of a default branch left in a gate, when a service stopped
+	// between its fetch and its removal, is removed first, before anything
+	// recovery starts can read one; readrefs.go owns why that is safe.
+	s.sweepReadRefs(ctx)
 	// Standing consent writes a decision's hold row before it applies the
 	// answer, so a service that stopped between the two left a row open.
 	// Each is finished from the run's history before any run is continued,

@@ -13,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -396,7 +397,7 @@ func TestAReviewPrimaryIsRetriedAfterItsExecutableReturns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(path, bytes, 0700); err != nil {
+	if err = procgroup.WriteProgram(path, bytes, 0700); err != nil {
 		t.Fatal(err)
 	}
 	result, err = built.stages.Run(t.Context(), agents.PurposeReview, inv)
