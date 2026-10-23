@@ -14,7 +14,7 @@ import (
 func seedAttempt(t *testing.T, s *Store, id string) TaskAttempt {
 	t.Helper()
 	task := seedTask(t, s, id)
-	a, err := s.BeginTaskAttempt(context.Background(), task.ID, 0)
+	a, err := s.BeginFirstTaskAttempt(context.Background(), task.ID, OnThisMachine())
 	if err != nil {
 		t.Fatalf("beginning the first attempt: %v", err)
 	}

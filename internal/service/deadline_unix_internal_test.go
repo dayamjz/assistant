@@ -99,7 +99,7 @@ func requireEnded(t *testing.T, pids []int) {
 // is document, with the code host the service builds itself.
 func openWithOperatorFile(t *testing.T, document string) *Service {
 	t.Helper()
-	root, err := os.MkdirTemp("", "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}

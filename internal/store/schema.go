@@ -179,6 +179,17 @@ const keptWorkAgainstMigration = "kept work against the default branch"
 // the reason sealCheckpointTableMigration is a constant.
 const runRebaseMigration = "run rebase record"
 
+// keptWorkWakesMigration names the migration that adds the wake about a
+// kept work entry rather than a task, and its notification record, for the
+// reason sealCheckpointTableMigration is a constant.
+const keptWorkWakesMigration = "kept work wakes"
+
+// taskMachineMigration names the migration that adds the machine a task runs
+// on and, beside a remote worker's session reference, the identity of the
+// herdr server hosting it, for the reason sealCheckpointTableMigration is a
+// constant.
+const taskMachineMigration = "task machine and remote session host"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2260,6 +2271,179 @@ var schema = []migration{
 				WHEN EXISTS (SELECT 1 FROM run WHERE id = OLD.run)
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a run rebase record is not deleted while its run stands');
+				END`,
+		},
+	},
+	{
+		version: 55,
+		name:    keptWorkWakesMigration,
+		statements: []string{
+			// A wake about a kept work entry rather than a task: PRD section
+			// 8's kept-work wake, the queue's third shape, for an entry no
+			// task names, such as the run of a person's own push, which the
+			// wake table cannot carry because its row names a task. The row
+			// is owned by the entry (P14): the project is read off the
+			// entry's row and recorded nowhere here. It is domain_wake's
+			// shape with the delegation replaced by the entry and its
+			// markers dropped, under the same seals: no column but the
+			// acknowledgement and the handout may change, an
+			// acknowledgement is written once, and a handout is written
+			// only while the row is queued and counted once. An entry is
+			// raised once, which the unique key holds. A row is not
+			// deleted while its entry may not be, on kept_work's own terms:
+			// it goes only with a closed run entry whose run is gone, which
+			// only ForgetRepository removes, and that refuses while the row
+			// is unacknowledged. Because a row can go, its
+			// identifier is AUTOINCREMENT, so a removed row's number is never
+			// handed to a later wake, and an acknowledgement naming it is
+			// refused rather than closing another wake.
+			`CREATE TABLE kept_work_wake (
+				id               INTEGER PRIMARY KEY AUTOINCREMENT,
+				kept_work        INTEGER NOT NULL REFERENCES kept_work(id),
+				kind             TEXT NOT NULL,
+				marker           TEXT NOT NULL,
+				created_at       TEXT NOT NULL,
+				handled_at       TEXT,
+				acknowledged_by  TEXT,
+				handed_out_at    TEXT,
+				handed_out_to    TEXT,
+				handed_out_under TEXT,
+				handouts         INTEGER,
+				UNIQUE (kept_work)
+			) STRICT`,
+			`CREATE INDEX kept_work_wake_unacknowledged ON kept_work_wake(id) WHERE handled_at IS NULL`,
+			`CREATE TRIGGER kept_work_wake_is_appended
+				BEFORE UPDATE OF id, kept_work, kind, marker, created_at ON kept_work_wake
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work wake is appended by the loop that observed it and is not rewritten');
+				END`,
+			`CREATE TRIGGER kept_work_wake_is_acknowledged_once
+				BEFORE UPDATE OF handled_at, acknowledged_by ON kept_work_wake
+				WHEN OLD.handled_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work wake is acknowledged once and the first acknowledgement stands');
+				END`,
+			`CREATE TRIGGER kept_work_wake_is_handed_out_while_queued
+				BEFORE UPDATE OF handed_out_at, handed_out_to, handed_out_under, handouts ON kept_work_wake
+				WHEN OLD.handled_at IS NOT NULL
+					OR NEW.handed_out_at IS NULL OR NEW.handed_out_to IS NULL OR NEW.handed_out_under IS NULL
+					OR NEW.handouts IS NOT coalesce(OLD.handouts, 0) + 1
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work wake is handed out only while it is queued, and each handout is counted once');
+				END`,
+			`CREATE TRIGGER kept_work_wake_is_not_removed
+				BEFORE DELETE ON kept_work_wake
+				WHEN EXISTS (SELECT 1 FROM kept_work k WHERE k.id = OLD.kept_work
+					AND (k.task_id IS NOT NULL OR (k.answer IS NULL AND k.closure IS NULL)
+						OR EXISTS (SELECT 1 FROM run WHERE run.id = k.run_id)))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work wake is kept after it is drained and is not deleted while its entry stands');
+				END`,
+			// Migration 46's notification record for the queue's third
+			// shape, on domain_notification's terms, keyed by the kept work
+			// wake it is about, and removed only with that wake.
+			`CREATE TABLE kept_work_notification (
+				kept_work_wake_id INTEGER PRIMARY KEY REFERENCES kept_work_wake(id),
+				claimed_at        TEXT NOT NULL,
+				outcome           TEXT CHECK (outcome IN ('sent', 'failed')),
+				exit_code         INTEGER,
+				detail            TEXT,
+				settled_at        TEXT,
+				CHECK ((outcome IS NULL) = (settled_at IS NULL)),
+				CHECK (outcome IS NOT NULL OR (exit_code IS NULL AND detail IS NULL)),
+				CHECK (outcome IS NOT 'sent' OR exit_code = 0)
+			) STRICT`,
+			`CREATE TRIGGER kept_work_notification_claim_is_written_once
+				BEFORE UPDATE OF kept_work_wake_id, claimed_at ON kept_work_notification
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is claimed once and the claim is not rewritten');
+				END`,
+			`CREATE TRIGGER kept_work_notification_is_settled_once
+				BEFORE UPDATE OF outcome, exit_code, detail, settled_at ON kept_work_notification
+				WHEN OLD.outcome IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is settled once and the first outcome stands');
+				END`,
+			`CREATE TRIGGER kept_work_notification_is_not_removed
+				BEFORE DELETE ON kept_work_notification
+				WHEN EXISTS (SELECT 1 FROM kept_work_wake w JOIN kept_work k ON k.id = w.kept_work
+					WHERE w.id = OLD.kept_work_wake_id
+						AND (k.task_id IS NOT NULL OR (k.answer IS NULL AND k.closure IS NULL)
+							OR EXISTS (SELECT 1 FROM run WHERE run.id = k.run_id)))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is kept and is not deleted while its kept work wake stands');
+				END`,
+		},
+	},
+	{
+		version: 56,
+		name:    taskMachineMigration,
+		statements: []string{
+			// PRD section 8's task record: "the machine it runs on, written
+			// once at dispatch and kept by promotion and relaunch, empty for
+			// this machine", the one place a task's machine is stored (P14).
+			// It is the remote host's name as the global remote_hosts
+			// setting gives it, and NULL for this machine, which is what
+			// every row written before this column reads as. An intake
+			// never writes it, which the insert trigger holds. The dispatch
+			// claim, BeginFirstTaskAttempt, writes it in the transaction
+			// that inserts the task's first attempt, before that insert, and
+			// the update trigger seals it from the first attempt on, so a
+			// relaunch, a dispatch retried after an attempt that never
+			// launched, and a promotion all find it as the dispatch left
+			// it. That no write reaches it between intake and the first
+			// attempt is the accessor's, since no other accessor names the
+			// column; the trigger does not see which transaction it is in.
+			`ALTER TABLE task ADD COLUMN machine TEXT`,
+			`CREATE TRIGGER task_machine_is_not_written_at_intake
+				BEFORE INSERT ON task
+				WHEN NEW.machine IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s machine is written at its dispatch and never at intake');
+				END`,
+			`CREATE TRIGGER task_machine_is_written_once_at_dispatch
+				BEFORE UPDATE OF machine ON task
+				WHEN OLD.machine IS NOT NULL OR NEW.machine IS NULL OR NEW.machine = ''
+					OR EXISTS (SELECT 1 FROM task_attempt WHERE task_attempt.task_id = OLD.id)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s machine is written once, by its dispatch, and is not rewritten');
+				END`,
+			// Beside a remote worker's session reference, the identity of
+			// the herdr server hosting it: its identifier and start time
+			// on the remote host's kernel, as migration 49 records a
+			// subordinate's tmux server beside its delegation attempt's
+			// reference. It is the one record of that server. Both are
+			// written in the one update that records session_ref, and only
+			// then, so the reference and its server are one fact; a
+			// session of a task on a remote host is refused without one,
+			// and one on this machine with one, since a local worker's
+			// server is recorded nowhere here. The session reference names
+			// its task and never the machine, which is read off the task's
+			// row. SetAttemptSession already admits the reference once;
+			// the first trigger holds that against a direct rewrite too,
+			// so the host can never be left beside a reference it did not
+			// come with.
+			`ALTER TABLE task_attempt ADD COLUMN host_pid INTEGER`,
+			`ALTER TABLE task_attempt ADD COLUMN host_start INTEGER`,
+			`CREATE TRIGGER task_attempt_session_is_recorded_once
+				BEFORE UPDATE OF session_ref ON task_attempt
+				WHEN OLD.session_ref IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task attempt''s session is recorded once and is not rewritten');
+				END`,
+			`CREATE TRIGGER task_attempt_host_is_written_with_its_session
+				BEFORE UPDATE OF host_pid, host_start ON task_attempt
+				WHEN OLD.session_ref IS NOT NULL OR OLD.host_pid IS NOT NULL OR OLD.host_start IS NOT NULL
+					OR NEW.session_ref IS NULL OR ((NEW.host_pid IS NULL) <> (NEW.host_start IS NULL))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task attempt''s session host is written once, whole, with its session reference');
+				END`,
+			`CREATE TRIGGER task_attempt_host_is_a_remote_workers
+				BEFORE UPDATE OF session_ref, host_pid, host_start ON task_attempt
+				WHEN NEW.session_ref IS NOT NULL
+					AND ((NEW.host_pid IS NULL) = ((SELECT machine FROM task WHERE task.id = NEW.task_id) IS NOT NULL))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a session host is recorded beside the session of a task on a remote host, and only there');
 				END`,
 		},
 	},

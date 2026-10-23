@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -170,7 +171,7 @@ func loopHome(t *testing.T) (*home.Home, *store.Store) {
 // stated, for a test that needs the loop's windows apart.
 func loopHomeConfigured(t *testing.T, document string) (*home.Home, *store.Store) {
 	t.Helper()
-	root, err := os.MkdirTemp("", "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}
@@ -368,11 +369,11 @@ func plantRunning(t *testing.T, records *store.Store, id, ref string) store.Task
 	if _, err := records.AppendTaskEvent(ctx, id, "started", ""); err != nil {
 		t.Fatalf("starting task %s: %v", id, err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatalf("beginning the attempt of %s: %v", id, err)
 	}
 	if ref != "" {
-		if err := records.SetAttemptSession(ctx, id, 1, ref); err != nil {
+		if err := records.SetAttemptSession(ctx, id, 1, ref, store.SessionHost{}); err != nil {
 			t.Fatalf("recording the session of %s: %v", id, err)
 		}
 	}

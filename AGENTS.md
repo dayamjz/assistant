@@ -3,7 +3,7 @@
 `assistant` runs a fleet of coding agents in parallel and puts a validation gate
 in front of your remote, so no change reaches a shared branch until it has been
 independently reviewed, tested, documented, and linted. Package rules are in
-`.claude/rules/<package>.md`; see Code.
+`.claude/rules/<package>.md`; see Code. When writing usage/cost examples or reports, follow [the usage-reporting rule](.claude/rules/usage-reporting.md) so reported token usage is never mistaken for billing.
 
 ## The specification is checked in
 
@@ -136,6 +136,17 @@ repository more than one round of review.
   out to git. Only `internal/agents` starts an agent process. Only
   `internal/findings` parses, normalizes, validates, or refuses a report; there
   is never a second parser.
+- A temporary directory a test makes with `os.MkdirTemp` is
+  `standin.TempDir`'s. `RegisterTempTag` records the caller's directory
+  inside the module as the namespace. A slash and an underscore in that
+  directory stay distinct. An absolute path is made relative by walking up
+  to `go.mod`; a non-absolute path is accepted only as the main module path
+  plus that directory, the form `-trimpath` records, and is not opened.
+  `TempDir` and `SweepTempDirs` use only that recorded namespace. The
+  package's `TestMain` registers and sweeps before tests. A live owner, and
+  a name that does not parse, are left. Go's `t.TempDir` and `go-build*`
+  directories, and a scratch directory the product makes for itself, are
+  not this.
 - Only `internal/home` spells a path under the home root, except
   `<home>/repos/<id>.git`, which `internal/gate` composes itself. Only
   `internal/managed` writes a service definition or invokes `launchctl`

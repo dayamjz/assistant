@@ -19,6 +19,12 @@ paths: ["internal/store/**"]
   queue's second shape, a wake about a domain, owned by the delegation row and
   under the wake table's seals; `AppendDomainWakeWithMarkers` is its one
   append and advances `delegation_marker` in the same transaction.
+  keptWorkWakesMigration's `kept_work_wake` is the third shape, PRD section
+  8's kept-work wake about an entry no task names, owned by the entry, once
+  per entry; `AppendKeptWorkWake` is its one append and records the entry's
+  `surfaced_at` in the same transaction. `untaskedShape` serves the second
+  and third shapes' offer, handout and acknowledgement; `DrainAll` and
+  `AcknowledgeAll` take every shape in one transaction.
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'
@@ -48,13 +54,24 @@ paths: ["internal/store/**"]
   and `MarkRunCleanupRemoved` in the removal's transaction, never a discard.
   `surfaced_at` is the one other column that moves, only forward. `ForgetRepository` and
   `RepositoryRemovable` refuse a repository with an open entry
-  (`*KeptWorkOpenError`), and a run's entry goes with its run only once it
-  is answered or closed. Eject's preflight is `ReserveRepositoryRemoval`,
+  (`*KeptWorkOpenError`) or an unacknowledged kept-work wake about one
+  (`ErrKeptWorkWakeQueued`), and a run's entry, its wake and the wake's
+  notification go with its run only once it is answered or closed and the
+  wake acknowledged. Eject's preflight is `ReserveRepositoryRemoval`,
   which writes `repository_removal`, naming the eject's process, in the
   transaction that found the repository forgettable; `CreateRun` refuses a
   run of a reserved repository (`ErrRepositoryBeingRemoved`), and nothing
   refuses a kept work entry over a reservation. internal/service releases a
   reservation whose owner is gone when it opens.
+- taskMachineMigration's `task.machine` is PRD section 8's machine a task
+  runs on, the one place it is stored: written once, for a remote host, by
+  `BeginFirstTaskAttempt` (the dispatch, the only first attempt; a carry on
+  names its entry through `CarriedOnFrom` and never a machine), sealed by
+  trigger from the first attempt on, and NULL for this machine. A remote
+  worker's herdr server (`host_pid`, `host_start`) is written with its
+  attempt's session reference by `SetAttemptSession` and only for a remote
+  task. A session reference and a kept work entry point at the task row and
+  hold no copy.
 - runRebaseMigration's `run_rebase` is the run rebase record the rebase
   stage writes through `RecordRunRebase`, held to the run row's submitted
   commit (`ErrRebaseNotOfRun`), written once, and gone only with its run.

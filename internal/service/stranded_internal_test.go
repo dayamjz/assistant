@@ -55,7 +55,7 @@ func TestAPushThatCannotReplaceTheRunItDisplacedReleasesTheSuccessor(t *testing.
 	if err != nil {
 		t.Fatalf("recording the blocker: %v", err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, blocker.ID, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, blocker.ID, store.OnThisMachine()); err != nil {
 		t.Fatalf("beginning the blocker's attempt: %v", err)
 	}
 	successor, err := records.CreateTask(ctx, store.Task{

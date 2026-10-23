@@ -45,10 +45,10 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	}, store.Disposition{}); err != nil {
 		t.Fatalf("recording the task: %v", err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.SetAttemptSession(ctx, id, 1, "pane-kept"); err != nil {
+	if err := records.SetAttemptSession(ctx, id, 1, "pane-kept", store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	// The copy holds a commit of the worker's that no remote has, and the

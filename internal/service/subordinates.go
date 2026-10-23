@@ -1111,6 +1111,25 @@ func (s *Service) respondDomain(ctx context.Context, req ipc.Request, r machine.
 	return out, nil
 }
 
+// publishKeptWorkWake pushes a kept-work wake the loop appended to the
+// coordinator's wake stream, on publishDomainWake's terms, as
+// ipc.TypeKeptWorkWakeQueued with the row's own identifier as its revision.
+// Only the coordinator's stream carries it: the entry names no task and so
+// no domain.
+func (s *Service) publishKeptWorkWake(w store.KeptWorkWake) {
+	if s.wakes == nil {
+		return
+	}
+	payload, err := json.Marshal(w)
+	if err != nil {
+		s.log.Printf("could not encode kept work wake %d about kept work entry %d: %v", w.ID, w.KeptWork, err)
+		return
+	}
+	if err := s.wakes.Publish(ipc.Event{Type: ipc.TypeKeptWorkWakeQueued, Revision: uint64(w.ID), Payload: payload}); err != nil {
+		s.log.Printf("could not push kept work wake %d about kept work entry %d: %v", w.ID, w.KeptWork, err)
+	}
+}
+
 // publishDomainWake pushes a domain wake the loop appended to the
 // coordinator's wake stream, on publishWake's terms, as
 // ipc.TypeDomainWakeQueued with the row's own identifier as its revision.

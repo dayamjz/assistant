@@ -5,6 +5,21 @@ and for whoever owns the repository's CI and merge settings. It describes what
 this build does today. [`prd.html`](prd.html) is the specification, and where
 this page and the code could disagree, the code and the PRD win.
 
+## Start here
+
+This is the detailed **operator reference**, not a short tutorial. Use the [README](../README.md) for a product overview and quick start; use this page when commands, configuration trust, safety decisions or failure recovery matter. The [PRD](prd.html) remains the contract.
+
+| Your question | Read |
+| --- | --- |
+| How do I set up the gate and send a change? | [Push through the assistant remote](#push-through-the-assistant-remote) and [A first run, step by step](#a-first-run-step-by-step) |
+| What should I do when execution stops? | [Answering a hold](#answering-a-hold) and [Bounding what one run spends](#bounding-what-one-run-spends) |
+| How do I run and supervise a fleet? | [Catching up on a fleet](#catching-up-on-a-fleet), [Waiting on a fleet](#waiting-on-a-fleet), and [Delegating a domain](#delegating-a-domain) |
+| How is unfinished work protected? | [Kept work](#kept-work) |
+| Can it merge without me? | [Unattended operating posture](#unattended-operating-posture), [Keep your CI required](#keep-your-ci-required), and [Merge order and stacking](#merge-order-and-stacking) |
+| What is not guaranteed? | [What a pass does not cover](#what-a-pass-does-not-cover) |
+
+**Safety reading rule:** A run **holds** when it needs a person's decision and **parks** when a bound ends its progress. Missing evidence is not success; do not bypass a refusal by assuming the underlying state. The details below are intentionally retained for agents and operators making decisions.
+
 ## Push through the `assistant` remote
 
 `assistant init` creates the repository's gate and adds a remote named
@@ -485,13 +500,17 @@ catch-up read (`kept` in `--json`) and in `assistant status`
 (`kept_work` in `--json`): a working copy's status lists the entries whose
 repository is that working copy's, and every status lists the entries whose
 owner names no repository, such as an investigation task started without
-one, because those belong to no working copy. An entry about a task, or about a run
-attributed to a task, also raises one `kept-work` wake, which reaches the
-coordinator and the notify command like any other wake. This build
-deviates from PRD section 6 for an entry about a run no task names, such as
-the run your own push started: it is listed by `status` and the catch-up
-read, but it never reaches the private channel or the coordinator until
-#458 lands.
+one, because those belong to no working copy. Each entry also raises one
+`kept-work` wake, which reaches the coordinator and the notify command like
+any other wake: about the task, for an entry about a task or about a run
+attributed to a task, and otherwise about the entry itself, for an entry
+about a run no task names, such as the run your own push started. The
+second is a wake of its own shape: the notify command's line names the
+entry in `kept_work` and its `project` and `branch` rather than a
+`task_id`, `assistant coordinator wakes` lists it under the project and
+then the branch, and the coordinator acknowledges it as `kNUMBER`, a
+number of its own. Acknowledging the wake answers nothing: the entry is
+listed until it is answered or closed.
 
 If the copy's work later turns up somewhere safe, for example once you push
 its commit to the upstream branch, the next cleanup of it removes the copy on
@@ -522,6 +541,14 @@ work ships (#411 part 2), the way past it is the work landing: once its
 commits are on the upstream branch or in the default branch, the next
 service start removes the copy on that proof and closes the entry. Part 2's
 discard will be your other way.
+
+Eject is also refused, before the gate is touched, while a `kept-work` wake
+about one of the repository's entries is still unacknowledged, even once
+the entry is closed, because the wake stays actionable until the coordinator
+acknowledges it, and forgetting the repository would delete it. The refusal
+names the wake by its number; once the coordinator acknowledges it as
+`kNUMBER`, eject removes the closed entry, its wake and the wake's
+notification record with the run.
 
 Eject is also refused while any run copy of the repository still stands on
 disk, whether its run's cleanup has not decided it yet or kept it, and the
@@ -662,7 +689,10 @@ queues, with the wake on standard input as one line of JSON, followed by
 end of file. The line is the wake object itself (`id`, `task_id`, `kind`,
 `marker` and the rest), not the event `assistant --json coordinator listen`
 prints: a `listen` line wraps the same object as its `payload`, beside
-`type` and `revision`, and the command's line has no such wrapper. The
+`type` and `revision`, and the command's line has no such wrapper. A wake
+about no task carries no `task_id`: one about a delegated domain names
+`delegation` and `domain`, and one about kept work no task names names the
+entry in `kept_work`, with its `project` and `branch`. The
 command decides where it goes: a script that posts to your own private chat
 channel, writes a desktop notification, or appends to a file. The line is a
 line of shell, run the way `commands.test` is, in the assistant home (by

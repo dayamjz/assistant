@@ -156,10 +156,17 @@ func newestOnBranch(t *testing.T, s *Store, repo, branch string) int64 {
 	return newest
 }
 
-// beginAttempt records the next attempt of a task, anchored to expected.
+// beginAttempt records the next attempt of a task, anchored to expected: the
+// dispatch, on this machine, for zero.
 func beginAttempt(t *testing.T, s *Store, id string, expected int64) TaskAttempt {
 	t.Helper()
-	a, err := s.BeginTaskAttempt(context.Background(), id, expected)
+	var a TaskAttempt
+	var err error
+	if expected == 0 {
+		a, err = s.BeginFirstTaskAttempt(context.Background(), id, OnThisMachine())
+	} else {
+		a, err = s.BeginTaskAttempt(context.Background(), id, expected)
+	}
 	if err != nil {
 		t.Fatalf("BeginTaskAttempt %s: %v", id, err)
 	}
