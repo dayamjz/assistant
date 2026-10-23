@@ -35,12 +35,14 @@ What it reads, and from where:
 
 It is loud where it cannot see: a log or API read that fails makes it exit 2
 (a failed issue read leaves each failure's issues unknown, never "none"),
-and a failed job whose log shows tests ran but in which nothing was named
-makes it exit 3 (listed under "Unattributed"). Both still print the ledger.
+and a failed or cancelled job whose log shows tests ran but in which nothing
+was named makes it exit 3 (listed under "Unattributed"). Both still print
+the ledger.
 
 Every gh it starts runs under a deadline (API_DEADLINE, LOG_DEADLINE) in a
 process group of its own, watched by a small watchdog that ends the group at
-the deadline or as soon as the ledger exits, however it exits (start_gh).
+the deadline, when the ledger stops (Ctrl+C included), or as soon as the
+ledger exits, however it exits (start_gh).
 
 Issues are matched by text: an issue whose title or body contains a record's
 match token (a test's top-level name, a leaked command's base name, or the
@@ -416,7 +418,9 @@ def retried(read, tries=3):
 
 
 # Seconds one gh call may take before it is ended: an API read (a paginated
-# one included), and one job's log, which can run to megabytes.
+# one included), and one job's log, which can run to megabytes. A call ended
+# at its deadline counts as a server error, so retried() may make it twice
+# more.
 API_DEADLINE = 120
 LOG_DEADLINE = 300
 
@@ -453,23 +457,64 @@ end(status if status >= 0 else 128 - status)
 """
 
 
+# The gh calls running now, so a ledger that is stopping (Ctrl+C, or any
+# exception through collect) ends them all at once instead of waiting for
+# their deadlines, and starts no more.
+_live_gh = set()
+_live_gh_lock = threading.Lock()
+_stopping = False
+
+
 def start_gh(args, deadline):
     """A running gh under the watchdog: stdout a pipe, stderr a file, and
     stdin the pipe whose closing ends it. A gh call ends with everything it
-    started at its deadline or when the ledger exits; a program gh starts
-    that leaves gh's process group is not followed."""
+    started at its deadline, when it is released (release_gh), or when the
+    ledger exits; a program gh starts that leaves gh's process group is not
+    followed. Once the ledger is stopping, no gh starts."""
     errors = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
-    process = subprocess.Popen(
-        [sys.executable, "-I", "-c", WATCHDOG, str(deadline), "gh", *args],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
-        text=True, encoding="utf-8", errors="replace", start_new_session=True)
+    with _live_gh_lock:
+        if _stopping:
+            errors.close()
+            raise GitHubError("gh " + " ".join(args) + ": not started, the ledger is stopping")
+        process = subprocess.Popen(
+            [sys.executable, "-I", "-c", WATCHDOG, str(deadline), "gh", *args],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
+            text=True, encoding="utf-8", errors="replace", start_new_session=True)
+        _live_gh.add(process)
     return process, errors
 
 
-def finish_gh(process, errors):
-    """gh's exit status and what it printed on stderr, once it has ended."""
+def release_gh(process):
+    """Closes the watchdog's stdin: a gh still running is ended now, with
+    what it started. Safe to call more than once and from any thread."""
+    try:
+        process.stdin.close()
+    except (OSError, ValueError):
+        pass
+
+
+def end_every_gh():
+    """Stops the ledger's gh calls: each running one is ended now, and none
+    starts after."""
+    global _stopping
+    with _live_gh_lock:
+        _stopping = True
+        live = list(_live_gh)
+    for process in live:
+        release_gh(process)
+
+
+def finish_gh(process, errors, read_to_end=True):
+    """gh's exit status and what it printed on stderr, once it has ended. A
+    read that stopped early releases gh first, so it ends now rather than at
+    its deadline; after a full read, stdin stays open until gh has exited,
+    so its own status is the one reported."""
+    if not read_to_end:
+        release_gh(process)
     status = process.wait()
-    process.stdin.close()
+    release_gh(process)
+    with _live_gh_lock:
+        _live_gh.discard(process)
     errors.seek(0)
     message = errors.read().strip()
     errors.close()
@@ -479,11 +524,13 @@ def finish_gh(process, errors):
 def gh_output(args, deadline=None):
     """(status, stdout, stderr) of one bounded gh call."""
     process, errors = start_gh(args, API_DEADLINE if deadline is None else deadline)
+    read_to_end = False
     try:
         output = process.stdout.read()
+        read_to_end = True
     finally:
         process.stdout.close()
-        status, message = finish_gh(process, errors)
+        status, message = finish_gh(process, errors, read_to_end)
     return status, output, message
 
 
@@ -561,12 +608,7 @@ class GitHub:
             read_to_end = True
         finally:
             process.stdout.close()
-            if not read_to_end:
-                # The reader stopped early: end gh now rather than at its
-                # deadline. After a full read, stdin stays open until gh has
-                # exited, so its own status is the one reported.
-                process.stdin.close()
-            status, message = finish_gh(process, errors)
+            status, message = finish_gh(process, errors, read_to_end)
         if status != 0:
             raise GitHubError(f"log of job {job_id}: {message or status}")
 
@@ -706,7 +748,8 @@ def run_jobs(github, cache, run):
 def collect(github, cache, runs, workers=4):
     """Every failed job of every attempt of each run, with its records."""
     jobs, reruns, problems = [], [], []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+    try:
         for found, rerun, trouble in pool.map(lambda run: run_jobs(github, cache, run), runs):
             jobs.extend(found)
             problems.extend(trouble)
@@ -722,6 +765,13 @@ def collect(github, cache, runs, workers=4):
                 results[job_id] = {"records": [], "unattributed": False, "cancel": None, "error": str(error)}
             if results[job_id].get("error"):
                 problems.append(results[job_id]["error"])
+    except BaseException:
+        # Ctrl+C, or anything else ending the collection: end the workers'
+        # gh calls now, or the shutdown below waits for their deadlines.
+        end_every_gh()
+        raise
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
     return jobs, results, reruns, problems
 
 
@@ -755,7 +805,7 @@ def branch_of(run, repo):
     run for itself: a push, schedule or dispatch."""
     branch = run.get("head_branch") or ""
     head = (run.get("head_repository") or {}).get("full_name")
-    if head and head != repo:
+    if head and head.lower() != repo.lower():  # GitHub's names ignore case
         return f"{head.split('/')[0]}:{branch}"
     if branch == "main" and run.get("event") in ("pull_request", "pull_request_target"):
         return "main (pull request)"
@@ -765,9 +815,12 @@ def branch_of(run, repo):
 def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, pulls):
     # Without the issues, which issue names a failure is unknown, not "none".
     find = matcher(issues) if issues is not None else (lambda token, prefix=False: None)
+    # A pull request is found by its head repository and branch: a fork's
+    # main is not this repository's main (GitHub's names ignore case).
     prs = {}
     for pull in sorted(pulls, key=lambda p: p["number"]):
-        prs[pull["head"]["ref"]] = pull["number"]
+        head = pull.get("head") or {}
+        prs[(((head.get("repo") or {}).get("full_name") or "").lower(), head.get("ref"))] = pull["number"]
     entries = {}
     unattributed, cancelled, counted = [], {"superseded": 0, "cancelled": 0}, 0
     for run, job in jobs:
@@ -784,7 +837,8 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
             "run_id": run["id"], "attempt": job.get("run_attempt", 1), "final_attempt": final,
             "job_id": job["id"], "job": job["name"], "platform": platform_of(job),
             "branch": branch_of(run, repo), "event": run.get("event"),
-            "pr": prs.get(run.get("head_branch")) if run.get("event") == "pull_request" else None,
+            "pr": prs.get((((run.get("head_repository") or {}).get("full_name") or "").lower(),
+                           run.get("head_branch"))) if run.get("event") == "pull_request" else None,
             "sha": run.get("head_sha"), "created_at": run.get("created_at"),
             # When the job that failed ended; a completed job always has it.
             "failed_at": job.get("completed_at") or job.get("started_at") or run.get("created_at"),
@@ -793,7 +847,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
         }
         if result.get("error"):
             # Records known without the log (a timeout's annotation) still count.
-            unattributed.append({**occurrence, "reason": f"log unreadable: {result['error']}"})
+            unattributed.append({**occurrence, "reason": f"not read: {result['error']}"})
         elif result.get("unattributed"):
             unattributed.append({**occurrence, "reason": "tests ran but no failure was named"})
         for data in result["records"]:
@@ -895,7 +949,8 @@ def markdown(ledger, zone):
     out.append(f"{ledger['runs_scanned']} completed runs, {local_time(window['first'], zone)} to "
                f"{local_time(window['last'], zone)}; every attempt read. {ledger['failed_jobs']} failed "
                f"job(s); not counted: {ledger['cancelled_jobs_not_counted']['superseded']} superseded by a "
-               f"newer run, {ledger['cancelled_jobs_not_counted']['cancelled']} cancelled by hand.")
+               f"newer run, {ledger['cancelled_jobs_not_counted']['cancelled']} cancelled for another reason "
+               "(by hand, or before it started).")
     out.append("")
     if ledger["problems"] or ledger["unattributed"]:
         out.append("## Incomplete: read these first")
@@ -985,7 +1040,7 @@ def report(args, github=None):
         print(json.dumps(ledger, indent=2))
     else:
         print(markdown(ledger, zone_of(args.tz)))
-    if ledger["problems"] or any(u["reason"].startswith("log unreadable") for u in ledger["unattributed"]):
+    if ledger["problems"] or any(u["reason"].startswith("not read") for u in ledger["unattributed"]):
         return 2
     if ledger["unattributed"]:
         return 3
@@ -1022,6 +1077,11 @@ def main(argv=None, github=None):
     parser.add_argument("--cache", default=default_cache(), help="parsed-log cache directory")
     parser.add_argument("--no-cache", action="store_true")
     args = parser.parse_args(argv)
+    global _stopping
+    with _live_gh_lock:
+        # A new report starts its own gh calls; an earlier one in this
+        # process has already joined its workers.
+        _stopping = False
     try:
         if args.command == "parse":
             return parse_command(args)
@@ -1032,4 +1092,9 @@ def main(argv=None, github=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        end_every_gh()
+        print("flake-ledger: interrupted", file=sys.stderr)
+        sys.exit(130)
