@@ -204,7 +204,7 @@ func (l lsofRun) readCwds(ctx context.Context) (map[int]string, error) {
 // end within the grace is left to a goroutine that reaps it once it exits,
 // with the run answering ErrSweepTimedOut without it.
 func (l lsofRun) run(ctx context.Context) ([]byte, error) {
-	share := l.deadline - l.deadline/lsofCleanupShare
+	share := lsofShare(l.deadline)
 	grace := lsofGrace(l.deadline)
 	bounded, cancel := context.WithTimeout(ctx, share)
 	defer cancel()
@@ -229,6 +229,12 @@ func (l lsofRun) run(ctx context.Context) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+// lsofShare is the part of a run's deadline lsof itself is given before its
+// group is ended: the deadline less one lsofCleanupShare-th of it.
+func lsofShare(deadline time.Duration) time.Duration {
+	return deadline - deadline/lsofCleanupShare
 }
 
 // lsofGrace is the grace a run under deadline gives procgroup.Run: a third
