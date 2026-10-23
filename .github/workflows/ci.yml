@@ -90,6 +90,11 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: make lint-guard-test
 
+      # The leftover guard's own tests. The Test step then proves the guard
+      # fails on planted leftovers before it trusts the real comparison.
+      - name: Leak guard tests
+        run: python3 scripts/leak-check-test.py -v
+
       # The race detector is the point of this job, so it is not optional.
       # The timeout is explicit because internal/service has run past go
       # test's ten-minute default on a macOS runner, which fails the package
@@ -130,9 +135,54 @@ jobs:
               bash -c 'setpriv --reuid=65534 --regid=65534 --clear-groups sleep infinity &
                 uid=$1 gid=$2; shift 2
                 exec setpriv --reuid="$uid" --regid="$gid" --init-groups "$@"' bash "$(id -u)" "$(id -g)")
+          else
+            # macOS's own agents and xcrun write into the per-user temp dir
+            # whatever TMPDIR says. With the tests' TMPDIR elsewhere, the
+            # per-package check denies every package's processes writes
+            # there, so the guard can set entries with Apple's names aside
+            # there (run --per-package); it still watches both.
+            TMPDIR=$(mktemp -d "$RUNNER_TEMP/tmp.XXXXXX")
+            export TMPDIR
           fi
-          "${run[@]}" go test -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
-          grep -E '^(ok|FAIL|--- FAIL|panic:|\?)[[:space:]]' test.log || true
+          # P15 per package: go test runs each package's test binary through
+          # `leak-check.py package` (-exec), which fails that package naming
+          # each process the binary started that is still running once it
+          # exits, then ends them, with other packages running beside it.
+          # Linux keeps a package's processes in its tree with the child
+          # subreaper, macOS by running the binary in a sandbox profile of
+          # its own that they all inherit; the script says what neither sees.
+          # Around the whole run, scripts/leak-check.py also fails naming
+          # every runner-user process and temp entry that is new when go test
+          # ends. Both snapshots are taken inside the namespace: a second one
+          # on the host after tini exits would miss what its teardown killed.
+          # The self-test first plants a detached process and a directory and
+          # must see this same guard, in this same wrapper, reject both, and
+          # the per-package check fail, name and end a planted process and
+          # leave one outside the package alone, so a guard that cannot see
+          # processes here fails the step instead of passing. Existing
+          # processes are matched by pid and start time, not by name; Go's
+          # build cache lives outside the watched temp roots. The only things
+          # set aside are taken for macOS's: Apple launchd jobs and XPC
+          # services only root can have defined, and Apple-named entries in
+          # the per-user temp dir, which no package can write; each is
+          # printed, and the script says on what evidence.
+          # Each package the check runs is recorded, and every package go test
+          # reports ok must be among them, so a lost -exec fails the step,
+          # and so does a run whose --per-package claim did not hold.
+          per_package=(-exec "python3 $PWD/scripts/leak-check.py package --")
+          export LEAK_CHECK_RECORD="$RUNNER_TEMP/per-package-checked.txt"
+          "${run[@]}" python3 scripts/leak-check.py self-test
+          : > "$LEAK_CHECK_RECORD"
+          "${run[@]}" python3 scripts/leak-check.py run --per-package -- \
+            go test "${per_package[@]}" -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
+          passed=$(grep -cE '^ok[[:space:]]' test.log || true)
+          checked=$(wc -l < "$LEAK_CHECK_RECORD")
+          echo "leak-check: $checked package(s) ran through the per-package check; go test reported $passed ok"
+          if [ "$checked" -lt "$passed" ] || [ "$passed" -eq 0 ]; then
+            echo "::error::fewer packages ran through the per-package check than passed"
+            status=${status:-1}
+          fi
+          grep -E '^(ok|FAIL|--- FAIL|panic:|\?|LEAK|leak-check:)[[:space:]]' test.log || true
           if [ -n "${status:-}" ]; then
             echo "::group::full test output"
             cat test.log

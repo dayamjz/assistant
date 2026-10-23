@@ -90,9 +90,10 @@ const knowledgeRefusedKind = "knowledge-refused"
 // knowledgeRef is the name the gate repository holds the default branch's
 // tip under while a launch reads the knowledge document at it: named for the
 // task and the attempt so no two reads overwrite each other's, and deleted
-// once read.
+// once read; one left behind is removed at the next open (readrefs.go's
+// sweepReadRefs).
 func knowledgeRef(taskID string, attempt int64) string {
-	return "refs/assistant/knowledge/" + taskID + "/" + strconv.FormatInt(attempt, 10)
+	return knowledgeReadNamespace + taskID + "/" + strconv.FormatInt(attempt, 10)
 }
 
 // knowledgeAt reads the curated knowledge document at commit in the gate
@@ -138,7 +139,7 @@ func (s *Service) launchKnowledge(ctx context.Context, task store.Task, d dispat
 	}
 	ref := knowledgeRef(task.ID, d.attempt)
 	defer func() { _ = bare.DeleteRef(context.WithoutCancel(ctx), ref) }()
-	at, err := fetchTrusted(ctx, bare, repository, ref, forWhat, ErrTrustedKnowledge)
+	at, err := s.fetchTrusted(ctx, bare, repository, ref, forWhat, ErrTrustedKnowledge)
 	if err != nil {
 		return knowledge.Knowledge{}, err
 	}

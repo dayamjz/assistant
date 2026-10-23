@@ -259,6 +259,23 @@ type Finding struct {
 	// leaves such an ask for a person. A stage's agent can write it too, and
 	// that only ever keeps one of its own asks for a person.
 	RemedyOutsideChange bool `json:"remedy_outside_change,omitempty"`
+	// NotStarted records that this finding stands in for work that never
+	// started: something outside the change refused it before it began, so
+	// the finding reports that absence rather than anything found, and the
+	// work is done by running it again once what refused it allows. The one
+	// finding this build marks so is the usage ceiling's hold,
+	// internal/machine's CeilingHeldFinding.
+	//
+	// Only the program sets it. ParseReport, ParseReportThrough, and
+	// ParseReviewReport clear it on every finding they return, so an agent
+	// that writes it is not believed; a report decoded from where the program
+	// stored it keeps it, because what was stored is what the program built.
+	// It decides nothing about Action and is not read by FixEligible, Holds,
+	// Fixable, or Held. What reads it is internal/pipeline, which offers a
+	// stage's hold the retry answer only when that stage's report holds on
+	// such a finding, and which drops such a hold from what a fix round left
+	// the stage when a retry sends the run back to it.
+	NotStarted bool `json:"not_started,omitempty"`
 	// Location is where the finding is, and may name nothing.
 	Location Location `json:"location,omitzero"`
 	// Cites are the repository-relative paths this finding relies on beyond

@@ -3,7 +3,6 @@
 package service
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // A process a test has a shell hold until it is released is
@@ -229,6 +229,16 @@ type heldChildRun struct {
 // it runs its tests itself rather than running itself again, and it is its
 // own owner (RunOwned). The child and the held process are killed in
 // cleanup if they are still running.
+//
+// A child that is killed or times out runs none of its cleanup, and before
+// #454 its TestMain's gitconfig directory and its test's TempDir outlived
+// the whole run. Two cleanups take them, each registered before the one that
+// kills and waits for the child, so each runs after the child has exited:
+// the child's TMPDIR is a directory inside this test's own, whose removal
+// takes what the child made there, its tests' TempDir among them; and what
+// the child made with standin.TempDir, its TestMain's gitconfig directory
+// among them, is in /tmp whatever TMPDIR says, so standin.SweepTempDirs
+// reclaims it once its owner, the child, is gone.
 func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 	t.Helper()
 	self, err := os.Executable()
@@ -236,26 +246,35 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
+	childTemp := filepath.Join(dir, "tmp")
+	if err := os.Mkdir(childTemp, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	binary := filepath.Join(dir, "child.test")
 	raw, err := os.ReadFile(self)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(binary, raw, 0o700); err != nil {
+	if err := procgroup.WriteProgram(binary, raw, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	record := filepath.Join(dir, "held")
 	r := &heldChildRun{exited: make(chan struct{}), out: &lockedOutput{}}
-	r.cmd, err = startCopied(func() *exec.Cmd {
+	r.cmd, err = standin.StartCopied(func() (*exec.Cmd, error) {
 		cmd := exec.Command(binary, append([]string{"-test.run=^TestHeldShellChild$", "-test.count=1"}, extra...)...)
-		cmd.Env = append(os.Environ(), heldModeVar+"="+mode, heldRecordVar+"="+record)
+		cmd.Env = append(os.Environ(), heldModeVar+"="+mode, heldRecordVar+"="+record, "TMPDIR="+childTemp)
 		cmd.Stdout, cmd.Stderr = r.out, r.out
-		return cmd
+		return cmd, cmd.Start()
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	go func() { r.err = r.cmd.Wait(); close(r.exited) }()
+	t.Cleanup(func() {
+		if err := standin.SweepTempDirs(); err != nil {
+			t.Errorf("reclaiming the temporary directories of the child test binary: %v", err)
+		}
+	})
 	t.Cleanup(func() {
 		_ = r.cmd.Process.Kill()
 		<-r.exited
@@ -275,25 +294,6 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 		}
 		if !time.Now().Before(deadline) {
 			t.Fatalf("the child never recorded its held process: %s", r.out)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// startCopied starts the command build returns, whose binary this process
-// has just written, and builds and starts it again while the start is
-// refused with ETXTBSY. On Linux a write descriptor to the copy can be held
-// for a moment by a child that another parallel test forked while the copy
-// was open (Go issue 22315), and exec refuses a binary open for writing. The
-// retry is bounded at five seconds; any other error, or ETXTBSY past the
-// bound, is returned unchanged.
-func startCopied(build func() *exec.Cmd) (*exec.Cmd, error) {
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		cmd := build()
-		err := cmd.Start()
-		if err == nil || !errors.Is(err, syscall.ETXTBSY) || !time.Now().Before(deadline) {
-			return cmd, err
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

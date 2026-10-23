@@ -942,7 +942,8 @@ What it does not do:
 
 It is not `usage_ceiling`. The ceiling counts every run's calls together over
 a window, refuses the next call once it is reached, and holds that run's stage
-for you. The budget is one run's, counts that run alone from its first call,
+for you; once there is room, `assistant --answer retry` runs that stage again
+in the same run. The budget is one run's, counts that run alone from its first call,
 and parks the run.
 
 ## Watch a worker in a terminal
@@ -961,6 +962,23 @@ A Cursor-only `agent:` pin refuses the launch with a recorded `route-refused`
 reason rather than falling back or widening grants; list Claude after Cursor
 if you want Cursor for runs and Claude for attachable workers. See
 `docs/multi-agent-support.md`.
+
+`session_provider: herdr` and the keys for workers on another machine
+(`remote_hosts`, `placement.local`, `placement.arch` and
+`remote_disconnect_grace`, PRD section 8) are parsed and validated, but this
+build does not act on them yet. The service refuses to start on a
+`config.yaml` that sets any of them, naming the key, rather than running
+workers some other way. A repository whose default branch's `assistant.json`
+sets `placement.arch` is refused the same way, naming the key, wherever the
+service reads that copy: a run, a delivery task's intake or promotion, and
+standing consent. A task of such a repository that reaches dispatch, an
+investigation or a delivery task taken before the key was added, is not
+dispatched: it stays queued, and the next dispatch pass after the key is
+removed dispatches it. Meanwhile the coordinator is told about it as it is
+about any task with no worker to watch: on the supervisor's second pass over
+it (about one `supervision_beacon_interval` in) and again each `escalation_window`,
+as a worker whose screen has not changed. Only the service log says the wait
+is placement.
 
 Each launch records which adapter it chose on the task attempt in the home's
 database, once, as `adapter`, `route_reason` and `route_skipped`; no command
