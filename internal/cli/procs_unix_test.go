@@ -16,6 +16,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 )
@@ -94,8 +95,14 @@ func endServicesOf(t *testing.T, h *home.Home) {
 // home's processes only, so the tests running beside it are not touched. It
 // is asked of a home whose root has a space in it too, which a command line
 // split on white space would not have matched.
+//
+// Its subject is the check and the cleanup, not how soon a start's service
+// answers, so the start waits for that answer through
+// cli.AwaitReadinessUntilTheTestsDeadline: a race-built service on a slow
+// runner answered after the start's bound had run out (#543).
 func TestAServiceATestLeavesUpIsReportedAndItsHomesCleanupEndsIt(t *testing.T) {
 	requiresIdentifiedPeer(t)
+	cli.AwaitReadinessUntilTheTestsDeadline(t)
 	for _, c := range []struct{ name, pattern string }{
 		{"a plain root", "h"},
 		{"a root with a space", "h s"},
@@ -128,6 +135,11 @@ func TestAServiceATestLeavesUpIsReportedAndItsHomesCleanupEndsIt(t *testing.T) {
 // is reported as still running past a grace, and is gone once ended. A
 // listing split on white space would not have seen it, and the check would
 // have passed with it running.
+//
+// The copy is waited on until it answers or exits, bounded by the test's
+// own deadline rather than a fixed one: its subject is the check, and a
+// race-built service on a slow runner took 12.84s of the 30s this wait once
+// had (#543).
 func TestTheCheckReportsALiveProcessOfABinaryWhosePathHasASpace(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	self, err := os.Executable()
@@ -167,10 +179,15 @@ func TestTheCheckReportsALiveProcessOfABinaryWhosePathHasASpace(t *testing.T) {
 			<-exited
 		}
 	})
-	deadline := time.Now().Add(30 * time.Second)
+	deadline, bounded := t.Deadline()
 	for instanceOf(t, h) == "" {
-		if !time.Now().Before(deadline) {
-			t.Fatal("the copy never answered")
+		select {
+		case <-exited:
+			t.Fatalf("the copy exited before it answered; its log is at %s", h.ServiceLog())
+		default:
+		}
+		if bounded && !time.Now().Before(deadline) {
+			t.Fatal("the copy never answered within the test's deadline")
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
