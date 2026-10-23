@@ -73,6 +73,9 @@ jobs:
       - name: Flake ledger tests
         if: matrix.os == 'ubuntu-latest'
         run: python3 scripts/flake-ledger-test.py -v
+      - name: CI test script tests
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 scripts/ci-test-test.py -v
 
       # The repeat gate's plan (scripts/repeat-plan.py): which packages a
       # pull request's change makes .github/workflows/repeat.yml run.

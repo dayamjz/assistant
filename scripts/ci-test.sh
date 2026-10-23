@@ -57,6 +57,18 @@ if [ "${#packages[@]}" -eq 0 ]; then
   echo "::error::CI_TEST_PACKAGES names no package"
   exit 2
 fi
+# Only package patterns under the module root: ./... or ./a/b, ./a/b/...,
+# each part starting with a letter, digit or underscore. Anything else, a
+# go test flag above all (-race=false, -run=^$), would reach go test after
+# the flags this script sets and could override them.
+segment='[A-Za-z0-9_][A-Za-z0-9_.-]*'
+pattern="^\./(${segment}/)*(${segment}|\.\.\.)$"
+for package in "${packages[@]}"; do
+  if ! [[ $package =~ $pattern ]]; then
+    echo "::error::CI_TEST_PACKAGES must be package patterns under the module root such as ./... or ./internal/agents, not '$package'"
+    exit 2
+  fi
+done
 echo "ci-test: go test -race -count=$count -timeout $timeout ${packages[*]}"
 export ASSISTANT_REQUIRE_TMUX=1
 run=()
