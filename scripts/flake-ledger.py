@@ -83,6 +83,8 @@ UNITTEST = re.compile(r"^(FAIL|ERROR): (\w+) \(([\w.]+?)\)(?: \((.*)\))?\s*$")
 UNITTEST_SUMMARY = re.compile(r"^FAILED \((?:failures|errors)=")
 ERROR_LINE = re.compile(r"^##\[error\](.*)")
 GUARD_ERROR = "fewer packages ran through the per-package check than passed"
+# scripts/ci-test.sh unfinished, after a run cut off before it ended.
+UNFINISHED = re.compile(r"^ci-test: cut off before these packages reported: (.*)$")
 TIMEOUT_ANNOTATION = "exceeded the maximum execution time"
 SUPERSEDED_ANNOTATION = "higher priority waiting request"
 MODULE_ROOT = re.compile(r"^/(?:Users|home)/runner/work/[^/]+/[^/]+")
@@ -194,6 +196,7 @@ class LogParser:
         self.run_leaks = []
         self.run_leak_total = None
         self.group_lines = 0
+        self.unfinished = None
 
     def feed(self, line):
         line = clean(line)
@@ -210,6 +213,10 @@ class LogParser:
         if self.in_group:
             self.group_lines += 1
             self._go_line(line)
+            return
+        unfinished = UNFINISHED.match(line)
+        if unfinished:
+            self.unfinished = unfinished.group(1).split()
             return
         error = ERROR_LINE.match(line)
         if error:
@@ -359,6 +366,16 @@ class LogParser:
         self.records = list(unique.values())
         tests_ran = self.saw_group or self.saw_unittest_failure or (self.raw and self.group_lines)
         return self.records, bool(tests_ran) and not self.records
+
+
+def unfinished_of(lines):
+    """The packages a cut-off run never reported, from scripts/ci-test.sh
+    unfinished's line, or None for a log without one (a job from before it
+    existed, or one cut off before go test started)."""
+    parser = LogParser()
+    for line in lines:
+        parser.feed(line)
+    return parser.unfinished
 
 
 def parse_lines(lines, raw=False):
@@ -529,10 +546,12 @@ def read_job(github, cache, job):
                 result["cancel"] = "cancelled"
         if result["cancel"] == "timeout":
             running = [s["name"] for s in job.get("steps") or [] if s.get("conclusion") == "cancelled"]
-            result["records"].append(Record(
-                "job-timeout", job["name"], "exceeded timeout-minutes",
-                f"cancelled in step {running[0]}" if running else "cancelled at its bound",
-                token="timeout-minutes").to_dict())
+            detail = f"cancelled in step {running[0]}" if running else "cancelled at its bound"
+            unfinished = retried(lambda: unfinished_of(github.job_log(job["id"])))
+            if unfinished is not None:
+                detail += "; not reported: " + (" ".join(unfinished) or "(none)")
+            result["records"].append(Record("job-timeout", job["name"], "exceeded timeout-minutes",
+                                            detail, token="timeout-minutes").to_dict())
         cache.put(f"job-{job['id']}", result)
         return result
     # A log that fails part way is parsed again from its start.

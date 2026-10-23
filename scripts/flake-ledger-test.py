@@ -242,7 +242,8 @@ class FakeGitHub:
             yield from handle
 
 
-LOGS = {120256178246: "rerun-attempt-1.log", 120265317855: "rerun-attempt-2.log"}
+LOGS = {120256178246: "rerun-attempt-1.log", 120265317855: "rerun-attempt-2.log",
+        120342424178: "job-timeout.log"}
 
 
 def run_report(github, *extra):
@@ -314,6 +315,16 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual([f["key"] for f in data["failures"]],
                          ["job-timeout: check (macos-latest) exceeded timeout-minutes"])
 
+    def test_a_timed_out_job_names_the_packages_it_never_reported(self):
+        timeout = "job-timeout: check (macos-latest) exceeded timeout-minutes"
+        _, data, _ = run_report(FakeGitHub(LOGS))
+        before = next(f for f in data["failures"] if f["key"] == timeout)
+        # A job from before scripts/ci-test.sh unfinished existed says only where it was cut.
+        self.assertEqual(before["details"], ["cancelled in step Test"])
+        _, data, _ = run_report(FakeGitHub({**LOGS, 120342424178: "job-timeout-unfinished.log"}))
+        after = next(f for f in data["failures"] if f["key"] == timeout)
+        self.assertEqual(after["details"], ["cancelled in step Test; not reported: internal/runs internal/service"])
+
     def test_a_running_attempts_jobs_are_not_cached(self):
         with tempfile.TemporaryDirectory() as folder:
             github = FakeGitHub(LOGS)
@@ -359,7 +370,7 @@ class LedgerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             log = Path(folder) / "empty-group.log"
             log.write_text("\n".join(framed(["FAIL"])))
-            github = FakeGitHub({120256178246: log, 120265317855: "rerun-attempt-2.log"})
+            github = FakeGitHub({**LOGS, 120256178246: log})
             status, data, _ = run_report(github)
         self.assertEqual(status, 3)
         self.assertEqual([u["reason"] for u in data["unattributed"]], ["tests ran but no failure was named"])

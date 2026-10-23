@@ -12,6 +12,14 @@
 #   CI_TEST_TIMEOUT   go test -timeout for each package binary (30m)
 # A value it cannot use is refused before anything runs.
 #
+# bash scripts/ci-test.sh unfinished, in a step after the one that ran the
+# suite (with the same CI_TEST_PACKAGES), names the packages test.log never
+# reported a result for when the run was cut off before it ended (a job
+# cancelled at timeout-minutes): those still running or not yet started.
+# A job cut off that way prints no full test output, so without this
+# nothing says what it was running. scripts/flake-ledger.py attaches the
+# list to the job's timeout. It prints nothing for a run that ended.
+#
 # The race detector is the point of this job, so it is not optional.
 # The timeout is explicit because internal/service has run past go
 # test's ten-minute default on a macOS runner, which fails the package
@@ -42,6 +50,19 @@
 # ASSISTANT_REQUIRE_TMUX makes them fail rather than skip without one.
 
 set -eo pipefail
+if [ "$1" = unfinished ]; then
+  # leak-check.py run prints this line once the command it ran has exited.
+  if [ ! -f test.log ] || grep -qE '^leak-check: [0-9]+ leftover\(s\); command exit=' test.log; then
+    exit 0
+  fi
+  read -r -a packages <<< "${CI_TEST_PACKAGES:-./...}"
+  module=$(go list -m)
+  reported=$({ grep -oE '^(ok|FAIL|\?)[[:space:]]+[^[:space:]]+' test.log || true; } | awk '{print $2}' | sort -u)
+  unfinished=$(go list "${packages[@]}" | sort -u | comm -23 - <(printf '%s\n' "$reported") |
+    sed "s|^$module/||" | tr '\n' ' ')
+  echo "ci-test: cut off before these packages reported: ${unfinished% }"
+  exit 0
+fi
 count=${CI_TEST_COUNT:-1}
 timeout=${CI_TEST_TIMEOUT:-30m}
 read -r -a packages <<< "${CI_TEST_PACKAGES:-./...}"
