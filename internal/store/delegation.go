@@ -400,10 +400,12 @@ type DelegationAttempt struct {
 	Host SessionHost `json:"host"`
 }
 
-// SessionHost is the identity of the process hosting a terminal session, a
-// tmux server's, as the delegation attempt records it: the identifier and
-// the start time internal/agents' Identity carries, which is what a
-// placement by ancestry compares. The zero value is no host.
+// SessionHost is the identity of the process hosting a terminal session: a
+// tmux server's, as the delegation attempt records it, or the herdr server's
+// of a worker on a remote host, as the task attempt records it, read on that
+// host's kernel. It is the identifier and the start time internal/agents'
+// Identity carries, which is what a placement by ancestry compares. The zero
+// value is no host.
 type SessionHost struct {
 	// PID is the host process's identifier.
 	PID int `json:"pid"`

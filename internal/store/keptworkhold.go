@@ -12,7 +12,7 @@ import (
 // work starts": while a project has an open kept work entry, no new task in
 // that project dispatches. This file is the one statement of which entries
 // hold which task, keptWorkHoldingTx, read by KeptWorkHolding and by
-// BeginDispatchAttempt's claim, so the wait a surface shows and the refusal a
+// every dispatch claim, so the wait a surface shows and the refusal a
 // dispatch meets cannot disagree about what holds it.
 //
 // A task a carry-on claim names is held, first, by the entries it carries
@@ -29,8 +29,9 @@ import (
 // the session was recorded, leaves its task held like a fresh one.
 //
 // The hold is checked at both of the moments new work begins, each inside
-// the transaction that records it: BeginDispatchAttempt, the attempt claim a
-// dispatch makes before it cuts a copy, and ClaimAttemptLaunch, the claim a
+// the transaction that records it: the attempt claim a dispatch makes before
+// it cuts a copy (BeginFirstTaskAttempt, or BeginDispatchAttempt for a
+// dispatch retried after an attempt that never launched), and ClaimAttemptLaunch, the claim a
 // launch makes immediately before it starts the worker's process. An entry
 // recorded after a dispatch claimed its attempt therefore still stops the
 // worker from starting. What neither closes is the instant between the
@@ -118,13 +119,15 @@ func (s *Store) OpenKeptWorkOf(ctx context.Context, repositoryID string) ([]Kept
 	return out, nil
 }
 
-// BeginDispatchAttempt is BeginTaskAttempt for a dispatch: the same anchored
-// claim, made only when the task is not held by kept work, which it decides
-// from keptWorkHoldingTx in the transaction that would write the attempt. A
-// held task is refused with a *DispatchHeldError and nothing is written, so
-// an entry recorded after a dispatcher's own read still holds the dispatch
-// at its claim. A relaunch, which is not new task work, claims through
-// BeginTaskAttempt and is never held.
+// BeginDispatchAttempt is BeginTaskAttempt for a dispatch retried after an
+// attempt that never launched: the same anchored claim, made only when the
+// task is not held by kept work, which it decides from keptWorkHoldingTx in
+// the transaction that would write the attempt. A held task is refused with
+// a *DispatchHeldError and nothing is written, so an entry recorded after a
+// dispatcher's own read still holds the dispatch at its claim. A first
+// dispatch is BeginFirstTaskAttempt's, which is held the same way. A
+// relaunch, which is not new task work, claims through BeginTaskAttempt and
+// is never held.
 func (s *Store) BeginDispatchAttempt(ctx context.Context, taskID string, expectedLatest int64) (TaskAttempt, error) {
 	return s.beginTaskAttempt(ctx, taskID, expectedLatest, true)
 }
@@ -155,14 +158,10 @@ func (s *Store) ClaimAttemptLaunch(ctx context.Context, taskID string, sequence 
 		if claimed.IsKnown() {
 			return fmt.Errorf("task %s attempt %d: %w", taskID, sequence, ErrAttemptLaunchClaimed)
 		}
-		holding, project, err := keptWorkHoldingTx(ctx, tx, taskID)
-		if err != nil {
+		if err := refuseHeldDispatchTx(ctx, tx, taskID); err != nil {
 			return err
 		}
-		if len(holding) > 0 {
-			return &DispatchHeldError{Task: taskID, Repository: project, Entries: holding}
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE task_attempt SET launch_claimed_at = ? WHERE task_id = ? AND sequence = ?`,
+		_, err := tx.ExecContext(ctx, `UPDATE task_attempt SET launch_claimed_at = ? WHERE task_id = ? AND sequence = ?`,
 			encodeTime(nowUTC()), taskID, sequence)
 		return err
 	})
@@ -171,6 +170,19 @@ func (s *Store) ClaimAttemptLaunch(ctx context.Context, taskID string, sequence 
 		return fmt.Errorf("store: claiming the launch of task %s attempt %d: %w", taskID, sequence, err)
 	}
 	return err
+}
+
+// refuseHeldDispatchTx refuses, with a *DispatchHeldError naming the
+// entries, a task keptWorkHoldingTx says kept work holds.
+func refuseHeldDispatchTx(ctx context.Context, tx *sql.Tx, taskID string) error {
+	holding, project, err := keptWorkHoldingTx(ctx, tx, taskID)
+	if err != nil {
+		return err
+	}
+	if len(holding) > 0 {
+		return &DispatchHeldError{Task: taskID, Repository: project, Entries: holding}
+	}
+	return nil
 }
 
 // keptWorkHoldingTx is the hold's one predicate, on this file's terms. It

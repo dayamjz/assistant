@@ -190,7 +190,7 @@ func TestADiscardAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testi
 		t.Fatal(err)
 	}
 	_ = records.Close()
-	advanceUpstream(t, git(t, subject, "remote", "get-url", "origin"), "unrelated.txt")
+	advanceUpstream(t, git(t, subject, "remote", "get-url", "origin"), "unrelated.txt", "someone else's work\n", "someone else's work")
 
 	withService(t, h, func(under serviceUnderTest) {
 		deadline := time.Now().Add(30 * time.Second)
@@ -210,19 +210,20 @@ func TestADiscardAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testi
 	})
 }
 
-// advanceUpstream lands a commit on the upstream's main that no copy holds,
-// from a clone of its own, the way another person's push moves it.
-func advanceUpstream(t *testing.T, upstream, file string) string {
+// advanceUpstream commits content to path on the bare upstream's default
+// branch from a clone of its own, the way another person's landing moves
+// it, and returns the commit.
+func advanceUpstream(t *testing.T, upstream, path, content, message string) string {
 	t.Helper()
-	pusher := filepath.Join(t.TempDir(), "pusher")
-	git(t, filepath.Dir(pusher), "clone", "--quiet", upstream, pusher)
-	if err := writeFile(filepath.Join(pusher, file), "someone else's work\n"); err != nil {
+	clone := t.TempDir()
+	git(t, clone, "clone", "--quiet", upstream, ".")
+	if err := os.WriteFile(filepath.Join(clone, path), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	git(t, pusher, "add", "-A")
-	git(t, pusher, "commit", "--quiet", "-m", "someone else's work")
-	git(t, pusher, "push", "--quiet", "origin", "HEAD:main")
-	return git(t, pusher, "rev-parse", "HEAD")
+	git(t, clone, "add", "-A")
+	git(t, clone, "commit", "--quiet", "-m", message)
+	git(t, clone, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+	return git(t, clone, "rev-parse", "HEAD")
 }
 
 // A discard's digest seals the whole stash list, not the stash's tip, the

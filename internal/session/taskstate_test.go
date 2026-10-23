@@ -34,7 +34,7 @@ func TestTaskstateResolvesThroughTheRealProvider(t *testing.T) {
 	if _, err := st.CreateTask(ctx, store.Task{ID: sub.id, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: sub.isolation.Copy}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := st.BeginTaskAttempt(ctx, sub.id, 0)
+	attempt, err := st.BeginFirstTaskAttempt(ctx, sub.id, store.OnThisMachine())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestTaskstateResolvesThroughTheRealProvider(t *testing.T) {
 	if _, err := st.AppendTaskEvent(ctx, sub.id, "working", "the worker says so"); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetAttemptSession(ctx, sub.id, attempt.Sequence, s.Reference().String()); err != nil {
+	if err := st.SetAttemptSession(ctx, sub.id, attempt.Sequence, s.Reference().String(), store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	probe := func(ctx context.Context, ref string) taskstate.Liveness { return p.Probe(ctx, ref).Liveness }

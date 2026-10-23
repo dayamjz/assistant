@@ -15,7 +15,6 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/supervisor/feed"
@@ -381,7 +380,7 @@ func (s *Service) parkedRun(ctx context.Context, repositoryID, branch string) (*
 // the rest of a status is still worth having.
 func (s *Service) branchState(ctx context.Context, workingPath string) *machine.Branch {
 	state := &machine.Branch{WorkingPath: workingPath}
-	working, err := vcs.OpenWorktree(ctx, workingPath, vcs.WithRedactor(redact.New()))
+	working, err := vcs.OpenWorktree(ctx, workingPath, s.git()...)
 	if err != nil {
 		state.Detail = err.Error()
 		return state

@@ -84,6 +84,14 @@ func TestMain(m *testing.M) {
 		helperMain(mode)
 		return
 	}
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	os.Exit(standin.RunOwned(m.Run))
 }
 

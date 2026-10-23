@@ -87,8 +87,10 @@ func TestAPromotionTouchesNoKeptWorkButItsCopys(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	streamWorkerOf(t, store.TaskInvestigation, "", nil, func(w launched, _ *standin.Agent) {
 		ctx := t.Context()
-		own := keptOnCopyOf(t, w)
+		// The other investigation ran, and so was dispatched, before the
+		// running one's entry was open, which would have held it.
 		_, other := plantKeptInvestigation(t, w.home, w.repository.WorkingPath, w.repository.ID)
+		own := keptOnCopyOf(t, w)
 
 		if _, err := promoteRunningInvestigation(t, w, "task/promoted", "local"); err == nil {
 			t.Fatal("a promotion asking for a posture lighter than the project's was not refused")
@@ -107,7 +109,7 @@ func TestAPromotionTouchesNoKeptWorkButItsCopys(t *testing.T) {
 		if untouched, err := recordsOf(t, w.home).KeptWorkEntry(ctx, other.ID); err != nil || !untouched.Open() {
 			t.Fatalf("the promotion touched another copy's entry: %+v, %v", untouched, err)
 		}
-		if _, err := recordsOf(t, w.home).KeptWorkEntry(ctx, other.ID+1); !errors.Is(err, store.ErrNotFound) {
+		if _, err := recordsOf(t, w.home).KeptWorkEntry(ctx, max(own.ID, other.ID)+1); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("the promotion wrote an entry of its own: %v", err)
 		}
 	})

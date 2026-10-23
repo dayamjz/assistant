@@ -21,7 +21,7 @@ func keptHoldTask(t *testing.T, s *Store, id, repo, branch string) {
 }
 
 // While a project has an open kept work entry, a new task in it is held at
-// its dispatch claim and nowhere else: BeginDispatchAttempt refuses it with
+// its dispatch claim and nowhere else: BeginFirstTaskAttempt refuses it with
 // the typed refusal naming the entry and writes no attempt, KeptWorkHolding
 // reads the same entry, and the relaunch claim is not held. A task in
 // another project, a task launched before, and a task naming no project are
@@ -45,9 +45,10 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 	keptHoldTask(t, s, "taskelsewher", "repo-2", "one")
 	seedTask(t, s, "tasknoprojct")
 	a := beginAttempt(t, s, "tasklaunched", 0)
-	if err := s.SetAttemptSession(ctx, "tasklaunched", a.Sequence, "ref-1"); err != nil {
+	if err := s.SetAttemptSession(ctx, "tasklaunched", a.Sequence, "ref-1", SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
+	relaunched := beginAttempt(t, s, "taskrelaunch", 0)
 
 	// An entry naming no project holds nothing anywhere.
 	if _, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: "tasknoprojct", CopyPath: "/tasks/tasknoprojct/copy",
@@ -69,11 +70,11 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].ID != entry.ID {
 		t.Fatalf("KeptWorkHolding(held) = %+v, %v; want the run's entry", got, err)
 	}
-	_, err = s.BeginDispatchAttempt(ctx, "taskheldnewa", 0)
+	_, err = s.BeginFirstTaskAttempt(ctx, "taskheldnewa", OnThisMachine())
 	var held *DispatchHeldError
 	if !errors.As(err, &held) || !errors.Is(err, ErrDispatchHeld) || held.Task != "taskheldnewa" || held.Repository != "repo-1" ||
 		len(held.Entries) != 1 || held.Entries[0].ID != entry.ID {
-		t.Fatalf("BeginDispatchAttempt(held) = %v; want a *DispatchHeldError naming entry %d", err, entry.ID)
+		t.Fatalf("BeginFirstTaskAttempt(held) = %v; want a *DispatchHeldError naming entry %d", err, entry.ID)
 	}
 	if attempts, err := s.TaskAttempts(ctx, "taskheldnewa"); err != nil || len(attempts) != 0 {
 		t.Fatalf("a held dispatch wrote attempts %+v, %v", attempts, err)
@@ -83,13 +84,13 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 			t.Errorf("KeptWorkHolding(%s) = %+v, %v; want none", id, got, err)
 		}
 	}
-	if _, err := s.BeginDispatchAttempt(ctx, "taskelsewher", 0); err != nil {
+	if _, err := s.BeginFirstTaskAttempt(ctx, "taskelsewher", OnThisMachine()); err != nil {
 		t.Errorf("a task in another project was refused: %v", err)
 	}
 	if _, err := s.BeginDispatchAttempt(ctx, "tasklaunched", a.Sequence); err != nil {
 		t.Errorf("a task launched before was refused: %v", err)
 	}
-	if _, err := s.BeginTaskAttempt(ctx, "taskrelaunch", 0); err != nil {
+	if _, err := s.BeginTaskAttempt(ctx, "taskrelaunch", relaunched.Sequence); err != nil {
 		t.Errorf("the relaunch claim was held: %v", err)
 	}
 	if _, err := s.KeptWorkHolding(ctx, "tasknobodyaa"); !errors.Is(err, ErrNotFound) {
@@ -103,7 +104,7 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 	if got, err := s.KeptWorkHolding(ctx, "taskheldnewa"); err != nil || len(got) != 0 {
 		t.Fatalf("after the answer KeptWorkHolding(held) = %+v, %v; want none", got, err)
 	}
-	if _, err := s.BeginDispatchAttempt(ctx, "taskheldnewa", 0); err != nil {
+	if _, err := s.BeginFirstTaskAttempt(ctx, "taskheldnewa", OnThisMachine()); err != nil {
 		t.Fatalf("after the answer the dispatch was refused: %v", err)
 	}
 	if kept, err := s.OpenKeptWorkOf(ctx, "repo-1"); err != nil || len(kept) != 0 {
@@ -143,7 +144,7 @@ func TestALaunchClaimWithNoStartedWorkerLeavesItsTaskHeld(t *testing.T) {
 	if err := s.ClaimAttemptLaunch(ctx, "taskstarteda", started.Sequence); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetAttemptSession(ctx, "taskstarteda", started.Sequence, "ref-started"); err != nil {
+	if err := s.SetAttemptSession(ctx, "taskstarteda", started.Sequence, "ref-started", SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 

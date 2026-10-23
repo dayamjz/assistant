@@ -11,7 +11,6 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/machine"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -61,9 +60,13 @@ import (
 // # The claim is the attempt, and the dispatched entry is not it
 //
 // Two dispatchers of one task cannot both cut: the dispatch is claimed by
-// store.BeginTaskAttempt, anchored to the highest attempt this dispatcher
-// read, and the loser is refused with ErrTaskMoved before it reads the
-// primary or touches the path. The "dispatched" entry intake or Release
+// store.BeginFirstTaskAttempt for a task with no attempt, and by
+// store.BeginDispatchAttempt, store.BeginTaskAttempt held by kept work, for a
+// retry, each anchored to the highest attempt
+// this dispatcher read, and the loser is refused with ErrTaskMoved before it
+// reads the primary or touches the path. The first claim records the task's
+// machine, and it is always this one: this build reads no remote host, so it
+// places every task here, and a retry stays where the first claim put it. The "dispatched" entry intake or Release
 // appended is the state fact the dispatch is decided from, and it is never
 // the claim: it says the task is to be dispatched, not that anyone is.
 //
@@ -136,8 +139,9 @@ import (
 // was never claimed is not dispatched or launched. internal/store owns which
 // entries hold which task (keptworkhold.go), and three places ask it: this
 // file through KeptWorkHolding right after the task's resolution is read,
-// before any sweep, clone or claim; store.BeginDispatchAttempt inside the
-// attempt claim; and store.ClaimAttemptLaunch inside the launch claim
+// before any sweep, clone or claim; inside the attempt claim
+// (store.BeginFirstTaskAttempt, or store.BeginDispatchAttempt for a retry);
+// and store.ClaimAttemptLaunch inside the launch claim
 // launch.go makes as its last write before the worker's process starts. The
 // last is what binds the hold to the launch itself: an entry recorded while
 // the copy is cut or asserted is read by that claim, and the worker is not
@@ -594,7 +598,12 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	if s.betweenAttemptReadAndClaim != nil {
 		s.betweenAttemptReadAndClaim()
 	}
-	attempt, err := s.store.BeginDispatchAttempt(ctx, id, latest)
+	var attempt store.TaskAttempt
+	if latest == 0 {
+		attempt, err = s.store.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine())
+	} else {
+		attempt, err = s.store.BeginDispatchAttempt(ctx, id, latest)
+	}
 	if err != nil {
 		return dispatched{}, err
 	}
@@ -618,7 +627,7 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 
 	// The observation and the proof.
 	env := agents.WorkerEnvironment(os.Environ(), nil)
-	obs, err := vcs.Observe(ctx, copyPath, vcs.WithRedactor(redact.New()))
+	obs, err := vcs.Observe(ctx, copyPath, s.git()...)
 	if err != nil {
 		if errors.Is(err, vcs.ErrNotARepository) {
 			return dispatched{}, s.refuseIsolation(ctx, id, attempt.Sequence, resolved.State.Basis.EventSequence,
@@ -640,7 +649,7 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	}
 
 	// The copy's snapshot, then the line the worker is told to run.
-	snapshot, err := copySnapshot(ctx, proof.Copy)
+	snapshot, err := s.copySnapshot(ctx, proof.Copy)
 	if err != nil {
 		return dispatched{}, fmt.Errorf("service: reading the references of the copy of task %s: %w", id, err)
 	}
@@ -734,7 +743,7 @@ func (s *Service) gatePathOf(ctx context.Context, repository store.Repository) (
 // which is the base a task's copy starts from. A primary with no local
 // default branch is refused: the base would otherwise be invented.
 func (s *Service) recordPrimary(ctx context.Context, id string, attempt int64, repository store.Repository) (string, error) {
-	primary, err := vcs.OpenWorktree(ctx, repository.WorkingPath, vcs.WithRedactor(redact.New()))
+	primary, err := vcs.OpenWorktree(ctx, repository.WorkingPath, s.git()...)
 	if err != nil {
 		return "", fmt.Errorf("service: opening the primary checkout of task %s: %w", id, err)
 	}
@@ -780,7 +789,7 @@ func (s *Service) cutTaskCopy(ctx context.Context, record store.Task, primary, c
 	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
 		return fmt.Errorf("service: creating the directory of task %s: %w", record.ID, err)
 	}
-	cloned, err := vcs.Clone(ctx, primary, copyPath, "", vcs.WithRedactor(redact.New()))
+	cloned, err := vcs.Clone(ctx, primary, copyPath, "", s.git()...)
 	if err != nil {
 		return fmt.Errorf("service: cloning the primary checkout for task %s: %w", record.ID, err)
 	}
@@ -848,8 +857,8 @@ const isolationRefusedKind = "isolation-refused"
 
 // copySnapshot reads what the proven copy holds: HEAD, the branch it is on,
 // and every reference, through internal/vcs's read-only operations.
-func copySnapshot(ctx context.Context, copyPath string) (store.CopySnapshot, error) {
-	copied, err := vcs.OpenWorktree(ctx, copyPath, vcs.WithRedactor(redact.New()))
+func (s *Service) copySnapshot(ctx context.Context, copyPath string) (store.CopySnapshot, error) {
+	copied, err := vcs.OpenWorktree(ctx, copyPath, s.git()...)
 	if err != nil {
 		return store.CopySnapshot{}, err
 	}

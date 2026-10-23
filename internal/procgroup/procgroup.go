@@ -3,13 +3,18 @@
 // or its context ends. It is PRD section 8's "the program runs in a process
 // group that the invoker ends when the call returns or times out", as one
 // mechanism the packages that invoke short-lived programs share rather than
-// each writing their own: internal/vcs runs git through it and
-// internal/forge runs gh through it, and internal/agents waits on its lsof
-// run through AwaitExit.
+// each writing their own. internal/vcs runs git through it, internal/forge
+// gh, internal/stages a configured command line, internal/agents its
+// forceful tree kill, lsof and its tmux clients, internal/managed launchctl
+// and systemctl, and internal/journey the build of the binary it tests.
+// internal/procgroup/guard fails the build on a program started anywhere
+// else that its exception list does not name.
 //
 // It decides nothing about what a program's exit means. Run returns what
-// os/exec's Wait reported, or a refusal of its own, and the caller reads its
-// context's error to tell an expiry from an answer.
+// os/exec's Wait reported joined to exec.ErrWaitDelay when the output did not
+// reach its end, or a refusal of its own, and the caller reads its context's
+// error to tell an expiry from an answer, and exec.ErrWaitDelay before it
+// reads output beside a status it accepts.
 //
 // # The one rule about signalling
 //
@@ -42,6 +47,8 @@
 //     group, so no later incarnation reclaims it.
 //   - A leader SIGKILL does not end within the grace is left to a goroutine
 //     that reaps it once it exits, and Run answers ErrAbandoned without it.
+//     Its exit status is then nobody's: the goroutine reaps it without
+//     writing cmd.ProcessState, which stays nil.
 //   - Anything else in this process that reaped every child, a wait on any
 //     process, would undo the unreaped guarantee. Nothing in this module
 //     does.
@@ -53,20 +60,39 @@ package procgroup
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"time"
 )
+
+// Command returns the command that runs name with args, not yet started,
+// for Run. It is exec.Command and nothing more, here so that no package but
+// this one names os/exec's constructor, which internal/procgroup/guard holds
+// them to. Building a command here does not put it on this package's terms;
+// only Run does, and the guard fails a call to one of *exec.Cmd's starting
+// methods outside this package as well.
+func Command(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
+}
 
 // ErrAbandoned is Run's answer when the context ended, the group was sent
 // SIGKILL, and the leader still had not exited within the grace. The leader is
 // reaped by a goroutine once it does exit, and nothing it wrote is reported.
+// It reports no exit status either: cmd.ProcessState is nil and stays nil, so
+// a caller reading it reads "no status" and races nothing, and a caller may
+// not call cmd.Wait on an abandoned program.
 var ErrAbandoned = errors.New("procgroup: the program did not exit within the grace after its group was killed")
 
 // ErrMisconfigured is Run's refusal of a command it cannot start on its own
 // terms: one built with exec.CommandContext, whose own cancellation would end
-// the leader alone on a schedule Run does not own; one whose SysProcAttr is
-// already set, which Run would have to overwrite to start the group; or a
-// grace of zero or less, which would bound nothing.
-// Nothing is started.
+// the leader alone on a schedule Run does not own, still refused when its
+// Cancel has been set back to nil because the context remains; one whose
+// SysProcAttr is
+// already set, which Run would have to overwrite to start the group; one
+// with a stream from its StdinPipe, StdoutPipe or StderrPipe, whose end in
+// this process only cmd.Wait closes, which the reap ErrAbandoned leaves does
+// not call; or a grace of zero or less, which would bound nothing.
+// Nothing is started, and Run closes no end of such a pipe: both ends are as
+// os/exec left them, which is open until the caller closes them.
 var ErrMisconfigured = errors.New("procgroup: the command cannot be run as a group of its own")
 
 // Bound returns ctx itself when it already carries a deadline, and otherwise

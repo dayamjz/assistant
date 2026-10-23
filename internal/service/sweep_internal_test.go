@@ -72,6 +72,18 @@ func requireSweepClearsHere(t *testing.T, unestablished string) {
 	limit := fmt.Sprintf("this host has %d process(es) outside any copy under test whose working directory this service cannot read and "+
 		"which neither of agents.Sweeper's carve-outs sets aside (%s), so every sweep here refuses to clear, as P6 requires, and "+
 		"%s is not established here", len(r.UnreadableBlocking), agents.DescribeBlockers(r.UnreadableBlocking), unestablished)
+	sweepLimit(t, limit)
+}
+
+// sweepLimit ends a test at a limit of this host's, a sweep refused only by
+// processes outside every copy under test whose working directory this
+// service cannot read: it skips with limit, which names them as
+// agents.DescribeBlockers does, so a log shows which processes they were.
+// Where standin.RequireSweepClearVar is set it fails the test with limit
+// instead, so the lane CI sets it on cannot pass by not having established
+// what limit names. It is the one place this package's tests decide that.
+func sweepLimit(t *testing.T, limit string) {
+	t.Helper()
 	if os.Getenv(standin.RequireSweepClearVar) != "" {
 		t.Fatalf("%s is set and %s", standin.RequireSweepClearVar, limit)
 	}

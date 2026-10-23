@@ -69,6 +69,7 @@ func (r invocationRecorder) RecordInvocation(rec agents.Record) {
 		Type:                store.Known(rec.Type),
 		Version:             store.Known(rec.Version),
 		Effort:              store.Known(rec.Effort),
+		ContextWindow:       store.Known(rec.ContextWindow),
 	})
 	if err != nil && r.s.log != nil {
 		r.s.log.Printf("dropping an agent invocation record: %v", err)

@@ -53,6 +53,14 @@ func TestMain(m *testing.M) {
 	// take no terminal of their own; a test's push is a person's, and the
 	// gate places one by a terminal's foreground on the pushing chain.
 	standin.AtTerminal()
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	os.Exit(standin.RunOwned(func() int { return runQuietly(m) }))
 }
 
@@ -68,7 +76,7 @@ func TestMain(m *testing.M) {
 // raw git helper above still names an absent file of its own, so what a test
 // builds by hand is insulated from this one as it was from the machine's.
 func runQuietly(m *testing.M) int {
-	dir, err := os.MkdirTemp("", "gitconfig")
+	dir, err := standin.TempDir("gitconfig")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "making the quiet git configuration:", err)
 		return 1
@@ -139,9 +147,10 @@ const callVerb = "ipc-call"
 // group: the credentials the service reads are then that process's, which
 // the kernel attributes and the test could not state. It takes the socket,
 // the method and the parameters as JSON, writes the answer to standard
-// output, and on a refusal writes the wire code to standard error and exits
-// non-zero. A streaming method is opened rather than called, and "{}" is
-// the answer that it opened. Nothing here decides anything: it is internal/ipc's client over
+// output, and on a refusal writes the wire error, its code and its message
+// both, to standard error as JSON and exits 1, which refusedWith reads. A
+// streaming method is opened rather than called, and "{}" is the answer that
+// it opened. Nothing here decides anything: it is internal/ipc's client over
 // the arguments it was given.
 func callMain() {
 	if len(os.Args) != 5 || os.Args[1] != callVerb {
@@ -159,14 +168,13 @@ func callMain() {
 	if spec, ok := ipc.Lookup(ipc.Method(method)); ok && spec.Kind == ipc.KindStream {
 		// A stream answers with events rather than a result, so what this
 		// reports is whether the service opened it: "{}" when it did, and
-		// the refusal's code when it did not, which is the half a test
+		// the refusal when it did not, which is the half a test
 		// placing this process in a worker's group asks about.
 		stream, err := client.SubscribeTo(ctx, ipc.Method(method), json.RawMessage(params))
 		if err != nil {
 			var wire *ipc.Error
 			if errors.As(err, &wire) {
-				fmt.Fprint(os.Stderr, string(wire.Code))
-				os.Exit(1)
+				writeRefusal(wire)
 			}
 			fmt.Fprintln(os.Stderr, "subscribe:", err)
 			os.Exit(2)
@@ -179,14 +187,23 @@ func callMain() {
 	if err := client.Call(ctx, ipc.Method(method), json.RawMessage(params), &answer); err != nil {
 		var wire *ipc.Error
 		if errors.As(err, &wire) {
-			fmt.Fprint(os.Stderr, string(wire.Code))
-			os.Exit(1)
+			writeRefusal(wire)
 		}
 		fmt.Fprintln(os.Stderr, "call:", err)
 		os.Exit(2)
 	}
 	fmt.Fprint(os.Stdout, string(answer))
 	os.Exit(0)
+}
+
+// writeRefusal is callMain's refusal: the wire error as JSON on standard
+// error, then exit status 1.
+func writeRefusal(wire *ipc.Error) {
+	if err := json.NewEncoder(os.Stderr).Encode(wire); err != nil {
+		fmt.Fprintln(os.Stderr, "encoding the refusal:", err)
+		os.Exit(2)
+	}
+	os.Exit(1)
 }
 
 // listenVerb is the first argument that makes this binary hold the wake
@@ -280,7 +297,7 @@ func requiresIdentifiedPeer(t *testing.T) {
 // named after a test would produce, so this does not use t.TempDir.
 func newHome(t *testing.T) *home.Home {
 	t.Helper()
-	root, err := os.MkdirTemp("", "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}
@@ -335,7 +352,7 @@ func git(t *testing.T, dir string, args ...string) string {
 // that short circuit rather than the walk it is about.
 func newSubject(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "s")
+	dir, err := standin.TempDir("s")
 	if err != nil {
 		t.Fatalf("making a subject repository: %v", err)
 	}
@@ -346,7 +363,7 @@ func newSubject(t *testing.T) string {
 	}
 	git(t, dir, "add", "-A")
 	git(t, dir, "commit", "--quiet", "-m", "first")
-	upstream, err := os.MkdirTemp("", "u")
+	upstream, err := standin.TempDir("u")
 	if err != nil {
 		t.Fatalf("making an upstream repository: %v", err)
 	}
@@ -518,11 +535,15 @@ func (cursorFactory) Name() string { return agents.CursorName }
 
 func (cursorFactory) AutoEligible() bool { return false }
 
+func (f cursorFactory) Declares() agents.Capabilities { return f.runner.Capabilities() }
+
 func (f cursorFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 
 func (f fixedFactory) Name() string { return f.runner.Name() }
 
 func (f fixedFactory) AutoEligible() bool { return true }
+
+func (f fixedFactory) Declares() agents.Capabilities { return f.runner.Capabilities() }
 
 func (f fixedFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 

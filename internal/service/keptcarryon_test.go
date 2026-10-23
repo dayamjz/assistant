@@ -71,10 +71,10 @@ func plantInvestigationCopy(t *testing.T, h *home.Home, subject, repositoryID, r
 	}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.SetAttemptSession(ctx, id, 1, "pane-gone"); err != nil {
+	if err := records.SetAttemptSession(ctx, id, 1, "pane-gone", store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	instructions, err := h.TaskInstructions(id)
@@ -843,7 +843,7 @@ func TestACarryOnTakesTheKeptCopyByIdentityAndNotAnUpstreamClone(t *testing.T) {
 	git(t, entry.CopyPath, "commit", "--quiet", "-m", "the worker's second commit")
 	b := git(t, entry.CopyPath, "rev-parse", "HEAD")
 	git(t, entry.CopyPath, "push", "--quiet", repository.UpstreamURL, a+":refs/heads/main")
-	advanceUpstream(t, repository.UpstreamURL, "c.txt")
+	advanceUpstream(t, repository.UpstreamURL, "c.txt", "someone else's work\n", "someone else's work")
 
 	stopped := errors.New("the service stopped between the copy's move and the entry's mark")
 	o, _ := workerOptions(t, h)
@@ -1002,10 +1002,10 @@ func TestAKeptCopyWhoseBranchStandsAwayFromHEADIsNotCarriedOn(t *testing.T) {
 	}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.BeginTaskAttempt(t.Context(), id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(t.Context(), id, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone"); err != nil {
+	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone", store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	// The task ended, as a task whose copy is kept has, so it no longer
@@ -1108,10 +1108,10 @@ func TestAKeptCopyWhoseTaskBranchCannotBeCreatedIsNotCarriedOn(t *testing.T) {
 	}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.BeginTaskAttempt(t.Context(), id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(t.Context(), id, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone"); err != nil {
+	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone", store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	// The task ended, as a task whose copy is kept has, so it no longer

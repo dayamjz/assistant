@@ -131,12 +131,13 @@
 // deadline and run in a process group the invoker ends when the call returns
 // or times out. Every git this package starts goes through internal/procgroup
 // for that, ServeReceivePack included. The deadline is the caller's context's,
-// or the handle's invocation deadline (WithInvocationDeadline, ten minutes by
-// default) where that context carries none, as one derived through
-// context.WithoutCancel does not. On linux and darwin git is the leader of a
-// group of its own, and the whole group is sent SIGKILL when git exits and
-// when the deadline passes, before git is reaped, so a descendant still in
-// the group neither outlives the call nor holds its output pipes.
+// or the handle's invocation deadline (WithInvocationDeadline, which
+// internal/service sets from the operator's git_deadline, and otherwise
+// DefaultInvocationDeadline) where that context carries none, as one derived
+// through context.WithoutCancel does not. On linux and darwin git is the
+// leader of a group of its own, and the whole group is sent SIGKILL when git
+// exits and when the deadline passes, before git is reaped, so a descendant
+// still in the group neither outlives the call nor holds its output pipes.
 //
 // What this does not cover is procgroup's to state, and its package comment
 // does: a descendant that left the group is not ended, only stops being

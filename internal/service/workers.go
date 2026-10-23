@@ -403,7 +403,7 @@ func (s *Service) listWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	if err != nil {
 		return machine.Wakes{}, err
 	}
-	return s.drainBoth(ctx, limit, s.wakeHandout(req, p))
+	return s.drainAll(ctx, limit, s.wakeHandout(req, p))
 }
 
 // peekWakes is a person's reading of the queue: every queued row, handed
@@ -427,8 +427,12 @@ func (s *Service) peekWakes(ctx context.Context, req ipc.Request, r machine.Wake
 		return machine.QueuedWakes{}, err
 	}
 	var domainWakes []store.DomainWake
+	var keptWorkWakes []store.KeptWorkWake
 	if !p.isSubordinate {
 		if domainWakes, err = s.store.QueuedDomainWakes(ctx, limit); err != nil {
+			return machine.QueuedWakes{}, err
+		}
+		if keptWorkWakes, err = s.store.QueuedKeptWorkWakes(ctx, limit); err != nil {
 			return machine.QueuedWakes{}, err
 		}
 	}
@@ -447,6 +451,7 @@ func (s *Service) peekWakes(ctx context.Context, req ipc.Request, r machine.Wake
 		out.Wakes = append(out.Wakes, machine.QueuedWake{Wake: w, Project: project})
 	}
 	out.DomainWakes = domainWakes
+	out.KeptWorkWakes = keptWorkWakes
 	return out, nil
 }
 
@@ -478,13 +483,19 @@ func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machi
 	if err != nil {
 		return machine.Acknowledged{}, err
 	}
-	if len(r.Wakes)+len(r.DomainWakes) == 0 {
+	if len(r.Wakes)+len(r.DomainWakes)+len(r.KeptWorkWakes) == 0 {
 		return machine.Acknowledged{}, fmt.Errorf("%w: an acknowledgement names no wakes", ipc.ErrInvalidRequest)
 	}
 	if p.isSubordinate && len(r.DomainWakes) > 0 {
 		// Every wake about a domain is about a subordinate, and the first
 		// coordinator alone acts on one.
 		return machine.Acknowledged{}, fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, and a wake about a domain is the first coordinator's to close",
+			ipc.ErrSubordinate, peerOf(req), p.subordinate.Domain)
+	}
+	if p.isSubordinate && len(r.KeptWorkWakes) > 0 {
+		// A wake about a kept work entry no task names is in no domain, so
+		// the first coordinator alone acts on one.
+		return machine.Acknowledged{}, fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, and a wake about kept work no task names is the first coordinator's to close",
 			ipc.ErrSubordinate, peerOf(req), p.subordinate.Domain)
 	}
 	if p.isSubordinate {
@@ -522,13 +533,13 @@ func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machi
 		}
 		return err
 	}
-	// The two shapes are one batch, all or nothing: store.AcknowledgeAll
-	// checks every row of both before it writes any, in one transaction,
-	// so a refused domain row leaves every task row named open too.
-	if err := s.store.AcknowledgeAll(ctx, r.Wakes, r.DomainWakes, by); err != nil {
+	// The shapes are one batch, all or nothing: store.AcknowledgeAll
+	// checks every row of each before it writes any, in one transaction,
+	// so a refused row of one shape leaves every row named open too.
+	if err := s.store.AcknowledgeAll(ctx, r.Wakes, r.DomainWakes, r.KeptWorkWakes, by); err != nil {
 		return machine.Acknowledged{}, refusal(err)
 	}
-	return machine.Acknowledged{Wakes: r.Wakes, DomainWakes: r.DomainWakes, By: by.String()}, nil
+	return machine.Acknowledged{Wakes: r.Wakes, DomainWakes: r.DomainWakes, KeptWorkWakes: r.KeptWorkWakes, By: by.String()}, nil
 }
 
 // assertSupervision is PRD section 5's arm verification over this home,

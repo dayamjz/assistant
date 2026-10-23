@@ -361,6 +361,9 @@ func fixtures(t *testing.T) map[string]any {
 				Handouts: store.Known(int64(1))}},
 			{Project: "the parser", Wake: store.Wake{ID: 8, TaskID: sampleID, Kind: string(supervisor.KindHoldOpened), Marker: "hold:" + sampleID,
 				CreatedAt: time.Date(2026, 10, 13, 9, 2, 0, 0, time.UTC)}},
+		}, KeptWorkWakes: []store.KeptWorkWake{
+			{ID: 3, KeptWork: 4, Project: store.Known("the parser"), Branch: store.Known("feature/parser"), Kind: string(supervisor.KindKeptWork), Marker: "kept-work:4",
+				CreatedAt: time.Date(2026, 10, 13, 9, 3, 0, 0, time.UTC)},
 		}},
 		"wakes acknowledged": machine.Acknowledged{Wakes: []int64{7}, By: store.AcknowledgedByCoordinator().String()},
 		"supervision":        supervisor.Arm{Outcome: supervisor.ArmAttached, Sequence: 12},
@@ -932,7 +935,7 @@ func TestEveryEventTypeHasAPhrase(t *testing.T) {
 			if line != machine.PhraseWorkerSpoke.String() {
 				t.Errorf("a worker's history entry renders %q", line)
 			}
-		case ipc.TypeWakeQueued, ipc.TypeDomainWakeQueued:
+		case ipc.TypeWakeQueued, ipc.TypeDomainWakeQueued, ipc.TypeKeptWorkWakeQueued:
 			if line != machine.PhraseNoticeQueued.String() {
 				t.Errorf("a pushed wake renders %q", line)
 			}

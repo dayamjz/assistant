@@ -90,6 +90,12 @@ type WakeRequest struct {
 	Kind string
 	// Marker is the detector's idempotency component.
 	Marker string
+	// Surfaces names the kept work entry the wake raises, unknown for a
+	// wake that raises none. When the wake is appended the entry's
+	// surfaced_at is recorded in the same transaction, on
+	// AppendKeptWorkWake's terms, so no entry is left raised and not
+	// recorded as surfaced. An entry that does not exist is ErrNotFound.
+	Surfaces Optional[int64]
 }
 
 // WakeDisposition is what AppendWakeWithMarkers did with the wake. The zero
@@ -264,16 +270,22 @@ func (s *Store) AppendWakeWithMarkers(ctx context.Context, inc Incarnation, w Wa
 		case !isNoRows(err):
 			return err
 		}
+		now := nowUTC()
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO wake (task_id, kind, marker, created_at, handled_at, acknowledged_by)
 			VALUES (?, ?, ?, ?, NULL, NULL)`,
-			w.TaskID, w.Kind, w.Marker, encodeTime(nowUTC()))
+			w.TaskID, w.Kind, w.Marker, encodeTime(now))
 		if err != nil {
 			return err
 		}
 		id, err := result.LastInsertId()
 		if err != nil {
 			return err
+		}
+		if entry, ok := w.Surfaces.Get(); ok {
+			if err := markKeptWorkSurfacedTx(ctx, tx, entry, now); err != nil {
+				return err
+			}
 		}
 		appended, err := scanWake(tx.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE id = ?`, id))
 		if err != nil {
@@ -726,36 +738,49 @@ func drainWakesTx(ctx context.Context, tx *sql.Tx, limit int, h WakeHandout) ([]
 	return out, nil
 }
 
-// DrainBoth is DrainWakes and DrainDomainWakes under one handout in one
-// transaction: the task rows, then the domain rows, each bounded by limit,
-// and the second none on a subordinate's route. Either both shapes are
-// handed out or neither is, so a drain whose second half fails, or whose
-// context ends between the two, leaves no row handed out that its caller
-// was not given.
-func (s *Store) DrainBoth(ctx context.Context, limit int, h WakeHandout) ([]Wake, []DomainWake, error) {
+// Drained is one drain of every shape the queue has, handed out under one
+// handout in one transaction.
+type Drained struct {
+	Wakes         []Wake
+	DomainWakes   []DomainWake
+	KeptWorkWakes []KeptWorkWake
+}
+
+// DrainAll is DrainWakes, DrainDomainWakes and the kept-work wakes' drain
+// under one handout in one transaction: the task rows, then the domain
+// rows, then the kept-work rows, each bounded by limit, and the last two
+// none on a subordinate's route. Every shape is handed out or none is, so
+// a drain whose later half fails, or whose context ends between two, leaves
+// no row handed out that its caller was not given.
+func (s *Store) DrainAll(ctx context.Context, limit int, h WakeHandout) (Drained, error) {
 	if limit < 1 {
-		return nil, nil, fmt.Errorf("store: a drain limit of %d is not a batch size", limit)
+		return Drained{}, fmt.Errorf("store: a drain limit of %d is not a batch size", limit)
 	}
 	if err := h.validate(); err != nil {
-		return nil, nil, fmt.Errorf("store: draining wakes: %w", err)
+		return Drained{}, fmt.Errorf("store: draining wakes: %w", err)
 	}
-	var wakes []Wake
-	var domainWakes []DomainWake
+	var out Drained
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		if wakes, err = drainWakesTx(ctx, tx, limit, h); err != nil {
+		if out.Wakes, err = drainWakesTx(ctx, tx, limit, h); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		domainWakes, err = drainDomainWakesTx(ctx, tx, limit, h)
+		if out.DomainWakes, err = drainDomainWakesTx(ctx, tx, limit, h); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		out.KeptWorkWakes, err = drainKeptWorkWakesTx(ctx, tx, limit, h)
 		return err
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("store: draining wakes: %w", err)
+		return Drained{}, fmt.Errorf("store: draining wakes: %w", err)
 	}
-	return wakes, domainWakes, nil
+	return out, nil
 }
 
 // TaskWakes returns every wake of a task, acknowledged or not, oldest first.
@@ -862,15 +887,15 @@ func acknowledgeWakesTx(ctx context.Context, tx *sql.Tx, ids []int64, who, now s
 	return nil
 }
 
-// AcknowledgeAll acknowledges task wakes and domain wakes in one
-// transaction, on AcknowledgeWakes' and AcknowledgeDomainWakes' terms for
-// each shape: every row of both shapes is checked before any is written,
-// so a batch naming one row of either shape that is unknown or already
-// acknowledged closes nothing, which is the whole-batch refusal an
-// acknowledgement naming both shapes is held to. A batch naming no row of
-// either shape is refused.
-func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes []int64, by Acknowledger) error {
-	if len(wakes)+len(domainWakes) == 0 {
+// AcknowledgeAll acknowledges task wakes, domain wakes and kept-work wakes
+// in one transaction, on AcknowledgeWakes' and AcknowledgeDomainWakes'
+// terms for each shape: every row of every shape is checked before any is
+// written, so a batch naming one row of any shape that is unknown or
+// already acknowledged closes nothing, which is the whole-batch refusal an
+// acknowledgement naming several shapes is held to. A batch naming no row
+// of any shape is refused.
+func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes, keptWorkWakes []int64, by Acknowledger) error {
+	if len(wakes)+len(domainWakes)+len(keptWorkWakes) == 0 {
 		return errors.New("store: an acknowledgement names no wakes")
 	}
 	who, err := acknowledgerText(by)
@@ -885,7 +910,12 @@ func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes []int64, 
 			}
 		}
 		if len(domainWakes) > 0 {
-			return acknowledgeDomainWakesTx(ctx, tx, domainWakes, who, now)
+			if err := acknowledgeDomainWakesTx(ctx, tx, domainWakes, who, now); err != nil {
+				return err
+			}
+		}
+		if len(keptWorkWakes) > 0 {
+			return keptWorkWakeShape.acknowledgeTx(ctx, tx, keptWorkWakes, who, now)
 		}
 		return nil
 	})

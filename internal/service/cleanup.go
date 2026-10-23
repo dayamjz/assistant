@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
@@ -79,8 +80,9 @@ import (
 // (store.KeptWork, written by internal/tasks' Keep); recovery reaches it too,
 // through reclaimAtRecovery, for a finished run whose copy still stands. What
 // surfaces the entry is the supervisor loop, as a kept-work wake about the
-// task the entry's owner is or is attributed to, and the status and catch-up
-// reads, which list every open entry; supervise.go and catchup.go own
+// task the entry's owner is or is attributed to, or about the entry itself
+// when no task names it, and the status and catch-up reads, which list
+// every open entry; supervise.go, keptworkwake.go and catchup.go own
 // those. An entry closes without an answer only when its copy is removed
 // on a P12 proof: internal/store's MarkCleanupRemoved and
 // MarkRunCleanupRemoved close the owner's open entries in the transaction
@@ -365,11 +367,26 @@ func (s *Service) logCleanup(ctx context.Context, done tasks.Cleanup, err error)
 		s.log.Printf("the isolated copy of task %s: %s on %s", done.Task, done.Result, done.Proof)
 		s.redispatchAfterRemoval()
 	case errors.As(err, &refused):
-		s.log.Printf("the isolated copy of task %s is left standing (%s): %s", refused.Task, refused.Reason, refused.Detail)
+		s.log.Printf("the isolated copy of task %s is left standing (%s): %s", refused.Task, refused.Reason, refusalAccount(refused))
 		if kept, ok := tasks.KeptOf(refused); ok {
 			s.keepWork(ctx, kept)
 		}
 	default:
 		s.log.Printf("the isolated copy of task %s was not cleaned up: %v", done.Task, err)
 	}
+}
+
+// refusalAccount is what the log says about a refused task cleanup after its
+// reason. A refusal no proof was attempted for says its own detail; one the
+// proofs answered is machine.CopyUnprovenPhrase over every attempt, so the
+// log says which proof found what rather than only that none held.
+func refusalAccount(r *tasks.CleanupRefusal) string {
+	if len(r.Attempts) == 0 {
+		return r.Detail
+	}
+	found := make([]machine.ProofFinding, 0, len(r.Attempts))
+	for _, a := range r.Attempts {
+		found = append(found, machine.ProofFinding{Proof: a.Proof, Found: a.Detail})
+	}
+	return machine.CopyUnprovenPhrase(found).String()
 }

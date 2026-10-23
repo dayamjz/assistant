@@ -20,7 +20,9 @@ paths: ["internal/supervisor/**"]
   subordinate's two kinds; the first is carried on `internal/store`'s domain
   wake, and `InFlightOf` counts those rows as a third input.
 - `kept-work` is PRD section 6's kept work, actionable and never a
-  subordinate's, raised once per kept work entry on the task wake.
+  subordinate's, raised once per kept work entry: on the task wake, or on
+  `internal/store`'s kept-work wake for an entry no task names, whose
+  queued rows `InFlightOf` counts with the domain wakes.
 
 Read both `doc.go` files (`doc.go` and `feed/doc.go`) before changing any of
 that, and for the residual gaps; `kind.go` is the one owner of what a wake kind

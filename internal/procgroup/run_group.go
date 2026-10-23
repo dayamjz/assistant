@@ -13,7 +13,9 @@ import (
 
 // Run starts cmd as the leader of a process group of its own and waits for
 // it. cmd is built with exec.Command and not yet started; its streams,
-// directory and environment are the caller's.
+// directory and environment are the caller's. A stream is a file, a reader
+// or writer, or nil, never a pipe from cmd's StdinPipe, StdoutPipe or
+// StderrPipe, which Run refuses.
 //
 // When the leader exits, by itself or otherwise, the group is sent SIGKILL
 // before the leader is reaped, so a descendant still in the group cannot go
@@ -41,14 +43,22 @@ import (
 // writer in flight, which then ends without writing again; and, for
 // ErrAbandoned, a goroutine that reaps the leader once it exits.
 //
+// For ErrAbandoned, cmd.ProcessState is nil when Run returns and stays nil
+// once that goroutine has reaped the leader, which it does through
+// cmd.Process and not cmd.Wait: an abandoned program has no exit status for
+// the caller, and nothing Run left running writes a field of cmd. cmd.Wait
+// must not be called on it.
+//
 // cmd.Process is nil exactly when nothing was started, and the error is then
 // ErrMisconfigured when Run refused cmd, ctx's error when ctx had already
 // ended, or cmd.Start's or a pipe's. Once the program started, the error is
-// ErrAbandoned as above, or cmd.Wait's when it reports one, such as the
-// *exec.ExitError of a failing status, and otherwise what the copying
-// reported; the failure to observe the leader's exit is joined to it when
-// that observation failed, in which case the group was still ended before
-// the reap. Run does not put ctx's error in place of any of these: the
+// ErrAbandoned as above, or otherwise cmd.Wait's, such as the
+// *exec.ExitError of a failing status, joined to what the copying reported,
+// so a failing status never hides output that was cut: a caller that
+// accepts a status as an answer checks for exec.ErrWaitDelay before it reads
+// the output as whole. The failure to observe the leader's exit is joined to
+// it when that observation failed, in which case the group was still ended
+// before the reap. Run does not put ctx's error in place of any of these: the
 // caller reads ctx.Err() to tell an expiry from an answer.
 func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 	if err := check(cmd, grace); err != nil {
@@ -86,10 +96,17 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 			timer.Stop()
 			endGroup(pgid)
 		case <-timer.C:
+			// The reap goes through cmd.Process rather than cmd.Wait,
+			// which would write cmd.ProcessState after Run returned and
+			// race every caller reading it. check refused a command built
+			// with a context, including one whose Cancel was set back to
+			// nil, and os/exec's own pipes, and every stream the child
+			// holds is a file or nil, so cmd.Wait would have nothing else
+			// to finish: no copier, no pipe end to close, no watchCtx.
 			go func() {
 				<-exited
 				endGroup(pgid)
-				_ = cmd.Wait()
+				_, _ = cmd.Process.Wait()
 			}()
 			_ = s.cut(grace)
 			return ErrAbandoned
@@ -97,11 +114,10 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 	}
 	// Every stream the child holds is a file or nil, so os/exec starts no
 	// copying goroutine and this returns once the leader is reaped.
-	waitErr := cmd.Wait()
-	copyErr := s.finish(grace)
-	if waitErr == nil {
-		waitErr = copyErr
-	}
+	// Both are reported: a failing status says how the program ended and
+	// says nothing about whether its output reached its end, so a caller
+	// that accepts the status still has to be told when the copy was cut.
+	waitErr := errors.Join(cmd.Wait(), s.finish(grace))
 	if observeErr != nil {
 		return errors.Join(fmt.Errorf("procgroup: observing the exit of %d: %w", pgid, observeErr), waitErr)
 	}

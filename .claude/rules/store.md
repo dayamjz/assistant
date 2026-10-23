@@ -19,6 +19,12 @@ paths: ["internal/store/**"]
   queue's second shape, a wake about a domain, owned by the delegation row and
   under the wake table's seals; `AppendDomainWakeWithMarkers` is its one
   append and advances `delegation_marker` in the same transaction.
+  keptWorkWakesMigration's `kept_work_wake` is the third shape, PRD section
+  8's kept-work wake about an entry no task names, owned by the entry, once
+  per entry; `AppendKeptWorkWake` is its one append and records the entry's
+  `surfaced_at` in the same transaction. `untaskedShape` serves the second
+  and third shapes' offer, handout and acknowledgement; `DrainAll` and
+  `AcknowledgeAll` take every shape in one transaction.
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'
@@ -49,8 +55,10 @@ paths: ["internal/store/**"]
   and `MarkRunCleanupRemoved` in the removal's transaction, never a discard.
   `surfaced_at` is the one other column that moves, only forward. `ForgetRepository` and
   `RepositoryRemovable` refuse a repository with an open entry
-  (`*KeptWorkOpenError`), and a run's entry goes with its run only once it
-  is answered or closed. Eject's preflight is `ReserveRepositoryRemoval`,
+  (`*KeptWorkOpenError`) or an unacknowledged kept-work wake about one
+  (`ErrKeptWorkWakeQueued`), and a run's entry, its wake and the wake's
+  notification go with its run only once it is answered or closed and the
+  wake acknowledged. Eject's preflight is `ReserveRepositoryRemoval`,
   which writes `repository_removal`, naming the eject's process, in the
   transaction that found the repository forgettable; `CreateRun` refuses a
   run of a reserved repository (`ErrRepositoryBeingRemoved`), and nothing
@@ -58,26 +66,27 @@ paths: ["internal/store/**"]
   reservation whose owner is gone when it opens. `keptworkhold.go` is the
   dispatch hold's one predicate: a task naming a project, none of whose
   attempts recorded a session (a claim alone proves no worker started),
-  whose project has an open entry; `BeginDispatchAttempt`
-  and `ClaimAttemptLaunch` (the last write before a worker starts) refuse
+  whose project has an open entry; the dispatch claims
+  (`BeginFirstTaskAttempt`, and `BeginDispatchAttempt` for a retried
+  dispatch) and `ClaimAttemptLaunch` (the last write before a worker starts) refuse
   it with `*DispatchHeldError` in their own transactions, and
   `BeginTaskAttempt`, the relaunch claim, is never held. Every answer is
   two facts, so an entry closes only in the write that records its
-  outcome and an answer under way leaves it open and listed. Migration 54
+  outcome and an answer under way leaves it open and listed. keptWorkLandingMigration
   records a landing so: the claim (`landing_claimed_at`, who and when),
   written whole on an open entry by `ClaimKeptWorkLanding`, once, so two
   landings of an entry claim once between them, and withdrawn whole by
   `WithdrawKeptWorkLanding` when no run could be started; and the answer,
   written only with `landed_run` by `RecordKeptWorkLanding`, which the
   triggers enforce. `KeptWork.Key` and `ParseKeptWorkKey` are the one
-  spelling of `--hold kept-work/N`. Migration 55 records a carry on as two
+  spelling of `--hold kept-work/N`. keptWorkCarryOnMigration records a carry on as two
   facts: the claim (`carried_on_task`, the task's reserved identifier, with
   the copy's identity, who and when), written whole on an open entry by
   `ClaimKeptWorkCarryOn`, which leaves it open and listed, and withdrawn
   whole by `WithdrawKeptWorkCarryOn` only while the task's row does not
   exist; and the answer, written only with `carried_on_at` by
   `MarkKeptWorkCarriedOn`, given the task the claim names, once that task
-  exists and owns the copy, which the triggers enforce; migration 56 records a
+  exists and owns the copy, which the triggers enforce; keptWorkDiscardMigration records a
   discard as two facts: the person's confirmation (`discard_digest`, what
   it was shown, with the commits, who and when), written whole on an open
   entry by `ConfirmKeptWorkDiscard`, which leaves it open and listed, and
@@ -97,6 +106,18 @@ paths: ["internal/store/**"]
   write in the flip's transaction, as PRD
   section 6's promotion paragraph says; it takes the promoter's `Resolver`
   for that.
+- taskMachineMigration's `task.machine` is PRD section 8's machine a task
+  runs on, the one place it is stored: written once, for a remote host, by
+  `BeginFirstTaskAttempt` (the dispatch, the only first attempt; a carry on
+  names its entry through `CarriedOnFrom` and never a machine), sealed by
+  trigger from the first attempt on, and NULL for this machine. A remote
+  worker's herdr server (`host_pid`, `host_start`) is written with its
+  attempt's session reference by `SetAttemptSession` and only for a remote
+  task. A session reference and a kept work entry point at the task row and
+  hold no copy.
+- runRebaseMigration's `run_rebase` is the run rebase record the rebase
+  stage writes through `RecordRunRebase`, held to the run row's submitted
+  commit (`ErrRebaseNotOfRun`), written once, and gone only with its run.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number
   what they append from the shipped list rather than spelling a version out.

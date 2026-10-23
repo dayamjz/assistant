@@ -157,7 +157,7 @@ func Route(ctx context.Context, catalog *Catalog, entries []string, need Capabil
 			skipped = append(skipped, Unavailability{Entry: entry, Name: name, Reason: SkipCannotRun, Err: err})
 			continue
 		}
-		declared, err := verifyDeclaration(name, runner)
+		declared, err := verifyDeclaration(name, factory, runner)
 		if err != nil {
 			return Selection{}, err
 		}

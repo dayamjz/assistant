@@ -3,7 +3,7 @@
 `assistant` runs a fleet of coding agents in parallel and puts a validation gate
 in front of your remote, so no change reaches a shared branch until it has been
 independently reviewed, tested, documented, and linted. Package rules are in
-`.claude/rules/<package>.md`; see Code.
+`.claude/rules/<package>.md`; see Code. When writing usage/cost examples or reports, follow [the usage-reporting rule](.claude/rules/usage-reporting.md) so reported token usage is never mistaken for billing.
 
 ## The specification is checked in
 
@@ -136,11 +136,29 @@ repository more than one round of review.
   out to git. Only `internal/agents` starts an agent process. Only
   `internal/findings` parses, normalizes, validates, or refuses a report; there
   is never a second parser.
+- A temporary directory a test makes with `os.MkdirTemp` is
+  `standin.TempDir`'s. `RegisterTempTag` records the caller's directory
+  inside the module as the namespace. A slash and an underscore in that
+  directory stay distinct. An absolute path is made relative by walking up
+  to `go.mod`; a non-absolute path is accepted only as the main module path
+  plus that directory, the form `-trimpath` records, and is not opened.
+  `TempDir` and `SweepTempDirs` use only that recorded namespace. The
+  package's `TestMain` registers and sweeps before tests. A live owner, and
+  a name that does not parse, are left. Go's `t.TempDir` and `go-build*`
+  directories, and a scratch directory the product makes for itself, are
+  not this.
 - Only `internal/home` spells a path under the home root, except
   `<home>/repos/<id>.git`, which `internal/gate` composes itself. Only
   `internal/managed` writes a service definition or invokes `launchctl`
   or `systemctl`. Only `internal/checkpoints` serializes a `graph.Checkpoint`
   outside `internal/graph`.
+- Only `internal/procgroup` names a starter, an entry of
+  `internal/procgroup/guard`'s `Starters` (os/exec's constructors and
+  starting methods, `os.StartProcess`, and the syscall and x/sys calls that
+  start a program): build a command with `procgroup.Command` and run it with
+  `procgroup.Run`. The functions that may do otherwise are the rows of the
+  guard's `Exceptions`, each with a typed reason; its test fails the build on
+  any other use in non-test code, and on a row that covers none.
 - Credential removal is `internal/redact`'s: a new shape is added there, never
   a second remover at a call site. A sentence a person reads is a row in
   `internal/machine`'s phrase table (`phrases.go`), never one at a renderer.

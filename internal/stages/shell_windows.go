@@ -3,12 +3,15 @@
 package stages
 
 import (
-	"context"
 	"os"
 	"os/exec"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
-// shellCommand builds the process one configured command line runs as.
+// shellCommand builds the process one configured command line runs as,
+// unstarted and with no context, for runCommand to run through
+// procgroup.Run, which owns its deadline and its process group.
 //
 // The line reaches the interpreter as a single argument, on the same terms as
 // the other platform: a commands.* value is a line of shell per PRD section
@@ -30,8 +33,8 @@ import (
 // is this platform's own way of naming the command interpreter, and pinning
 // past it would override that convention to buy a determinism property no PRD
 // section asks for; it is named here rather than defeated.
-func shellCommand(ctx context.Context, command, dir string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, interpreter(), "/c", command)
+func shellCommand(command, dir string) *exec.Cmd {
+	cmd := procgroup.Command(interpreter(), "/c", command)
 	cmd.Dir = dir
 	return cmd
 }

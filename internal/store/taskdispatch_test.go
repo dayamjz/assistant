@@ -67,7 +67,7 @@ func TestPrimarySnapshotIsWrittenOncePerAttempt(t *testing.T) {
 	if _, err := s.RecordPrimarySnapshot(ctx, before); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a snapshot for an attempt that does not exist = %v, want ErrNotFound", err)
 	}
-	if _, err := s.BeginTaskAttempt(ctx, task.ID, 0); err != nil {
+	if _, err := s.BeginFirstTaskAttempt(ctx, task.ID, OnThisMachine()); err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}
 	recorded, err := s.RecordPrimarySnapshot(ctx, before)

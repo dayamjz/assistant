@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -353,7 +354,8 @@ func keepTaskCopy(t *testing.T, h *home.Home, id string) store.KeptWork {
 	}
 	defer func() { _ = records.Close() }()
 	cleaner, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records,
-		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))})
+		Forge:       forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))),
+		GitDeadline: config.DefaultGitDeadline})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,10 +416,10 @@ func TestALandingIsRefusedWhenHEADLeavesAHeldCommitBehind(t *testing.T) {
 	}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.BeginTaskAttempt(t.Context(), id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(t.Context(), id, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone"); err != nil {
+	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone", store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	_ = records.Close()
@@ -515,10 +517,10 @@ func plantKeptDelivery(t *testing.T, h *home.Home, repository store.Repository, 
 	}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.BeginTaskAttempt(t.Context(), id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(t.Context(), id, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone"); err != nil {
+	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone", store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	_ = records.Close()

@@ -96,7 +96,7 @@ func newCleanupSubject(t *testing.T, script forgetest.Script) *cleanupSubject {
 		t.Fatalf("UpsertRepository: %v", err)
 	}
 	provider := forgetest.New(t, script)
-	cleaner, err := NewCleaner(CleanupDeps{Home: h, Store: s, Forge: provider.Host()})
+	cleaner, err := NewCleaner(CleanupDeps{Home: h, Store: s, Forge: provider.Host(), GitDeadline: vcs.DefaultInvocationDeadline})
 	if err != nil {
 		t.Fatalf("NewCleaner: %v", err)
 	}
@@ -160,7 +160,7 @@ func (s *cleanupSubject) record(t *testing.T, shape store.TaskShape, branch stor
 	}, store.Disposition{}); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if _, err := s.store.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := s.store.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {

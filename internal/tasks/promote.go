@@ -11,7 +11,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/gate"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -420,7 +419,7 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 		}
 		return Promoted{}, &PromotionRefusal{Task: req.Task, Reason: reason, Event: event, Written: written, Cause: cause}
 	}
-	obs, err := vcs.Observe(ctx, copyPath, vcs.WithRedactor(redact.New()))
+	obs, err := vcs.Observe(ctx, copyPath, q.git...)
 	if err != nil {
 		if !errors.Is(err, vcs.ErrNotARepository) {
 			return Promoted{}, fmt.Errorf("tasks: observing the copy of task %s: %w", req.Task, err)
@@ -441,7 +440,7 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 		}
 	}
 
-	copied, err := vcs.OpenWorktree(ctx, copyPath, vcs.WithRedactor(redact.New()))
+	copied, err := vcs.OpenWorktree(ctx, copyPath, q.git...)
 	if err != nil {
 		return Promoted{}, fmt.Errorf("tasks: opening the copy of task %s: %w", req.Task, err)
 	}
@@ -457,7 +456,7 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 	}
 	out.Head = head
 
-	obs, err = vcs.Observe(ctx, copyPath, vcs.WithRedactor(redact.New()))
+	obs, err = vcs.Observe(ctx, copyPath, q.git...)
 	if err != nil {
 		return Promoted{}, fmt.Errorf("tasks: observing the shaped copy of task %s: %w", req.Task, err)
 	}

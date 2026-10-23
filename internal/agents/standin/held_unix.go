@@ -107,10 +107,7 @@ func recordHeldIdentity(path string) error {
 		return errors.New("this process's start time could not be read")
 	}
 	line := strconv.Itoa(id.PID) + " " + strconv.FormatUint(id.Start, 10) + "\n"
-	if err := os.WriteFile(path+".tmp", []byte(line), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(path+".tmp", path)
+	return writeWhole(path, []byte(line))
 }
 
 // HeldWait is the shell command that runs this binary as the held process

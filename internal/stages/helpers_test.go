@@ -18,11 +18,22 @@ import (
 // internal/gate's and internal/service's own tests do: a working copy
 // assembled with the code under test could not show that code wrong.
 //
-// It runs with the developer's own git configuration out of the way and with
-// the author and committer identity stated, so what a test builds does not
-// depend on the machine it runs on.
+// It runs on gitCommand's terms.
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	out, err := gitCommand(dir, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// gitCommand is the one git command every helper here runs, in dir: with the
+// developer's own git configuration out of the way, automatic maintenance
+// off, and the author and committer identity stated, so what a test builds
+// does not depend on the machine it runs on and no automatic maintenance is
+// forked into the background to outlive it.
+func gitCommand(dir string, args ...string) *exec.Cmd {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
@@ -36,24 +47,14 @@ func git(t *testing.T, dir string, args ...string) string {
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
 		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
 	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
-	}
-	return strings.TrimSpace(string(out))
+	return cmd
 }
 
 // isAncestor reports whether ancestor is reachable from descendant in dir's
 // repository, without failing the test when the answer is no.
 func isAncestor(t *testing.T, dir, ancestor, descendant string) bool {
 	t.Helper()
-	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, ".gitconfig-absent"),
-		"GIT_CONFIG_SYSTEM="+filepath.Join(dir, ".gitconfig-absent"),
-	)
-	return cmd.Run() == nil
+	return gitCommand(dir, "merge-base", "--is-ancestor", ancestor, descendant).Run() == nil
 }
 
 // newHome opens a home under a temporary root.

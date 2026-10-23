@@ -11,7 +11,7 @@ import (
 
 // gateLaunch is one program role resolved for the launches that role owns.
 // pinned is false when the role names no agent, which means the service
-// agent list, with no model and no effort.
+// agent list, with no model, no effort, and no context window.
 type gateLaunch struct {
 	pinned   bool
 	runner   agents.Runner
@@ -22,6 +22,7 @@ type gateLaunch struct {
 	version  string
 	model    string
 	effort   string
+	window   string
 }
 
 // fields is the attribution a launch of roleName carries. An unpinned role
@@ -29,7 +30,7 @@ type gateLaunch struct {
 func (g gateLaunch) fields(roleName string) roleFields {
 	return roleFields{
 		role: roleName, provider: g.provider, typ: g.typ, version: g.version,
-		model: g.model, effort: g.effort,
+		model: g.model, effort: g.effort, window: g.window,
 	}
 }
 
@@ -37,8 +38,9 @@ func (g gateLaunch) fields(roleName string) roleFields {
 //
 // A role that is absent, and a role that names no agent, uses the service
 // agent. A role that names an agent is a pin of that one name: an agent that
-// cannot run, a model the adapter has not declared, and an effort it has not
-// declared are refused here. An explicit backup is resolved lazily only
+// cannot run, a model the adapter has not declared, a context window it has
+// not declared on that model, and an effort it has not declared are refused
+// here, naming the role. An explicit backup is resolved lazily only
 // after a recognized availability failure; it cannot cover invalid settings.
 // The worker role is not resolved here; launch.go owns that path.
 func (s *Service) gateRole(ctx context.Context, roleName string) (gateLaunch, error) {
@@ -51,15 +53,15 @@ func (s *Service) gateRole(ctx context.Context, roleName string) (gateLaunch, er
 
 func (s *Service) gateRoleChoice(ctx context.Context, roleName string, role config.Role) (gateLaunch, error) {
 	if role.Agent == "" {
-		if role.Provider != "" || role.Effort != "" {
-			return gateLaunch{}, fmt.Errorf("service: the %s role names a model or an effort and no agent", roleName)
+		if role.Provider != "" || role.Effort != "" || role.ContextWindow != "" {
+			return gateLaunch{}, fmt.Errorf("service: the %s role names a model, an effort, or a context window and no agent", roleName)
 		}
 		return gateLaunch{}, nil
 	}
 	var requestedModel string
-	if role.Provider != "" {
+	if role.Provider != "" || role.ContextWindow != "" {
 		var err error
-		requestedModel, err = agents.Translate(role.Agent, role.Provider, role.Type, role.Version)
+		requestedModel, err = agents.Translate(role.Agent, role.Provider, role.Type, role.Version, role.ContextWindow)
 		if err != nil {
 			return gateLaunch{}, fmt.Errorf("service: the %s role: %w", roleName, err)
 		}
@@ -103,7 +105,7 @@ func (s *Service) gateRoleChoice(ctx context.Context, roleName string, role conf
 			if deferred.caps.Has(agents.CapabilityResumableSessions) {
 				runner = &deferredRoleSessions{deferredRoleRunner: deferred}
 			}
-			primary = gateLaunch{pinned: true, runner: runner, caps: deferred.caps, name: role.Agent, provider: role.Provider, typ: role.Type, version: role.Version, model: requestedModel, effort: role.Effort}
+			primary = gateLaunch{pinned: true, runner: runner, caps: deferred.caps, name: role.Agent, provider: role.Provider, typ: role.Type, version: role.Version, model: requestedModel, effort: role.Effort, window: role.ContextWindow}
 		}
 		primary.runner = agents.WithFallback(stampRunner(primary.runner, primary.fields(roleName)), openBackup)
 		return primary, nil
@@ -123,6 +125,7 @@ func (s *Service) gateRoleChoice(ctx context.Context, roleName string, role conf
 		version:  role.Version,
 		model:    requestedModel,
 		effort:   role.Effort,
+		window:   role.ContextWindow,
 	}, nil
 }
 
@@ -193,10 +196,10 @@ func (p purposeRunner) Run(ctx context.Context, purpose agents.Purpose, inv agen
 }
 
 // roleFields is what a review or fix launch records about the role: the
-// role name, the triple and effort it named, and the model identifier the
-// adapter was asked to start. Empty text is not named.
+// role name, the triple, effort, and context window it named, and the model
+// identifier the adapter was asked to start. Empty text is not named.
 type roleFields struct {
-	role, provider, typ, version, model, effort string
+	role, provider, typ, version, model, effort, window string
 }
 
 func (f roleFields) apply(inv agents.Invocation) agents.Invocation {
@@ -205,6 +208,7 @@ func (f roleFields) apply(inv agents.Invocation) agents.Invocation {
 	inv.Type = f.typ
 	inv.Version = f.version
 	inv.Effort = f.effort
+	inv.ContextWindow = f.window
 	if f.model != "" {
 		inv.Model = f.model
 	}

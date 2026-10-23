@@ -24,6 +24,34 @@ func landKept(t *testing.T, s *Store, id int64) KeptWork {
 	return k
 }
 
+// discardKept answers the entry discard the way a discard does: confirmed
+// on a digest, then marked once the copy is gone.
+func discardKept(t *testing.T, s *Store, id int64) KeptWork {
+	t.Helper()
+	if _, err := s.ConfirmKeptWorkDiscard(context.Background(), id, fmt.Sprintf("digest-%d", id), nil, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	k, err := s.MarkKeptWorkDiscarded(context.Background(), id, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+// carryOnKept answers the entry carry on the way a carry on does: claimed
+// naming task, whose row must exist, then marked carried on by it.
+func carryOnKept(t *testing.T, s *Store, id int64, task string) KeptWork {
+	t.Helper()
+	if _, err := s.ClaimKeptWorkCarryOn(context.Background(), id, task, fmt.Sprintf("copy-of-%d", id), ResolvedByPerson()); err != nil {
+		t.Fatal(err)
+	}
+	k, err := s.MarkKeptWorkCarriedOn(context.Background(), id, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
 // An entry's key round-trips through ParseKeptWorkKey and nothing else
 // parses: a hold's key, a finding id, a sign, a zero and an empty number are
 // all refused.

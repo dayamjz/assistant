@@ -38,7 +38,9 @@ type Call struct {
 	Dir string `json:"dir"`
 	// Step is the index of the script step that answered this invocation, or
 	// -1 when no step matched and the stand-in exited with ExitUnscripted. It
-	// is -1 for a worker, which no step answers.
+	// is -1 for a worker, which no step answers, and for a Cursor one-shot
+	// the modelled CLI refused before any step was chosen, because its
+	// command line did not tell the CLI to trust its directory.
 	Step int `json:"step"`
 	// Worker reports that this process was started as a worker rather than
 	// as a one-shot invocation: the adapter put neither --print nor
@@ -217,28 +219,17 @@ func claimedPlaces(dir string) (int, error) {
 	return claimed, nil
 }
 
-// record writes the call beside the place it claimed, whole and then renamed,
-// so nothing partial is ever visible under the name a reader looks for.
+// record writes the call beside the place it claimed through writeWhole, so
+// nothing partial is ever visible under the name a reader looks for, and a
+// file a failed write leaves behind has ".partial-" and a random part after
+// recordSuffix, so it does not end in recordSuffix and is never read as a
+// call.
 func record(dir string, c Call) error {
 	encoded, err := json.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("encoding call %d: %w", c.Seq, err)
 	}
-	file, err := os.CreateTemp(dir, "recording-*")
-	if err != nil {
-		return fmt.Errorf("recording call %d: %w", c.Seq, err)
-	}
-	if _, err := file.Write(encoded); err != nil {
-		// The close is what would report a failure to flush, and this path
-		// already has a failure to report; the file it leaves behind is named
-		// as a recording in progress and is never read as a call.
-		_ = file.Close()
-		return fmt.Errorf("recording call %d: %w", c.Seq, err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("recording call %d: %w", c.Seq, err)
-	}
-	if err := os.Rename(file.Name(), placePath(dir, c.Seq, recordSuffix)); err != nil {
+	if err := writeWhole(placePath(dir, c.Seq, recordSuffix), encoded); err != nil {
 		return fmt.Errorf("recording call %d: %w", c.Seq, err)
 	}
 	return nil

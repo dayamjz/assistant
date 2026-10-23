@@ -39,7 +39,7 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	if err != nil {
 		return machine.Run{}, err
 	}
-	working, err := vcs.OpenWorktree(ctx, req.WorkingPath, vcs.WithRedactor(redact.New()))
+	working, err := vcs.OpenWorktree(ctx, req.WorkingPath, s.git()...)
 	if err != nil {
 		return machine.Run{}, err
 	}
@@ -162,7 +162,7 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 	if err != nil {
 		return machine.Run{}, err
 	}
-	working, err := vcs.OpenWorktree(ctx, req.WorkingPath, vcs.WithRedactor(redact.New()))
+	working, err := vcs.OpenWorktree(ctx, req.WorkingPath, s.git()...)
 	if err != nil {
 		return machine.Run{}, err
 	}

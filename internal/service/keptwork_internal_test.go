@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -44,10 +45,10 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	}, store.Disposition{}); err != nil {
 		t.Fatalf("recording the task: %v", err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.SetAttemptSession(ctx, id, 1, "pane-kept"); err != nil {
+	if err := records.SetAttemptSession(ctx, id, 1, "pane-kept", store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	// The copy holds a commit of the worker's that no remote has, and the
@@ -62,7 +63,7 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	heldGit(t, copyPath, "add", "-A")
 	heldGit(t, copyPath, "commit", "--quiet", "-m", "the worker's own commit")
 	head := heldGit(t, copyPath, "rev-parse", "HEAD")
-	reporter, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records, Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))})
+	reporter, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records, Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))), GitDeadline: config.DefaultGitDeadline})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +201,7 @@ func TestAnInterruptedTaskCopyRemovalIsCompletedAtTheNextOpen(t *testing.T) {
 	}
 
 	cleaner, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records,
-		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))})
+		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))), GitDeadline: config.DefaultGitDeadline})
 	if err != nil {
 		t.Fatal(err)
 	}
