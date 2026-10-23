@@ -227,7 +227,8 @@ func TestEveryCeilingCountIsAKeyOfTheSchema(t *testing.T) {
 
 // The hold the ceiling raises is an ask whose remedy lies outside the change,
 // so P3 holds it for a person and standing consent does not answer it with a
-// fix round; it carries the hold row and the exact figures, and a report of it
+// fix round; it is marked as a call that never started, which offers its hold
+// the retry; it carries the hold row and the exact figures, and a report of it
 // validates the way the stage node holds every report to.
 func TestTheCeilingHoldIsAnAskForAPersonCarryingTheFigures(t *testing.T) {
 	t.Parallel()
@@ -235,6 +236,12 @@ func TestTheCeilingHoldIsAnAskForAPersonCarryingTheFigures(t *testing.T) {
 	f := machine.CeilingHeldFinding(reached)
 	if f.Action != findings.ActionAsk || !f.RemedyOutsideChange || !f.Holds() || f.FixEligible() {
 		t.Errorf("the hold's finding is %+v, want an ask outside the change", f)
+	}
+	// Marked as work that never started, which is what offers the stage's
+	// hold PRD section 5's retry, and kept through the normalization every
+	// stage report passes.
+	if !f.NotStarted || !machine.CeilingHeldReport(reached).Normalize().HasHeldNotStarted() {
+		t.Errorf("the hold's finding is %+v, want it marked as a call that never started", f)
 	}
 	for _, part := range []string{machine.CeilingHoldPhrase(machine.CeilingReached).String(), "input_tokens 150 of 100 (reached)", "over the last 1d"} {
 		if !strings.Contains(f.Description, part) {

@@ -24,6 +24,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // TestAPushArrivingWhileARunsCopyIsBeingCutWaitsForItAndIsReceived is issue
@@ -263,7 +264,7 @@ read line <%[3]s
 exit 0
 `, shellWord(filepath.Join(dir, "taken")), shellWord(pausedPipe), shellWord(releasePipe))
 	hook := filepath.Join(repository, "hooks", "reference-transaction")
-	if err := os.WriteFile(hook, []byte(script), 0o700); err != nil {
+	if err := procgroup.WriteProgram(hook, []byte(script), 0o700); err != nil {
 		t.Fatalf("installing the pausing hook: %v", err)
 	}
 	cut := pausedCut{paused: make(chan struct{})}

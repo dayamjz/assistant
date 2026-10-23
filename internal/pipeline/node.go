@@ -21,15 +21,23 @@ import (
 // raised independent of the stage's implementation: a body cannot leave one
 // out, because it never handles it.
 //
+// automatic says the stage takes automatic fix rounds. Its node then also
+// reads RerunKey, and records OutcomeRerun rather than OutcomeFixable while
+// that key says the ceiling refused the last round, so the run takes that
+// round again as the one the refusal counted.
+//
 // repairing says this pipeline built the stage the path back to review, which
 // is a stage whose row says Stage.RepairsAfterPush given fix rounds. Its node
 // then also reads the run's head and the commit it pushed, and writes
 // KeyRepairs, the record of each repair it routes back, so the record is the
 // node's and a body can neither omit nor invent one.
-func stageNode(stage Stage, impl Implementation, fixed, repairing bool) graph.Node {
+func stageNode(stage Stage, impl Implementation, fixed, automatic, repairing bool) graph.Node {
 	adapterReads := []Key{KeySkip, KeyDiffEmpty, KeyNoCodeHost}
 	if fixed {
 		adapterReads = append(adapterReads, stage.HeldKey())
+	}
+	if automatic {
+		adapterReads = append(adapterReads, stage.RerunKey())
 	}
 	adapterWrites := []Key{stage.ReportKey(), stage.OutcomeKey()}
 	if repairing {
@@ -104,6 +112,15 @@ func stageNode(stage Stage, impl Implementation, fixed, repairing bool) graph.No
 					return err
 				}
 				outcome := classify(report)
+				if automatic && outcome == OutcomeFixable {
+					owed, err := r.Get(string(stage.RerunKey()))
+					if err != nil {
+						return err
+					}
+					if rerun, _ := owed.Bool(); rerun {
+						outcome = OutcomeRerun
+					}
+				}
 				if out.Rebase && out.Repair {
 					return fmt.Errorf("%w: %s", ErrTwoPathsBack, stage)
 				}
@@ -253,11 +270,19 @@ func holdNode(stage Stage, requests bool) graph.Node {
 
 // fixNode builds the node that applies one stage's fix-eligible findings. It
 // reads the report the stage recorded and the summary the last round wrote,
-// and it writes the summary this round wrote; everything else it touches is
-// what the fixer declared.
+// and it writes the summary this round wrote and whether the usage ceiling
+// refused the round, RerunKey; everything else it touches is what the fixer
+// declared.
+//
+// A refused round is one whose holds are all the program's mark of a call
+// that never started, findings.Finding.NotStarted, which only
+// machine.CeilingHeldFinding carries and no agent's report can, because
+// internal/findings clears it on every report it parses. The node does not
+// know which edge it was entered by: a round taken again over rerunEntry is
+// the same round, and writes the key the same way, false once it starts.
 func fixNode(stage Stage, fixer Fixer) graph.Node {
 	reads := union(fixer.Reads, stage.ReportKey(), stage.FixKey())
-	writes := union(fixer.Writes, stage.FixKey(), stage.HeldKey())
+	writes := union(fixer.Writes, stage.FixKey(), stage.HeldKey(), stage.RerunKey())
 	declared := keySet(fixer.Reads)
 	permitted := keySet(fixer.Writes)
 	return graph.Node{
@@ -309,10 +334,29 @@ func fixNode(stage Stage, fixer Fixer) graph.Node {
 				if err := w.Set(string(stage.HeldKey()), graph.TextValue(held)); err != nil {
 					return err
 				}
+				if err := w.Set(string(stage.RerunKey()), graph.BoolValue(refusedRound(out.Holds))); err != nil {
+					return err
+				}
 				return applyWrites(w, permitted, "the fixer for "+stage.String(), out.Writes)
 			}
 		},
 	}
+}
+
+// refusedRound reports whether holds, what one automatic fix round returned,
+// are what a round the usage ceiling refused returns: one or more, and every
+// one standing in for work that never started. A round whose fixer ran
+// returns only holds that fixer raised, which never carry the mark.
+func refusedRound(holds []findings.Finding) bool {
+	if len(holds) == 0 {
+		return false
+	}
+	for _, f := range holds {
+		if !f.NotStarted {
+			return false
+		}
+	}
+	return true
 }
 
 // requestNode builds the node that runs a fix round a person asked for at the

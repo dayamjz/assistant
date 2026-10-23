@@ -193,6 +193,7 @@ func parseThrough(raw string, demand *Demand, text func(string) string) (Report,
 			}
 			continue
 		}
+		report = report.agentWritten()
 		if text != nil {
 			report = report.Rewritten(text)
 		}

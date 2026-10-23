@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // gitRunner invokes git directly. This package is one of the two documented
@@ -327,11 +329,19 @@ func (g *gitRunner) writeExecutable(dir, rel, content string) error {
 // writeFile writes one file under root, creating its parents. mode is applied
 // as given, because the executable bit is part of what a planted hook is: a
 // harness distribution writes an executable, and a plant that wrote a
-// non-executable file would be a different condition.
+// non-executable file would be a different condition. A mode with an
+// execute bit is a program, written by procgroup.WriteProgram.
 func writeFile(root, rel string, mode os.FileMode, content string) error {
 	path := filepath.Join(root, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("fixture: creating the parent of %s: %w", path, err)
+	}
+	if mode&0o111 != 0 {
+		// A planted hook is a program git may run as soon as it is in place.
+		if err := procgroup.WriteProgram(path, []byte(content), mode); err != nil {
+			return fmt.Errorf("fixture: writing %s: %w", path, err)
+		}
+		return nil
 	}
 	if err := os.WriteFile(path, []byte(content), mode); err != nil {
 		return fmt.Errorf("fixture: writing %s: %w", path, err)
@@ -348,7 +358,8 @@ func writeFile(root, rel string, mode os.FileMode, content string) error {
 // the route the copied-working-directory condition arrives by: that condition
 // is about a working copy whose configuration was inherited by being copied,
 // and writing the same configuration into a fresh directory would produce a
-// state the product's own path never reaches.
+// state the product's own path never reaches. A file whose mode has an
+// execute bit is a program, written by procgroup.WriteProgram.
 func copyTree(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -375,6 +386,9 @@ func copyTree(src, dst string) error {
 			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
+			}
+			if mode := info.Mode().Perm(); mode&0o111 != 0 {
+				return procgroup.WriteProgram(target, data, mode)
 			}
 			return os.WriteFile(target, data, info.Mode().Perm())
 		}

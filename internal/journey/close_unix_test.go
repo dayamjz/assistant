@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // Close leaves no home behind even when a git the service started outlives
@@ -59,7 +60,7 @@ func TestCloseLeavesNoHomeAGitTheServiceStartedWouldRemake(t *testing.T) {
 		"  mkdir -p \"$target\";;\n" +
 		"esac\n" +
 		"exec '" + git + "' \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(wrapper), 0o700); err != nil {
+	if err := procgroup.WriteProgram(filepath.Join(bin, "git"), []byte(wrapper), 0o700); err != nil {
 		t.Fatal(err)
 	}
 

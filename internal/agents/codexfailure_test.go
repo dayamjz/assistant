@@ -14,6 +14,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // recordedLines reads a recording under testdata as its lines.
@@ -206,7 +207,7 @@ func TestAMissingCodexBinaryIsATypedRefusalBeforeAnythingStarts(t *testing.T) {
 		t.Skip("the vanished-binary half needs an executable script, which this test writes for a unix shell")
 	}
 	bin := filepath.Join(t.TempDir(), "codex")
-	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := procgroup.WriteProgram(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	recorded := &recorder{}

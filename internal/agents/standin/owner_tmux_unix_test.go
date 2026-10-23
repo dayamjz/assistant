@@ -19,6 +19,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // The variables a test hands this binary when it starts it as a test binary
@@ -380,7 +381,7 @@ func startTmuxOwnerOf(t *testing.T, mode string, copied bool) *tmuxOwned {
 			t.Fatal(err)
 		}
 		self = filepath.Join(dir, "owner.test")
-		if err := os.WriteFile(self, raw, 0o700); err != nil {
+		if err := procgroup.WriteProgram(self, raw, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}

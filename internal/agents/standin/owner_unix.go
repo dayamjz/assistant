@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // A process a test starts can outlive the test binary that started it: a
@@ -270,7 +271,7 @@ func ownProcesses() error {
 			return fmt.Errorf("standin: making a directory for the tmux tests find: %w", err)
 		}
 		wrapper = filepath.Join(wrapperDir, "tmux")
-		if err := os.WriteFile(wrapper, []byte(tmuxWrapper(value, real)), 0o700); err != nil {
+		if err := procgroup.WriteProgram(wrapper, []byte(tmuxWrapper(value, real)), 0o700); err != nil {
 			_ = os.RemoveAll(wrapperDir)
 			return fmt.Errorf("standin: writing the tmux tests find: %w", err)
 		}
