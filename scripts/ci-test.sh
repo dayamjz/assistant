@@ -6,6 +6,12 @@
 # a "full test output" group when the step fails, which is where
 # scripts/flake-ledger.py reads failures from.
 #
+# What it runs, each with the check job's value as its default:
+#   CI_TEST_PACKAGES  space-separated package patterns (./...)
+#   CI_TEST_COUNT     go test -count, a positive integer (1)
+#   CI_TEST_TIMEOUT   go test -timeout for each package binary (30m)
+# A value it cannot use is refused before anything runs.
+#
 # The race detector is the point of this job, so it is not optional.
 # The timeout is explicit because internal/service has run past go
 # test's ten-minute default on a macOS runner, which fails the package
@@ -36,6 +42,22 @@
 # ASSISTANT_REQUIRE_TMUX makes them fail rather than skip without one.
 
 set -eo pipefail
+count=${CI_TEST_COUNT:-1}
+timeout=${CI_TEST_TIMEOUT:-30m}
+read -r -a packages <<< "${CI_TEST_PACKAGES:-./...}"
+if ! [[ $count =~ ^[1-9][0-9]*$ ]]; then
+  echo "::error::CI_TEST_COUNT must be a positive integer, not '$count'"
+  exit 2
+fi
+if ! [[ $timeout =~ ^[0-9]+[hms]$|^[0-9]+m[0-9]+s$|^[0-9]+h[0-9]+m$ ]]; then
+  echo "::error::CI_TEST_TIMEOUT must be a duration such as 30m, not '$timeout'"
+  exit 2
+fi
+if [ "${#packages[@]}" -eq 0 ]; then
+  echo "::error::CI_TEST_PACKAGES names no package"
+  exit 2
+fi
+echo "ci-test: go test -race -count=$count -timeout $timeout ${packages[*]}"
 export ASSISTANT_REQUIRE_TMUX=1
 run=()
 if [ "$RUNNER_OS" = "Linux" ]; then
@@ -84,7 +106,7 @@ export LEAK_CHECK_RECORD="$RUNNER_TEMP/per-package-checked.txt"
 "${run[@]}" python3 scripts/leak-check.py self-test
 : > "$LEAK_CHECK_RECORD"
 "${run[@]}" python3 scripts/leak-check.py run --per-package -- \
-  go test "${per_package[@]}" -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
+  go test "${per_package[@]}" -race -count="$count" -timeout "$timeout" -v "${packages[@]}" > test.log 2>&1 || status=$?
 passed=$(grep -cE '^ok[[:space:]]' test.log || true)
 checked=$(wc -l < "$LEAK_CHECK_RECORD")
 echo "leak-check: $checked package(s) ran through the per-package check; go test reported $passed ok"

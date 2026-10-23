@@ -2,6 +2,7 @@
 """Count every failure in recent CI runs, by test, platform and branch.
 
 Run: python3 scripts/flake-ledger.py [--limit 60] [--json ledger.json]
+One run, from inside it: python3 scripts/flake-ledger.py --run <id>
 Parse one log: python3 scripts/flake-ledger.py parse <log>... (a job log as
 GitHub serves it, or raw `go test -v` output with --raw)
 
@@ -422,6 +423,9 @@ class GitHub:
             page += 1
         return runs[:limit]
 
+    def run(self, run_id):
+        return self.api(f"repos/{self.repo}/actions/runs/{run_id}")
+
     def attempt(self, run_id, attempt):
         return self.api(f"repos/{self.repo}/actions/runs/{run_id}/attempts/{attempt}")
 
@@ -543,7 +547,8 @@ def read_job(github, cache, job):
 
 
 def attempt_of(github, cache, run, attempt):
-    """The jobs and conclusion of one finished attempt of a run."""
+    """The jobs and conclusion of one attempt of a run. Only an attempt that
+    has finished is cached: a running one's jobs are still changing."""
     name = f"attempt-{run['id']}-{attempt}"
     cached = cache.get(name)
     if cached is not None:
@@ -552,14 +557,15 @@ def attempt_of(github, cache, run, attempt):
     jobs = github.attempt_jobs(run["id"], attempt)
     conclusion = run["conclusion"] if attempt == final else github.attempt(run["id"], attempt).get("conclusion")
     value = {"jobs": jobs, "conclusion": conclusion}
-    cache.put(name, value)
+    if attempt < final or run.get("status") == "completed":
+        cache.put(name, value)
     return value
 
 
 def run_jobs(github, cache, run):
     """Every failed or cancelled job of every attempt of one run."""
     final = run.get("run_attempt") or 1
-    seen, jobs, attempts, problems = set(), [], [], []
+    seen, jobs, attempts, problems, completed = set(), [], [], [], 0
     for attempt in range(1, final + 1):
         try:
             listed = attempt_of(github, cache, run, attempt)
@@ -571,18 +577,22 @@ def run_jobs(github, cache, run):
             if job["id"] in seen:
                 continue  # a job listed under more than one attempt is read once
             seen.add(job["id"])
-            if job.get("status") != "completed" or job.get("conclusion") in ("success", "skipped", "neutral"):
+            if job.get("status") != "completed":
+                continue
+            completed += 1
+            if job.get("conclusion") in ("success", "skipped", "neutral"):
                 continue
             jobs.append((run, job))
     rerun = {"run": run, "attempts": attempts} if final > 1 else None
-    return jobs, rerun, problems
+    return jobs, rerun, problems, completed
 
 
 def collect(github, cache, runs, workers=4):
     """Every failed job of every attempt of each run, with its records."""
-    jobs, reruns, problems = [], [], []
+    jobs, reruns, problems, completed = [], [], [], 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        for found, rerun, trouble in pool.map(lambda run: run_jobs(github, cache, run), runs):
+        for found, rerun, trouble, finished in pool.map(lambda run: run_jobs(github, cache, run), runs):
+            completed += finished
             jobs.extend(found)
             problems.extend(trouble)
             if rerun:
@@ -596,7 +606,7 @@ def collect(github, cache, runs, workers=4):
             except GitHubError as error:
                 problems.append(str(error))
                 results[job_id] = {"records": [], "unattributed": False, "cancel": None, "error": str(error)}
-    return jobs, results, reruns, problems
+    return jobs, results, reruns, problems, completed
 
 
 def matcher(issues):
@@ -622,7 +632,7 @@ def matcher(issues):
     return find
 
 
-def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, pulls):
+def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, pulls, completed=None):
     find = matcher(issues)
     prs = {}
     for pull in sorted(pulls, key=lambda p: p["number"]):
@@ -703,6 +713,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "repo": repo, "workflow": workflow,
         "runs_scanned": len(runs),
+        "jobs_read": completed,
         "window": {"first": min((r["created_at"] for r in runs), default=None),
                    "last": max((r["created_at"] for r in runs), default=None)},
         "failed_jobs": sum(1 for _, j in jobs if (results.get(j["id"]) or {}).get("cancel") not in cancelled),
@@ -739,8 +750,9 @@ def markdown(ledger, zone):
     window = ledger["window"]
     out.append(f"# Flake ledger: {ledger['repo']} {ledger['workflow']}")
     out.append("")
-    out.append(f"{ledger['runs_scanned']} completed runs, {local_time(window['first'], zone)} to "
-               f"{local_time(window['last'], zone)}; every attempt read. {ledger['failed_jobs']} failed "
+    jobs = f"{ledger['jobs_read']} finished job(s), " if ledger.get("jobs_read") is not None else ""
+    out.append(f"{ledger['runs_scanned']} run(s), {local_time(window['first'], zone)} to "
+               f"{local_time(window['last'], zone)}; every attempt read. {jobs}{ledger['failed_jobs']} failed "
                f"job(s); not counted: {ledger['cancelled_jobs_not_counted']['superseded']} superseded by a "
                f"newer run, {ledger['cancelled_jobs_not_counted']['cancelled']} cancelled by hand.")
     out.append("")
@@ -810,14 +822,19 @@ def zone_of(name):
 
 def report(args, github=None):
     github = github or GitHub(args.repo or detect_repo())
-    runs = github.runs(args.workflow, args.limit, branch=args.branch, since=args.since)
+    if args.run:
+        runs = [github.run(args.run)]
+    else:
+        runs = github.runs(args.workflow, args.limit, branch=args.branch, since=args.since)
     if not runs:
         print(f"flake-ledger: no completed runs of {args.workflow} in {github.repo}", file=sys.stderr)
         return 2
     cache = Cache(None if args.no_cache else args.cache)
-    jobs, results, reruns, problems = collect(github, cache, runs)
+    jobs, results, reruns, problems, completed = collect(github, cache, runs)
     issues, pulls = github.issues(), github.pulls()
-    ledger = build_ledger(github.repo, args.workflow, runs, jobs, results, reruns, problems, issues, pulls)
+    workflow = os.path.basename(runs[0].get("path") or "") if args.run else args.workflow
+    ledger = build_ledger(github.repo, workflow or args.workflow, runs, jobs, results, reruns, problems,
+                          issues, pulls, completed)
     if args.json:
         Path(args.json).write_text(json.dumps(ledger, indent=2) + "\n")
     if args.format == "json":
@@ -855,6 +872,8 @@ def main(argv=None, github=None):
     parser.add_argument("--limit", type=int, default=60, help="most recent completed runs to read")
     parser.add_argument("--branch", help="only runs of this branch")
     parser.add_argument("--since", help="only runs created on or after this date (YYYY-MM-DD)")
+    parser.add_argument("--run", type=int, metavar="ID",
+                        help="only this run, finished or not (its finished jobs); for a workflow's own summary")
     parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
     parser.add_argument("--json", metavar="PATH", help="also write the JSON ledger here")
     parser.add_argument("--tz", help="time zone for the markdown (default: this machine's)")

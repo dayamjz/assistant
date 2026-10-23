@@ -212,6 +212,9 @@ class FakeGitHub:
     def runs(self, workflow, limit, branch=None, since=None):
         return self.data["runs"][:limit]
 
+    def run(self, run_id):
+        return next(r for r in self.data["runs"] if r["id"] == run_id)
+
     def attempt(self, run_id, attempt):
         return {"conclusion": self.data["attempts"][f"{run_id}/{attempt}"]["conclusion"]}
 
@@ -269,6 +272,23 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(timeout["hidden_by_rerun"], 1)
         self.assertEqual([i["number"] for i in timeout["issues"]["open"]], [559])
         self.assertEqual(len(failures), 3)
+
+    def test_one_run_is_read_alone_with_its_finished_jobs_counted(self):
+        status, data, text = run_report(FakeGitHub(LOGS), "--run", "39905430594")
+        self.assertEqual(status, 0, text)
+        self.assertEqual((data["runs_scanned"], data["jobs_read"], data["failed_jobs"]), (1, 9, 2))
+        self.assertIn("9 finished job(s), 2 failed job(s)", text)
+
+    def test_a_running_attempts_jobs_are_not_cached(self):
+        with tempfile.TemporaryDirectory() as folder:
+            github = FakeGitHub(LOGS)
+            run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
+            run["status"], run["conclusion"] = "in_progress", None
+            with contextlib.redirect_stdout(io.StringIO()):
+                ledger.main(["--cache", folder, "--run", "39905430594"], github=github)
+            cached = sorted(p.name.split("-" + ledger.SCRIPT_DIGEST)[0] for p in Path(folder).iterdir())
+        self.assertIn("attempt-39905430594-1", cached)
+        self.assertNotIn("attempt-39905430594-3", cached)
 
     def test_a_run_superseded_by_a_newer_one_is_counted_but_not_a_failure(self):
         _, data, _ = run_report(FakeGitHub(LOGS))
