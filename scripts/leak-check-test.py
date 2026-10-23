@@ -2,10 +2,12 @@
 """Executable and model tests for the CI leftover guard, leak-check.py."""
 
 import contextlib
+import ctypes
 import importlib.util
 import io
 import os
 from pathlib import Path
+import select
 import socket
 import stat
 import subprocess
@@ -608,6 +610,70 @@ func TestLeavesPsBlockedOnItsOutput(t *testing.T) {
 }
 """
 
+SANDBOX_FILTER_PATH = 1  # sandbox_check's filter for a path argument
+READ_EXTENSION = "com.apple.app-sandbox.read"  # the class a read grant is issued under
+MACH_EXTENSION = "com.apple.app-sandbox.mach"  # the class a mach-lookup grant is issued under
+
+
+def issue_extension(kind, target):
+    """A sandbox extension token granting kind for target, a path for
+    READ_EXTENSION and a global name for MACH_EXTENSION, issued by this
+    process, which no sandbox confines."""
+    libc = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True)
+    issue = (libc.sandbox_extension_issue_file if kind == READ_EXTENSION
+             else libc.sandbox_extension_issue_mach)
+    issue.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]
+    issue.restype = ctypes.c_void_p
+    token = issue(kind.encode(), str(target).encode(), 0)
+    if not token:
+        raise OSError(ctypes.get_errno(), f"issuing {kind} for {target}")
+    try:
+        return ctypes.string_at(token).decode()
+    finally:
+        libc.free(ctypes.c_void_p(token))
+
+
+def read_denied(pid, path):
+    """sandbox_check's answer for pid reading path's data: 1 denied, 0 allowed."""
+    libc = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True)
+    libc.sandbox_check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    libc.sandbox_check.restype = ctypes.c_int
+    return libc.sandbox_check(pid, b"file-read-data",
+                              SANDBOX_FILTER_PATH | check.SANDBOX_CHECK_NO_REPORT,
+                              str(path).encode())
+
+
+# Consumes the sandbox extension token in argv[1], prints "consumed" once it
+# has, and waits to be killed.
+CONSUME_AND_WAIT = """
+import ctypes, sys, time
+libc = ctypes.CDLL('/usr/lib/libSystem.dylib', use_errno=True)
+libc.sandbox_extension_consume.argtypes = [ctypes.c_char_p]
+libc.sandbox_extension_consume.restype = ctypes.c_int64
+if libc.sandbox_extension_consume(sys.argv[1].encode()) < 0:
+    sys.exit(f'consuming the extension failed: errno {ctypes.get_errno()}')
+print('consumed', flush=True)
+time.sleep(300)
+"""
+
+
+def consume_under(profile, token):
+    """Start CONSUME_AND_WAIT under the sandbox profile with token, and
+    return it once it has consumed the token; fail if it has not within 30
+    seconds, killing it."""
+    process = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", profile, sys.executable,
+                                "-c", CONSUME_AND_WAIT, token],
+                               stdout=subprocess.PIPE, text=True)
+    ready, _, _ = select.select([process.stdout], [], [], 30)
+    line = process.stdout.readline().strip() if ready else ""
+    if line != "consumed":
+        process.kill()
+        process.wait()
+        process.stdout.close()
+        raise AssertionError(f"the process under {profile} did not consume its token: {line!r}")
+    return process
+
+
 def running(pid):
     """Whether pid is a running process, an unreaped exited one counting as
     gone. Read with ps, not with the guard's own reads."""
@@ -740,19 +806,35 @@ class PerPackageTest(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
     def test_only_the_packages_own_sandbox_marks_a_process(self):
-        # Real processes: one in the package's sandbox is marked; one outside
-        # any sandbox, one in a sandbox that denies both files, and a pid
-        # that is gone are not.
+        # Real processes: one in the package's sandbox is marked, and so is
+        # one there holding a grant to look up the name its profile denies,
+        # which no extension lifts; one outside any sandbox, one in a sandbox
+        # that denies both names, and a pid that is gone are not. The grant
+        # is shown in force by another sandbox whose rule an extension does
+        # lift: given the same grant it is allowed inside and not marked, and
+        # given a grant of outside instead, which only this process can
+        # issue, it is marked, the one way the mark admits a stranger.
         sandbox = check.Sandbox()
         started = []
         try:
             def sleep(*prefix):
                 started.append(subprocess.Popen([*prefix, "sleep", "300"]))
                 return started[-1]
+
+            def consuming(profile, token):
+                started.append(consume_under(profile, token))
+                return started[-1]
             inside = sleep("/usr/bin/sandbox-exec", "-p", sandbox.profile)
             outside = sleep()
-            both = sleep("/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)"
-                         f'(deny file-read-data (subpath "{sandbox.folder}"))')
+            names = f'(global-name "{sandbox.inside}") (global-name "{sandbox.outside}")'
+            both = sleep("/usr/bin/sandbox-exec", "-p",
+                         f"(version 1)(allow default)(deny mach-lookup {names})")
+            lifted = (f"(version 1)(allow default)(deny mach-lookup {names})"
+                      f'(allow mach-lookup (extension "{MACH_EXTENSION}"))')
+            to_inside = issue_extension(MACH_EXTENSION, sandbox.inside)
+            granted = consuming(sandbox.profile, to_inside)
+            stranger = consuming(lifted, to_inside)
+            stranger_outside = consuming(lifted, issue_extension(MACH_EXTENSION, sandbox.outside))
             gone = subprocess.Popen(["true"])
             gone.wait()
             # sandbox-exec applies the profile before it execs sleep, so a
@@ -761,6 +843,11 @@ class PerPackageTest(unittest.TestCase):
                 while check.darwin_command(process.pid).split()[:1] != ["sleep"]:
                     pass
             self.assertIs(sandbox.marks(inside.pid), True)
+            self.assertIs(sandbox.marks(granted.pid), True)
+            self.assertEqual(sandbox.denies(stranger.pid, sandbox.inside), 0)
+            self.assertIs(sandbox.marks(stranger.pid), False)
+            self.assertEqual(sandbox.denies(stranger_outside.pid, sandbox.inside), 1)
+            self.assertIs(sandbox.marks(stranger_outside.pid), True)
             self.assertIs(sandbox.marks(outside.pid), False)
             self.assertIs(sandbox.marks(both.pid), False)
             self.assertIs(sandbox.marks(gone.pid), False)
@@ -787,7 +874,46 @@ class PerPackageTest(unittest.TestCase):
             for process in started:
                 process.kill()
                 process.wait()
-            sandbox.remove()
+                if process.stdout:
+                    process.stdout.close()
+
+    @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
+    def test_a_grant_to_one_file_does_not_mark_another_sandboxs_process(self):
+        # #551: before, the mark was a pair of files the check made in
+        # TMPDIR, and Spotlight's mdworker_shared, whose sandbox at times
+        # allowed reading one of them and not the other, read as in the
+        # package's sandbox, so the check failed the package naming the worker
+        # and killed it. Here real processes in a sandbox that denies reads
+        # under a TMPDIR of the test's own each hold a real read grant to one
+        # file there: each file the check made there, and a control file of
+        # the test's, so there is always one. None is marked, and the check
+        # made no file there at all.
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder).resolve()
+            control, unread = folder / "control", folder / "unread"
+            control.write_text("granted")
+            unread.write_text("never granted")
+            with mock.patch.object(tempfile, "tempdir", str(folder)):
+                sandbox = check.Sandbox()
+            granted = sorted(path for path in folder.rglob("*")
+                             if path.is_file() and path != unread)
+            self.assertIn(control, granted)
+            profile = (f'(version 1)(allow default)(deny file-read-data (subpath "{folder}"))'
+                       '(allow file-read-data (extension "com.apple.app-sandbox.read"))')
+            for path in granted:
+                with self.subTest(granted=path.name):
+                    process = consume_under(profile, issue_extension(READ_EXTENSION, path))
+                    try:
+                        # The grant is in force: the process may read that
+                        # file, and not another beside it.
+                        self.assertEqual(read_denied(process.pid, path), 0)
+                        self.assertEqual(read_denied(process.pid, unread), 1)
+                        self.assertIs(sandbox.marks(process.pid), False)
+                    finally:
+                        process.kill()
+                        process.wait()
+                        process.stdout.close()
+            self.assertEqual(granted, [control], "Sandbox made files under TMPDIR")
 
     @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
     def test_a_ps_a_package_leaves_blocked_on_its_output_cannot_pass(self):

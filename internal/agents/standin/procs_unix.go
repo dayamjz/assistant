@@ -3,7 +3,6 @@
 package standin
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -166,6 +165,13 @@ const settleReadings = 64
 // during an earlier reading after starting another has that other read
 // whole in a later one.
 //
+// When no reading settles, the error is an unsettledError naming the
+// process number that kept the most readings in a row from settling,
+// through the last, with what it kept the last of them from settling with:
+// a process of this user's whose read fails in every reading is named with
+// that read's error, however many other processes exit during each reading
+// on a busy machine, since each of those unsettles fewer (#561).
+//
 // What that does not cover: a process of another user's whose command line
 // cannot be read is passed over, and so is what it starts unless that is
 // read whole itself; a process of this user's whose reads keep failing
@@ -187,15 +193,22 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 	// a process match accepts, or nil for one it refuses or passes over.
 	read := map[agents.Identity]*Process{}
 	stopped := map[int]bool{}
-	// unsettled is what kept the last reading from settling.
-	var unsettled error
+	// causes is what kept the last reading from settling, one per process
+	// number in the order the table named them, and standing is, for each
+	// of those numbers, how many readings in a row through the last it kept
+	// from settling.
+	var causes []unsettledCause
+	standing := map[int]int{}
 	for range settleReadings {
 		pids, err := table.ids()
 		if err != nil {
 			return nil, fmt.Errorf("listing processes: %w", err)
 		}
 		var found []Process
-		unsettled = nil
+		causes = nil
+		unsettle := func(pid int, err error) {
+			causes = append(causes, unsettledCause{pid: pid, err: err})
+		}
 		nowStopped := map[int]bool{}
 		for _, pid := range pids {
 			if exclude[pid] {
@@ -203,13 +216,13 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			}
 			id, running, err := table.identify(pid)
 			if err != nil {
-				unsettled = cmp.Or(unsettled, fmt.Errorf("process %d could not be identified: %w", pid, err))
+				unsettle(pid, fmt.Errorf("process %d could not be identified: %w", pid, err))
 				continue
 			}
 			if !running {
 				nowStopped[pid] = true
 				if !stopped[pid] {
-					unsettled = cmp.Or(unsettled, fmt.Errorf("process %d read as not running for the first time", pid))
+					unsettle(pid, fmt.Errorf("process %d read as not running for the first time", pid))
 				}
 				continue
 			}
@@ -221,21 +234,26 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			}
 			matched, merr := match(table, pid)
 			_, args, cerr := table.commandLine(pid)
+			// The match reads the same record commandLine does, so when
+			// both fail alike the error is told once.
 			failed := errors.Join(merr, cerr)
+			if merr != nil && errors.Is(merr, cerr) {
+				failed = merr
+			}
 			foreign, ferr := false, error(nil)
 			if failed != nil {
 				foreign, ferr = table.foreign(pid)
 			}
 			if presence, err := id.Presence(); err != nil || presence != agents.PresencePresent {
-				unsettled = cmp.Or(unsettled, fmt.Errorf("%v exited before it had been read whole", id))
+				unsettle(pid, fmt.Errorf("%v exited before it had been read whole", id))
 				continue
 			}
 			switch {
 			case failed != nil && ferr != nil:
-				unsettled = cmp.Or(unsettled, fmt.Errorf("process %d could not be read (%w), nor its user: %w", pid, failed, ferr))
+				unsettle(pid, fmt.Errorf("process %d could not be read (%w), nor its user: %w", pid, failed, ferr))
 				continue
 			case failed != nil && !foreign:
-				unsettled = cmp.Or(unsettled, fmt.Errorf("process %d is this user's and running, and could not be read: %w", pid, failed))
+				unsettle(pid, fmt.Errorf("process %d is this user's and running, and could not be read: %w", pid, failed))
 				continue
 			}
 			if failed != nil || !matched || isSweep(args) {
@@ -246,12 +264,73 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			read[id] = &p
 			found = append(found, p)
 		}
-		if unsettled == nil {
+		if len(causes) == 0 {
 			return found, nil
 		}
 		stopped = nowStopped
+		nowStanding := make(map[int]int, len(causes))
+		for _, c := range causes {
+			nowStanding[c.pid] = standing[c.pid] + 1
+		}
+		standing = nowStanding
 	}
-	return nil, fmt.Errorf("listing processes: no reading of the process table settled in %d; in the last, %w", settleReadings, unsettled)
+	return nil, longestStanding(causes, standing)
+}
+
+// unsettledCause is one process that kept a reading of the process table
+// from settling (processesWhere), and why.
+type unsettledCause struct {
+	pid int
+	err error
+}
+
+// unsettledError is processesWhere's error when no reading of the process
+// table settled within settleReadings. It names, of the processes that kept
+// the last reading from settling, the one whose number kept the most
+// readings in a row through the last from settling, and the first the
+// table named of those that tie.
+type unsettledError struct {
+	// PID is the process number named.
+	PID int
+	// Readings is how many readings in a row, through the last, PID kept
+	// from settling: settleReadings when it kept every one of them.
+	Readings int
+	// Others is how many other processes kept the last reading from
+	// settling.
+	Others int
+	// Err is why PID kept the last reading from settling.
+	Err error
+}
+
+// Error names the process, why it kept the last reading from settling, how
+// many readings in a row it did, and how many others kept the last one from
+// settling too.
+func (e *unsettledError) Error() string {
+	others := ""
+	switch {
+	case e.Others == 1:
+		others = ", and 1 other process kept the last from settling too"
+	case e.Others > 1:
+		others = fmt.Sprintf(", and %d other processes kept the last from settling too", e.Others)
+	}
+	return fmt.Sprintf("listing processes: no reading of the process table settled in %d; %v, which kept each of the last %d from settling%s",
+		settleReadings, e.Err, e.Readings, others)
+}
+
+// Unwrap is why the named process kept the last reading from settling.
+func (e *unsettledError) Unwrap() error { return e.Err }
+
+// longestStanding is the unsettledError for causes, the last reading's, in
+// the order the table named them, given standing, how many readings in a
+// row through the last each process number in causes kept from settling.
+func longestStanding(causes []unsettledCause, standing map[int]int) *unsettledError {
+	named := causes[0]
+	for _, c := range causes[1:] {
+		if standing[c.pid] > standing[named.pid] {
+			named = c
+		}
+	}
+	return &unsettledError{PID: named.pid, Readings: standing[named.pid], Others: len(causes) - 1, Err: named.err}
 }
 
 // isSweep reports whether args, argv[0] first, are an owner sweep's, which
@@ -272,10 +351,29 @@ func isSweep(args []string) bool {
 // the moment between that check and the signal; it does not close it. It
 // reports whether p had to be killed.
 func (p Process) End() bool {
+	if !p.signal(syscall.SIGTERM) {
+		return false
+	}
+	return p.killUnlessGone()
+}
+
+// signal sends p sig once its identity has been read to still name the
+// running process, End's check before each signal, and reports whether it
+// read so and sent sig; a process read as gone, or whose identity could not
+// be read, is sent nothing.
+func (p Process) signal(sig syscall.Signal) bool {
 	if presence, err := p.Presence(); err != nil || presence != agents.PresencePresent {
 		return false
 	}
-	_ = syscall.Kill(p.PID, syscall.SIGTERM)
+	_ = syscall.Kill(p.PID, sig)
+	return true
+}
+
+// killUnlessGone is the rest of End once p has been sent SIGTERM: it waits
+// up to EndGrace for p to go, then sends SIGKILL to its group when it leads
+// one and to it otherwise, after the same check of its identity, and
+// reports whether p had to be killed.
+func (p Process) killUnlessGone() bool {
 	if p.GoneWithin(EndGrace) {
 		return false
 	}
@@ -365,8 +463,10 @@ func stayed(ps []Process, grace time.Duration) []Process {
 // once this binary is gone, so the binary AtTerminal ran again outliving a
 // killed outer one is watchOuter's to end, and a terminal server outliving
 // a killed owner the owner sweep's, and no check in that run reports
-// either. A failed check ends what it names; what that ending starts, it
-// leaves to the sweep.
+// either. A failed check ends what it names as one set (endAll), so each
+// process it names has been sent its own SIGTERM before any child of its it
+// names is sent one; what that ending starts all the same, within what
+// endAll does not cover, it leaves to the sweep.
 func leftAfterTests() bool {
 	self, err := os.Executable()
 	if err != nil {
