@@ -12,6 +12,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -83,6 +84,8 @@ func newFixture(t *testing.T) *fixture {
 	if err := h.Create(); err != nil {
 		t.Fatalf("home.Create: %v", err)
 	}
+	// Seeded for time alone, as internal/store/storetest's comment says.
+	storetest.Seed(t, filepath.Join(root, "state.db"))
 	s, err := store.Open(ctx, filepath.Join(root, "state.db"), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)

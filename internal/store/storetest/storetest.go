@@ -18,8 +18,9 @@
 // gets: creating a database from nothing stays exercised by internal/store's
 // own tests and by every home a seeding helper does not reach.
 //
-// Its consumers are internal/service's tests and internal/cli's, which both
-// open homes by the hundred; one copy is why it is a package. internal/store's
+// Its consumers are the tests of packages that open databases by the dozen
+// or the hundred, each seeding at the helper that opens a fresh one; one
+// copy is why it is a package. internal/store's
 // own tests cannot import it, since it imports that package, so they keep the
 // same arrangement in their helpers_test.go.
 package storetest

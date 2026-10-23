@@ -8,6 +8,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 )
 
 // The stand-in agent is this test binary re-executed, so a package whose tests
@@ -43,6 +44,8 @@ func TestMain(m *testing.M) {
 	}
 	code := m.Run()
 	cleanup()
+	// The database template internal/store/storetest made, if a test seeded one.
+	storetest.Remove()
 	os.Exit(code)
 }
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"math"
 	"os/exec"
 	"testing"
 	"time"
@@ -15,6 +16,36 @@ func ShortenReceiveWait(t *testing.T, d time.Duration) {
 	was := receiveWait
 	receiveWait = d
 	t.Cleanup(func() { receiveWait = was })
+}
+
+// AwaitReadinessUntilTheTestsDeadline has every wait in this process for a
+// service to answer a readiness check - a start's, a restart's wait for its
+// successor, and a managed install's or start's - wait until t's deadline
+// rather than readyTimeout, for the rest of the test, so the wait ends on
+// what the readiness mechanism observes. A start that launched the service
+// itself ends its wait when the service answers or that process exits. A
+// restart, a managed install and a managed start watch no process, so only
+// an answer ends theirs. Any of them also ends with the command's context.
+// It is for a test whose subject is not that bound.
+// A race-built service on a fresh home spends most of readyTimeout migrating
+// its store on a fast host, and a slow one was seen to run past it while the
+// same service answered moments later (#543); the bound is the product's, for
+// the build a person runs, which answers well inside it.
+//
+// What it gives up: a wait that nothing ends fails at t's deadline instead of
+// after readyTimeout, and with no deadline (-timeout 0) it does not end. That
+// is a service that stays up and never answers, and for a restart or a
+// managed install or start, a service that exited too. The wait for a stop to
+// be observed keeps readyTimeout. It changes a package variable, so a test
+// using it does not run in parallel.
+func AwaitReadinessUntilTheTestsDeadline(t *testing.T) {
+	t.Helper()
+	was := readyWait
+	readyWait = time.Duration(math.MaxInt64)
+	if deadline, ok := t.Deadline(); ok {
+		readyWait = time.Until(deadline)
+	}
+	t.Cleanup(func() { readyWait = was })
 }
 
 // BetweenEjectPreflightAndRemoval runs f inside eject's window between the
