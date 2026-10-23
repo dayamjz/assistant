@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/principles"
 )
@@ -176,5 +177,56 @@ func TestALaunchClaimWithNoStartedWorkerLeavesItsTaskHeld(t *testing.T) {
 	}
 	if err := s.ClaimAttemptLaunch(ctx, "taskstarteda", next.Sequence); err != nil {
 		t.Fatalf("the next launch of a task whose worker started: %v", err)
+	}
+}
+
+// A carry-on claim holds the task it names only while its entry is open,
+// the final review of 3088420: a task's copy is kept and the entry
+// claimed for a carry on naming a new task, whose row is written; the new
+// task is held by the claim, which is the positive control. The cleanup of
+// the old task then records a proof and marks its copy removed, which
+// closes the entry with the claim never carried out, and the carry on's
+// mark is refused as closed. The new task is held by nothing then and
+// dispatches. Without the closure read, the closed entry held it forever,
+// since no mark or withdrawal can ever be written on it again.
+func TestAClosedEntrysUnfinishedCarryOnHoldsNothing(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRun(t, s)
+	keptHoldTask(t, s, "taskoldcopya", "repo-1", "old")
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: "taskoldcopya", CopyPath: "/worktrees/taskoldcopya",
+		Holds: []string{"aaaa"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, entry.ID, "tasknewcopya", "the-kept-copy", ResolvedByPerson()); err != nil {
+		t.Fatal(err)
+	}
+	keptHoldTask(t, s, "tasknewcopya", "repo-1", "old")
+	if held, err := s.KeptWorkHolding(ctx, "tasknewcopya"); err != nil || len(held) != 1 || held[0].ID != entry.ID {
+		t.Fatalf("while its carry on is claimed the new task is held by %+v, %v; want the entry", held, err)
+	}
+
+	if _, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: "taskoldcopya", Proof: CleanupProofMergedPullRequest,
+		Examined: []string{"aaaa"}}, TaskDelivery); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkCleanupRemoved(ctx, "taskoldcopya", time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := s.KeptWorkEntry(ctx, entry.ID)
+	if err != nil || !closed.Closure.IsKnown() || closed.CarriedOnAt.IsKnown() || closed.CarriedOnTask.Or("") != "tasknewcopya" {
+		t.Fatalf("after the removal on a proof the entry reads %+v, %v; want it closed with the claim not carried out", closed, err)
+	}
+	if _, err := s.MarkKeptWorkCarriedOn(ctx, entry.ID, "tasknewcopya"); !errors.Is(err, ErrKeptWorkClosed) {
+		t.Fatalf("the carry on's mark on the closed entry = %v; want ErrKeptWorkClosed", err)
+	}
+	if held, err := s.KeptWorkHolding(ctx, "tasknewcopya"); err != nil || len(held) != 0 {
+		t.Fatalf("after the entry closed the new task is held by %+v, %v; want nothing", held, err)
+	}
+	if _, err := s.BeginFirstTaskAttempt(ctx, "tasknewcopya", OnThisMachine()); err != nil {
+		t.Fatalf("the new task's dispatch after the entry closed = %v; want it claimed", err)
 	}
 }

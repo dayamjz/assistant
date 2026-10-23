@@ -15,8 +15,9 @@ import (
 // every dispatch claim, so the wait a surface shows and the refusal a
 // dispatch meets cannot disagree about what holds it.
 //
-// A task a carry-on claim names is held, first, by the entries it carries
-// on until it owns their copy. Otherwise a task is held when all three are
+// A task a carry-on claim names is held, first, by the open entries it
+// carries on until it owns their copy; an entry closed on a proof with the
+// claim owed holds nothing. Otherwise a task is held when all three are
 // true in one read: it names a project
 // (its repository), no attempt of it has recorded a terminal session, and an
 // entry of that project is open (neither answered nor closed). The second is
@@ -197,8 +198,11 @@ func keptWorkHoldingTx(ctx context.Context, tx *sql.Tx, taskID string) ([]KeptWo
 	// A task a carry-on claim names is held by the entries it carries on
 	// until it owns their copy (MarkKeptWorkCarriedOn): a carry on whose
 	// adoption failed leaves the task held on them, so no dispatch cuts it
-	// a fresh clone without the kept work.
-	carrying, err := tx.QueryContext(ctx, keptWorkColumns+` FROM kept_work WHERE carried_on_task = ? AND carried_on_at IS NULL ORDER BY id`, taskID)
+	// a fresh clone without the kept work. Only an open entry holds: one
+	// closed on a proof while its claim was owed takes no mark or
+	// withdrawal again, and its work is where the proof found it.
+	carrying, err := tx.QueryContext(ctx, keptWorkColumns+` FROM kept_work
+		WHERE carried_on_task = ? AND carried_on_at IS NULL AND answer IS NULL AND closure IS NULL ORDER BY id`, taskID)
 	if err != nil {
 		return nil, project, err
 	}
