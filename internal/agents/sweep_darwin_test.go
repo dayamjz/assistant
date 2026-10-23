@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // realLsof is the real output of the lsof run the listing makes, with this
@@ -151,7 +152,7 @@ func standInLsof(t *testing.T, dir, body string) (program, pids string) {
 	t.Helper()
 	program, pids = filepath.Join(dir, "lsof"), filepath.Join(dir, "pids")
 	script := "#!/bin/sh\n[ \"$1\" = " + standInWarm + " ] && exit 0\necho $$ > " + pids + "\n" + strings.ReplaceAll(body, "PIDS", pids)
-	if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
+	if err := procgroup.WriteProgram(program, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := exec.Command(program, standInWarm).CombinedOutput(); err != nil {

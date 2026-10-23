@@ -179,7 +179,7 @@ func TestAListingSettlesBesideAZombie(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, err := processesWhere(kernel{}, func(processTable, int) bool { return false }); err != nil {
+	if _, err := processesWhere(kernel{}, func(processTable, int) (bool, error) { return false, nil }); err != nil {
 		t.Errorf("a listing beside the zombie %d: %v", proc.Pid, err)
 	}
 	_, _ = proc.Wait()
@@ -226,5 +226,51 @@ func TestProcessesMatchingListsAProcessByItsArguments(t *testing.T) {
 	exited = true
 	if listed, err := ProcessesMatching(carriesToken); err != nil || len(listed) != 0 {
 		t.Errorf("after the shell exited the listing is %v, %v, want none", listed, err)
+	}
+}
+
+// refusalsSeen is a processTable that passes every read through to the
+// kernel and records each process the kernel reported as another user's
+// (foreign).
+type refusalsSeen struct {
+	kernel
+	mu      sync.Mutex
+	refused []int
+}
+
+func (t *refusalsSeen) foreign(pid int) (bool, error) {
+	foreign, err := t.kernel.foreign(pid)
+	if err == nil && foreign {
+		t.mu.Lock()
+		t.refused = append(t.refused, pid)
+		t.mu.Unlock()
+	}
+	return foreign, err
+}
+
+// A listing of every process passes over another user's processes whose
+// command line it cannot read, and settles beside them (P15): the real
+// kernel answers every read, the listing accepts every process it reads,
+// and it ends without an error. A failed read of this user's running
+// process unsettles a reading instead, so this is the control that the
+// refusal is read from the process's user and that another user's
+// unreadable process still settles: the listing did meet at least one,
+// which macOS's root processes are and Linux CI's namespace holds (tini and
+// a sleep of the nobody user), and none of them was listed.
+func TestAListingPassesOverAnotherUsersUnreadableProcess(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	table := &refusalsSeen{}
+	listed, err := processesWhere(table, func(processTable, int) (bool, error) { return true, nil })
+	if err != nil {
+		t.Fatalf("a listing of every process: %v", err)
+	}
+	if len(table.refused) == 0 {
+		t.Fatal("no read failed for another user's process, so this shows nothing")
+	}
+	for _, p := range listed {
+		if slices.Contains(table.refused, p.PID) {
+			t.Errorf("%v is another user's and could not be read, and was listed", p)
+		}
 	}
 }

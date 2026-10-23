@@ -158,7 +158,10 @@ repository more than one round of review.
   start a program): build a command with `procgroup.Command` and run it with
   `procgroup.Run`. The functions that may do otherwise are the rows of the
   guard's `Exceptions`, each with a typed reason; its test fails the build on
-  any other use in non-test code, and on a row that covers none.
+  any other use in non-test code, and on a row that covers none. A file
+  something runs, tests included, is written by `procgroup.WriteProgram`
+  (#539); the guard's `LoadWrites` test fails the build on any other mode it
+  finds with an execute bit, or one it cannot read, outside `WriteExceptions`.
 - Credential removal is `internal/redact`'s: a new shape is added there, never
   a second remover at a call site. A sentence a person reads is a row in
   `internal/machine`'s phrase table (`phrases.go`), never one at a renderer.

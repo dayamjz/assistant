@@ -128,12 +128,14 @@ func writeRecord(repo string, rec record) error {
 	if err != nil {
 		return fmt.Errorf("gate: encoding record for %s: %w", repo, err)
 	}
-	return replaceFile(recordPath(repo), append(data, '\n'), 0o644)
+	return replaceFile(recordPath(repo), append(data, '\n'))
 }
 
-// replaceFile writes content to path through a temporary file in the same
-// directory and renames it into place.
-func replaceFile(path string, content []byte, mode os.FileMode) error {
+// replaceFile writes content to path, readable by everyone and writable by
+// its owner, through a temporary file in the same directory and renames it
+// into place. It writes data; a hook, which git runs as a program, is
+// writeHook's.
+func replaceFile(path string, content []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*")
 	if err != nil {
@@ -152,7 +154,7 @@ func replaceFile(path string, content []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("gate: closing %s: %w", name, err)
 	}
-	if err := os.Chmod(name, mode); err != nil {
+	if err := os.Chmod(name, 0o644); err != nil {
 		return fmt.Errorf("gate: setting the mode of %s: %w", name, err)
 	}
 	if err := os.Rename(name, path); err != nil {

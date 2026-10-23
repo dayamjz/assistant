@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,6 +45,25 @@ func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
 	if err = os.WriteFile(sentinel, []byte("keep this work"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// The backup's launch is held at the moment its reference is recorded,
+	// before its hold is settled, until a reader is waiting on that
+	// settlement, so the loop below reads the service in the order #538 lost
+	// on CI rather than wherever the poll happens to land. The first
+	// recording is the primary's, which this goroutine makes.
+	release := make(chan struct{})
+	var letGo sync.Once
+	var recordings atomic.Int32
+	s.afterSessionRecorded = func(string, string) {
+		if recordings.Add(1) == 1 {
+			return
+		}
+		select {
+		case <-release:
+		case <-s.stopCtx.Done():
+		}
+	}
+	s.awaitingSessionRecord = func(string) { letGo.Do(func() { close(release) }) }
+	t.Cleanup(func() { letGo.Do(func() { close(release) }) })
 	first, err := s.launchTask(t.Context(), d)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +79,17 @@ func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
 			if adapter != "cursor" {
 				t.Fatalf("backup attributed to %s", adapter)
 			}
-			_, current, _ := s.sessionOf(sub.task)
+			// launchTask holds a session before it records the reference,
+			// so a record naming the backup's session is a session held;
+			// sessionOf answers it once the hold is settled.
+			_, current, held := s.sessionOf(sub.task)
+			if !held || current == nil {
+				t.Fatalf("attempt %d records session %v and this service holds no session for task %s",
+					attempts[1].Sequence, attempts[1].SessionRef, sub.task)
+			}
+			if recorded, _ := attempts[1].SessionRef.Get(); current.Reference().String() != recorded {
+				t.Fatalf("attempt %d records session %s and this service holds %s", attempts[1].Sequence, recorded, current.Reference())
+			}
 			if current.Reference() == first.Reference() {
 				t.Fatal("worker was not replaced")
 			}

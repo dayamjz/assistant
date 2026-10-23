@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // standInManager writes a manager command line named name into a fresh
@@ -28,7 +30,7 @@ func standInManager(t *testing.T, name string, status int) (dir, calls string) {
 	if status != 0 {
 		script += "echo 'the manager says no' >&2\nexit " + string(rune('0'+status)) + "\n"
 	}
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+	if err := procgroup.WriteProgram(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return dir, calls

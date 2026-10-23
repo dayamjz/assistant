@@ -101,7 +101,9 @@ var errTaskUnplaced = errors.New("service: the task was not placed on this machi
 // unhonoredKeys is refused on refusalUnhonoredRepository's terms, and a copy
 // that cannot be fetched, read or parsed refuses too (P7): either way the
 // task is left queued rather than placed here on a guess. The fetch lands
-// under dispatchTrustedRef.
+// under dispatchReadNamespace, in a reference of this read's own, so a
+// second dispatcher of the task cannot remove it before it is resolved and
+// have this one refused for a read the repository did not fail (#552).
 //
 // It is what keeps a task from reaching this machine under a placement.arch
 // set after its intake, or under one an investigation's intake never read.
@@ -119,7 +121,7 @@ var errTaskUnplaced = errors.New("service: the task was not placed on this machi
 // the wake is the placement's to add (#526).
 func (s *Service) placeable(ctx context.Context, repository store.Repository, id string) error {
 	forWhat := "the dispatch of task " + id
-	if _, err := s.trustedTaskLayer(ctx, repository, dispatchTrustedRef(id), forWhat); err != nil {
+	if _, err := s.trustedTaskLayer(ctx, repository, dispatchReadNamespace, id, forWhat); err != nil {
 		return fmt.Errorf("%w: %s reads its repository's trusted configuration first: %w", errTaskUnplaced, forWhat, err)
 	}
 	return nil

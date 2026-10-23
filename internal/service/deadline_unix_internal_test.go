@@ -20,6 +20,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -49,7 +50,7 @@ func hangOnPath(t *testing.T, name, marker string) (recorded func() []int) {
 		"  exec sleep 600\n" +
 		"fi\n" +
 		fallback + "\n"
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o700); err != nil {
+	if err := procgroup.WriteProgram(filepath.Join(dir, name), []byte(script), 0o700); err != nil {
 		t.Fatalf("writing the stand-in %s: %v", name, err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

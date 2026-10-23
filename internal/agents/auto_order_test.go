@@ -1,12 +1,12 @@
 package agents_test
 
 import (
-	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // plantOnPath makes each named executable resolvable and nothing else, so what
@@ -19,7 +19,7 @@ func plantOnPath(t *testing.T, names ...string) {
 	}
 	dir := t.TempDir()
 	for _, name := range names {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		if err := procgroup.WriteProgram(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 			t.Fatalf("planting %s: %v", name, err)
 		}
 	}

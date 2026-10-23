@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
@@ -12,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // dispatchSubject is a hand-built service over a home whose store records a
@@ -173,6 +175,90 @@ func TestConcurrentDispatchOfOneTaskClaimsOneAttempt(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(subject.copy, ".git")); err != nil {
 		t.Fatalf("the winner's clone is not standing: %v", err)
 	}
+}
+
+// Two dispatchers of one task each read the repository's trusted copy
+// before the first claim (placeable), and neither's read can be undone by
+// the other's (#552). The first to fetch is held between its fetch and its
+// resolve until the other has fetched, resolved and read, has removed what
+// its own read left in the gate, and has reached its claim; only then does
+// the held one resolve what it fetched. While both reads shared one
+// reference named for the task, the second's removal deleted the first's
+// fetch, and the first was refused as though the trusted copy could not be
+// read: P7's refusal, reached for a reason that is not the repository's,
+// beside a claim that was never contested. Now the store's anchor alone
+// decides between them, and no dispatch reference is left in the gate.
+func TestADispatchersTrustedReadIsItsOwn(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P7)
+	subject := newDispatchSubject(t)
+	ctx := t.Context()
+	var fetched atomic.Int32
+	reached := make(chan struct{})
+	var reachOnce sync.Once
+	reach := func() { reachOnce.Do(func() { close(reached) }) }
+	subject.service.betweenTrustedFetchAndResolve = func(string) {
+		if fetched.Add(1) == 1 {
+			<-reached
+		}
+	}
+	subject.service.betweenAttemptReadAndClaim = reach
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer reach()
+			_, errs[i] = subject.service.dispatchClaimed(ctx, subject.task)
+		}()
+	}
+	wg.Wait()
+	if n := fetched.Load(); n != 2 {
+		t.Fatalf("the dispatchers fetched the trusted copy %d times, want once each: the ordering this test holds was never reached", n)
+	}
+	won, lost := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			won++
+		case errors.Is(err, store.ErrTaskMoved):
+			lost++
+		default:
+			t.Fatalf("a dispatcher failed for a reason other than the claim: %v", err)
+		}
+	}
+	if won != 1 || lost != 1 {
+		t.Fatalf("%d dispatchers won and %d lost the claim, want one of each: %v", won, lost, errs)
+	}
+	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
+	if err != nil || len(attempts) != 1 {
+		t.Fatalf("the task has attempts %+v (%v), want exactly one", attempts, err)
+	}
+	if left := dispatchReadRefs(t, subject); len(left) != 0 {
+		t.Fatalf("the dispatches left %v in the gate, want every read's reference removed once read", left)
+	}
+}
+
+// dispatchReadRefs lists the references under the dispatch reads' namespace
+// in the gate repository of the subject's repository.
+func dispatchReadRefs(t *testing.T, subject *dispatchSubject) []vcs.Ref {
+	t.Helper()
+	ctx := t.Context()
+	repository, err := subject.records.Repository(ctx, "subject")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare, err := subject.service.gateRepositoryOf(ctx, repository, "the test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := bare.ListRefs(ctx, "refs/assistant/trusted/dispatch/")
+	if err != nil {
+		t.Fatalf("listing the gate's dispatch references: %v", err)
+	}
+	return refs
 }
 
 // A dispatch that reaches proven ends with the proof in the service's slot

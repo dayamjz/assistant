@@ -10,6 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/safety"
 )
 
@@ -434,10 +435,17 @@ func TestTheRebaseStageHoldsAReplayARepeatedBlockWouldHide(t *testing.T) {
 }
 
 // executable makes name in dir executable and stages it, so the working tree
-// and the index agree on the mode.
+// and the index agree on the mode. It writes the file again as a program,
+// through procgroup.WriteProgram, rather than setting the bit on the file
+// already there.
 func executable(t *testing.T, dir, name string) {
 	t.Helper()
-	if err := os.Chmod(filepath.Join(dir, name), 0o755); err != nil {
+	path := filepath.Join(dir, name)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", name, err)
+	}
+	if err := procgroup.WriteProgram(path, content, 0o755); err != nil {
 		t.Fatalf("making %s executable: %v", name, err)
 	}
 	git(t, dir, "add", name)

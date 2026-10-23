@@ -10,6 +10,12 @@
 // internal/procgroup/guard fails the build on a program started anywhere
 // else that its exception list does not name.
 //
+// A program this module writes and then starts, in a test or not, is written
+// by WriteProgram, whose doc comment owns why: a write that races a start is
+// how a program comes to be refused with ETXTBSY (#539). The guard fails the
+// build on a file given an execute bit anywhere else its exception list does
+// not name, within the reach its package comment states.
+//
 // It decides nothing about what a program's exit means. Run returns what
 // os/exec's Wait reported joined to exec.ErrWaitDelay when the output did not
 // reach its end, or a refusal of its own, and the caller reads its context's
