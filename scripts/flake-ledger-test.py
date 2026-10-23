@@ -287,6 +287,14 @@ LOGS = {120256178246: "rerun-attempt-1.log", 120265317855: "rerun-attempt-2.log"
         120290002917: "superseded-ubuntu.log"}
 
 
+def set_steps(github, job_id, conclusions):
+    """Gives the recorded job's named steps these conclusions."""
+    job = next(j for a in github.data["attempts"].values() for j in a["jobs"] if j["id"] == job_id)
+    for step in job["steps"]:
+        step["conclusion"] = conclusions.get(step["name"], step["conclusion"])
+    return job
+
+
 def stopped_after_attempt_2(github):
     """The recorded three-attempt run as it stood before attempt 3."""
     run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
@@ -360,6 +368,29 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(data["failures"], [])
         status, _, _ = run_report(FakeGitHub(LOGS))
         self.assertEqual(status, 0, "over many runs a superseded job is only counted")
+
+    def test_one_run_with_a_job_that_timed_out_is_incomplete(self):
+        # Run 39932040317 as it stood after attempt 1: its macOS job ran into
+        # timeout-minutes. The timeout is a failure record, and the suite
+        # never finished, so the run's summary cannot pass.
+        github = FakeGitHub(LOGS)
+        run = github.run(39932040317)
+        run["run_attempt"], run["conclusion"] = 1, "cancelled"
+        del github.data["attempts"]["39932040317/2"]
+        status, data, _ = run_report(github, "--run", "39932040317")
+        self.assertEqual(status, 2)
+        self.assertEqual([(c["job_id"], c["reason"]) for c in data["cancelled_jobs"]], [(120342424178, "timeout")])
+        self.assertIn("job-timeout: check (macos-latest) exceeded timeout-minutes", [f["key"] for f in data["failures"]])
+
+    def test_one_run_with_a_job_cancelled_after_a_failure_is_incomplete(self):
+        # Run 39916130926 with its macOS job's log holding the recorded judge
+        # failure, and its ubuntu job finished: the cancel still cut the
+        # macOS suite short.
+        github = FakeGitHub({**LOGS, 120290002840: "judge-test-failure.log"})
+        set_steps(github, 120290002917, {})["conclusion"] = "success"
+        status, data, _ = run_report(github, "--run", "39916130926")
+        self.assertEqual(status, 2)
+        self.assertEqual([(c["job_id"], c["reason"]) for c in data["cancelled_jobs"]], [(120290002840, "superseded")])
 
     def test_a_running_attempts_jobs_are_not_cached(self):
         with tempfile.TemporaryDirectory() as folder:
