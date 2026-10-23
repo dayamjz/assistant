@@ -298,6 +298,18 @@ func (s Stage) FixKey() Key { return Key("fix." + s.String()) }
 // holds to the stage's report.
 func (s Stage) HeldKey() Key { return Key("held." + s.String()) }
 
+// RerunKey says the usage ceiling refused the stage's last automatic fix
+// round, so that round never started and is still owed: the stage's next
+// execution that reports fix-eligible findings records OutcomeRerun rather
+// than OutcomeFixable, and the run takes the round again over the edge
+// rerunEntry builds, not the one the refusal already counted. The fix node is
+// its one writer and writes it every round, true when the ceiling refused the
+// round and false when the round started, and the stage node reads it at a
+// stage that takes automatic rounds. A round a person asked for never writes
+// it: a retry does not carry a request. It is late because false is how every
+// run behaved before it existed.
+func (s Stage) RerunKey() Key { return Key("rerun." + s.String()) }
+
 // RequestKey is where what a person asked for with a fix round at this stage's
 // hold lands: the encoded FixRequest. It is the hold's graph.Halt.Detail key,
 // so it belongs to that halt point alone on the same terms as AnswerKey, and
@@ -331,6 +343,7 @@ func buildSchema() map[Key]keySpec {
 		add(keySpec{row.stage.FixKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline, false})
 		add(keySpec{row.stage.HeldKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline, false})
 		add(keySpec{row.stage.RequestKey(), graph.KindText, graph.MergeNone, ownerPipeline, false})
+		add(keySpec{row.stage.RerunKey(), graph.KindBool, graph.MergeNone, ownerPipeline, true})
 	}
 	return out
 }

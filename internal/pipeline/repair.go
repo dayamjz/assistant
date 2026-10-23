@@ -32,8 +32,10 @@ import (
 // builds it.
 //
 // The bound is the same number the edge into the stage's fixer carries. Every
-// traversal of this edge follows one entry into the fixer, which that edge
-// counted first, and a resubmission of the same repair without another fix
+// traversal of this edge follows one fix round that started, which that edge
+// counted first: either it entered the fixer that way, or it was a round the
+// usage ceiling refused taken again over rerunEntry, which stands for the
+// refused entry that edge counted. A resubmission of the same repair without another fix
 // round is counted the same way: the checks stage reports it as another fix
 // finding rather than taking this edge again, so a run whose repairs keep
 // failing parks rounds-exhausted in front of the fixer before this edge could

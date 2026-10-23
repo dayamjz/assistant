@@ -826,6 +826,11 @@ func (e *Executor) checkEdgeBounds(cp *Checkpoint, edge int) (Status, string) {
 		cp.Counters.Fingerprints[edge] = fingerprint
 	}
 	cp.Counters.Traversals[edge]++
+	if !cp.Counters.Unattended {
+		for _, j := range e.graph.restartedBy(edge) {
+			cp.Counters.Fingerprints[j] = ""
+		}
+	}
 	return StatusRunning, ""
 }
 
