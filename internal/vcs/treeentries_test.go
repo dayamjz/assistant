@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -23,8 +24,7 @@ func TestTreeEntriesBuildTheTreeAHandCommitRecords(t *testing.T) {
 	commitFile(t, dir, "a.txt", "one\n", "a")
 	commitFile(t, dir, "d/b.txt", "two\n", "b")
 	base := commitFile(t, dir, "gone.txt", "three\n", "gone")
-	writeFile(t, filepath.Join(dir, "a.txt"), "one, changed\n")
-	if err := os.Chmod(filepath.Join(dir, "a.txt"), 0o755); err != nil {
+	if err := procgroup.WriteProgram(filepath.Join(dir, "a.txt"), []byte("one, changed\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	rawGit(t, dir, "rm", "--quiet", "gone.txt")

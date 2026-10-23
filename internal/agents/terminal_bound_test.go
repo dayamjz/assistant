@@ -18,6 +18,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // wedgedTmux is a tmux that answers like the real one, the wrapper
@@ -48,7 +49,7 @@ func newWedgedTmux(t *testing.T) wedgedTmux {
 		"  fi\n" +
 		"done\n" +
 		"exec '" + real + "' \"$@\"\n"
-	if err := os.WriteFile(w.tmux, []byte(script), 0o755); err != nil {
+	if err := procgroup.WriteProgram(w.tmux, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return w
