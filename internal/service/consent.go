@@ -163,8 +163,9 @@ func standingConsentRefused(repository store.Repository) error {
 // consentTrustedRef is the reference the default branch's tip is fetched
 // under for one check of whether a repository allows standing consent. It is
 // named for the check rather than for a run because the check precedes the
-// run, and it is removed as soon as the check has read it.
-func consentTrustedRef(check string) string { return "refs/assistant/trusted/consent/" + check }
+// run, and it is removed as soon as the check has read it; one left behind
+// is removed at the next open (readrefs.go's sweepReadRefs).
+func consentTrustedRef(check string) string { return consentReadNamespace + check }
 
 // standingConsentAllowed reads whether repository allows standing consent:
 // its trusted copy at a fresh fetch of the default branch, resolved with the

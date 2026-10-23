@@ -397,6 +397,11 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
+	// betweenTrustedFetchAndResolve runs in fetchTrusted after the default
+	// branch has been fetched under ref and before ref is resolved. It is nil
+	// in production and set only by this package's tests, which use it to
+	// hold one reader of a trusted copy there while another reads its own.
+	betweenTrustedFetchAndResolve func(ref string)
 	// beforeRefusalEnd runs in endRefused, after begin refused a run and
 	// before the run is ended. It is nil in production and set only by this
 	// package's tests, which use it to hold the run pending while they

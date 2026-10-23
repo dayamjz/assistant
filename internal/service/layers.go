@@ -250,7 +250,7 @@ func (s *Service) trustedLayer(ctx context.Context, bare *vcs.Repository, reposi
 // through refusalUnhonoredRepository, so every reader refuses it alike.
 func (s *Service) trustedLayerAt(ctx context.Context, bare *vcs.Repository, repository store.Repository,
 	ref, forWhat string) (config.Layer, string, []byte, error) {
-	at, err := fetchTrusted(ctx, bare, repository, ref, forWhat, ErrTrustedConfig)
+	at, err := s.fetchTrusted(ctx, bare, repository, ref, forWhat, ErrTrustedConfig)
 	if err != nil {
 		return config.Layer{}, "", nil, err
 	}
@@ -280,7 +280,7 @@ func (s *Service) trustedLayerAt(ctx context.Context, bare *vcs.Repository, repo
 // reads at. A record naming no default branch, a fetch that fails and a tip
 // that does not resolve are each reported under class, the reader's own
 // refusal, naming forWhat.
-func fetchTrusted(ctx context.Context, bare *vcs.Repository, repository store.Repository,
+func (s *Service) fetchTrusted(ctx context.Context, bare *vcs.Repository, repository store.Repository,
 	ref, forWhat string, class error) (string, error) {
 	if repository.DefaultBranch == "" {
 		return "", fmt.Errorf(
@@ -293,6 +293,9 @@ func fetchTrusted(ctx context.Context, bare *vcs.Repository, repository store.Re
 		return "", fmt.Errorf("%w: fetching %s from the upstream for %s: %w",
 			class, repository.DefaultBranch, forWhat, err)
 	}
+	if s.betweenTrustedFetchAndResolve != nil {
+		s.betweenTrustedFetchAndResolve(ref)
+	}
 	at, err := bare.ResolveCommit(ctx, ref)
 	if err != nil {
 		return "", fmt.Errorf("%w: resolving the fetched %s for %s: %w",
@@ -301,29 +304,24 @@ func fetchTrusted(ctx context.Context, bare *vcs.Repository, repository store.Re
 	return at, nil
 }
 
-// taskTrustedRef is the name the gate repository holds the default branch's
-// tip under while an intake or a promotion reads the posture of the task it
-// is creating or promoting. It is named for the task, on trustedRef's terms,
-// and deleted once read.
-func taskTrustedRef(taskID string) string { return "refs/assistant/trusted/task/" + taskID }
-
-// dispatchTrustedRef is the name the gate repository holds the default
-// branch's tip under while a dispatch reads it for the task it is about to
-// place (placeable). It is named apart from taskTrustedRef so a promotion
-// and a dispatch of one task cannot overwrite or delete each other's fetch,
-// and it is deleted once read.
-func dispatchTrustedRef(taskID string) string { return "refs/assistant/trusted/dispatch/" + taskID }
-
-// trustedTaskLayer is trustedLayerAt for a read made on a task's behalf: it
-// opens the repository's gate repository, fetches the default branch under
-// ref, reads the copy there, and deletes ref afterwards, best effort; one
-// left behind is overwritten by the next read under the same name and read
-// by nothing else. Its refusals are trustedLayerAt's.
-func (s *Service) trustedTaskLayer(ctx context.Context, repository store.Repository, ref, forWhat string) (config.Layer, error) {
+// trustedTaskLayer is trustedLayerAt for a read made on task taskID's
+// behalf: it opens the repository's gate repository, fetches the default
+// branch under a reference of this read's own in namespace (readRef), reads
+// the copy there, and deletes the reference afterwards, best effort. The
+// namespace is the reader's, so an intake's or promotion's read and a
+// dispatch's are told apart by name, and the reference is this read's alone,
+// so two reads of one kind for one task - two dispatchers of it, which the
+// store's claim anchor decides between - cannot update or delete each
+// other's fetch before it is resolved (#552). One left behind is read by
+// nothing and removed at the next open (readrefs.go's sweepReadRefs). Its
+// refusals are trustedLayerAt's.
+func (s *Service) trustedTaskLayer(ctx context.Context, repository store.Repository,
+	namespace, taskID, forWhat string) (config.Layer, error) {
 	bare, err := s.gateRepositoryOf(ctx, repository, forWhat)
 	if err != nil {
 		return config.Layer{}, err
 	}
+	ref := readRef(namespace, taskID)
 	defer func() { _ = bare.DeleteRef(context.WithoutCancel(ctx), ref) }()
 	trusted, _, _, err := s.trustedLayerAt(ctx, bare, repository, ref, forWhat)
 	return trusted, err
@@ -340,10 +338,10 @@ func (s *Service) trustedTaskLayer(ctx context.Context, repository store.Reposit
 // cannot be fetched, a document that cannot be read or parsed, and a trusted
 // copy naming a lighter posture than the operator's are ErrTrustedConfig, and
 // internal/tasks refuses the intake or the promotion on it rather than
-// assuming a posture. The fetch lands under taskTrustedRef, through
+// assuming a posture. The fetch lands under postureReadNamespace, through
 // trustedTaskLayer.
 func (s *Service) projectPosture(ctx context.Context, repository store.Repository, taskID string) (config.Delivery, error) {
-	trusted, err := s.trustedTaskLayer(ctx, repository, taskTrustedRef(taskID), "task "+taskID)
+	trusted, err := s.trustedTaskLayer(ctx, repository, postureReadNamespace, taskID, "task "+taskID)
 	if err != nil {
 		return "", err
 	}
