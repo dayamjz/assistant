@@ -893,9 +893,17 @@ func TestACarryOnCompletesACarryOnNoteAnAppendLeftPartial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The note is its section: from its heading to the next section the
+	// program appends (dispatch's isolation check, once the task is
+	// dispatched) or the end of the file.
 	text := string(raw)
-	if strings.Count(text, service.CarryOnHeading) != 1 || !strings.HasSuffix(text, "rather than starting over.\n") ||
-		!strings.Contains(text, "You were started in the working copy of an earlier task, "+old+",") {
+	at := strings.Index(text, service.CarryOnHeading)
+	note := text[max(at, 0):]
+	if end := strings.Index(note, "\n\n## "); end >= 0 {
+		note = note[:end]
+	}
+	if at < 0 || strings.Count(text, service.CarryOnHeading) != 1 || !strings.HasSuffix(note, "rather than starting over.\n") ||
+		!strings.Contains(note, "You were started in the working copy of an earlier task, "+old+",") {
 		t.Fatalf("the completed carry on left the instructions reading:\n%s\nwant the whole note, once", text)
 	}
 }
