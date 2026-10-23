@@ -1,5 +1,5 @@
 {
- "_about": "Real GitHub API responses recorded 2026-10-23 for runs 39905430594, 39932040317 and 39916130926, trimmed to the fields scripts/flake-ledger.py reads.",
+ "_about": "Real GitHub API responses recorded 2026-10-23 for runs 39905430594, 39932040317 and 39916130926, trimmed to the fields scripts/flake-ledger.py reads; pulls are #154 and #257, two pull requests that reused the branch claude/prd-owner-decisions.",
  "runs": [
   {
    "id": 39905430594,
@@ -1483,6 +1483,30 @@
    "title": "ci: the macOS check job runs within minutes of its 40-minute timeout since the per-package leak check",
    "body": "Since #492 (per-package leak check) merged, macOS `check` jobs take 25-37 minutes against `timeout-minutes: 40` (ci.yml line 21). On 2026-10-23 around 2:27 AM PDT three runs that started together (#554, #556, main) ran 37-40 minutes and two were cancelled at the timeout with \"The operation was canceled\" (runs 39932040317, 39932031756). Recent durations: 25, 26, 28, 28, 29, 30, 30, 33, 35, 37, 40, 40 minutes.\n\nDecide between making the job faster (what the per-package check costs per package on macOS, the settle loops, whether `internal/service` and `internal/cli` dominate) and a larger bound with a reason. A timeout that cancels a passing run reads as a failure and is re-run past, which is the noise this push is removing.",
    "closed_at": null
+  }
+ ],
+ "pulls": [
+  {
+   "number": 154,
+   "created_at": "2026-10-14T06:30:01Z",
+   "closed_at": "2026-10-14T06:41:50Z",
+   "head": {
+    "ref": "claude/prd-owner-decisions",
+    "repo": {
+     "full_name": "dayamjz/assistant"
+    }
+   }
+  },
+  {
+   "number": 257,
+   "created_at": "2026-10-15T14:26:18Z",
+   "closed_at": "2026-10-15T14:48:36Z",
+   "head": {
+    "ref": "claude/prd-owner-decisions",
+    "repo": {
+     "full_name": "dayamjz/assistant"
+    }
+   }
   }
  ]
 }
