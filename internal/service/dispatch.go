@@ -65,7 +65,10 @@ import (
 // this dispatcher read, and the loser is refused with ErrTaskMoved before it
 // reads the primary or touches the path. The first claim records the task's
 // machine, and it is always this one: this build reads no remote host, so it
-// places every task here, and a retry stays where the first claim put it. The "dispatched" entry intake or Release
+// places every task here, and a retry stays where the first claim put it.
+// Before a first claim the repository's trusted copy is read (unhonored.go's
+// placeable), and a copy that does not allow this machine, or that cannot be
+// read, leaves the task queued with nothing claimed. The "dispatched" entry intake or Release
 // appended is the state fact the dispatch is decided from, and it is never
 // the claim: it says the task is to be dispatched, not that anyone is.
 //
@@ -235,7 +238,9 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // assertion, is retried at the next open and not at the next release, which
 // is what keeps a failure that repeats from adding an attempt per run that
 // settles. A task refused resolves Failed from the entry the refusal appended
-// and is kept out by the resolver as well as by the slot.
+// and is kept out by the resolver as well as by the slot. The one exception
+// is a task placeable left queued: it claimed nothing, so its slot is given
+// back and the next pass reads its repository's trusted copy again.
 //
 // The tasks are read under the read side of the intake exclusion
 // createTask holds across an intake, so a pass never reads a task whose
@@ -294,6 +299,9 @@ func (s *Service) dispatchDue(ctx context.Context) {
 		case errors.Is(err, store.ErrTaskMoved):
 			s.log.Printf("task %s was not dispatched here: %v", r.Record.ID, err)
 			continue
+		case errors.Is(err, errTaskUnplaced):
+			s.log.Printf("task %s stays queued: %v", r.Record.ID, err)
+			continue
 		default:
 			s.log.Printf("task %s was not dispatched: %v", r.Record.ID, err)
 			continue
@@ -351,8 +359,23 @@ func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, erro
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	settle(d.proof)
+	s.settleOrRelease(id, settle, d.proof, err)
 	return d, err
+}
+
+// settleOrRelease ends a dispatch's hold on its slot: a dispatch left queued
+// by placeable claimed nothing, so its slot is given back and the next pass
+// reads the trusted copy again, and every other outcome settles the slot
+// with the proof, or none, for the service's lifetime.
+func (s *Service) settleOrRelease(id string, settle func(tasks.Isolation), proof tasks.Isolation, err error) {
+	if errors.Is(err, errTaskUnplaced) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.isolated, id)
+		delete(s.claiming, id)
+		return
+	}
+	settle(proof)
 }
 
 // redispatchTask is dispatchTask for a retry answered on the hold a dispatch
@@ -369,7 +392,7 @@ func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, er
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	settle(d.proof)
+	s.settleOrRelease(id, settle, d.proof, err)
 	return d, err
 }
 
@@ -482,6 +505,14 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	}
 	if _, launched := latestSession(attempts); launched {
 		return dispatched{}, fmt.Errorf("%w: task %s attempt %d", errTaskLaunched, id, latest)
+	}
+	// The first claim places the task, so it is made only once the
+	// repository's trusted copy allows this machine; a later attempt stays
+	// where the first claim put it (store.BeginTaskAttempt places nothing).
+	if latest == 0 {
+		if err := s.placeable(ctx, repository, id); err != nil {
+			return dispatched{}, err
+		}
 	}
 	// A copy already standing is a retry's, swept before the claim on
 	// sweep.go's terms; a copy about to be cut has nothing in it to sweep.
