@@ -973,8 +973,11 @@ service reads that copy: a run, a delivery task's intake or promotion, and
 standing consent. A task of such a repository that reaches dispatch, an
 investigation or a delivery task taken before the key was added, is not
 dispatched: it stays queued, and the next dispatch pass after the key is
-removed dispatches it. Only the service log says why it waits; `assistant`
-does not surface it yet.
+removed dispatches it. Meanwhile the coordinator is told about it as it is
+about any task with no worker to watch: on the supervisor's second pass over
+it (about one `supervision_beacon_interval` in) and again each `escalation_window`,
+as a worker whose screen has not changed. Only the service log says the wait
+is placement.
 
 Each launch records which adapter it chose on the task attempt in the home's
 database, once, as `adapter`, `route_reason` and `route_skipped`; no command

@@ -109,10 +109,14 @@ var errTaskUnplaced = errors.New("service: the task was not placed on this machi
 // pass, at the next intake, release or open, reads the copy again and
 // dispatches the task once the key is gone.
 //
-// What it does not do is surface the task: the refusal is written to the
-// service's log, and the task reads Dispatched to anyone who asks. PRD
-// section 10 surfaces such a task at once and again each escalation_window;
-// that is the dispatch's placement to add (#526).
+// The task is surfaced the way the supervisor loop surfaces any Dispatched
+// task with no terminal to read: a terminal-unchanged wake on the loop's
+// second pass over it, and again each escalation_window (supervise.go), the
+// cadence PRD section 10 asks of a task no eligible machine satisfies. What
+// that wake does not carry is why: the coordinator reads it as a worker
+// whose screen has not changed, the task reads Dispatched, and only this
+// refusal, in the service's log, says the wait is placement. Saying so in
+// the wake is the placement's to add (#526).
 func (s *Service) placeable(ctx context.Context, repository store.Repository, id string) error {
 	forWhat := "the dispatch of task " + id
 	if _, err := s.trustedTaskLayer(ctx, repository, dispatchTrustedRef(id), forWhat); err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
@@ -24,8 +25,11 @@ import (
 // covered: an investigation taken by task.create while the key is set, and a
 // delivery task accepted before the key was added and dispatched once the
 // service opens after it. Neither claims an attempt, and each still resolves
-// Dispatched. Once the key is removed, the next dispatch pass dispatches both,
-// so the task was kept queued by the key and not lost.
+// Dispatched. Each is surfaced to the coordinator by the supervisor loop's
+// terminal-unchanged wake, as any Dispatched task with no terminal is, which
+// is what unhonored.go's placeable says of it. Once the key is removed, the
+// next dispatch pass dispatches both, so the task was kept queued by the key
+// and not lost.
 func TestATaskOfARepositoryNarrowedByPlacementArchStaysQueued(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P7)
@@ -37,6 +41,7 @@ func TestATaskOfARepositoryNarrowedByPlacementArchStaysQueued(t *testing.T) {
 	h := newHome(t)
 	subject := newSubject(t)
 	repository := recordRepository(t, h, subject)
+	writeOperatorConfig(t, h.ConfigFile(), `{"supervision_beacon_interval": "1s"}`+"\n")
 	accepted := recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/accepted-before")
 	plantTrustedDocument(t, subject, `{"placement": {"arch": ["`+elsewhere+`"]}}`)
 
@@ -57,6 +62,7 @@ func TestATaskOfARepositoryNarrowedByPlacementArchStaysQueued(t *testing.T) {
 			if got := taskState(t, running.client, id); got.State != taskstate.Dispatched {
 				t.Fatalf("task %s resolves %+v under placement.arch [%s], want it still Dispatched", id, got, elsewhere)
 			}
+			awaitWake(t, h, id, supervisor.KindTerminalUnchanged)
 		}
 
 		plantTrustedDocument(t, subject, `{"ignore_patterns": ["vendor/**"]}`)
@@ -81,6 +87,28 @@ func awaitQueued(t *testing.T, h *home.Home, id string) {
 		}
 		if !time.Now().Before(deadline) {
 			t.Fatalf("task %s was neither dispatched nor logged as staying queued within %s", id, launchWait)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// awaitWake waits for the supervisor loop to queue a wake of kind about the
+// task.
+func awaitWake(t *testing.T, h *home.Home, id string, kind supervisor.Kind) {
+	t.Helper()
+	deadline := time.Now().Add(launchWait)
+	for {
+		wakes, err := recordsOf(t, h).TaskWakes(t.Context(), id)
+		if err != nil {
+			t.Fatalf("reading the wakes of task %s: %v", id, err)
+		}
+		for _, w := range wakes {
+			if w.Kind == string(kind) {
+				return
+			}
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("no %s wake was queued about task %s within %s; its wakes are %+v", kind, id, launchWait, wakes)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
