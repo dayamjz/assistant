@@ -1,472 +1,162 @@
-# assistant
+# Assistant
 
-**Run many coding agents at once, and let none of them ship unvalidated work.**
+**Orchestrate coding agents. Choose the right models. Ship validated code.**
 
-Assistant does two things you currently do by hand. It puts a validation gate
-in front of your remote, so no change reaches a shared branch until it has been
-independently reviewed, tested, documented, and linted. And it runs a fleet of
-coding agents in parallel, each in its own isolated copy of a repository, with
-a coordinator agent you talk to and a supervisor that keeps watch while you are
-away. The product requirements describe both halves and why they belong in one
-tool. The gate is the more mature half; the fleet's limits in this build are
-listed under Status. [`docs/operators.md`](docs/operators.md) covers using the
-gate next to your CI and forge.
+Assistant is a **local-first orchestration and delivery system** for AI coding agents. Give a coordinator work to do, run specialized agents in isolated repository copies, and keep a human in control of consequential decisions. When changes are ready, a separate Git gate reviews and validates them before they reach the shared repository.
 
-## Status
+![Assistant overview: coordinate, execute, validate](docs/illustrations/assistant-overview.svg)
 
-Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Twenty-nine pieces exist so far, and the
-binary can be driven. The execution
-engine in `internal/graph` is the first: the graph builder with its
-construction-time checks, an executor with halt points and bounded cycles, and
-checkpoints behind a four-operation store. The second is `internal/findings`,
-the vocabulary every pipeline stage speaks: a finding with its severity and its
-action, the report a stage returns, the defensive parsing that turns untrusted
-agent output into a validated report, and the one rule a review report answers
-for beyond that: it carries the revision it read and the paths it actually
-read, and a finding reaching past that evidence is refused and reported as
-refused rather than believed. The third is `internal/config`, the
-configuration schema: the merge of the operator's document with a
-repository's trusted and pushed copies, the defaults, the parse-time
-validation, and the path matcher. The fourth is `internal/vcs`, the only
-package that invokes git. The fifth is `internal/safety`, the policy
-layer over it: it decides whether a branch update may proceed and on what
-anchor, and refuses rather than guessing when a fact the decision rests on
-cannot be verified. The sixth is `internal/store`, the durable record of what
-the gate did: an embedded sqlite database behind typed accessors, with additive
-migrations checked against the database's own catalog, and every hold
-resolution recorded with who made it, from a closed set that is the type
-itself rather than a check, so no text a caller was handed decodes into one.
-The seventh is
-`internal/agents`, the only package that starts an agent process: the separate
-reviewing and fixing roles, the capabilities an adapter declares and is held
-to, the Claude Code adapter, the review shape that carries the evidence its
-answer is bound to and that the fixer refuses, ordered fallback resolution, and
-a record of what each invocation cost. The eighth is
-`internal/forge`, the only package that talks to a code host: the provider
-interface over pull requests, mergeability, checks, and a merge bound to the
-head it was asked for, a GitHub adapter over the `gh` command line and a
-GitLab adapter over GitLab's REST API, and a checks model in which an empty
-check list is not a pass. The ninth is `internal/ipc`, the local protocol between the command line
-and the background service: the method table, the event taxonomy and its
-bounded stream, a client, a server, and peer identification the kernel answers
-for. Who resolved a held decision that arrives here is derived from the
-surface rather than read out of the request, so the answer is the machine
-interface and never a person, including when a person typed it, because
-nothing the kernel tells this protocol separates the two. The tenth is
-`internal/gate`, which owns the local bare repository a push
-is validated through: where it lives, the admission and notification hooks that
-make a push mean something, its identity across a move or a copy, and one seam
-every operation obtains its gate from, so no operation can skip the ownership
-question that an index in `internal/store` answers. The eleventh is
-`internal/pipeline`, the nine delivery-gate stages as a graph over the
-execution engine: the contract one stage implements, the fixed order carried as
-nine named fields rather than a list, the state schema as one key table, the
-refusal of a path the resolved adapter has not declared, and the fix loop with
-its halt points and its three bounds. It defines a topology and executes
-nothing. The twelfth is `internal/scope`, the review stage's scope
-lens rather than a tenth stage: the guidance that asks a reviewer to trace every
-path a change touched back to the recorded intent, and the notes an untraced
-path becomes. It ships on and no configuration key turns it off, and what it
-produces is always a note that informs and blocks nothing. The thirteenth is
-`internal/fixture`, the adversarial subject repository the end-to-end harness
-validates against: seven scenarios built from nothing on demand, each planting
-conditions a stage or a refusal has to answer, with the answer each one must
-produce recorded beside it. The fourteenth is `internal/runs`, the service that
-owns a run: its status changes as a table of anchored moves, each read and
-written in one transaction against the statuses the move is legal out of, and
-the one durable fixer session a run keeps, recorded on the run itself rather
-than in pipeline state, so a run's fixer resumes the same conversation across a
-segment boundary and across a restart of the service. The fifteenth is
-`internal/checkpoints`, the durable form of the four-operation store the
-execution engine writes through: a run's whole checkpoint history in the
-embedded database, where every write is anchored to the checkpoint the caller
-observed and one that anchors to a run that has moved is refused rather than
-appended, so a run survives a restart as a position and not only as a record.
-The sixteenth is `internal/principles`, the build-time check that fails when a
-principle the PRD lists is neither cited by a test nor written down as a
-declared gap: the PRD owns that list and the constants here are pinned to it in
-both directions, and a test cites by calling `principles.Cite` inside its own
-body, so a comment naming a principle does not count. What it establishes is
-only that no principle goes silently unclaimed; a citation says a test claims to
-check a principle, never that the principle is covered or that it holds. The
-seventeenth is `internal/redact`, the one owner of credential removal. The
-eighteenth is `internal/home`, the one owner of the on-disk layout and of the
-exclusive lock that gives a home exactly one service. The nineteenth is
-`internal/machine`, the shapes a structured answer takes, the three exit codes,
-and the outcome vocabulary a driving agent reads. The twentieth is
-`internal/service`, the background service that holds the home's lock, binds
-the local socket, owns every run that is executing, and answers the protocol.
-The twenty-first is `internal/cli`, the command surface itself: the verbs PRD
-section 9 specifies and no others, rendered for a person or as one structured
-document per invocation, and beside that table the subcommands a gate's
-hooks and its remote invoke, which are what makes a push to the gate start a run.
-The twenty-second is `internal/outcomes`, the build-time check that fails when
-the PRD's outcome row and `internal/machine`'s outcome set stop declaring the
-same six values, in the same order, in the same two groups. The row owns the
-set, and it is read by a marker on that row alone, so a marker elsewhere in the
-document is a refusal rather than a seventh outcome, and a set the rule cannot
-read is a refusal too rather than a short one. What it establishes is only that
-both sides name the same set; it does not say those six are the right six, or
-that an outcome means on the wire what the row's sentence about it says.
-The twenty-third is `internal/journey`, the end-to-end harness: the binary driven
-as a process against the fixture's subject, organized by PRD principle rather
-than by feature, with every check carrying the counterfeit observations it must
-reject so no assertion that cannot fail may ship, and three tables accounting
-for the principles, the planted conditions and the fixture's open questions.
-The twenty-fourth is `internal/judge`, the decision-model client behind the
-checks PRD section 5 lets a decision model add: two fixed questions, a pinned
-model version, and an answer that is a probability or a failed call, never a
-guess. The remaining four are the fleet. The twenty-fifth is
-`internal/taskstate`, which answers what is true of a task now by resolving its
-records on every read rather than storing a summary. The twenty-sixth is
-`internal/tasks`: intake, queueing behind a blocker, the isolation assertion a
-worker's copy has to pass before anything launches in it, the cleanup decision
-and promotion. The twenty-seventh is `internal/supervisor`, the pure wake
-classifier and stop-guard predicate, with `internal/supervisor/feed` as the
-edge that reads the beacon, the lock and the database for it. The
-twenty-eighth is `internal/session`, the terminal session a worker runs in,
-behind a five-operation provider. The twenty-ninth is `internal/custody`, PRD
-section 11's custody of your branch: `assistant sync` classifies the branch
-against what the pipeline holds for it, prints the exact steps, and with
-`--confirm` brings back work a finished run moved, fast-forwards a branch that
-is behind, or adopts a diverged head only on a three-way merge proving the
-contents match, keeping the replaced head first; it never stashes, merges,
-rebases, switches or deletes a branch, or writes to a remote, and
-`assistant status` reports the same classification without fetching or
-writing anything.
+> **At a glance:** Parallel workers and hierarchical coordination run locally today. Remote worker execution across machines is being built; cloud-hosted workers are a future direction, not a shipped feature.
 
-So `assistant` builds and runs. A run can be started, reported on, answered and
-carried on across separate invocations, with the service restarted in between,
-because the position comes back out of the checkpoint history rather than out
-of the process that reached it. Pushing a branch to the gate starts one too:
-the admission hook decides whether the push may proceed before any reference in
-the gate changes, and the notification hook starts a run for the branch and the
-commit the push named, whatever the working copy is standing on. A push that
-deletes a branch, or that carries anything that is not a branch, is accepted
-and starts nothing, and reports that rather than passing over it.
-Nothing merges a pull request on its own unless the operator lists the
-repository in the global-only `autonomy.merge` configuration key: there, a run
-that ended checks-passed is merged after a live read finds its pull request
-open, not a draft, mergeable and green on the head the run observed, with the
-merge bound to that head, and a refusal from the code host is reported rather
-than worked around.
+## Why Assistant?
 
-The one push that starts no run is a delivery task's own, from its worker, when
-the task was recorded, at intake or at promotion, under the `local` delivery
-posture: the task holds instead, and
-answering `approve` fast-forwards your local default branch to the worker's
-commit, anchored to the tip read when the change was offered, without
-validating it and without anything leaving the machine. A person's push to the
-gate always starts the full run. Only the operator's own `config.yaml` can turn
-`local` on: the `delivery` key there is the lightest posture the home allows,
-and a repository's `assistant.json`, on the default branch or on a pushed
-branch, may tighten it to `gated` and never loosen it. A repository file naming
-a lighter posture than the one beneath it is refused, stopping the run or the
-intake and naming the file's layer and both postures, rather than ignored.
-
-What each posture requires, publishes, and leaves to whom is one table in
-`internal/config` (`config.Policies`). A delivery task's answer as
-`assistant --json tasks ID` carries its posture's row as `policy`, except that
-`lands` reads `remote` when the repository has no code host (a local path or
-`file://` upstream), where the person merges on the remote. The answer carries
-`policy` only when the task's record holds a posture and its repository is one
-a run can start against; a repository on a network host this build does not
-address starts no run, so its task's answer carries none, and so does a task
-whose record holds no posture (one recorded before intake or promotion wrote
-one), although its push starts the full run.
-`gated` is the full nine-stage run, then the branch and a pull request, merged
-under the code host's policy only where there is one.
-`local` validates nothing, publishes nothing, and lands only on an `approve`
-answer to its approval hold. That answer is recorded as the machine
-interface's, because no surface in this build witnesses a person, so a
-coordinator acting for you can give it too.
-
-The stage bodies are separate work against the stage contract, and they land
-one at a time; all nine have landed. Review is the one that reads the change
-against the diff and the recorded intent, puts the scope lens in front of a
-reviewer, binds what comes back to what the reviewer declared reading, and
-takes automatic fix rounds; test validates a change with the targeted check
-`commands.test` names, resolved under PRD section 10's trust rule - from the
-operator's own configuration and the repository document's trusted copy on
-the default branch, never from the branch under validation unless the
-operator opts in - and holds for a person when no command is configured. A
-stage without a body would hold a placeholder that validates nothing, so a
-run could never report a pass a body did not establish; `stages.Implemented`
-is the authority on which stages have one, and `assistant doctor` reports
-it. Every
-run is given an isolated copy of its own, cut from the gate's repository, and
-the review body launches the resolved agent over it; the pull request body
-fails when the run's record names no repository on the code host, so a run of
-a repository with none can only fail there or skip the stage; the intent body
-launches nothing; and the test body starts only the configured targeted
-check. That is what bounds
-what the end-to-end harness can drive through the binary;
-`internal/journey/README.md` is the authority on what a green run there does
-and does not establish, starting with the limit that a scripted agent proves
-the machinery and not the review quality.
-
-The fleet runs through the same service. A coordinator agent creates work over
-the local protocol's restricted `task.create` method; there is no person-facing
-create verb, by PRD section 9's design. Each delivery task is cut its own copy,
-asserted isolated before its worker starts, and the worker is started through
-the resolved adapter's worker sessions, declared by Claude Code and Cursor
-(Cursor uses ACP pipe sessions; attachable terminals remain Claude's).
-A supervisor loop keeps a durable wake queue for the coordinator and pushes
-each wake to a coordinator holding `assistant coordinator listen`; a drain
-hands out what is queued, and only the coordinator's acknowledgement after it
-acted records a wake as handled, so a wake handed out and never acknowledged
-is handed out again. `assistant host install` prints, or with `--write` adds, the stop guard that
-keeps the coordinator's turn from ending while work is in flight with no live
-supervisor. A worker's
-push goes through the gate like anyone's, unless its task was recorded under the
-`local` posture described above. Workers can be messaged and stopped,
-`assistant watch` opens with a catch-up of what landed and what waits on you,
-and `assistant runs --usage` totals what the stage agents' calls cost.
-
-A worker can also run in a terminal you can attach to and type into: with
-`"session_provider": "tmux"` in your own configuration file, each worker is
-hosted in a tmux server of its own, `assistant coordinator peek ID` reads its
-recent output, redacted and bounded, and names the command that attaches to
-it. That needs tmux on the service's PATH and an agent adapter that declares
-terminal workers, which Claude Code does: its worker runs the CLI's
-interactive interface with a configuration directory of its own, so the
-service needs `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` in its
-environment, and
-[`docs/operators.md`](docs/operators.md) says what that mode rests on.
-
-What this build does not do yet, so nothing here claims it: the pipe
-provider stays the default; `direct` delivery stays deferred under
-PRD section 12 and is refused at parse; routing among agents waits for a
-second adapter; and interrupting a worker is refused because no adapter
-declares it.
-
-## Platforms
-
-macOS and Linux are supported, and CI runs the tests on both. Windows is not
-supported. CI vets the build for Windows (`GOOS=windows go vet ./...`) so the
-Windows-tagged sources keep compiling, but nothing runs or is tested there, and
-the surfaces this build cannot provide on Windows refuse rather than degrade:
-`internal/ipc` identifies no socket peer there, so every method that drives a
-run is refused, no worker is placed, and `service start --install` is refused.
-
-## The two promises
-
-**Nothing unvalidated is shared.** The gate is a named remote you push to on
-purpose. Pushing to it is how you consent to having that change validated,
-fixed, pushed, and turned into a pull request. Your ordinary `git push` keeps
-working as it always did.
-
-**Parallel work you can watch.** Each worker runs in its own isolated copy,
-supervised, and what it ships goes through the gate. By default a worker runs
-on pipes the service holds, which you watch through `assistant watch` and
-`assistant tasks` and steer through the coordinator. With `session_provider:
-tmux` in your own configuration file, each worker instead runs in a terminal
-you can attach to, read, and type into; `assistant coordinator peek ID` names
-the attach command, and [`docs/operators.md`](docs/operators.md) states what
-that mode needs and what attaching still cannot guarantee.
-
-## What it is not
-
-- Not continuous integration. Your CI stays the shared outer check.
-- Not a code host, and it does not own merge policy.
-- Not a model or an agent harness. It drives whichever coding agent you use.
-- Not a team governance platform. It publishes facts, not verdicts.
-
-## Repository layout
-
-| Path | Contents |
+| Without Assistant | With Assistant |
 | --- | --- |
-| `cmd/assistant` | The binary. The process boundary and nothing else: it hands the command surface what it needs and exits with the code that comes back. |
-| `cmd/fixture` | Builds the fixture repository into a directory you name. `scripts/build-fixture.sh DIR` runs it. |
-| `internal/agents` | The only package that starts an agent process: the run and fix roles, the stage-body form of the agent that is not a route to a fixer session, the capability declaration every adapter is held to, the Claude Code adapter, fallback resolution, the review shape and the evidence demand it carries, and invocation records. |
-| `internal/agents/route` | The typed-graph answer to one question about a type: can a caller holding it reach a fixer session. The general form of the P4 check, asked by `internal/agents` and `internal/stages`. |
-| `internal/agents/standin` | The scripted agent the tests outside `internal/agents` run against: the test binary re-executed as the agent process, read by the production adapter. |
-| `internal/buildinfo` | Which build this binary is: the release version a release build is stamped with at link time, and what the Go toolchain recorded. `--version` and the build a run is recorded against both read it. |
-| `internal/checkpoints` | The durable `graph.CheckpointStore` over `internal/store`: a run's checkpoint history, appends anchored to what the caller observed, and the fork that copies a run's history up to a point into a new run. |
-| `internal/cli` | The command surface: the verbs PRD section 9 specifies, their flags, the two renderings of one answer, and the subcommands a gate's hooks and its remote invoke. It holds no validation logic. |
-| `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
-| `internal/custody` | Custody of a person's branch, PRD section 11: the six classes a branch is in relative to what the pipeline holds, the exact steps each allows, and the only path that moves a person's branch, every move a decision of `internal/safety`'s anchored on the run's own observation. |
-| `internal/findings` | The stage vocabulary: findings, actions, reports, parsing of agent output, and the evidence a review report's findings are bound to. |
-| `internal/fixture` | The adversarial subject repository the end-to-end harness validates against: the seven scenarios, the conditions planted in them, and what each one is expected to produce. |
-| `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, checks and a merge bound to a head, the GitHub adapter over the `gh` command line, and the GitLab adapter over GitLab's REST API. `internal/forge/forgetest` and `internal/forge/labtest` are their over-the-wire stand-ins. |
-| `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks and the protocol they call the command surface with, the receive command and lock that make a push wait for a run's copy being cut, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |
-| `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
-| `internal/home` | The one root everything lives under: where the database, the socket, the lock, the gates, the isolated copies and the logs go, and the exclusive lock that gives a home one service. |
-| `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, peer identification, and the one resolver it derives for an answer that arrives here. |
-| `internal/journey` | The end-to-end harness: the `assistant` binary driven as a process against `internal/fixture`'s subject, organized by PRD principle, with every check carrying the counterfeit observations it must reject, and the three tables that account for principles, planted conditions and the fixture's open questions. |
-| `internal/judge` | The decision-model client: the two fixed questions, the pinned model version, the cutoffs, and an answer that is a probability or a failed call. `internal/judge/judgetest` is its over-the-wire stand-in. |
-| `internal/machine` | The agent-facing half of the surface: the shapes an answer takes, the three exit codes, and the outcome vocabulary. |
-| `internal/outcomes` | The build-time check that the PRD's outcome row and `internal/machine`'s set declare the same six values, in the same order, in the same two groups: the marked row it reads, the comparison, and the refusal when it cannot be read. |
-| `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
-| `internal/principles` | The build-time check that no principle the PRD lists goes unclaimed: the constants pinned to that list, the `Cite` call a test claims a principle with, the scan that finds those calls, and the written table of what nothing claims. |
-| `internal/redact` | The one owner of credential removal, called wherever text is persisted or reported. |
-| `internal/runs` | The run service: the anchored table of a run's status changes, and the one durable fixer session a run keeps, recorded on the run so a restarted service resumes the same conversation. |
-| `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
-| `internal/scope` | The review stage's scope lens, not a tenth stage: the guidance a reviewer traces each touched path against, and the note an untraced path becomes. |
-| `internal/service` | The background service: it holds the home's lock, binds the socket, recovers the runs and tasks it finds, owns every run that is executing, and dispatches, supervises and cleans up after fleet workers. |
-| `internal/session` | The terminal session a worker runs in: a five-operation provider (create, capture, send, probe, close), with a pipe as the only provider in this build. |
-| `internal/stages` | Where the nine stage bodies live. A stage without one holds a placeholder that validates nothing and holds for a decision; `Implemented` says which stages have a body. |
-| `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, a run's anchored checkpoint history, tasks, task state and events, holds and the closed set of who resolved each one, and the gate ownership index. |
-| `internal/supervisor` | The pure core of supervision: the wake classifier and the stop-guard predicate, with no I/O. `internal/supervisor/feed` reads the beacon, the lock and the database for it. |
-| `internal/tasks` | Fleet intake and queueing, the isolation assertion a worker's copy must pass, the cleanup decision, the delivery posture recorded at intake or promotion, and promotion itself. |
-| `internal/taskstate` | What is true of a task now, resolved from its records on every read rather than stored as a summary. |
-| `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |
-| `docs/prd.html` | The product requirements. The specification this code answers to. |
+| Manually juggle several coding sessions | Coordinate isolated parallel workers and delegate task domains |
+| Use one model or effort level for every job | Configure agents, model providers, versions, and effort by role |
+| Lose context when a session ends | Track durable task and run state, resuming what can be recovered |
+| Push changes and then discover mistakes | Submit changes to a separate, multi-stage validation gate |
+| Wonder what an agent spent or left behind | Inspect recorded usage, budgets, holds, and kept work |
 
-## Install
+## 1. Give each agent a job
 
-With Go 1.25 or newer:
+A primary coordinator can launch task workers and delegate a **named domain** to a subordinate coordinator. A subordinate manages tasks within its assigned domain; decisions beyond its authority escalate to the primary coordinator. This keeps ownership and permissions explicit.
+
+You can define roles for workers, reviews, and fixes, choosing the **agent**, **model provider**, **model family and version**, and **reasoning effort**. Roles can also specify an explicit fallback for recognized availability or quota failures. Assistant refuses unsupported model/agent combinations instead of silently substituting another one.
+
+```mermaid
+flowchart TD
+    U["You"] --> C["Primary coordinator"]
+    C --> A["Domain A coordinator"]
+    C --> B["Domain B coordinator"]
+    A --> W1["Isolated worker"]
+    A --> W2["Isolated worker"]
+    B --> W3["Isolated worker"]
+    W1 --> G["Validation gate"]
+    W2 --> G
+    W3 --> G
+    G --> R["Shared repository / PR"]
+    A -. "Escalate decisions" .-> C
+    B -. "Escalate decisions" .-> C
+```
+
+### Example role configuration
+
+In your operator's `~/.assistant/config.yaml`, a role can pin a model and effort:
+
+```yaml
+agent:
+  - claude
+  - cursor
+
+roles:
+  worker-hard:
+    agent: claude
+    provider: anthropic
+    type: opus
+    version: "5.5"
+    effort: high
+  review:
+    agent: codex
+    provider: openai
+    type: gpt
+    version: "6.1-sol"
+    effort: high
+  fix:
+    agent: cursor
+```
+
+These are **example pins**, not guaranteed entitlements or the default configuration. Installed CLI support, authentication, and available models still matter. General worker tasks use the configured agent list unless a task selects a named role; review and fix are reserved system roles. For adapter capabilities, model mappings, and fallback rules, see [multi-agent support](docs/multi-agent-support.md).
+
+## 2. Run independent work without losing control
+
+Each task gets an isolated repository copy. Workers can investigate a problem and report findings without immediately editing or shipping code; a subsequent promotion can turn an investigation into delivery work. The supervisor watches progress, raises decisions and stalled-work signals, and maintains durable records through service restarts.
+
+Assistant also records **kept work** when a copy cannot safely be removed. It surfaces that retained state rather than silently deleting work. The full answer/dispatch-hold workflow is still being completed, so do not assume every recovery path is automated.
+
+**Where workers run:** Local pipe workers are available today, with terminal-backed workers where the selected adapter supports them. Multi-machine placement through a remote bridge and herdr sessions is **in active development** and not yet an end-to-end supported workflow.
+
+```mermaid
+flowchart LR
+    C["Coordinator"] --> P{"Place worker"}
+    P --> L["Local machine\nAvailable"]
+    P -. "In development" .-> M["Remote machine\nSSH bridge + herdr"]
+    M -. "Later" .-> X["Cloud-hosted capacity\nFuture direction"]
+    L --> I["Isolated repository copy"]
+    M -.-> I
+    I --> S["Supervision + durable state"]
+```
+
+## 3. Validate before delivery
+
+`assistant init` creates an `assistant` Git remote for your checkout. Push a branch to that remote to start validation. Your normal `origin` remote remains available; Assistant only gates pushes sent through its own gate. It **does not replace CI** or the host's merge policy.
+
+```mermaid
+flowchart LR
+    P["git push assistant BRANCH"] --> G["Admission + snapshot"]
+    G --> V["Independent review\nTest · Docs · Lint"]
+    V --> D{"Safe to deliver?"}
+    D -- "Yes" --> H["Push upstream\nOpen / update PR or MR"]
+    D -- "Fix needed" --> F["Bounded fix round"] --> V
+    D -- "Decision needed" --> U["Hold for person"]
+```
+
+The gate's pipeline also accounts for rebase, safety, scope, and host checks. It will refuse uncertain operations rather than treat missing evidence as a pass. GitHub and GitLab integrations support the code-host portion of delivery; optional autonomous merging is restricted by configuration and live checks. See [operating the gate](docs/operators.md) for the exact behavior.
+
+## 4. See what's running and what it costs
+
+Assistant exposes human-readable and structured status, active task and run views, and recorded agent usage broken down by agent, role, model, provider, and effort. Run-level output-token budgets and home-wide usage ceilings provide distinct controls: a run budget can park an individual run, while a home ceiling can hold further agent starts.
+
+## Quick start
+
+**Prerequisites:** Go, Git, and at least one supported coding-agent CLI installed and authenticated. For hosted PR/MR operations, install and authenticate the relevant code-host tooling. macOS and Linux are the primary supported environments.
 
 ```sh
 go install github.com/dayamjz/assistant/cmd/assistant@latest
+
+# From your repository
+assistant init
+assistant doctor
+assistant service start
+
+# After committing a feature branch
+git push assistant YOUR_BRANCH
+assistant watch
 ```
 
-That builds from source into `$(go env GOPATH)/bin`, or `$GOBIN` when it is
-set. `@latest` is the newest release tag once one exists, and until then the
-newest commit on `main`; `assistant --version` names whichever it was, as the
-module version Go recorded.
+`assistant init` needs a known upstream and default branch. It can suggest test and lint commands, but a run trusts those commands only after the repository configuration is committed to the default branch. Follow `assistant doctor` to complete setup; see [operators.md](docs/operators.md) for flags, credentials, and troubleshooting.
 
-Or download a release binary. Each release on the
-[releases page](https://github.com/dayamjz/assistant/releases) carries one
-archive per platform, `assistant_VERSION_OS_ARCH.tar.gz` for `darwin` and
-`linux` on `amd64` and `arm64`, and a `SHA256SUMS` file covering them. Verify
-the archive against it before unpacking:
+| Command | What it helps you do |
+| --- | --- |
+| `assistant doctor` | Diagnose setup and learn the next safe step |
+| `assistant watch` | Follow validation and its decisions |
+| `assistant tasks` | Inspect task work |
+| `assistant status` | See repository and gate state |
+| `assistant sync` | Reconcile a checkout with validated changes |
+| `assistant runs --usage=7d` | Review recent recorded usage |
+| `assistant --json status` | Consume structured status |
 
-```sh
-set -e
-VERSION=v0.1.0 OS=darwin ARCH=arm64   # the release, and this machine's platform
-archive="assistant_${VERSION}_${OS}_${ARCH}.tar.gz"
-base=https://github.com/dayamjz/assistant/releases/download/$VERSION
-curl -fLO "$base/$archive"
-curl -fLO "$base/SHA256SUMS"
-grep -F "$archive" SHA256SUMS | shasum -a 256 -c -   # on Linux: grep -F "$archive" SHA256SUMS | sha256sum -c -
-tar -xzf "$archive"
-sudo install -m 0755 "assistant_${VERSION}_${OS}_${ARCH}/assistant" /usr/local/bin/   # or: mkdir -p ~/.local/bin && install -m 0755 ... ~/.local/bin/
-assistant --version   # assistant v0.1.0 COMMIT GO_VERSION
-```
+## Available now vs. on the roadmap
 
-The check passes only when the digest line for that archive matches the file
-you downloaded; if the manifest has no line for it, or the digest differs,
-nothing after it runs.
-It shows the archive is the one published beside that `SHA256SUMS`, not who
-published it: both come from the same release, and nothing is signed yet.
-The binaries are built without cgo, so each archive holds one executable and
-no separate libraries to install beside it; on macOS that executable still
-links the system libraries the Go runtime uses. A release build's `--version`
-names its release tag; any
-other build names the module version Go recorded, `(devel)` included. There
-is no self-update.
+| Capability | Status |
+| --- | --- |
+| Local isolated task workers and supervision | **Available** |
+| Hierarchical coordinator domains and escalations | **Available** |
+| Role-specific agent, provider, model, effort, and fallback | **Available** (adapter/model constraints apply) |
+| Nine-stage validation and GitHub/GitLab delivery | **Available** |
+| Usage records, per-run budgets, home-wide ceilings | **Available** |
+| Kept-work visibility | **Available**; resolution flows are being expanded |
+| Cross-machine placement, bridge, herdr provider | **In development** ([GitHub #490](https://github.com/dayamjz/assistant/pull/490), [Linear AGE-310](https://linear.app/zolutions/issue/AGE-310/gap-12-remote-worker-execution)) |
+| Role-level configurable context windows | **In development** ([Linear AGE-418](https://linear.app/zolutions/issue/AGE-418/roles-let-a-role-name-a-context-window-claudes-1m-so-a-configured)) |
+| Automatic cloud worker provisioning | **Future direction** |
 
-A release is cut by pushing a `v*` tag on a commit on `main`:
-[`.github/workflows/release.yml`](.github/workflows/release.yml) refuses a
-tag off `main`, runs `make check` on Linux and macOS, and publishes nothing
-unless both pass.
+The roadmap shows intent, not a shipping commitment. The implementation and [operator guide](docs/operators.md) are authoritative for actual behavior.
 
-## Development
+## Learn more
 
-```sh
-make build     # build the binary into ./bin
-make test      # go test -race -timeout 30m ./...
-make lint      # vet and golangci-lint
-make check     # lint and test, what CI runs
-```
+- [Operator guide](docs/operators.md): setup, pushes, decisions, and recovery
+- [Multi-agent support](docs/multi-agent-support.md): adapters, roles, model pins, and fallback behavior
+- [Product requirements](docs/prd.html): principles, contracts, limitations, and deferred features
+- [End-to-end verification](internal/journey/README.md): what the tests establish
 
-```sh
-assistant init                 # create or repair this repository's gate
-assistant init --accept-commands   # also write the test and lint commands it detects into assistant.json
-assistant service start        # start the background service for this home
-git push assistant BRANCH      # hand a branch to the gate, which starts a run
-assistant                      # attach to this branch's run, or start one
-assistant --answer approved    # answer the decision it is holding on
-assistant --answer fix --select ID --note TEXT   # ask for one fix round there
-assistant --standing-consent   # let the program answer this run's pre-push holds, where the repository allows it
-assistant tasks                # fleet work and where each task stands
-assistant watch                # catch up, then follow everything in flight
-assistant runs --usage=7d      # what the stage agents' calls cost, by agent and run
-assistant host install         # print the stop guard line for the coordinator's host
-assistant --task ID --answer retry   # answer a task that is waiting on you
-assistant --task ID --answer approved   # with none of its own open, answer its run's decision instead
-assistant status               # repository, gate, service, run, branch
-assistant sync                 # how this branch stands against what the pipeline holds, and the plan
-assistant sync --confirm       # carry that plan out
-assistant --json status        # the same answer as one structured document
-assistant doctor               # can a run start at all, what stops one, and your change's next step
-```
-
-For a first run, `assistant doctor` is the guide: after `assistant init` it
-also reads where the checkout's change stands and names the one next step,
-in order - a branch of its own when you are on the default branch, a commit
-naming what is untracked, unstaged or staged, then the exact
-`git push assistant BRANCH` line that starts the run, then `assistant
-watch`. Do what it says and run it again. It reads and never writes: every
-step is a command you run.
-
-Registering is `init` and `doctor` and nothing else. `doctor` checks git among
-its dependencies and names the one thing to do; `init` sets up
-the gate, says which upstream and default branch it recorded and how that
-upstream treats proposals, and offers commands only for keys the default
-branch's `assistant.json` does not already name. Running `init` again repairs
-the gate in place, says it was already there, and names each field of the
-record it changed, such as a fork it was not given again; with the same flags
-it records nothing new. A written command reaches no run until the file lands on
-the default branch. See [`docs/operators.md`](docs/operators.md#running-init-again).
-
-A working copy whose gate was created before a push learned to wait for a
-run's copy needs `assistant init` once more: that is what points its
-`assistant` remote's receive command through the gate, and until it runs a
-push that lands while a copy is being set up can still be rejected.
-
-The home is `~/.assistant` unless `ASSISTANT_HOME` names another root. Add
-`--json` to any command for the machine interface: one document on standard
-output, progress on standard error, and three exit codes that mean success or
-a normal decision point, an operational failure, and incorrect usage.
-
-`--version` and `--help` answer as documents too, but only when `--json` comes
-before them: `assistant --json --version` writes one and `assistant --version
---json` writes the plain line, because the scan of the flags ahead of a command
-stops at the one it recognizes. Reworking that scan is a separate change.
-
-```sh
-scripts/build-fixture.sh DIR   # build the fixture repository into DIR
-```
-
-`DIR` must not exist or must be empty, and the manifest describing what was
-planted is written to `DIR/manifest.json`, whose path the script prints. The
-fixture is built from nothing every time, so none of it is checked in.
-
-`make test` exercises `internal/vcs`, `internal/gate`, `internal/cli`,
-`internal/service`, `internal/journey`, and `internal/fixture` against a real
-git, so it needs a
-git binary on `PATH`; `internal/vcs`'s package comment states the minimum
-version it needs. An `internal/fixture` test skips itself when git is not on
-`PATH`, and the ones that drive the planted toolchain conditions skip when `go`
-is not either. The `internal/cli`, `internal/service` and `internal/journey`
-tests that drive a run skip on any platform but linux and darwin, because
-`internal/ipc` reads no local socket peer credentials there and so refuses
-every method that drives one; all three also skip a test whose service did not
-come up there, because the protocol needs a local socket to be served over.
-`internal/journey/README.md` records what those two leave a green run of the
-harness establishing on such a platform.
-
-`make lint` requires golangci-lint from the v2 series, the line that can read
-this module's `.golangci.yml`. It refuses when the linter is missing or comes
-from another major series rather than quietly running `go vet` alone, so a
-green `make check` always means lint ran. `make lint-guard-test` proves that
-refusal still fires.
-
-The linter also has to be built with Go 1.26 or later, because go.mod pins
-`toolchain go1.26.9` and golangci-lint refuses to load its config when the Go
-language version it was built with, major and minor only, is older than the one
-that line names. The release binaries of the version CI pins are built with Go
-1.26; one built from source with Go 1.25 stops with that refusal before linting
-anything.
-
-`make test` runs the race detector, so on darwin/arm64 it needs Go 1.26.5 or
-later (golang/go#79804, #321). The `toolchain` line selects go1.26.9 on its own
-under the default `GOTOOLCHAIN=auto`; `go version` inside the checkout shows
-which one a run uses.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+Assistant is developed in Go. For repository checks, use `make check` with the toolchain and lint dependencies specified by the project.
