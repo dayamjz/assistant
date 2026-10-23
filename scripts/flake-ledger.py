@@ -548,10 +548,21 @@ def read_job(github, cache, job):
                 "job-timeout", job["name"], "exceeded timeout-minutes",
                 f"cancelled in step {running[0]}" if running else "cancelled at its bound",
                 token="timeout-minutes").to_dict())
+        if not job.get("steps"):
+            # Cancelled before a runner took it: no step ran, so there is no
+            # output to read and GitHub keeps no log (it answers 404).
+            cache.put(f"job-{job['id']}", result)
+            return result
     # A log that fails part way is parsed again from its start. A cancelled
     # job's log is read too: a cancel in a later step is the job's result
     # even when its Test step had already failed and printed why.
-    records, unattributed, errors = retried(lambda: parse_lines(github.job_log(job["id"])))
+    try:
+        records, unattributed, errors = retried(lambda: parse_lines(github.job_log(job["id"])))
+    except GitHubError as error:
+        # What the annotations already proved stays; the result is partial,
+        # so it is not cached and the next run reads the log again.
+        result["error"] = str(error)
+        return result
     if result["cancel"]:
         result["records"] += [r.to_dict() for r in records]
         result["unattributed"] = unattributed
@@ -627,8 +638,9 @@ def collect(github, cache, runs, workers=4):
             try:
                 results[job_id] = future.result()
             except GitHubError as error:
-                problems.append(str(error))
                 results[job_id] = {"records": [], "unattributed": False, "cancel": None, "error": str(error)}
+            if results[job_id].get("error"):
+                problems.append(results[job_id]["error"])
     return jobs, results, reruns, problems, completed
 
 
@@ -665,7 +677,10 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
     unattributed, cancelled = [], {"superseded": 0, "cancelled": 0}
     for run, job in jobs:
         result = results.get(job["id"]) or {"records": [], "error": "not read"}
-        if result.get("cancel") in cancelled and not result["records"] and not result.get("error"):
+        # Set aside only a cancel with nothing in it: no failure, no read
+        # problem, and no test output that named nothing.
+        if (result.get("cancel") in cancelled and not result["records"] and not result.get("error")
+                and not result.get("unattributed")):
             cancelled[result["cancel"]] += 1
             continue
         final = run.get("run_attempt") or 1
@@ -680,9 +695,9 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
             "run_conclusion": run["conclusion"], "hidden_by_rerun": hidden,
         }
         if result.get("error"):
+            # Records known without the log (a timeout's annotation) still count.
             unattributed.append({**occurrence, "reason": f"log unreadable: {result['error']}"})
-            continue
-        if result.get("unattributed"):
+        elif result.get("unattributed"):
             unattributed.append({**occurrence, "reason": "tests ran but no failure was named"})
         for data in result["records"]:
             record = Record.from_dict(data)
