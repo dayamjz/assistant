@@ -142,6 +142,8 @@ func waitCarriedOn(t *testing.T, h *home.Home, id int64) store.KeptWork {
 func TestCarryingKeptWorkOnCreatesATaskWhoseWorkerStartsInTheKeptCopy(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "a carried-on task's worker starting in the kept copy")
 	principles.Cite(t, principles.P15)
 
 	h := newHome(t)
@@ -344,6 +346,8 @@ func TestAKeptCopyThatFailsTheAssertionIsNotCarriedOn(t *testing.T) {
 func TestACarryOnAStoppedServiceDidNotCarryOutIsCompletedAtTheNextStart(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "a carry on completed at the next start launching its worker")
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P6)
 
@@ -425,6 +429,8 @@ func waitLaunched(t *testing.T, h *home.Home, task string) {
 func TestACarryOnStoppedInsideIntakeIsCompletedAtTheNextStart(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "a carry on stopped inside intake launching its worker once completed")
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P6)
 
@@ -488,6 +494,8 @@ func TestACarryOnStoppedInsideIntakeIsCompletedAtTheNextStart(t *testing.T) {
 func TestAFailedAdoptionHoldsTheTaskAndAFreshCloneIsNotTakenForTheCopy(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "a failed adoption's task launching in the kept copy once adopted")
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P6)
 
@@ -721,6 +729,8 @@ func TestACarryOnCompletesTheClaimTheEntryHoldsNotOneItReadBefore(t *testing.T) 
 func TestCarryingOnAnswersEveryEntryOfTheCopy(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "the carried-on task's worker starting in the copy every entry names")
 	principles.Cite(t, principles.P15)
 
 	h := newHome(t)
@@ -766,6 +776,8 @@ func TestCarryingOnAnswersEveryEntryOfTheCopy(t *testing.T) {
 func TestACarryOnStoppedAfterTheMoveAdoptsACopyThatWentOn(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "a carry on stopped after the move launching in the copy that went on")
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P6)
 
@@ -828,6 +840,8 @@ func TestACarryOnStoppedAfterTheMoveAdoptsACopyThatWentOn(t *testing.T) {
 func TestACarryOnTakesTheKeptCopyByIdentityAndNotAnUpstreamClone(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "the carried-on task launching in the kept copy and not a clone")
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P6)
 
@@ -923,6 +937,8 @@ func TestACarryOnTakesTheKeptCopyByIdentityAndNotAnUpstreamClone(t *testing.T) {
 func TestAKeptCopyWithARemoteTheReshapeKeepsIsNotCarriedOn(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "the carried-on task launching once the refused copy is fixed")
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P11)
 	principles.Cite(t, principles.P6)
@@ -977,6 +993,8 @@ func TestAKeptCopyWithARemoteTheReshapeKeepsIsNotCarriedOn(t *testing.T) {
 func TestAKeptCopyWhoseBranchStandsAwayFromHEADIsNotCarriedOn(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "the carried-on task launching once the refused copy is fixed")
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P6)
 
@@ -1083,6 +1101,8 @@ func TestAKeptCopyWhoseBranchStandsAwayFromHEADIsNotCarriedOn(t *testing.T) {
 func TestAKeptCopyWhoseTaskBranchCannotBeCreatedIsNotCarriedOn(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "the carried-on task launching once the refused copy is fixed")
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P6)
 
@@ -1191,6 +1211,8 @@ func TestAKeptCopyWhoseTaskBranchCannotBeCreatedIsNotCarriedOn(t *testing.T) {
 func TestACarriedOnCopyIsAssertedOnceShapedBeforeItIsMarked(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "the carried-on task launching in the asserted copy")
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P11)
 
