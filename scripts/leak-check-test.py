@@ -1176,9 +1176,9 @@ pathlib.Path(sys.argv[1]).write_text(str(pid))
 # Runs the real package_run over the command after "--", with every listing
 # of the process table holding a process outside the package that is gone
 # before its mark is read: a child of this process, started before the
-# listing and killed and reaped after it. Prints how many listings there
-# were once every one held such a process, and an inspection failure as
-# the command line does.
+# listing and killed and reaped after it, even when the listing fails.
+# Prints how many listings there were once every one held such a process,
+# and an inspection failure as the command line does.
 CHURN_EACH_LISTING = """
 import importlib.util, subprocess, sys
 spec = importlib.util.spec_from_file_location("leak_check", sys.argv[1])
@@ -1189,9 +1189,13 @@ table, listings, churned = check.darwin_table, [], []
 
 def churn():
     child = subprocess.Popen(['sleep', '300'])
-    listed = table()
-    child.kill()
-    child.wait()
+    try:
+        listed = table()
+    finally:
+        # Ended and reaped whether or not the listing could be read, so a
+        # failed read leaves nothing running (P15).
+        child.kill()
+        child.wait()
     listings.append(True)
     if any(pid == child.pid for pid, _ in listed):
         churned.append(True)
