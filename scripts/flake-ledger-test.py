@@ -454,6 +454,16 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual([f["key"] for f in data["failures"]],
                          ["job-timeout: check (macos-latest) exceeded timeout-minutes"])
 
+    def test_a_timed_out_job_names_the_packages_it_never_reported(self):
+        timeout = "job-timeout: check (macos-latest) exceeded timeout-minutes"
+        _, data, _ = run_report(FakeGitHub(LOGS))
+        before = next(f for f in data["failures"] if f["key"] == timeout)
+        # A job from before scripts/ci-test.sh unfinished existed says only where it was cut.
+        self.assertEqual(before["details"], ["cancelled in step Test"])
+        _, data, _ = run_report(FakeGitHub({**LOGS, 120342424178: "job-timeout-unfinished.log"}))
+        after = next(f for f in data["failures"] if f["key"] == timeout)
+        self.assertEqual(after["details"], ["cancelled in step Test; not reported: internal/runs internal/service"])
+
     def test_one_run_with_a_job_that_timed_out_is_incomplete(self):
         # Run 39932040317 as it stood after attempt 1: its macOS job ran into
         # timeout-minutes. The timeout is a failure record, and the suite

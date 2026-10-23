@@ -41,8 +41,11 @@ class InputTest(unittest.TestCase):
                     "RUNNER_TEMP": str(self.folder / "runner-temp")}
 
     def run_script(self, **values):
+        return self.run_script_with(None, **values)
+
+    def run_script_with(self, mode, **values):
         env = {**self.env, **values}
-        result = subprocess.run(["bash", str(SCRIPT)], cwd=self.folder, env=env,
+        result = subprocess.run(["bash", str(SCRIPT)] + ([mode] if mode else []), cwd=self.folder, env=env,
                                 capture_output=True, text=True, timeout=60)
         calls = self.calls.read_text().splitlines() if self.calls.exists() else []
         return result, calls
@@ -71,6 +74,15 @@ class InputTest(unittest.TestCase):
         self.assert_refused("CI_TEST_COUNT", "0")
         self.assert_refused("CI_TEST_COUNT", "3 -race=false")
         self.assert_refused("CI_TEST_TIMEOUT", "30m -race=false")
+
+    def test_the_unfinished_mode_refuses_the_same_packages(self):
+        # bash ci-test.sh unfinished lists packages with go list; a flag in
+        # its packages is refused there too, before go runs.
+        (self.folder / "test.log").write_text("ok  \tgithub.com/dayamjz/assistant/internal/agents\t1.0s\n")
+        result, calls = self.run_script_with("unfinished", CI_TEST_PACKAGES="-json ./...")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("::error::CI_TEST_PACKAGES", result.stdout)
+        self.assertEqual(calls, [])
 
     def test_package_patterns_reach_go_test_after_the_race_flag(self):
         # The positive control: valid values pass the checks, and go test

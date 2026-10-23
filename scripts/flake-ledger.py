@@ -104,6 +104,8 @@ UNITTEST = re.compile(r"^(FAIL|ERROR): (\w+) \(([\w.]+?)\)(?: \((.*)\))?\s*$")
 UNITTEST_SUMMARY = re.compile(r"^FAILED \((?:failures|errors)=")
 ERROR_LINE = re.compile(r"^##\[error\](.*)")
 GUARD_ERROR = "fewer packages ran through the per-package check than passed"
+# scripts/ci-test.sh unfinished, after a run cut off before it ended.
+UNFINISHED = re.compile(r"^ci-test: cut off before these packages reported: (.*)$")
 TIMEOUT_ANNOTATION = "exceeded the maximum execution time"
 SUPERSEDED_ANNOTATION = "higher priority waiting request"
 # The error line the runner prints in the step a cancel stops.
@@ -224,6 +226,7 @@ class LogParser:
         self.run_leaks = []
         self.run_leak_total = None
         self.group_lines = 0
+        self.unfinished = None
         # The log in sections, each ended by the exit line a failed step
         # prints (FAILED_STEP_END): section k is the k-th failed step's part.
         self.section = 0
@@ -248,6 +251,10 @@ class LogParser:
         if self.in_group:
             self.group_lines += 1
             self._go_line(line)
+            return
+        unfinished = UNFINISHED.match(line)
+        if unfinished:
+            self.unfinished = unfinished.group(1).split()
             return
         error = ERROR_LINE.match(line)
         if error:
@@ -419,6 +426,18 @@ class LogParser:
         self.records = list(unique.values())
         tests_ran = self.saw_group or self.saw_unittest_failure or (self.raw and self.group_lines)
         return self.records, bool(tests_ran) and not self.records
+
+
+def parse_job_log(lines):
+    """parse_lines for a job log, plus the packages a cut-off run never
+    reported, from scripts/ci-test.sh unfinished's line: None for a log
+    without one (a job from before it existed, or one cut off before go test
+    started)."""
+    parser = LogParser()
+    for line in lines:
+        parser.feed(line)
+    records, unattributed = parser.finish()
+    return records, unattributed, parser.errors, parser.unfinished
 
 
 def parse_lines(lines, raw=False):
@@ -757,12 +776,14 @@ def read_job(github, cache, job):
     # job's log is read too: a cancel in a later step is the job's result
     # even when its Test step had already failed and printed why.
     try:
-        records, unattributed, errors = retried(lambda: parse_lines(github.job_log(job["id"])))
+        records, unattributed, errors, unfinished = retried(lambda: parse_job_log(github.job_log(job["id"])))
     except GitHubError as error:
         # What the annotations already proved stays; the result is partial,
         # so it is not cached and the next run reads the log again.
         result["error"] = str(error)
         return result
+    if result["cancel"] == "timeout" and unfinished is not None:
+        result["records"][0]["detail"] += "; not reported: " + (" ".join(unfinished) or "(none)")
     records = records + unexplained_steps(job, records, errors, result["cancel"])
     result["records"] += [r.to_dict() for r in records]
     result["unattributed"] = unattributed

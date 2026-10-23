@@ -97,6 +97,14 @@ jobs:
             echo "No test skipped on ${{ matrix.os }}."
           fi
 
+      # A job cut off at timeout-minutes prints no full test output; this
+      # names the packages test.log never reported, still running or not yet
+      # started, and the flake ledger attaches them to the job's timeout.
+      - name: Unfinished packages
+        if: always()
+        shell: bash
+        run: bash scripts/ci-test.sh unfinished
+
   lint:
     name: lint
     runs-on: ubuntu-latest
