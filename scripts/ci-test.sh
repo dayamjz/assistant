@@ -3,8 +3,8 @@
 # (it reads RUNNER_OS and RUNNER_TEMP, and on Linux needs passwordless sudo,
 # unshare, setpriv and tini). Output goes to test.log in the current
 # directory; the summary lines are printed, and the whole log is printed in
-# a "full test output" group when the step fails, which is where
-# scripts/flake-ledger.py reads failures from.
+# a "full test output" group when the step fails, so the job's log holds
+# every failing test's output in one place.
 #
 # The race detector is the point of this job, so it is not optional.
 # The timeout is explicit because internal/service has run past go
