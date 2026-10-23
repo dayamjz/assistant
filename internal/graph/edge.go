@@ -154,6 +154,16 @@ type Edge struct {
 	// Executor.AnswerUnattended is not exempt, and that answer is also
 	// measured on the edge it takes out of its halt point, on the terms the
 	// package documentation's "Bounding cycles" states.
+	//
+	// A traversal that follows a person's answer also starts the convergence
+	// measure afresh for the rounds the node it enters runs for itself: every
+	// back edge into that node, not itself Answered, that leaves a node other
+	// than a halt point, entered from that node and from nowhere else. The
+	// next such round is then compared with nothing rather than with the last
+	// one before the answer, so a round that repeats it returns to the person
+	// instead of parking the run; a round that repeats one taken since the
+	// answer still parks, and the round limits are untouched. A traversal
+	// that follows an unattended answer starts nothing afresh.
 	Answered bool
 }
 

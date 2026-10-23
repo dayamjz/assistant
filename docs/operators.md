@@ -942,7 +942,8 @@ What it does not do:
 
 It is not `usage_ceiling`. The ceiling counts every run's calls together over
 a window, refuses the next call once it is reached, and holds that run's stage
-for you. The budget is one run's, counts that run alone from its first call,
+for you; once there is room, `assistant --answer retry` runs that stage again
+in the same run. The budget is one run's, counts that run alone from its first call,
 and parks the run.
 
 ## Watch a worker in a terminal
