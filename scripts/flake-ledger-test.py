@@ -279,6 +279,15 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual((data["runs_scanned"], data["jobs_read"], data["failed_jobs"]), (1, 9, 2))
         self.assertIn("9 finished job(s), 2 failed job(s)", text)
 
+    def test_one_run_with_a_cancelled_job_is_incomplete(self):
+        # Run 39916130926's two check jobs were cancelled; read as one run,
+        # its summary cannot pass, whatever the cancel's reason.
+        status, data, _ = run_report(FakeGitHub(LOGS), "--run", "39916130926")
+        self.assertEqual(status, 2)
+        self.assertEqual(data["failures"], [])
+        status, _, _ = run_report(FakeGitHub(LOGS))
+        self.assertEqual(status, 0, "over many runs a superseded job is only counted")
+
     def test_a_running_attempts_jobs_are_not_cached(self):
         with tempfile.TemporaryDirectory() as folder:
             github = FakeGitHub(LOGS)

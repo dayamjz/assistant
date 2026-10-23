@@ -71,7 +71,9 @@ jobs:
   summary:
     name: summary
     needs: stress
-    if: always()
+    # Not when the run was cancelled; a job of it that timed out or was
+    # cancelled alone makes the summary fail as incomplete.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -82,8 +84,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Reads this run's finished jobs and the logs of the ones that failed.
-      # It fails when a log cannot be read or a failed job names nothing, so
-      # a summary that saw nothing does not pass as a clean one.
+      # It fails when a log cannot be read, a failed job names nothing, or a
+      # job was cancelled, so a summary that saw nothing does not pass as a
+      # clean one.
       - name: Every test that failed at least once
         env:
           GH_TOKEN: ${{ github.token }}

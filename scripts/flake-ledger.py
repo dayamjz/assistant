@@ -754,7 +754,8 @@ def markdown(ledger, zone):
     out.append(f"{ledger['runs_scanned']} run(s), {local_time(window['first'], zone)} to "
                f"{local_time(window['last'], zone)}; every attempt read. {jobs}{ledger['failed_jobs']} failed "
                f"job(s); not counted: {ledger['cancelled_jobs_not_counted']['superseded']} superseded by a "
-               f"newer run, {ledger['cancelled_jobs_not_counted']['cancelled']} cancelled by hand.")
+               f"newer run, {ledger['cancelled_jobs_not_counted']['cancelled']} cancelled for another reason "
+               "(by hand, or before it started).")
     out.append("")
     if ledger["problems"] or ledger["unattributed"]:
         out.append("## Incomplete: read these first")
@@ -842,6 +843,13 @@ def report(args, github=None):
     else:
         print(markdown(ledger, zone_of(args.tz)))
     if ledger["problems"] or any(u["reason"].startswith("log unreadable") for u in ledger["unattributed"]):
+        return 2
+    cancelled = sum(ledger["cancelled_jobs_not_counted"].values())
+    if args.run and cancelled:
+        # One run's summary cannot say its tests passed when some of its jobs
+        # never finished them, whatever cancelled them.
+        print(f"flake-ledger: {cancelled} job(s) of run {args.run} were cancelled, "
+              "so this run's results are incomplete", file=sys.stderr)
         return 2
     if ledger["unattributed"]:
         return 3
