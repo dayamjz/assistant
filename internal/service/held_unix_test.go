@@ -3,7 +3,6 @@
 package service
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // A process a test has a shell hold until it is released is
@@ -241,18 +241,15 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(binary, raw, 0o700); err != nil {
+	if err := procgroup.WriteProgram(binary, raw, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	record := filepath.Join(dir, "held")
 	r := &heldChildRun{exited: make(chan struct{}), out: &lockedOutput{}}
-	r.cmd, err = startCopied(func() *exec.Cmd {
-		cmd := exec.Command(binary, append([]string{"-test.run=^TestHeldShellChild$", "-test.count=1"}, extra...)...)
-		cmd.Env = append(os.Environ(), heldModeVar+"="+mode, heldRecordVar+"="+record)
-		cmd.Stdout, cmd.Stderr = r.out, r.out
-		return cmd
-	})
-	if err != nil {
+	r.cmd = exec.Command(binary, append([]string{"-test.run=^TestHeldShellChild$", "-test.count=1"}, extra...)...)
+	r.cmd.Env = append(os.Environ(), heldModeVar+"="+mode, heldRecordVar+"="+record)
+	r.cmd.Stdout, r.cmd.Stderr = r.out, r.out
+	if err := r.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
 	go func() { r.err = r.cmd.Wait(); close(r.exited) }()
@@ -275,25 +272,6 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 		}
 		if !time.Now().Before(deadline) {
 			t.Fatalf("the child never recorded its held process: %s", r.out)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// startCopied starts the command build returns, whose binary this process
-// has just written, and builds and starts it again while the start is
-// refused with ETXTBSY. On Linux a write descriptor to the copy can be held
-// for a moment by a child that another parallel test forked while the copy
-// was open (Go issue 22315), and exec refuses a binary open for writing. The
-// retry is bounded at five seconds; any other error, or ETXTBSY past the
-// bound, is returned unchanged.
-func startCopied(build func() *exec.Cmd) (*exec.Cmd, error) {
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		cmd := build()
-		err := cmd.Start()
-		if err == nil || !errors.Is(err, syscall.ETXTBSY) || !time.Now().Before(deadline) {
-			return cmd, err
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // TestAPlantedExecutableIsCommittedExecutableWhereGitIgnoresTheFilesystemBit
@@ -228,7 +230,7 @@ func TestTheEnvironmentCarriesThePlatformThroughAndDropsWhatRedirects(t *testing
 	if err := os.MkdirAll(filepath.Join(template, "hooks"), 0o755); err != nil {
 		t.Fatalf("create the template: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(template, "hooks", templateHook),
+	if err := procgroup.WriteProgram(filepath.Join(template, "hooks", templateHook),
 		[]byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("write the template hook: %v", err)
 	}
