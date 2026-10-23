@@ -22,13 +22,18 @@ const RequireTmuxVar = "ASSISTANT_REQUIRE_TMUX"
 // A tmux server leaves the process group and the session of the test that
 // starts it, so a kill of the test binary misses it and whatever runs in its
 // panes, and both would keep running with nobody to end them. Tmux therefore
-// fails the test unless it runs inside RunOwned, which starts the owner
-// sweep that ends them once this binary is gone and runs the check that
-// reports one still running after the tests. The wrapper runs the real tmux
-// with the owner identity in its environment whatever environment it was
-// given, so a server a test starts under an environment of its own, as the
-// adapter does under a base environment, carries the identity the sweep and
-// the check find it by, and so does what runs in its panes.
+// fails the test unless it runs inside RunOwned, whose check, once the tests
+// return, names and ends a server still running and fails the package, and
+// whose owner sweep ends one once this binary is gone when the check failed
+// or never ran (a killed binary). A passing check retires the sweep only
+// once this binary starts nothing more through Go and a listing finds
+// nothing carrying the identity, so a server that appears after it was
+// started by a process the check cannot read as carrying the identity, or by
+// this binary other than through Go's fork (RunOwned). The wrapper runs the
+// real tmux with the owner identity in its environment whatever environment
+// it was given, so a server a test starts under an environment of its own,
+// as the adapter does under a base environment, carries the identity the
+// sweep and the check find it by, and so does what runs in its panes.
 //
 // What it does not cover: a tmux run by its real path, or looked up on a
 // PATH a test wrote without the wrapper's directory, is not the wrapper, and
