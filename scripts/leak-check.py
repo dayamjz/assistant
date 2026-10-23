@@ -691,7 +691,7 @@ def linux_leftovers(package):
 KINFO_PROC_SIZE = 648  # sizeof(struct kinfo_proc) from sys/sysctl.h, 64-bit
 SZOMB = 5  # extern_proc.p_stat of a process that has exited, from sys/proc.h
 P_WEXIT = 0x00002000  # extern_proc.p_flag of a process working on exiting, from sys/proc.h
-SANDBOX_FILTER_GLOBAL_NAME = 2  # sandbox_check's filter for a Mach service name argument
+SANDBOX_FILTER_GLOBAL_NAME = 2  # sandbox_check's filter for a Mach service name; the guard's tests fail if wrong
 SANDBOX_CHECK_NO_REPORT = 0x40000000  # sandbox_check: do not log a denial
 SETTLE_READINGS = 64
 
@@ -758,20 +758,24 @@ class Sandbox:
     """A sandbox profile that marks a package's processes, and the reads that
     tell them apart.
 
-    The mark is two Mach service names of random bytes, inside and outside,
-    new for each package: the profile allows everything except looking up
-    inside, and the writes below, so a process in it is denied inside and
-    allowed outside. A process in no sandbox is allowed both, and one in a
-    sandbox that denies the lookups it was not granted is denied both. Only
-    a sandbox that denies inside by name, or that was granted outside, could
-    read as marked: inside is in this profile alone, and outside is in no
-    profile, on no disk and registered with no one, only in this process.
-    The mark was once a
-    pair of files in TMPDIR, and Spotlight, which grants its importer a read
-    of the one file it imports, made its worker read as marked while it
-    imported the second (#551); the guard's tests hold such a grant to each
-    file the check makes. The profile has no rule a sandbox extension lifts,
-    so a process in it is still marked once it consumes a grant to inside.
+    The mark is two Mach service names, inside and outside, each
+    "leak-check." and 128 random bits in hex, new for each package: the
+    profile allows everything except looking up inside, and the writes
+    below, so a process in it is denied inside and allowed outside. A
+    process in no sandbox is allowed both, and one in a sandbox that denies
+    the lookups it was not granted is denied both. Reading as marked takes
+    a rule that tells these two names apart, or a grant of outside alone:
+    inside is named only in this profile, and outside is in no profile and
+    leaves this process in no argument, so no other process can name it in
+    a rule or be issued a grant for it, and a rule written without either
+    name tells two random names apart only by chance. The mark was once a
+    pair of files in TMPDIR, and Spotlight's mdworker_shared, whose sandbox
+    at times allowed reading one of them and not the other, read as marked
+    and was failed and killed as a package's process (#551). The check makes
+    no files now: the guard's tests fail if Sandbox makes any under TMPDIR,
+    and check that a process in another sandbox granted a read of one file
+    is not marked. The profile has no rule a sandbox extension lifts, so a
+    process in it that consumes a grant to inside is still marked.
     A process started under the profile is in it after a new session, its
     parent's exit and exec, and sandbox-exec run inside it fails before
     starting its command, so a process the package starts cannot leave the
