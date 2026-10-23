@@ -17,9 +17,12 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -407,6 +410,45 @@ class LedgerTest(unittest.TestCase):
         leak = failures["leak: internal/supervisor mdworker_shared"]
         self.assertEqual(leak["last_seen"], "2026-10-23T05:52:16Z")
 
+    def test_a_step_that_failed_before_a_cancel_is_counted(self):
+        # The recorded superseded job, as the runner would report it had
+        # Verify formatting failed: the steps after it skip, the always()
+        # step is cancelled, and the cancel becomes the job's conclusion.
+        github = FakeGitHub(LOGS)
+        job = next(j for a in github.data["attempts"].values() for j in a["jobs"] if j["id"] == 120290002840)
+        after = False
+        for step in job["steps"]:
+            if step["name"] == "Verify formatting":
+                step["conclusion"], after = "failure", True
+            elif after and step["name"] == "Skipped tests":
+                step["conclusion"] = "cancelled"
+            elif after and step["name"] not in ("Post Run actions/checkout@v4", "Complete job"):
+                step["conclusion"] = "skipped"
+        stamp = "2026-10-23T07:12:01.0000000Z"
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "gofmt-then-cancel.log"
+            log.write_text("\n".join([
+                f"{stamp} ##[group]Run unformatted=$(gofmt -l .)", f"{stamp} ##[endgroup]",
+                f"{stamp} These files are not gofmt-clean:", f"{stamp} internal/graph/graph.go",
+                f"{stamp} ##[error]Process completed with exit code 1.",
+                "2026-10-23T07:19:57.7514310Z ##[error]The operation was canceled."]) + "\n")
+            github.logs = {**LOGS, 120290002840: log}
+            status, data, _ = run_report(github)
+        self.assertEqual(status, 0)
+        failures = {f["key"]: f for f in data["failures"]}
+        step = failures["step: check (macos-latest) step Verify formatting"]
+        self.assertEqual([o["job_id"] for o in step["occurrences"]], [120290002840])
+        self.assertNotIn("The operation was canceled.", step["details"])
+        self.assertEqual(data["cancelled_jobs_not_counted"], {"superseded": 1, "cancelled": 0})
+
+    def test_the_headline_counts_every_job_whose_failures_are_counted(self):
+        github = FakeGitHub({**LOGS, 120290002840: "judge-test-failure.log"})
+        _, data, text = run_report(github)
+        jobs = {o["job_id"] for f in data["failures"] for o in f["occurrences"]}
+        self.assertEqual(len(jobs), 4)
+        self.assertEqual(data["failed_jobs"], 4)
+        self.assertIn("4 failed job(s)", text)
+
     def test_a_cancelled_job_whose_tests_name_nothing_fails_the_ledger(self):
         # The superseded job's Test step printed its output and named no
         # failure: a cancel later in the job does not make that complete.
@@ -460,6 +502,124 @@ class LedgerTest(unittest.TestCase):
                     ledger.main(["--cache", folder], github=github)
         self.assertEqual(sorted(first.read), sorted(LOGS))
         self.assertEqual(second.read, [])
+
+
+FAKE_GH = """#!/bin/sh
+# Blocks like a gh whose server never answers, with a child of its own
+# that holds none of gh's pipes, so only ending the group ends it.
+echo $$ >> "$FAKE_GH_PIDS"
+sleep 600 </dev/null >/dev/null 2>&1 &
+echo $! >> "$FAKE_GH_PIDS"
+echo "a first line, then nothing"
+wait
+"""
+
+
+class GhProcessTest(unittest.TestCase):
+    """P15: every gh the ledger starts runs under a deadline and ends, with
+    what it started, when the ledger ends. The gh here is a real program
+    that blocks and starts a child, as a hung gh would."""
+
+    def setUp(self):
+        folder = tempfile.mkdtemp(prefix="flake-ledger-gh-")
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        self.pids = Path(folder) / "pids"
+        gh = Path(folder) / "gh"
+        gh.write_text(FAKE_GH)
+        gh.chmod(0o755)
+        self.env = {**os.environ, "PATH": f"{folder}{os.pathsep}{os.environ['PATH']}",
+                    "FAKE_GH_PIDS": str(self.pids)}
+        self.addCleanup(self.end_leftovers)
+
+    def started(self, count=2):
+        lines = self.pids.read_text().split() if self.pids.exists() else []
+        return [int(p) for p in lines] if len(lines) >= count else None
+
+    def end_leftovers(self):
+        for pid in self.started(1) or []:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+
+    def assert_ended(self, pids, within=10):
+        deadline = time.monotonic() + within
+        alive = list(pids)
+        while alive and time.monotonic() < deadline:
+            alive = [p for p in alive if alive_pid(p)]
+            time.sleep(0.1)
+        self.assertEqual(alive, [], "gh or its child outlived its bound")
+
+    def wait_for_gh(self, ledger_process):
+        deadline = time.monotonic() + 30
+        while self.started() is None:
+            self.assertIsNone(ledger_process.poll(), "the ledger exited before starting gh")
+            self.assertLess(time.monotonic(), deadline, "gh never started")
+            time.sleep(0.1)
+        return self.started()
+
+    def test_a_gh_call_past_its_deadline_is_ended_with_its_child(self):
+        raised = []
+
+        def call():
+            try:
+                ledger.GitHub("dayamjz/assistant").api("repos/dayamjz/assistant/issues")
+            except ledger.GitHubError as error:
+                raised.append(error)
+
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(ledger, "API_DEADLINE", 1), \
+                mock.patch.object(ledger, "pause"):
+            # On a thread, so a call that never ends fails the test instead
+            # of hanging it; ending the fake gh then lets the thread finish.
+            caller = threading.Thread(target=call)
+            caller.start()
+            caller.join(20)
+            overran = caller.is_alive()
+            if overran:
+                self.end_leftovers()
+                caller.join(20)
+        self.assertFalse(overran, "a gh call outran its deadline")
+        self.assertRegex(str(raised[0]), "timed out after 1s")
+        pids = self.started()
+        self.assertEqual(len(pids), 6, "three tries, each a gh and its child")
+        self.assert_ended(pids)
+
+    def test_a_log_read_stopped_early_ends_its_gh_at_once(self):
+        github = ledger.GitHub("dayamjz/assistant")
+        github._escape_flag = False
+        # A short deadline keeps a regression from hanging the test; ending at
+        # once is well inside it.
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(ledger, "LOG_DEADLINE", 8):
+            lines = github.job_log(1)
+            self.assertEqual(next(lines), "a first line, then nothing\n")
+            begun = time.monotonic()
+            lines.close()
+        self.assertLess(time.monotonic() - begun, 3, "closing the read waited for gh's deadline")
+        self.assert_ended(self.started())
+
+    def ledger(self):
+        return subprocess.Popen([sys.executable, str(SCRIPT), "--repo", "dayamjz/assistant", "--no-cache"],
+                                env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def test_a_terminated_ledger_ends_its_gh_and_what_gh_started(self):
+        process = self.ledger()
+        pids = self.wait_for_gh(process)
+        process.send_signal(signal.SIGTERM)
+        process.wait(timeout=10)
+        self.assert_ended(pids)
+
+    def test_a_killed_ledger_ends_its_gh_and_what_gh_started(self):
+        process = self.ledger()
+        pids = self.wait_for_gh(process)
+        process.kill()
+        process.wait(timeout=10)
+        self.assert_ended(pids)
+
+
+def alive_pid(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 class ClosedIssueTest(unittest.TestCase):
