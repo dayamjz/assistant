@@ -583,3 +583,173 @@ func TestValidateHoldsAConvergenceParkToTheAnswerThatAllowsIt(t *testing.T) {
 		})
 	}
 }
+
+// reenteredLoop is a node with a round of its own behind a cycle a person
+// drives: an "again" answer goes through redo back to work, which takes one
+// round through step and then stands at the hold again. Every pass's round
+// leaves the state the last pass's round left, so the back edge from step to
+// work is one convergence would park on the second pass. fresh starts true and
+// step clears it, so the run leaves the hold, and redo leaves for work, in a
+// different state on the second pass than on the first, and only step's
+// return repeats. shared adds a way into step from the hold, so step is no
+// longer a node work alone enters.
+func reenteredLoop(shared bool) *graph.Builder {
+	set := func(writes map[string]graph.Value) func() graph.Body {
+		return graph.Stateless(func(_ context.Context, _ graph.Reader, w graph.Writer) error {
+			for k, v := range writes {
+				if err := w.Set(k, v); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	options := []string{"again", "done"}
+	if shared {
+		options = append(options, "step")
+	}
+	b := graph.NewBuilder().
+		Start("work").
+		Key(graph.Key{Name: "answer", Kind: graph.KindText}).
+		Key(graph.Key{Name: "pending", Kind: graph.KindBool, Merge: graph.MergeLastWriteWins}).
+		Key(graph.Key{Name: "fresh", Kind: graph.KindBool}).
+		Node(graph.Node{Name: "work", Reads: []string{"pending"}, NewBody: set(nil)}).
+		Node(graph.Node{Name: "step", Writes: []string{"pending", "fresh"},
+			NewBody: set(map[string]graph.Value{"pending": graph.BoolValue(false), "fresh": graph.BoolValue(false)})}).
+		Node(graph.Node{Name: "hold", Reads: []string{"answer"}, NewBody: set(nil),
+			Halt: &graph.Halt{Question: "again?", Options: options, Into: "answer"}}).
+		Node(graph.Node{Name: "redo", Writes: []string{"pending"},
+			NewBody: set(map[string]graph.Value{"pending": graph.BoolValue(true)})}).
+		Node(graph.Node{Name: "done", NewBody: set(nil)}).
+		Edge(graph.Edge{From: "work", To: "step", Rounds: 5,
+			Guard: &graph.Guard{Key: "pending", Op: graph.OpEquals, Value: graph.BoolValue(true)}}).
+		Edge(graph.Edge{From: "work", To: "hold"}).
+		Edge(graph.Edge{From: "step", To: "work", Rounds: 5}).
+		Edge(graph.Edge{From: "hold", To: "redo", Rounds: 3,
+			Guard: &graph.Guard{Key: "answer", Op: graph.OpEquals, Value: graph.TextValue("again")}})
+	if shared {
+		b = b.Edge(graph.Edge{From: "hold", To: "step", Rounds: 3,
+			Guard: &graph.Guard{Key: "answer", Op: graph.OpEquals, Value: graph.TextValue("step")}})
+	}
+	return b.
+		Edge(graph.Edge{From: "hold", To: "done"}).
+		Edge(graph.Edge{From: "redo", To: "work", Rounds: 3, Answered: true})
+}
+
+// A person's answer that sends a run back into a node over an Answered edge
+// starts the convergence measure afresh for the rounds that node runs for
+// itself: the back edges into it from a node only it enters. So a round there
+// that repeats the last pass's is not compared with that pass, and the run
+// stands at the hold again for the person; internal/pipeline's retry at the
+// usage ceiling's hold, over a fix round the ceiling refused again, is that
+// round. The round limit still holds, and a repeat within one pass would
+// still park. The controls are the same run answered unattended, which parks
+// converged on step's return, the edge the rule restarts, and the same graph
+// with a second way into step, which parks there too because step is then
+// not a node only work enters.
+func TestAPersonsAnswerRestartsTheMeasureOfTheRoundsItReenters(t *testing.T) {
+	ctx := context.Background()
+	start := func(t *testing.T, shared bool) *graph.Executor {
+		t.Helper()
+		g := mustBuild(t, reenteredLoop(shared))
+		exec := mustExecutor(t, g, graph.NewMemoryStore(), 100)
+		if _, err := exec.Run(ctx, "run", mustState(t, g, map[string]graph.Value{"fresh": graph.BoolValue(true)})); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		return exec
+	}
+	stepReturn := func(t *testing.T, got graph.Result) {
+		t.Helper()
+		park, ok := got.Park()
+		if got.Status != graph.StatusConverged || !ok || park.Edge == nil || park.Edge.From != "step" || park.Edge.To != "work" {
+			t.Fatalf("the second pass came to %s at %q (%+v), want converged on the edge from step to work",
+				got.Status, got.Position, park.Edge)
+		}
+	}
+
+	t.Run("a person's answers", func(t *testing.T) {
+		exec := start(t, false)
+		for i := range 3 {
+			got, err := exec.Answer(ctx, "run", "again")
+			if err != nil || got.Status != graph.StatusHalted || got.Position != "hold" {
+				t.Fatalf("pass %d came to %v at %q (%s), %v; want the run at the hold again",
+					i+1, got.Status, got.Position, got.Reason, err)
+			}
+		}
+		if _, err := exec.Answer(ctx, "run", "again"); !errors.Is(err, graph.ErrRoundsSpent) {
+			t.Fatalf("a fourth pass past a bound of three came to %v, want graph.ErrRoundsSpent", err)
+		}
+	})
+
+	t.Run("unattended answers", func(t *testing.T) {
+		exec := start(t, false)
+		if got, err := exec.AnswerUnattended(ctx, "run", "again", "", nil); err != nil || got.Status != graph.StatusHalted {
+			t.Fatalf("the first unattended pass came to %v, %v", got.Status, err)
+		}
+		got, err := exec.AnswerUnattended(ctx, "run", "again", "", nil)
+		if err != nil {
+			t.Fatalf("the second unattended pass: %v", err)
+		}
+		stepReturn(t, got)
+	})
+
+	t.Run("a round node with a second way in", func(t *testing.T) {
+		exec := start(t, true)
+		if got, err := exec.Answer(ctx, "run", "again"); err != nil || got.Status != graph.StatusHalted {
+			t.Fatalf("the first pass came to %v, %v", got.Status, err)
+		}
+		got, err := exec.Answer(ctx, "run", "again")
+		if err != nil {
+			t.Fatalf("the second pass: %v", err)
+		}
+		stepReturn(t, got)
+	})
+}
+
+// An edge leaving a halt point keeps its convergence measure across a
+// person's answer, even a back edge from a halt point entered only from the
+// node it returns to: it is where an answer sends the run on, not where a
+// round the node runs for itself closes. Here "again" sends the run from the
+// hold straight back to work over such an edge, which is not Answered, and
+// "redo" sends it back through redo over an Answered edge. A second "again"
+// leaves the hold in the state the first did, with only redo's answered pass
+// between them, so the run parks converged on the hold's edge back to work,
+// as it would with no redo at all.
+func TestAPersonsAnswerLeavesTheMeasureOfAnEdgeLeavingAHaltPoint(t *testing.T) {
+	ctx := context.Background()
+	noop := graph.Stateless(func(context.Context, graph.Reader, graph.Writer) error { return nil })
+	g := mustBuild(t, graph.NewBuilder().
+		Start("work").
+		Key(graph.Key{Name: "answer", Kind: graph.KindText}).
+		Node(graph.Node{Name: "work", NewBody: noop}).
+		Node(graph.Node{Name: "hold", Reads: []string{"answer"}, NewBody: noop,
+			Halt: &graph.Halt{Question: "again?", Options: []string{"again", "redo", "done"}, Into: "answer"}}).
+		Node(graph.Node{Name: "redo", NewBody: noop}).
+		Node(graph.Node{Name: "done", NewBody: noop}).
+		Edge(graph.Edge{From: "work", To: "hold"}).
+		Edge(graph.Edge{From: "hold", To: "work", Rounds: 5,
+			Guard: &graph.Guard{Key: "answer", Op: graph.OpEquals, Value: graph.TextValue("again")}}).
+		Edge(graph.Edge{From: "hold", To: "redo", Rounds: 3,
+			Guard: &graph.Guard{Key: "answer", Op: graph.OpEquals, Value: graph.TextValue("redo")}}).
+		Edge(graph.Edge{From: "hold", To: "done"}).
+		Edge(graph.Edge{From: "redo", To: "work", Rounds: 3, Answered: true}))
+	exec := mustExecutor(t, g, graph.NewMemoryStore(), 100)
+	if _, err := exec.Run(ctx, "run", mustState(t, g, nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, answer := range []string{"again", "redo"} {
+		if got, err := exec.Answer(ctx, "run", answer); err != nil || got.Status != graph.StatusHalted {
+			t.Fatalf("answering %q came to %v at %q (%s), %v; want the run at the hold again",
+				answer, got.Status, got.Position, got.Reason, err)
+		}
+	}
+	got, err := exec.Answer(ctx, "run", "again")
+	if err != nil {
+		t.Fatalf("the second %q: %v", "again", err)
+	}
+	park, ok := got.Park()
+	if got.Status != graph.StatusConverged || !ok || park.Edge == nil || park.Edge.From != "hold" || park.Edge.To != "work" {
+		t.Fatalf("the second %q came to %s at %q (%+v), want converged on the edge from hold to work",
+			"again", got.Status, got.Position, park.Edge)
+	}
+}

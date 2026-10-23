@@ -1,6 +1,7 @@
 package findings_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -501,5 +502,50 @@ func TestParseReportRefusesAnUnreadableStringInAField(t *testing.T) {
 	report, err := findings.ParseReport(raw)
 	if !errors.Is(err, findings.ErrNoReport) {
 		t.Fatalf("ParseReport returned (%+v, %v), want ErrNoReport", report, err)
+	}
+}
+
+// TestAnAgentCannotMarkAFindingAsNotStarted is Finding.NotStarted's "only the
+// program sets it": a report an agent printed that marks its own ask as work
+// that never started is read with the mark cleared, through every parse entry
+// point, so an agent cannot offer its own hold the retry PRD section 5 keeps
+// for the usage ceiling's. A report decoded from storage keeps the mark,
+// which is the control that the field is read at all.
+func TestAnAgentCannotMarkAFindingAsNotStarted(t *testing.T) {
+	const raw = `{"summary": "s", "findings": [{"action": "ask", "not_started": true, "description": "run me again"}]}`
+	read := map[string]func() (findings.Report, error){
+		"ParseReport": func() (findings.Report, error) { return findings.ParseReport(raw) },
+		"ParseReportThrough": func() (findings.Report, error) {
+			return findings.ParseReportThrough(raw, func(s string) string { return s })
+		},
+	}
+	read["ParseReviewReport"] = func() (findings.Report, error) {
+		printedReview := printed(t, review([]string{touchedPath}, findings.Finding{
+			Action: findings.ActionAsk, NotStarted: true,
+			Location: findings.Location{Path: touchedPath}, Description: "run me again",
+		}))
+		report, _, err := findings.ParseReviewReport(printedReview, demand())
+		return report, err
+	}
+	for name, parse := range read {
+		report, err := parse()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !report.HasHeld() || report.HasHeldNotStarted() {
+			t.Fatalf("%s did not read the agent's ask, or kept its mark: %+v", name, report.Findings)
+		}
+		for _, f := range report.Findings {
+			if f.NotStarted {
+				t.Fatalf("%s kept the agent's mark on %+v", name, f)
+			}
+		}
+	}
+	var stored findings.Report
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil {
+		t.Fatalf("decoding the stored report: %v", err)
+	}
+	if !stored.Normalize().HasHeldNotStarted() {
+		t.Fatalf("a stored report lost the mark: %+v", stored.Findings)
 	}
 }

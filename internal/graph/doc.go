@@ -123,6 +123,27 @@
 // halt point has nothing to be compared with, so the earliest this parks is
 // the second answer to send a run along it.
 //
+// A person's answer also restarts a measure. When the run crosses an
+// Answered edge after a person's answer, the back edges closing the rounds
+// the node it enters runs for itself, those from a node entered from it and
+// from nowhere else, forget their last fingerprint, so the next such round
+// is compared with nothing. Without that, a round the person's answer led
+// to that left the state exactly as the last round before the answer did
+// would park the run, although nothing ran on its own between them: the
+// person answered. internal/pipeline's retry at the usage ceiling's hold is
+// the case that needs it: the stage runs again, its fix round's call is
+// refused again, and that round repeats the one before the retry, as PRD
+// section 14 decision 25 says a retry with no room does, so held to that
+// comparison the second such retry would park the run and take the hold
+// with it. The scope is that narrow on purpose. A round repeating one taken
+// since the answer still parks; a back edge from a node anything else
+// enters, such as internal/pipeline's paths back from the checks stage, keeps
+// its measure across the answer; an edge leaving a halt point is not a
+// round's return and keeps its measure too; and after an unattended answer
+// nothing restarts, because the exemption that reasons from a person's
+// attention does not hold. Graph.restartedBy is the one statement of which
+// edges restart.
+//
 // All three have to survive a resume intact, and intact means more than the
 // counts. A count is meaningless without the bound it is compared against and
 // the edge it accrued on, so a checkpoint's Counters carry those too: the
