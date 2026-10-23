@@ -378,49 +378,52 @@ class LeakCheckTest(unittest.TestCase):
             code = check.guarded_run(command, per_package=True)
         return code, out.getvalue()
 
-    @unittest.skipUnless(sys.platform == "darwin", "launchd is macOS's")
     def test_an_apple_job_that_exits_while_it_is_read_is_not_a_leftover(self):
-        """#572: launchd keeps no record of a job that is not running, so an
-        Apple job that exits between run's listing and its read of launchd
-        once read as no job and was reported, as helpd and Spotlight's
-        mdworker_shared were on CI. helpd is started through launchd here and
-        made to exit just before launchd is read. Positive controls: the same
-        job still running is set aside as launchd's, and a detached process
-        the command leaves is reported either way."""
+        """#572: launchd reports no job for a process that is no longer
+        running, so an Apple job that exited between run's listing and its
+        read of launchd once read as no job and was reported, as helpd and
+        Spotlight's mdworker_shared were on CI. The command here leaves two
+        detached sleeps of its own, and apple_owned answers as launchd does
+        for a job: a record for the first while it still runs as that pid,
+        and none once it is gone. The first is made to exit just before that
+        read. Positive controls: the same job still running is set aside, so
+        a run without the set-aside fails here, and the second sleep, no job
+        at all, is reported either way. Nothing depends on which of this
+        host's own processes are running or new."""
+        label = "launchd job com.apple.leak-check-test"
         for exits in (True, False):
             with self.subTest(exits=exits), tempfile.TemporaryDirectory() as folder:
-                stop_launchd_job(HELPD)  # so that the command is what starts it
-                planted = Path(folder) / "planted"
-                real, seen = check.apple_owned, []
+                job, planted = Path(folder) / "job", Path(folder) / "planted"
+                reads = []
 
                 def read(new_pids):
-                    if not seen:
-                        seen.append(launchd_job_pid(HELPD))
-                        self.assertIn(seen[0], new_pids,
-                                      "helpd was not listed as new, so nothing was tested")
+                    pid = int(job.read_text())
+                    if not reads:
+                        self.assertIn(pid, new_pids, "the job was not listed as new, so nothing was tested")
                         if exits:
-                            stop_process(seen[0])
-                    return real(new_pids)
+                            stop_process(pid)
+                    reads.append(set(new_pids))
+                    running = pid in new_pids and check.process_start(pid) is not None
+                    return {pid: label} if running else {}
 
                 try:
                     code, output = self.guarded(
-                        [sys.executable, "-c", KICKSTART_AND_PLANT,
-                         f"gui/{os.getuid()}/{HELPD}", str(planted)], read)
+                        [sys.executable, "-c", PLANT_EACH, str(job), str(planted)], read)
                 finally:
-                    if planted.exists() and planted.read_text():
-                        stop_process(int(planted.read_text()))
-                    stop_launchd_job(HELPD)
-                self.assertTrue(seen, output)
-                job = seen[0]
+                    for record in (job, planted):
+                        if record.exists() and record.read_text():
+                            stop_process(int(record.read_text()))
+                self.assertTrue(reads, output)
+                pid = job.read_text()
                 self.assertEqual(code, 1, output)
                 self.assertIn(f"LEAK process pid={planted.read_text()} ", output)
-                self.assertNotIn(f"LEAK process pid={job} ", output)
+                self.assertNotIn(f"LEAK process pid={pid} ", output)
                 if exits:
-                    self.assertRegex(output, rf"(?m)^leak-check: pid={job} start=\S+ ended or "
+                    self.assertRegex(output, rf"(?m)^leak-check: pid={pid} start=\S+ ended or "
                                              "began exiting while it was read; listing again$")
-                    self.assertNotIn(f"launchd job {HELPD} pid={job}", output)
+                    self.assertNotIn(f"{label} pid={pid}", output)
                 else:
-                    self.assertIn(f"set aside: launchd job {HELPD} pid={job}\n", output)
+                    self.assertIn(f"set aside: {label} pid={pid}\n", output)
 
     def test_what_a_process_starts_as_it_exits_mid_reading_is_reported(self):
         """Why run lists again rather than leave out a process that exits
@@ -1293,9 +1296,6 @@ sys.exit(code)
 """
 
 
-HELPD = "com.apple.helpd"  # an on-demand Apple agent CI saw reported (#572)
-
-
 def wait_for(condition, what, limit=60):
     """Poll condition until it holds, failing loudly after limit seconds
     rather than hanging the suite."""
@@ -1304,15 +1304,6 @@ def wait_for(condition, what, limit=60):
         if time.monotonic() > deadline:
             raise AssertionError(f"timed out waiting for {what}")
         time.sleep(0.01)
-
-
-def launchd_job_pid(label):
-    """The pid launchctl list shows for label, or None when it is not running."""
-    for line in subprocess.check_output(["launchctl", "list"], text=True).splitlines()[1:]:
-        pid, _, name = line.split("\t", 2)
-        if name == label and pid != "-":
-            return int(pid)
-    return None
 
 
 def stop_process(pid):
@@ -1327,34 +1318,14 @@ def stop_process(pid):
     wait_for(lambda: not check.still_running((pid, start)), f"pid {pid} to exit")
 
 
-def stop_launchd_job(label):
-    """End the job label if it runs, and wait until launchd shows it stopped."""
-    pid = launchd_job_pid(label)
-    if pid is not None:
-        stop_process(pid)
-        wait_for(lambda: launchd_job_pid(label) != pid, f"launchd to record {label} stopped")
-
-
-# Asks launchd to start the job argv[1] and waits until the process launchd
-# names for it runs (kickstart can return before the spawn), then leaves a
-# detached sleep and records its pid in argv[2].
-KICKSTART_AND_PLANT = """
-import pathlib, subprocess, sys, time
-subprocess.run(['launchctl', 'kickstart', sys.argv[1]], check=True)
-label, deadline = sys.argv[1].rsplit('/', 1)[1], time.monotonic() + 60
-while True:
-    listed = [line.split('\\t') for line in subprocess.check_output(
-        ['launchctl', 'list'], text=True).splitlines()[1:]]
-    pid = next((row[0] for row in listed if row[2] == label and row[0] != '-'), None)
-    if pid and subprocess.run(['ps', '-p', pid], capture_output=True).returncode == 0:
-        break
-    if time.monotonic() > deadline:
-        sys.exit(f'launchd never ran {label}')
-    time.sleep(0.01)
-p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True)
-pathlib.Path(sys.argv[2]).write_text(str(p.pid))
+# Leaves a detached sleep for each path in argv[1:], recording its pid there.
+PLANT_EACH = """
+import pathlib, subprocess, sys
+for record in sys.argv[1:]:
+    p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    pathlib.Path(record).write_text(str(p.pid))
 """
 
 # Starts argv[2:] in a session of its own, waits until the file argv[1] has
