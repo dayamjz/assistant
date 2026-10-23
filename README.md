@@ -103,11 +103,11 @@ flowchart LR
 
 The gate's pipeline also accounts for rebase, safety, scope, and host checks. It will refuse uncertain operations rather than treat missing evidence as a pass. GitHub and GitLab integrations support the code-host portion of delivery; optional autonomous merging is restricted by configuration and live checks. See [operating the gate](docs/operators.md) for the exact behavior.
 
-## 4. See what's running and what it costs
+## 4. Understand agent usage and control budgets
 
 Assistant exposes human-readable and structured status, active task and run views, and recorded agent usage broken down by agent, role, model, provider, and effort. Run-level output-token budgets and home-wide usage ceilings provide distinct controls: a run budget can park an individual run, while a home ceiling can hold further agent starts.
 
-### Example: one validated change and what it cost
+### Real example: one validated change
 
 This is a real execution, not a mock-up. A small Go repository with a local upstream pushed one branch through the gate. The operator's `~/.assistant/config.yaml` pinned the review role and set both controls:
 
@@ -128,7 +128,22 @@ usage_ceiling:
   output_tokens: 2000000  # holds further agent starts once reached
 ```
 
-The run passed review, test, document, lint and push. Afterwards, `assistant runs --usage=24h` reported:
+The run passed review, test, document, lint and push. One review-agent call was recorded. **The figures below are reported token usage—not dollars billed—and do not include task workers' own turns.**
+
+| Recorded metric | Value |
+| --- | ---: |
+| Agent / model | Claude Code / `claude-opus-5-5` |
+| Purpose / role / effort | Review / `review` / High |
+| Stage-agent calls | **1** (0 failed) |
+| Elapsed agent-call time | **14.255 seconds** |
+| Input tokens | **6** |
+| Output tokens | **994** |
+| Cache-read tokens | **77,801** |
+| Cache-creation tokens | **20,219** |
+| Seven-day output-token ceiling | **994 / 2,000,000** (under limit) |
+
+<details>
+<summary>See the actual <code>assistant runs --usage=24h</code> output</summary>
 
 ```text
 What the agent calls made to vet your changes cost follows, in the exact terms each call was recorded in. It counts those calls and nothing else: a worker's own turns are not in it, it carries no price, and a count the agent did not report is shown as unreported rather than as nothing. Nothing to decide from it alone.
@@ -151,12 +166,22 @@ By run and stage
       input 6, output 994, cache read 77801, cache written 20219
 ```
 
-How to read it:
+</details>
 
-- **Counts are what each agent reported, not a price.** Assistant records token counts in the agent's own terms and never estimates cost. A count an agent does not report shows as unreported, not zero.
-- **Only the gate's own agent calls are counted.** Here that is one review call; test, document, lint and push ran commands, not agents. A task worker's own turns are not included.
-- **The breakdown shows the role pin in effect.** The review call ran on `claude-opus-5-5` at high effort because the `review` role named it.
-- **The ceiling line shows how much room is left.** 994 of 2,000,000 output tokens were used over the last 7 days, so agent calls keep starting. `assistant --json runs --usage=24h` returns the same report as one JSON document.
+### Illustrative: four agents on one feature
+
+A coordinator could delegate backend and frontend work to separate workers, then send the result to an independent reviewer. Different roles may use different agents, models and effort settings:
+
+| Role | Example configuration | What you can inspect |
+| --- | --- | --- |
+| Coordinator | Claude, high effort | Delegation and task status |
+| Backend worker | Claude, high effort | Worker status; worker-turn token totals **not** in the usage report |
+| Frontend worker | Cursor, default effort | Worker status; worker-turn token totals **not** in the usage report |
+| Gate reviewer | Codex, high effort | **Recorded** review-stage call and reported tokens |
+
+**This is a workflow illustration, not an execution record or a four-agent bill.** Assistant's current usage view covers agent calls made by validation stages, not every coordinator or task-worker turn. It records input, output and cache-token categories when the adapter reports them. Missing counts stay **unreported**, never zero. Assistant does **not** calculate USD cost; CLI subscriptions, cache charges, model prices and provider billing cannot be inferred from these token totals alone.
+
+For the recorded view, run `assistant runs --usage=24h` or `assistant --json runs --usage=24h`. See [usage budgets and ceilings in the operator guide](docs/operators.md) for interpretation and configuration.
 
 ## Quick start
 
