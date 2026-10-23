@@ -3,6 +3,9 @@ package vcs
 import (
 	"cmp"
 	"context"
+	"errors"
+	"io/fs"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -66,6 +69,119 @@ func (r *Repository) Reflogs(ctx context.Context, refs ...string) ([]ReflogEntry
 		args = append(args, ref)
 	}
 	return r.reflogs(ctx, append(args, "--")...)
+}
+
+// ErrRefStorageUnsupported is returned by ReflogValuesOf for a repository
+// whose references are not kept as files, which it cannot read.
+var ErrRefStorageUnsupported = errors.New("vcs: the repository does not keep its references as files, so its reflogs cannot be read entry by entry")
+
+// ReflogValuesOf returns every object the named references' own reflogs
+// record, by the value each entry moved from as well as the one it moved
+// to, each once, in the order the logs record them (each log oldest first,
+// the previous value of an entry before its new one), leaving out the null
+// identifier an entry that created a reference moved from. Names are
+// checked on Reflogs' terms. It reads only those logs: unlike
+// ReflogValues, whose single-worktree read takes in the logs of every
+// reference a repository's worktrees share, a working copy's own HEAD here
+// is that HEAD's log alone, so a caller can tell what this working copy's
+// own logs record from what a shared one does.
+//
+// git log --walk-reflogs names an entry by the value it moved to alone, and
+// no ref@{n} resolves to a previous value an entry expired from the middle
+// of a log left, so the logs are read from the files git keeps them in, at
+// the path git rev-parse --git-path gives, line by line in the format
+// git-update-ref(1) documents for them (the previous value, a space, the
+// new value, a space, and the rest). A repository whose references are not
+// files, which sets extensions.refStorage to anything else, is refused with
+// ErrRefStorageUnsupported, and a line of any other shape with
+// ErrMalformedOutput, never skipped. A reference with no reflog contributes
+// nothing. It reads and writes nothing else, and refuses with
+// ErrNotARepository on a bare repository.
+func (r *Repository) ReflogValuesOf(ctx context.Context, refs ...string) ([]string, error) {
+	if r.kind != KindWorktree {
+		return nil, &openError{path: r.path, kind: KindWorktree}
+	}
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	args := []string{"rev-parse", "--path-format=absolute"}
+	for _, ref := range refs {
+		if err := checkArg("ref", ref); err != nil {
+			return nil, err
+		}
+		if ref != "HEAD" && !strings.HasPrefix(ref, "refs/") {
+			return nil, &argumentError{what: "ref", value: ref, reason: "is neither HEAD nor a full reference name, which begins refs/"}
+		}
+		if strings.Contains(ref, "@{") {
+			return nil, &argumentError{what: "ref", value: ref, reason: "carries a reflog selector, which no reference name does"}
+		}
+		args = append(args, "--git-path", "logs/"+ref)
+	}
+	storage, err := r.configValues(ctx, "extensions.refStorage")
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range storage {
+		if !strings.EqualFold(s, "files") {
+			return nil, ErrRefStorageUnsupported
+		}
+	}
+	format, err := r.ObjectFormat(ctx)
+	if err != nil {
+		return nil, err
+	}
+	width := 40
+	if format == "sha256" {
+		width = 64
+	}
+	null := strings.Repeat("0", width)
+	out, err := r.run(ctx, "reflog-paths", args...)
+	if err != nil {
+		return nil, err
+	}
+	paths := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(paths) != len(refs) {
+		return nil, &outputError{op: "reflog-paths", detail: "git gave " + strconv.Itoa(len(paths)) + " paths for " + strconv.Itoa(len(refs)) + " logs"}
+	}
+	var values []string
+	for i, path := range paths {
+		raw, err := os.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, line := range strings.Split(strings.TrimRight(string(raw), "\n"), "\n") {
+			if line == "" {
+				continue
+			}
+			fields := strings.SplitN(line, " ", 3)
+			if len(fields) < 3 || !isObjectID(fields[0], width) || !isObjectID(fields[1], width) {
+				return nil, &outputError{op: "reflog-values-of", detail: "the reflog of " + refs[i] + " holds a line that is not an entry"}
+			}
+			for _, v := range fields[:2] {
+				if v != null && !slices.Contains(values, v) {
+					values = append(values, v)
+				}
+			}
+		}
+	}
+	return values, nil
+}
+
+// isObjectID reports whether s is an object identifier of width lowercase
+// hexadecimal digits.
+func isObjectID(s string, width int) bool {
+	if len(s) != width {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // reflogs is the one walk both reads make. The selector, %gD, is the

@@ -127,11 +127,11 @@ import (
 // that the upstream took up afterwards through a name the copy no longer
 // holds reads as gone, which refuses the confirmation. A stash entry
 // records no worktree, so a run's own entries are the ones made on a
-// commit its own names record (ownStash), a commit the gate's reflogs
-// record too among them: one another worktree made on such a commit is
-// shown as this one's, and one this worktree made on a commit its names no
-// longer record is not shown, nor destroyed, since the gate's stash
-// stands.
+// commit its own names or either value of an entry of its own reflogs
+// record (ownStash), a commit the gate's reflogs record too among them:
+// one another worktree made on such a commit is shown as this one's, and
+// one this worktree made on a commit none of them records any more is not
+// shown, nor destroyed, since the gate's stash stands.
 //
 // # The removal
 //
@@ -332,7 +332,13 @@ func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, shown []string
 	// count: those are its work, and nothing else will ever name them.
 	stash := inv.Stash
 	if !entry.TaskID.IsKnown() {
-		own, err := ownStash(ctx, entry, copied, slices.Clone(named.objects))
+		logs := []string{"HEAD"}
+		for _, ref := range refs {
+			if strings.HasPrefix(ref.Name, "refs/") {
+				logs = append(logs, ref.Name)
+			}
+		}
+		own, err := ownStash(ctx, entry, copied, slices.Clone(named.objects), logs)
 		if err != nil {
 			return Loss{}, nil, err
 		}
@@ -439,19 +445,23 @@ func (n *names) add(object, name string) {
 
 // ownStash is, for a run's worktree, the entries of the stash it shares
 // with the gate that it made: each whose base, the commit the stash was
-// made on (its first parent), is one of mine, what the worktree's own names
-// record: its HEAD, its own references and root references, and the value
-// each entry of their reflogs moved to (namesOf over copyNames' read for a
-// run). Those are the worktree's alone, so a base the gate's shared
-// references or their reflogs record too is still its own when one of
-// them records it, and a base only the shared ones record is not. git
-// records no worktree on a stash entry, so this is the closest the stash
-// says: an entry another worktree made on a commit this one's names record
-// is taken for this one's, which fails toward showing, and one this
-// worktree made on a commit its names no longer record, the value an
-// expired reflog entry moved to or the one the oldest standing entry moved
-// from among them, is not.
-func ownStash(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, mine []string) ([]vcs.ReflogEntry, error) {
+// made on (its first parent), is one of what the worktree's own names
+// record. That is mine, its HEAD, its own references and root references
+// and the value each entry of their reflogs moved to (namesOf over
+// copyNames' read for a run), and every value, previous or new, an entry
+// of logs, the reflogs of its HEAD and its own references, records
+// (vcs.ReflogValuesOf), so a base an expiry left only as the value the
+// oldest standing entry moved from, or the one an entry after a gap moved
+// from, is still its own. Those are the worktree's alone, so a base the
+// gate's shared references or their reflogs record too is still its own
+// when one of them records it, and a base only the shared ones record is
+// not. git records no worktree on a stash entry, so this is the closest
+// the stash says: an entry another worktree made on a commit this one's
+// names record is taken for this one's, which fails toward showing, and
+// one this worktree made on a commit no entry of its own logs records any
+// more, expired from them whole, is not. A repository whose references
+// are not kept as files refuses the read (vcs.ErrRefStorageUnsupported).
+func ownStash(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, mine, logs []string) ([]vcs.ReflogEntry, error) {
 	fail := func(err error) ([]vcs.ReflogEntry, error) {
 		return nil, fmt.Errorf("tasks: reading the stash the kept copy at %s shares: %w", entry.CopyPath, err)
 	}
@@ -466,6 +476,11 @@ func ownStash(ctx context.Context, entry store.KeptWork, copied *vcs.Repository,
 	if err != nil {
 		return fail(err)
 	}
+	recorded, err := copied.ReflogValuesOf(ctx, logs...)
+	if err != nil {
+		return fail(err)
+	}
+	mine = append(mine, recorded...)
 	var own []vcs.ReflogEntry
 	for _, e := range entries {
 		base, err := copied.ResolveCommit(ctx, e.Object+"^1")

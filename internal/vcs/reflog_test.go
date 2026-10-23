@@ -125,3 +125,103 @@ func TestReflogsReadPositionsWhateverTheOperatorsLogDate(t *testing.T) {
 		t.Errorf("Reflogs of a name carrying a selector = %v; want ErrInvalidArgument", err)
 	}
 }
+
+// ReflogValuesOf reads the named logs alone, by both values of every entry:
+// a worktree of a bare repository whose HEAD log keeps, after deletions,
+// only entries whose previous values are no entry's new value, the oldest
+// entry's and one left by a gap in the middle. Both are read, and neither
+// the null identifier a creation moved from nor a value only a log the
+// worktree shares with the repository records (a branch's, made with a log)
+// is, unless that log is named. A line of another shape is refused, not
+// skipped, a name that is not a reference is refused before git runs, a
+// bare repository is refused, and so is a repository whose references are
+// not files, where git can make one.
+func TestReflogValuesOfReadsTheNamedLogsByBothValues(t *testing.T) {
+	gitEnvironment(t)
+	base := t.TempDir()
+	seed := filepath.Join(base, "seed")
+	rawGit(t, base, "init", "--quiet", "-b", "main", seed)
+	rawGit(t, seed, "commit", "--quiet", "--allow-empty", "-m", "a")
+	gate := filepath.Join(base, "gate.git")
+	rawGit(t, base, "clone", "--quiet", "--bare", seed, gate)
+	wt := filepath.Join(base, "wt")
+	rawGit(t, gate, "worktree", "add", "--quiet", "--detach", wt, "main")
+	commit := func(message string) string {
+		t.Helper()
+		rawGit(t, wt, "commit", "--quiet", "--allow-empty", "-m", message)
+		return strings.TrimSpace(rawGit(t, wt, "rev-parse", "HEAD"))
+	}
+	start := strings.TrimSpace(rawGit(t, wt, "rev-parse", "HEAD"))
+	b := commit("b")
+	c := commit("c")
+	d := commit("d")
+	e := commit("e")
+	// HEAD's log, newest first: d->e, c->d, b->c, start->b. Deleting c->d
+	// and start->b leaves d->e and b->c: b and d are previous values no
+	// remaining entry moved to.
+	rawGit(t, wt, "reflog", "delete", "HEAD@{3}")
+	rawGit(t, wt, "reflog", "delete", "HEAD@{1}")
+	if moved := rawGit(t, wt, "log", "--walk-reflogs", "--format=%H", "HEAD"); strings.Contains(moved, b) || strings.Contains(moved, d) {
+		t.Fatalf("HEAD's log still moves to %s or %s:\n%s", b, d, moved)
+	}
+	shared := commit("shared")
+	rawGit(t, wt, "reset", "--quiet", "--hard", e)
+	rawGit(t, wt, "reflog", "delete", "HEAD@{0}")
+	rawGit(t, wt, "reflog", "delete", "HEAD@{0}")
+	rawGit(t, gate, "update-ref", "--create-reflog", "refs/heads/recorded", shared)
+	repo, err := vcs.OpenWorktree(ctx(t), wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.ReflogValuesOf(ctx(t), "HEAD")
+	if err != nil || !slices.Contains(got, b) || !slices.Contains(got, c) || !slices.Contains(got, d) || !slices.Contains(got, e) ||
+		slices.Contains(got, shared) || slices.Contains(got, start) {
+		t.Fatalf("HEAD's values = %v, %v; want %s, %s, %s and %s, and not the shared log's %s or the deleted entry's %s",
+			got, err, b, c, d, e, shared, start)
+	}
+	// The shared branch's log was made by its creation, so its one entry
+	// moved from the null identifier, which is no value.
+	if created := rawGit(t, gate, "reflog", "show", "--format=%H", "refs/heads/recorded"); strings.TrimSpace(created) != shared {
+		t.Fatalf("the shared branch's log reads %q; want its one creation entry", created)
+	}
+	named, err := repo.ReflogValuesOf(ctx(t), "HEAD", "refs/heads/recorded", "refs/heads/nolog")
+	if err != nil || !slices.Contains(named, shared) {
+		t.Fatalf("with the shared log named = %v, %v; want %s", named, err, shared)
+	}
+	for _, v := range named {
+		if strings.Trim(v, "0") == "" {
+			t.Fatalf("the values hold the null identifier: %v", named)
+		}
+	}
+	if _, err := repo.ReflogValuesOf(ctx(t), "main"); !errors.Is(err, vcs.ErrInvalidArgument) {
+		t.Fatalf("a short name = %v; want ErrInvalidArgument", err)
+	}
+	bare, err := vcs.OpenBare(ctx(t), gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bare.ReflogValuesOf(ctx(t), "HEAD"); !errors.Is(err, vcs.ErrNotARepository) {
+		t.Fatalf("a bare repository = %v; want ErrNotARepository", err)
+	}
+
+	logPath := strings.TrimSpace(rawGit(t, wt, "rev-parse", "--path-format=absolute", "--git-path", "logs/HEAD"))
+	writeFile(t, logPath, b+" "+c+"\n")
+	if _, err := repo.ReflogValuesOf(ctx(t), "HEAD"); !errors.Is(err, vcs.ErrMalformedOutput) {
+		t.Fatalf("a line that is not an entry = %v; want ErrMalformedOutput", err)
+	}
+
+	tables := filepath.Join(base, "tables")
+	if _, err := tryRawGit(base, "init", "--quiet", "--ref-format=reftable", tables); err != nil {
+		t.Logf("this git makes no reftable repository, so the refusal of one is not exercised: %v", err)
+		return
+	}
+	rawGit(t, tables, "commit", "--quiet", "--allow-empty", "-m", "a")
+	reftable, err := vcs.OpenWorktree(ctx(t), tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reftable.ReflogValuesOf(ctx(t), "HEAD"); !errors.Is(err, vcs.ErrRefStorageUnsupported) {
+		t.Fatalf("a reftable repository = %v; want ErrRefStorageUnsupported", err)
+	}
+}

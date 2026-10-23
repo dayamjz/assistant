@@ -985,6 +985,115 @@ func TestALandingRefusesARunsOwnStashMadeOnACommitTheGateRecords(t *testing.T) {
 	})
 }
 
+// A run's stash entry is its own when the commit it was made on survives
+// in the worktree's HEAD reflog only as the value an entry moved from, the
+// review of 46e30f2: the run's worktree stands at the submitted commit B,
+// which a gate branch's reflog also records; an edit is stashed there, a
+// commit C made and the worktree reset to HEAD, and every entry of the
+// worktree's HEAD reflog that moved to B is then deleted, as an expiry
+// leaves it, so B is recorded only as the entry from B to C moved from.
+// The discard shown lists the stash's commit and reads the stash, and the
+// landing is refused naming the stash, recording nothing; with the base
+// recorded only as the value an entry of the worktree's own bisect
+// reference's log moved from, and HEAD's log emptied, the discard shown
+// still reads the stash. Without the value
+// each own entry moved from, B was matched by nothing the worktree's
+// own names record, the entry was taken for another worktree's, and the
+// landing started at C with the stashed edit never validated.
+func TestALandingRefusesARunsOwnStashWhoseBaseOnlyAnEntrysPreviousValueRecords(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	submitted := git(t, subject, "rev-parse", "HEAD")
+	entry := keptEntryOf(t, h, subject)
+	gate := git(t, entry.CopyPath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if head := git(t, entry.CopyPath, "rev-parse", "HEAD"); head != submitted {
+		t.Fatalf("the run's worktree stands at %s; want the submitted %s", head, submitted)
+	}
+	git(t, gate, "update-ref", "--create-reflog", "refs/heads/recorded", submitted)
+	if err := writeFile(filepath.Join(entry.CopyPath, "file.txt"), "an edit stashed in the run's worktree\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "stash", "push", "--quiet", "-m", "the run's own edit")
+	stashed := git(t, gate, "rev-parse", "refs/stash")
+	if err := writeFile(filepath.Join(entry.CopyPath, "later.txt"), "a commit after the stash\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "add", "later.txt")
+	git(t, entry.CopyPath, "commit", "--quiet", "-m", "a commit after the stash")
+	later := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	git(t, entry.CopyPath, "reset", "--quiet", "--hard", "HEAD")
+	// Delete, oldest first, every entry of the worktree's HEAD reflog that
+	// moved to the submitted commit, keeping the one that moved from it.
+	for {
+		moved := strings.Fields(git(t, entry.CopyPath, "reflog", "show", "--format=%H", "HEAD"))
+		at := slices.Index(moved, submitted)
+		if at < 0 {
+			break
+		}
+		git(t, entry.CopyPath, "reflog", "delete", fmt.Sprintf("HEAD@{%d}", at))
+	}
+	logPath := git(t, entry.CopyPath, "rev-parse", "--path-format=absolute", "--git-path", "logs/HEAD")
+	raw, err := os.ReadFile(logPath)
+	if err != nil || !strings.Contains(string(raw), submitted+" "+later+" ") {
+		t.Fatalf("the worktree's HEAD reflog reads %q, %v; want the entry from %s to %s kept, or the case would test nothing",
+			raw, err, submitted, later)
+	}
+	land := func(under serviceUnderTest) (machine.KeptWorkAnswered, error) {
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+			Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptLand)}, &out)
+		return out, err
+	}
+	withService(t, h, func(under serviceUnderTest) {
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &shown); err != nil || shown.Loss == nil ||
+			!shown.Loss.Stash || !slices.Contains(shown.Loss.Lacks, stashed) {
+			t.Fatalf("the discard shown = %+v, %v; want the stash read and its commit %s lost", shown.Loss, err, stashed)
+		}
+		if out, err := land(under); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "stash") {
+			t.Fatalf("landing a run's copy whose stash's base only an entry's previous value records = %+v, %v; want it refused naming the stash", out, err)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() || still.LandingClaimed() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open and unclaimed", still, err)
+		}
+		// The same base recorded only as the value an entry of the
+		// worktree's own bisect reference's log moved from, HEAD's log
+		// emptied, is still its own.
+		git(t, entry.CopyPath, "update-ref", "--create-reflog", "refs/bisect/good", submitted)
+		git(t, entry.CopyPath, "update-ref", "refs/bisect/good", later)
+		git(t, entry.CopyPath, "reflog", "delete", "refs/bisect/good@{1}")
+		git(t, entry.CopyPath, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "HEAD")
+		bisectLog := git(t, entry.CopyPath, "rev-parse", "--path-format=absolute", "--git-path", "logs/refs/bisect/good")
+		if head, err := os.ReadFile(logPath); err != nil || len(head) != 0 {
+			t.Fatalf("HEAD's log reads %q, %v; want it empty", head, err)
+		}
+		if raw, err := os.ReadFile(bisectLog); err != nil || !strings.HasPrefix(string(raw), submitted+" "+later+" ") || strings.Count(string(raw), "\n") != 1 {
+			t.Fatalf("the bisect reference's log reads %q, %v; want the one entry from %s to %s", raw, err, submitted, later)
+		}
+		var again machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &again); err != nil || again.Loss == nil ||
+			!again.Loss.Stash || !slices.Contains(again.Loss.Lacks, stashed) {
+			t.Fatalf("the discard shown with only the bisect log recording the base = %+v, %v; want the stash read and %s lost", again.Loss, err, stashed)
+		}
+		git(t, entry.CopyPath, "update-ref", "-d", "refs/bisect/good")
+	})
+	git(t, entry.CopyPath, "stash", "drop", "--quiet")
+	withService(t, h, func(under serviceUnderTest) {
+		out, err := land(under)
+		if err != nil || out.Run == "" {
+			t.Fatalf("landing the run's copy with the stash dropped = %+v, %v; want a run", out, err)
+		}
+		if run, err := recordsOf(t, h).Run(t.Context(), out.Run); err != nil || run.SubmittedHead != later {
+			t.Fatalf("the landing's run reads %+v, %v; want it at %s", run, err, later)
+		}
+	})
+}
+
 // Two land answers to one entry start one run between them: both are made
 // at once, each ends as the run named or as refused while the other was
 // landing, the entry names exactly one run, the repository has exactly one
