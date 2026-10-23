@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -107,10 +108,14 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"autonomy": {"merge": ["owner/name"]},
 		"delivery": "local",
 		"allow_standing_consent": true,
-		"session_provider": "tmux",
+		"session_provider": "herdr",
 		"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4},
 		"notify": {"command": "notify-me --channel private"},
-		"run_usage_budget": {"output_tokens": 5}
+		"run_usage_budget": {"output_tokens": 5},
+		"remote_hosts": [{"host": "studio", "root": "/Users/me/remote", "bridge": "/Users/me/bin/assistant",
+			"max_workers": 4, "min_free_disk": "20GiB", "max_load": 6.5}],
+		"placement": {"local": {"max_workers": 8, "min_free_disk": "500MB", "max_load": 12}, "arch": ["arm64", "amd64"]},
+		"remote_disconnect_grace": "2h"
 	}`
 	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
@@ -169,8 +174,22 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	if c.Delivery != DeliveryLocal {
 		t.Errorf("Delivery = %q", c.Delivery)
 	}
-	if c.SessionProvider != SessionProviderTmux {
+	if c.SessionProvider != SessionProviderHerdr {
 		t.Errorf("SessionProvider = %q", c.SessionProvider)
+	}
+	wantHosts := []RemoteHost{{Host: "studio", Root: "/Users/me/remote", Bridge: "/Users/me/bin/assistant",
+		Limits: PlacementLimits{MaxWorkers: 4, MinFreeDiskBytes: 20 << 30, MaxLoad: 6.5}}}
+	if !reflect.DeepEqual(c.RemoteHosts, wantHosts) {
+		t.Errorf("RemoteHosts = %+v, want %+v", c.RemoteHosts, wantHosts)
+	}
+	if c.PlacementLocal != (PlacementLimits{MaxWorkers: 8, MinFreeDiskBytes: 500 * 1000 * 1000, MaxLoad: 12}) {
+		t.Errorf("PlacementLocal = %+v", c.PlacementLocal)
+	}
+	if strings.Join(c.PlacementArch, ",") != "arm64,amd64" {
+		t.Errorf("PlacementArch = %v", c.PlacementArch)
+	}
+	if c.RemoteDisconnectGrace != 2*time.Hour {
+		t.Errorf("RemoteDisconnectGrace = %v", c.RemoteDisconnectGrace)
 	}
 	if c.UsageCeiling != (UsageCeiling{Window: 24 * time.Hour, InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3, CacheCreationTokens: 4}) {
 		t.Errorf("UsageCeiling = %+v", c.UsageCeiling)

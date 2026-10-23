@@ -54,7 +54,7 @@ autonomy:
   merge: [owner/name]
 delivery: local
 allow_standing_consent: true
-session_provider: tmux
+session_provider: herdr
 usage_ceiling:
   window: 24h
   input_tokens: 1
@@ -65,6 +65,20 @@ notify:
   command: notify-me --channel private
 run_usage_budget:
   output_tokens: 5
+remote_hosts:
+  - host: studio
+    root: /Users/me/remote
+    bridge: /Users/me/bin/assistant
+    max_workers: 4
+    min_free_disk: 20GiB
+    max_load: 6.5
+placement:
+  local:
+    max_workers: 8
+    min_free_disk: 500MB
+    max_load: 12
+  arch: [arm64, amd64]
+remote_disconnect_grace: 2h
 `
 
 const wholeSchemaJSON = `{
@@ -96,10 +110,14 @@ const wholeSchemaJSON = `{
 	"autonomy": {"merge": ["owner/name"]},
 	"delivery": "local",
 	"allow_standing_consent": true,
-	"session_provider": "tmux",
+	"session_provider": "herdr",
 	"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4},
 	"notify": {"command": "notify-me --channel private"},
-	"run_usage_budget": {"output_tokens": 5}
+	"run_usage_budget": {"output_tokens": 5},
+	"remote_hosts": [{"host": "studio", "root": "/Users/me/remote", "bridge": "/Users/me/bin/assistant",
+		"max_workers": 4, "min_free_disk": "20GiB", "max_load": 6.5}],
+	"placement": {"local": {"max_workers": 8, "min_free_disk": "500MB", "max_load": 12}, "arch": ["arm64", "amd64"]},
+	"remote_disconnect_grace": "2h"
 }`
 
 func resolvedGlobal(t *testing.T, l Layer) Config {
