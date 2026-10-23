@@ -162,13 +162,15 @@ type Loss struct {
 	// task's clone HEAD, every reference, every worktree's HEAD, its root
 	// references and every reflog entry by both its values, the stash list
 	// whole among them; for a run's worktree HEAD, its own references and
-	// root references, and the values of the reflogs git reads for it alone
-	// less the ones the gate's own reflogs record, which stand after the
-	// removal, and the stash entries it made (ownStash), never another
-	// worktree's. Held is the default branch and what the upstream holds
-	// now (upstreamHeld); a remote-tracking reference holds nothing of
-	// itself. It is wider than what Keep records, which leaves the stash
-	// and the reflogs out.
+	// root references, every entry of their reflogs by both its values
+	// (reflogValues), and the stash entries it made (ownStash), never
+	// another worktree's, and never the gate's shared references or their
+	// reflogs, which the removal leaves. Held is the default branch and
+	// what the upstream holds now (upstreamHeld) and nothing else: a
+	// remote-tracking reference holds nothing of itself, and neither do the
+	// gate's references, so a commit the worktree's own names reach is
+	// listed whatever the gate records. It is wider than what Keep records,
+	// which leaves the stash and the reflogs out.
 	Lacks []string
 	// Dirty, Untracked and Stash are the inventory's indicators of the copy
 	// as it stands now, as git reports them: a tracked change, a file no
@@ -321,7 +323,7 @@ func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, shown []string
 		return Loss{}, nil, err
 	}
 	named := namesOf(inv.Head.Commit, refs, logs)
-	values, err := c.reflogValues(ctx, entry, copied)
+	values, err := reflogValues(ctx, entry, copied, refs)
 	if err != nil {
 		return Loss{}, nil, err
 	}
@@ -331,13 +333,7 @@ func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, shown []string
 	// count: those are its work, and nothing else will ever name them.
 	stash := inv.Stash
 	if !entry.TaskID.IsKnown() {
-		logs := []string{"HEAD"}
-		for _, ref := range refs {
-			if strings.HasPrefix(ref.Name, "refs/") {
-				logs = append(logs, ref.Name)
-			}
-		}
-		own, err := ownStash(ctx, entry, copied, slices.Clone(named.objects), logs)
+		own, err := ownStash(ctx, entry, copied, append(slices.Clone(named.objects), values...))
 		if err != nil {
 			return Loss{}, nil, err
 		}
@@ -445,13 +441,13 @@ func (n *names) add(object, name string) {
 // ownStash is, for a run's worktree, the entries of the stash it shares
 // with the gate that it made: each whose base, the commit the stash was
 // made on (its first parent), is one of what the worktree's own names
-// record. That is mine, its HEAD, its own references and root references
+// record. That is mine: its HEAD, its own references and root references
 // and the value each entry of their reflogs moved to (namesOf over
 // copyNames' read for a run), and every value, previous or new, an entry
-// of logs, the reflogs of its HEAD and its own references, records
-// (vcs.ReflogValuesOf), so a base an expiry left only as the value the
-// oldest standing entry moved from, or the one an entry after a gap moved
-// from, is still its own. Those are the worktree's alone, so a base the
+// of the reflogs of its HEAD and its own references records
+// (reflogValues), so a base an expiry left only as the value the oldest
+// standing entry moved from, or the one an entry after a gap moved from,
+// is still its own. Those are the worktree's alone, so a base the
 // gate's shared references or their reflogs record too is still its own
 // when one of them records it, and a base only the shared ones record is
 // not. git records no worktree on a stash entry, so this is the closest
@@ -460,7 +456,7 @@ func (n *names) add(object, name string) {
 // one this worktree made on a commit no entry of its own logs records any
 // more, expired from them whole, is not. A repository whose references
 // are not kept as files refuses the read (vcs.ErrRefStorageUnsupported).
-func ownStash(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, mine, logs []string) ([]vcs.ReflogEntry, error) {
+func ownStash(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, mine []string) ([]vcs.ReflogEntry, error) {
 	fail := func(err error) ([]vcs.ReflogEntry, error) {
 		return nil, fmt.Errorf("tasks: reading the stash the kept copy at %s shares: %w", entry.CopyPath, err)
 	}
@@ -475,11 +471,6 @@ func ownStash(ctx context.Context, entry store.KeptWork, copied *vcs.Repository,
 	if err != nil {
 		return fail(err)
 	}
-	recorded, err := copied.ReflogValuesOf(ctx, logs...)
-	if err != nil {
-		return fail(err)
-	}
-	mine = append(mine, recorded...)
 	var own []vcs.ReflogEntry
 	for _, e := range entries {
 		base, err := copied.ResolveCommit(ctx, e.Object+"^1")
@@ -514,40 +505,39 @@ var gitDirShownAsObjects = []string{"objects", "refs", "packed-refs", "logs", "r
 var runWorktreeRefs = []string{"refs/worktree/", "refs/bisect/", "refs/rewritten/"}
 
 // reflogValues is every value a reflog the removal destroys records, by
-// either value and of any type (vcs.ReflogValues): for a task's clone,
-// removed whole, every reflog it keeps, every worktree's HEAD's among
-// them; for a run's worktree, the ones git reads for it alone, less every
-// value the gate's own reads record, since the logs of the references the
-// worktree shares with the gate stand after the removal and so does what
-// they record.
-func (c *Cleaner) reflogValues(ctx context.Context, entry store.KeptWork, copied *vcs.Repository) ([]string, error) {
-	fail := func(err error) ([]string, error) {
+// either value and of any type: for a task's clone, removed whole, every
+// reflog it keeps, every worktree's HEAD's among them (vcs.ReflogValues);
+// for a run's worktree, the logs of its own HEAD and of its own references
+// among refs, copyNames' read, and no other (vcs.ReflogValuesOf). The logs
+// of the references it shares with the gate stand after the removal and
+// are not read, so a value only they record is not counted; and they hold
+// nothing either, so a value the worktree's own logs record counts
+// whatever they record too, by either of its values alike.
+func reflogValues(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, refs []vcs.Ref) ([]string, error) {
+	var values []string
+	var err error
+	if entry.TaskID.IsKnown() {
+		values, err = copied.ReflogValues(ctx)
+	} else {
+		values, err = copied.ReflogValuesOf(ctx, ownLogs(refs)...)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("tasks: reading what the reflogs of the kept copy at %s record: %w", entry.CopyPath, err)
 	}
-	if entry.TaskID.IsKnown() {
-		values, err := copied.ReflogValues(ctx, false)
-		if err != nil {
-			return fail(err)
+	return values, nil
+}
+
+// ownLogs is the reflogs a run's worktree keeps of its own: its HEAD's, and
+// those of its own references among refs, copyNames' read for it, whose
+// root references keep none.
+func ownLogs(refs []vcs.Ref) []string {
+	logs := []string{"HEAD"}
+	for _, ref := range refs {
+		if strings.HasPrefix(ref.Name, "refs/") {
+			logs = append(logs, ref.Name)
 		}
-		return values, nil
 	}
-	mine, err := copied.ReflogValues(ctx, true)
-	if err != nil {
-		return fail(err)
-	}
-	obs, err := vcs.Observe(ctx, entry.CopyPath, c.git...)
-	if err != nil {
-		return fail(err)
-	}
-	gate, err := vcs.OpenBare(ctx, obs.CommonDir, c.git...)
-	if err != nil {
-		return fail(err)
-	}
-	shared, err := gate.ReflogValues(ctx, true)
-	if err != nil {
-		return fail(err)
-	}
-	return slices.DeleteFunc(mine, func(v string) bool { return slices.Contains(shared, v) }), nil
+	return logs
 }
 
 // copyFiles is every path the removal destroys whose content or deletion

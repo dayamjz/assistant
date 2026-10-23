@@ -225,11 +225,9 @@ func TestNotHeldByAnswersFromTheWholeHistory(t *testing.T) {
 // --walk-reflogs names nowhere, and a blob a notes reference's reflog
 // records only as the value it moved from are both read, and NotReachedFrom
 // given them lists the commit as not reached and the blob among the others.
-// Narrowed to this working copy, a commit another worktree's HEAD reflog
-// alone records is not read, while it is without the narrowing, and the
-// other worktree's narrowed read includes the logs of references every
-// worktree shares, the notes reference's among them. RootRefs lists ORIG_HEAD, which the reset wrote naming
-// the commit, and HEAD, and no reference under refs/.
+// A commit another worktree's HEAD reflog alone records is read too, since
+// every worktree's HEAD's log is. RootRefs lists ORIG_HEAD, which the reset
+// wrote naming the commit, and HEAD, and no reference under refs/.
 func TestReflogValuesReadEveryValueOfEveryLog(t *testing.T) {
 	gitEnvironment(t)
 	dir := filepath.Join(t.TempDir(), "main")
@@ -266,12 +264,8 @@ func TestReflogValuesReadEveryValueOfEveryLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherRepo, err := vcs.OpenWorktree(ctx(t), other)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	all, err := repo.ReflogValues(ctx(t), false)
+	all, err := repo.ReflogValues(ctx(t))
 	if err != nil || !slices.Contains(all, reset) || !slices.Contains(all, blob) || !slices.Contains(all, elsewhere) {
 		t.Fatalf("every reflog's values = %v, %v; want %s, %s and %s among them", all, err, reset, blob, elsewhere)
 	}
@@ -279,12 +273,6 @@ func TestReflogValuesReadEveryValueOfEveryLog(t *testing.T) {
 	if err != nil || !slices.Contains(commits, reset) || !slices.Contains(others, blob) {
 		t.Errorf("NotReachedFrom of every reflog value = %v, %v, %v; want %s among the commits and %s among the others",
 			commits, others, err, reset, blob)
-	}
-	if mine, err := repo.ReflogValues(ctx(t), true); err != nil || !slices.Contains(mine, reset) || slices.Contains(mine, elsewhere) {
-		t.Errorf("this working copy's reflog values = %v, %v; want %s and not %s, another worktree's", mine, err, reset, elsewhere)
-	}
-	if theirs, err := otherRepo.ReflogValues(ctx(t), true); err != nil || !slices.Contains(theirs, elsewhere) || !slices.Contains(theirs, blob) {
-		t.Errorf("the other worktree's reflog values = %v, %v; want its own %s and the shared notes log's %s", theirs, err, elsewhere, blob)
 	}
 	roots, err := repo.RootRefs(ctx(t))
 	if err != nil {

@@ -311,9 +311,10 @@ func keptDefaultTip(ctx context.Context, l landing) (string, string) {
 	return tip, ""
 }
 
-// lostFrom is what a discard of the copy loses: what exists nowhere the
-// removal leaves intact as far as this program can see, decided from the
-// copy's own objects and from everything that names one in what the
+// lostFrom is what a discard of the copy loses: what nothing held reaches,
+// held being the default branch and what the upstream holds now and
+// nothing else, the gate a run's worktree belongs to included, decided
+// from the copy's own objects and from everything that names one in what the
 // removal destroys (reach, as Loss composes it) rather than from the
 // references Keep reads. It is the commits any of it reaches that neither
 // the default branch nor anything the upstream holds reaches, a commit

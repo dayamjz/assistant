@@ -149,21 +149,13 @@ func (reach Reach) args() ([]string, error) {
 // --filter=tree:0 --reflog), each once, in that listing's order. It is the
 // one read of a reflog entry's previous value: git log --walk-reflogs names
 // each entry by the value it moved to alone, and no ref@{n} resolves to a
-// previous value an entry expired from the middle of a log left.
-//
-// thisWorktree narrows it to the logs git reads for this working copy
-// alone (git's --single-worktree): its own HEAD's and its own references',
-// with the logs of every reference shared by all the repository's
-// worktrees; without it, every worktree's HEAD's are read too. The filter
-// leaves out a tree or blob that a commit or tree in the same listing
-// holds; what holds it is listed. A repository whose reflogs record nothing
-// returns nothing.
-func (r *Repository) ReflogValues(ctx context.Context, thisWorktree bool) ([]string, error) {
-	args := []string{"rev-list", "--objects", "--no-walk", "--filter=tree:0"}
-	if thisWorktree {
-		args = append(args, "--single-worktree")
-	}
-	out, err := r.run(ctx, "reflog-values", append(args, "--reflog")...)
+// previous value an entry expired from the middle of a log left. Every
+// log is read, every worktree's HEAD's among them; ReflogValuesOf reads
+// chosen ones. The filter leaves out a tree or blob that a commit or tree
+// in the same listing holds; what holds it is listed. A repository whose
+// reflogs record nothing returns nothing.
+func (r *Repository) ReflogValues(ctx context.Context) ([]string, error) {
+	out, err := r.run(ctx, "reflog-values", "rev-list", "--objects", "--no-walk", "--filter=tree:0", "--reflog")
 	if err != nil {
 		return nil, err
 	}

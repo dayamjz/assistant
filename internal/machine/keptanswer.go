@@ -38,8 +38,9 @@ type KeptWorkAnswerRequest struct {
 type KeptWorkLoss struct {
 	// Head is the commit the copy's HEAD stands on.
 	Head string `json:"head"`
-	// Lacks is the commits the removal destroys that exist nowhere it
-	// leaves intact: every commit HEAD, a reference, a root reference such
+	// Lacks is the commits the removal destroys a name of that nothing held
+	// reaches, held being the default branch and the upstream alone: every
+	// commit HEAD, a reference, a root reference such
 	// as ORIG_HEAD or a reflog entry of the copy, by the value it moved to
 	// or the one it moved from, reaches that neither the default branch
 	// nor what the upstream holds now reaches: anything the copy names
@@ -47,10 +48,15 @@ type KeptWorkLoss struct {
 	// of the same name as a branch or remote-tracking reference of the
 	// copy's stands on. A commit reset away, a stash under the newest, and
 	// one only a remote-tracking reference names that the upstream no
-	// longer reaches are among them. For a run's worktree only what its
-	// removal destroys counts, and the stash entries it made: never a
-	// commit the gate's own references or their reflogs, or another
-	// worktree's stash entries, still record.
+	// longer reaches are among them. For a run's worktree the names counted
+	// are only what its removal destroys, its HEAD, its own references and
+	// root references and their reflogs, and the stash entries it made, so
+	// a commit only the gate's own references or their reflogs, or another
+	// worktree's stash entries, record is not listed. Those stand after the
+	// removal but hold nothing, as the default branch and the upstream do:
+	// a commit one of the worktree's own names reaches is listed even when
+	// the gate records it too, and a land of HEAD that does not carry it is
+	// refused.
 	Lacks []string `json:"lacks"`
 	// Objects is every object a name the removal destroys points at that
 	// is not a commit, an annotated tag, a tree or a blob, with its type

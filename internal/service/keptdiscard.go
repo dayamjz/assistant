@@ -21,14 +21,15 @@ import (
 //
 // # What is shown, and what is confirmed
 //
-// internal/tasks' Loss reads what would be lost from the copy now, what
-// exists nowhere the removal leaves intact: the commits that anything the
-// removal destroys names reaches (a reference, a root reference such as
-// ORIG_HEAD, a reflog entry by either of its values, or HEAD; for a run's
-// worktree never the gate's shared references or reflogs, which stand
-// after it, but the stash entries it made) and that neither the default
-// branch, read fresh, nor what the upstream holds now reaches, a
-// remote-tracking reference holding nothing of itself, with every tag,
+// internal/tasks' Loss reads what would be lost from the copy now: the
+// commits that anything the removal destroys names reaches (a reference, a
+// root reference such as ORIG_HEAD, a reflog entry by either of its
+// values, or HEAD; for a run's worktree only its own names and the stash
+// entries it made, never the gate's shared references or reflogs, which
+// stand after it) and that neither the default branch, read fresh, nor
+// what the upstream holds now reaches, a remote-tracking reference and the
+// gate's references holding nothing of themselves, so a commit a run's own
+// names reach is shown even when the gate records it too, with every tag,
 // tree or blob such a
 // name or value records that none of those is, every path whose content
 // or deletion nothing else holds, as git would store it, ignored files and

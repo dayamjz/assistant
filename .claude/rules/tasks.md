@@ -42,12 +42,13 @@ paths: ["internal/tasks/**"]
   refusals are a copy kept for its work; `kept_test.go` places every reason.
 - `kept_discard.go` is the copy's half of PRD section 6's discard, and
   `Loss` is also what `internal/service`'s land answer decides from: `Loss`
-  reads what removing the copy would lose, what exists nowhere the removal
-  leaves intact: the commits that anything the removal destroys names
-  reaches (HEAD, a reference, a root reference such as ORIG_HEAD, a reflog
-  entry by either of its values, `vcs.ReflogValues`; for a run's worktree
-  only its own and the stash entries it made, `ownStash`, never the gate's
-  shared references or their reflogs, which the removal leaves) and
+  reads what removing the copy would lose: the commits that anything the
+  removal destroys names reaches (HEAD, a reference, a root reference such
+  as ORIG_HEAD, a reflog entry by either of its values, `vcs.ReflogValues`;
+  for a run's worktree only its own and their logs' values,
+  `vcs.ReflogValuesOf`, and the stash entries it made, `ownStash`, never
+  the gate's shared references or their reflogs, which the removal leaves
+  and which hold nothing either) and
   nothing held reaches, the default branch and what the upstream holds
   now: every object the copy names that it advertises, by identity, and
   the commit its branch of the same name as one of the copy's branches or

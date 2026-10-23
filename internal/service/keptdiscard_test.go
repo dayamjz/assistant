@@ -821,6 +821,71 @@ func TestARunsDiscardCountsOnlyWhatItsRemovalDestroys(t *testing.T) {
 	})
 }
 
+// A run's worktree's own logs count whatever the gate also records, the
+// final review of c04c40f: a commit is made in a kept run's worktree and
+// kept under a branch of the gate's own, with a reflog recording it, and
+// the worktree is reset back. The commit is still named by the worktree's
+// HEAD reflog, which its removal destroys, and the gate's references hold
+// nothing, so the discard lists it and a land of HEAD is refused naming
+// it. With the HEAD entry that moved to it deleted, and ORIG_HEAD, which
+// the reset left at it, so the worktree's log records it only as the
+// value its reset moved from, both still hold.
+// Before, that value was dropped because the gate's reflog records it too,
+// so the same commit was listed when the worktree's log named it by one
+// value and not by the other. The positive control, the gate's own branch
+// at a commit no log of the worktree records, is never listed.
+func TestARunsDiscardCountsWhatItsOwnLogsRecordWhateverTheGateRecords(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	entry := keptEntryOf(t, h, subject)
+	gate := git(t, entry.CopyPath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		head := git(t, entry.CopyPath, "rev-parse", "HEAD")
+		side := git(t, gate, "commit-tree", "-p", head, "-m", "a branch of the gate's own", head+"^{tree}")
+		git(t, gate, "update-ref", "--create-reflog", "refs/heads/gate-side", side)
+		git(t, entry.CopyPath, "checkout", "--quiet", "--detach")
+		git(t, entry.CopyPath, "commit", "--quiet", "--allow-empty", "-m", "kept under a branch of the gate's")
+		kept := git(t, entry.CopyPath, "rev-parse", "HEAD")
+		git(t, gate, "update-ref", "--create-reflog", "refs/heads/keep", kept)
+		git(t, entry.CopyPath, "reset", "--quiet", "--hard", head)
+		check := func(state string) {
+			t.Helper()
+			var out machine.KeptWorkAnswered
+			if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &out); err != nil || out.Loss == nil {
+				t.Fatalf("%s: the discard shown = %+v, %v", state, out, err)
+			}
+			if !slices.Contains(out.Loss.Lacks, kept) || slices.Contains(out.Loss.Lacks, side) {
+				t.Fatalf("%s: the discard lists %v; want %s, which the worktree's log records, and not %s, the gate's alone",
+					state, out.Loss.Lacks, kept, side)
+			}
+			var landed machine.KeptWorkAnswered
+			err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+				Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptLand)}, &landed)
+			if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), kept) {
+				t.Fatalf("%s: the land of HEAD = %+v, %v; want it refused naming %s", state, landed, err, kept)
+			}
+		}
+		check("named by the worktree's HEAD log")
+		if log := git(t, entry.CopyPath, "reflog", "--format=%H", "HEAD"); !slices.Equal(strings.Fields(log)[:min(2, len(strings.Fields(log)))], []string{head, kept}) {
+			t.Fatalf("the worktree's HEAD log reads:\n%s\nwant the reset to %s and then the commit of %s", log, head, kept)
+		}
+		git(t, entry.CopyPath, "reflog", "delete", "HEAD@{1}")
+		if log := git(t, entry.CopyPath, "reflog", "--format=%H", "HEAD"); strings.Contains(log, kept) {
+			t.Fatalf("the worktree's HEAD log still names %s as a new value:\n%s", kept, log)
+		}
+		// The reset left ORIG_HEAD at the commit too, a name of its own.
+		git(t, entry.CopyPath, "update-ref", "-d", "ORIG_HEAD")
+		check("recorded by the worktree's HEAD log only as the value its reset moved from")
+	})
+}
+
 // A discard answers every entry of its copy that the removal's own read of
 // the copy covers, not only the ones kept before the confirmation: the
 // discard is confirmed and the service stops before the removal; then the

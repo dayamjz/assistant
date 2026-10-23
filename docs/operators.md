@@ -619,7 +619,8 @@ or discard it.
 
 Discard, `--answer discard` with the same flags, is given twice. Alone it
 shows exactly what removing the copy would lose, in the structured answer
-(`--json`): what exists nowhere removing it leaves intact. That is the
+(`--json`): what neither the default branch nor the upstream holds,
+the only two places counted as keeping work. That is the
 commits anything in the copy names that neither the default branch nor
 the upstream holds, a commit reset away, one only `ORIG_HEAD` or an old
 reflog entry still records, and every stash included, and any tag, tree
@@ -628,9 +629,11 @@ upstream does not have; what the upstream holds now is held and not
 listed, a commit one of the copy's remote-tracking branches names
 included while the upstream's branch of that name still reaches it, so
 one whose branch the upstream has since deleted or rewound is listed (for a run's copy,
-only what removing its worktree destroys: the gate's branches and their
-reflogs stay, so they are not listed, but the stash entries made in that
-worktree are); every file
+only what its worktree names counts: a commit only the gate's own branches
+or their reflogs record is not listed, since removing the worktree leaves
+them, but they keep nothing either, so a commit the worktree's own HEAD,
+references or their reflogs record is listed even when a gate branch has
+it too, and so are the stash entries made in that worktree); every file
 removing the copy destroys whose content or deletion nothing else holds,
 as git would store it, so a file git reports clean is not listed though
 its line endings differ, and files git ignores included, each with why (`changed`, `new`, `staged`, `deleted` for

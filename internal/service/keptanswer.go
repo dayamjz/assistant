@@ -63,8 +63,9 @@ import (
 // is a file git reports clean whose bytes its line-ending conversion or
 // filters changed. A default branch or an upstream that cannot be read now
 // refuses it as not established. A run's worktree is read as a discard
-// reads it, so the gate's references and reflogs, and another worktree's
-// stash entries, which stand after it, refuse nothing.
+// reads it, so a commit only the gate's references or reflogs, or another
+// worktree's stash entries, record refuses nothing, and one the
+// worktree's own names reach refuses it whatever the gate records too.
 //
 // What the check does not cover, and what that costs. The entries of the
 // repository directory Loss shows (LostRepository: the configuration, a
