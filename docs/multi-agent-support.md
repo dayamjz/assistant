@@ -6,6 +6,19 @@
 HTTP APIs directly. Supported adapters are Cursor (Agent CLI), Claude Code,
 OpenAI, and Grok Build.
 
+## Pick the right section
+
+| Need | Section |
+| --- | --- |
+| Compare CLI adapters and authentication | [Supported agents](#supported-agents) |
+| Configure the default agent or ordered alternatives | [Configuration](#configuration) |
+| Pin providers, models, efforts or roles | [Model pin and fallback list](#model-pin-and-fallback-list), [GPT review roles](#gpt-review-roles), and [Claude roles](#claude-roles) |
+| Understand which workers can run where | [Agent capabilities](#agent-capabilities) and [Worker routing](#worker-routing-gap-02) |
+| Diagnose refused routing or authentication | [Troubleshooting](#troubleshooting) |
+| Understand failure-only role fallback | [Explicit availability fallback](#explicit-availability-fallback) |
+
+**Important distinctions:** A model *provider* is not an interchangeable CLI *agent*. An installed CLI, matching declared capabilities, valid model pin, and usable credentials are all required; configuration does not grant access to a model. Fallback is for recognized availability failures, not for silently hiding an agent's task failure. This document specifies current local adapter behavior, not an available remote-worker service.
+
 ## Supported Agents
 
 ### 1. Cursor (Agent CLI)
