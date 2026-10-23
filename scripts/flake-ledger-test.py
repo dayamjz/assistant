@@ -281,6 +281,14 @@ LOGS = {120256178246: "rerun-attempt-1.log", 120265317855: "rerun-attempt-2.log"
         120290002917: "superseded-ubuntu.log"}
 
 
+def stopped_after_attempt_2(github):
+    """The recorded three-attempt run as it stood before attempt 3."""
+    run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
+    run["run_attempt"], run["conclusion"] = 2, "failure"
+    del github.data["attempts"]["39905430594/3"]
+    return github
+
+
 def run_report(github, *extra):
     with tempfile.TemporaryDirectory() as folder:
         out = Path(folder) / "ledger.json"
@@ -370,7 +378,7 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual([(f["attempt"], f["key"]) for f in rerun["earlier_failures"]], [
             (1, "leak: internal/supervisor mdworker_shared"),
             (2, "test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt")])
-        self.assertIn("hidden: the run ended green", text)
+        self.assertIn("hidden: the final attempt does not show it", text)
 
     def test_an_unreadable_log_is_reported_and_fails_the_ledger(self):
         status, data, text = run_report(FakeGitHub(LOGS, unreadable={120265317855}))
@@ -398,6 +406,35 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual([u["reason"] for u in data["unattributed"]], ["tests ran but no failure was named"])
         failures = {f["key"] for f in data["failures"]}
         self.assertIn("step: check (macos-latest) step Test", failures)
+
+    def test_a_failure_the_final_attempt_does_not_show_is_hidden_though_the_run_failed(self):
+        # The recorded run, stopped after attempt 2: the supervisor leak of
+        # attempt 1 is gone from attempt 2, the run's face, which fails
+        # internal/service instead.
+        _, data, text = run_report(stopped_after_attempt_2(FakeGitHub(LOGS)))
+        failures = {f["key"]: f for f in data["failures"]}
+        self.assertEqual(failures["leak: internal/supervisor mdworker_shared"]["hidden_by_rerun"], 1)
+        dispatch = failures["test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt"]
+        self.assertEqual(dispatch["hidden_by_rerun"], 0)
+        self.assertIn("attempt 1, check (macos-latest): leak: internal/supervisor mdworker_shared "
+                      "(hidden: the final attempt does not show it)", text)
+
+    def test_a_failure_the_final_attempt_shows_again_is_not_hidden(self):
+        github = stopped_after_attempt_2(FakeGitHub({**LOGS, 120265317855: "rerun-attempt-1.log"}))
+        _, data, _ = run_report(github)
+        leak = next(f for f in data["failures"] if f["key"] == "leak: internal/supervisor mdworker_shared")
+        self.assertEqual((leak["count"], leak["hidden_by_rerun"]), (2, 0))
+
+    def test_each_failure_is_timed_by_the_job_it_failed_in(self):
+        # Attempt 2's job ended at 06:18:38Z, nearly an hour after the run
+        # was created (05:22:50Z).
+        _, data, _ = run_report(FakeGitHub(LOGS))
+        failures = {f["key"]: f for f in data["failures"]}
+        dispatch = failures["test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt"]
+        self.assertEqual((dispatch["first_seen"], dispatch["last_seen"]),
+                         ("2026-10-23T06:18:38Z", "2026-10-23T06:18:38Z"))
+        leak = failures["leak: internal/supervisor mdworker_shared"]
+        self.assertEqual(leak["last_seen"], "2026-10-23T05:52:16Z")
 
     def test_a_cancelled_job_whose_tests_name_nothing_fails_the_ledger(self):
         # The superseded job's Test step printed its output and named no
@@ -455,10 +492,17 @@ class LedgerTest(unittest.TestCase):
 
 
 class ClosedIssueTest(unittest.TestCase):
-    def dispatch(self, branch, created_at):
+    def dispatch(self, branch, completed_at=None, closed_at=None):
+        # The failure is attempt 2's, in job 120265317855; moving when that
+        # job ended moves when it failed. The run itself was created earlier.
         github = FakeGitHub(LOGS)
         run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
-        run["head_branch"], run["created_at"] = branch, created_at
+        run["head_branch"] = branch
+        if completed_at:
+            job = next(j for j in github.data["attempts"]["39905430594/2"]["jobs"] if j["id"] == 120265317855)
+            job["completed_at"] = completed_at
+        if closed_at:
+            next(i for i in github.data["issues"] if i["number"] == 552)["closed_at"] = closed_at
         _, data, text = run_report(github)
         entry = next(f for f in data["failures"] if f["name"] == "TestConcurrentDispatchOfOneTaskClaimsOneAttempt")
         return entry["failed_on_main_after_close"], text
@@ -469,8 +513,13 @@ class ClosedIssueTest(unittest.TestCase):
         self.assertEqual(flagged, [552])
         self.assertIn("~~#552~~ **failed on main since it closed**", text)
 
+    def test_a_rerun_failure_after_the_close_of_a_run_created_before_it_is_flagged(self):
+        # The run was created at 05:22:50Z; its attempt 2 failed at
+        # 06:18:38Z, after an issue closed at 06:00Z.
+        self.assertEqual(self.dispatch("main", closed_at="2026-10-23T06:00:00Z")[0], [552])
+
     def test_a_failure_before_the_close_or_off_main_is_not(self):
-        self.assertEqual(self.dispatch("main", "2026-10-23T05:22:50Z")[0], [])
+        self.assertEqual(self.dispatch("main")[0], [])
         self.assertEqual(self.dispatch("fix/age-441-handoff-session", "2026-10-23T10:00:00Z")[0], [])
 
 
