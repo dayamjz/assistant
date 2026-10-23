@@ -175,7 +175,12 @@ func TestHeldShellChild(t *testing.T) {
 	} else {
 		_, id = heldShell(t, worker, dir)
 	}
-	line := strconv.Itoa(id.PID) + " " + strconv.FormatUint(id.Start, 10) + "\n"
+	sweep, ok := standin.OwnerSweep()
+	if !ok {
+		t.Fatal("this child test binary started no owner sweep, so the test that started it has none to wait for")
+	}
+	line := strconv.Itoa(id.PID) + " " + strconv.FormatUint(id.Start, 10) + " " +
+		strconv.Itoa(sweep.PID) + " " + strconv.FormatUint(sweep.Start, 10) + "\n"
 	if err := os.WriteFile(record+".tmp", []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -211,18 +216,27 @@ func (o *lockedOutput) String() string {
 
 // heldChildRun is a child test binary heldChild started: the command, closed
 // exited once it has been waited for, with its error then in err, its
-// output, and the identity of the held process it recorded.
+// output, and the identities it recorded of its held process and of the
+// owner sweep its RunOwned started (standin.OwnerSweep).
 type heldChildRun struct {
 	cmd    *exec.Cmd
 	exited chan struct{}
 	err    error
 	out    *lockedOutput
 	held   agents.Identity
+	sweep  agents.Identity
 }
+
+// sweepWait bounds how long heldChild's cleanup waits for a child's owner
+// sweep once the child has exited: the sweep notices within
+// standin.OwnerPoll and ends what it finds within a few rounds of
+// standin.EndGrace, so one still running past this has stopped working.
+const sweepWait = 60 * time.Second
 
 // heldChild runs TestHeldShellChild in mode as a test binary of its own,
 // with extra arguments, and returns once the child has recorded its held
-// process. The child is a copy of this binary, so the check its RunOwned
+// process and its owner sweep, which its cleanup waits for once the child
+// has exited. The child is a copy of this binary, so the check its RunOwned
 // runs lists the processes of the copy alone, never those of this run's
 // other tests, which it would otherwise report and end. It shares this
 // process's group, the foreground of the terminal AtTerminal gave it, so
@@ -281,13 +295,25 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 		if r.held.PID != 0 && !(standin.Process{Identity: r.held}).GoneWithin(0) {
 			_ = syscall.Kill(r.held.PID, syscall.SIGKILL)
 		}
+		// The child's owner sweep outlives it by design unless a passing
+		// check retired it, so after a child killed, timed out or failed it
+		// is still working; waited for here, it cannot outlive this test
+		// and the package with it (#563).
+		if r.sweep.PID != 0 {
+			sweeper := standin.Process{Identity: r.sweep}
+			if !sweeper.GoneWithin(sweepWait) {
+				t.Errorf("the child's owner sweep %d was still running %v after the child exited: %s", r.sweep.PID, sweepWait, r.out)
+				sweeper.End()
+			}
+		}
 	})
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		// The child reads the identity while the process runs, since a
 		// failing child may have ended it before this read could.
 		if raw, err := os.ReadFile(record); err == nil {
-			if _, err := fmt.Sscanf(string(raw), "%d %d", &r.held.PID, &r.held.Start); err != nil || r.held.Start == 0 {
+			if _, err := fmt.Sscanf(string(raw), "%d %d %d %d", &r.held.PID, &r.held.Start, &r.sweep.PID, &r.sweep.Start); err != nil ||
+				r.held.Start == 0 || r.sweep.Start == 0 {
 				t.Fatalf("the child recorded %q: %v", raw, err)
 			}
 			return r
