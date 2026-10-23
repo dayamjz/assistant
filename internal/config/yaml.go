@@ -87,6 +87,9 @@ func ParseYAML(origin Origin, data []byte) (Layer, error) {
 	if err := walk(origin, "", value.(map[string]any), layer.values); err != nil {
 		return Layer{}, err
 	}
+	if err := requireHerdr(layer.values); err != nil {
+		return Layer{}, err
+	}
 	return layer, nil
 }
 

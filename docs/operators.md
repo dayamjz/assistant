@@ -5,6 +5,21 @@ and for whoever owns the repository's CI and merge settings. It describes what
 this build does today. [`prd.html`](prd.html) is the specification, and where
 this page and the code could disagree, the code and the PRD win.
 
+## Start here
+
+This is the detailed **operator reference**, not a short tutorial. Use the [README](../README.md) for a product overview and quick start; use this page when commands, configuration trust, safety decisions or failure recovery matter. The [PRD](prd.html) remains the contract.
+
+| Your question | Read |
+| --- | --- |
+| How do I set up the gate and send a change? | [Push through the assistant remote](#push-through-the-assistant-remote) and [A first run, step by step](#a-first-run-step-by-step) |
+| What should I do when execution stops? | [Answering a hold](#answering-a-hold) and [Bounding what one run spends](#bounding-what-one-run-spends) |
+| How do I run and supervise a fleet? | [Catching up on a fleet](#catching-up-on-a-fleet), [Waiting on a fleet](#waiting-on-a-fleet), and [Delegating a domain](#delegating-a-domain) |
+| How is unfinished work protected? | [Kept work](#kept-work) |
+| Can it merge without me? | [Unattended operating posture](#unattended-operating-posture), [Keep your CI required](#keep-your-ci-required), and [Merge order and stacking](#merge-order-and-stacking) |
+| What is not guaranteed? | [What a pass does not cover](#what-a-pass-does-not-cover) |
+
+**Safety reading rule:** A run **holds** when it needs a person's decision and **parks** when a bound ends its progress. Missing evidence is not success; do not bypass a refusal by assuming the underlying state. The details below are intentionally retained for agents and operators making decisions.
+
 ## Push through the `assistant` remote
 
 `assistant init` creates the repository's gate and adds a remote named
@@ -946,6 +961,23 @@ A Cursor-only `agent:` pin refuses the launch with a recorded `route-refused`
 reason rather than falling back or widening grants; list Claude after Cursor
 if you want Cursor for runs and Claude for attachable workers. See
 `docs/multi-agent-support.md`.
+
+`session_provider: herdr` and the keys for workers on another machine
+(`remote_hosts`, `placement.local`, `placement.arch` and
+`remote_disconnect_grace`, PRD section 8) are parsed and validated, but this
+build does not act on them yet. The service refuses to start on a
+`config.yaml` that sets any of them, naming the key, rather than running
+workers some other way. A repository whose default branch's `assistant.json`
+sets `placement.arch` is refused the same way, naming the key, wherever the
+service reads that copy: a run, a delivery task's intake or promotion, and
+standing consent. A task of such a repository that reaches dispatch, an
+investigation or a delivery task taken before the key was added, is not
+dispatched: it stays queued, and the next dispatch pass after the key is
+removed dispatches it. Meanwhile the coordinator is told about it as it is
+about any task with no worker to watch: on the supervisor's second pass over
+it (about one `supervision_beacon_interval` in) and again each `escalation_window`,
+as a worker whose screen has not changed. Only the service log says the wait
+is placement.
 
 Each launch records which adapter it chose on the task attempt in the home's
 database, once, as `adapter`, `route_reason` and `route_skipped`; no command

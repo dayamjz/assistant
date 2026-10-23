@@ -71,8 +71,9 @@
 //     the run budget. A pushed branch may never set one.
 //   - TrustGlobal keys are the operator's preferences about how their own
 //     machine behaves rather than facts about a repository: the checks timeout,
-//     session reuse, the decision-model mode, and the usage ceiling. Only the operator's own file may set one, and a
-//     repository file carrying one is refused when it is parsed.
+//     session reuse, the decision-model mode, the usage ceiling, and the
+//     remote hosts and placement limits. Only the operator's own file may set
+//     one, and a repository file carrying one is refused when it is parsed.
 //   - TrustGlobalLoosens keys have ordered values and only the operator's own
 //     file may loosen one: the delivery posture, by the owner's decision on
 //     #304, so no commit turns a lighter delivery path on without the
@@ -115,7 +116,9 @@
 // because a bare number would leave the unit to be assumed, and a reserved
 // agent flag is refused rather than dropped. Document ownership refuses a
 // second claim on a subject, which is P14 enforced in configuration rather
-// than stated in prose.
+// than stated in prose. One rule reads two keys, so it runs once a document
+// is decoded rather than in a decoder: a remote host named under a session
+// provider other than herdr is refused, naming remote_hosts.
 //
 // A document also has to mean one thing. A dotted key is written as nested
 // objects and the flat spelling is refused, and a member name repeated within
