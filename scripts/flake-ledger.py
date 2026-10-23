@@ -37,8 +37,9 @@ What it reads, and from where:
 It is loud where it cannot see: a log or API read that fails makes it exit 2
 (a failed issue read leaves each failure's issues unknown, never "none"),
 and a failed or cancelled job whose log shows tests ran but in which nothing
-was named makes it exit 3 (listed under "Unattributed"). With --run, a
-cancelled job of the run's latest attempt is exit 2 too. With
+was named makes it exit 3 (listed under "Unattributed"). With --run, a job
+of the run's latest attempt that timed out or was cancelled is exit 2 too,
+whatever it recorded before it stopped: its suite did not finish. With
 --require-open-issues, a failure an earlier attempt had that no open issue
 names is exit 4: a re-run may pass a test, but not silently. Each still
 prints the ledger.
@@ -838,14 +839,17 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
     unattributed, cancelled, cancelled_jobs, counted = [], {"superseded": 0, "cancelled": 0}, [], 0
     for run, job in jobs:
         result = results.get(job["id"]) or {"records": [], "error": "not read"}
+        if result.get("cancel"):
+            # Every job that did not run to its end, whatever it recorded:
+            # a timeout or a cancel after a failure still cut its suite short.
+            cancelled_jobs.append({"run_id": run["id"], "job_id": job["id"], "job": job["name"],
+                                   "attempt": job.get("run_attempt", 1),
+                                   "final_attempt": run.get("run_attempt") or 1, "reason": result["cancel"]})
         # Set aside only a cancel with nothing in it: no failure, no read
         # problem, and no test output that named nothing.
         if (result.get("cancel") in cancelled and not result["records"] and not result.get("error")
                 and not result.get("unattributed")):
             cancelled[result["cancel"]] += 1
-            cancelled_jobs.append({"run_id": run["id"], "job_id": job["id"], "job": job["name"],
-                                   "attempt": job.get("run_attempt", 1),
-                                   "final_attempt": run.get("run_attempt") or 1, "reason": result["cancel"]})
             continue
         counted += 1  # a failed job: a failure, a read problem, or output that named nothing
         final = run.get("run_attempt") or 1
@@ -1085,9 +1089,12 @@ def report(args, github=None):
     latest = [c for c in ledger["cancelled_jobs"] if c["attempt"] == c["final_attempt"]]
     if args.run and latest:
         # One run's summary cannot say its tests passed when some of its
-        # latest attempt's jobs never finished them, whatever cancelled them.
-        print(f"flake-ledger: {len(latest)} job(s) of run {args.run}'s latest attempt were cancelled, "
-              "so its results are incomplete", file=sys.stderr)
+        # latest attempt's jobs never finished them, whatever cancelled them
+        # and whatever they recorded first: a timeout is a failure record and
+        # still an unfinished suite. An earlier attempt's cancel was re-run.
+        reasons = ", ".join(f"{c['job']} ({c['reason']})" for c in latest)
+        print(f"flake-ledger: {len(latest)} job(s) of run {args.run}'s latest attempt did not finish: "
+              f"{reasons}, so its results are incomplete", file=sys.stderr)
         return 2
     if args.require_open_issues and ledger["rerun_without_issue"]:
         for r in ledger["rerun_without_issue"]:
