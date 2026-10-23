@@ -5,6 +5,21 @@ and for whoever owns the repository's CI and merge settings. It describes what
 this build does today. [`prd.html`](prd.html) is the specification, and where
 this page and the code could disagree, the code and the PRD win.
 
+## Start here
+
+This is the detailed **operator reference**, not a short tutorial. Use the [README](../README.md) for a product overview and quick start; use this page when commands, configuration trust, safety decisions or failure recovery matter. The [PRD](prd.html) remains the contract.
+
+| Your question | Read |
+| --- | --- |
+| How do I set up the gate and send a change? | [Push through the assistant remote](#push-through-the-assistant-remote) and [A first run, step by step](#a-first-run-step-by-step) |
+| What should I do when execution stops? | [Answering a hold](#answering-a-hold) and [Bounding what one run spends](#bounding-what-one-run-spends) |
+| How do I run and supervise a fleet? | [Catching up on a fleet](#catching-up-on-a-fleet), [Waiting on a fleet](#waiting-on-a-fleet), and [Delegating a domain](#delegating-a-domain) |
+| How is unfinished work protected? | [Kept work](#kept-work) |
+| Can it merge without me? | [Unattended operating posture](#unattended-operating-posture), [Keep your CI required](#keep-your-ci-required), and [Merge order and stacking](#merge-order-and-stacking) |
+| What is not guaranteed? | [What a pass does not cover](#what-a-pass-does-not-cover) |
+
+**Safety reading rule:** A run **holds** when it needs a person's decision and **parks** when a bound ends its progress. Missing evidence is not success; do not bypass a refusal by assuming the underlying state. The details below are intentionally retained for agents and operators making decisions.
+
 ## Push through the `assistant` remote
 
 `assistant init` creates the repository's gate and adds a remote named
