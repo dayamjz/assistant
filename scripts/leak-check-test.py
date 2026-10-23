@@ -808,9 +808,13 @@ sys.exit(check.package_run(command))
 # Leaves a detached process that, on SIGUSR1, starts a detached sleep,
 # records its pid in argv[2], and exits; records that process's pid in
 # argv[1] once it is ready for the signal, and exits. Before that, the
-# process connects to the port in argv[3], fills the connection with more
-# than it holds, and sets it to linger on close for up to 120 seconds, so
-# its exit stays under way until the other end reads what it sent.
+# process connects to the port in argv[3], gives the connection an 8 MiB
+# send buffer and fills it, and sets it to linger on close for up to 120
+# seconds; it fills the buffer again just before it exits. The other end
+# does not read, so the connection cannot deliver it all, and the exit
+# stays under way until the other end reads what it was sent. A 4 KiB
+# receive buffer set on the listener did not hold it: macOS grew the
+# accepted socket's, which took all the data on a CI run.
 FORK_ON_SIGNAL = """
 import os, pathlib, signal, socket, struct, subprocess, sys
 SO_LINGER_SEC = 0x1080  # sys/socket.h: SO_LINGER, its time in seconds
@@ -819,19 +823,23 @@ pid = os.fork()
 if pid == 0:
     os.setsid()
     held = socket.create_connection(("127.0.0.1", int(sys.argv[3])))
-    held.setblocking(False)
-    try:
-        while True:
-            held.send(b"x" * 65536)
-    except BlockingIOError:
-        pass
-    held.setblocking(True)
+    held.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 << 20)
+    def fill():
+        held.setblocking(False)
+        try:
+            while True:
+                held.send(b"x" * (1 << 20))
+        except BlockingIOError:
+            pass
+        held.setblocking(True)
+    fill()
     held.setsockopt(socket.SOL_SOCKET, SO_LINGER_SEC, struct.pack("ii", 1, 120))
     def start(*_):
         p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
         pathlib.Path(sys.argv[2]).write_text(str(p.pid))
+        fill()
         os._exit(0)
     signal.signal(signal.SIGUSR1, start)
     os.write(told, b"r")
@@ -858,7 +866,6 @@ check = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(check)
 order, parent, child = sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4])
 listener = socket.socket()
-listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
 listener.bind(("127.0.0.1", 0))
 listener.listen(1)
 command = sys.argv[sys.argv.index("--") + 1:] + [str(listener.getsockname()[1])]
