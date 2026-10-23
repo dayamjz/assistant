@@ -3,7 +3,7 @@
 `assistant` runs a fleet of coding agents in parallel and puts a validation gate
 in front of your remote, so no change reaches a shared branch until it has been
 independently reviewed, tested, documented, and linted. Package rules are in
-`.claude/rules/<package>.md`; see Code.
+`.claude/rules/<package>.md`; see Code. When writing usage/cost examples or reports, follow [the usage-reporting rule](.claude/rules/usage-reporting.md) so reported token usage is never mistaken for billing.
 
 ## The specification is checked in
 
