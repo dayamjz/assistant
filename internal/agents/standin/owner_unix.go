@@ -368,6 +368,18 @@ func owned() (value string, sweeper agents.Identity) {
 	return owning.value, owning.sweeper
 }
 
+// OwnerSweep is the identity of the owner sweep RunOwned started in this
+// process, and false when it started none. The sweep outlives this binary
+// by design, until a passing check retires it, so a test that runs a test
+// binary of its own and lets it exit any other way (killed, timed out,
+// failed) has that sweep still running after the binary is gone, and it
+// can outlive the test, and the package, unless the test waits for it:
+// the binary reads this and records it for the test that started it (#563).
+func OwnerSweep() (agents.Identity, bool) {
+	_, sweeper := owned()
+	return sweeper, sweeper.PID != 0
+}
+
 // ownedTmux is the tmux wrapper ownProcesses wrote, empty when it wrote none.
 func ownedTmux() string {
 	owning.mu.Lock()

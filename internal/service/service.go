@@ -213,6 +213,11 @@ type Options struct {
 	// product never does. It is here rather than only on the Service because
 	// Open builds the queue that runs it.
 	afterIntakeBranchRelease func()
+	// afterMergeReadPass is the Service field of the same name, which
+	// export_test.go's WithAfterMergeReadPassForTest sets and the product
+	// never does. It is here rather than only on the Service because Open
+	// starts the pass that runs it.
+	afterMergeReadPass func()
 	// sweepCopy is the Service field of the same name, set before recovery
 	// runs. It is here rather than only on the Service because recovery
 	// sweeps finished runs' copies inside Open, so a test that records what
@@ -418,6 +423,12 @@ type Service struct {
 	// this package's tests, which use it to run a dispatch pass at that
 	// moment.
 	afterIntakeBranchRelease func()
+	// afterMergeReadPass runs on mergeread.go's goroutine after each pass of
+	// the read for merges a person made, the first of which Open starts. It
+	// is nil in production and set only by this package's tests, which use
+	// it to start a run only once the opening pass is over, so that pass
+	// cannot read the run's pull request (#595).
+	afterMergeReadPass func()
 	// afterConsentRegistered runs in underStandingConsent once
 	// writeConsentAnswer has registered a standing-consent hold and before
 	// the answer is given. It is nil in production and set only by this
@@ -660,6 +671,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		beforeStaleRemovalRelease: o.beforeStaleRemovalRelease,
 		landedSpacing:             landedSpacingOf(o.cleanupAskSpacing),
 		afterIntakeBranchRelease:  o.afterIntakeBranchRelease,
+		afterMergeReadPass:        o.afterMergeReadPass,
 		isolated:                  make(map[string]tasks.Isolation),
 		claiming:                  make(map[string]bool),
 		launched:                  make(map[string]launchedWorker),

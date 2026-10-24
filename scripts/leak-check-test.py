@@ -365,6 +365,33 @@ class LeakCheckTest(unittest.TestCase):
         # is no Apple bundle whatever its path starts with.
         self.assertFalse(check.only_root_changes(f"/System/Volumes/Data{Path.home()}"))
 
+    def test_only_a_process_its_parent_shows_outside_settles_outside(self):
+        """started_outside, the rule that lets churn settle (#553): a process
+        that could not be read settles outside the sandbox only when it read
+        as unmarked and its parent in the same listing settled outside,
+        started no later, and is not launchd; one settled so counts for its
+        own children."""
+        outer = (500, "100.000000")
+        table = {
+            outer: ("running", 400),
+            (1, "1.000000"): ("running", 0),
+            (501, "101.000000"): ("exited", 500),     # parent settled outside
+            (502, "102.000000"): ("exited", 501),     # grandchild through 501
+            (503, "103.000000"): ("exited", 1),       # orphan: launchd adopted it
+            (504, "104.000000"): ("exited", 600),     # parent is the package's
+            (600, "90.000000"): ("running", 1),
+            (505, "105.000000"): ("exited", 700),     # parent started after it
+            (700, "200.000000"): ("running", 1),
+            (506, "106.000000"): ("exited", 500),     # its mark was not read
+            (507, "107.000000"): ("exited", 999),     # parent not in the listing
+        }
+        pending = {key: ("", True) for key in table if key[0] in (501, 502, 503, 504, 505, 507)}
+        pending[(506, "106.000000")] = ("", False)
+        outside = {outer, (1, "1.000000"), (700, "200.000000")}
+        check.started_outside(table, pending, outside)
+        self.assertEqual(sorted(pid for pid, _ in outside - {outer, (1, "1.000000"), (700, "200.000000")}),
+                         [501, 502])
+
     def guarded(self, command, read):
         """Run command through the real guarded_run as CI runs it (run
         --per-package, with a TMPDIR of its own), with read in place of
@@ -929,6 +956,55 @@ class PerPackageTest(unittest.TestCase):
                         os.kill(pid, 9)
 
     @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
+    def test_churn_outside_the_package_does_not_keep_a_reading_from_settling(self):
+        """#553: a process outside the package that the listing holds and
+        that is gone before its mark is read once forced another listing, so
+        steady churn on a busy machine kept every reading from settling and
+        failed a clean package. Here the real check runs with one such
+        process in every listing: a child of the process running the check,
+        started before each listing and killed and reaped before any mark is
+        read. A package that leaves a detached sleep must still fail naming
+        it, and one that leaves nothing must pass."""
+        for leak in (True, False):
+            with self.subTest(leak=leak), tempfile.TemporaryDirectory() as folder:
+                record = Path(folder) / "pid"
+                planted = [sys.executable, "-c", PLANT_DETACHED, str(record)]
+                command = planted if leak else [sys.executable, "-c", "pass"]
+                result = subprocess.run(
+                    [sys.executable, "-B", "-c", CHURN_EACH_LISTING, str(SCRIPT), "--"] + command,
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    check=False, timeout=120)
+                pid = int(record.read_text()) if leak else None
+                try:
+                    self.assertRegex(result.stdout, r"(?m)^churned in every one of [1-9]\d* listings$",
+                                     "no listing held a churned process, so this shows nothing")
+                    self.assertNotIn("no reading of the process table settled", result.stdout)
+                    if leak:
+                        self.assertEqual(result.returncode, 1, result.stdout)
+                        self.assertIn(f"LEAK package={os.getcwd()} process pid={pid} ", result.stdout)
+                        self.assertFalse(running(pid), "the check left the sleep running")
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stdout)
+                        self.assertNotIn("LEAK", result.stdout)
+                finally:
+                    if pid is not None and running(pid):
+                        os.kill(pid, 9)
+
+    @unittest.skipUnless(sys.platform == "darwin", "kinfo_proc is macOS's")
+    def test_the_table_reads_each_process_parent(self):
+        """darwin_table's parent is the kernel record's e_ppid: this process's
+        own is its parent, and a child it starts has this process as its."""
+        with subprocess.Popen(["sleep", "300"]) as child:
+            try:
+                table = check.darwin_table()
+                parents = {pid: parent for (pid, _), (_, parent) in table.items()}
+                self.assertEqual(parents.get(os.getpid()), os.getppid())
+                self.assertEqual(parents.get(child.pid), os.getpid())
+            finally:
+                child.kill()
+                child.wait()
+
+    @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
     def test_only_the_packages_own_sandbox_marks_a_process(self):
         # Real processes: one in the package's sandbox is marked, and so is
         # one there holding a grant to look up the name its profile denies,
@@ -1221,6 +1297,45 @@ pathlib.Path(sys.argv[1]).write_text(str(pid))
 # exited, before the mark is read, once ps no longer shows it exiting;
 # exiting, just after the check's next read of that process; held, only once
 # package_run has returned or failed. Each prints what ps showed.
+# Runs the real package_run over the command after "--", with every listing
+# of the process table holding a process outside the package that is gone
+# before its mark is read: a child of this process, started before the
+# listing and killed and reaped after it, even when the listing fails.
+# Prints how many listings there were once every one held such a process,
+# and an inspection failure as the command line does.
+CHURN_EACH_LISTING = """
+import importlib.util, subprocess, sys
+spec = importlib.util.spec_from_file_location("leak_check", sys.argv[1])
+check = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(check)
+command = sys.argv[sys.argv.index("--") + 1:]
+table, listings, churned = check.darwin_table, [], []
+
+def churn():
+    child = subprocess.Popen(['sleep', '300'])
+    try:
+        listed = table()
+    finally:
+        # Ended and reaped whether or not the listing could be read, so a
+        # failed read leaves nothing running (P15).
+        child.kill()
+        child.wait()
+    listings.append(True)
+    if any(pid == child.pid for pid, _ in listed):
+        churned.append(True)
+    return listed
+
+check.darwin_table = churn
+try:
+    code = check.package_run(command)
+except (OSError, RuntimeError) as error:
+    print(f"leak-check: inspection failed: {error}", flush=True)
+    code = 2
+if listings and len(churned) == len(listings):
+    print(f"churned in every one of {len(listings)} listings", flush=True)
+sys.exit(code)
+"""
+
 HOLD_IN_EXIT = """
 import importlib.util, os, signal, socket, subprocess, sys
 from pathlib import Path
