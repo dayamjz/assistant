@@ -72,7 +72,9 @@ paths: ["internal/service/**"]
   of the working tree or index and anything lost HEAD does not carry
   (`tasks.Cleaner.LeftBehind`, read as `Loss` reads), claimed once (`ClaimKeptWorkLanding`), carried out
   through `startPushedBranch` and answered with its run, the claim
-  withdrawn when no run could start; carry on (`keptcarryon.go`), claimed first with the
+  withdrawn when no run could start; land, carry on and a promotion each
+  first put back what a discard of the copy that did not finish set aside
+  (`putBackDiscard`), refusing while it cannot be; carry on (`keptcarryon.go`), claimed first with the
   entry left open, which creates a new task through `queue.Create` with
   the identifier the claim named, a promoted task's recorded
   `DeliveryIntent` as its instructions, and adopts the kept copy, the answer

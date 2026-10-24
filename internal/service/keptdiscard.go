@@ -391,6 +391,29 @@ func (s *Service) putBackDiscard(ctx context.Context, entry store.KeptWork) erro
 	return s.cleaner.PutBack(ctx, entry, gatePath)
 }
 
+// putBackKeptWorkOf is putBackDiscard for every open kept work entry of
+// the task, refusing with ipc.ErrRefused, naming what stays aside, when
+// something cannot be put back.
+func (s *Service) putBackKeptWorkOf(ctx context.Context, task string) error {
+	open, err := s.store.OpenKeptWork(ctx)
+	if err != nil {
+		return err
+	}
+	for _, entry := range open {
+		if entry.TaskID.Or("") != task {
+			continue
+		}
+		if err := s.putBackDiscard(ctx, entry); err != nil {
+			if errors.Is(err, tasks.ErrAsideStands) || errors.Is(err, tasks.ErrRecordNotTheCopys) {
+				return fmt.Errorf("%w: task %s was not promoted, since kept work entry %d's copy cannot be read whole: %w",
+					ipc.ErrRefused, task, entry.ID, err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
 // claimDiscard takes the copy's discard slot in this service, false when a
 // call holds it.
 func (s *Service) claimDiscard(copyPath string) bool {

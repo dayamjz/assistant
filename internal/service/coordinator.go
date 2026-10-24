@@ -170,6 +170,14 @@ func (s *Service) promoteTask(ctx context.Context, req ipc.Request, r machine.Ta
 		r.Task, r.Branch, r.Repository, r.Intent)); err != nil {
 		return machine.TaskPromoted{}, err
 	}
+	// The promoted worker continues in the task's copy, and the flip answers
+	// the copy's kept work carry on, so what a discard of that copy that did
+	// not finish set aside is put back first; what cannot be put back
+	// refuses the promotion rather than close the entry over work beside a
+	// path nothing reads.
+	if err := s.putBackKeptWorkOf(ctx, r.Task); err != nil {
+		return machine.TaskPromoted{}, err
+	}
 	promoted, err := s.queue.Promote(ctx, tasks.Promotion{
 		Task: r.Task, Repository: r.Repository, Branch: r.Branch, Intent: r.Intent, Delivery: r.Delivery,
 		By:          req.HoldResolver(),

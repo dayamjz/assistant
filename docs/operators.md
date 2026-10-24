@@ -603,7 +603,10 @@ there, and the task dispatches into the copy as any task
 does. The entry stays open and listed until the new task owns the copy,
 and only then is it answered carry on; if the new task cannot be created
 (its role is no longer configured, say), nothing is moved, the answer is
-refused naming why, and the entry stays open for another answer.
+refused naming why, and the entry stays open for another answer. Anything
+a discard of the copy that did not finish left beside it is put back
+first; while something cannot be put back (a file was written where it
+goes), the carry on is refused naming it.
 Carrying on points the gate's remote at the gate and puts HEAD where
 the task's shape has it, and removes no remote and moves or renames no
 branch, since any of that can leave a commit with nothing naming it: a
@@ -665,7 +668,12 @@ as the discard moves that file aside is lost with it. If something was
 written exactly where a file set aside goes back, both are kept: the new
 one in the copy, yours beside it in a directory named after the copy with
 `.discarding` at the end, the refusal names it, and the entry is not shown
-again until you move one of the two out of the way. Your
+again until you move one of the two out of the way. A task's copy is read
+and discarded only through a `.git` directory of its own: one whose `.git`
+is a link or a file pointing at another repository, whose `.git` names
+another repository's as the one its branches are in, or whose
+configuration names another directory as its working tree, is refused
+when shown or confirmed, and nothing of it or the other is touched. Your
 confirmation is recorded first, with what it was shown and who gave it,
 and the entry stays open and listed until the copy is gone; only then is
 it answered discard. If the service stops in between, the next start
@@ -688,7 +696,9 @@ unchanged copy establishes it.
 A promotion of an investigation whose copy has a kept-work entry (its
 worker ended with its copy kept) answers that entry carry on itself, in the
 promotion's own write, since the promoted worker continues in that copy;
-the entry closes with the promotion and never without it.
+the entry closes with the promotion and never without it. As with carry
+on, anything a discard of that copy that did not finish left beside it is
+put back first, and the promotion is refused while it cannot be.
 
 Discard is yours alone. The service admits a confirmation only from a
 process in the foreground of its controlling terminal, the same relation a

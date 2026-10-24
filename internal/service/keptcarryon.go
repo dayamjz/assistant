@@ -146,6 +146,14 @@ func (s *Service) carryOnKeptWork(ctx context.Context, req ipc.Request, entry st
 	// A claim this answer finds standing, one a stopped service or a failed
 	// adoption left, is completed rather than claimed again.
 	if entry.Open() && !entry.CarryOnClaimed() {
+		// What a discard that did not finish set aside is put back first,
+		// so the copy carried on is the whole copy.
+		if err := s.putBackDiscard(ctx, entry); err != nil {
+			if errors.Is(err, tasks.ErrAsideStands) || errors.Is(err, tasks.ErrRecordNotTheCopys) {
+				return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d was not carried on: %w", ipc.ErrRefused, entry.ID, err)
+			}
+			return machine.KeptWorkAnswered{}, err
+		}
 		plan, err := s.carryOnOf(ctx, entry)
 		if err != nil {
 			return machine.KeptWorkAnswered{}, err
