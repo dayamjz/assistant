@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/procgroup/guard"
@@ -21,6 +22,60 @@ import (
 // see the race, so the test is in race builds only, which is how CI runs
 // it.
 func TestTheLoadersTypeCheckWithoutARace(t *testing.T) {
+	root := instancesModule(t, "")
+	// The window is narrow, and a second round is another chance at it: on
+	// main before the fix, one round failed 6 of 10 runs and two rounds 19
+	// of 20 (Apple M-series, GOMAXPROCS=4).
+	for range 2 {
+		uses, err := guard.Load(root, "./...")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(uses) != 0 {
+			t.Errorf("Load found %v in a module that starts no program", uses)
+		}
+		writes, err := guard.LoadWrites(root, "./...")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(writes) != 0 {
+			t.Errorf("LoadWrites found %v in a module that writes no program", writes)
+		}
+	}
+}
+
+// TestALoadOfPackagesThatDoNotCompileIsRefusedWithoutARace is the same race
+// through the path that needs no package checked on purpose: a package that
+// does not compile has no export data, and a loader that left type
+// information to go/packages would see it checked from source there,
+// concurrently with the others, before refusing it (the review of #628).
+// Each loader must refuse the module, naming a package it could not read,
+// with no checker racing another.
+func TestALoadOfPackagesThatDoNotCompileIsRefusedWithoutARace(t *testing.T) {
+	root := instancesModule(t, "\treturn n + undefinedHere\n")
+	for range 2 {
+		if uses, err := guard.Load(root, "./..."); err == nil {
+			t.Fatalf("Load answered %v and no error for packages that do not compile", uses)
+		} else if !strings.Contains(err.Error(), "example.com/instances/p") {
+			t.Errorf("Load's error %q names no package it could not read", err)
+		}
+		if writes, err := guard.LoadWrites(root, "./..."); err == nil {
+			t.Fatalf("LoadWrites answered %v and no error for packages that do not compile", writes)
+		} else if !strings.Contains(err.Error(), "example.com/instances/p") {
+			t.Errorf("LoadWrites' error %q names no package it could not read", err)
+		}
+	}
+}
+
+// instancesModule writes a module of 32 packages whose function ranges over
+// each iterator strings and bytes return, with a test file that does too,
+// and returns its root. ending, when not empty, is the function's last
+// statement in place of its return.
+func instancesModule(t *testing.T, ending string) string {
+	t.Helper()
+	if ending == "" {
+		ending = "\treturn n\n"
+	}
 	root := t.TempDir()
 	write := func(name, text string) {
 		t.Helper()
@@ -59,9 +114,8 @@ func Count(s string) (n int) {
 	for range bytes.Lines([]byte(s)) {
 		n++
 	}
-	return n
-}
-`, i))
+%s}
+`, i, ending))
 		write(fmt.Sprintf("p%d/p_test.go", i), fmt.Sprintf(`package p%d
 
 import (
@@ -78,23 +132,5 @@ func TestCount(t *testing.T) {
 }
 `, i))
 	}
-	// The window is narrow, and a second round is another chance at it: on
-	// main before the fix, one round failed 6 of 10 runs and two rounds 19
-	// of 20 (Apple M-series, GOMAXPROCS=4).
-	for range 2 {
-		uses, err := guard.Load(root, "./...")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(uses) != 0 {
-			t.Errorf("Load found %v in a module that starts no program", uses)
-		}
-		writes, err := guard.LoadWrites(root, "./...")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(writes) != 0 {
-			t.Errorf("LoadWrites found %v in a module that writes no program", writes)
-		}
-	}
+	return root
 }

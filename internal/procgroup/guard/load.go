@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/tools/go/gcexportdata"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -35,27 +36,29 @@ func typeCheckEach(root string, platforms []string, tests bool, patterns []strin
 // at a time, filling the Fset, Syntax, Types and TypesInfo of each. A package
 // that does not load or type-check cleanly is an error, never a skip.
 //
-// go/packages is asked for the package graph and every package's export
-// data, which it reads, and it type-checks nothing itself: it would check
-// packages concurrently, and go/types from Go 1.26 races when two checkers
-// first read the same generic instance of an imported package, such as the
-// iter.Seq[string] of a range over strings.SplitSeq. A checker reads the
-// instance's right-hand side without the lock the other's expansion of it
-// holds (golang/go#81122, whose fix, go.dev/cl/841585, is in review and in no
-// release), which failed a -race run on macOS (#624). With one checker at a
-// time the instance has one reader, and its lock covers every expansion
-// after that. go/packages would also check a package with no export data
-// from source, concurrently, so such a package is refused.
+// go/packages is asked for the package graph and each package's export data
+// file, and for no type information, so it starts no type checker: it would
+// check packages concurrently, from source wherever it has no export data,
+// and go/types from Go 1.26 races when two checkers first read the same
+// generic instance of an imported package, such as the iter.Seq[string] of
+// a range over strings.SplitSeq. A checker reads the instance's right-hand
+// side without the lock the other's expansion of it holds (golang/go#81122,
+// whose fix, go.dev/cl/841585, is in review and in no release), which failed
+// a -race run on macOS (#624). Here one package at a time is read or checked,
+// so the instance has one reader, and its lock covers every expansion after
+// that. A package with no export data does not build, and is refused before
+// anything is read.
 //
 // What is checked from source is go/packages' own rule: every matched
 // package, and every package that imports one of them however indirectly,
 // such as a test-only package that imports a test variant. Checked before
 // its importers, each one is what they import, so no package sees two
-// versions of one type. The rest are read from export data.
+// versions of one type. The rest are read from their export data, also
+// before their importers.
 func typeCheck(root, goos string, tests bool, patterns []string) ([]*packages.Package, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
-			packages.NeedImports | packages.NeedDeps | packages.NeedExportFile | packages.NeedTypes |
+			packages.NeedImports | packages.NeedDeps | packages.NeedExportFile |
 			packages.NeedTypesSizes | packages.NeedModule,
 		Dir:   root,
 		Env:   append(os.Environ(), "GOOS="+goos, "GOWORK=off"),
@@ -74,7 +77,12 @@ func typeCheck(root, goos string, tests bool, patterns []string) ([]*packages.Pa
 			errs = append(errs, fmt.Errorf("guard: %s for %s: %w", p.PkgPath, goos, e))
 		}
 		if len(p.Errors) == 0 && p.ExportFile == "" && p.PkgPath != "unsafe" {
-			errs = append(errs, fmt.Errorf("guard: %s for %s has no export data, so it would be type-checked concurrently", p.ID, goos))
+			errs = append(errs, fmt.Errorf("guard: %s for %s has no export data, so it does not build", p.ID, goos))
+		}
+		// Types go/packages filled in are types it read or checked itself,
+		// concurrently.
+		if p.Types != nil || p.TypesInfo != nil {
+			errs = append(errs, fmt.Errorf("guard: go/packages loaded the types of %s for %s itself", p.ID, goos))
 		}
 	})
 	if len(errs) > 0 {
@@ -92,10 +100,16 @@ func typeCheck(root, goos string, tests bool, patterns []string) ([]*packages.Pa
 		for _, imp := range p.Imports {
 			fromSource[p] = fromSource[p] || fromSource[imp]
 		}
-		if !fromSource[p] {
-			return
+		var err error
+		switch {
+		case p.PkgPath == "unsafe":
+			p.Types = types.Unsafe
+		case fromSource[p]:
+			err = checkFromSource(fset, p)
+		default:
+			err = readExportData(fset, p)
 		}
-		if err := checkFromSource(fset, p); err != nil {
+		if err != nil {
 			errs = append(errs, fmt.Errorf("guard: %s for %s: %w", p.ID, goos, err))
 		}
 	})
@@ -105,11 +119,46 @@ func typeCheck(root, goos string, tests bool, patterns []string) ([]*packages.Pa
 	return pkgs, nil
 }
 
+// readExportData sets p's Types from its export data file, the way
+// go/packages reads one: the reader is shown every package p imports however
+// indirectly, under its path, so it reuses the ones already read or checked
+// rather than making its own.
+func readExportData(fset *token.FileSet, p *packages.Package) error {
+	f, err := os.Open(p.ExportFile)
+	if err != nil {
+		return err
+	}
+	// A file only read from has nothing a close error could lose.
+	defer func() { _ = f.Close() }()
+	r, err := gcexportdata.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", p.ExportFile, err)
+	}
+	view := map[string]*types.Package{}
+	seen := map[*packages.Package]bool{}
+	var show func(imports map[string]*packages.Package)
+	show = func(imports map[string]*packages.Package) {
+		for _, imp := range imports {
+			if !seen[imp] {
+				seen[imp] = true
+				view[imp.PkgPath] = imp.Types
+				show(imp.Imports)
+			}
+		}
+	}
+	show(p.Imports)
+	tpkg, err := gcexportdata.Read(r, fset, view, p.PkgPath)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", p.ExportFile, err)
+	}
+	p.Types = tpkg
+	return nil
+}
+
 // checkFromSource parses p's compiled files and type-checks them against the
-// types of p's imports: export data go/packages read, or what this file
-// checked before. The types go/packages read for p are replaced by the ones
-// checked here, even when checking failed, so p's importers are checked
-// against them.
+// types of p's imports, which this file read or checked before. p's Types
+// are the ones checked here even when checking failed, so p's importers are
+// checked against them.
 func checkFromSource(fset *token.FileSet, p *packages.Package) error {
 	syntax := make([]*ast.File, 0, len(p.CompiledGoFiles))
 	for _, name := range p.CompiledGoFiles {
