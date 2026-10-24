@@ -84,6 +84,9 @@ paths: ["internal/tasks/**"]
   its files disagree with it (`copyRecord`); what a discard that did not
   finish set aside is put back by the next `Discard` or `PutBack` before
   anything is read, and `Loss` refuses until then (`ErrAsideStands`).
+  `Loss`, `Discard` and `PutBack` support one repository layout and refuse
+  every other before reading anything (`supportedLayout`,
+  `ErrLayoutUnsupported`): an unusual layout is refused, never handled.
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (an exclusively created partial of a fresh name, then a
   rename; a path standing as a link is `*InstructionsLinkError`), so a file

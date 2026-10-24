@@ -234,7 +234,7 @@ func refusedLoss(entry store.KeptWork, err error) error {
 	case errors.Is(err, tasks.ErrLossUnestablished):
 		return fmt.Errorf("%w: kept work entry %d was not discarded: %v; the next cleanup of the unchanged copy establishes it, "+
 			"and until then what a discard would lose cannot be shown exactly", ipc.ErrRefused, entry.ID, err)
-	case errors.Is(err, tasks.ErrCopyGone), errors.Is(err, tasks.ErrAsideStands), errors.Is(err, tasks.ErrRecordNotTheCopys):
+	case errors.Is(err, tasks.ErrCopyGone), errors.Is(err, tasks.ErrAsideStands), errors.Is(err, tasks.ErrRecordNotTheCopys) || errors.Is(err, tasks.ErrLayoutUnsupported):
 		return fmt.Errorf("%w: kept work entry %d was not discarded: %w", ipc.ErrRefused, entry.ID, err)
 	}
 	return err
@@ -263,7 +263,7 @@ type discardWithdrawn struct {
 }
 
 func (e *discardWithdrawn) Error() string {
-	if errors.Is(e.cause, tasks.ErrRecordNotTheCopys) || errors.Is(e.cause, tasks.ErrAsideStands) {
+	if errors.Is(e.cause, tasks.ErrRecordNotTheCopys) || errors.Is(e.cause, tasks.ErrLayoutUnsupported) || errors.Is(e.cause, tasks.ErrAsideStands) {
 		return fmt.Sprintf("the copy cannot be removed as it stands (%v), so the confirmation was withdrawn, the copy left "+
 			"standing and the entry is open again", e.cause)
 	}
@@ -328,7 +328,7 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 		}
 		return s.store.RecordKeptWorkDiscardRead(ctx, entry.ID, digest, time.Now())
 	})
-	if errors.Is(err, tasks.ErrLossChanged) || errors.Is(err, tasks.ErrRecordNotTheCopys) || errors.Is(err, tasks.ErrAsideStands) {
+	if errors.Is(err, tasks.ErrLossChanged) || errors.Is(err, tasks.ErrRecordNotTheCopys) || errors.Is(err, tasks.ErrLayoutUnsupported) || errors.Is(err, tasks.ErrAsideStands) {
 		open, werr := s.store.WithdrawKeptWorkDiscard(ctx, entry.ID, digest)
 		if werr != nil {
 			return machine.KeptWorkAnswered{}, fmt.Errorf("service: kept work entry %d: the copy changed since its discard was "+
@@ -404,7 +404,7 @@ func (s *Service) putBackKeptWorkOf(ctx context.Context, task string) error {
 			continue
 		}
 		if err := s.putBackDiscard(ctx, entry); err != nil {
-			if errors.Is(err, tasks.ErrAsideStands) || errors.Is(err, tasks.ErrRecordNotTheCopys) {
+			if errors.Is(err, tasks.ErrAsideStands) || errors.Is(err, tasks.ErrRecordNotTheCopys) || errors.Is(err, tasks.ErrLayoutUnsupported) {
 				return fmt.Errorf("%w: task %s was not promoted, since kept work entry %d's copy cannot be read whole: %w",
 					ipc.ErrRefused, task, entry.ID, err)
 			}

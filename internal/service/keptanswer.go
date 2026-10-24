@@ -285,7 +285,7 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 	// What a discard that did not finish set aside is put back first, so
 	// the copy is read whole.
 	if err := s.putBackDiscard(ctx, entry); err != nil {
-		if errors.Is(err, tasks.ErrAsideStands) || errors.Is(err, tasks.ErrRecordNotTheCopys) {
+		if errors.Is(err, tasks.ErrAsideStands) || errors.Is(err, tasks.ErrRecordNotTheCopys) || errors.Is(err, tasks.ErrLayoutUnsupported) {
 			return refuse(err.Error())
 		}
 		return landing{}, err
@@ -297,6 +297,8 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 	case errors.Is(err, tasks.ErrLossUnestablished):
 		return refuse("what its copy holds that the default branch lacks is not established now (" + err.Error() +
 			"), so a landing cannot say what it would leave behind")
+	case errors.Is(err, tasks.ErrLayoutUnsupported):
+		return refuse(err.Error())
 	case err != nil:
 		return landing{}, err
 	}

@@ -62,10 +62,10 @@ import (
 //
 // What it names more than is lost, failing toward showing: a file whose
 // content a commit other than HEAD's holds, a mode git is configured to
-// ignore (core.fileMode), a submodule's working tree,
-// whose commits are another repository's, and a path a sparse checkout
-// leaves out of the working tree, which reads as deleted, are named all
-// the same.
+// ignore (core.fileMode), and a submodule's working tree, whose commits
+// are another repository's, are named all the same. A sparse checkout,
+// whose paths left out would read as deleted, is refused before anything
+// is read (supportedLayout).
 type lostPaths struct {
 	repo    *vcs.Repository
 	format  string

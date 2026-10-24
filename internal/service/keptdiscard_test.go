@@ -1542,3 +1542,54 @@ func TestADiscardThatDidNotFinishIsPutBackBeforeTheCopyIsRead(t *testing.T) {
 		})
 	}
 }
+
+// A run's discard is refused, before anything is read or changed, for a
+// worktree whose layout a discard does not support (round 25): its record
+// in the gate holding a symbolic link, or core.symlinks false. The discard
+// answer is refused naming why, with the worktree, its record and the
+// entry as they were. The positive control is
+// TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead's, the ordinary
+// layout, which discards.
+func TestARunsDiscardRefusesALayoutItDoesNotSupport(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+	for _, c := range []struct{ name, reason string }{
+		{"a symbolic link in its record", "symbolic link"},
+		{"core.symlinks false", "core.symlinks"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHome(t)
+			subject := newSubject(t)
+			recordRepository(t, h, subject)
+			entry := keptEntryOf(t, h, subject)
+			record := git(t, entry.CopyPath, "rev-parse", "--absolute-git-dir")
+			if c.reason == "symbolic link" {
+				if err := os.Symlink(t.TempDir(), filepath.Join(record, "elsewhere")); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				git(t, entry.CopyPath, "config", "core.symlinks", "false")
+			}
+			head := git(t, entry.CopyPath, "rev-parse", "HEAD")
+			withService(t, h, func(under serviceUnderTest) {
+				ctx := t.Context()
+				var shown machine.KeptWorkAnswered
+				err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &shown)
+				if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), c.reason) {
+					t.Fatalf("the discard shown for a worktree with %s = %+v, %v; want it refused naming %q", c.name, shown, err, c.reason)
+				}
+				if now := git(t, entry.CopyPath, "rev-parse", "HEAD"); now != head {
+					t.Fatalf("the worktree's HEAD reads %s after the refusal; want %s", now, head)
+				}
+				if _, err := os.Stat(filepath.Join(record, "HEAD")); err != nil {
+					t.Fatalf("the worktree's record lost its HEAD: %v", err)
+				}
+				if got, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !got.Open() || got.DiscardDigest.IsKnown() {
+					t.Fatalf("the entry reads %+v, %v after the refusal; want it open and unconfirmed", got, err)
+				}
+			})
+		})
+	}
+}

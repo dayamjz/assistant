@@ -668,12 +668,16 @@ as the discard moves that file aside is lost with it. If something was
 written exactly where a file set aside goes back, both are kept: the new
 one in the copy, yours beside it in a directory named after the copy with
 `.discarding` at the end, the refusal names it, and the entry is not shown
-again until you move one of the two out of the way. A task's copy is read
-and discarded only through a `.git` directory of its own: one whose `.git`
-is a link or a file pointing at another repository, whose `.git` names
-another repository's as the one its branches are in, or whose
-configuration names another directory as its working tree, is refused
-when shown or confirmed, and nothing of it or the other is touched. Your
+again until you move one of the two out of the way. A copy is shown,
+discarded or landed only in the one repository layout this supports, and
+anything else is refused naming why, with nothing of it read or changed:
+a task's copy needs a `.git` directory of its own (not a link or a file
+pointing elsewhere) with no `commondir` file and no linked worktree, a
+run's copy the `.git` file git writes for a worktree, and either needs no
+symbolic link anywhere in its repository directory, `core.symlinks` not
+false, no `core.worktree`, no sparse checkout, and its references in files
+rather than a reftable. Land reads the copy the same way and is refused
+the same; put the copy back in that layout to discard or land it. Your
 confirmation is recorded first, with what it was shown and who gave it,
 and the entry stays open and listed until the copy is gone; only then is
 it answered discard. If the service stops in between, the next start

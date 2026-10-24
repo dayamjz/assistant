@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -494,71 +495,152 @@ func TestAReflogGoesBackOnlyWithItsReference(t *testing.T) {
 	}
 }
 
-// A task's clone is read and changed only through a repository directory
-// of its own, round 24's first finding: the clone's .git is replaced by a
-// symbolic link to another clone's .git, or by a file pointing git at it,
-// or keeps its own .git with a commondir file naming the other's or a
-// core.worktree naming the directory the clone stands in, and that other
-// clone holds a branch and reflogs nothing else holds. The
-// preview refuses with ErrRecordNotTheCopys, and so does a discard
-// confirmed on what the preview showed through the redirect, with the other
-// clone's references, HEAD, index and reflogs as they were and the task's
-// directory standing. Before, the discard set the other clone's items
-// aside through the link, moved its HEAD and deleted its branch, and
-// removed only the task's directory.
-func TestADiscardTouchesNoRepositoryButTheClonesOwn(t *testing.T) {
+// A discard reads and changes a task's clone only in the one layout it
+// supports, round 25's direction after rounds 24 and 25 each found another
+// layout the set-aside mishandled: a .git that is a directory of the
+// clone's own with no symbolic link anywhere in it, no commondir file and
+// no linked worktree, core.symlinks true, no core.worktree, no sparse
+// checkout, and references in files. Each layout below is made once the
+// clone is kept: .git a symbolic link to another clone's, or a gitdir file
+// naming it (round 24); a commondir file naming the other's, a
+// core.worktree naming the directory the clone stands in; .git/refs/heads
+// a symbolic link into the other clone, with its objects fetched (round
+// 25's first finding, which deleted the other clone's branch); a changed
+// tracked symbolic link under core.symlinks=false (round 25's second,
+// whose restore could not tell git's checkout from somebody's file); a
+// sparse checkout; a linked worktree; and references in a reftable. Each
+// preview refuses with ErrLayoutUnsupported naming why, and so does a
+// discard on the digest shown before, with the clone and the other clone
+// exactly as they were and nothing set aside. The positive control is the
+// same clone in the ordinary layout, which discards.
+func TestADiscardRefusesALayoutItDoesNotSupport(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
-	for _, how := range []string{"a symbolic link", "a gitdir file", "a commondir file", "a core.worktree setting"} {
-		t.Run(how, func(t *testing.T) {
+	for _, c := range []struct {
+		name, reason string
+		make         func(t *testing.T, copyPath, other string)
+	}{
+		{"the ordinary layout, the positive control", "", nil},
+		{".git a symbolic link", "is not a directory", func(t *testing.T, copyPath, other string) {
+			if err := os.RemoveAll(filepath.Join(copyPath, ".git")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(other, ".git"), filepath.Join(copyPath, ".git")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{".git a gitdir file", "is not a directory", func(t *testing.T, copyPath, other string) {
+			if err := os.RemoveAll(filepath.Join(copyPath, ".git")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(copyPath, ".git"), []byte("gitdir: "+filepath.Join(other, ".git")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a commondir file", "commondir", func(t *testing.T, copyPath, other string) {
+			if err := os.WriteFile(filepath.Join(copyPath, ".git", "commondir"), []byte(filepath.Join(other, ".git")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a core.worktree", "core.worktree", func(t *testing.T, copyPath, _ string) {
+			rawGit(t, copyPath, "config", "core.worktree", filepath.Dir(copyPath))
+		}},
+		{"refs/heads a symbolic link into another clone", "symbolic link", func(t *testing.T, copyPath, other string) {
+			rawGit(t, copyPath, "fetch", "-q", other, "only-here")
+			heads := filepath.Join(copyPath, ".git", "refs", "heads")
+			if err := os.RemoveAll(heads); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(other, ".git", "refs", "heads"), heads); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"core.symlinks false with a tracked link changed", "core.symlinks", func(t *testing.T, copyPath, _ string) {
+			if err := os.Symlink("own.txt", filepath.Join(copyPath, "link")); err != nil {
+				t.Fatal(err)
+			}
+			rawGit(t, copyPath, "add", "link")
+			rawGit(t, copyPath, "commit", "--quiet", "-m", "a link")
+			if err := os.Remove(filepath.Join(copyPath, "link")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("scratch.txt", filepath.Join(copyPath, "link")); err != nil {
+				t.Fatal(err)
+			}
+			rawGit(t, copyPath, "config", "core.symlinks", "false")
+		}},
+		{"a sparse checkout", "sparse", func(t *testing.T, copyPath, _ string) {
+			rawGit(t, copyPath, "sparse-checkout", "set", "--no-cone", "/own.txt")
+		}},
+		{"a linked worktree", "worktree", func(t *testing.T, copyPath, _ string) {
+			rawGit(t, copyPath, "worktree", "add", "--quiet", "--detach", filepath.Join(t.TempDir(), "linked"))
+		}},
+		{"references in a reftable", "reftable", func(t *testing.T, copyPath, _ string) {
+			if out, err := rawGitErr(copyPath, "refs", "migrate", "--ref-format=reftable"); err != nil {
+				t.Skipf("this git cannot move references into a reftable: %v\n%s", err, out)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
 			s, tk, entry, shown := keptWithWork(t)
 			other := filepath.Join(t.TempDir(), "other")
 			rawGit(t, filepath.Dir(other), "clone", "-q", tk.copy, other)
 			rawGit(t, other, "switch", "-q", "-c", "only-here")
 			commit(t, other, "only-here.txt", "the other clone's own work\n", "the other clone's own commit")
-			before := copySnapshot(t, other)
-			if how == "a core.worktree setting" {
-				// The clone's own .git directory stands, and names the
-				// directory the clone stands in as its working tree, which
-				// holds the clone and whatever stands beside it.
-				rawGit(t, tk.copy, "config", "core.worktree", filepath.Dir(tk.copy))
-			} else if how == "a commondir file" {
-				// The clone's own .git directory stands, and names the
-				// other's as the directory its references and objects are in.
-				if err := os.WriteFile(filepath.Join(tk.copy, ".git", "commondir"), []byte(filepath.Join(other, ".git")+"\n"), 0o600); err != nil {
-					t.Fatal(err)
+			if c.make == nil {
+				if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); err != nil {
+					t.Fatalf("Discard of the clone in the ordinary layout: %v", err)
 				}
-			} else if err := os.RemoveAll(filepath.Join(tk.copy, ".git")); err != nil {
-				t.Fatal(err)
-			}
-			if how == "a commondir file" || how == "a core.worktree setting" {
-			} else if how == "a symbolic link" {
-				if err := os.Symlink(filepath.Join(other, ".git"), filepath.Join(tk.copy, ".git")); err != nil {
-					t.Fatal(err)
+				if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("the clone still stands: %v", err)
 				}
-			} else if err := os.WriteFile(filepath.Join(tk.copy, ".git"), []byte("gitdir: "+filepath.Join(other, ".git")+"\n"), 0o600); err != nil {
-				t.Fatal(err)
+				return
 			}
-			// The reviewer's sequence: the discard shown through the
-			// redirect, and that digest confirmed.
+			c.make(t, tk.copy, other)
+			beforeCopy, beforeOther := treeAndGitState(t, tk.copy), copySnapshot(t, other)
+			// The reviewer's sequence: the discard shown in the layout, and
+			// that digest confirmed.
 			digest, lacks := shown.Digest, shown.Lacks
-			if through, err := s.cleaner.Loss(ctx, entry); !errors.Is(err, ErrRecordNotTheCopys) {
-				t.Errorf("the preview of a clone whose .git is %s to another = %v; want ErrRecordNotTheCopys", how, err)
+			if through, err := s.cleaner.Loss(ctx, entry); !errors.Is(err, ErrLayoutUnsupported) || !strings.Contains(err.Error(), c.reason) {
+				t.Errorf("the preview of a clone with %s = %v; want ErrLayoutUnsupported naming %q", c.name, err, c.reason)
 				if err == nil {
 					digest, lacks = through.Digest, through.Lacks
 				}
 			}
-			if _, err := s.cleaner.Discard(ctx, entry, digest, lacks, "", nil); !errors.Is(err, ErrRecordNotTheCopys) {
-				t.Errorf("the discard of a clone whose .git is %s to another = %v; want ErrRecordNotTheCopys", how, err)
+			if _, err := s.cleaner.Discard(ctx, entry, digest, lacks, "", nil); !errors.Is(err, ErrLayoutUnsupported) {
+				t.Errorf("the discard of a clone with %s = %v; want ErrLayoutUnsupported", c.name, err)
 			}
-			if now := copySnapshot(t, other); now != before {
-				t.Fatalf("the other clone reads\n%s\nafter the refusal; want it as it was\n%s", now, before)
+			if err := s.cleaner.PutBack(ctx, entry, ""); err != nil && !errors.Is(err, ErrLayoutUnsupported) {
+				t.Errorf("PutBack of a clone with %s = %v; want nothing to put back or ErrLayoutUnsupported", c.name, err)
 			}
-			if _, err := os.Lstat(tk.copy); err != nil {
-				t.Fatalf("the task's directory is gone: %v", err)
+			if now := treeAndGitState(t, tk.copy); now != beforeCopy {
+				t.Errorf("the clone reads\n%s\nafter the refusal; want it as it was\n%s", now, beforeCopy)
+			}
+			if now := copySnapshot(t, other); now != beforeOther {
+				t.Errorf("the other clone reads\n%s\nafter the refusal; want it as it was\n%s", now, beforeOther)
+			}
+			if _, err := os.Lstat(asideDir(tk.copy)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("something is set aside beside the clone: %v", err)
 			}
 		})
 	}
+}
+
+// treeAndGitState is every entry under copyPath, its .git included, with
+// what it holds, read from the file system alone so a layout git reads
+// strangely is still read as it stands.
+func treeAndGitState(t *testing.T, copyPath string) string {
+	t.Helper()
+	state, err := readCopyState(copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for p, e := range state {
+		lines = append(lines, fmt.Sprintf("%s %v %s", strings.TrimPrefix(p, copyPath), e.mode, e.held))
+	}
+	slices.Sort(lines)
+	return strings.Join(lines, "\n")
 }
 
 // keptLandedHolding is keptLanded for a landed branch that holds each of
@@ -868,5 +950,49 @@ func TestADiscardWritesNoSubmoduleBack(t *testing.T) {
 	}
 	if now := copySnapshot(t, tk.copy); now != before {
 		t.Fatalf("the refused discard left the copy as\n%s\nwant it as it was\n%s", now, before)
+	}
+}
+
+// What a stopped discard set aside is never put back into a layout a
+// discard does not support: a discard of a kept clone stops once it has
+// set its items aside, and the clone's .git/refs/heads is then made a
+// symbolic link into another clone. The next Discard and PutBack each
+// refuse with ErrLayoutUnsupported, leaving what was set aside standing,
+// the clone as it is and the other clone untouched; without the check
+// before the put-back, the restore writes the clone's branch back through
+// the link into the other clone.
+func TestAStoppedDiscardIsNotPutBackIntoALayoutItDoesNotSupport(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s, tk, entry, shown := keptWithWork(t)
+	s.cleaner.betweenAsideAndCheck = func() error { return errStoppedAside }
+	if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, errStoppedAside) {
+		t.Fatalf("the stopped discard = %v; want it stopped", err)
+	}
+	s.cleaner.betweenAsideAndCheck = nil
+	other := filepath.Join(t.TempDir(), "other")
+	rawGit(t, filepath.Dir(other), "clone", "-q", s.upstream, other)
+	heads := filepath.Join(tk.copy, ".git", "refs", "heads")
+	if err := os.RemoveAll(heads); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(other, ".git", "refs", "heads"), heads); err != nil {
+		t.Fatal(err)
+	}
+	beforeCopy, beforeOther, beforeAside := treeAndGitState(t, tk.copy), treeAndGitState(t, other), treeAndGitState(t, asideDir(tk.copy))
+	if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, ErrLayoutUnsupported) {
+		t.Errorf("Discard with refs/heads a link into another clone = %v; want ErrLayoutUnsupported", err)
+	}
+	if err := s.cleaner.PutBack(ctx, entry, ""); !errors.Is(err, ErrLayoutUnsupported) {
+		t.Errorf("PutBack with refs/heads a link into another clone = %v; want ErrLayoutUnsupported", err)
+	}
+	if now := treeAndGitState(t, tk.copy); now != beforeCopy {
+		t.Errorf("the clone reads\n%s\nwant it as it was\n%s", now, beforeCopy)
+	}
+	if now := treeAndGitState(t, other); now != beforeOther {
+		t.Errorf("the other clone reads\n%s\nwant it as it was\n%s", now, beforeOther)
+	}
+	if now := treeAndGitState(t, asideDir(tk.copy)); now != beforeAside {
+		t.Errorf("what was set aside reads\n%s\nwant it as it was\n%s", now, beforeAside)
 	}
 }

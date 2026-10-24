@@ -296,3 +296,59 @@ func TestGitPathNamesWhatAWorktreeKeepsOfItsOwn(t *testing.T) {
 		}
 	}
 }
+
+// Configuration is read as git reads it, and the repository directory as
+// git names it: ConfigBool reports a key unset as unset, reads git's
+// spellings of a boolean ("yes", "off") as git does, and refuses a value
+// git does not read as one; ConfigValue reports the last of several values
+// set, as git uses; GitDir names a main working copy's .git and a linked
+// worktree's own directory in its repository.
+func TestConfigAndTheRepositoryDirectoryAreReadAsGitReadsThem(t *testing.T) {
+	repo, dir, linked, _, _ := asideSubject(t)
+	c := ctx(t)
+	if value, set, err := repo.ConfigBool(c, "core.sparseCheckout"); err != nil || set || value {
+		t.Fatalf("ConfigBool of an unset key = %v, %v, %v; want unset", value, set, err)
+	}
+	rawGit(t, dir, "config", "core.sparseCheckout", "yes")
+	if value, set, err := repo.ConfigBool(c, "core.sparseCheckout"); err != nil || !set || !value {
+		t.Fatalf("ConfigBool of yes = %v, %v, %v; want set and true", value, set, err)
+	}
+	rawGit(t, dir, "config", "core.sparseCheckout", "off")
+	if value, set, err := repo.ConfigBool(c, "core.sparseCheckout"); err != nil || !set || value {
+		t.Fatalf("ConfigBool of off = %v, %v, %v; want set and false", value, set, err)
+	}
+	rawGit(t, dir, "config", "core.sparseCheckout", "sometimes")
+	var cmdErr *vcs.CommandError
+	if _, _, err := repo.ConfigBool(c, "core.sparseCheckout"); !errors.As(err, &cmdErr) {
+		t.Fatalf("ConfigBool of a value that is no boolean = %v; want a *CommandError", err)
+	}
+	rawGit(t, dir, "config", "--unset", "core.sparseCheckout")
+	rawGit(t, dir, "config", "--add", "x.y", "first")
+	rawGit(t, dir, "config", "--add", "x.y", "last")
+	if value, set, err := repo.ConfigValue(c, "x.y"); err != nil || !set || value != "last" {
+		t.Fatalf("ConfigValue of a key set twice = %q, %v, %v; want the last, set", value, set, err)
+	}
+	if _, set, err := repo.ConfigValue(c, "x.unset"); err != nil || set {
+		t.Fatalf("ConfigValue of an unset key = %v, %v; want unset", set, err)
+	}
+	wt, err := vcs.OpenWorktree(c, linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	common, err := filepath.EvalSymlinks(filepath.Join(dir, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []struct {
+		repo *vcs.Repository
+		want string
+	}{{repo, common}, {wt, filepath.Join(common, "worktrees", "linked")}} {
+		got, err := w.repo.GitDir(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved, err := filepath.EvalSymlinks(got); err != nil || resolved != w.want {
+			t.Fatalf("GitDir = %s (%s, %v); want %s", got, resolved, err, w.want)
+		}
+	}
+}
