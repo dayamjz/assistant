@@ -22,6 +22,11 @@ What it reads, and from where:
   (a build failure, a panic outside a test, or a per-package leak). A
   failure the output stopped after, before its package's result line (a
   cancel during the print), is counted under the package "(output cut off)".
+  The package's own lines are told apart from output a test logged by
+  where they start: go test -v prints === RUN and a test's --- FAIL at
+  column 0, and t.Log indents what it logs. Output a test writes to stdout
+  itself, unindented, cannot be told apart in text; go test -json can
+  (#601).
 - The leak check's leftovers, from the same group: `LEAK package=...` is a
   per-package leak, a `LEAK` line without `package=` a whole-run leftover.
   The self-test's planted leftovers print outside the group and are not
@@ -208,6 +213,7 @@ class LogParser:
         self.records = []
         # Per Go package block, reset at each ok/FAIL package line.
         self.failed_tops, self.failed_subs = set(), set()
+        self.ran = set()  # tests and subtests this package's own === RUN lines named
         self.first = {}  # top-level test -> the first message logged under it
         self.messages = {}
         self.context = ""
@@ -282,7 +288,10 @@ class LogParser:
             self.reading_running = False
         context = GO_CONTEXT.match(line)
         if context:
+            # At column 0, so the package's own: a test's logged output is
+            # indented by t.Log.
             self.context = context.group(1)
+            self.ran.add(context.group(1))
             return
         message = GO_MESSAGE.match(line)
         if message and self.context and self.context not in self.messages \
@@ -355,6 +364,7 @@ class LogParser:
         if verdict == "FAIL":
             self._fail_package(package, suffix)
         self.failed_tops, self.failed_subs, self.first = set(), set(), {}
+        self.ran = set()
         self.messages = {}
         self.context = ""
         self.block_leaks = []
@@ -366,10 +376,11 @@ class LogParser:
         before = len(self.records)
         running = self.timeout[1] if self.timeout else []
         running_tops = {t.split("/", 1)[0] for t in running}
-        # A failed subtest names its test even when the test's own --- FAIL
-        # line never printed (go test -v prints it first, but output can be
-        # cut anywhere).
-        sub_tops = {s.split("/", 1)[0] for s in self.failed_subs}
+        # A failed subtest this package ran names its test even when the
+        # test's own --- FAIL line never printed (go test -v prints it first,
+        # but output can be cut anywhere). One it never ran is output a test
+        # logged, such as a fixture's own go test, and names nothing.
+        sub_tops = {s.split("/", 1)[0] for s in self.failed_subs if s in self.ran}
         for top in sorted(self.failed_tops | running_tops | sub_tops):
             subtests = [s for s in self.failed_subs | set(running) if s.startswith(top + "/")]
             if top in running_tops:

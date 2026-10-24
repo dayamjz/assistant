@@ -110,9 +110,11 @@ func TestParent(t *testing.T) {
 	t.Run("sub a", func(t *testing.T) { t.Fatal("sub a broke") })
 	t.Run("sub b", func(t *testing.T) {})
 }
-// A test may log another go test's output. Indented, it is not this package's.
+// A test may log another go test's output, a failing subtest included.
+// Indented by t.Log, it is not this package's.
 func TestLogsAFixturesOutput(t *testing.T) {
-	t.Log("fixture output:\\n--- FAIL: TestFixture (0.00s)\\nFAIL\\tgithub.com/x/y\\t0.1s")
+	t.Log("fixture output:\\n=== RUN   TestFixture/child\\n    --- FAIL: TestFixture/child (0.00s)\\n" +
+		"--- FAIL: TestFixture (0.00s)\\nFAIL\\tgithub.com/x/y\\t0.1s")
 }
 """,
     "timeout/timeout_test.go": """package timeout
