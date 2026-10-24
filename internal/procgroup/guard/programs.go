@@ -1,12 +1,10 @@
 package guard
 
 import (
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/constant"
 	"go/types"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -82,30 +80,12 @@ func LoadWrites(root string, patterns ...string) ([]Write, error) {
 		line, col int
 	}
 	merged := map[key]*Write{}
-	for _, goos := range WritePlatforms {
-		cfg := &packages.Config{
-			Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
-				packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
-			Dir:   abs,
-			Env:   append(os.Environ(), "GOOS="+goos, "GOWORK=off"),
-			Tests: true,
-		}
-		pkgs, err := packages.Load(cfg, patterns...)
-		if err != nil {
-			return nil, fmt.Errorf("guard: loading for %s: %w", goos, err)
-		}
-		if len(pkgs) == 0 {
-			return nil, fmt.Errorf("guard: loading for %s matched no package", goos)
-		}
-		var errs []error
-		for _, p := range pkgs {
-			for _, e := range p.Errors {
-				errs = append(errs, fmt.Errorf("guard: %s for %s: %w", p.PkgPath, goos, e))
-			}
-		}
-		if len(errs) > 0 {
-			return nil, errors.Join(errs...)
-		}
+	loaded, err := typeCheckEach(abs, WritePlatforms, true, patterns)
+	if err != nil {
+		return nil, err
+	}
+	for i, goos := range WritePlatforms {
+		pkgs := loaded[i]
 		for _, p := range pkgs {
 			for _, w := range writes(p) {
 				rel, err := filepath.Rel(abs, w.File)
