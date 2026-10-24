@@ -21,6 +21,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -492,7 +493,7 @@ func TestDoctorReportsTheCodeHostAndDoesNotBlockOnIt(t *testing.T) {
 	// contract is that the command resolves to something this process may
 	// execute, not that it answers as a provider.
 	planted := filepath.Join(bin, "gh")
-	if err := os.WriteFile(planted, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := procgroup.WriteProgram(planted, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("planting a provider command line: %v", err)
 	}
 	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
@@ -638,7 +639,7 @@ func agentPATH(t *testing.T, names ...string) string {
 	}
 	script := []byte("#!/bin/sh\nexit 0\n")
 	for _, name := range names {
-		if err := os.WriteFile(filepath.Join(bin, name), script, 0o755); err != nil {
+		if err := procgroup.WriteProgram(filepath.Join(bin, name), script, 0o755); err != nil {
 			t.Fatalf("planting %s: %v", name, err)
 		}
 	}
@@ -1678,7 +1679,7 @@ func TestDoctorSeparatesANamedOnlyRunnableAgentFromTheAutoEligibleOne(t *testing
 
 	plant := func(name string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		if err := procgroup.WriteProgram(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 			t.Fatalf("planting %s: %v", name, err)
 		}
 	}
@@ -1735,7 +1736,7 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 	}
 	plant := func(name string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		if err := procgroup.WriteProgram(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 			t.Fatalf("planting %s: %v", name, err)
 		}
 	}
@@ -1767,7 +1768,7 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 	if err := os.Symlink(realGit, filepath.Join(noTmux, "git")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(noTmux, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := procgroup.WriteProgram(filepath.Join(noTmux, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", noTmux)

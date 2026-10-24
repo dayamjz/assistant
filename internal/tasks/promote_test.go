@@ -17,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -93,6 +94,8 @@ func newPromotionSubject(t *testing.T) *promotionSubject {
 	}
 	rawGit(t, primary, "push", "-q", gatePath, "main:main")
 
+	// Seeded for time alone, as internal/store/storetest's comment says.
+	storetest.Seed(t, h.Database())
 	s, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)

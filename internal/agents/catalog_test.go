@@ -2,7 +2,6 @@ package agents_test
 
 import (
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // The catalog option is only worth having if it reaches every adapter the
@@ -73,19 +73,11 @@ func installStandinAs(t *testing.T, dir, name string) {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	src, err := os.Open(self)
+	content, err := os.ReadFile(self)
 	if err != nil {
-		t.Fatalf("opening the test binary: %v", err)
+		t.Fatalf("reading the test binary: %v", err)
 	}
-	defer src.Close()
-	dst, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-	if err != nil {
-		t.Fatalf("installing the stand-in as %s: %v", name, err)
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		t.Fatalf("installing the stand-in as %s: %v", name, err)
-	}
-	if err := dst.Close(); err != nil {
+	if err := procgroup.WriteProgram(filepath.Join(dir, name), content, 0o755); err != nil {
 		t.Fatalf("installing the stand-in as %s: %v", name, err)
 	}
 }

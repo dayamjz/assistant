@@ -450,8 +450,9 @@ func (g *Graph) recordsFingerprint(i int) bool { return g.back[i] || g.leavesHal
 
 // comparesFingerprint reports whether a traversal of edge i is compared with
 // the one before it, given whether the latest answer the run took was
-// unattended. That is the convergence check's whole rule, and two of its
-// three cases exist only for an unattended answer.
+// unattended. That is the convergence check's whole rule for comparing, and
+// two of its three cases exist only for an unattended answer; restartedBy
+// says when a person's answer empties what a comparison would read.
 //
 // A back edge not marked Edge.Answered is always compared. An Answered back
 // edge is compared after an unattended answer, measuring the round it closes
@@ -473,6 +474,48 @@ func (g *Graph) comparesFingerprint(i int, unattended bool) bool {
 	default:
 		return g.recordsFingerprint(i)
 	}
+}
+
+// restartedBy returns the back edges whose convergence measure a traversal of
+// edge i starts afresh when it follows a person's answer, which is the whole
+// of that rule: none unless i is marked Edge.Answered, and otherwise every
+// back edge into the node i enters that is not itself Answered, does not
+// leave a halt point, and leaves a node entered from that node and from
+// nowhere else, a round the node runs for itself. An edge leaving a halt
+// point is where an answer sends the run on rather than where a round
+// closes, so it keeps its measure. checkEdgeBounds applies the rule only
+// after an attended answer.
+func (g *Graph) restartedBy(i int) []int {
+	if !g.edges[i].Answered {
+		return nil
+	}
+	into := g.edges[i].To
+	var out []int
+	for j, e := range g.edges {
+		if g.back[j] && !e.Answered && !g.leavesHalt(j) && e.To == into && g.enteredOnlyFrom(e.From, into) {
+			out = append(out, j)
+		}
+	}
+	return out
+}
+
+// enteredOnlyFrom reports whether every edge entering node leaves from.
+//
+// restartedBy asks it only of the node a back edge into from leaves, and the
+// run's own entry into the start node, which no edge records, needs no case
+// there. A back edge never leads farther from the start node than it leaves,
+// so one leaving the start node is a loop on it, and from is then the start
+// node too. The Answered edge into from then leaves some other node, because
+// checkAnswered refuses an Answered edge leaving the start node, so the start
+// node is never entered only from itself. Every other node a run can reach is
+// entered by an edge, and an unreachable node fails to build.
+func (g *Graph) enteredOnlyFrom(node, from string) bool {
+	for _, e := range g.edges {
+		if e.To == node && e.From != from {
+			return false
+		}
+	}
+	return true
 }
 
 // convergedReason is what a convergence park on edge i says, which is the

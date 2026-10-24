@@ -68,8 +68,8 @@ paths: ["internal/store/**"]
   attempts recorded a session (a claim alone proves no worker started),
   whose project has an open entry; the dispatch claims
   (`BeginFirstTaskAttempt`, and `BeginDispatchAttempt` for a retried
-  dispatch) and `ClaimAttemptLaunch` (the last write before a worker starts) refuse
-  it with `*DispatchHeldError` in their own transactions, and
+  dispatch) and `ClaimAttemptLaunch` (the last write before a worker starts)
+  refuse it with `*DispatchHeldError` in their own transactions, and
   `BeginTaskAttempt`, the relaunch claim, is never held. Every answer is
   two facts, so an entry closes only in the write that records its
   outcome and an answer under way leaves it open and listed. keptWorkLandingMigration

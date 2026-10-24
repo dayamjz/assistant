@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -729,6 +730,20 @@ func withService(t *testing.T, h *home.Home, body func(serviceUnderTest)) {
 // from options rather than from scratch.
 func withServiceOptions(t *testing.T, o service.Options, body func(serviceUnderTest)) {
 	t.Helper()
+	running, closeService := openService(t, o)
+	defer closeService()
+	body(running)
+}
+
+// openService opens a service over o, serves it, and dials it, as
+// withServiceOptions does, for a test that has to close one and open the
+// next itself; the function it returns closes the connection and the
+// service, and is called before the next service over the same home opens.
+// Only its first call does that; a later one returns at once, so a caller
+// that defers the closer it holds, and fails on a reopen before replacing
+// it, does not wait forever on a service it already closed.
+func openService(t *testing.T, o service.Options) (serviceUnderTest, func()) {
+	t.Helper()
 	running, err := service.Open(t.Context(), o)
 	if err != nil {
 		requiresLocalSocket(t, err)
@@ -743,8 +758,9 @@ func withServiceOptions(t *testing.T, o service.Options, body func(serviceUnderT
 		<-served
 		t.Fatalf("dialing %s: %v", running.Socket(), dialErr)
 	}
-	func() {
-		defer func() {
+	var once sync.Once
+	return serviceUnderTest{service: running, client: client}, func() {
+		once.Do(func() {
 			_ = client.Close()
 			if err := running.Close(); err != nil {
 				t.Errorf("closing the service: %v", err)
@@ -752,9 +768,8 @@ func withServiceOptions(t *testing.T, o service.Options, body func(serviceUnderT
 			if err := <-served; err != nil {
 				t.Errorf("serving: %v", err)
 			}
-		}()
-		body(serviceUnderTest{service: running, client: client})
-	}()
+		})
+	}
 }
 
 // serviceWithClient opens a service the test closes itself, for a test whose

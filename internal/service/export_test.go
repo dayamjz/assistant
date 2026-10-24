@@ -130,6 +130,14 @@ func (s *Service) DispatchDueForTest(ctx context.Context) {
 	s.dispatchDue(ctx)
 }
 
+// WithAfterMergeReadPassForTest returns o with the seam after each pass of
+// mergeread.go's read for merges a person made set to f, for this package's
+// external tests: f first runs once the pass Open starts has returned.
+func WithAfterMergeReadPassForTest(o Options, f func()) Options {
+	o.afterMergeReadPass = f
+	return o
+}
+
 // ReadPersonMergesForTest runs one pass of mergeread.go's read for merges a
 // person made, readPersonMerges, for this package's external tests, which
 // use it to read a merge they scripted the code host to report without

@@ -327,9 +327,8 @@ func TestADirectoryDoesNotSweepItsSlashUnderscoreTwin(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	mod := namespaceProbeModule(t)
 	bins := t.TempDir()
-	writeNamespaceProbe(t, mod)
-	under := buildNamespaceProbe(t, mod, "review488probe/a_b", filepath.Join(bins, "under.bin"), false)
-	slash := buildNamespaceProbe(t, mod, "review488probe/a/b", filepath.Join(bins, "slash.bin"), false)
+	under := buildNamespaceProbe(t, mod, "a_b", filepath.Join(bins, "under.bin"), false)
+	slash := buildNamespaceProbe(t, mod, "a/b", filepath.Join(bins, "slash.bin"), false)
 
 	cmd := exec.Command(under, "create", "stay")
 	stdout, err := cmd.StdoutPipe()
@@ -378,12 +377,11 @@ func TestTrimpathRegistersWithoutTheSourceTree(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	mod := namespaceProbeModule(t)
 	bins := t.TempDir()
-	writeNamespaceProbe(t, mod)
-	plain := buildNamespaceProbe(t, mod, "review488probe/a_b", filepath.Join(bins, "plain.bin"), false)
-	trim := buildNamespaceProbe(t, mod, "review488probe/a_b", filepath.Join(bins, "trim.bin"), true)
+	plain := buildNamespaceProbe(t, mod, "a_b", filepath.Join(bins, "plain.bin"), false)
+	trim := buildNamespaceProbe(t, mod, "a_b", filepath.Join(bins, "trim.bin"), true)
 
 	cmd := exec.Command(trim, "create")
-	cmd.Dir = filepath.Join(mod, "review488probe", "a_b")
+	cmd.Dir = filepath.Join(mod, "a_b")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("trimpath from the package directory: %v\n%s", err, out)
@@ -396,27 +394,81 @@ func TestTrimpathRegistersWithoutTheSourceTree(t *testing.T) {
 	}
 }
 
-// namespaceProbeModule is the module that contains this test. go test sets
-// the working directory to the package directory, so the walk starts there.
-// The path recorded in the binary is not used: under -trimpath that path is
-// the import path, and walking it does not find go.mod.
+// namespaceProbeModule writes the probe, a module of its own named
+// namespaceProbePath with the packages a_b and a/b, into a temporary
+// directory, and returns that directory. It is never written into this
+// checkout: another package loading ./... while these tests ran read it
+// there and failed when it was removed under the load (#584), and a test
+// does not write into the tree it tests. The probe imports this package
+// through a Go workspace, go.work beside its go.mod, that also uses the
+// module containing this test, which go test makes the working directory's.
 func namespaceProbeModule(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	mod, err := moduleRootFrom(wd)
+	checkout, err := moduleRootFrom(wd)
 	if err != nil {
 		t.Fatal(err)
 	}
+	version, err := goDirectives(filepath.Join(checkout, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Resolved, because go compares the directory it is run in, with every
+	// link followed, against the workspace's own.
+	mod, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"go.mod":  "module " + namespaceProbePath + "\n\n" + version,
+		"go.work": version + "\nuse (\n\t.\n\t" + strconv.Quote(checkout) + "\n)\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(mod, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeNamespaceProbe(t, mod)
 	return mod
 }
 
+// namespaceProbePath is the probe module's path, which a -trimpath build
+// records in place of the directory its sources are in. It is named under
+// this repository's module path, though it is a module of its own outside
+// the checkout, because Go lets only an import path under that one import
+// this package, which is internal.
+const namespaceProbePath = "github.com/dayamjz/assistant/review488probe"
+
+// goDirectives is the go line of the go.mod at path, and its toolchain line
+// when it has one, each ending in a newline, so the probe builds with the
+// toolchain this module's own build selects.
+func goDirectives(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var goLine, toolchain string
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "go "):
+			goLine = line + "\n"
+		case strings.HasPrefix(line, "toolchain "):
+			toolchain = line + "\n"
+		}
+	}
+	if goLine == "" {
+		return "", fmt.Errorf("%s has no go line", path)
+	}
+	return goLine + toolchain, nil
+}
+
+// writeNamespaceProbe writes the probe's two packages into the module at mod.
 func writeNamespaceProbe(t *testing.T, mod string) {
 	t.Helper()
-	root := filepath.Join(mod, "review488probe")
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	src := []byte(`package main
 
 import (
@@ -457,7 +509,7 @@ func main() {
 }
 `)
 	for _, rel := range []string{"a_b/main.go", "a/b/main.go"} {
-		path := filepath.Join(root, filepath.FromSlash(rel))
+		path := filepath.Join(mod, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -467,16 +519,21 @@ func main() {
 	}
 }
 
+// buildNamespaceProbe builds the probe's package pkg from the module at root
+// into out, through that module's workspace. It passes -mod=readonly, the
+// workspace default, because workspace mode refuses -mod=mod, and a flag on
+// the command line overrides what GOFLAGS says, from the environment or the
+// go env file, so the build does not depend on the caller's setting (#593).
 func buildNamespaceProbe(t *testing.T, root, pkg, out string, trimpath bool) string {
 	t.Helper()
-	args := []string{"build", "-o", out}
+	args := []string{"build", "-mod=readonly", "-o", out}
 	if trimpath {
 		args = append(args, "-trimpath")
 	}
 	args = append(args, "./"+pkg)
 	cmd := exec.Command("go", args...)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "GOMAXPROCS=4")
+	cmd.Env = append(os.Environ(), "GOMAXPROCS=4", "GOWORK="+filepath.Join(root, "go.work"))
 	if outb, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build %s: %v\n%s", pkg, err, outb)
 	}

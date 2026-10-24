@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/forge"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // The probe answers with the executable the host's adapters would run, so a
@@ -65,7 +66,7 @@ func TestProbeEstablishesResolutionAndNotAStart(t *testing.T) {
 		name = "gh.exe"
 	}
 	planted := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(planted, []byte("not a program\n"), 0o755); err != nil {
+	if err := procgroup.WriteProgram(planted, []byte("not a program\n"), 0o755); err != nil {
 		t.Fatalf("planting an executable that is no program: %v", err)
 	}
 	host := forge.NewGitHubHost(testRedactor, forge.WithBinary(planted))

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -38,7 +39,7 @@ func armableGit(t *testing.T) (binary string, arm func(), recorded func() []int)
 		"  exec sleep 600\n" +
 		"fi\n" +
 		"exec '" + real + "' \"$@\"\n"
-	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+	if err := procgroup.WriteProgram(binary, []byte(script), 0o700); err != nil {
 		t.Fatalf("writing the armable git: %v", err)
 	}
 	arm = func() {

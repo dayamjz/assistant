@@ -4,7 +4,6 @@ package cli_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,8 +15,10 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // A service a test starts through the surface is this binary, launched by the
@@ -94,8 +95,14 @@ func endServicesOf(t *testing.T, h *home.Home) {
 // home's processes only, so the tests running beside it are not touched. It
 // is asked of a home whose root has a space in it too, which a command line
 // split on white space would not have matched.
+//
+// Its subject is the check and the cleanup, not how soon a start's service
+// answers, so the start waits for that answer through
+// cli.AwaitReadinessUntilTheTestsDeadline: a race-built service on a slow
+// runner answered after the start's bound had run out (#543).
 func TestAServiceATestLeavesUpIsReportedAndItsHomesCleanupEndsIt(t *testing.T) {
 	requiresIdentifiedPeer(t)
+	cli.AwaitReadinessUntilTheTestsDeadline(t)
 	for _, c := range []struct{ name, pattern string }{
 		{"a plain root", "h"},
 		{"a root with a space", "h s"},
@@ -128,6 +135,11 @@ func TestAServiceATestLeavesUpIsReportedAndItsHomesCleanupEndsIt(t *testing.T) {
 // is reported as still running past a grace, and is gone once ended. A
 // listing split on white space would not have seen it, and the check would
 // have passed with it running.
+//
+// The copy is waited on until it answers or exits, bounded by the test's
+// own deadline rather than a fixed one: its subject is the check, and a
+// race-built service on a slow runner took 12.84s of the 30s this wait once
+// had (#543).
 func TestTheCheckReportsALiveProcessOfABinaryWhosePathHasASpace(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	self, err := os.Executable()
@@ -144,15 +156,15 @@ func TestTheCheckReportsALiveProcessOfABinaryWhosePathHasASpace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(copied, content, 0o755); err != nil {
+	if err := procgroup.WriteProgram(copied, content, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	h := newHomeNamed(t, "h s")
 
-	served, err := startCopied(func() *exec.Cmd {
+	served, err := standin.StartCopied(func() (*exec.Cmd, error) {
 		cmd := exec.Command(copied, "--home", h.Root(), "service", "start", "--foreground")
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-		return cmd
+		return cmd, cmd.Start()
 	})
 	if err != nil {
 		t.Fatalf("starting the copy: %v", err)
@@ -167,10 +179,15 @@ func TestTheCheckReportsALiveProcessOfABinaryWhosePathHasASpace(t *testing.T) {
 			<-exited
 		}
 	})
-	deadline := time.Now().Add(30 * time.Second)
+	deadline, bounded := t.Deadline()
 	for instanceOf(t, h) == "" {
-		if !time.Now().Before(deadline) {
-			t.Fatal("the copy never answered")
+		select {
+		case <-exited:
+			t.Fatalf("the copy exited before it answered; its log is at %s", h.ServiceLog())
+		default:
+		}
+		if bounded && !time.Now().Before(deadline) {
+			t.Fatal("the copy never answered within the test's deadline")
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -265,24 +282,5 @@ func TestAServiceWhoseOwnerIsGoneEndsItself(t *testing.T) {
 	case <-exited:
 	case <-time.After(bound):
 		t.Fatalf("the service was still running %v after its owner was killed", bound)
-	}
-}
-
-// startCopied starts the command build returns, whose binary this process
-// has just written, and builds and starts it again while the start is
-// refused with ETXTBSY. On Linux a write descriptor to the copy can be held
-// for a moment by a child that another parallel test forked while the copy
-// was open (Go issue 22315), and exec refuses a binary open for writing. The
-// retry is bounded at five seconds; any other error, or ETXTBSY past the
-// bound, is returned unchanged.
-func startCopied(build func() *exec.Cmd) (*exec.Cmd, error) {
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		cmd := build()
-		err := cmd.Start()
-		if err == nil || !errors.Is(err, syscall.ETXTBSY) || !time.Now().Before(deadline) {
-			return cmd, err
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }

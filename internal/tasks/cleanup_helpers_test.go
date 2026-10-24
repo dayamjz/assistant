@@ -14,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -85,6 +86,8 @@ func newCleanupSubject(t *testing.T, script forgetest.Script) *cleanupSubject {
 	if err := h.Create(); err != nil {
 		t.Fatalf("home.Create: %v", err)
 	}
+	// Seeded for time alone, as internal/store/storetest's comment says.
+	storetest.Seed(t, h.Database())
 	s, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)

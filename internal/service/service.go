@@ -249,6 +249,11 @@ type Options struct {
 	// product never does. It is here rather than only on the Service because
 	// Open builds the queue that runs it.
 	afterIntakeBranchRelease func()
+	// afterMergeReadPass is the Service field of the same name, which
+	// export_test.go's WithAfterMergeReadPassForTest sets and the product
+	// never does. It is here rather than only on the Service because Open
+	// starts the pass that runs it.
+	afterMergeReadPass func()
 	// sweepCopy is the Service field of the same name, set before recovery
 	// runs. It is here rather than only on the Service because recovery
 	// sweeps finished runs' copies inside Open, so a test that records what
@@ -484,6 +489,11 @@ type Service struct {
 	// half of keptdiscard.go's one carrier of a confirmation. It is read
 	// and written under mu.
 	discards map[string]bool
+	// betweenTrustedFetchAndResolve runs in fetchTrusted after the default
+	// branch has been fetched under ref and before ref is resolved. It is nil
+	// in production and set only by this package's tests, which use it to
+	// hold one reader of a trusted copy there while another reads its own.
+	betweenTrustedFetchAndResolve func(ref string)
 	// beforeRefusalEnd runs in endRefused, after begin refused a run and
 	// before the run is ended. It is nil in production and set only by this
 	// package's tests, which use it to hold the run pending while they
@@ -500,12 +510,37 @@ type Service struct {
 	// this package's tests, which use it to run a dispatch pass at that
 	// moment.
 	afterIntakeBranchRelease func()
+	// afterMergeReadPass runs on mergeread.go's goroutine after each pass of
+	// the read for merges a person made, the first of which Open starts. It
+	// is nil in production and set only by this package's tests, which use
+	// it to start a run only once the opening pass is over, so that pass
+	// cannot read the run's pull request (#595).
+	afterMergeReadPass func()
 	// afterConsentRegistered runs in underStandingConsent once
 	// writeConsentAnswer has registered a standing-consent hold and before
 	// the answer is given. It is nil in production and set only by this
 	// package's tests, which use it to look at the stream at the point a
 	// service that stopped there would have left it.
 	afterConsentRegistered func()
+	// beforeSessionRecord runs in launchTask once the session is held
+	// pending and immediately before the store write that records the
+	// attempt's session reference, outside mu, with the task and the
+	// reference. It is nil in production and set only by this package's
+	// tests, which use it to make that write wait on a held store or to read
+	// the service while the session is pending.
+	beforeSessionRecord func(id, ref string)
+	// afterSessionRecorded runs in launchTask once the store write that
+	// records the attempt's session reference has succeeded and before the
+	// pending mark is settled, outside mu, with the task and the reference.
+	// It is nil in production and set only by this package's tests, which
+	// use it to hold a launch at the point the record names a session still
+	// pending.
+	afterSessionRecorded func(id, ref string)
+	// awaitingSessionRecord runs in sessionOf when the session it found is
+	// still pending, just before it waits for the record's write, with the
+	// task. It is nil in production and set only by this package's tests,
+	// which use it to know a reader is waiting rather than guess.
+	awaitingSessionRecord func(id string)
 	// sweepCopy stands in for the sweep this service asks of a copy: the
 	// one relaunch.go and dispatch.go ask of a task's standing copy, and the
 	// one runsweep.go asks of a finished run's. It is nil in production,
@@ -723,6 +758,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		beforeStaleRemovalRelease: o.beforeStaleRemovalRelease,
 		landedSpacing:             landedSpacingOf(o.cleanupAskSpacing),
 		afterIntakeBranchRelease:  o.afterIntakeBranchRelease,
+		afterMergeReadPass:        o.afterMergeReadPass,
 		isolated:                  make(map[string]tasks.Isolation),
 		claiming:                  make(map[string]bool),
 		launched:                  make(map[string]launchedWorker),

@@ -3,7 +3,6 @@
 package service
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // A process a test has a shell hold until it is released is
@@ -175,7 +175,12 @@ func TestHeldShellChild(t *testing.T) {
 	} else {
 		_, id = heldShell(t, worker, dir)
 	}
-	line := strconv.Itoa(id.PID) + " " + strconv.FormatUint(id.Start, 10) + "\n"
+	sweep, ok := standin.OwnerSweep()
+	if !ok {
+		t.Fatal("this child test binary started no owner sweep, so the test that started it has none to wait for")
+	}
+	line := strconv.Itoa(id.PID) + " " + strconv.FormatUint(id.Start, 10) + " " +
+		strconv.Itoa(sweep.PID) + " " + strconv.FormatUint(sweep.Start, 10) + "\n"
 	if err := os.WriteFile(record+".tmp", []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -211,24 +216,43 @@ func (o *lockedOutput) String() string {
 
 // heldChildRun is a child test binary heldChild started: the command, closed
 // exited once it has been waited for, with its error then in err, its
-// output, and the identity of the held process it recorded.
+// output, and the identities it recorded of its held process and of the
+// owner sweep its RunOwned started (standin.OwnerSweep).
 type heldChildRun struct {
 	cmd    *exec.Cmd
 	exited chan struct{}
 	err    error
 	out    *lockedOutput
 	held   agents.Identity
+	sweep  agents.Identity
 }
+
+// sweepWait bounds how long heldChild's cleanup waits for a child's owner
+// sweep once the child has exited: the sweep notices within
+// standin.OwnerPoll and ends what it finds within a few rounds of
+// standin.EndGrace, so one still running past this has stopped working.
+const sweepWait = 60 * time.Second
 
 // heldChild runs TestHeldShellChild in mode as a test binary of its own,
 // with extra arguments, and returns once the child has recorded its held
-// process. The child is a copy of this binary, so the check its RunOwned
+// process and its owner sweep, which its cleanup waits for once the child
+// has exited. The child is a copy of this binary, so the check its RunOwned
 // runs lists the processes of the copy alone, never those of this run's
 // other tests, which it would otherwise report and end. It shares this
 // process's group, the foreground of the terminal AtTerminal gave it, so
 // it runs its tests itself rather than running itself again, and it is its
 // own owner (RunOwned). The child and the held process are killed in
 // cleanup if they are still running.
+//
+// A child that is killed or times out runs none of its cleanup, and before
+// #454 its TestMain's gitconfig directory and its test's TempDir outlived
+// the whole run. Two cleanups take them, each registered before the one that
+// kills and waits for the child, so each runs after the child has exited:
+// the child's TMPDIR is a directory inside this test's own, whose removal
+// takes what the child made there, its tests' TempDir among them; and what
+// the child made with standin.TempDir, its TestMain's gitconfig directory
+// among them, is in /tmp whatever TMPDIR says, so standin.SweepTempDirs
+// reclaims it once its owner, the child, is gone.
 func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 	t.Helper()
 	self, err := os.Executable()
@@ -236,66 +260,96 @@ func heldChild(t *testing.T, mode string, extra ...string) *heldChildRun {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
+	childTemp := filepath.Join(dir, "tmp")
+	if err := os.Mkdir(childTemp, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	binary := filepath.Join(dir, "child.test")
 	raw, err := os.ReadFile(self)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(binary, raw, 0o700); err != nil {
+	if err := procgroup.WriteProgram(binary, raw, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	record := filepath.Join(dir, "held")
 	r := &heldChildRun{exited: make(chan struct{}), out: &lockedOutput{}}
-	r.cmd, err = startCopied(func() *exec.Cmd {
+	r.cmd, err = standin.StartCopied(func() (*exec.Cmd, error) {
 		cmd := exec.Command(binary, append([]string{"-test.run=^TestHeldShellChild$", "-test.count=1"}, extra...)...)
-		cmd.Env = append(os.Environ(), heldModeVar+"="+mode, heldRecordVar+"="+record)
+		cmd.Env = append(os.Environ(), heldModeVar+"="+mode, heldRecordVar+"="+record, "TMPDIR="+childTemp)
 		cmd.Stdout, cmd.Stderr = r.out, r.out
-		return cmd
+		return cmd, cmd.Start()
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	go func() { r.err = r.cmd.Wait(); close(r.exited) }()
 	t.Cleanup(func() {
+		if err := standin.SweepTempDirs(); err != nil {
+			t.Errorf("reclaiming the temporary directories of the child test binary: %v", err)
+		}
+	})
+	t.Cleanup(func() {
 		_ = r.cmd.Process.Kill()
 		<-r.exited
 		if r.held.PID != 0 && !(standin.Process{Identity: r.held}).GoneWithin(0) {
 			_ = syscall.Kill(r.held.PID, syscall.SIGKILL)
 		}
+		// The child's owner sweep outlives it by design unless a passing
+		// check retired it, so after a child killed, timed out or failed it
+		// is still working; waited for here, it cannot outlive this test
+		// and the package with it (#563).
+		if r.sweep.PID != 0 {
+			sweeper := standin.Process{Identity: r.sweep}
+			if !sweeper.GoneWithin(sweepWait) {
+				t.Errorf("the child's owner sweep %d was still running %v after the child exited: %s", r.sweep.PID, sweepWait, r.out)
+				sweeper.End()
+			}
+		}
 	})
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		// The child reads the identity while the process runs, since a
-		// failing child may have ended it before this read could.
+		// failing child may have ended it before this read could. The
+		// record is read again once the child has exited, since it may have
+		// written it just before.
+		exited := false
+		select {
+		case <-r.exited:
+			exited = true
+		default:
+		}
 		if raw, err := os.ReadFile(record); err == nil {
-			if _, err := fmt.Sscanf(string(raw), "%d %d", &r.held.PID, &r.held.Start); err != nil || r.held.Start == 0 {
+			if _, err := fmt.Sscanf(string(raw), "%d %d %d %d", &r.held.PID, &r.held.Start, &r.sweep.PID, &r.sweep.Start); err != nil ||
+				r.held.Start == 0 || r.sweep.Start == 0 {
 				t.Fatalf("the child recorded %q: %v", raw, err)
 			}
 			return r
 		}
+		if exited {
+			t.Fatalf("the child exited (%v) before it recorded its held process: %s", r.err, r.out)
+		}
 		if !time.Now().Before(deadline) {
-			t.Fatalf("the child never recorded its held process: %s", r.out)
+			t.Fatalf("the child never recorded its held process; what it was doing (%s): %s", r.quit(), r.out)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
 
-// startCopied starts the command build returns, whose binary this process
-// has just written, and builds and starts it again while the start is
-// refused with ETXTBSY. On Linux a write descriptor to the copy can be held
-// for a moment by a child that another parallel test forked while the copy
-// was open (Go issue 22315), and exec refuses a binary open for writing. The
-// retry is bounded at five seconds; any other error, or ETXTBSY past the
-// bound, is returned unchanged.
-func startCopied(build func() *exec.Cmd) (*exec.Cmd, error) {
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		cmd := build()
-		err := cmd.Start()
-		if err == nil || !errors.Is(err, syscall.ETXTBSY) || !time.Now().Before(deadline) {
-			return cmd, err
-		}
-		time.Sleep(20 * time.Millisecond)
+// quit asks a child that has not recorded its held process what it is
+// doing: it sends the child SIGQUIT, on which the Go runtime writes every
+// goroutine's stack to the child's standard error, which is r.out, and
+// exits, and waits for it to exit. It says whether the child exited on it
+// within 10s, so a failure that shows no stacks says why.
+func (r *heldChildRun) quit() string {
+	if err := r.cmd.Process.Signal(syscall.SIGQUIT); err != nil {
+		return fmt.Sprintf("the child could not be sent SIGQUIT: %v", err)
+	}
+	select {
+	case <-r.exited:
+		return fmt.Sprintf("its stacks on SIGQUIT, after which it exited %v", r.err)
+	case <-time.After(10 * time.Second):
+		return "it was sent SIGQUIT and had not exited 10s later"
 	}
 }
 
