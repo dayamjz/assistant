@@ -1,18 +1,22 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -238,6 +242,153 @@ func TestADispatchersTrustedReadIsItsOwn(t *testing.T) {
 	}
 	if left := dispatchReadRefs(t, subject); len(left) != 0 {
 		t.Fatalf("the dispatches left %v in the gate, want every read's reference removed once read", left)
+	}
+}
+
+// Two dispatchers of one task both read no attempt, and the one that loses
+// the first claim never touches the copy the winner cuts (#562). The first
+// to fetch the trusted copy is held there until the other has claimed
+// attempt 1, cut the copy and proved it; only then does the held one go on,
+// with the winner's copy standing at the path. While a dispatcher swept any
+// copy it found standing before its claim, the loser swept the winner's:
+// in CI it caught the winner's clone still running there and failed for a
+// reason other than the claim, and a sweep that clears ends whatever it
+// finds, a winner's worker among it. Now a first claim sweeps nothing, so
+// the loser goes straight to the claim and the anchor refuses it. The sweep
+// asked is the real one, recorded on the way through, so what the test
+// counts is what a dispatch asks of agents.Sweeper.
+func TestALosingDispatcherNeverSweepsTheWinnersCopy(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	subject := newDispatchSubject(t)
+	ctx := t.Context()
+	var mu sync.Mutex
+	var swept []string
+	real := agents.NewSweeper(subject.service.home, reapGrace, nil).Sweep
+	subject.service.sweepCopy = func(ctx context.Context, dir string) (agents.SweepResult, error) {
+		mu.Lock()
+		swept = append(swept, dir)
+		mu.Unlock()
+		return real(ctx, dir)
+	}
+	var fetched atomic.Int32
+	returned := make(chan struct{})
+	var returnOnce sync.Once
+	subject.service.betweenTrustedFetchAndResolve = func(string) {
+		if fetched.Add(1) == 1 {
+			<-returned
+		}
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer returnOnce.Do(func() { close(returned) })
+			_, errs[i] = subject.service.dispatchClaimed(ctx, subject.task)
+		}()
+	}
+	wg.Wait()
+	if n := fetched.Load(); n != 2 {
+		t.Fatalf("the dispatchers fetched the trusted copy %d times, want once each: the ordering this test holds was never reached", n)
+	}
+	won, lost := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			won++
+		case errors.Is(err, store.ErrTaskMoved):
+			lost++
+		default:
+			t.Fatalf("a dispatcher failed for a reason other than the claim: %v", err)
+		}
+	}
+	if won != 1 || lost != 1 {
+		t.Fatalf("%d dispatchers won and %d lost the claim, want one of each: %v", won, lost, errs)
+	}
+	if len(swept) != 0 {
+		t.Fatalf("a first claim asked for sweeps of %v, want none: the loser swept the copy the winner cut", swept)
+	}
+	if _, err := os.Stat(filepath.Join(subject.copy, ".git")); err != nil {
+		t.Fatalf("the winner's clone is not standing: %v", err)
+	}
+}
+
+// A copy that stands at the task's path without this dispatch having cut it
+// or asked the sweep of it is refused as not isolated, recorded on the
+// attempt the dispatch claimed, and left as it stands (P6): at a first
+// claim, which sweeps nothing because no attempt has cut a copy, and at a
+// retry whose check before its claim found nothing standing. The planted
+// copy is cut the way a dispatch cuts one and passes the assertion, so the
+// refusal is this guard's and not the assertion's, and the untracked file
+// in it stands for work someone left there.
+func TestACopyNoDispatchCutOrSweptIsRefused(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	for _, c := range []struct {
+		name  string
+		retry bool
+	}{{name: "first claim"}, {name: "retry", retry: true}} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			subject := newDispatchSubject(t)
+			ctx := t.Context()
+			var swept atomic.Int32
+			subject.service.sweepCopy = func(context.Context, string) (agents.SweepResult, error) {
+				swept.Add(1)
+				return agents.SweepResult{}, errors.New("no sweep is asked of a copy this dispatch did not find before its claim")
+			}
+			want := int64(1)
+			if c.retry {
+				// An attempt that crashed before it cut anything: the retry's
+				// check finds no copy, and one appears before its claim.
+				if _, err := subject.records.BeginFirstTaskAttempt(ctx, subject.task, store.OnThisMachine()); err != nil {
+					t.Fatal(err)
+				}
+				want = 2
+				subject.service.betweenAttemptReadAndClaim = func() { plantTaskCopy(t, subject) }
+			} else {
+				plantTaskCopy(t, subject)
+			}
+			_, err := subject.service.dispatchClaimed(ctx, subject.task)
+			var refused *isolationRefused
+			if !errors.As(err, &refused) || refused.Attempt != want || refused.Reason != taskstate.RefusedNotIsolated {
+				t.Fatalf("the dispatch returned %v, want attempt %d refused %s", err, want, taskstate.RefusedNotIsolated)
+			}
+			if !strings.Contains(refused.Cause.Error(), "neither cut it nor swept it") {
+				t.Fatalf("the refusal's cause is %v, want this guard's and not the assertion's", refused.Cause)
+			}
+			if n := swept.Load(); n != 0 {
+				t.Fatalf("the dispatch asked %d sweeps, want none", n)
+			}
+			if bytes, err := os.ReadFile(filepath.Join(subject.copy, "kept.txt")); err != nil || string(bytes) != "work\n" {
+				t.Fatalf("the standing copy's work is %q (%v), want it as it was left", bytes, err)
+			}
+		})
+	}
+}
+
+// plantTaskCopy cuts the subject task's copy the way a dispatch does, with
+// no attempt claiming it, and leaves an untracked file in it.
+func plantTaskCopy(t *testing.T, subject *dispatchSubject) {
+	t.Helper()
+	ctx := t.Context()
+	record, err := subject.records.Task(ctx, subject.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := subject.service.expectationOf(ctx, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := heldGit(t, e.repository.WorkingPath, "rev-parse", "main")
+	if err := subject.service.cutTaskCopy(ctx, record, e.repository.WorkingPath, e.copyPath, e.gatePath, base); err != nil {
+		t.Fatalf("planting the copy: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(e.copyPath, "kept.txt"), []byte("work\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

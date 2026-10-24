@@ -63,7 +63,14 @@ import (
 // store.BeginFirstTaskAttempt for a task with no attempt, and by
 // store.BeginTaskAttempt for a retry, each anchored to the highest attempt
 // this dispatcher read, and the loser is refused with ErrTaskMoved before it
-// reads the primary or touches the path. The first claim records the task's
+// reads the primary. Before a first claim nothing touches the path either:
+// no attempt has cut a copy, so a dispatch sweeps nothing then (#562), and
+// whatever it finds standing after it wins is refused rather than swept or
+// used, below. A retry sweeps before its claim, so that a sweep that does
+// not clear records nothing; two retries anchored to the same attempt would
+// both sweep before the anchor decided between them, and it is the slot and
+// the home's lock below, not the anchor, that keep there from being two.
+// The first claim records the task's
 // machine, and it is always this one: this build reads no remote host, so it
 // places every task here, and a retry stays where the first claim put it.
 // Before a first claim the repository's trusted copy is read (unhonored.go's
@@ -89,8 +96,9 @@ import (
 // not.
 //
 // A retry after a crash is a new attempt of the same task, and it finds
-// whatever the crashed one left at the path. A path already standing there is
-// swept before the claim, on sweep.go's terms, because a crash between a
+// whatever the crashed one left at the path. A path already standing there
+// when the retry reads its attempts is swept before the claim, on
+// sweep.go's terms, because a crash between a
 // worker's start and the record of its session leaves a process no record
 // names, and the sweep finds it by the copy instead. Where the platform has
 // no sweep, agents.ErrSweepUnsupported, nothing proves that process absent,
@@ -104,8 +112,12 @@ import (
 // and is never removed or written into (P6; copyStanding takes the same
 // stance toward a run's copy): a half-written directory fails the
 // assertion, and that failure is recorded as the refusal with the path
-// untouched. The one directory this file does
-// remove is a clone this same call just made and could not shape - the task
+// untouched. A path that stands after the claim and that this dispatch
+// neither cut nor asked the sweep of, at a first claim or appearing after a
+// retry's check, is asserted the same way and then refused as not isolated
+// even when the assertion passes, because nothing proves it unowned, and it
+// too is left as it stands. The one directory this file does remove is a
+// clone this same call just made and could not shape - the task
 // branch could not be created in it, or HEAD could not be detached - which
 // holds no work and is the program's own; it is removed so that the next
 // attempt cuts a fresh one rather than proving a clone standing on the wrong
@@ -514,10 +526,19 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 			return dispatched{}, err
 		}
 	}
-	// A copy already standing is a retry's, swept before the claim on
-	// sweep.go's terms; a copy about to be cut has nothing in it to sweep.
+	// A copy already standing at a retry is the earlier attempt's, swept
+	// before the claim on sweep.go's terms; a copy about to be cut has
+	// nothing in it to sweep. A first claim sweeps nothing: no attempt has
+	// cut a copy, so whatever stands at the path is either a concurrent
+	// winner's, which only the winner may touch (#562), or nobody's
+	// attempt's, which the check after the claim refuses.
 	var swept copySwept
-	if _, err := os.Lstat(copyPath); err == nil {
+	var stood bool
+	if latest > 0 {
+		_, err := os.Lstat(copyPath)
+		stood = err == nil
+	}
+	if stood {
 		if swept, err = s.sweepStandingCopy(ctx, id, copyPath); err != nil {
 			return dispatched{}, err
 		}
@@ -563,14 +584,20 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 		return dispatched{}, err
 	}
 
-	// The copy: whatever stands at the path, or a fresh clone when nothing
-	// does.
+	// The copy: a fresh clone when nothing stands at the path, or what the
+	// sweep before the claim was asked of. A path standing now that this
+	// dispatch neither cut nor asked the sweep of, at a first claim or one
+	// that appeared after the check before a retry's claim, is asserted and
+	// then refused as not isolated, never given a worker unswept.
 	if _, err := os.Lstat(copyPath); errors.Is(err, os.ErrNotExist) {
 		if err := s.cutTaskCopy(ctx, record, repository.WorkingPath, copyPath, gatePath, base); err != nil {
 			return dispatched{}, err
 		}
 	} else if err != nil {
 		return dispatched{}, fmt.Errorf("service: reading the copy of task %s at %s: %w", id, copyPath, err)
+	} else if !stood {
+		swept.unswept = fmt.Errorf("%s stands, and attempt %d of task %s neither cut it nor swept it before its claim",
+			copyPath, attempt.Sequence, id)
 	}
 
 	// The observation and the proof.

@@ -68,8 +68,7 @@ func TestARestartRelaunchesADeadCodexWorkerInPlace(t *testing.T) {
 	o, agent := codexWorkerOptions(t, h)
 	var second session.Reference
 	var call standin.Call
-	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
+	withRestartedService(t, o, h, id, unestablished, func(running serviceUnderTest, provider session.Provider, launched *session.Session) {
 		second = launched.Reference()
 		waitCapture(t, provider, launched, "the relaunch note was read")
 		if got := observed(t, taskState, running.client, id); !readsRunning(got) {
