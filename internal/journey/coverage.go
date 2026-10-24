@@ -411,7 +411,8 @@ func Coverage() []Established {
 				"its group, a check by working directory, and the kept-work record, which " +
 				"internal/service's tests reach through the package: a refused cleanup writing an " +
 				"entry and raising one wake, and a restart recording a finished run's standing copy; " +
-				"its answers and the dispatch hold are not in this build. Both walks drive a run through methods internal/ipc restricts, " +
+				"the dispatch hold and a run's answer naming the project's kept work, which internal/service's and internal/cli's tests reach; " +
+				"its answers are not in this build. Both walks drive a run through methods internal/ipc restricts, " +
 				"so on a platform where that package reads no local socket peer credentials they are " +
 				"skipped rather than passing, and they build only on unix."},
 	}

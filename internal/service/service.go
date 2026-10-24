@@ -402,6 +402,11 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
+	// betweenHeldAndRelease runs in a dispatch that kept work held, after
+	// the refusal and before the slot is given back. It is nil in
+	// production and set only by this package's tests, which use it to
+	// close the entry and run another dispatch pass inside that window.
+	betweenHeldAndRelease func()
 	// betweenTrustedFetchAndResolve runs in fetchTrusted after the default
 	// branch has been fetched under ref and before ref is resolved. It is nil
 	// in production and set only by this package's tests, which use it to

@@ -73,6 +73,9 @@ const KeptRemovedOnProof KeptClosure = "removed-on-proof"
 // leave the entry unestablished for good; an answered or closed entry is
 // sealed whole, basis included.
 //
+// While an entry is open, a new task in its project is not dispatched:
+// keptworkhold.go is that predicate and BeginDispatchAttempt its refusal.
+//
 // A repository with an open entry cannot be forgotten: ForgetRepository,
 // RepositoryRemovable and ReserveRepositoryRemoval refuse it with a
 // *KeptWorkOpenError naming each entry. An entry is never refused because an
@@ -254,21 +257,12 @@ func (e *KeptWorkOpenError) Unwrap() error { return ErrKeptWorkOpen }
 // open entry whose project is the repository, read in the removal's
 // transaction.
 func refuseIfKeptWorkIsOpen(ctx context.Context, tx *sql.Tx, repositoryID string) error {
-	rows, err := tx.QueryContext(ctx, keptWorkColumns+` FROM kept_work
-		WHERE repository_id = ? AND answer IS NULL AND closure IS NULL ORDER BY id`, repositoryID)
+	rows, err := tx.QueryContext(ctx, openKeptWorkOfProject, repositoryID)
 	if err != nil {
 		return fmt.Errorf("store: checking the kept work of repository %s: %w", repositoryID, err)
 	}
-	defer func() { _ = rows.Close() }()
-	var open []KeptWork
-	for rows.Next() {
-		k, err := scanKeptWork(rows)
-		if err != nil {
-			return fmt.Errorf("store: checking the kept work of repository %s: %w", repositoryID, err)
-		}
-		open = append(open, k)
-	}
-	if err := rows.Err(); err != nil {
+	open, err := scanKeptWorkRows(rows)
+	if err != nil {
 		return fmt.Errorf("store: checking the kept work of repository %s: %w", repositoryID, err)
 	}
 	if len(open) > 0 {

@@ -129,6 +129,13 @@ func scanTaskAttempt(sc scanner) (TaskAttempt, error) {
 // no state and launches nothing: the record precedes the process, and the
 // session the process runs in is filled in afterwards by SetAttemptSession.
 func (s *Store) BeginTaskAttempt(ctx context.Context, taskID string, expectedLatest int64) (TaskAttempt, error) {
+	return s.beginTaskAttempt(ctx, taskID, expectedLatest, false)
+}
+
+// beginTaskAttempt is BeginTaskAttempt, and BeginDispatchAttempt when
+// dispatch is true, which refuses a task kept work holds before the anchor
+// is read, in the same transaction.
+func (s *Store) beginTaskAttempt(ctx context.Context, taskID string, expectedLatest int64, dispatch bool) (TaskAttempt, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return TaskAttempt{}, fmt.Errorf("store: no task named")
 	}
@@ -141,11 +148,17 @@ func (s *Store) BeginTaskAttempt(ctx context.Context, taskID string, expectedLat
 		if err := anchorTaskAttemptTx(ctx, tx, taskID, expectedLatest); err != nil {
 			return err
 		}
+		if dispatch {
+			if err := refuseHeldDispatchTx(ctx, tx, taskID); err != nil {
+				return err
+			}
+		}
 		return insertTaskAttemptTx(ctx, tx, taskID, sequence, now)
 	})
 	if err != nil {
 		var moved *TaskMovedError
-		if errors.As(err, &moved) {
+		var held *DispatchHeldError
+		if errors.As(err, &moved) || errors.As(err, &held) {
 			return TaskAttempt{}, err
 		}
 		return TaskAttempt{}, fmt.Errorf("store: beginning an attempt of task %s: %w", taskID, err)

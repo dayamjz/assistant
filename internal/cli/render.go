@@ -456,6 +456,9 @@ func readOutRun(w io.Writer, r machine.Run) {
 			writeln(w, phrase)
 		}
 	}
+	if phrase, ok := machine.RunKeptWorkPhrase(r); ok {
+		writeln(w, phrase)
+	}
 	if phrase, ok := machine.RepairPhrase(r.Repairs); ok {
 		writeln(w, phrase)
 	}

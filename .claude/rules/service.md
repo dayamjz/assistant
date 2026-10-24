@@ -55,8 +55,15 @@ paths: ["internal/service/**"]
   entry about a task once as a `kept-work` wake, `keptworkwake.go` raises
   an entry no task names once on the queue's third shape, an entry with
   `surfaced_at` recorded is raised on neither again, and status and the
-  catch-up read list them. Answers and the dispatch hold are #411's second
-  part.
+  catch-up read list them. `dispatch.go` holds a new task's dispatch while its
+  project has an open entry, asking internal/store's one predicate
+  (`KeptWorkHolding`, `BeginFirstTaskAttempt` or, for a retried dispatch,
+  `BeginDispatchAttempt` at the claim, and
+  `launch.go`'s `ClaimAttemptLaunch` before the worker starts);
+  `releaseHeldSlot` gives the slot back and reads the hold again, and a
+  removal asks again (`redispatchAfterRemoval`); `taskView` and `report`
+  name the entries.
+  Answers are #411's remaining part.
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances
   in, and `report` reads it rather than inferring it.
