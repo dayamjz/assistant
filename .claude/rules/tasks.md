@@ -69,9 +69,10 @@ paths: ["internal/tasks/**"]
   one shown still in the copy or taken up upstream, and only as the copy
   was read (`kept_remove.go`: the state of everything the removal destroys
   read before the loss read and again after the checks, objects that read
-  adds aside, and each entry removed only while it is as read), the one
-  use of `vcs.RemoveWorktreeDiscardingChanges`, for a run's record once its
-  worktree is gone, behind a person's answer and no proof.
+  adds aside, and each entry removed only while it is as read, a run's
+  record in the gate, held to be a directory of the gate's worktrees
+  directory, removed so too and never through git's forced removal),
+  behind a person's answer and no proof.
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (an exclusively created partial of a fresh name, then a
   rename; a path standing as a link is `*InstructionsLinkError`), so a file

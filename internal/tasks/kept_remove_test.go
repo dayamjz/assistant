@@ -205,3 +205,39 @@ func TestARenameThatMustNotReplaceRefusesToLandOnAName(t *testing.T) {
 		t.Fatalf("the moved file reads %q, %v", raw, err)
 	}
 }
+
+// recordOfGate takes a directory of the gate's own worktrees directory as a
+// worktree's record, the positive control, also when it is reached through
+// a link, and refuses one anywhere else: the gate's worktrees directory
+// itself, a directory under a record, and a directory outside the gate.
+func TestAWorktreeRecordIsTakenOnlyFromTheGatesWorktrees(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	root := t.TempDir()
+	gate := filepath.Join(root, "gate.git")
+	record := filepath.Join(gate, "worktrees", "run")
+	outside := filepath.Join(root, "elsewhere", ".git")
+	for _, dir := range []string{filepath.Join(record, "logs"), outside} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linked := filepath.Join(root, "linked")
+	if err := os.Symlink(gate, linked); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordOfGate(record, gate); err != nil {
+		t.Fatalf("the gate's own worktree record was refused: %v", err)
+	}
+	if err := recordOfGate(filepath.Join(linked, "worktrees", "run"), gate); err != nil {
+		t.Fatalf("the record reached through a link was refused: %v", err)
+	}
+	for name, dir := range map[string]string{
+		"the worktrees directory itself": filepath.Join(gate, "worktrees"),
+		"a directory under a record":     filepath.Join(record, "logs"),
+		"a directory outside the gate":   outside,
+	} {
+		if err := recordOfGate(dir, gate); !errors.Is(err, ErrRecordOutsideGate) {
+			t.Errorf("%s, %s, reads %v as a worktree record; want ErrRecordOutsideGate", name, dir, err)
+		}
+	}
+}

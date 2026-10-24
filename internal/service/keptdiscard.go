@@ -103,9 +103,11 @@ import (
 // the copy before the removal moved that file aside is lost with it. An
 // entry a cleanup records while the copy is being removed, from a copy
 // partly gone, is kept after the moment and left open over a copy that is
-// gone. A run's worktree record that changed after the worktree was
-// removed is left standing in the gate and logged, and the discard is
-// done, since the copy went as it was shown.
+// gone. A run's worktree record, its directory in the gate, is removed as
+// read too and never by git; one that changed after the worktree was
+// removed is left standing in the gate, whole or from the entry that
+// differed on, and logged, and the discard is done, since the copy went
+// as it was shown.
 
 // # What "person-only" is enforced by, and what it is not
 //
@@ -261,6 +263,10 @@ type discardWithdrawn struct {
 }
 
 func (e *discardWithdrawn) Error() string {
+	if errors.Is(e.cause, tasks.ErrRecordOutsideGate) {
+		return fmt.Sprintf("the copy cannot be removed as it stands (%v), so the confirmation was withdrawn, the copy left "+
+			"standing and the entry is open again", e.cause)
+	}
 	return fmt.Sprintf("the copy changed since the discard was confirmed (%v), so the confirmation was withdrawn, the copy left "+
 		"standing and the entry is open again; answer discard without a confirmation to see what it holds now", e.cause)
 }
@@ -339,7 +345,7 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 		s.log.Printf("kept work entry %d: %v", entry.ID, left)
 		err = nil
 	}
-	if errors.Is(err, tasks.ErrLossChanged) {
+	if errors.Is(err, tasks.ErrLossChanged) || errors.Is(err, tasks.ErrRecordOutsideGate) {
 		open, werr := s.store.WithdrawKeptWorkDiscard(ctx, entry.ID, digest)
 		if werr != nil {
 			return machine.KeptWorkAnswered{}, fmt.Errorf("service: kept work entry %d: the copy changed since its discard was "+

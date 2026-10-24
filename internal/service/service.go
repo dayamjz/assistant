@@ -240,6 +240,11 @@ type Options struct {
 	// record is, which export_test.go's WithWorktreeRemovalSeamForTest sets
 	// with discardRemovalTest and the product never does.
 	inWorktreeRemoval func()
+	// inRecordRemoval is the cleaner's seam inside a run's copy's discard
+	// after the last check of the worktree's record and before anything in
+	// it is removed, which export_test.go's WithRecordRemovalSeamForTest
+	// sets with discardRemovalTest and the product never does.
+	inRecordRemoval func()
 	// cleanupAskSpacing replaces landedAskSpacing for this service, which
 	// export_test.go's WithCleanupAskSpacingForTest sets and the product
 	// never does; zero is landedAskSpacing.
@@ -923,6 +928,9 @@ func (s *Service) openParts(ctx context.Context, o Options, lookup func(string) 
 	}
 	if err == nil && o.inWorktreeRemoval != nil {
 		err = s.cleaner.BetweenWorktreeRemovalAndRecordForTest(o.discardRemovalTest, o.inWorktreeRemoval)
+	}
+	if err == nil && o.inRecordRemoval != nil {
+		err = s.cleaner.InRecordRemovalForTest(o.discardRemovalTest, o.inRecordRemoval)
 	}
 	if err != nil {
 		return err

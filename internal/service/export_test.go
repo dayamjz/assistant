@@ -101,6 +101,14 @@ func WithWorktreeRemovalSeamForTest(tb testing.TB, o Options, f func()) Options 
 	return o
 }
 
+// WithRecordRemovalSeamForTest returns o with a run's copy's discard
+// running f after the last check of the worktree's record in the gate and
+// before anything in it is removed, for this package's external tests.
+func WithRecordRemovalSeamForTest(tb testing.TB, o Options, f func()) Options {
+	o.discardRemovalTest, o.inRecordRemoval = tb, f
+	return o
+}
+
 // WithCleanupAskSpacingForTest returns o with the spacing the supervisor
 // pass leaves between two asks of one landed task's cleanup set to d, for
 // this package's external tests, which cannot wait landedAskSpacing.

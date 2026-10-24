@@ -347,6 +347,11 @@ type Cleaner struct {
 	// the gate is checked and git removes its record. It is nil in
 	// production and set only through BetweenWorktreeRemovalAndRecordForTest.
 	betweenWorktreeRemovalAndRecord func()
+	// inRecordRemoval runs in a discard of a run's copy after the last
+	// check of the worktree's record in the gate and before anything in it
+	// is removed. It is nil in production and set only through
+	// InRecordRemovalForTest.
+	inRecordRemoval func()
 	// betweenProofAndRemoval runs after the proof is recorded and before
 	// the copy is re-read and removed. It is nil in production and set only
 	// by this package's tests, which use it to change the copy inside the
@@ -406,6 +411,19 @@ func (c *Cleaner) BetweenWorktreeRemovalAndRecordForTest(tb testing.TB, f func()
 		return errors.New("tasks: BetweenWorktreeRemovalAndRecordForTest is a test's seam and takes the test")
 	}
 	c.betweenWorktreeRemovalAndRecord = f
+	return nil
+}
+
+// InRecordRemovalForTest makes every discard of a run's copy this Cleaner
+// makes run f after the last check of the worktree's record in the gate
+// and before anything in it is removed, so a test can write into that
+// moment. It takes the test and refuses a nil one, on
+// InterruptBeforeMarkForTest's terms.
+func (c *Cleaner) InRecordRemovalForTest(tb testing.TB, f func()) error {
+	if tb == nil {
+		return errors.New("tasks: InRecordRemovalForTest is a test's seam and takes the test")
+	}
+	c.inRecordRemoval = f
 	return nil
 }
 
