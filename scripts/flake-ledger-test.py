@@ -220,6 +220,25 @@ class RecordedGoOutputTest(unittest.TestCase):
         records, _ = self.records(framed(self.output))
         self.assertNotIn("test: fail TestFixture", records)
 
+    def test_output_cut_off_before_a_package_reported_names_what_was_pending(self):
+        # The real recording, cut just before each failing package's result
+        # line, as a cancel during the print would leave it.
+        for package, pending in (("fail", ["TestTop", "TestParent"]), ("timeout", ["TestSlow"]),
+                                 ("panics", ["panic: boom at init"])):
+            with self.subTest(package=package):
+                end = next(i for i, l in enumerate(self.output) if l.startswith(f"FAIL\tgithub.com/example/m/{package}\t"))
+                parser = ledger.LogParser(raw=True)
+                for line in self.output[:end]:
+                    parser.feed(line)
+                records, _ = parser.finish()
+                self.assertEqual(parser.cut_off, pending)
+                self.assertNotIn(package, {r.package for r in records})
+        parser = ledger.LogParser(raw=True)
+        for line in self.output:
+            parser.feed(line)
+        parser.finish()
+        self.assertEqual(parser.cut_off, [], "the whole recording leaves nothing pending")
+
     def test_raw_output_parses_as_the_group_does(self):
         raw, _ = self.records(self.output, raw=True)
         in_group, _ = self.records(framed(self.output))
@@ -455,6 +474,18 @@ def log_lines(name, first=1, last=None):
     return (DATA / name).read_text(encoding="utf-8").split("\n")[first - 1:last]
 
 
+def cut_off_log(folder):
+    """A job log cut off while its test output printed, from real lines: the
+    recorded judge failure's log through its complete package (line 109),
+    then the dispatch package's failing test (rerun-attempt-2.log 116-120)
+    with that package's result line never printed, then the cancel."""
+    log = Path(folder) / "cut-off.log"
+    log.write_text("\n".join(log_lines("judge-test-failure.log", 1, 109)
+                             + log_lines("rerun-attempt-2.log", 116, 120)
+                             + ["2026-10-23T07:19:57.7514310Z ##[error]The operation was canceled."]) + "\n")
+    return log
+
+
 def set_steps(github, job_id, conclusions):
     """Gives the recorded job's named steps these conclusions."""
     job = github.job(job_id)
@@ -609,6 +640,31 @@ class LedgerTest(ServerTest):
         _, data, _ = self.run_report(self.github(logs={**LOGS, 120342424178: "job-timeout-unfinished.log"}))
         after = next(f for f in data["failures"] if f["key"] == timeout)
         self.assertEqual(after["details"], ["cancelled in step Test; not reported: internal/runs internal/service"])
+
+    def test_a_failure_whose_package_never_reported_is_not_passed_over(self):
+        # The judge failure is named; the dispatch failure was printed but its
+        # package's result line never was. This version does not count such
+        # a failure (#608), so the job is not attributed, naming it.
+        with tempfile.TemporaryDirectory() as folder:
+            github = self.github(logs={**LOGS, 120256178246: cut_off_log(folder)})
+            status, data, _ = self.run_report(github)
+        self.assertEqual(status, 3)
+        keys = {f["key"] for f in data["failures"] if any(o["job_id"] == 120256178246 for o in f["occurrences"])}
+        self.assertEqual(keys, {"test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient"})
+        self.assertEqual([(u["job_id"], u["reason"]) for u in data["unattributed"]], [
+            (120256178246, "its test output was cut off before a package's result line, so these failures are "
+                           "not counted: TestConcurrentDispatchOfOneTaskClaimsOneAttempt")])
+
+    def test_parse_says_what_a_cut_off_log_did_not_count(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = cut_off_log(folder)
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                status = ledger.main(["parse", str(log)])
+        self.assertEqual(status, 3)
+        self.assertIn("TestAnotherProviderStoppingDoesNotReachAClient", stdout.getvalue())
+        self.assertIn("cut off before a package's result line; not counted: "
+                      "TestConcurrentDispatchOfOneTaskClaimsOneAttempt", stderr.getvalue())
 
     def test_a_failed_test_step_that_names_nothing_fails_the_ledger(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -873,6 +929,20 @@ class OneRunTest(ServerTest):
         self.assertEqual(data["rerun_without_issue"], [])
         self.assertIn("test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt",
                       [f["key"] for f in data["failures"]])
+
+    def test_a_rerun_past_a_failure_cut_off_before_its_package_reported_does_not_pass(self):
+        # The review's case: every failure that was named has an open issue,
+        # but attempt 1's output was cut off after a failure this version
+        # cannot count. The check must not pass the re-run.
+        with tempfile.TemporaryDirectory() as folder:
+            github = self.github(logs={**LOGS, 120256178246: cut_off_log(folder)})
+            self.open_issues_naming_every_earlier_failure(github)
+            github.data["issues"].append({"number": 902, "state": "open", "closed_at": None, "body": "",
+                                          "title": "judge: TestAnotherProviderStoppingDoesNotReachAClient flakes"})
+            status, data, _ = self.run_report(github, "--run", "39905430594", "--require-open-issues")
+        self.assertEqual(data["rerun_without_issue"], [])
+        self.assertEqual(status, 3)
+        self.assertEqual([u["job_id"] for u in data["unattributed"]], [120256178246])
 
     def rerun_check_failed_in_attempt_2(self, folder):
         # Run 39905430594 with its attempt 2 holding a failed re-runs job, as

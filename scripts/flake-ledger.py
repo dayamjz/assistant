@@ -44,7 +44,10 @@ a failed or cancelled job it reads:
 It is loud where it cannot see: a read that fails makes it exit 2 (a failed
 issue read leaves each failure's issues unknown, never "none"), and a failed
 or cancelled job whose Test step failed, or that names no failed step, with
-none of the above read in it makes it exit 3 (listed as not attributed).
+none of the above read in it makes it exit 3 (listed as not attributed). So
+does a job whose test output stopped, a cancel cutting it off, after a
+failure but before that package's result line: this version does not count
+such a failure (#608), so it names it and does not pass the job.
 With --run ID it reads that one run, finished or not (its finished jobs),
 and a job of the run's latest attempt that timed out or was cancelled is
 exit 2 too, whatever it recorded first: its suite did not finish. With
@@ -180,6 +183,7 @@ class LogParser:
         self.errors = []  # what the Test step reported on ##[error] lines
         self.leftovers = ""  # the first leftover line the leak check printed
         self.unfinished = None  # the packages ci-test.sh unfinished listed, once it printed them
+        self.cut_off = []  # failures pending when the output ended before their package's result line
         self._new_package()
 
     def _new_package(self):
@@ -273,7 +277,15 @@ class LogParser:
             self.records.append(Record("package", package, "(package)", "no failing test was named"))
 
     def finish(self):
-        """The records, and whether the test output was printed but named nothing."""
+        """The records, and whether the test output was printed but named nothing.
+        Failures still pending when the output ended, before their package's
+        result line, are not counted; they are listed in cut_off."""
+        running = [t.split("/", 1)[0] for t in self.timeout[1]] if self.timeout else []
+        self.cut_off = list(dict.fromkeys(self.failed + running))
+        if not self.cut_off and self.timeout:
+            self.cut_off = [f"a test timed out after {self.timeout[0]}"]
+        if not self.cut_off and self.panic:
+            self.cut_off = [f"panic: {self.panic}"]
         if self.leftovers:
             self.records.append(Record("leak", "(leak check)", "leftovers, not read by this version",
                                        self.leftovers))
@@ -538,9 +550,9 @@ def read_job(github, job):
             parser = LogParser()
             for line in github.job_log(job["id"]):
                 parser.feed(line)
-            return (*parser.finish(), parser.unfinished)
+            return (*parser.finish(), parser.unfinished, parser.cut_off)
     try:
-        records, printed_nothing, unfinished = retried(read)
+        records, printed_nothing, unfinished, cut_off = retried(read)
     except GitHubError as error:
         # What the annotations and steps already proved stays.
         result["error"] = str(error)
@@ -549,6 +561,7 @@ def read_job(github, job):
         # The timeout row was the first one added.
         result["records"][0]["detail"] += "; not reported: " + (" ".join(unfinished) or "(none)")
     result["records"] += [r.to_dict() for r in records]
+    result["cut_off"] = cut_off
     # The Test step failed, or the job failed naming no step, and the log
     # explained none of it.
     test_failed = TEST_STEP in failed or (not failed and result["cancel"] is None)
@@ -667,6 +680,9 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
         }
         if result.get("error"):
             unattributed.append({**occurrence, "reason": f"not read: {result['error']}"})
+        elif result.get("cut_off"):
+            unattributed.append({**occurrence, "reason": "its test output was cut off before a package's result "
+                                 f"line, so these failures are not counted: {', '.join(result['cut_off'])}"})
         elif result.get("unattributed"):
             unattributed.append({**occurrence, "reason": "the Test step failed and nothing in its log was named"})
         for data in result["records"]:
@@ -879,11 +895,18 @@ def report(args, github):
 def parse_command(args):
     status = 0
     for name in args.logs:
+        parser = LogParser(raw=args.raw)
         with open(name, encoding="utf-8", errors="replace") as handle:
-            records, printed_nothing = parse_lines(handle, raw=args.raw)
+            for line in handle:
+                parser.feed(line)
+        records, printed_nothing = parser.finish()
         for record in records:
             print(json.dumps({"log": name, **record.to_dict()}))
-        if printed_nothing:
+        if parser.cut_off:
+            print(f"flake-ledger: {name}: the test output was cut off before a package's result line; "
+                  f"not counted: {', '.join(parser.cut_off)}", file=sys.stderr)
+            status = 3
+        elif printed_nothing:
             print(f"flake-ledger: {name}: the test output named no failure", file=sys.stderr)
             status = 3
     return status
