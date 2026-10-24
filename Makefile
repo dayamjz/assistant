@@ -75,7 +75,11 @@ lint-guard-test:
 tidy:
 	$(GO) mod tidy
 
-# What CI runs, and what the validation gate runs.
+# Local check: lint, then the race suite. CI does not run this target.
+# Its test step is scripts/ci-test.sh, which runs the race suite under
+# scripts/leak-check.py. This repository's gate config
+# (.no-mistakes.yaml) sets commands.test to empty and commands.lint
+# to "make lint".
 check: lint test
 
 clean:
