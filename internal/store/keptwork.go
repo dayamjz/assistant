@@ -1101,11 +1101,16 @@ var ErrKeptWorkCarriedOn = errors.New("store: the kept work entry is already car
 // claim names, owns the copy, the carry on's second fact, once: the entry
 // is answered
 // carry-on, by who asked and as of when, with the instant, in one write
-// that also answers and marks every other open entry of the same copy kept
-// by the time of the claim and holding no claim or confirmation of its
-// own, the copy kept again at another state, with the same claim, since
-// the copy moved for all of them. An entry kept after the claim was not
-// what it carried on, and is left open. The task's row must exist; one
+// that also answers and marks every other open entry of the same copy
+// holding no claim or confirmation of its own, the copy kept again at
+// another state, with the same claim, since the copy moved whole for all
+// of them: one kept after the claim and before the move included, whose
+// state went on with the copy (PRD section 6: the entry closes once the
+// new task owns the copy). That every entry naming the copy's path is of
+// the copy that moved is the caller's, which marks only once the copy
+// stands at the task's path and no longer at its own; nothing here reads
+// the copy. While the claim stands no other entry of the copy can take a
+// claim or confirmation of its own (ErrKeptWorkCopyOwed). The task's row must exist; one
 // that does not is ErrNotFound. An entry already marked is
 // ErrKeptWorkCarriedOn, one answered otherwise ErrKeptWorkAnswered, one
 // closed on a proof ErrKeptWorkClosed, one with no claim naming task
@@ -1146,9 +1151,8 @@ func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64, task string
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = 'carry-on', answered_by = ?, answered_at = ?, carried_on_task = ?,
 			carried_on_copy = ?, carry_on_by = ?, carry_on_claimed_at = ?, carried_on_at = ?
-			WHERE id = ? OR (copy_path = ? AND answer IS NULL AND closure IS NULL AND discard_digest IS NULL AND carried_on_task IS NULL
-				AND kept_at <= ?)`,
-			by, claimed, task, copied, by, claimed, encodeTime(nowUTC()), id, k.CopyPath, claimed); err != nil {
+			WHERE id = ? OR (copy_path = ? AND answer IS NULL AND closure IS NULL AND discard_digest IS NULL AND carried_on_task IS NULL)`,
+			by, claimed, task, copied, by, claimed, encodeTime(nowUTC()), id, k.CopyPath); err != nil {
 			return err
 		}
 		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))

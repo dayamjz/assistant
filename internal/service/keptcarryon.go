@@ -73,8 +73,14 @@ import (
 // commits up contains them all and lacks the copy's own work. The kept
 // copy is checked to be that copy before it is moved, too. Carrying on
 // moves the whole copy, so the mark answers and marks every open entry of
-// the same copy kept by the time of the claim, the copy kept again at
-// another state, in its one write; and a claim is refused while another
+// the same copy, the copy kept again at another state, in its one write,
+// one kept after the claim and before the move included, since its state
+// moved with the copy; the mark is made only once verifyAdopted, or the
+// move itself, has the copy at the new path and gone from its own, so
+// every entry naming that path is of the copy that moved. The residual: a
+// directory put at the old path after that and kept there before the mark
+// would be answered with the copy too; nothing in this build puts one
+// there, since the task that path belongs to has ended. A claim is refused while another
 // entry of the copy holds an answer not yet carried out, as every answer
 // is (keptdiscard.go's "Every entry of the copy").
 //

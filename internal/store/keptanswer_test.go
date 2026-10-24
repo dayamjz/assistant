@@ -189,7 +189,8 @@ func TestALandingIsClaimedAndThenAnsweredWithItsRun(t *testing.T) {
 // a claim written in part, withdrawn under an answer or written on an
 // answered entry, and a rewrite of either fact. Another entry of the copy
 // takes no answer while the claim stands; the mark answers it with the
-// claim when it was kept before the claim, and leaves one kept after open.
+// claim whether it was kept before the claim or after, since the copy
+// moved whole, and leaves an entry of another copy open.
 func TestACarryOnIsClaimedAndThenAnsweredWithItsAdoption(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -256,6 +257,10 @@ func TestACarryOnIsClaimedAndThenAnsweredWithItsAdoption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	elsewhere, _, err := s.RecordKeptWork(ctx, KeptCopy{RunID: run.ID, CopyPath: "/worktrees/d", Holds: []string{"d444"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !late.KeptAt.After(reclaimed.CarryOnClaimedAt.Or(time.Time{})) {
 		t.Fatalf("the late entry was kept at %v, not after the claim at %v", late.KeptAt, reclaimed.CarryOnClaimedAt)
 	}
@@ -288,8 +293,12 @@ func TestACarryOnIsClaimedAndThenAnsweredWithItsAdoption(t *testing.T) {
 		!got.CarriedOnAt.IsKnown() {
 		t.Fatalf("the copy's entry kept before the claim reads %+v, %v; want it carried on with the claim", got, err)
 	}
-	if got, err := s.KeptWorkEntry(ctx, late.ID); err != nil || !got.Open() || got.CarriedOnTask.IsKnown() {
-		t.Fatalf("the copy's entry kept after the claim reads %+v, %v; want it open, not taken by a carry on it was not part of", got, err)
+	if got, err := s.KeptWorkEntry(ctx, late.ID); err != nil || got.Answer.Or("") != KeptCarryOn || got.CarriedOnTask.Or("") != "taskcarrying" ||
+		!got.CarriedOnAt.IsKnown() {
+		t.Fatalf("the copy's entry kept after the claim reads %+v, %v; want it carried on with the claim, since its state moved with the copy", got, err)
+	}
+	if got, err := s.KeptWorkEntry(ctx, elsewhere.ID); err != nil || !got.Open() || got.CarriedOnTask.IsKnown() {
+		t.Fatalf("another copy's entry reads %+v, %v; want it open, not taken by a carry on of another copy", got, err)
 	}
 	if owed, err := s.KeptWorkCarryOnsOwed(ctx); err != nil || len(owed) != 0 {
 		t.Fatalf("KeptWorkCarryOnsOwed = %+v, %v; want none once carried on", owed, err)

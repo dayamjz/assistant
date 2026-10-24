@@ -764,6 +764,89 @@ func TestCarryingOnAnswersEveryEntryOfTheCopy(t *testing.T) {
 	})
 }
 
+// An entry of the copy recorded after the carry on was claimed, and before
+// the copy moved, is carried on with it, the final full review of 74949eb:
+// the worker commits again and the copy is kept again through the real
+// Keep inside the seam between the claim and the completion, so the second
+// entry is kept after the claim. The completion moves the whole copy, the
+// second commit with it, so the mark answers and marks both entries with
+// the one task, and that task dispatches and its worker starts. Without
+// it the second entry stayed open naming a path that no longer stands, its
+// copy gone, and held the project's new task, the carried-on one among
+// them, from dispatching for as long as it stood.
+func TestACarryOnCarriesOnAnEntryOfTheCopyKeptAfterItsClaim(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "the carried-on task's worker starting once an entry kept after the claim is carried on too")
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, first := plantKeptInvestigation(t, h, subject, repository.ID)
+	// The seam pauses the answer once, after its claim, and the test's own
+	// goroutine commits and keeps the copy again before letting it go on.
+	paused, resume := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	o, _ := workerOptions(t, h)
+	o = service.WithCarryOnClaimInterruptForTest(t, o, func() error {
+		once.Do(func() {
+			close(paused)
+			<-resume
+		})
+		return nil
+	})
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		answered := make(chan error, 1)
+		go func() { answered <- under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, first), &out) }()
+		select {
+		case <-paused:
+		case err := <-answered:
+			t.Fatalf("the answer returned %+v, %v before its claim's seam ran", out, err)
+		}
+		if err := writeFile(first.CopyPath+"/more.txt", "what the worker found after the claim\n"); err != nil {
+			close(resume)
+			t.Fatal(err)
+		}
+		git(t, first.CopyPath, "add", "-A")
+		git(t, first.CopyPath, "commit", "--quiet", "-m", "the worker's commit after the claim")
+		second := keepTaskCopy(t, h, old)
+		close(resume)
+		if err := <-answered; err != nil {
+			t.Fatalf("carrying the first entry on: %v", err)
+		}
+		claimed, err := recordsOf(t, h).KeptWorkEntry(ctx, first.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if second.ID == 0 || second.ID == first.ID || second.CopyPath != first.CopyPath ||
+			!second.KeptAt.After(claimed.CarryOnClaimedAt.Or(time.Time{})) {
+			t.Fatalf("the copy kept again in the seam reads %+v; want a second entry of the copy kept after the claim at %v",
+				second, claimed.CarryOnClaimedAt)
+		}
+		newPath, err := h.TaskCopy(out.Task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(newPath, "more.txt")); err != nil {
+			t.Fatalf("the commit made after the claim is not in task %s's copy: %v", out.Task, err)
+		}
+		for _, id := range []int64{first.ID, second.ID} {
+			got, err := recordsOf(t, h).KeptWorkEntry(ctx, id)
+			if err != nil || got.Answer.Or("") != store.KeptCarryOn || got.CarriedOnTask.Or("") != out.Task || !got.CarriedOnAt.IsKnown() {
+				t.Fatalf("entry %d reads %+v, %v; want it carried on by task %s", id, got, err, out.Task)
+			}
+		}
+		// A task an open entry of its project holds never launches, so the
+		// launch is that nothing holds it.
+		waitLaunched(t, h, out.Task)
+	})
+}
+
 // A carry on stopped after the copy was moved is completed by the next
 // start though the copy went on past what it was kept at, the reviewer's
 // sequence: a detached investigation's copy is kept at the worker's commit

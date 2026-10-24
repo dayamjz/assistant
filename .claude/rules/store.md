@@ -96,7 +96,8 @@ paths: ["internal/store/**"]
   only with `discarded_at` by `MarkKeptWorkDiscarded` once the copy is
   gone, which the triggers enforce. Carry on and discard each move or
   remove the whole copy, so each mark answers and marks every other open
-  entry of the copy kept by its claim, or for a discard by the time the
+  entry of the copy, for a carry on whenever it was kept, since its state
+  moved with the copy, and for a discard those kept by the time the
   removal's read of the copy began, which `RecordKeptWorkDiscardRead`
   records on the entry before the removal (migration 61's
   `discard_read_at`, written only under an owed confirmation and withdrawn
