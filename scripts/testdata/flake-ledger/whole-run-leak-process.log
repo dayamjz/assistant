@@ -1,0 +1,140 @@
+﻿2026-10-23T13:21:40.3543480Z Current runner version: '2.338.0'
+2026-10-23T13:21:40.3556870Z ##[group]Runner Image Provisioner
+2026-10-23T13:21:40.3557340Z Hosted Compute Agent
+2026-10-23T13:21:40.3559900Z ##[endgroup]
+2026-10-23T13:21:40.3574660Z ##[endgroup]
+2026-10-23T13:21:40.3578270Z ##[endgroup]
+2026-10-23T13:21:40.3580870Z ##[endgroup]
+2026-10-23T13:21:41.5634480Z ##[group]Run actions/checkout@v4
+2026-10-23T13:21:41.5642890Z ##[endgroup]
+2026-10-23T13:21:41.7317210Z ##[endgroup]
+2026-10-23T13:21:41.7699950Z ##[endgroup]
+2026-10-23T13:21:41.7756310Z ##[endgroup]
+2026-10-23T13:21:42.0251970Z ##[endgroup]
+2026-10-23T13:21:43.2725210Z ##[endgroup]
+2026-10-23T13:21:43.2727270Z ##[endgroup]
+2026-10-23T13:21:43.4484810Z ##[endgroup]
+2026-10-23T13:21:43.4960810Z ##[group]Run actions/setup-go@v6
+2026-10-23T13:21:43.4990050Z ##[endgroup]
+2026-10-23T13:22:01.9505050Z ##[endgroup]
+2026-10-23T13:22:01.9657980Z ##[group]Run if ! command -v tmux >/dev/null 2>&1; then
+2026-10-23T13:22:01.9709030Z ##[endgroup]
+2026-10-23T13:22:11.8755170Z ##[group]Run unformatted=$(gofmt -l .)
+2026-10-23T13:22:11.8802580Z ##[endgroup]
+2026-10-23T13:22:12.2039740Z ##[group]Run go vet ./...
+2026-10-23T13:22:12.2082820Z ##[endgroup]
+2026-10-23T13:22:20.0646130Z ##[group]Run python3 scripts/leak-check-test.py -v
+2026-10-23T13:22:20.0682770Z ##[endgroup]
+2026-10-23T13:22:30.2419500Z ##[group]Run set -o pipefail
+2026-10-23T13:22:30.2477630Z ##[endgroup]
+2026-10-23T13:22:30.4897760Z leak-check: watching /Users/runner/work/_temp/tmp.BLVYaD/leak-check-self-test-p9bxx737, /private/tmp, /private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T
+2026-10-23T13:22:30.4903920Z LEAK process pid=2624 start=1792761750.437573 command=sleep 300
+2026-10-23T13:22:30.4904820Z LEAK directory /Users/runner/work/_temp/tmp.BLVYaD/leak-check-self-test-p9bxx737/planted-directory
+2026-10-23T13:22:30.4905450Z leak-check: 2 leftover(s); command exit=0
+2026-10-23T13:22:30.6584690Z leak-check self-test: expected failure observed; planted leaks removed
+2026-10-23T13:22:30.6586460Z LEAK package=/Users/runner/work/assistant/assistant process pid=2633 start=1792761750.577704 command=sleep 300
+2026-10-23T13:22:30.6587120Z leak-check: package /Users/runner/work/assistant/assistant left processes running
+2026-10-23T13:22:30.6591830Z leak-check self-test: per-package check failed, named and ended its planted process, and left a process outside the package alone
+2026-10-23T13:22:30.6592640Z leak-check self-test: per-package check refused a write in /private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T
+2026-10-23T13:35:45.9420400Z leak-check:       43 package(s) ran through the per-package check; go test reported 43 ok
+2026-10-23T13:35:45.9561760Z leak-check: watching /Users/runner/work/_temp/tmp.BLVYaD, /private/tmp, /private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T
+2026-10-23T13:35:45.9566420Z ok  	github.com/dayamjz/assistant/internal/agents	254.536s
+2026-10-23T13:35:45.9566840Z ok  	github.com/dayamjz/assistant/internal/agents/route	1.211s
+2026-10-23T13:35:45.9567210Z ok  	github.com/dayamjz/assistant/internal/agents/standin	112.135s
+2026-10-23T13:35:45.9568030Z ok  	github.com/dayamjz/assistant/internal/buildinfo	2.785s
+2026-10-23T13:35:45.9568510Z ok  	github.com/dayamjz/assistant/internal/checkpoints	63.854s
+2026-10-23T13:35:45.9568830Z ok  	github.com/dayamjz/assistant/internal/cli	251.717s
+2026-10-23T13:35:45.9569170Z ok  	github.com/dayamjz/assistant/internal/config	1.246s
+2026-10-23T13:35:45.9569490Z ok  	github.com/dayamjz/assistant/internal/custody	17.774s
+2026-10-23T13:35:45.9569840Z ok  	github.com/dayamjz/assistant/internal/findings	1.558s
+2026-10-23T13:35:45.9570260Z ok  	github.com/dayamjz/assistant/internal/fixture	15.550s
+2026-10-23T13:35:45.9570620Z ok  	github.com/dayamjz/assistant/internal/forge	100.382s
+2026-10-23T13:35:45.9570990Z ok  	github.com/dayamjz/assistant/internal/forge/forgetest	24.465s
+2026-10-23T13:35:45.9571800Z ok  	github.com/dayamjz/assistant/internal/forge/specifier	1.274s
+2026-10-23T13:35:45.9572230Z ok  	github.com/dayamjz/assistant/internal/gate	496.452s
+2026-10-23T13:35:45.9572630Z ok  	github.com/dayamjz/assistant/internal/graph	1.822s
+2026-10-23T13:35:45.9573040Z ok  	github.com/dayamjz/assistant/internal/home	2.412s
+2026-10-23T13:35:45.9573330Z ok  	github.com/dayamjz/assistant/internal/ipc	20.472s
+2026-10-23T13:35:45.9573690Z ok  	github.com/dayamjz/assistant/internal/journey	115.474s
+2026-10-23T13:35:45.9583280Z ok  	github.com/dayamjz/assistant/internal/journey/compilehold	1.308s
+2026-10-23T13:35:45.9583770Z ok  	github.com/dayamjz/assistant/internal/journey/hangbuild	1.415s
+2026-10-23T13:35:45.9584160Z ok  	github.com/dayamjz/assistant/internal/judge	5.035s
+2026-10-23T13:35:45.9584940Z ok  	github.com/dayamjz/assistant/internal/knowledge	1.157s
+2026-10-23T13:35:45.9585270Z ok  	github.com/dayamjz/assistant/internal/machine	10.957s
+2026-10-23T13:35:45.9586100Z ok  	github.com/dayamjz/assistant/internal/managed	2.547s
+2026-10-23T13:35:45.9586380Z ok  	github.com/dayamjz/assistant/internal/outcomes	1.482s
+2026-10-23T13:35:45.9586760Z ok  	github.com/dayamjz/assistant/internal/pipeline	20.868s
+2026-10-23T13:35:45.9587130Z ok  	github.com/dayamjz/assistant/internal/principles	4.121s
+2026-10-23T13:35:45.9587470Z ok  	github.com/dayamjz/assistant/internal/procgroup	11.018s
+2026-10-23T13:35:45.9587820Z ok  	github.com/dayamjz/assistant/internal/procgroup/guard	53.847s
+2026-10-23T13:35:45.9588200Z ok  	github.com/dayamjz/assistant/internal/redact	4.210s
+2026-10-23T13:35:45.9588520Z ok  	github.com/dayamjz/assistant/internal/runs	449.897s
+2026-10-23T13:35:45.9588840Z ok  	github.com/dayamjz/assistant/internal/safety	1.259s
+2026-10-23T13:35:45.9589140Z ok  	github.com/dayamjz/assistant/internal/scope	1.156s
+2026-10-23T13:35:45.9589460Z ok  	github.com/dayamjz/assistant/internal/service	495.052s
+2026-10-23T13:35:45.9589820Z ok  	github.com/dayamjz/assistant/internal/session	14.839s
+2026-10-23T13:35:45.9590140Z ok  	github.com/dayamjz/assistant/internal/stages	230.340s
+2026-10-23T13:35:45.9590550Z ok  	github.com/dayamjz/assistant/internal/store	55.251s
+2026-10-23T13:35:45.9590910Z ok  	github.com/dayamjz/assistant/internal/store/storetest	4.940s
+2026-10-23T13:35:45.9591530Z ok  	github.com/dayamjz/assistant/internal/supervisor	1.222s
+2026-10-23T13:35:45.9592340Z ok  	github.com/dayamjz/assistant/internal/supervisor/feed	27.751s
+2026-10-23T13:35:45.9592840Z ok  	github.com/dayamjz/assistant/internal/tasks	417.063s
+2026-10-23T13:35:45.9593370Z ok  	github.com/dayamjz/assistant/internal/taskstate	90.759s
+2026-10-23T13:35:45.9593790Z ok  	github.com/dayamjz/assistant/internal/vcs	143.617s
+2026-10-23T13:35:45.9707370Z LEAK process pid=95624 start=1792762542.994261 command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared -s mdworker -c MDSImporterWorker -m com.apple.mdworker.shared
+2026-10-23T13:35:45.9709000Z LEAK process pid=95627 start=1792762543.190118 command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared -s mdworker -c MDSImporterWorker -m com.apple.mdworker.shared
+2026-10-23T13:35:45.9709810Z leak-check: 2 leftover(s); command exit=0
+2026-10-23T13:35:45.9711000Z ##[group]full test output
+2026-10-23T13:35:45.9713570Z leak-check: watching /Users/runner/work/_temp/tmp.BLVYaD, /private/tmp, /private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T
+2026-10-23T13:35:46.0228940Z ok  	github.com/dayamjz/assistant/internal/agents	254.536s
+2026-10-23T13:35:46.0236440Z ok  	github.com/dayamjz/assistant/internal/agents/route	1.211s
+2026-10-23T13:35:46.0283130Z ok  	github.com/dayamjz/assistant/internal/agents/standin	112.135s
+2026-10-23T13:35:46.0286630Z ok  	github.com/dayamjz/assistant/internal/buildinfo	2.785s
+2026-10-23T13:35:46.0317410Z ok  	github.com/dayamjz/assistant/internal/checkpoints	63.854s
+2026-10-23T13:35:46.1050570Z ok  	github.com/dayamjz/assistant/internal/cli	251.717s
+2026-10-23T13:35:46.1433370Z ok  	github.com/dayamjz/assistant/internal/config	1.246s
+2026-10-23T13:35:46.1446950Z ok  	github.com/dayamjz/assistant/internal/custody	17.774s
+2026-10-23T13:35:46.1604190Z ok  	github.com/dayamjz/assistant/internal/findings	1.558s
+2026-10-23T13:35:46.1611800Z ok  	github.com/dayamjz/assistant/internal/fixture	15.550s
+2026-10-23T13:35:46.1743740Z ok  	github.com/dayamjz/assistant/internal/forge	100.382s
+2026-10-23T13:35:46.1745810Z ok  	github.com/dayamjz/assistant/internal/forge/forgetest	24.465s
+2026-10-23T13:35:46.1748960Z ok  	github.com/dayamjz/assistant/internal/forge/specifier	1.274s
+2026-10-23T13:35:46.1823840Z ok  	github.com/dayamjz/assistant/internal/gate	496.452s
+2026-10-23T13:35:46.1980020Z ok  	github.com/dayamjz/assistant/internal/graph	1.822s
+2026-10-23T13:35:46.1996090Z ok  	github.com/dayamjz/assistant/internal/home	2.412s
+2026-10-23T13:35:46.2033370Z ok  	github.com/dayamjz/assistant/internal/ipc	20.472s
+2026-10-23T13:35:46.2147280Z ok  	github.com/dayamjz/assistant/internal/journey	115.474s
+2026-10-23T13:35:46.2147950Z ok  	github.com/dayamjz/assistant/internal/journey/compilehold	1.308s
+2026-10-23T13:35:46.2148430Z ok  	github.com/dayamjz/assistant/internal/journey/hangbuild	1.415s
+2026-10-23T13:35:46.2171830Z ok  	github.com/dayamjz/assistant/internal/judge	5.035s
+2026-10-23T13:35:46.2174700Z ok  	github.com/dayamjz/assistant/internal/knowledge	1.157s
+2026-10-23T13:35:46.2231030Z ok  	github.com/dayamjz/assistant/internal/machine	10.957s
+2026-10-23T13:35:46.2238170Z ok  	github.com/dayamjz/assistant/internal/managed	2.547s
+2026-10-23T13:35:46.2256640Z ok  	github.com/dayamjz/assistant/internal/outcomes	1.482s
+2026-10-23T13:35:46.2383880Z ok  	github.com/dayamjz/assistant/internal/pipeline	20.868s
+2026-10-23T13:35:46.2395190Z ok  	github.com/dayamjz/assistant/internal/principles	4.121s
+2026-10-23T13:35:46.2407460Z ok  	github.com/dayamjz/assistant/internal/procgroup	11.018s
+2026-10-23T13:35:46.2410140Z ok  	github.com/dayamjz/assistant/internal/procgroup/guard	53.847s
+2026-10-23T13:35:46.2433920Z ok  	github.com/dayamjz/assistant/internal/redact	4.210s
+2026-10-23T13:35:46.2499900Z ok  	github.com/dayamjz/assistant/internal/runs	449.897s
+2026-10-23T13:35:46.2569510Z ok  	github.com/dayamjz/assistant/internal/safety	1.259s
+2026-10-23T13:35:46.2578540Z ok  	github.com/dayamjz/assistant/internal/scope	1.156s
+2026-10-23T13:35:46.3092560Z ok  	github.com/dayamjz/assistant/internal/service	495.052s
+2026-10-23T13:35:46.3112210Z ok  	github.com/dayamjz/assistant/internal/session	14.839s
+2026-10-23T13:35:46.3468740Z ok  	github.com/dayamjz/assistant/internal/stages	230.340s
+2026-10-23T13:35:46.3777870Z ok  	github.com/dayamjz/assistant/internal/store	55.251s
+2026-10-23T13:35:46.3778970Z ok  	github.com/dayamjz/assistant/internal/store/storetest	4.940s
+2026-10-23T13:35:46.3845470Z ok  	github.com/dayamjz/assistant/internal/supervisor	1.222s
+2026-10-23T13:35:46.3875130Z ok  	github.com/dayamjz/assistant/internal/supervisor/feed	27.751s
+2026-10-23T13:35:46.4039440Z ok  	github.com/dayamjz/assistant/internal/tasks	417.063s
+2026-10-23T13:35:46.4090580Z ok  	github.com/dayamjz/assistant/internal/taskstate	90.759s
+2026-10-23T13:35:46.4141710Z ok  	github.com/dayamjz/assistant/internal/vcs	143.617s
+2026-10-23T13:35:46.4169730Z LEAK process pid=95624 start=1792762542.994261 command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared -s mdworker -c MDSImporterWorker -m com.apple.mdworker.shared
+2026-10-23T13:35:46.4170510Z LEAK process pid=95627 start=1792762543.190118 command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared -s mdworker -c MDSImporterWorker -m com.apple.mdworker.shared
+2026-10-23T13:35:46.4170600Z leak-check: 2 leftover(s); command exit=0
+2026-10-23T13:35:46.4170940Z ##[endgroup]
+2026-10-23T13:35:46.4184060Z ##[error]Process completed with exit code 1.
+2026-10-23T13:35:46.4273820Z ##[group]Run if [ ! -f test.log ]; then
+2026-10-23T13:35:46.4467010Z ##[endgroup]
+2026-10-23T13:35:46.5170950Z ok  	github.com/dayamjz/assistant/internal/journey	115.474s
+2026-10-23T13:35:46.5171500Z ok  	github.com/dayamjz/assistant/internal/journey/compilehold	1.308s
