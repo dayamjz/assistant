@@ -188,8 +188,7 @@ func TestARestartUnderTmuxRelaunchesADeadTerminalInPlace(t *testing.T) {
 
 	o, _ := workerOptions(t, h)
 	var second session.Reference
-	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
+	withRestartedService(t, o, h, id, unestablished, func(running serviceUnderTest, provider session.Provider, launched *session.Session) {
 		if _, ok := provider.(*session.Tmux); !ok {
 			t.Fatalf("the restarted service relaunched through %T, want the tmux provider", provider)
 		}

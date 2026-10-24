@@ -2,15 +2,19 @@
 """Executable and model tests for the CI leftover guard, leak-check.py."""
 
 import contextlib
+import ctypes
 import importlib.util
 import io
 import os
 from pathlib import Path
+import select
+import signal
 import socket
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -361,6 +365,154 @@ class LeakCheckTest(unittest.TestCase):
         # is no Apple bundle whatever its path starts with.
         self.assertFalse(check.only_root_changes(f"/System/Volumes/Data{Path.home()}"))
 
+    def test_only_a_process_its_parent_shows_outside_settles_outside(self):
+        """started_outside, the rule that lets churn settle (#553): a process
+        that could not be read settles outside the sandbox only when it read
+        as unmarked and its parent in the same listing settled outside,
+        started no later, and is not launchd; one settled so counts for its
+        own children."""
+        outer = (500, "100.000000")
+        table = {
+            outer: ("running", 400),
+            (1, "1.000000"): ("running", 0),
+            (501, "101.000000"): ("exited", 500),     # parent settled outside
+            (502, "102.000000"): ("exited", 501),     # grandchild through 501
+            (503, "103.000000"): ("exited", 1),       # orphan: launchd adopted it
+            (504, "104.000000"): ("exited", 600),     # parent is the package's
+            (600, "90.000000"): ("running", 1),
+            (505, "105.000000"): ("exited", 700),     # parent started after it
+            (700, "200.000000"): ("running", 1),
+            (506, "106.000000"): ("exited", 500),     # its mark was not read
+            (507, "107.000000"): ("exited", 999),     # parent not in the listing
+        }
+        pending = {key: ("", True) for key in table if key[0] in (501, 502, 503, 504, 505, 507)}
+        pending[(506, "106.000000")] = ("", False)
+        outside = {outer, (1, "1.000000"), (700, "200.000000")}
+        check.started_outside(table, pending, outside)
+        self.assertEqual(sorted(pid for pid, _ in outside - {outer, (1, "1.000000"), (700, "200.000000")}),
+                         [501, 502])
+
+    def guarded(self, command, read):
+        """Run command through the real guarded_run as CI runs it (run
+        --per-package, with a TMPDIR of its own), with read in place of
+        apple_owned, and return its exit status and what it printed."""
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.dict(os.environ, {"TMPDIR": folder}), \
+                mock.patch.object(tempfile, "gettempdir", return_value=folder), \
+                mock.patch.object(check, "apple_owned", read), \
+                contextlib.redirect_stdout(out):
+            code = check.guarded_run(command, per_package=True)
+        return code, out.getvalue()
+
+    def test_an_apple_job_that_exits_while_it_is_read_is_not_a_leftover(self):
+        """#572: launchd reports no job for a process that is no longer
+        running, so an Apple job that exited between run's listing and its
+        read of launchd once read as no job and was reported, as helpd and
+        Spotlight's mdworker_shared were on CI. The command here leaves two
+        detached sleeps of its own, and apple_owned answers as launchd does
+        for a job: a record for the first while it still runs as that pid,
+        and none once it is gone. The first is made to exit just before that
+        read. Positive controls: the same job still running is set aside, so
+        a run without the set-aside fails here, and the second sleep, no job
+        at all, is reported either way. Nothing depends on which of this
+        host's own processes are running or new."""
+        label = "launchd job com.apple.leak-check-test"
+        for exits in (True, False):
+            with self.subTest(exits=exits), tempfile.TemporaryDirectory() as folder:
+                job, planted = Path(folder) / "job", Path(folder) / "planted"
+                reads = []
+
+                def read(new_pids):
+                    pid = int(job.read_text())
+                    if not reads:
+                        self.assertIn(pid, new_pids, "the job was not listed as new, so nothing was tested")
+                        if exits:
+                            stop_process(pid)
+                    reads.append(set(new_pids))
+                    running = pid in new_pids and check.process_start(pid) is not None
+                    return {pid: label} if running else {}
+
+                try:
+                    code, output = self.guarded(
+                        [sys.executable, "-c", PLANT_EACH, str(job), str(planted)], read)
+                finally:
+                    for record in (job, planted):
+                        if record.exists() and record.read_text():
+                            stop_process(int(record.read_text()))
+                self.assertTrue(reads, output)
+                pid = job.read_text()
+                self.assertEqual(code, 1, output)
+                self.assertIn(f"LEAK process pid={planted.read_text()} ", output)
+                self.assertNotIn(f"LEAK process pid={pid} ", output)
+                if exits:
+                    self.assertRegex(output, rf"(?m)^leak-check: pid={pid} start=\S+ ended or "
+                                             "began exiting while it was read; listing again$")
+                    self.assertNotIn(f"{label} pid={pid}", output)
+                else:
+                    self.assertIn(f"set aside: {label} pid={pid}\n", output)
+
+    def test_what_a_process_starts_as_it_exits_mid_reading_is_reported(self):
+        """Why run lists again rather than leave out a process that exits
+        while it is read (settled_after): the process can have started one
+        the listing could not hold. Here a detached process the command
+        leaves starts a detached sleep and exits as run reads launchd, and the
+        sleep, which the first listing does not have, must be reported."""
+        with tempfile.TemporaryDirectory() as folder:
+            forker, child = Path(folder) / "forker", Path(folder) / "child"
+            seen = []
+            real = check.apple_owned
+
+            def read(new_pids):
+                if not seen:
+                    seen.append(int(forker.read_text()))
+                    self.assertIn(seen[0], new_pids,
+                                  "the forking process was not listed as new, so nothing was tested")
+                    os.kill(seen[0], signal.SIGUSR1)
+                    wait_for(lambda: child.exists() and child.read_text(), "the child's pid")
+                    wait_for(lambda: check.process_start(seen[0]) is None
+                             or not check.still_running((seen[0], check.process_start(seen[0]))),
+                             "the forking process to exit")
+                return real(new_pids)
+
+            try:
+                code, output = self.guarded(
+                    [sys.executable, "-c", DETACH, str(forker),
+                     sys.executable, "-c", FORK_THEN_EXIT, str(forker), str(child)], read)
+            finally:
+                for record in (child, forker):
+                    if record.exists() and record.read_text():
+                        stop_process(int(record.read_text()))
+            self.assertTrue(seen, output)
+            self.assertEqual(code, 1, output)
+            self.assertIn(f"LEAK process pid={child.read_text()} ", output)
+            self.assertNotIn(f"LEAK process pid={seen[0]} ", output)
+
+    def test_a_process_that_never_settles_is_reported_not_left_out(self):
+        """A process the listing shows that is never running when read again,
+        as one held in its exit is (darwin_records), never settles: after
+        SETTLE_READINGS listings it is reported rather than left out or set
+        aside, whatever launchd was read as saying while it was listed."""
+        held = (4242, "1792760000.000001")
+        listings = []
+
+        def listing():
+            listings.append(True)
+            return {held: "/usr/bin/held-in-exit"}
+
+        with mock.patch.object(check, "processes", side_effect=listing), \
+                mock.patch.object(check, "still_running", return_value=False), \
+                mock.patch.object(check, "apple_owned",
+                                  return_value={held[0]: "launchd job com.apple.agentd"}), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            after, jobs = check.settled_after({}, [])
+        self.assertEqual(len(listings), check.SETTLE_READINGS)
+        self.assertEqual(jobs, {})
+        self.assertEqual(check.differences(({}, {}), after, jobs)[0],
+                         [f"LEAK process pid={held[0]} start={held[1]} command=/usr/bin/held-in-exit"])
+        self.assertEqual(out.getvalue().count("listing again"), 1)
+        self.assertIn(f"did not settle in {check.SETTLE_READINGS} listings", out.getvalue())
+
     def test_missing_root_is_an_error(self):
         with tempfile.TemporaryDirectory() as folder:
             with self.assertRaises(FileNotFoundError):
@@ -451,7 +603,8 @@ class LeakCheckTest(unittest.TestCase):
 
     def test_command_failure_survives_clean_comparison(self):
         with mock.patch.object(check, "temp_roots", return_value=[]), \
-                mock.patch.object(check, "snapshot", return_value=({}, {})), \
+                mock.patch.object(check, "processes", return_value={}), \
+                mock.patch.object(check, "temp_entries", return_value={}), \
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(check.guarded_run([sys.executable, "-c", "exit(7)"]), 7)
 
@@ -608,6 +761,70 @@ func TestLeavesPsBlockedOnItsOutput(t *testing.T) {
 }
 """
 
+SANDBOX_FILTER_PATH = 1  # sandbox_check's filter for a path argument
+READ_EXTENSION = "com.apple.app-sandbox.read"  # the class a read grant is issued under
+MACH_EXTENSION = "com.apple.app-sandbox.mach"  # the class a mach-lookup grant is issued under
+
+
+def issue_extension(kind, target):
+    """A sandbox extension token granting kind for target, a path for
+    READ_EXTENSION and a global name for MACH_EXTENSION, issued by this
+    process, which no sandbox confines."""
+    libc = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True)
+    issue = (libc.sandbox_extension_issue_file if kind == READ_EXTENSION
+             else libc.sandbox_extension_issue_mach)
+    issue.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]
+    issue.restype = ctypes.c_void_p
+    token = issue(kind.encode(), str(target).encode(), 0)
+    if not token:
+        raise OSError(ctypes.get_errno(), f"issuing {kind} for {target}")
+    try:
+        return ctypes.string_at(token).decode()
+    finally:
+        libc.free(ctypes.c_void_p(token))
+
+
+def read_denied(pid, path):
+    """sandbox_check's answer for pid reading path's data: 1 denied, 0 allowed."""
+    libc = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True)
+    libc.sandbox_check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
+    libc.sandbox_check.restype = ctypes.c_int
+    return libc.sandbox_check(pid, b"file-read-data",
+                              SANDBOX_FILTER_PATH | check.SANDBOX_CHECK_NO_REPORT,
+                              str(path).encode())
+
+
+# Consumes the sandbox extension token in argv[1], prints "consumed" once it
+# has, and waits to be killed.
+CONSUME_AND_WAIT = """
+import ctypes, sys, time
+libc = ctypes.CDLL('/usr/lib/libSystem.dylib', use_errno=True)
+libc.sandbox_extension_consume.argtypes = [ctypes.c_char_p]
+libc.sandbox_extension_consume.restype = ctypes.c_int64
+if libc.sandbox_extension_consume(sys.argv[1].encode()) < 0:
+    sys.exit(f'consuming the extension failed: errno {ctypes.get_errno()}')
+print('consumed', flush=True)
+time.sleep(300)
+"""
+
+
+def consume_under(profile, token):
+    """Start CONSUME_AND_WAIT under the sandbox profile with token, and
+    return it once it has consumed the token; fail if it has not within 30
+    seconds, killing it."""
+    process = subprocess.Popen(["/usr/bin/sandbox-exec", "-p", profile, sys.executable,
+                                "-c", CONSUME_AND_WAIT, token],
+                               stdout=subprocess.PIPE, text=True)
+    ready, _, _ = select.select([process.stdout], [], [], 30)
+    line = process.stdout.readline().strip() if ready else ""
+    if line != "consumed":
+        process.kill()
+        process.wait()
+        process.stdout.close()
+        raise AssertionError(f"the process under {profile} did not consume its token: {line!r}")
+    return process
+
+
 def running(pid):
     """Whether pid is a running process, an unreaped exited one counting as
     gone. Read with ps, not with the guard's own reads."""
@@ -739,20 +956,85 @@ class PerPackageTest(unittest.TestCase):
                         os.kill(pid, 9)
 
     @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
+    def test_churn_outside_the_package_does_not_keep_a_reading_from_settling(self):
+        """#553: a process outside the package that the listing holds and
+        that is gone before its mark is read once forced another listing, so
+        steady churn on a busy machine kept every reading from settling and
+        failed a clean package. Here the real check runs with one such
+        process in every listing: a child of the process running the check,
+        started before each listing and killed and reaped before any mark is
+        read. A package that leaves a detached sleep must still fail naming
+        it, and one that leaves nothing must pass."""
+        for leak in (True, False):
+            with self.subTest(leak=leak), tempfile.TemporaryDirectory() as folder:
+                record = Path(folder) / "pid"
+                planted = [sys.executable, "-c", PLANT_DETACHED, str(record)]
+                command = planted if leak else [sys.executable, "-c", "pass"]
+                result = subprocess.run(
+                    [sys.executable, "-B", "-c", CHURN_EACH_LISTING, str(SCRIPT), "--"] + command,
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    check=False, timeout=120)
+                pid = int(record.read_text()) if leak else None
+                try:
+                    self.assertRegex(result.stdout, r"(?m)^churned in every one of [1-9]\d* listings$",
+                                     "no listing held a churned process, so this shows nothing")
+                    self.assertNotIn("no reading of the process table settled", result.stdout)
+                    if leak:
+                        self.assertEqual(result.returncode, 1, result.stdout)
+                        self.assertIn(f"LEAK package={os.getcwd()} process pid={pid} ", result.stdout)
+                        self.assertFalse(running(pid), "the check left the sleep running")
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stdout)
+                        self.assertNotIn("LEAK", result.stdout)
+                finally:
+                    if pid is not None and running(pid):
+                        os.kill(pid, 9)
+
+    @unittest.skipUnless(sys.platform == "darwin", "kinfo_proc is macOS's")
+    def test_the_table_reads_each_process_parent(self):
+        """darwin_table's parent is the kernel record's e_ppid: this process's
+        own is its parent, and a child it starts has this process as its."""
+        with subprocess.Popen(["sleep", "300"]) as child:
+            try:
+                table = check.darwin_table()
+                parents = {pid: parent for (pid, _), (_, parent) in table.items()}
+                self.assertEqual(parents.get(os.getpid()), os.getppid())
+                self.assertEqual(parents.get(child.pid), os.getpid())
+            finally:
+                child.kill()
+                child.wait()
+
+    @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
     def test_only_the_packages_own_sandbox_marks_a_process(self):
-        # Real processes: one in the package's sandbox is marked; one outside
-        # any sandbox, one in a sandbox that denies both files, and a pid
-        # that is gone are not.
+        # Real processes: one in the package's sandbox is marked, and so is
+        # one there holding a grant to look up the name its profile denies,
+        # which no extension lifts; one outside any sandbox, one in a sandbox
+        # that denies both names, and a pid that is gone are not. The grant
+        # is shown in force by another sandbox whose rule an extension does
+        # lift: given the same grant it is allowed inside and not marked, and
+        # given a grant of outside instead, which only this process can
+        # issue, it is marked, the one way the mark admits a stranger.
         sandbox = check.Sandbox()
         started = []
         try:
             def sleep(*prefix):
                 started.append(subprocess.Popen([*prefix, "sleep", "300"]))
                 return started[-1]
+
+            def consuming(profile, token):
+                started.append(consume_under(profile, token))
+                return started[-1]
             inside = sleep("/usr/bin/sandbox-exec", "-p", sandbox.profile)
             outside = sleep()
-            both = sleep("/usr/bin/sandbox-exec", "-p", "(version 1)(allow default)"
-                         f'(deny file-read-data (subpath "{sandbox.folder}"))')
+            names = f'(global-name "{sandbox.inside}") (global-name "{sandbox.outside}")'
+            both = sleep("/usr/bin/sandbox-exec", "-p",
+                         f"(version 1)(allow default)(deny mach-lookup {names})")
+            lifted = (f"(version 1)(allow default)(deny mach-lookup {names})"
+                      f'(allow mach-lookup (extension "{MACH_EXTENSION}"))')
+            to_inside = issue_extension(MACH_EXTENSION, sandbox.inside)
+            granted = consuming(sandbox.profile, to_inside)
+            stranger = consuming(lifted, to_inside)
+            stranger_outside = consuming(lifted, issue_extension(MACH_EXTENSION, sandbox.outside))
             gone = subprocess.Popen(["true"])
             gone.wait()
             # sandbox-exec applies the profile before it execs sleep, so a
@@ -761,6 +1043,11 @@ class PerPackageTest(unittest.TestCase):
                 while check.darwin_command(process.pid).split()[:1] != ["sleep"]:
                     pass
             self.assertIs(sandbox.marks(inside.pid), True)
+            self.assertIs(sandbox.marks(granted.pid), True)
+            self.assertEqual(sandbox.denies(stranger.pid, sandbox.inside), 0)
+            self.assertIs(sandbox.marks(stranger.pid), False)
+            self.assertEqual(sandbox.denies(stranger_outside.pid, sandbox.inside), 1)
+            self.assertIs(sandbox.marks(stranger_outside.pid), True)
             self.assertIs(sandbox.marks(outside.pid), False)
             self.assertIs(sandbox.marks(both.pid), False)
             self.assertIs(sandbox.marks(gone.pid), False)
@@ -787,7 +1074,46 @@ class PerPackageTest(unittest.TestCase):
             for process in started:
                 process.kill()
                 process.wait()
-            sandbox.remove()
+                if process.stdout:
+                    process.stdout.close()
+
+    @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
+    def test_a_grant_to_one_file_does_not_mark_another_sandboxs_process(self):
+        # #551: before, the mark was a pair of files the check made in
+        # TMPDIR, and Spotlight's mdworker_shared, whose sandbox at times
+        # allowed reading one of them and not the other, read as in the
+        # package's sandbox, so the check failed the package naming the worker
+        # and killed it. Here real processes in a sandbox that denies reads
+        # under a TMPDIR of the test's own each hold a real read grant to one
+        # file there: each file the check made there, and a control file of
+        # the test's, so there is always one. None is marked, and the check
+        # made no file there at all.
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder).resolve()
+            control, unread = folder / "control", folder / "unread"
+            control.write_text("granted")
+            unread.write_text("never granted")
+            with mock.patch.object(tempfile, "tempdir", str(folder)):
+                sandbox = check.Sandbox()
+            granted = sorted(path for path in folder.rglob("*")
+                             if path.is_file() and path != unread)
+            self.assertIn(control, granted)
+            profile = (f'(version 1)(allow default)(deny file-read-data (subpath "{folder}"))'
+                       '(allow file-read-data (extension "com.apple.app-sandbox.read"))')
+            for path in granted:
+                with self.subTest(granted=path.name):
+                    process = consume_under(profile, issue_extension(READ_EXTENSION, path))
+                    try:
+                        # The grant is in force: the process may read that
+                        # file, and not another beside it.
+                        self.assertEqual(read_denied(process.pid, path), 0)
+                        self.assertEqual(read_denied(process.pid, unread), 1)
+                        self.assertIs(sandbox.marks(process.pid), False)
+                    finally:
+                        process.kill()
+                        process.wait()
+                        process.stdout.close()
+            self.assertEqual(granted, [control], "Sandbox made files under TMPDIR")
 
     @unittest.skipUnless(sys.platform == "darwin", "the sandbox mark is macOS's")
     def test_a_ps_a_package_leaves_blocked_on_its_output_cannot_pass(self):
@@ -971,6 +1297,45 @@ pathlib.Path(sys.argv[1]).write_text(str(pid))
 # exited, before the mark is read, once ps no longer shows it exiting;
 # exiting, just after the check's next read of that process; held, only once
 # package_run has returned or failed. Each prints what ps showed.
+# Runs the real package_run over the command after "--", with every listing
+# of the process table holding a process outside the package that is gone
+# before its mark is read: a child of this process, started before the
+# listing and killed and reaped after it, even when the listing fails.
+# Prints how many listings there were once every one held such a process,
+# and an inspection failure as the command line does.
+CHURN_EACH_LISTING = """
+import importlib.util, subprocess, sys
+spec = importlib.util.spec_from_file_location("leak_check", sys.argv[1])
+check = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(check)
+command = sys.argv[sys.argv.index("--") + 1:]
+table, listings, churned = check.darwin_table, [], []
+
+def churn():
+    child = subprocess.Popen(['sleep', '300'])
+    try:
+        listed = table()
+    finally:
+        # Ended and reaped whether or not the listing could be read, so a
+        # failed read leaves nothing running (P15).
+        child.kill()
+        child.wait()
+    listings.append(True)
+    if any(pid == child.pid for pid, _ in listed):
+        churned.append(True)
+    return listed
+
+check.darwin_table = churn
+try:
+    code = check.package_run(command)
+except (OSError, RuntimeError) as error:
+    print(f"leak-check: inspection failed: {error}", flush=True)
+    code = 2
+if listings and len(churned) == len(listings):
+    print(f"churned in every one of {len(listings)} listings", flush=True)
+sys.exit(code)
+"""
+
 HOLD_IN_EXIT = """
 import importlib.util, os, signal, socket, subprocess, sys
 from pathlib import Path
@@ -1045,6 +1410,69 @@ finally:
 sys.exit(code)
 """
 
+
+def wait_for(condition, what, limit=60):
+    """Poll condition until it holds, failing loudly after limit seconds
+    rather than hanging the suite."""
+    deadline = time.monotonic() + limit
+    while not condition():
+        if time.monotonic() > deadline:
+            raise AssertionError(f"timed out waiting for {what}")
+        time.sleep(0.01)
+
+
+def stop_process(pid):
+    """SIGKILL pid and wait until it is no longer running."""
+    start = check.process_start(pid)
+    if start is None:
+        return
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    wait_for(lambda: not check.still_running((pid, start)), f"pid {pid} to exit")
+
+
+# Leaves a detached sleep for each path in argv[1:], recording its pid there.
+PLANT_EACH = """
+import pathlib, subprocess, sys
+for record in sys.argv[1:]:
+    p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    pathlib.Path(record).write_text(str(p.pid))
+"""
+
+# Starts argv[2:] in a session of its own, waits until the file argv[1] has
+# content, and exits, so the program is left behind, reparented, and reaped
+# by its new parent.
+DETACH = """
+import pathlib, subprocess, sys, time
+record = pathlib.Path(sys.argv[1])
+subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                 stderr=subprocess.DEVNULL, start_new_session=True)
+deadline = time.monotonic() + 60
+while not (record.exists() and record.read_text()):
+    if time.monotonic() > deadline:
+        sys.exit('the detached program never recorded its pid')
+    time.sleep(0.01)
+"""
+
+# Records its pid in argv[1]; on SIGUSR1 starts a detached sleep, records
+# that pid in argv[2], and exits.
+FORK_THEN_EXIT = """
+import os, pathlib, signal, subprocess, sys
+def fork_and_exit(*_):
+    p = subprocess.Popen(['sleep', '300'], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    pathlib.Path(sys.argv[2]).write_text(str(p.pid))
+    os._exit(0)
+signal.signal(signal.SIGUSR1, fork_and_exit)
+pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))
+while True:
+    signal.pause()
+"""
 
 if __name__ == "__main__":
     unittest.main()

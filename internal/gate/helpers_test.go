@@ -14,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -75,11 +76,14 @@ func indexOptions(t *testing.T) func(...gate.Option) []gate.Option {
 
 // openIndex opens the ownership index on a database of its own. It is not under
 // the home under test, because a home is allowed not to exist yet and opening a
-// database does not create the directory it sits in.
+// database does not create the directory it sits in. The database is seeded
+// from internal/store/storetest's template, for time alone, as that package's
+// comment says.
 func openIndex(t *testing.T) *store.Store {
 	t.Helper()
-	index, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"),
-		store.WithRedactor(testRedactor()))
+	path := filepath.Join(t.TempDir(), "state.db")
+	storetest.Seed(t, path)
+	index, err := store.Open(context.Background(), path, store.WithRedactor(testRedactor()))
 	if err != nil {
 		t.Fatalf("open the ownership index: %v", err)
 	}

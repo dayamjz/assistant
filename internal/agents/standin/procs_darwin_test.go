@@ -8,12 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"slices"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/principles"
 )
 
@@ -58,6 +58,59 @@ func (t *failsMidExec) environment(pid int) ([]string, error) {
 		return nil, syscall.EIO
 	}
 	return t.kernel.environment(pid)
+}
+
+// churns is a processTable that starts a real process of this user's
+// before each reading of the table (ids) and ends and reaps it when the
+// reading first asks after it (identify), so that every reading meets a
+// process that exited after the table named it, as one on a busy machine
+// does. The table names it first, since macOS's process table names the
+// newest process first. Every other read passes through to the table it
+// wraps.
+type churns struct {
+	*failsMidExec
+	mu    sync.Mutex
+	live  map[int]*exec.Cmd
+	ended int
+}
+
+func (c *churns) ids() ([]int, error) {
+	p := exec.Command("/bin/sleep", "60")
+	if err := p.Start(); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	c.live[p.Process.Pid] = p
+	c.mu.Unlock()
+	return c.failsMidExec.ids()
+}
+
+func (c *churns) identify(pid int) (agents.Identity, bool, error) {
+	c.mu.Lock()
+	p, ok := c.live[pid]
+	delete(c.live, pid)
+	c.mu.Unlock()
+	if ok {
+		_ = p.Process.Kill()
+		_ = p.Wait()
+		c.ended++
+	}
+	return c.failsMidExec.identify(pid)
+}
+
+// newChurns wraps table in a churns that ends what it started with the
+// test.
+func newChurns(t *testing.T, table *failsMidExec) *churns {
+	c := &churns{failsMidExec: table, live: map[int]*exec.Cmd{}}
+	t.Cleanup(func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, p := range c.live {
+			_ = p.Process.Kill()
+			_ = p.Wait()
+		}
+	})
+	return c
 }
 
 // startHeldShell starts a real shell of this user that waits on its input,
@@ -117,20 +170,37 @@ func TestAListingReadsAgainAProcessWhoseReadFailedOnce(t *testing.T) {
 // A list that cannot be read is an error and never an empty list (P15): when
 // every read of this user's running shell fails, no reading settles, and the
 // listing fails naming the shell and the read's error rather than passing
-// the shell over. Before, it came back empty with no error. The control is
-// that the shell was running throughout, so nothing else unsettled it.
+// the shell over. Before #550, it came back empty with no error. Every
+// reading here also meets another process that exits during it (churns), as
+// a busy runner's do, and the shell is still the one named, as the process
+// that kept every reading from settling: before, the error named whatever
+// unsettled the last reading first, which on macOS CI was an unrelated
+// process exiting (#561). The controls are that every reading met a process
+// that exited, that the last met one besides the shell, and that the shell
+// was running throughout.
 func TestAListingFailsWhenThisUsersRunningProcessCannotBeRead(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
 	shell, token := startHeldShell(t)
-	table := &failsMidExec{pid: shell.Process.Pid, always: true}
+	table := newChurns(t, &failsMidExec{pid: shell.Process.Pid, always: true})
 
 	listed, err := processesWhere(table, carriesArg(token))
 	if err == nil {
 		t.Fatalf("the listing is %v and no error, though no read of the running shell %d succeeded", listed, shell.Process.Pid)
 	}
-	if !errors.Is(err, syscall.EIO) || !strings.Contains(err.Error(), fmt.Sprintf("process %d ", shell.Process.Pid)) {
-		t.Errorf("the listing failed with %v, want one naming process %d and the read's EIO", err, shell.Process.Pid)
+	if table.ended != settleReadings {
+		t.Fatalf("%d of %d readings met a process that exited, so this shows nothing", table.ended, settleReadings)
+	}
+	t.Logf("the listing failed with %v", err)
+	var unsettled *unsettledError
+	if !errors.As(err, &unsettled) {
+		t.Fatalf("the listing failed with %v, want an unsettledError", err)
+	}
+	if unsettled.Others == 0 {
+		t.Fatalf("nothing but the shell kept the last reading from settling (%v), so this shows nothing", err)
+	}
+	if unsettled.PID != shell.Process.Pid || unsettled.Readings != settleReadings || !errors.Is(err, syscall.EIO) {
+		t.Errorf("the listing failed with %v, want one naming process %d as keeping each of the %d readings from settling with the read's EIO", err, shell.Process.Pid, settleReadings)
 	}
 	if err := shell.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatalf("the shell was not running once the listing returned (%v), so this shows nothing", err)

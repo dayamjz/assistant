@@ -71,8 +71,11 @@ repository more than one round of review.
 
 ## Code
 
-- Go, formatted with `gofmt`. `make check` is what CI runs and what the gate
-  runs; keep it green.
+- Go, formatted with `gofmt`. `make check` (lint and the race suite) is the
+  local check; keep it green. CI runs the suite through `scripts/ci-test.sh`
+  under the leak check (`scripts/leak-check.py`), so a package that leaves a
+  process or temp entry behind fails CI even when `make check` passes. The gate
+  runs `make lint` and leaves the full suite to CI (`.no-mistakes.yaml`).
 - **Package rules live in `.claude/rules/<package>.md`** (`internal/service` is
   `.claude/rules/service.md`) and are part of this agreement. Read the one for
   the package you change, whatever tool you are: Claude Code loads it when it

@@ -15,7 +15,8 @@ cannot list, run passes only as CI runs it, with a TMPDIR of its own and
 run compares one snapshot taken before the command with one taken after it,
 so it reports what is still there when the command ends: for go test, the
 end of the whole run. A process that outlives its package but exits before
-go test ends is not there, and neither is a temp entry removed by then.
+go test ends is not there, and neither is a temp entry removed by then, nor
+a process that exits while the snapshot after is being read (settled_after).
 
 package is P15's per-package check (CI fails when any process a test started
 outlives its package): go test runs each package's test binary through it,
@@ -42,6 +43,7 @@ import ctypes
 import errno
 import os
 from pathlib import Path
+import secrets
 import signal
 import stat
 import struct
@@ -411,6 +413,64 @@ def snapshot(roots, unread=None):
     return processes(), temp_entries(roots, unread)
 
 
+def still_running(key):
+    """Whether the process key, a (pid, start) from processes, is still that
+    process and running: on macOS not exiting or exited (darwin_process), on
+    Linux still in /proc with that start."""
+    pid, start = key
+    if sys.platform == "darwin":
+        return darwin_process(pid) == (start, RUNNING)
+    return process_start(pid) == start
+
+
+def settled_after(before_processes, roots, unread=None):
+    """The snapshot run compares with before once the command has ended, and
+    the new processes in it set aside as macOS's own, as apple_owned maps
+    them.
+
+    launchd is read after the process listing, and apple_launchd_jobs and
+    apple_bundle_service find nothing for a process that is no longer
+    running, so an Apple job that exited in between read as no job and was
+    reported though launchd ran it (#572 has the CI runs: Spotlight's
+    mdworker_shared and helpd). So each new process is read again once
+    launchd has been read for it, and that read settles it only when the
+    process is still the same and running then (still_running): set aside
+    as macOS's when launchd's record says so, and reported otherwise. One
+    that has exited, is exiting, or was replaced by then was read neither
+    way, and since it may have started a process the listing could not
+    hold, the processes are listed again; the snapshot is the first listing
+    in which every new process settled. A process that exits during the
+    reading is therefore not in it, as one that exited before the first
+    listing is not. One still unsettled after SETTLE_READINGS listings, as
+    a process held in its exit would be, is reported, not set aside.
+    """
+    settled, told = {}, set()
+    for _ in range(SETTLE_READINGS):
+        listed = processes()
+        new = [key for key in listed if key not in before_processes]
+        unread_pids = {pid for pid, start in new if (pid, start) not in settled}
+        jobs = apple_owned(unread_pids) if unread_pids else {}
+        unsettled = []
+        for key in new:
+            if key in settled:
+                continue
+            if still_running(key):
+                settled[key] = jobs.get(key[0])
+            else:
+                unsettled.append(key)
+        for pid, start in set(unsettled) - told:
+            print(f"leak-check: pid={pid} start={start} ended or began exiting while "
+                  "it was read; listing again", flush=True)
+        told.update(unsettled)
+        if not unsettled:
+            break
+    else:
+        print(f"leak-check: {len(unsettled)} process(es) did not settle in "
+              f"{SETTLE_READINGS} listings; reported, not set aside", flush=True)
+    aside = {pid: settled[(pid, start)] for pid, start in new if settled.get((pid, start))}
+    return (listed, temp_entries(roots, unread)), aside
+
+
 def differences(before, after, jobs=None, apple_root=None):
     """Return every new process identity and new or replaced filesystem entry,
     and, separately, the new ones set aside as taken for macOS's.
@@ -441,7 +501,8 @@ def differences(before, after, jobs=None, apple_root=None):
 
 def guarded_run(command, per_package=False):
     """Run command and fail for every runner-user process and temp entry it
-    left: new when it ends, and not set aside as macOS's own (differences).
+    left: new when it ends, and not set aside as macOS's own (settled_after,
+    differences).
 
     A name in the per-user temp dir is no proof of who made the entry, since
     a test can make com.apple.anything there as easily as an Apple agent. So
@@ -471,9 +532,8 @@ def guarded_run(command, per_package=False):
 
     before = snapshot(roots, unread)
     result = subprocess.run(command, check=False)
-    after = snapshot(roots, unread)
-    new_pids = {pid for pid, start in after[0] if (pid, start) not in before[0]}
-    messages, aside = differences(before, after, apple_owned(new_pids), apple_root)
+    after, jobs = settled_after(before[0], roots, unread)
+    messages, aside = differences(before, after, jobs, apple_root)
     for message in aside:
         print(f"leak-check: set aside: {message}", flush=True)
     for message in messages:
@@ -688,9 +748,11 @@ def linux_leftovers(package):
 
 
 KINFO_PROC_SIZE = 648  # sizeof(struct kinfo_proc) from sys/sysctl.h, 64-bit
+E_PPID_OFFSET = 560  # kinfo_proc.kp_eproc.e_ppid, 64-bit; the guard's tests check it on known parents
+LAUNCHD = 1  # the pid an orphan is reparented to on macOS
 SZOMB = 5  # extern_proc.p_stat of a process that has exited, from sys/proc.h
 P_WEXIT = 0x00002000  # extern_proc.p_flag of a process working on exiting, from sys/proc.h
-SANDBOX_FILTER_PATH = 1  # sandbox_check's filter for a path argument
+SANDBOX_FILTER_GLOBAL_NAME = 2  # sandbox_check's filter for a Mach service name; the guard's tests fail if wrong
 SANDBOX_CHECK_NO_REPORT = 0x40000000  # sandbox_check: do not log a denial
 SETTLE_READINGS = 64
 
@@ -699,8 +761,9 @@ RUNNING, EXITING, EXITED = "running", "exiting", "exited"
 
 
 def darwin_records(mib):
-    """The kinfo_proc records sysctl returns for mib, as (pid, start, state):
-    start is the kernel's start time in the form process_start uses; state is
+    """The kinfo_proc records sysctl returns for mib, as (pid, start, state,
+    parent): parent is the record's parent pid (eproc.e_ppid), and start is
+    the kernel's start time in the form process_start uses; state is
     EXITED for a zombie (p_stat SZOMB), EXITING for a process that is not one
     yet but whose p_flag has P_WEXIT, the flag ps shows as E, and RUNNING
     otherwise. A process held in its exit reads EXITING, not yet a zombie,
@@ -726,24 +789,27 @@ def darwin_records(mib):
                            f"not whole {KINFO_PROC_SIZE}-byte records")
     records = []
     for offset in range(0, size.value, KINFO_PROC_SIZE):
-        # extern_proc: p_starttime at 0, p_flag at 32, p_stat at 36, p_pid at 40.
+        # extern_proc: p_starttime at 0, p_flag at 32, p_stat at 36, p_pid at
+        # 40; eproc, which follows it, puts e_ppid at 560 of the record.
         sec, usec = struct.unpack_from("<qi", buffer.raw, offset)
         flag, = struct.unpack_from("<i", buffer.raw, offset + 32)
         pid, = struct.unpack_from("<i", buffer.raw, offset + 40)
+        parent, = struct.unpack_from("<i", buffer.raw, offset + E_PPID_OFFSET)
         if buffer.raw[offset + 36] == SZOMB:
             state = EXITED
         elif flag & P_WEXIT:
             state = EXITING
         else:
             state = RUNNING
-        records.append((pid, f"{sec}.{usec:06d}", state))
+        records.append((pid, f"{sec}.{usec:06d}", state, parent))
     return records
 
 
 def darwin_table():
-    """Map (pid, start) to its state (darwin_records), for every process in
-    the kernel's table (sysctl kern.proc.all), whatever its user."""
-    return {(pid, start): state for pid, start, state in darwin_records((1, 14, 0))}
+    """Map (pid, start) to (state, parent pid) (darwin_records), for every
+    process in the kernel's table (sysctl kern.proc.all), whatever its user."""
+    return {(pid, start): (state, parent)
+            for pid, start, state, parent in darwin_records((1, 14, 0))}
 
 
 def darwin_process(pid):
@@ -757,14 +823,29 @@ class Sandbox:
     """A sandbox profile that marks a package's processes, and the reads that
     tell them apart.
 
-    The profile allows everything except reading one file, inside, and the
-    writes below, so a process in it denies inside and allows outside, two empty files in a
-    directory of their own. A process outside it allows both, and one in
-    another sandbox that denies both is not marked either. A process started
-    under the profile is in it after a new session, its parent's exit and
-    exec, and sandbox-exec run inside it fails before starting its command,
-    so a process the package starts cannot leave the mark that way; the
-    guard's tests check each of these on the machine they run on.
+    The mark is two Mach service names, inside and outside, each
+    "leak-check." and 128 random bits in hex, new for each package: the
+    profile allows everything except looking up inside, and the writes
+    below, so a process in it is denied inside and allowed outside. A
+    process in no sandbox is allowed both, and one in a sandbox that denies
+    the lookups it was not granted is denied both. Reading as marked takes
+    a rule that tells these two names apart, or a grant of outside alone:
+    inside is named only in this profile, and outside is in no profile and
+    leaves this process in no argument, so no other process can name it in
+    a rule or be issued a grant for it, and a rule written without either
+    name tells two random names apart only by chance. The mark was once a
+    pair of files in TMPDIR, and Spotlight's mdworker_shared, whose sandbox
+    at times allowed reading one of them and not the other, read as marked
+    and was failed and killed as a package's process (#551). The check makes
+    no files now: the guard's tests fail if Sandbox makes any under TMPDIR,
+    and check that a process in another sandbox granted a read of one file
+    is not marked. The profile has no rule a sandbox extension lifts, so a
+    process in it that consumes a grant to inside is still marked.
+    A process started under the profile is in it after a new session, its
+    parent's exit and exec, and sandbox-exec run inside it fails before
+    starting its command, so a process the package starts cannot leave the
+    mark that way; the guard's tests check each of these on the machine they
+    run on.
 
     Given unwritable, a directory, the profile also denies every write under
     it: package_run passes the per-user temp dir when TMPDIR is elsewhere
@@ -779,29 +860,25 @@ class Sandbox:
     cannot see.
     sandbox_check reads the mark of any pid; for a pid that is gone, and for
     a process that has begun exiting (darwin_records), it answers denied for
-    both files, which is not the mark.
+    both names, which is not the mark.
     """
 
     def __init__(self, unwritable=None):
-        self.folder = Path(tempfile.mkdtemp(prefix="leak-check-package-")).resolve()
-        self.inside = self.folder / "inside"
-        self.outside = self.folder / "outside"
-        self.inside.touch()
-        self.outside.touch()
-        for path in (self.inside, unwritable):
-            if path is not None and ('"' in str(path) or "\\" in str(path)):
-                raise RuntimeError(f"cannot quote {path} in a sandbox profile")
+        self.inside = f"leak-check.{secrets.token_hex(16)}"
+        self.outside = f"leak-check.{secrets.token_hex(16)}"
+        if unwritable is not None and ('"' in str(unwritable) or "\\" in str(unwritable)):
+            raise RuntimeError(f"cannot quote {unwritable} in a sandbox profile")
         self.profile = ("(version 1)(allow default)"
-                        f'(deny file-read-data (literal "{self.inside}"))')
+                        f'(deny mach-lookup (global-name "{self.inside}"))')
         if unwritable is not None:
             self.profile += f'(deny file-write* (subpath "{unwritable}"))'
         self.check = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True).sandbox_check
         self.check.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]
         self.check.restype = ctypes.c_int
 
-    def denies(self, pid, path):
-        return self.check(pid, b"file-read-data",
-                          SANDBOX_FILTER_PATH | SANDBOX_CHECK_NO_REPORT, str(path).encode())
+    def denies(self, pid, name):
+        return self.check(pid, b"mach-lookup",
+                          SANDBOX_FILTER_GLOBAL_NAME | SANDBOX_CHECK_NO_REPORT, name.encode())
 
     def marks(self, pid):
         """True when pid is in this sandbox, False when it is not or is gone,
@@ -811,10 +888,30 @@ class Sandbox:
             return None
         return inside == 1 and outside == 0
 
-    def remove(self):
-        for path in (self.inside, self.outside):
-            path.unlink(missing_ok=True)
-        self.folder.rmdir()
+
+def start_order(key):
+    """Sort key for a (pid, start): the start time as numbers."""
+    return tuple(map(int, key[1].split(".")))
+
+
+def started_outside(table, pending, outside):
+    """Add to outside each process of pending (a key to (description,
+    unmarked)) that read as unmarked and whose parent in table settled
+    outside the sandbox, started no later than it, and is not launchd
+    (darwin_marked), until no more can be added: a parent added here counts
+    for its own children."""
+    current = {key[0]: key for key in table}
+    added = True
+    while added:
+        added = False
+        for key, (_, unmarked) in pending.items():
+            if key in outside or not unmarked:
+                continue
+            parent = current.get(table[key][1])
+            if (parent is not None and parent[0] != LAUNCHD and parent in outside
+                    and start_order(parent) <= start_order(key)):
+                outside.add(key)
+                added = True
 
 
 def darwin_marked(sandbox):
@@ -834,16 +931,33 @@ def darwin_marked(sandbox):
     held in its exit through SETTLE_READINGS listings makes this an error
     rather than a reading without what it started. A process that exits
     before its mark is read, and started nothing, is not found.
+
+    Except: an unmarked process that could not be settled so is settled
+    outside the sandbox when its parent in the same listing (its record's
+    e_ppid) settled outside it, started no later than it did, and is not
+    launchd. A process is in the sandbox only if the process that started it
+    was, since the sandbox is inherited and cannot be left (Sandbox). The
+    rule takes a recorded parent other than launchd, which adopts orphans,
+    to be the process that started this one; a record naming some other
+    process, as when a debugger outside the sandbox traces one of the
+    package's processes as it exits, would settle that process outside, and
+    that is the rule's gap. It matters because any process of any user that
+    starts and exits while a listing is read would otherwise force another
+    listing, and steady churn on a busy machine then never let one settle
+    (#553: 66 of 100 runs of a clean package failed so beside three loops
+    of /usr/bin/true). Settled this way, a process's own children follow by
+    the same rule from it, in the same listing.
+
     SETTLE_READINGS listings without one that settles are an error naming
     what the last left unsettled.
     """
-    found, settled = set(), set()
+    found, settled, outside = set(), set(), set()
     for _ in range(SETTLE_READINGS):
-        unsettled = []
+        pending = {}
         # Newest first: a process the package left is among the last started.
         table = darwin_table()
-        for key in sorted(table, key=lambda k: tuple(map(int, k[1].split("."))), reverse=True):
-            if table[key] == EXITED or key in settled:
+        for key in sorted(table, key=start_order, reverse=True):
+            if table[key][0] == EXITED or key in settled:
                 continue
             mark = sandbox.marks(key[0])
             reading = darwin_process(key[0])
@@ -852,10 +966,14 @@ def darwin_marked(sandbox):
                 found.add(key)
             if mark or (running and mark is not None):
                 settled.add(key)
+                if not mark:
+                    outside.add(key)
             if not running or mark is None:
                 state = "gone" if reading is None or reading[0] != key[1] else reading[1]
-                unsettled.append(f"pid={key[0]} start={key[1]} {state}"
-                                 + (", its mark unread" if mark is None else ""))
+                pending[key] = (f"pid={key[0]} start={key[1]} parent={table[key][1]} {state}"
+                                + (", its mark unread" if mark is None else ""), mark is False)
+        started_outside(table, pending, outside)
+        unsettled = [said for key, (said, _) in pending.items() if key not in outside]
         if not unsettled:
             return found
     raise RuntimeError(f"no reading of the process table settled in {SETTLE_READINGS} "
@@ -947,33 +1065,29 @@ def package_run(command):
     else:
         raise RuntimeError("the per-package check runs on Linux and macOS, "
                            f"and this is {sys.platform}")
-    try:
-        record = os.environ.get("LEAK_CHECK_RECORD")
-        if record:
-            with open(record, "a", encoding="utf-8") as out:
-                out.write(os.getcwd() + "\n")
-        child = os.posix_spawnp(command[0], command, os.environ)
+    record = os.environ.get("LEAK_CHECK_RECORD")
+    if record:
+        with open(record, "a", encoding="utf-8") as out:
+            out.write(os.getcwd() + "\n")
+    child = os.posix_spawnp(command[0], command, os.environ)
 
-        def forward(signum, _frame):
-            try:
-                os.kill(child, signum)
-            except ProcessLookupError:
-                pass
+    def forward(signum, _frame):
+        try:
+            os.kill(child, signum)
+        except ProcessLookupError:
+            pass
 
-        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
-            signal.signal(signum, forward)
-        while True:
-            pid, status = os.waitpid(-1 if sandbox is None else child, 0)
-            if pid == child:
-                break
-        package = os.getcwd()
-        if sandbox is None:
-            left = linux_leftovers(package)
-        else:
-            left = darwin_leftovers(package, sandbox)
-    finally:
-        if sandbox is not None:
-            sandbox.remove()
+    for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+        signal.signal(signum, forward)
+    while True:
+        pid, status = os.waitpid(-1 if sandbox is None else child, 0)
+        if pid == child:
+            break
+    package = os.getcwd()
+    if sandbox is None:
+        left = linux_leftovers(package)
+    else:
+        left = darwin_leftovers(package, sandbox)
     if left:
         print(f"leak-check: package {package} left processes running", flush=True)
     if os.WIFSIGNALED(status):

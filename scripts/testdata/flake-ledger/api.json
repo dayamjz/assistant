@@ -1,0 +1,1512 @@
+{
+ "_about": "Real GitHub API responses recorded 2026-10-23 for runs 39905430594, 39932040317 and 39916130926, trimmed to the fields scripts/flake-ledger.py reads; pulls are #154 and #257, two pull requests that reused the branch claude/prd-owner-decisions.",
+ "runs": [
+  {
+   "id": 39905430594,
+   "run_attempt": 3,
+   "conclusion": "success",
+   "status": "completed",
+   "head_branch": "fix/age-441-handoff-session",
+   "head_repository": {
+    "full_name": "dayamjz/assistant"
+   },
+   "event": "pull_request",
+   "head_sha": "98cc03dfa01ab9635066cd77f7b5556cfbaee8f4",
+   "created_at": "2026-10-23T05:22:50Z",
+   "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594"
+  },
+  {
+   "id": 39932040317,
+   "run_attempt": 2,
+   "conclusion": "success",
+   "status": "completed",
+   "head_branch": "fix/age-444-service-readiness",
+   "head_repository": {
+    "full_name": "dayamjz/assistant"
+   },
+   "event": "pull_request",
+   "head_sha": "9a507d503651a68642680445767a3fa7468361bf",
+   "created_at": "2026-10-23T09:27:50Z",
+   "html_url": "https://github.com/dayamjz/assistant/actions/runs/39932040317"
+  },
+  {
+   "id": 39916130926,
+   "run_attempt": 1,
+   "conclusion": "cancelled",
+   "status": "completed",
+   "head_branch": "fix/age-551-leakcheck-mdworker",
+   "head_repository": {
+    "full_name": "dayamjz/assistant"
+   },
+   "event": "pull_request",
+   "head_sha": "743bec968dfa9bf0d5d23675d651289e1ba75b05",
+   "created_at": "2026-10-23T07:11:01Z",
+   "html_url": "https://github.com/dayamjz/assistant/actions/runs/39916130926"
+  }
+ ],
+ "attempts": {
+  "39905430594/1": {
+   "conclusion": "failure",
+   "jobs": [
+    {
+     "id": 120256178154,
+     "run_attempt": 1,
+     "name": "check (ubuntu-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:42:59Z",
+     "conclusion": "success",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/120256178154",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "success"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "success"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "success"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120256178246,
+     "run_attempt": 1,
+     "name": "check (macos-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T05:22:54Z",
+     "completed_at": "2026-10-23T05:52:16Z",
+     "conclusion": "failure",
+     "labels": [
+      "macos-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/120256178246",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "failure"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120256178326,
+     "run_attempt": 1,
+     "name": "lint",
+     "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:25:25Z",
+     "conclusion": "success",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/120256178326",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    }
+   ]
+  },
+  "39905430594/2": {
+   "conclusion": "failure",
+   "jobs": [
+    {
+     "id": 120265317855,
+     "run_attempt": 2,
+     "name": "check (macos-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T05:54:13Z",
+     "completed_at": "2026-10-23T06:18:38Z",
+     "conclusion": "failure",
+     "labels": [
+      "macos-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/120265317855",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "failure"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120265318851,
+     "run_attempt": 2,
+     "name": "lint",
+     "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:25:25Z",
+     "conclusion": "success",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/120265318851",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120265319660,
+     "run_attempt": 2,
+     "name": "check (ubuntu-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:42:59Z",
+     "conclusion": "success",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/120265319660",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "success"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "success"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "success"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    }
+   ]
+  },
+  "39905430594/3": {
+   "conclusion": "success",
+   "jobs": [
+    {
+     "id": 120273066649,
+     "run_attempt": 3,
+     "name": "check (macos-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T06:19:34Z",
+     "completed_at": "2026-10-23T06:51:57Z",
+     "conclusion": "success",
+     "labels": [
+      "macos-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/120273066649",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "success"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120273067604,
+     "run_attempt": 3,
+     "name": "check (ubuntu-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:42:59Z",
+     "conclusion": "success",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/120273067604",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "success"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "success"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "success"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120273068696,
+     "run_attempt": 3,
+     "name": "lint",
+     "status": "completed",
+     "started_at": "2026-10-23T05:22:53Z",
+     "completed_at": "2026-10-23T05:25:25Z",
+     "conclusion": "success",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/120273068696",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    }
+   ]
+  },
+  "39932040317/1": {
+   "conclusion": "cancelled",
+   "jobs": [
+    {
+     "id": 120342423839,
+     "run_attempt": 1,
+     "name": "lint",
+     "status": "completed",
+     "started_at": "2026-10-23T09:27:53Z",
+     "completed_at": "2026-10-23T09:41:42Z",
+     "conclusion": "success",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39932040317/job/120342423839",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120342424113,
+     "run_attempt": 1,
+     "name": "check (ubuntu-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T09:27:53Z",
+     "completed_at": "2026-10-23T09:58:08Z",
+     "conclusion": "success",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39932040317/job/120342424113",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "success"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "success"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "success"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120342424178,
+     "run_attempt": 1,
+     "name": "check (macos-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T09:27:53Z",
+     "completed_at": "2026-10-23T10:08:08Z",
+     "conclusion": "cancelled",
+     "labels": [
+      "macos-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39932040317/job/120342424178",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "cancelled"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    }
+   ]
+  },
+  "39932040317/2": {
+   "conclusion": "success",
+   "jobs": [
+    {
+     "id": 120362627622,
+     "run_attempt": 2,
+     "name": "check (macos-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T10:18:16Z",
+     "completed_at": "2026-10-23T10:50:01Z",
+     "conclusion": "success",
+     "labels": [
+      "macos-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39932040317/job/120362627622",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "success"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120362628716,
+     "run_attempt": 2,
+     "name": "lint",
+     "status": "completed",
+     "started_at": "2026-10-23T09:27:53Z",
+     "completed_at": "2026-10-23T09:41:42Z",
+     "conclusion": "success",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39932040317/job/120362628716",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120362629612,
+     "run_attempt": 2,
+     "name": "check (ubuntu-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T09:27:53Z",
+     "completed_at": "2026-10-23T09:58:08Z",
+     "conclusion": "success",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39932040317/job/120362629612",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "success"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "success"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "success"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    }
+   ]
+  },
+  "39916130926/1": {
+   "conclusion": "cancelled",
+   "jobs": [
+    {
+     "id": 120290002581,
+     "run_attempt": 1,
+     "name": "lint",
+     "status": "completed",
+     "started_at": "2026-10-23T07:11:04Z",
+     "completed_at": "2026-10-23T07:13:20Z",
+     "conclusion": "success",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39916130926/job/120290002581",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (windows)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post golangci-lint (darwin)",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run golangci/golangci-lint-action@v9",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120290002840,
+     "run_attempt": 1,
+     "name": "check (macos-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T07:11:04Z",
+     "completed_at": "2026-10-23T07:20:10Z",
+     "conclusion": "cancelled",
+     "labels": [
+      "macos-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39916130926/job/120290002840",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "cancelled"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    },
+    {
+     "id": 120290002917,
+     "run_attempt": 1,
+     "name": "check (ubuntu-latest)",
+     "status": "completed",
+     "started_at": "2026-10-23T07:11:04Z",
+     "completed_at": "2026-10-23T07:19:59Z",
+     "conclusion": "cancelled",
+     "labels": [
+      "ubuntu-latest"
+     ],
+     "html_url": "https://github.com/dayamjz/assistant/actions/runs/39916130926/job/120290002917",
+     "steps": [
+      {
+       "name": "Set up job",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Run actions/setup-go@v6",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tmux",
+       "conclusion": "success"
+      },
+      {
+       "name": "Install tini",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify formatting",
+       "conclusion": "success"
+      },
+      {
+       "name": "Verify go.mod is tidy",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet",
+       "conclusion": "success"
+      },
+      {
+       "name": "Vet for Windows",
+       "conclusion": "success"
+      },
+      {
+       "name": "Lint guard",
+       "conclusion": "success"
+      },
+      {
+       "name": "Leak guard tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Test",
+       "conclusion": "cancelled"
+      },
+      {
+       "name": "Skipped tests",
+       "conclusion": "success"
+      },
+      {
+       "name": "Post Run actions/setup-go@v6",
+       "conclusion": "skipped"
+      },
+      {
+       "name": "Post Run actions/checkout@v4",
+       "conclusion": "success"
+      },
+      {
+       "name": "Complete job",
+       "conclusion": "success"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "annotations": {
+  "120342424178": [
+   {
+    "annotation_level": "failure",
+    "message": "The job has exceeded the maximum execution time of 40m0s"
+   },
+   {
+    "annotation_level": "warning",
+    "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/"
+   },
+   {
+    "annotation_level": "failure",
+    "message": "The operation was canceled."
+   },
+   {
+    "annotation_level": "warning",
+    "message": "Failed to restore: Egress is over the account limit.\nRequestId:d50e7bd4-001e-0079-14d0-6264a0000000\nTime:2026-10-23T09:28:15.8656782Z"
+   },
+   {
+    "annotation_level": "notice",
+    "message": "Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times."
+   }
+  ],
+  "120290002840": [
+   {
+    "annotation_level": "failure",
+    "message": "Canceling since a higher priority waiting request for ci-refs/pull/554/merge exists"
+   },
+   {
+    "annotation_level": "warning",
+    "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/"
+   },
+   {
+    "annotation_level": "failure",
+    "message": "The operation was canceled."
+   },
+   {
+    "annotation_level": "notice",
+    "message": "Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times."
+   }
+  ],
+  "120290002917": [
+   {
+    "annotation_level": "failure",
+    "message": "Canceling since a higher priority waiting request for ci-refs/pull/554/merge exists"
+   },
+   {
+    "annotation_level": "warning",
+    "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/"
+   },
+   {
+    "annotation_level": "failure",
+    "message": "The operation was canceled."
+   },
+   {
+    "annotation_level": "notice",
+    "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\""
+   }
+  ]
+ },
+ "issues": [
+  {
+   "number": 551,
+   "state": "closed",
+   "title": "ci: the per-package leak check blames a package for Spotlight's mdworker_shared on macOS",
+   "body": "Seen on #546's CI after it merged main (run https://github.com/dayamjz/assistant/actions/runs/39905430594, macos-latest; ubuntu and lint green). #546 does not touch internal/supervisor or scripts/.\n\n```\nLEAK package=.../internal/supervisor process pid=3156 command=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared -s mdworker -c MDSImporterWorker -m com.apple.mdworker.shared\nleak-check: package .../internal/supervisor left processes running\nFAIL github.com/dayamjz/assistant/internal/supervisor\n```\n\n`scripts/leak-check.py` (#492) sets aside com.apple.* launchd jobs that `launchctl list` shows, and Apple .xpc/.appex bundles launchd records as a process's originator. Spotlight's mdworker_shared pool is neither, so a Spotlight worker that launchd starts while a package runs is reported as that package's leak. Main and every PR can hit this at random.\n\nFind what evidence proves such a process is not the package's: its parent, its launchd domain or label (`launchctl print pid/<pid>`, `launchctl procinfo`), its responsible process, or whether it descends from the package's process tree at all. Set aside only on evidence a test cannot forge, and keep the check failing loudly on a real leak (positive control: a test's own detached process is still reported). Do not add an mdworker name match: a name proves nothing.",
+   "closed_at": "2026-10-23T12:14:29Z"
+  },
+  {
+   "number": 552,
+   "state": "closed",
+   "title": "service: concurrent dispatches of one task race on refs/assistant/trusted/dispatch/<task> (regression from #540)",
+   "body": "Seen on #546's CI (run https://github.com/dayamjz/assistant/actions/runs/39905430594 attempt 2, macos-latest). #546 does not touch dispatch's trusted read; #540 (merged 2026-10-22 10:20 PM PDT) added it.\n\n```\ndispatch_internal_test.go:159: a dispatcher failed for a reason other than the claim: service: the task was not placed on this machine: the dispatch of task lkyl7jgeni6w reads its repository's trusted configuration first: service: the trusted configuration could not be established; the run is stopped rather than run on guessed defaults: resolving the fetched main for the dispatch of task lkyl7jgeni6w: vcs: refs/assistant/trusted/dispatch/lkyl7jgeni6w does not resolve to a commit in .../repos/29244857f72c15e0.git\n--- FAIL: TestConcurrentDispatchOfOneTaskClaimsOneAttempt\n```\n\nCoordinator's reading (verify it): #540 made `dispatchClaimed` read the trusted copy before claiming, by fetching main into a ref named after the task. Two concurrent dispatches of one task (which the test exercises, and the service can do) share that ref name, so one can update or remove it between the other's fetch and resolve. Then a dispatcher fails for a reason other than losing the claim, and the task may be left unplaced.\n\nFix at the cause: a fetch ref unique to each dispatch attempt (or the read ordered after the claim, if the placement contract allows), without weakening #540's guarantee that a task stays queued when the trusted copy cannot be read (P7). Reproduce deterministically by ordering two dispatchers between fetch and resolve, never with a sleep.",
+   "closed_at": "2026-10-23T09:27:38Z"
+  },
+  {
+   "number": 559,
+   "state": "open",
+   "title": "ci: the macOS check job runs within minutes of its 40-minute timeout since the per-package leak check",
+   "body": "Since #492 (per-package leak check) merged, macOS `check` jobs take 25-37 minutes against `timeout-minutes: 40` (ci.yml line 21). On 2026-10-23 around 2:27 AM PDT three runs that started together (#554, #556, main) ran 37-40 minutes and two were cancelled at the timeout with \"The operation was canceled\" (runs 39932040317, 39932031756). Recent durations: 25, 26, 28, 28, 29, 30, 30, 33, 35, 37, 40, 40 minutes.\n\nDecide between making the job faster (what the per-package check costs per package on macOS, the settle loops, whether `internal/service` and `internal/cli` dominate) and a larger bound with a reason. A timeout that cancels a passing run reads as a failure and is re-run past, which is the noise this push is removing.",
+   "closed_at": null
+  }
+ ],
+ "pulls": [
+  {
+   "number": 154,
+   "created_at": "2026-10-14T06:30:01Z",
+   "closed_at": "2026-10-14T06:41:50Z",
+   "head": {
+    "ref": "claude/prd-owner-decisions",
+    "repo": {
+     "full_name": "dayamjz/assistant"
+    }
+   }
+  },
+  {
+   "number": 257,
+   "created_at": "2026-10-15T14:26:18Z",
+   "closed_at": "2026-10-15T14:48:36Z",
+   "head": {
+    "ref": "claude/prd-owner-decisions",
+    "repo": {
+     "full_name": "dayamjz/assistant"
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,52 @@
+﻿2026-10-23T07:11:04.6076528Z Current runner version: '2.338.0'
+2026-10-23T07:11:04.6112338Z ##[group]Runner Image Provisioner
+2026-10-23T07:11:04.6112875Z Hosted Compute Agent
+2026-10-23T07:11:04.6115760Z ##[endgroup]
+2026-10-23T07:11:04.6118244Z ##[endgroup]
+2026-10-23T07:11:04.6121664Z ##[endgroup]
+2026-10-23T07:11:04.6124299Z ##[endgroup]
+2026-10-23T07:11:05.6505254Z ##[group]Run actions/checkout@v4
+2026-10-23T07:11:05.6511663Z ##[endgroup]
+2026-10-23T07:11:05.7300576Z ##[endgroup]
+2026-10-23T07:11:05.7547384Z ##[endgroup]
+2026-10-23T07:11:05.7635614Z ##[endgroup]
+2026-10-23T07:11:05.8394812Z ##[endgroup]
+2026-10-23T07:11:06.8908409Z ##[endgroup]
+2026-10-23T07:11:06.8910274Z ##[endgroup]
+2026-10-23T07:11:06.9843611Z ##[endgroup]
+2026-10-23T07:11:07.0235819Z ##[group]Run actions/setup-go@v6
+2026-10-23T07:11:07.0244058Z ##[endgroup]
+2026-10-23T07:11:15.4098742Z ##[endgroup]
+2026-10-23T07:11:15.4664511Z ##[group]Run if ! command -v tmux >/dev/null 2>&1; then
+2026-10-23T07:11:15.5003479Z ##[endgroup]
+2026-10-23T07:11:15.6944666Z ##[group]Run sudo apt-get update && sudo apt-get install -y tini
+2026-10-23T07:11:15.7057700Z ##[endgroup]
+2026-10-23T07:11:25.7764622Z ##[group]Run unformatted=$(gofmt -l .)
+2026-10-23T07:11:25.7821234Z ##[endgroup]
+2026-10-23T07:11:26.6177429Z ##[group]Run go mod tidy
+2026-10-23T07:11:26.6230455Z ##[endgroup]
+2026-10-23T07:11:27.7625544Z ##[group]Run go vet ./...
+2026-10-23T07:11:27.7676519Z ##[endgroup]
+2026-10-23T07:11:45.7058592Z ##[group]Run GOOS=windows go vet ./...
+2026-10-23T07:11:45.7111190Z ##[endgroup]
+2026-10-23T07:11:58.5302443Z ##[group]Run make lint-guard-test
+2026-10-23T07:11:58.5370854Z ##[endgroup]
+2026-10-23T07:12:00.1289709Z ok   missing linter
+2026-10-23T07:12:00.4965386Z ok   wrong major series
+2026-10-23T07:12:00.8582396Z ok   unparseable version
+2026-10-23T07:12:01.2153797Z ok   version command fails
+2026-10-23T07:12:01.2199603Z ##[group]Run python3 scripts/leak-check-test.py -v
+2026-10-23T07:12:01.2264179Z ##[endgroup]
+2026-10-23T07:12:04.9960580Z ##[group]Run set -o pipefail
+2026-10-23T07:12:05.0023744Z ##[endgroup]
+2026-10-23T07:12:05.1275117Z leak-check: watching /tmp, /tmp/leak-check-self-test-4b13ahtv
+2026-10-23T07:12:05.1275536Z LEAK process pid=7 start=33125 command=sleep 300
+2026-10-23T07:12:05.1275885Z LEAK directory /tmp/leak-check-self-test-4b13ahtv/planted-directory
+2026-10-23T07:12:05.1276272Z leak-check: 2 leftover(s); command exit=0
+2026-10-23T07:12:05.1781730Z leak-check self-test: expected failure observed; planted leaks removed
+2026-10-23T07:12:05.1782545Z LEAK package=/home/runner/work/assistant/assistant process pid=12 start=33130 command=sleep 300
+2026-10-23T07:12:05.1782951Z leak-check: package /home/runner/work/assistant/assistant left processes running
+2026-10-23T07:12:05.1784358Z leak-check self-test: per-package check failed, named and ended its planted process, and left a process outside the package alone
+2026-10-23T07:19:57.1114592Z ##[error]The operation was canceled.
+2026-10-23T07:19:57.1173451Z ##[group]Run if [ ! -f test.log ]; then
+2026-10-23T07:19:57.1243259Z ##[endgroup]
