@@ -57,7 +57,9 @@ the ledger.
 Every gh it starts runs under a deadline (API_DEADLINE, LOG_DEADLINE) in a
 process group of its own, watched by a small watchdog that ends the group at
 the deadline, when the ledger stops (Ctrl+C included), or as soon as the
-ledger exits, however it exits (start_gh).
+ledger exits, however it exits (start_gh). The group's id stays the
+watchdog's own until it is signalled, so the signal cannot reach another
+group (WATCHDOG).
 
 Issues are matched by text: an issue whose title or body contains a record's
 match token (a test's top-level name, a leaked command's base name, or the
@@ -499,20 +501,35 @@ LOG_DEADLINE = 300
 # of stdin closes, which the kernel does however the ledger exits, killed
 # included. The watchdog runs in a session of its own, so a signal meant for
 # the ledger's terminal does not stop it before it has ended gh.
+#
+# The group is led by an anchor, a shell this watchdog starts and does not
+# reap until it has signalled the group, so the group's id, the anchor's pid,
+# cannot have been reused by then for someone else's group (P6): a pid is not
+# reused before its process is reaped. gh itself may exit and be reaped
+# first. The anchor reads a pipe from the watchdog, and if the watchdog is
+# killed, the pipe closes and the anchor ends the group, itself included.
 WATCHDOG = r"""
 import os, signal, subprocess, sys, threading
 deadline, command = float(sys.argv[1]), sys.argv[2:]
-child = subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True)
+anchor = subprocess.Popen(["/bin/sh", "-c", "while read -r _; do :; done; kill -KILL 0"],
+                          stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                          preexec_fn=os.setpgrp)
+child = subprocess.Popen(command, stdin=subprocess.DEVNULL, preexec_fn=lambda: os.setpgid(0, anchor.pid))
+ending = threading.Lock()
 
 def end(status, message=None):
+    ending.acquire()  # ends once; a second caller waits here for the exit
     try:
-        os.killpg(child.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    if message:
-        sys.stderr.write(message + "\n")
-        sys.stderr.flush()
-    os._exit(status)
+        try:
+            os.killpg(anchor.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        anchor.wait()
+        if message:
+            sys.stderr.write(message + "\n")
+            sys.stderr.flush()
+    finally:
+        os._exit(status)  # whatever failed above, such as stderr to a reader that is gone
 
 def owner_gone():
     sys.stdin.buffer.read()
@@ -539,8 +556,9 @@ def start_gh(args, deadline):
     """A running gh under the watchdog: stdout a pipe, stderr a file, and
     stdin the pipe whose closing ends it. A gh call ends with everything it
     started at its deadline, when it is released (release_gh), or when the
-    ledger exits; a program gh starts that leaves gh's process group is not
-    followed. Once the ledger is stopping, no gh starts."""
+    ledger or the watchdog exits, killed included; a program gh starts that
+    leaves gh's process group is not followed. Once the ledger is stopping,
+    no gh starts."""
     errors = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
     with _live_gh_lock:
         if _stopping:

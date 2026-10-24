@@ -277,10 +277,19 @@ class RealGoTestOutputTest(unittest.TestCase):
         # A cancel during the print can stop the output anywhere, here just
         # after TestParent's first failed subtest, before its package's
         # result line. The test is named under the cut-off package, with
-        # that subtest, described by the subtest's message.
-        cut = next(i for i, l in enumerate(self.output) if l == "    --- FAIL: TestParent/sub_a (0.00s)")
-        start = max(i for i in range(cut) if ledger.GO_PACKAGE_END.match(self.output[i]))
-        lines = framed(self.output[start + 1:cut + 1])
+        # that subtest, described by the subtest's message. A slower runner
+        # prints other elapsed times, so the same output with each one at
+        # 0.01s must read the same.
+        slower = [re.sub(r"\(\d+\.\d+s\)$", "(0.01s)", line) for line in self.output]
+        self.assertNotEqual(slower, self.output)
+        for output in (self.output, slower):
+            with self.subTest(slower=output is slower):
+                self.check_cut_inside_a_result_block(output)
+
+    def check_cut_inside_a_result_block(self, output):
+        cut = next(i for i, l in enumerate(output) if l.startswith("    --- FAIL: TestParent/sub_a ("))
+        start = max(i for i in range(cut) if ledger.GO_PACKAGE_END.match(output[i]))
+        lines = framed(output[start + 1:cut + 1])
         group = next(i for i, l in enumerate(lines) if l.endswith(ledger.GROUP_START))
         group_end = next(i for i, l in enumerate(lines) if i > group and l.endswith(ledger.GROUP_END))
         records, unattributed = self.records(lines[:group_end])
@@ -850,7 +859,15 @@ class StandInProcess(unittest.TestCase):
             self.assertIsNone(owner.poll(), f"its owner exited before starting {self.program}")
             self.assertLess(time.monotonic(), deadline, f"{self.program} never started")
             time.sleep(0.1)
-        return self.started(count)
+        return self.with_watchdogs(self.started(count))
+
+    def with_watchdogs(self, pids):
+        """pids and the watchdogs that started them, which must end too."""
+        parents = set()
+        for pid in pids:
+            parent = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True).stdout
+            parents.update(int(p) for p in parent.split())
+        return sorted(set(pids) | parents - {os.getpid(), 1})
 
 
 class GoTestBoundTest(StandInProcess):
@@ -916,6 +933,76 @@ class RunListTest(StandInProcess):
         with mock.patch.dict(os.environ, {**self.env, "FAKE_GH_DATA": str(answers)}):
             runs = ledger.GitHub("dayamjz/assistant").runs("ci.yml", 10, branch=branch, since="2026-10-01")
         self.assertEqual([r["id"] for r in runs], [data["runs"][0]["id"]])
+
+
+# Run before the watchdog in its own process: records, each time it signals
+# a process group, whether that group's id is still the pid of a process this
+# watchdog started and has not reaped. A pid, and so a group id, is not
+# reused before its process is reaped, so only then can the signal not reach
+# someone else's group (P6).
+OBSERVE_KILLPG = """
+import os, subprocess
+_killpg = os.killpg
+def killpg(group, sig):
+    parent = subprocess.run(["ps", "-o", "ppid=", "-p", str(group)], capture_output=True, text=True).stdout.split()
+    with open(os.environ["KILLPG_RECORD"], "a") as record:
+        record.write("anchored\\n" if parent == [str(os.getpid())] else "not anchored\\n")
+    _killpg(group, sig)
+os.killpg = killpg
+"""
+
+
+class WatchdogTest(StandInProcess):
+    """The watchdog ends gh's process group only while that group's id is
+    still its own, on every path, and the group still ends when the
+    watchdog itself is killed."""
+
+    program = "gh"
+
+    def watchdog(self, command, deadline=30, observe=True):
+        self.record = self.pids.with_name("killpg")
+        script = (OBSERVE_KILLPG if observe else "") + ledger.WATCHDOG
+        process = subprocess.Popen([sys.executable, "-I", "-c", script, str(deadline), *command],
+                                   env={**self.env, "KILLPG_RECORD": str(self.record)},
+                                   stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                   start_new_session=True)
+        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait()))
+        self.addCleanup(process.stderr.close)
+        self.addCleanup(lambda: process.stdin.closed or process.stdin.close())
+        return process
+
+    def signalled(self):
+        return self.record.read_text().split("\n")[:-1] if self.record.exists() else []
+
+    def test_a_gh_that_exits_has_its_group_ended_while_its_id_is_still_the_watchdogs(self):
+        process = self.watchdog(["sh", "-c", "exit 3"])
+        self.assertEqual(process.wait(timeout=20), 3)
+        self.assertTrue(self.signalled())
+        self.assertEqual(set(self.signalled()), {"anchored"})
+
+    def test_a_gh_past_its_deadline_has_its_group_ended_while_its_id_is_still_the_watchdogs(self):
+        process = self.watchdog(["gh"], deadline=1)
+        pids = self.wait_for_start(process)
+        self.assertEqual(process.wait(timeout=20), 124)
+        self.assertTrue(self.signalled())
+        self.assertEqual(set(self.signalled()), {"anchored"})
+        self.assert_ended(pids)
+
+    def test_a_gh_whose_owner_exits_has_its_group_ended_while_its_id_is_still_the_watchdogs(self):
+        process = self.watchdog(["gh"])
+        pids = self.wait_for_start(process)
+        process.stdin.close()
+        self.assertEqual(process.wait(timeout=20), 125)
+        self.assertTrue(self.signalled())
+        self.assertEqual(set(self.signalled()), {"anchored"})
+        self.assert_ended(pids)
+
+    def test_a_killed_watchdog_still_ends_gh_and_what_gh_started(self):
+        process = self.watchdog(["gh"], observe=False)
+        pids = self.wait_for_start(process)
+        process.kill()
+        process.wait(timeout=10)
+        self.assert_ended(pids)
 
 
 class GhProcessTest(StandInProcess):
