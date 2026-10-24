@@ -2,7 +2,6 @@ package vcs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -155,9 +154,11 @@ var rootRefsFloor = [2]int{2, 45}
 // rootRefsByName is RootRefs under a git older than rootRefsFloor: every
 // name in this working copy's own repository directory that isRootRefName
 // takes, resolved by git to the object it names and the one that peels to,
-// in name order. A name git does not resolve, a broken file or a directory
-// among them, is not a reference and is left out, as git leaves it out of
-// its own listing; one whose read fails otherwise is an error.
+// in name order. A name git answers is no reference, a broken file or a
+// directory among them, is left out, as git leaves it out of its own
+// listing; any other failure of a read, a git the context or the
+// invocation deadline ended among them, is an error, never a shorter
+// list.
 func (r *Repository) rootRefsByName(ctx context.Context) ([]Ref, error) {
 	out, err := r.run(ctx, "git-dir", "rev-parse", "--absolute-git-dir")
 	if err != nil {
@@ -173,13 +174,16 @@ func (r *Repository) rootRefsByName(ctx context.Context) ([]Ref, error) {
 		if !isRootRefName(e.Name()) {
 			continue
 		}
-		object, err := r.run(ctx, "root-ref", "rev-parse", "--verify", "--quiet", "--end-of-options", e.Name())
+		// --verify --quiet answers a name that is no reference by exiting
+		// 1; that alone is taken as one, and any
+		// other failure, a git ended by the context or the invocation
+		// deadline among them, is the read's.
+		object, code, err := r.runExpecting(ctx, "root-ref", []int{1}, "rev-parse", "--verify", "--quiet", "--end-of-options", e.Name())
 		if err != nil {
-			var cmdErr *CommandError
-			if errors.As(err, &cmdErr) {
-				continue
-			}
 			return nil, err
+		}
+		if code == 1 {
+			continue
 		}
 		peeled, err := r.run(ctx, "root-ref-peeled", "rev-parse", "--verify", "--quiet", "--end-of-options", e.Name()+"^{}")
 		if err != nil {
