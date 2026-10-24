@@ -378,10 +378,13 @@ func TestACopyNoDispatchCutOrSweptIsRefused(t *testing.T) {
 // (#562), and then uses it as it stands (P6). Another directory standing at
 // the path is refused as TestACopyNoDispatchCutOrSweptIsRefused's is, even
 // when it is the same history cut the same way, and a sweep that does not
-// clear gives no worker. A retry is held to the rule a retry keeps: the
-// adopted copy appearing after its check, before its claim, is refused like
-// any other. The sweep asked is the real one, recorded on the way through
-// with how many attempts stood when it was asked.
+// clear gives no worker; on a host whose sweeps cannot clear, the adopted
+// copy's dispatch is not established, on sweep_internal_test.go's terms,
+// while the order of its sweep still is. A retry is held to the rule a
+// retry keeps: the adopted copy appearing after its check, before its
+// claim, is refused like any other. The sweep asked is the real one,
+// recorded on the way through with how many attempts stood when it was
+// asked.
 func TestOnlyTheCopyACarryOnAdoptedIsTakenAtAFirstClaimAndSweptAfterIt(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
@@ -495,6 +498,12 @@ func TestOnlyTheCopyACarryOnAdoptedIsTakenAtAFirstClaimAndSweptAfterIt(t *testin
 				t.Fatalf("%d dispatchers lost the claim, want one: %v", lost, errs)
 			}
 
+			if !c.replace {
+				if len(swept) != 1 || swept[0] != subject.copy || attemptsAtSweep[0] != 1 {
+					t.Fatalf("the sweeps asked were of %v with %v attempts standing, want one of %s after the claim",
+						swept, attemptsAtSweep, subject.copy)
+				}
+			}
 			switch {
 			case c.replace:
 				var refused *isolationRefused
@@ -511,14 +520,12 @@ func TestOnlyTheCopyACarryOnAdoptedIsTakenAtAFirstClaimAndSweptAfterIt(t *testin
 					t.Fatalf("the dispatch returned %v, want no worker for a copy the sweep did not clear", won)
 				}
 			default:
+				// Dispatching needs the real sweep to clear, which a host
+				// whose sweeps cannot does not, on sweep_internal_test.go's
+				// terms; the order of the sweep above holds either way.
 				if won != nil {
-					t.Fatalf("the dispatch over the adopted copy returned %v, want it dispatched", won)
-				}
-			}
-			if !c.replace {
-				if len(swept) != 1 || swept[0] != subject.copy || attemptsAtSweep[0] != 1 {
-					t.Fatalf("the sweeps asked were of %v with %v attempts standing, want one of %s after the claim",
-						swept, attemptsAtSweep, subject.copy)
+					fatalUnlessSweepsStoppedClearing(t, "that a carried-on task is dispatched over the copy it adopted",
+						"the dispatch over the adopted copy returned %v, want it dispatched", won)
 				}
 			}
 			if bytes, err := os.ReadFile(filepath.Join(subject.copy, "kept.txt")); err != nil || string(bytes) != "work\n" {
