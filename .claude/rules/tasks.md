@@ -71,9 +71,12 @@ paths: ["internal/tasks/**"]
   cover), refusing an unestablished entry; `Discard` deletes only what
   that digest names, the commits lost held to those shown exactly, and
   never removes a copy by force (the owner's decision of 2026-10-24):
-  `kept_aside.go` sets the confirmed items aside recoverably, journalled,
-  reads the loss again, which must hold nothing more (`emptyOfWork`), and
-  only then removes the directory, a run's worktree by git's removal
+  `kept_aside.go` sets aside, recoverably and journalled, only the items
+  the removal needs gone, each held to what was read before the loss (a
+  clone's lost branches, tags and stash with their own reflogs, HEAD and
+  its reflog, the index entries by path, the working tree's lost paths),
+  reads the loss again, which may lose nothing the confirmed loss did not
+  name (`beyondShown`), and only then removes the directory, a run's worktree by git's removal
   without force and a task's clone on P12's proof, putting everything back
   on any refusal; a run's record in the gate is taken from the gate's own
   registry (`vcs.WorktreeRecords`, read from the gate and held to git's

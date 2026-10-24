@@ -649,9 +649,11 @@ file or a stash made since is refused and you are told to look again, and
 so is a commit you were shown that the default branch or the upstream has
 taken up since, since the loss is then not the one you confirmed; a change
 that loses nothing more, such as a branch made at a commit already listed,
-is not. It first sets what you were shown aside beside the copy, so it can
-be put back, then reads the copy again, and removes the copy only when
-nothing is left in it that would be lost: a run's copy by git's own
+is not. It first sets aside, beside the copy so it can be put back, only
+what the removal needs gone of what you were shown (files, index entries,
+and for a task's copy its lost branches, tags, stash and HEAD with their
+reflogs), then reads the copy again, and removes the copy only when
+removing it would lose nothing you were not shown: a run's copy by git's own
 worktree removal without force, which refuses when anything is left, and
 a task's copy only when one of the cleanup proofs then holds for what
 remains, so a task's copy whose remaining commits no proof covers (for

@@ -749,12 +749,13 @@ func hashFile(path string) (string, error) {
 // Every refusal leaves the copy as it was and is ErrLossChanged, naming
 // what differs: commits lost now that were not shown or shown that are not
 // lost now; a digest that no longer matches; a path shown as lost that is
-// gone or holds something else when it is set aside; a path written where
-// the discard writes one; a reference that moved; HEAD that moved;
-// anything the copy still holds once what was shown is set aside
-// (emptyOfWork); and a removal git or P12's proof refuses. What was set
-// aside is put back first, and what could not be is ErrAsideStands as well,
-// naming where it is. beforeRemoval, when not nil, runs once the digest is
+// gone or holds something else when it is set aside; an index or a
+// reflog changed since the loss was read; a path written where the
+// discard writes one; a reference that moved; HEAD that moved; anything
+// the copy would still lose once what was shown is set aside that the
+// loss did not show (beyondShown); and a removal git or P12's proof
+// refuses. What was set aside is put back first, and what could not be is
+// ErrAsideStands as well, naming where it is. beforeRemoval, when not nil, runs once the digest is
 // checked and before anything is set aside, and an error it returns is
 // returned with nothing touched. A copy already gone returns the zero Loss
 // and no error, and runs nothing but the removal of what a discard that
@@ -789,7 +790,7 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 	if err := c.putBack(ctx, entry, copied); err != nil {
 		return Loss{}, err
 	}
-	before, err := workingState(entry.CopyPath)
+	before, err := readAsideBefore(ctx, entry, copied)
 	if err != nil {
 		return Loss{}, fmt.Errorf("tasks: reading the copy at %s: %w", entry.CopyPath, err)
 	}
@@ -833,7 +834,7 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 	if err != nil {
 		return refuse(fmt.Errorf("%w: the copy could not be read once what was shown was set aside: %w", ErrLossChanged, err))
 	}
-	if err := emptyOfWork(loss, after); err != nil {
+	if err := beyondShown(loss, after); err != nil {
 		return refuse(err)
 	}
 	if entry.TaskID.IsKnown() {

@@ -335,6 +335,20 @@ func rawGitErr(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// rawGitIn runs git directly in dir with stdin as its input, and fails the
+// test when git fails.
+func rawGitIn(t *testing.T, dir, stdin string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // The digest is framed, so no byte string can stand for a boundary, and it
 // carries every entry's type and permission bits. The reviewer's forgery,
 // inside an untracked nested repository, which is walked entry by entry: a
@@ -835,11 +849,13 @@ func copySnapshot(t *testing.T, copyPath string) string {
 	head := rawGit(t, copyPath, "rev-parse", "HEAD")
 	target, _ := rawGitErr(copyPath, "symbolic-ref", "--quiet", "HEAD")
 	lines = append(lines, "HEAD "+head+" "+target)
-	index, err := hashFile(filepath.Join(copyPath, ".git", "index"))
-	if err != nil {
-		t.Fatal(err)
+	// The index by its entries: a restore puts each entry back, and git
+	// rewrites what it caches beside them.
+	for _, e := range strings.Split(rawGit(t, copyPath, "ls-files", "--stage", "-z"), "\x00") {
+		if head, path, ok := strings.Cut(e, "\t"); ok {
+			lines = append(lines, "index "+path+" "+head)
+		}
 	}
-	lines = append(lines, "index "+index)
 	if logs, err := readCopyState(filepath.Join(copyPath, ".git", "logs")); err == nil {
 		for p, s := range logs {
 			lines = append(lines, fmt.Sprintf("log %s %s", strings.TrimPrefix(p, copyPath), s.held))
@@ -850,6 +866,21 @@ func copySnapshot(t *testing.T, copyPath string) string {
 	}
 	slices.Sort(lines)
 	return strings.Join(lines, "\n")
+}
+
+// reflogOnlyCommit makes a commit holding work nothing else holds, moves
+// HEAD to it and back, so only the reflogs name it, the way round 23's
+// review did: with git's plumbing, which writes no file of the repository
+// directory but the objects and the reflogs. It returns the commit.
+func reflogOnlyCommit(t *testing.T, copyPath string) string {
+	t.Helper()
+	head := strings.TrimSpace(rawGit(t, copyPath, "rev-parse", "HEAD"))
+	blob := strings.TrimSpace(rawGitIn(t, copyPath, "work only a reflog reaches\n", "hash-object", "-w", "--stdin"))
+	tree := strings.TrimSpace(rawGitIn(t, copyPath, "100644 blob "+blob+"\treflogged.txt\n", "mktree"))
+	c := strings.TrimSpace(rawGit(t, copyPath, "commit-tree", tree, "-p", head, "-m", "a commit only a reflog names"))
+	rawGit(t, copyPath, "update-ref", "-m", "to the commit", "HEAD", c)
+	rawGit(t, copyPath, "update-ref", "-m", "and back", "HEAD", head)
+	return c
 }
 
 // withoutLines is snapshot, a copySnapshot, without the lines that begin
@@ -869,22 +900,24 @@ func withoutLines(snapshot string, prefixes []string) string {
 // earlier removal deleted what it had not shown. Every one of those ways is
 // now a refusal that deletes nothing: a file git ignores written after the
 // preview's read (round 15's late write), a tracked file edited, a commit
-// made, a clean tracked file deleted, a file the loss showed edited or
-// deleted and a file inside a directory it showed deleted (rounds 20 and
-// 21), a
-// replacement reference added and a graft file added (round 19), each at
-// two moments, before the discard sets what it showed aside and right
-// after (the changes to what was shown only before, since afterwards it is
-// already aside). Each refuses with ErrLossChanged and the copy, its
-// working tree, references, root references, HEAD, index and reflogs, is
-// as it was with the change made, with nothing left aside; except a commit
-// made once HEAD was moved off the lost commit, which HEAD cannot be put
-// back over without leaving it unnamed, so the discard leaves what it set
-// aside standing, refuses with ErrAsideStands as well, and Loss refuses
-// until it is put back. The commit pushed after the preview is
-// TestALossTakesWhatTheUpstreamHoldsAsHeld's. The positive control is the
-// same discard with nothing written, which removes the clone and leaves
-// nothing aside.
+// made, a tag only the copy holds, a commit only a reflog names and
+// content only the index holds (round 23, the last two of which a discard that set the reflogs and the index
+// aside whole destroyed), a clean tracked file deleted, a file the loss
+// showed edited or deleted and a file inside a directory it showed
+// deleted (rounds 20 and 21), a replacement reference added and a graft
+// file added (round 19), each at two moments, before the discard sets what
+// it showed aside and right after (the changes to what was shown, and the
+// reflog's commit, only before). Each refuses with ErrLossChanged and the
+// copy, its working tree, references, root references, HEAD, index entries
+// and reflogs, is as it was with the change made, content staged once the
+// discard replaced index entries still staged, with nothing left aside;
+// except a commit made once HEAD was moved off the lost commit, which HEAD
+// cannot be put back over without leaving it unnamed, so the discard
+// leaves what it set aside standing, refuses with ErrAsideStands as well,
+// and Loss refuses until it is put back. The commit pushed after the
+// preview is TestALossTakesWhatTheUpstreamHoldsAsHeld's. The positive
+// control is the same discard with nothing written, which removes the
+// clone and leaves nothing aside.
 func TestEveryChangeADiscardDidNotShowRefusesIt(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	type change struct {
@@ -893,6 +926,9 @@ func TestEveryChangeADiscardDidNotShowRefusesIt(t *testing.T) {
 		// touches is what of copySnapshot's lines the change itself makes
 		// differ, which a refusal after setting aside leaves as changed.
 		touches []string
+		// stays, when not nil, checks that a refusal after setting aside
+		// left the change itself standing.
+		stays func(t *testing.T, copyPath string)
 	}
 	changes := []change{
 		{name: "a file git ignores", write: func(t *testing.T, copyPath, _ string) {
@@ -915,6 +951,32 @@ func TestEveryChangeADiscardDidNotShowRefusesIt(t *testing.T) {
 				t.Error(err)
 			}
 		}},
+		{name: "a commit only a reflog names", write: func(t *testing.T, copyPath, _ string) {
+			// Round 23's sequence: new work committed and the branch moved
+			// back, so only the reflogs name the commit.
+			// Made with plumbing, so no file of the repository directory but
+			// the reflogs changes.
+			reflogOnlyCommit(t, copyPath)
+		}},
+		{name: "content staged that nothing else holds", write: func(t *testing.T, copyPath, _ string) {
+			// Round 23's sequence: a blob only the index holds.
+			if err := os.WriteFile(filepath.Join(copyPath, "staged-only.txt"), []byte("held by the index alone\n"), 0o600); err != nil {
+				t.Error(err)
+			}
+			rawGit(t, copyPath, "add", "staged-only.txt")
+			if err := os.Remove(filepath.Join(copyPath, "staged-only.txt")); err != nil {
+				t.Error(err)
+			}
+		}, touches: []string{"index staged-only.txt "}, stays: func(t *testing.T, copyPath string) {
+			if staged := rawGit(t, copyPath, "ls-files", "--stage", "--", "staged-only.txt"); staged == "" {
+				t.Fatal("the content staged once what was shown was set aside is gone from the index after the refusal")
+			}
+		}},
+		{name: "a tag only the copy holds", write: func(t *testing.T, copyPath, _ string) {
+			// An annotated tag on a commit the default branch holds: an
+			// object lost, and no commit.
+			rawGit(t, copyPath, "tag", "--annotate", "--message", "the copy's own", "only-here", "refs/heads/main")
+		}, touches: []string{"ref refs/tags/only-here "}},
 		{name: "a file inside a directory shown as lost deleted", write: func(t *testing.T, copyPath, _ string) {
 			if err := os.Remove(filepath.Join(copyPath, "notes", "a.txt")); err != nil {
 				t.Error(err)
@@ -942,7 +1004,7 @@ func TestEveryChangeADiscardDidNotShowRefusesIt(t *testing.T) {
 	}
 	for _, moment := range []string{"before setting aside", "after setting aside"} {
 		for _, c := range changes {
-			if moment == "after setting aside" && strings.Contains(c.name, "shown as lost") {
+			if moment == "after setting aside" && (strings.Contains(c.name, "shown as lost") || c.name == "a commit only a reflog names") {
 				continue
 			}
 			t.Run(moment+"/"+c.name, func(t *testing.T) {
@@ -1045,6 +1107,9 @@ func TestEveryChangeADiscardDidNotShowRefusesIt(t *testing.T) {
 				now := copySnapshot(t, tk.copy)
 				if moment == "after setting aside" {
 					now = withoutLines(now, c.touches)
+					if c.stays != nil {
+						c.stays(t, tk.copy)
+					}
 				}
 				if now != after {
 					t.Fatalf("the refused discard (%v) left the copy as\n%s\nwant it as it was\n%s", err, now, after)

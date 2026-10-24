@@ -345,3 +345,151 @@ func TestARestoreTakesOutOnlyWhatItWroteAndMakesItsDirectoriesAgain(t *testing.T
 		t.Fatalf("what was set aside holds %q, %v; want the edit shown", raw, err)
 	}
 }
+
+// A restore that could not finish takes up where it stopped, round 23's
+// third finding: a landed clone is kept for an edit, staged, to
+// sub/x.txt, a tracked file whose directory holds nothing else, and a
+// file no commit records, notes.txt; the discard moves both aside, empties
+// and removes sub, replaces sub/x.txt's index entry with HEAD's, and
+// writes HEAD's sub/x.txt into a sub it makes. A file written where
+// notes.txt was refuses the discard, and the restore puts everything back
+// but notes.txt, refusing with ErrAsideStands. The person then removes
+// that file and unstages sub/x.txt; the next put-back finishes without
+// touching anything it already put back: sub/x.txt's edit stands, its
+// index entry is the one the person left, nothing is left aside, and Loss
+// reads the copy. Before, the second restore took the edit it had put
+// back for a change to the file it wrote and refused for good; with the
+// index entry still in the journal it would stage the edit again; and with
+// the directory it made still in the journal it would refuse that
+// directory, holding sub/x.txt again, as one somebody wrote into.
+func TestARestoreThatStoppedTakesUpWhereItStopped(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s := newCleanupSubject(t, nil)
+	tk := s.deliveryTask(t, "topic")
+	if err := os.MkdirAll(filepath.Join(tk.copy, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	commit(t, tk.copy, filepath.Join("sub", "x.txt"), "on topic\n", "on topic")
+	s.push(t, tk.copy, "topic")
+	x := filepath.Join(tk.copy, "sub", "x.txt")
+	if err := os.WriteFile(x, []byte("edited after the landing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "add", filepath.Join("sub", "x.txt"))
+	notes := filepath.Join(tk.copy, "notes.txt")
+	if err := os.WriteFile(notes, []byte("not committed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonCopyDirty))
+	if !ok {
+		t.Fatal("a dirty refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := copySnapshot(t, tk.copy)
+	s.cleaner.betweenAsideAndCheck = func() error {
+		return os.WriteFile(notes, []byte("written meanwhile\n"), 0o600)
+	}
+	if _, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, ErrAsideStands) {
+		t.Fatalf("the discard over a file written where one was set aside = %v; want ErrAsideStands", err)
+	}
+	s.cleaner.betweenAsideAndCheck = nil
+	if notesAside := []string{"tree /notes.txt ", "aside stands"}; withoutLines(copySnapshot(t, tk.copy), notesAside) != withoutLines(before, notesAside) {
+		t.Fatalf("the first restore left the copy as\n%s\nwant it as it was but notes.txt\n%s", copySnapshot(t, tk.copy), before)
+	}
+	if err := os.Remove(notes); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "reset", "--quiet", "--", filepath.Join("sub", "x.txt"))
+	unstaged := rawGit(t, tk.copy, "ls-files", "--stage", "--", filepath.Join("sub", "x.txt"))
+	if err := s.cleaner.PutBack(ctx, got.Entry, ""); err != nil {
+		t.Fatalf("PutBack once the file written meanwhile is removed: %v", err)
+	}
+	if _, err := os.Lstat(asideDir(tk.copy)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("something is still set aside: %v", err)
+	}
+	if now := rawGit(t, tk.copy, "ls-files", "--stage", "--", filepath.Join("sub", "x.txt")); now != unstaged {
+		t.Fatalf("sub/x.txt's index entry reads %q after the put-back; want the one the person left, %q", now, unstaged)
+	}
+	index := []string{"index sub/x.txt "}
+	if now := copySnapshot(t, tk.copy); withoutLines(now, index) != withoutLines(before, index) {
+		t.Fatalf("the copy once put back reads\n%s\nwant it as it was but sub/x.txt's index entry\n%s", now, before)
+	}
+	if _, err := s.cleaner.Loss(ctx, got.Entry); err != nil {
+		t.Fatalf("Loss once put back: %v", err)
+	}
+}
+
+// A restore puts an index path back only while it holds what the discard
+// wrote there, round 23's second finding: a landed clone is kept for an
+// edit to g.txt that is staged, so the discard replaces g.txt's index
+// entry with HEAD's. Content staged at g.txt once it has refuses the
+// discard, and the restore leaves that staging, and the file written
+// over the one it wrote, where they are, refusing with ErrAsideStands
+// naming g.txt, with the edit shown beside the copy. Before, the restore
+// put the whole index back over the new staging.
+func TestARestoreLeavesContentStagedWhereTheDiscardWroteTheIndex(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s, tk, entry, shown := keptLanded(t, func(copyPath string) {
+		if err := os.WriteFile(filepath.Join(copyPath, "g.txt"), []byte("edited and staged\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rawGit(t, copyPath, "add", "g.txt")
+	})
+	g := filepath.Join(tk.copy, "g.txt")
+	var staged string
+	s.cleaner.betweenAsideAndCheck = func() error {
+		if err := os.WriteFile(g, []byte("staged once the discard wrote the index\n"), 0o600); err != nil {
+			return err
+		}
+		rawGit(t, tk.copy, "add", "g.txt")
+		staged = rawGit(t, tk.copy, "ls-files", "--stage", "--", "g.txt")
+		return nil
+	}
+	_, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil)
+	if !errors.Is(err, ErrLossChanged) || !errors.Is(err, ErrAsideStands) || !strings.Contains(err.Error(), "index entries of g.txt") {
+		t.Fatalf("the discard over content staged where it wrote the index = %v; want ErrLossChanged and ErrAsideStands naming g.txt's index entries", err)
+	}
+	if now := rawGit(t, tk.copy, "ls-files", "--stage", "--", "g.txt"); now != staged {
+		t.Fatalf("g.txt's index entry reads %q after the refusal; want what was staged once the discard wrote it, %q", now, staged)
+	}
+	if raw, err := os.ReadFile(filepath.Join(asideDir(tk.copy), "tree", "g.txt")); err != nil || string(raw) != "edited and staged\n" {
+		t.Fatalf("what was set aside holds %q, %v; want the edit shown", raw, err)
+	}
+}
+
+// A reflog goes back only once its reference does: a clone kept for a
+// commit of its own has its branch deleted and the branch's reflog set
+// aside, and once it has, the branch is made again, without a reflog, at a
+// new commit nothing else holds. The discard refuses, the restore cannot
+// write the branch back over it, and the reflog stays aside rather than
+// becoming the new branch's, refusing with ErrAsideStands naming the
+// branch.
+func TestAReflogGoesBackOnlyWithItsReference(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s, tk, entry, shown := keptWithWork(t)
+	branch := "refs/heads/task/aside"
+	main := rawGit(t, tk.copy, "rev-parse", "refs/heads/main")
+	s.cleaner.betweenAsideAndCheck = func() error {
+		elsewhere := rawGit(t, tk.copy, "commit-tree", main+"^{tree}", "-p", main, "-m", "the branch made again")
+		rawGit(t, tk.copy, "-c", "core.logAllRefUpdates=false", "update-ref", branch, elsewhere, "")
+		return nil
+	}
+	_, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil)
+	if !errors.Is(err, ErrAsideStands) || !strings.Contains(err.Error(), branch) {
+		t.Fatalf("the discard over the branch made again = %v; want ErrAsideStands naming %s", err, branch)
+	}
+	if _, err := os.Lstat(filepath.Join(tk.copy, ".git", "logs", "refs", "heads", "task", "aside")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the branch made again has a reflog: %v; want the set-aside one kept aside", err)
+	}
+}

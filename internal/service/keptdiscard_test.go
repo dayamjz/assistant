@@ -823,12 +823,15 @@ func TestARunsDiscardCountsOnlyWhatItsRemovalDestroys(t *testing.T) {
 }
 
 // A run's discard removes its worktree only when, with what it showed set
-// aside, nothing of the worktree is left that the removal would lose, the
-// owner's decision of 2026-10-24 after rounds 15 to 21: a commit made in it
+// aside, the removal would lose nothing it did not show, the owner's
+// decision of 2026-10-24 after rounds 15 to 21: a commit made in it
 // immediately before what was shown is set aside, which writes the
 // worktree's own directory in the gate and no file of the worktree's
-// (the final full review of 74949eb, finding 1), and a file written into
-// that directory once what was shown is set aside (where the delta review
+// (the final full review of 74949eb, finding 1), a commit only the
+// worktree's reflog names, made with plumbing and HEAD moved back (round
+// 23's first finding, which a discard that set the reflogs aside whole
+// destroyed), and a file written into that directory once what was shown
+// is set aside (where the delta review
 // of 8ddafcb saw git's forced removal delete one), each refuse the
 // confirmed discard with the worktree standing at its HEAD with its
 // files, the written file where it was written, nothing left set aside and
@@ -849,13 +852,14 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	const (
 		beforeRemoval = "a commit immediately before what was shown is set aside"
+		reflogOnly    = "a commit only a reflog names before what was shown is set aside"
 		afterAside    = "a file written into the record once what was shown is set aside"
 		outsideGate   = "a record outside the gate"
 		siblingRecord = "the record of another copy"
 		siblingLink   = "a .git linked to another copy's"
 		control       = "nothing written, the positive control"
 	)
-	for _, c := range []string{beforeRemoval, afterAside, outsideGate, siblingRecord, siblingLink, control} {
+	for _, c := range []string{beforeRemoval, reflogOnly, afterAside, outsideGate, siblingRecord, siblingLink, control} {
 		t.Run(c, func(t *testing.T) {
 			t.Parallel()
 			h := newHome(t)
@@ -913,7 +917,7 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 			pause := func() { once.Do(func() { close(paused); <-resume }) }
 			o := options(t, h)
 			switch c {
-			case beforeRemoval:
+			case beforeRemoval, reflogOnly:
 				o = service.WithDiscardRemovalSeamsForTest(t, o, pause, nil)
 			case afterAside:
 				o = service.WithDiscardAsideSeamForTest(t, o, func() error { pause(); return nil })
@@ -944,6 +948,13 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 					case beforeRemoval:
 						git(t, entry.CopyPath, "commit", "--quiet", "--allow-empty", "-m", "made immediately before what was shown is set aside")
 						committed = git(t, entry.CopyPath, "rev-parse", "HEAD")
+					case reflogOnly:
+						// Round 23's sequence, with plumbing so nothing but the
+						// worktree's own reflog records it.
+						head := git(t, entry.CopyPath, "rev-parse", "HEAD")
+						committed = git(t, entry.CopyPath, "commit-tree", head+"^{tree}", "-p", head, "-m", "only a reflog names this")
+						git(t, entry.CopyPath, "update-ref", "-m", "to the commit", "HEAD", committed)
+						git(t, entry.CopyPath, "update-ref", "-m", "and back", "HEAD", head)
 					case afterAside:
 						if err := writeFile(filepath.Join(record, "written-once-set-aside"), "kept with the record\n"); err != nil {
 							t.Fatal(err)
@@ -953,7 +964,7 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 				}
 				err := <-answered
 				switch c {
-				case beforeRemoval, afterAside:
+				case beforeRemoval, reflogOnly, afterAside:
 					if !errors.Is(err, ipc.ErrRefused) {
 						t.Fatalf("the confirmed discard over %s = %+v, %v; want it refused", c, done, err)
 					}
@@ -963,6 +974,14 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 					}
 					if head := git(t, entry.CopyPath, "rev-parse", "HEAD"); head != want {
 						t.Fatalf("the worktree's HEAD reads %s after the refusal; want %s", head, want)
+					}
+					if c == reflogOnly {
+						if _, err := os.Stat(record); err != nil {
+							t.Fatalf("the worktree's record, whose reflog alone names %s, is gone: %v", committed, err)
+						}
+						if log := git(t, entry.CopyPath, "reflog", "--format=%H", "HEAD"); !strings.Contains(log, committed) {
+							t.Fatalf("HEAD's reflog no longer names %s after the refusal:\n%s", committed, log)
+						}
 					}
 					if c == afterAside {
 						if raw, err := os.ReadFile(filepath.Join(record, "written-once-set-aside")); err != nil || string(raw) != "kept with the record\n" {
@@ -1024,7 +1043,10 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 // Before, that value was dropped because the gate's reflog records it too,
 // so the same commit was listed when the worktree's log named it by one
 // value and not by the other. The positive control, the gate's own branch
-// at a commit no log of the worktree records, is never listed.
+// at a commit no log of the worktree records, is never listed. A discard
+// then confirmed removes the worktree and leaves the gate's branch at the
+// lost commit standing with its reflog, since the gate's references are
+// not the worktree's to delete (round 23).
 func TestARunsDiscardCountsWhatItsOwnLogsRecordWhateverTheGateRecords(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -1074,6 +1096,23 @@ func TestARunsDiscardCountsWhatItsOwnLogsRecordWhateverTheGateRecords(t *testing
 		// The reset left ORIG_HEAD at the commit too, a name of its own.
 		git(t, entry.CopyPath, "update-ref", "-d", "ORIG_HEAD")
 		check("recorded by the worktree's HEAD log only as the value its reset moved from")
+
+		// The confirmed discard removes the worktree and touches none of
+		// the gate's references, the branch at the lost commit among them.
+		var shown, done machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &shown); err != nil || shown.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, shown.Loss.Digest), &done); err != nil ||
+			done.Effect != machine.KeptWorkDiscarded {
+			t.Fatalf("the confirmed discard = %+v, %v; want it discarded", done, err)
+		}
+		if at := git(t, gate, "rev-parse", "refs/heads/keep"); at != kept {
+			t.Fatalf("the gate's branch keep reads %s after the discard; want it standing at %s", at, kept)
+		}
+		if log := git(t, gate, "reflog", "--format=%H", "refs/heads/keep"); !strings.Contains(log, kept) {
+			t.Fatalf("the gate's branch keep's reflog reads %q after the discard; want it standing", log)
+		}
 	})
 }
 
