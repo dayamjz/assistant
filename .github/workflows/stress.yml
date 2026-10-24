@@ -1,0 +1,70 @@
+name: Stress
+
+# Runs the race suite several times per OS, in exactly the check job's test
+# environment, so a flake surfaces here instead of in a pull request that
+# then pays for it in re-runs and re-reviews. The schedule runs it on main; a
+# dispatch runs it on the ref it is started on. Each job fails on its own
+# failures, and its log's "full test output" group holds them; a summary
+# of every test that failed at least once waits for the flake ledger.
+#
+# Cost: the repository is public, so hosted runner minutes are not billed.
+# A run is 6 jobs, about 3 x 22 ubuntu and 3 x 29 macOS minutes, 2 at a
+# time, so it never holds more than 2 of the account's macOS runners, which
+# pull requests share, and takes about 80 minutes.
+
+on:
+  # A change to this workflow, or to the environment it runs, runs it, so
+  # the change shows it works before it lands (workflow_dispatch reaches
+  # only what is already on main). For the leak check this is the exposure
+  # its own tests cannot give: #551's false positive showed only against the
+  # real suite.
+  pull_request:
+    paths:
+      - .github/workflows/stress.yml
+      - .github/actions/test-env/**
+      - scripts/ci-test.sh
+      - scripts/leak-check.py
+  schedule:
+    # 14:00 UTC, 07:00 PDT: one of the quieter hours for pull request CI.
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "Package patterns, space-separated"
+        default: "./..."
+      count:
+        description: "go test -count in each job; with more than 1, name fewer packages so a job ends inside 60 minutes"
+        default: "1"
+
+# A newer push to a pull request replaces its stress run; a scheduled or
+# dispatched run is never cut short by the next one.
+concurrency:
+  group: stress-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    name: stress (${{ matrix.os }}, run ${{ matrix.run }})
+    runs-on: ${{ matrix.os }}
+    # A suite takes up to 37 minutes on macOS (#559); a job that still runs
+    # out fails as cancelled.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        run: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/test-env
+      - name: Test
+        shell: bash
+        env:
+          CI_TEST_PACKAGES: ${{ inputs.packages || './...' }}
+          CI_TEST_COUNT: ${{ inputs.count || '1' }}
+        run: bash scripts/ci-test.sh
+
