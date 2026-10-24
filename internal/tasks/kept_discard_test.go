@@ -821,7 +821,9 @@ func TestALossNamesEveryPathItDestroysThatNothingElseHolds(t *testing.T) {
 // where Discard's callback runs, the removal itself refuses on reaching
 // the change, which stands as written, and what it removed before that
 // was each entry as it was read, and so shown; a deletion there destroys
-// nothing more and goes ahead. A cleanup keeping the copy at the moment
+// nothing more and goes ahead, and the loss Discard returns is the one
+// shown: it names a file the loss showed as lost though another process
+// deleted it, and not a clean tracked file it never showed. A cleanup keeping the copy at the moment
 // finds the entry already standing, so nothing but the refusal could have
 // kept the change. The positive control is the same discard with nothing
 // written, which removes the clone. Before the removal was held to the
@@ -863,7 +865,7 @@ func TestAnythingWrittenAfterADiscardsLastReadRefusesIt(t *testing.T) {
 				t.Errorf("HEAD reads %s after the refusal; want the commit made inside the window, %s", head, late)
 			}
 		}},
-		{name: "a file deleted", write: func(t *testing.T, copyPath string) {
+		{name: "a tracked file deleted", write: func(t *testing.T, copyPath string) {
 			if err := os.Remove(filepath.Join(copyPath, "own.txt")); err != nil {
 				t.Error(err)
 			}
@@ -871,6 +873,16 @@ func TestAnythingWrittenAfterADiscardsLastReadRefusesIt(t *testing.T) {
 			t.Helper()
 			if _, err := os.Lstat(filepath.Join(copyPath, "own.txt")); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("own.txt stands after the refusal: %v; want it deleted as it was", err)
+			}
+		}},
+		{name: "a file shown as lost deleted", write: func(t *testing.T, copyPath string) {
+			if err := os.Remove(filepath.Join(copyPath, "scratch.txt")); err != nil {
+				t.Error(err)
+			}
+		}, stands: func(t *testing.T, copyPath string) {
+			t.Helper()
+			if _, err := os.Lstat(filepath.Join(copyPath, "scratch.txt")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("scratch.txt stands after the refusal: %v; want it deleted as it was", err)
 			}
 		}},
 		{name: "nothing, the positive control"},
@@ -897,9 +909,19 @@ func TestAnythingWrittenAfterADiscardsLastReadRefusesIt(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(tk.copy, ".git", "info", "exclude"), []byte("secret.txt\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
+				// A file no commit records, which the loss shows as lost.
+				if err := os.WriteFile(filepath.Join(tk.copy, "scratch.txt"), []byte("not committed\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 				shown, err := s.cleaner.Loss(ctx, got.Entry)
 				if err != nil {
 					t.Fatal(err)
+				}
+				named := func(l Loss, path string) bool {
+					return slices.ContainsFunc(l.Files, func(f LostPath) bool { return f.Path == path })
+				}
+				if !named(shown, "scratch.txt") || named(shown, "own.txt") {
+					t.Fatalf("the loss shown names %+v; want scratch.txt and not own.txt, which HEAD holds", shown.Files)
 				}
 				var inside KeptEntry
 				var after copyState
@@ -921,15 +943,21 @@ func TestAnythingWrittenAfterADiscardsLastReadRefusesIt(t *testing.T) {
 					callback = func() error { window(); return nil }
 				}
 				lost, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", callback)
-				if c.write == nil || (moment == "before the removal" && c.name == "a file deleted") {
+				deletion := c.name == "a tracked file deleted" || c.name == "a file shown as lost deleted"
+				if c.write == nil || (moment == "before the removal" && deletion) {
 					if err != nil {
 						t.Fatalf("Discard on the digest shown, %s %s: %v", c.name, moment, err)
 					}
 					if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
 						t.Fatalf("the clone still stands: %v", err)
 					}
-					if lost.Digest != shown.Digest {
-						t.Fatalf("Discard returned the loss %s, want the one shown, %s", lost.Digest, shown.Digest)
+					// The loss returned is the one shown, whatever another
+					// process removed after the check: it names scratch.txt,
+					// which the loss showed, deleted or not, and not own.txt,
+					// which it never showed, deleted or not.
+					if lost.Digest != shown.Digest || !named(lost, "scratch.txt") || named(lost, "own.txt") {
+						t.Fatalf("Discard returned the loss %s naming %+v; want the one shown, %s, naming scratch.txt and not own.txt",
+							lost.Digest, lost.Files, shown.Digest)
 					}
 					return
 				}

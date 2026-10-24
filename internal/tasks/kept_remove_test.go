@@ -44,7 +44,8 @@ func plantTree(t *testing.T) string {
 // read refuses with ErrLossChanged and stays under its name holding what
 // was written; a file or directory added after the read keeps its directory
 // from being removed and refuses too, standing as it was made; and an entry
-// already gone refuses nothing. The repository directory is removed after
+// already gone, before the removal or once its directory was listed,
+// refuses nothing. The repository directory is removed after
 // everything beside it, so a refusal among the working files leaves the
 // repository readable. Each refusal's positive control is the unchanged
 // tree, which is removed.
@@ -159,6 +160,27 @@ func TestARemovalRemovesOnlyWhatItsStateRecorded(t *testing.T) {
 		}
 		if raw, err := os.ReadFile(made); err != nil || string(raw) != "made after the listing\n" {
 			t.Fatalf("the entry made after the listing reads %q, %v; want it standing", raw, err)
+		}
+	})
+	t.Run("an entry removed after its directory was listed", func(t *testing.T) {
+		root := plantTree(t)
+		state, err := readCopyState(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nested := filepath.Join(root, "nested")
+		r := remover{afterListing: func(dir string) {
+			if dir == nested {
+				if err := os.Remove(filepath.Join(nested, "b.txt")); err != nil {
+					t.Error(err)
+				}
+			}
+		}}
+		if err := r.removeEntry(root, state); err != nil {
+			t.Fatalf("removing the tree with an entry removed after its directory was listed: %v", err)
+		}
+		if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the tree still stands: %v", err)
 		}
 	})
 	t.Run("an entry already gone", func(t *testing.T) {

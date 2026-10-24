@@ -23,8 +23,11 @@ import (
 // whether the check or the removal finds it. An entry removed is refused
 // only by the check: one removed after the check, while the copy is being
 // removed, is not, since removing the copy without it destroys nothing it
-// held, and the loss Discard returns is then the one shown, naming it as
-// lost though another process removed it.
+// held. The loss Discard returns is then the one shown, unchanged: it names
+// such an entry only where the loss shown named it, a file no commit
+// records among them, though another process removed it, and never one the
+// loss did not show, a clean tracked file whose content HEAD holds among
+// them.
 //
 // What it does not cover: a process that opened a file in the copy before
 // that file is moved aside for its removal can still write to it through
