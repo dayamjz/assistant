@@ -302,8 +302,11 @@ type Counters struct {
 	// last time the edge was traversed, for a back edge and for an edge
 	// leaving a halt point; every other entry stays empty. The convergence
 	// check compares against it. An empty entry means the edge has not been
-	// traversed, and a checkpoint written before edges leaving a halt point
-	// were recorded carries theirs empty, which reads the same way.
+	// traversed since its measure last started, and a checkpoint written
+	// before edges leaving a halt point were recorded carries theirs empty,
+	// which reads the same way. A person's answer that sends the run back
+	// into a node over an Edge.Answered edge empties the entries of that
+	// node's own rounds, on the terms Edge.Answered states.
 	Fingerprints []string `json:"fingerprints"`
 	// EdgeDigest fingerprints the edge vector the two vectors above are
 	// indexed against. Both are positional, so a graph whose edges differ

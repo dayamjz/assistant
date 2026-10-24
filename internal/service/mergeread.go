@@ -227,7 +227,8 @@ const (
 // startMergeReads starts the goroutine that runs readPersonMerges as the
 // service opens and every mergeReadInterval after, under the service's own
 // context, registered as background work so Close waits for the pass in
-// flight, which the context ending cuts short.
+// flight, which the context ending cuts short. afterMergeReadPass, a test's
+// seam, runs after each pass.
 func (s *Service) startMergeReads() {
 	if !s.startWork() {
 		return
@@ -238,6 +239,9 @@ func (s *Service) startMergeReads() {
 		defer ticker.Stop()
 		for {
 			s.readPersonMerges(s.stopCtx)
+			if s.afterMergeReadPass != nil {
+				s.afterMergeReadPass()
+			}
 			select {
 			case <-s.stopCtx.Done():
 				return

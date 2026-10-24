@@ -3,11 +3,13 @@ package journey
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // The names this harness stands on a PATH, and the environment variable each
@@ -114,7 +116,7 @@ func installShims() (string, error) {
 		return "", fmt.Errorf("journey: locating this test binary, which is what stands in for the "+
 			"executables this product resolves off PATH: %w", err)
 	}
-	dir, err := os.MkdirTemp("", "assistant-shims")
+	dir, err := standin.TempDir("shim")
 	if err != nil {
 		return "", fmt.Errorf("journey: making a directory for the shims: %w", err)
 	}
@@ -126,22 +128,15 @@ func installShims() (string, error) {
 	return dir, nil
 }
 
-// copyExecutable writes a copy of src at dst that this process may execute.
+// copyExecutable writes a copy of src at dst that this process may execute,
+// through procgroup.WriteProgram, since the shim is started as soon as a
+// journey resolves it.
 func copyExecutable(src, dst string) error {
-	from, err := os.Open(src)
+	content, err := os.ReadFile(src)
 	if err != nil {
 		return fmt.Errorf("journey: reading %s to copy it: %w", src, err)
 	}
-	defer func() { _ = from.Close() }()
-	to, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
-	if err != nil {
-		return fmt.Errorf("journey: creating the shim %s: %w", dst, err)
-	}
-	if _, err := io.Copy(to, from); err != nil {
-		_ = to.Close()
-		return fmt.Errorf("journey: writing the shim %s: %w", dst, err)
-	}
-	if err := to.Close(); err != nil {
+	if err := procgroup.WriteProgram(dst, content, 0o755); err != nil {
 		return fmt.Errorf("journey: writing the shim %s: %w", dst, err)
 	}
 	return nil

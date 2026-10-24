@@ -99,7 +99,7 @@ func TestAFiledReportIsReadThroughTheSnapshot(t *testing.T) {
 			t.Fatalf("CreateTask: %v", err)
 		}
 		beginAttempt(t, s, task.ID, 0)
-		if err := s.SetAttemptSession(ctx, task.ID, 1, "ref-"+task.ID); err != nil {
+		if err := s.SetAttemptSession(ctx, task.ID, 1, "ref-"+task.ID, store.SessionHost{}); err != nil {
 			t.Fatalf("SetAttemptSession: %v", err)
 		}
 		appendEvents(t, s, task.ID, "started")

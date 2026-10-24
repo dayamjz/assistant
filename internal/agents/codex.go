@@ -135,6 +135,10 @@ func (f *codexFactory) Name() string { return CodexName }
 // Code, so this one resolves only when an entry names it.
 func (f *codexFactory) AutoEligible() bool { return false }
 
+// Declares is what every runner this factory builds declares, which
+// codexRunner's Capabilities states and explains.
+func (f *codexFactory) Declares() Capabilities { return codexDeclaration }
+
 // New reports whether Codex can be run here, and returns a Runner when it can.
 //
 // What availability means here is exactly one thing: the named executable
@@ -176,12 +180,22 @@ func (r *codexRunner) Name() string { return CodexName }
 // speaks the pipe protocol recorded from CLI 0.163.0. That thread is not
 // the fixer session. Terminal workers are not declared.
 //
+// All four token counts are declared because `codex exec --json` prints
+// them on turn.completed and the reader reads each one: input_tokens,
+// output_tokens, cached_input_tokens as cache reads, and
+// cache_write_input_tokens as cache creation, the keys CLI 0.163.0 printed
+// in testdata/codex-exec-0.163.0.jsonl. A turn that failed prints no
+// turn.completed and so no count, which its record says.
+//
 // Instruction suppression is not declared, because nothing here implements
 // it. Leaving it undeclared is what lets internal/pipeline refuse a run that
 // asks for suppression against this adapter before it launches one.
-func (r *codexRunner) Capabilities() Capabilities {
-	return Declare(CapabilityResumableSessions, CapabilityWorkerSessions)
-}
+func (r *codexRunner) Capabilities() Capabilities { return codexDeclaration }
+
+// codexDeclaration is what Capabilities and the factory's Declares both return.
+var codexDeclaration = Declare(CapabilityResumableSessions, CapabilityWorkerSessions,
+	CapabilityReportsInputTokens, CapabilityReportsOutputTokens,
+	CapabilityReportsCacheReadTokens, CapabilityReportsCacheCreationTokens)
 
 // Run executes one invocation with no session. It resumes nothing, and the
 // session the agent opens for itself is not kept, so a record it produces

@@ -2,6 +2,8 @@ package machine
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/gate"
@@ -1301,17 +1303,17 @@ var (
 		CeilingReached: {
 			Outcome:     "This step did not start the agent call it needed, because agent use recorded for this home has reached the ceiling you set.",
 			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
-			Decision:    "Raise the ceiling in your own configuration and restart the service, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+			Decision:    "Once recorded use has aged out of the ceiling's window, or you have raised the ceiling in your own configuration and restarted the service, answer retry to run this step again; or answer to go on without the check.",
 		},
 		CeilingUnestablished: {
 			Outcome:     "This step did not start the agent call it needed, because some recorded calls did not report a count the ceiling you set is on, so the ceiling could not be weighed.",
 			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
-			Decision:    "Set the ceiling on counts every agent reports and restart the service, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+			Decision:    "Once those calls have aged out of the ceiling's window, or you have set the ceiling on counts every agent reports and restarted the service, answer retry to run this step again; or answer to go on without the check.",
 		},
 		CeilingUnread: {
 			Outcome:     "This step did not start the agent call it needed, because the record of agent use could not be read to weigh against the ceiling you set.",
 			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
-			Decision:    "Run assistant doctor, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+			Decision:    "Run assistant doctor, and once the record can be read, answer retry to run this step again; or answer to go on without the check.",
 		},
 	}
 )
@@ -1473,6 +1475,10 @@ const (
 	// UpstreamKindUnrecorded is a Check.Kind for CheckUpstream when neither
 	// a repository record nor origin names where validated changes go.
 	UpstreamKindUnrecorded = "upstream-unrecorded"
+	// UpstreamKindUnreadable is a Check.Kind for CheckUpstream when what
+	// names where validated changes go, the repository record or origin,
+	// could not be read. The check's detail carries what failed.
+	UpstreamKindUnreadable = "upstream-unreadable"
 	// CheckStages is whether every stage has an implementation in this build.
 	CheckStages = "stages"
 )
@@ -1575,6 +1581,11 @@ var (
 		Consequence: "A run cannot start from it until assistant init records the upstream.",
 		Decision:    "Run assistant init here.",
 	}
+	phraseUpstreamUnreadable = Phrase{
+		Outcome:     "Where validated changes from this checkout go could not be read from its repository record or its origin.",
+		Consequence: "Whether a run from here can open a pull request cannot be said until it can be read.",
+		Decision:    "Run assistant --json doctor for what could not be read and why, put it right, then run assistant doctor again.",
+	}
 )
 
 // phraseByUpstreamKind is the one table from an upstream check's kind to what
@@ -1585,6 +1596,7 @@ var phraseByUpstreamKind = map[string]Phrase{
 	UpstreamKindLocal:       phraseUpstreamLocal,
 	UpstreamKindUnsupported: phraseUpstreamUnsupported,
 	UpstreamKindUnrecorded:  phraseUpstreamUnrecorded,
+	UpstreamKindUnreadable:  phraseUpstreamUnreadable,
 }
 
 // phraseCheckUnfamiliar is the row for a check under a name the table has
@@ -1975,12 +1987,13 @@ func TablePhrases() []Phrase {
 		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept, phraseRepairAdded, phraseRepairNotYetAdded)
 	out = append(out, keptWorkRows()...)
+	out = append(out, cleanupRows()...)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseNoticeQueued, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
 	for _, name := range CheckNames() {
 		if name == CheckUpstream {
-			for _, kind := range []string{UpstreamKindGitHub, UpstreamKindGitLab, UpstreamKindLocal, UpstreamKindUnsupported, UpstreamKindUnrecorded} {
+			for _, kind := range slices.Sorted(maps.Keys(phraseByUpstreamKind)) {
 				out = append(out, CheckPhrase(Check{Name: name, Kind: kind}))
 			}
 			continue

@@ -3,9 +3,11 @@
 package standin
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // processIDs is every process identifier /proc lists.
@@ -55,4 +57,21 @@ func startEnvironment(pid int) ([]string, error) {
 		return nil, nil
 	}
 	return strings.Split(trimmed, "\x00"), nil
+}
+
+// foreignProcess reports whether pid runs as another user's: the owner of
+// its /proc entry is not this process's effective user. It is read so that a
+// listing passes over only the processes of another user's whose command
+// line it could not read, rather than assuming that of every read that
+// failed (processesWhere).
+func foreignProcess(pid int) (bool, error) {
+	info, err := os.Stat("/proc/" + strconv.Itoa(pid))
+	if err != nil {
+		return false, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false, fmt.Errorf("process %d: /proc entry has no owner to read (%T)", pid, info.Sys())
+	}
+	return int(stat.Uid) != os.Geteuid(), nil
 }

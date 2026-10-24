@@ -17,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -93,6 +94,8 @@ func newPromotionSubject(t *testing.T) *promotionSubject {
 	}
 	rawGit(t, primary, "push", "-q", gatePath, "main:main")
 
+	// Seeded for time alone, as internal/store/storetest's comment says.
+	storetest.Seed(t, h.Database())
 	s, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
@@ -116,11 +119,13 @@ func newPromotionSubject(t *testing.T) *promotionSubject {
 			ps.postureAsked.Add(1)
 			return ps.posture, ps.postureErr
 		},
+		GitDeadline: vcs.DefaultInvocationDeadline,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	ps.cleaner, err = NewCleaner(CleanupDeps{Home: h, Store: s, Forge: forgetest.New(t, nil).Host()})
+	ps.cleaner, err = NewCleaner(CleanupDeps{Home: h, Store: s, Forge: forgetest.New(t, nil).Host(),
+		GitDeadline: vcs.DefaultInvocationDeadline})
 	if err != nil {
 		t.Fatalf("NewCleaner: %v", err)
 	}
@@ -159,7 +164,7 @@ func (s *promotionSubject) cut(t *testing.T, blocker store.Optional[string]) tas
 	}, store.Disposition{Blocker: blocker}); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if _, err := s.store.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := s.store.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {

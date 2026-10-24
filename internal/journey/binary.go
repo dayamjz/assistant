@@ -1,6 +1,8 @@
 package journey
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -8,7 +10,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"time"
+
+	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
+
+// buildGrace is procgroup.Run's grace for the build: how long the go command
+// has to exit once its group was ended, and its output to reach its end
+// once it exited.
+const buildGrace = 5 * time.Second
 
 // BinaryVariable names the environment variable that points this harness at a
 // built assistant binary.
@@ -73,19 +84,25 @@ func resolveBinary() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir, err := os.MkdirTemp("", "assistant-binary")
+	dir, err := standin.TempDir("bin")
 	if err != nil {
 		return "", fmt.Errorf("journey: making a directory to build the binary into: %w", err)
 	}
 	built := filepath.Join(dir, "assistant"+exeSuffix())
-	cmd := exec.Command("go", "build", "-o", built, "./cmd/assistant")
+	// The build runs through procgroup.Run, so what the go command started
+	// ends with it. It carries no deadline of its own: a cold build's length
+	// is the toolchain's, and the test binary's own -timeout is what bounds
+	// it, as it bounds every test this harness serves.
+	cmd := procgroup.Command("go", "build", "-o", built, "./cmd/assistant")
 	cmd.Dir = root
-	if out, err := cmd.CombinedOutput(); err != nil {
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := procgroup.Run(context.Background(), cmd, buildGrace); err != nil {
 		// Cleanup removes this directory by way of productBinary.path, which a
 		// failed build never sets, so a build that failed has to take its own
 		// directory with it or nothing ever will.
 		_ = os.RemoveAll(dir)
-		return "", fmt.Errorf("journey: building the assistant binary from %s: %w\n%s", root, err, out)
+		return "", fmt.Errorf("journey: building the assistant binary from %s: %w\n%s", root, err, out.String())
 	}
 	return built, nil
 }

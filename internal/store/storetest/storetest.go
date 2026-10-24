@@ -18,8 +18,9 @@
 // gets: creating a database from nothing stays exercised by internal/store's
 // own tests and by every home a seeding helper does not reach.
 //
-// Its consumers are internal/service's tests and internal/cli's, which both
-// open homes by the hundred; one copy is why it is a package. internal/store's
+// Its consumers are the tests of packages that open databases by the dozen
+// or the hundred, each seeding at the helper that opens a fresh one; one
+// copy is why it is a package. internal/store's
 // own tests cannot import it, since it imports that package, so they keep the
 // same arrangement in their helpers_test.go.
 package storetest
@@ -33,6 +34,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -49,7 +51,7 @@ var template struct {
 // templatePath returns the template's path, making it on first use.
 func templatePath() (string, error) {
 	template.once.Do(func() {
-		dir, err := os.MkdirTemp("", "dbtemplate")
+		dir, err := standin.TempDir("dbtemplate")
 		if err != nil {
 			template.err = err
 			return

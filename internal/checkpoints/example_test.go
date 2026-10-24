@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/checkpoints"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/store"
@@ -20,7 +21,7 @@ import (
 func Example() {
 	ctx := context.Background()
 
-	home, err := os.MkdirTemp("", "assistant-checkpoints-")
+	home, err := standin.TempDir("chk")
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -1,0 +1,39 @@
+name: Test environment
+description: >-
+  Installs what scripts/ci-test.sh runs the suite with: Go at go.mod's
+  toolchain, tmux, and on Linux tini. Run actions/checkout first.
+
+runs:
+  using: composite
+  steps:
+    # v6 or newer, because v5 reads only go.mod's `go` directive and would
+    # install go1.25.0; v6 installs the `toolchain` directive's version when
+    # one is present, which go.mod pins for darwin/arm64's race detector
+    # (#321), and sets GOTOOLCHAIN=local so no later step switches away.
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: go.mod
+        cache: true
+
+    # The terminal session provider's tests run against a real tmux, and
+    # scripts/ci-test.sh requires one, so they fail here rather than skip.
+    - name: Install tmux
+      shell: bash
+      run: |
+        if ! command -v tmux >/dev/null 2>&1; then
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install tmux
+          else
+            sudo apt-get update && sudo apt-get install -y tmux
+          fi
+        fi
+        tmux -V
+
+    # On Linux scripts/ci-test.sh runs the tests under tini in a process
+    # namespace of their own; the script says why.
+    - name: Install tini
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update && sudo apt-get install -y tini
+        tini --version

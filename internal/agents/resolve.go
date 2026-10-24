@@ -35,6 +35,11 @@ type Factory interface {
 	// for any adapter, Claude included. The conformance suite drives a test
 	// helper binary for all of them.
 	AutoEligible() bool
+	// Declares is what every Runner this factory builds declares, readable
+	// without building one: an agent that is not installed here still has a
+	// declaration, and a recorded call by it is weighed against that.
+	// Resolve refuses a Runner whose own declaration differs.
+	Declares() Capabilities
 }
 
 // Catalog is the set of agent adapters this build has. "auto" tries the
@@ -184,6 +189,18 @@ func (c *Catalog) Survey(ctx context.Context) []Standing {
 	return out
 }
 
+// Declared is what the adapter registered under name declares, read from its
+// factory without building a runner, and false when this catalog has no
+// adapter by that name. It is how a record naming an agent is read against
+// that agent's declaration, whether or not the agent is installed here.
+func (c *Catalog) Declared(name string) (Capabilities, bool) {
+	f, ok := c.lookup(name)
+	if !ok {
+		return Capabilities{}, false
+	}
+	return f.Declares(), true
+}
+
 // lookup returns the factory registered under name, if any.
 func (c *Catalog) lookup(name string) (Factory, bool) {
 	for _, f := range c.factories {
@@ -280,7 +297,7 @@ func Resolve(ctx context.Context, entries []string, catalog *Catalog) (Resolutio
 			skipped = append(skipped, Unavailability{Entry: entry, Name: name, Reason: SkipCannotRun, Err: err})
 			continue
 		}
-		declared, err := verifyDeclaration(name, runner)
+		declared, err := verifyDeclaration(name, factory, runner)
 		if err != nil {
 			return Resolution{}, err
 		}

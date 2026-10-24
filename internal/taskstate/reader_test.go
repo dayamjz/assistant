@@ -13,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 )
 
 const (
@@ -23,7 +24,10 @@ const (
 
 func openStore(t *testing.T) *store.Store {
 	t.Helper()
-	s, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"), store.WithRedactor(redact.New()))
+	// Seeded for time alone, as internal/store/storetest's comment says.
+	path := filepath.Join(t.TempDir(), "state.db")
+	storetest.Seed(t, path)
+	s, err := store.Open(context.Background(), path, store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -56,10 +60,17 @@ func newTask(t *testing.T, s *store.Store, id string, withBranch bool) store.Tas
 	return task
 }
 
-// beginAttempt records the next attempt of a task, anchored to expected.
+// beginAttempt records the next attempt of a task, anchored to expected: the
+// dispatch, on this machine, for zero.
 func beginAttempt(t *testing.T, s *store.Store, id string, expected int64) store.TaskAttempt {
 	t.Helper()
-	a, err := s.BeginTaskAttempt(context.Background(), id, expected)
+	var a store.TaskAttempt
+	var err error
+	if expected == 0 {
+		a, err = s.BeginFirstTaskAttempt(context.Background(), id, store.OnThisMachine())
+	} else {
+		a, err = s.BeginTaskAttempt(context.Background(), id, expected)
+	}
 	if err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}
@@ -280,7 +291,7 @@ func TestTheReaderConsultsTheProbeForTasksWithASession(t *testing.T) {
 	newTask(t, s, "notyetaaaaaa", false)
 	appendEvents(t, s, "withsessiona", "started")
 	first := beginAttempt(t, s, "withsessiona", 0)
-	if err := s.SetAttemptSession(ctx, "withsessiona", first.Sequence, "pane-1"); err != nil {
+	if err := s.SetAttemptSession(ctx, "withsessiona", first.Sequence, "pane-1", store.SessionHost{}); err != nil {
 		t.Fatalf("SetAttemptSession: %v", err)
 	}
 	beginAttempt(t, s, "notyetaaaaaa", 0)

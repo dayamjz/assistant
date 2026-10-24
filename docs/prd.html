@@ -32,6 +32,8 @@
   .prd-num {
     font-variant-numeric: tabular-nums;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: nowrap;
+    overflow-wrap: normal;
   }
   .prd-nav a.active { color: var(--color-primary); }
 </style>
@@ -169,6 +171,12 @@
     are on the line. Everything runs on your machine, under your identity, at your initiative.
     Assistant is not a shared service and does not hold a team's policy.
   </p>
+  <p class="mb-4 leading-relaxed opacity-90">
+    Some workers may run on another machine of yours that you name, still under your identity and
+    at your initiative. That machine holds only their copies and terminals; the home, the gate, and
+    every decision about a task's course stay on the machine you work at. Section 8's
+    <a class="link" href="#remote-hosts">workers on another machine</a> says how.
+  </p>
 
   <h3 class="text-xl font-semibold mb-3">What it is not</h3>
   <ul class="list-disc pl-6 space-y-1.5 opacity-90">
@@ -208,6 +216,8 @@
         <tr><td><b>hold</b></td><td>A run or task waiting on a decision from you. A hold is durable and survives a restart. It is not the lifecycle state Paused, which section 6 reserves for a worker's own declared external wait.</td></tr>
         <tr><td><b>wake</b></td><td>An event that might need attention. Most wakes are handled without involving a model.</td></tr>
         <tr><td><b>home</b></td><td>One instance's private state directory. Locks, queues, and records are all scoped to a home.</td></tr>
+        <tr><td><b>remote host</b></td><td>Another machine of yours, named in your global settings, on which workers may run. It holds their isolated copies and terminals and no home. Not a code host, and not the host session a coordinator runs in.</td></tr>
+        <tr><td><b>bridge</b></td><td>The process of this program the service starts on a remote host to act for it there. It holds no record and decides no task's course. What needs that host's kernel or filesystem it does there, on rules section 8 fixes: it starts and ends workers' sessions, cuts and asserts their copies, and places their calls and pushes from that kernel, never from anything a caller states.</td></tr>
       </tbody>
     </table>
   </div>
@@ -477,7 +487,7 @@ flowchart TB
         Nothing the program starts outlives its owner, and kept work is never silent
       </div>
       <div class="collapse-content text-sm opacity-90 space-y-2">
-        <p>Every process, terminal session, agent session, wait, isolated copy and lock the program creates has exactly one recorded owner: a run, a task, a delegation, or the service itself. When the owner ends, what it owns ends with it: a process by its whole group and within a stated bound, a wait by its deadline. An external program the service invokes (an agent, a check command, a notify command, a version probe) runs under a deadline, and when the deadline passes it is ended together with everything it started. On stop and on restart, the service ends or reclaims what a previous incarnation left under its home. Whatever it finds there that no record owns, it reports; it never ignores it.</p>
+        <p>Every process, terminal session, agent session, wait, isolated copy and lock the program creates has exactly one recorded owner: a run, a task, a delegation, or the service itself. When the owner ends, what it owns ends with it: a process by its whole group and within a stated bound, a wait by its deadline. An external program the service invokes (an agent, a check command, a notify command, a version probe) runs under a deadline, and when the deadline passes it is ended together with everything it started. A task's worker is the exception: a long-lived worker agent session has no invocation deadline. It runs in a process group of its own with a recorded owner, and it ends when its task lands, when it is stopped, and when the service stops, within <code>stop_grace</code>, on the terms and in the further cases section 8 states. The liveness probe ends nothing: it is how the service learns a worker has ended. A live worker that has stalled is surfaced, by <code>escalation_window</code> at the latest, and never ended; a bound that ends one is not yet specified. On stop and on restart, the service ends or reclaims what a previous incarnation left under its home. Whatever it finds there that no record owns, it reports; it never ignores it.</p>
         <p>Work is the one exception, and the exception is loud. An isolated copy holding work that has not landed is kept, on P6's and P12's terms, because a leaked copy costs disk while a deleted one costs work. A kept copy is not a leftover. It is a decision owed to you: it is surfaced the moment it is kept, and no new task starts in its project until you make it: you land it, you have it carried on, or you discard it yourself. The program never discards it on its own. Ending a process never discards work.</p>
         <p>This binds the program, its tests, and the tooling that builds it. A test that starts a process ends it, and a development fleet's watchers, reviews and repairs end what they start.</p>
         <p><b>Prevents:</b> agents and services that keep spending tokens and machine time nobody asked for, slowing every other run and hiding real failures under the load they create; and work that is safe on disk but that nobody knows about until days later.</p>
@@ -830,6 +840,7 @@ flowchart LR
     <pre class="mermaid">
 flowchart TD
   run["Run the stage"] --> f{"Any findings?"}
+  retry["Run the stage again <br />from the top, at most <br />three per stage per run"]
   f -- no --> done["Stage completes"]
   f -- yes --> elig{"Fixable findings, <br />none needing your decision, <br />and this stage takes fix rounds?"}
   elig -- no --> hold["Hold for your decision"]
@@ -840,9 +851,13 @@ flowchart TD
   conv -- no --> park
   conv -- yes --> run
   hold --> act["Approve, fix a selection, skip, or cancel"]
-  act -->|fix| fix
   act -->|approve| done
   act -->|skip| done
+  hold -->|"retry, offered only at the usage ceiling's hold"| retry
+  retry --> run
+  reqfix["Fixer applies the findings you selected, <br />at most three per stage per run"]
+  act -->|fix a selection| reqfix
+  reqfix --> run
     </pre>
   </div>
 
@@ -853,19 +868,22 @@ flowchart TD
         <tr><td><b>Per-stage rounds</b></td><td>Each stage has its own limit. Reaching it parks the stage rather than continuing.</td><td>One stage oscillating between two wrong fixes.</td></tr>
         <tr><td><b>Run-wide budget</b></td><td>A total step budget across the whole run, independent of any stage's limit.</td><td>Several stages each staying under their own limit while the run as a whole never finishes.</td></tr>
         <tr><td><b>Per-run usage budget</b></td><td>The output tokens the run's own agent calls report, read from the agent invocation record before every step and compared against the budget the run recorded when it started. Reaching it, or a call that reported no count, parks the run. It changes on a live run only by adopting a new budget into the run's history.</td><td>A run whose stages each stay under their round limits, and whose steps stay under the run-wide budget, while its agent calls cost far more than intended.</td></tr>
-        <tr><td><b>Convergence</b></td><td>A fix round that produces no change parks the loop. The measure is over the run's whole state, so the loop parks after its second round that changes nothing, not its first. The automatic loop and the rounds standing consent asks for both park this way; a round you ask for at a hold does not (section 14, decision 8).</td><td>An agent that reports success each round without editing anything. Neither counter would catch this before exhausting itself.</td></tr>
+        <tr><td><b>Convergence</b></td><td>A fix round that produces no change parks the loop. The measure is over the run's whole state, so the loop parks after its second round that changes nothing, not its first. The automatic loop and the rounds standing consent asks for both park this way; a round you ask for at a hold does not (section 14, decision 8), and neither does a retry at the usage ceiling's hold (decision 25). A retry also starts the measure of the stage's own fix rounds afresh, so the first such round after it is compared with nothing; a round that repeats one taken since the retry still parks.</td><td>An agent that reports success each round without editing anything. Neither counter would catch this before exhausting itself.</td></tr>
       </tbody>
     </table>
   </div>
 
   <h3 class="text-xl font-semibold mb-3">What you do at a hold</h3>
   <p class="mb-4 opacity-90">
-    A hold offers up to four actions, and they are the same whether you act through the terminal
+    A hold offers up to five actions, and they are the same whether you act through the terminal
     interface or an agent acts through the machine interface. Approve, skip, and cancel are offered
     at every hold. Fix is offered at the six stages before push, intent through lint, and not at
     push, pull request, or checks, for the reason section 14 decision 8 records: a round at push
     would push its result before you saw it, and a round at the two stages after push would leave
-    a commit nothing pushes.
+    a commit nothing pushes. Retry is offered only at a hold the usage ceiling raised (section 10),
+    at whichever stage it holds, for the reason section 14 decision 25 records. Such a hold is the
+    only one that lists it, and an answer of retry at any other hold is refused while that hold
+    stays open.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
     <table class="table table-sm table-zebra">
@@ -873,6 +891,7 @@ flowchart TD
       <tbody>
         <tr><td><b>Approve</b></td><td>Accept the findings as they stand and advance.</td></tr>
         <tr><td><b>Fix</b></td><td>Run one fix round over the findings you selected, with any notes you attached and any findings you wrote yourself. The stage re-runs and holds again so you see the result.</td></tr>
+        <tr><td><b>Retry</b></td><td>Run the stage again once the usage ceiling would admit its call: the calls in its window have aged out, you changed the ceiling in your own configuration and restarted the service, or the record that could not be read can be read. The stage runs from the top, in the same run. If its agent call is refused again it holds again on the same question, and otherwise it goes on as it would have. An automatic fix round the ceiling refused is taken again only if the stage, run first, still reports something to fix, and it is the round the refusal already counted against the stage's round limit, not one more. A fix round you asked for that the ceiling refused is not taken again, because a retry carries no request: the stage holds on that round's account, which says it did not run, and you can ask for it again. Every hold a fix round left for the stage's next execution is kept except the ceiling's own, so a round you asked for is still shown to you and a ceiling question that no longer applies is not. The program marks the ceiling's own hold as standing for a call that never started, a mark no agent's report can carry, and that mark is what offers the retry and what the retry drops.</td></tr>
         <tr><td><b>Skip</b></td><td>Mark this stage skipped for this run only.</td></tr>
         <tr><td><b>Cancel</b></td><td>End the run. Work stays recoverable.</td></tr>
       </tbody>
@@ -1137,7 +1156,7 @@ stateDiagram-v2
 
   <p class="mb-8 opacity-90">
     A task runs under a role, section 10's <code>roles</code>. Intake records the role name and
-    nothing about which agent, model provider, model type, model version, or effort that name meant: the role row is the one owner of
+    nothing about which agent, model provider, model type, model version, effort, or context window that name meant: the role row is the one owner of
     those, and a launch reads it then (P14). No role at intake is the <code>worker</code> role.
     Promotion and relaunch keep the name. The review and the fix of a run that the task's push
     starts are the <code>review</code> and <code>fix</code> roles, not the task's role.
@@ -1918,10 +1937,12 @@ flowchart TB
     <li>Exactly one service owns a home. It takes an exclusive operating-system lock before recovery and before binding its socket, so the lock cannot go stale even after a hard kill.</li>
     <li>Admission runs before any reference in the gate changes, so a refusal happens before mutation rather than after.</li>
     <li>A push reaches the gate only from a process the service can place as a task's worker or as a person's shell, read along the pushing process's ancestry; a push it can place as neither is refused before any reference moves, with a typed reason naming what was read.</li>
+    <li>A push from a remote host reaches the gate only through that host's bridge, which places the process that made it by that process's ancestry on that host. For each push it places, the service starts one receiving process of its own, which is placed as that one task's worker for exactly its own lifetime and receives that one push and no other; nothing else from a remote host is placed at all. <a class="link" href="#remote-hosts">Workers on another machine</a> owns the rule.</li>
     <li>Pushes to the same branch serialize, and a new push supersedes the run in progress. Different branches run concurrently.</li>
     <li>Launch and readiness are different states. Publishing a process identifier is not proof of readiness; only a real health response is.</li>
     <li>Stopping is bounded. On a stop request or SIGTERM, the service stops admitting work, ends the process groups it registered, and exits within <code>stop_grace</code>; past the grace it ends them by force. A service that does not exit on SIGTERM is a defect, not a slow shutdown.</li>
-    <li>Every invocation of an external program carries a deadline. The program runs in a process group that the invoker ends when the call returns or times out, so a child cannot keep a pipe or a terminal open after its parent is gone.</li>
+    <li>Every invocation of an external program carries a deadline. The program runs in a process group that the invoker ends when the call returns or times out, so a child cannot keep a pipe or a terminal open after its parent is gone. Which deadline bounds which program is said here. git the service runs, and git a bridge runs for it on a remote host under the value the service hands it, is bounded by <code>git_deadline</code>, <code>gh</code> the service runs by <code>gh_deadline</code>, and a stage command by <code>command_timeout</code>; each is the operator's alone to set, and none stands in for another. <code>git_deadline</code> and <code>gh_deadline</code> bound an invocation whose caller set no deadline of its own; a caller's own deadline is kept instead. git and <code>gh</code> the command line runs itself, rather than the service, are built without your settings and run under those two keys' defaults. No other program's deadline is a configuration key.</li>
+    <li>A task's worker is the exception to the invocation deadline: a long-lived worker agent session has none. It runs in a process group of its own, and its owner is its task, whose attempt records its session. It ends when its task lands or an investigation's findings are relayed, when it is stopped, when its agent reports itself unavailable and its configured backup takes over or that handoff is held, and when the service stops, within <code>stop_grace</code> and by force once the grace has passed. Each of those ends a worker this service started and holds. One an earlier incarnation of the service started and did not end reads as ambiguous liveness (section 11) while it runs, and is ended only when it is stopped. The liveness probe ends nothing: it is how the service learns a worker has ended. A live worker that has stalled is never ended. Its unchanged screen surfaces on section 5's terms: at once when nothing proves progress, once <code>escalation_window</code> has passed when something does, and again each window while it stays unchanged. A bound that ends a stalled live worker is not yet specified (#531).</li>
     <li>macOS and Linux are the supported platforms. Windows is not supported: the build is vetted for it so it does not rot, and nothing is run or tested there. What this build cannot provide on Windows refuses rather than degrades: no socket peer is identified, so every request that drives a run is refused and no worker is placed, and the managed service's install is refused.</li>
   </ul>
 
@@ -1979,7 +2000,11 @@ flowchart TB
         interface. The same declaration says which version cells from section 10's table the
         adapter translates. A role whose triple that adapter has not declared is refused before
         launch, on these terms, and the table stays the one owner of which providers, types, and
-        versions exist.
+        versions exist. The same declaration also says which of the agent invocation record's token
+        counts the adapter reports; a count it does not declare is one it declares it does not report.
+        Section 10's usage ceiling does not hold a call to a count its agent declares it does not
+        report. A conformance probe holds each adapter's declaration to what that adapter reads off
+        its agent's output, in both directions, and a declaration no probe checks fails the suite.
       </p>
       <p class="text-sm opacity-90 mt-2">
         The case that decides whether this is worth having is P4. A review may never resume the
@@ -2008,11 +2033,11 @@ flowchart TB
         <tr><td><b>stage result</b></td><td>Authoritative</td><td>Per stage: status, findings, duration, log path, last activity, and the effective fix limit.</td></tr>
         <tr><td><b>round</b></td><td>History</td><td>One row per stage execution. Findings, which findings were selected and by whom, the exact payload sent to the fixer, and the one-line summary. This is what the pull request narrative is generated from.</td></tr>
         <tr><td><b>checkpoint history</b></td><td>Authoritative, appended</td><td>One entry per position a run has stood in: state, the node it has not yet run, the status it stood in, the decision it is halted on when it is halted, the bound accounting, and, on an entry a fork produced, the entry it was copied from. Appended after every node and never revised. The entry with the highest sequence is where the run stands, and it is the only record that answers that.</td></tr>
-        <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, launch notation (how the worker was started), the role it runs under (the name only, recorded at intake and kept by promotion and relaunch), delivery posture (recorded at intake or promotion, in a field of its own), domain (written once at intake from the creator's placement, kept by promotion and relaunch; empty means the first coordinator's own, which is what every row written before the field reads as), isolated copy path, session reference, linked run, linked pull request. Each attempt also records, once at launch, the knowledge revision its worker was told: the default-branch commit and the digest of section 10's project knowledge document there, a known commit with no digest meaning the branch held none, and never the text.</td></tr>
+        <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, launch notation (how the worker was started), the role it runs under (the name only, recorded at intake and kept by promotion and relaunch), delivery posture (recorded at intake or promotion, in a field of its own), domain (written once at intake from the creator's placement, kept by promotion and relaunch; empty means the first coordinator's own, which is what every row written before the field reads as), isolated copy path, session reference, linked run, linked pull request. The machine it runs on, written once at dispatch and kept by promotion and relaunch, empty for this machine, which is what every row written before the field reads as; it is the one place a task's machine is stored (<a class="link" href="#remote-hosts">workers on another machine</a>). For a worker on a remote host it also holds, written with the session reference, the identity of the herdr server hosting that worker, as the store holds a subordinate's tmux server beside its delegation attempt's reference. Each attempt also records, once at launch, the knowledge revision its worker was told: the default-branch commit and the digest of section 10's project knowledge document there, a known commit with no digest meaning the branch held none, and never the text.</td></tr>
         <tr><td><b>task state</b></td><td>Resolved on read</td><td>Not a stored row. A resolution with its source attached, computed on each read from the records that own its facts, as of one consistent read of them; section 6 says what it rests on. Distinct from the event log, per P8.</td></tr>
         <tr><td><b>task event</b></td><td>History</td><td>Append-only. Every append is a wake.</td></tr>
-        <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator, or by the subordinate coordinator of the task's domain for the kinds it can act on. A table here and not a directory, so a wake and its markers are one write. Draining hands a row out; acknowledging closes it. The coordinator that drained a row acknowledges it after it has acted on it, and a row handed out and never acknowledged is handed out again: after a restart, and once the coordinator it was handed to is no longer attached. No row is deleted: closed rows are kept, and a row is actionable until acknowledged. Which coordinator a wake reaches is decided by its kind, and every wake has exactly one recipient. While a delegation stands, a progress-class kind of a delegated task, one the subordinate can act on with the commands it holds, reaches the subordinate; a decision-class kind, one whose action the subordinate is refused, a hold among them, reaches the first coordinator. A wake's domain is derived from its task when it is drained and stored on no row.</td></tr>
-        <tr><td><b>notification</b></td><td>Authoritative, appended</td><td>One row per wake offered to section 10's <code>notify.command</code>, claimed before the command runs and settled once with how it ended: <code>sent</code> or <code>failed</code>, the exit status where the command reported one, and a detail with credentials removed. The claim is never rewritten and the settlement is its one revision. A claim never settled, a crash between the two among them, is not offered again. No row is deleted. A wake about a domain rather than a task has its twin, the domain notification record, on the same terms, keyed by that wake.</td></tr>
+        <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator, or by the subordinate coordinator of the task's domain for the kinds it can act on. A table here and not a directory, so a wake and its markers are one write. Draining hands a row out; acknowledging closes it. The coordinator that drained a row acknowledges it after it has acted on it, and a row handed out and never acknowledged is handed out again: after a restart, and once the coordinator it was handed to is no longer attached. No row is deleted: closed rows are kept, and a row is actionable until acknowledged. Which coordinator a wake reaches is decided by its kind, and every wake has exactly one recipient. While a delegation stands, a progress-class kind of a delegated task, one the subordinate can act on with the commands it holds, reaches the subordinate; a decision-class kind, one whose action the subordinate is refused, a hold among them, reaches the first coordinator. A wake's domain is derived from its task when it is drained and stored on no row. A kept-work entry no task names, the run of a person's own push among them, is raised as the kept-work wake: a wake about the entry rather than a task, a row of its own shape keyed by the entry, appended once per entry by the supervisor loop on the same terms and drained, handed out and acknowledged on the same terms. An entry surfaces once whichever shape carries it, so an entry already raised on a task's wake is not raised on this one, nor the reverse. Its domain is derived from the entry when it is drained, as a task wake's is from its task, and stored on no row: the entry names a project and no task, and a domain is a set of tasks, so the wake is in none and reaches the first coordinator, where its kind, kept work, a decision-class kind, routes it as well. The entry's project and branch, read off the entry, are what the wake is listed and offered under. Like every wake it is actionable, and counts toward section 6's work in flight, until it is acknowledged. The coordinator that drained it acknowledges it after it has acted on it, on the same terms as every row; acknowledging it closes the wake and answers nothing, because the entry stays open until section 6's answer or a removal on a proof closes it, and status and the catch-up read list it until then.</td></tr>
+        <tr><td><b>notification</b></td><td>Authoritative, appended</td><td>One row per wake offered to section 10's <code>notify.command</code>, claimed before the command runs and settled once with how it ended: <code>sent</code> or <code>failed</code>, the exit status where the command reported one, and a detail with credentials removed. The claim is never rewritten and the settlement is its one revision. A claim never settled, a crash between the two among them, is not offered again. No row is deleted. A wake about a domain rather than a task has its twin, the domain notification record, on the same terms, keyed by that wake. The kept-work wake has its twin too, the kept-work notification record, on the same terms, keyed by that wake, so an entry no task names is offered to the private channel once, as every wake is.</td></tr>
         <tr><td><b>merge record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the code-host read that ends a run on a merge: the pull request, the head read, and when. The code host owns the merge; this is the program's record that it saw it. The run's <code>passed</code> on a merge and the task's Landed are both derived from this one record, and neither stores the fact again.</td></tr>
         <tr><td><b>local landing record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the approved fast-forward that delivers a <code>local</code> task: the task, the commit, the local default branch's tip before and after, and when. The task's Landed for a <code>local</code> task is derived from it, read in the same tier as the merge record.</td></tr>
         <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. A delivery task's Complete is derived from it; an investigation's Complete is derived from the record that its findings were relayed, never from this one. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>
@@ -2023,7 +2048,7 @@ flowchart TB
         <tr><td><b>delegation attempt</b></td><td>Authoritative, appended</td><td>One row per start of a domain's subordinate coordinator, with its session reference, sealed. A relaunch is a new row anchored to the attempt history it read, bounded by <code>relaunch_attempts</code> on section 11's terms.</td></tr>
         <tr><td><b>escalation</b></td><td>Authoritative, appended</td><td>One row per decision a subordinate coordinator hands up to the first coordinator, sealed. It is raised as a wake of its own kind, subordinate escalated, which section 6's flowchart surfaces always.</td></tr>
         <tr><td><b>seen mark</b></td><td>Authoritative, appended</td><td>One row per merge or cleanup record you were shown and marked seen, keyed the way that record is keyed. One per home. It is what section 9's catch-up reads to decide what landed since you last looked, and nothing else reads it.</td></tr>
-        <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, the model provider, model type, and model version the launch was asked for, the model identifier the adapter started, the role and the effort of the launch, timing, failure category, token usage, and the run and stage it served where it served one. Never prompts, outputs, diffs, or credentials. The run, the stage, the role, the provider, the type, the version, and the effort were added later, so a row written before one of them reads that one as unknown, never as a guess. A provider, a type, a version, or an effort that was not named is recorded as not named, and is never stored as one of the named values.</td></tr>
+        <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, the model provider, model type, and model version the launch was asked for, the model identifier the adapter started, the role, the effort, and the context window of the launch, timing, failure category, token usage, and the run and stage it served where it served one. Never prompts, outputs, diffs, or credentials. The run, the stage, the role, the provider, the type, the version, the effort, and the context window were added later, so a row written before one of them reads that one as unknown, never as a guess. A provider, a type, a version, an effort, or a context window that was not named is recorded as not named, and is never stored as one of the named values.</td></tr>
       </tbody>
     </table>
   </div>
@@ -2112,6 +2137,7 @@ flowchart TB
     <li><b>The full log is the authority.</b> What appears in findings, streams, and prompts is a bounded projection with an explicit marker naming what was omitted and how to read the rest.</li>
     <li><b>Log rotation truncates in place.</b> A service or child process holding an open descriptor keeps writing to the bounded file rather than to an orphaned inode.</li>
     <li><b>Records precede directories.</b> Insert the run row before creating its directory, so a directory with no row is always safe to remove.</li>
+    <li><b>A remote root is not a home.</b> On a remote host the configured root, empty or absent when a bridge first uses it, holds <code>lock</code> and <code>socket</code> for its one bridge, <code>home</code> naming the home it belongs to, written once at first use, <code>instance</code>, the running bridge's own instance identity, written by each bridge when it starts, and, for each task placed there, <code>tasks/&lt;id&gt;/copy</code> with, beside it, the configuration file and launch file of that task's herdr server, which the bridge writes and which hold no state. It holds no store, no gate, and no record.</li>
     <li><b>Nothing under <code>tasks/</code> is state.</b> A task's state is resolved on read, per P8 and section 6, so no file there holds it, and no file in a task's records holds it. The durable wake queue is a table in <code>state.db</code>, not a directory.</li>
   </ul>
 
@@ -2155,6 +2181,184 @@ flowchart TB
       </div>
     </div>
   </div>
+
+  <h3 id="remote-hosts" class="prd-anchor text-xl font-semibold mt-10 mb-3">Workers on another machine</h3>
+  <p class="mb-4 opacity-90">
+    The development fleet that builds this program already runs workers on a second machine by hand
+    (#388): the coordinator on one Mac starts agent sessions in herdr panes on another over SSH, reads their
+    screens, watches their status, and keeps placement rules in its head. This subsection makes that a
+    feature, decided on 2026-10-22 as section 14's decision 22, without moving any decision about a task's course. One home, one service, one store, one gate and one
+    supervisor loop stay on the machine you work at. Another machine of yours, a <b>remote host</b>
+    named in your global settings, holds only the isolated copies of the tasks placed on it and the
+    terminals of the workers running in them, and a <b>bridge</b>, a process of this program the
+    service starts there, does on that machine what the service does here for a worker and nothing
+    else.
+  </p>
+  <div class="prd-mermaid mb-6">
+    <pre class="mermaid">
+flowchart TB
+  subgraph here["This machine: the home"]
+    svc["Service<br />store, gate, supervisor,<br />every decision about a task"]
+    tr["Transport the service opens<br />one per remote host"]
+    rc["Receiver<br />one per push, placed as that push's task"]
+  end
+  subgraph there["Remote host: copies and terminals only"]
+    br["Bridge<br />no store, no gate, no record"]
+    hs["One herdr session and server per worker"]
+    wk["Worker in its remote copy"]
+  end
+  svc --> tr --> br
+  br -->|"starts, reads, ends"| hs --> wk
+  wk -->|"assistant worker, git push assistant"| br
+  br -->|"call, caller placed by this host's kernel"| svc
+  br -->|"one push, on a stream of its own"| rc -->|"admission hooks"| svc
+    </pre>
+  </div>
+
+  <p class="font-semibold mb-1">The bridge</p>
+  <p class="text-sm opacity-90 mb-4">
+    The bridge is a build of this program, started by the service over the transport, with that
+    transport as its only channel back. It holds no store, no lock on the home, no gate, and no
+    configuration of its own, and it decides no task's course: dispatch, admission, relaunch, every
+    finding and every hold stay the service's. What it does decide, it decides from that host's kernel
+    and filesystem on rules this subsection fixes, and nothing a caller states enters any of it: it
+    places a caller and refuses one it cannot place, cuts and asserts a copy and refuses one that does
+    not assert, takes the readings placement needs, lists processes for the sweep, and ends what it
+    started when <code>remote_disconnect_grace</code> passes. It carries a worker's calls and pushes to
+    the service with the task it placed, and the service decides each one as it decides a local
+    worker's. There is one bridge per remote root, holding a lock in that root the way the service
+    holds the home's. The root names the home it belongs to, written once at first use, so a root is
+    never shared between homes and a bridge of another home is refused; that file says which home and
+    nothing about which bridge. Each bridge also writes an instance identity of its own when it
+    starts, as the service does in the home, and that identity, not the home file, is what tells one
+    bridge from the next (the ownership row below says what turns on it).
+  </p>
+  <p class="text-sm opacity-90 mb-4">
+    The bridge's build must be the service's, compared on the identity section 8's run record traces a
+    run to: the version, the source revision and modified flag the Go toolchain recorded, and the
+    toolchain's version. The bridge reports its own over the transport, read from what its toolchain
+    recorded and not from a version line it prints. A bridge whose identity differs, or that carries
+    no revision or a modified one, so that two different builds could share an identity, is refused,
+    and its host is ineligible until it matches. The architecture is not compared, because a remote host
+    of another architecture than this machine runs a binary built for its own, and the identity
+    compared names the source and the toolchain, which a build for either architecture records alike. The match covers this program's part and nothing more: two builds of one clean revision
+    made with different build flags compare equal, and a binary made to report another build's
+    identity is not caught. The coding agent and herdr on that host are other programs, and the match
+    says nothing about either. The transport is SSH, authenticated by your own SSH configuration under
+    the name you gave the host; the program adds no SSH credential and stores none.
+  </p>
+
+  <p class="font-semibold mb-1">The herdr session provider</p>
+  <p class="text-sm opacity-90 mb-4">
+    herdr becomes the third terminal session provider beside <code>pipe</code> and <code>tmux</code>,
+    on the five operations section 8's session row names and through the held set those two share.
+    Remote hosts require it: with a host named and <code>session_provider</code> set to anything else,
+    the configuration refuses at parse time, so the provider stays one choice for the whole service.
+    What follows was read off herdr 0.9.5 on 2026-10-21 and 2026-10-22, by its own help, its default
+    configuration (<code>herdr --default-config</code>), and process listings of sessions started for
+    the purpose, and it is what the provider is built against; a herdr server
+    that reports another version is refused at start rather than driven on the assumption that it
+    behaves the same.
+  </p>
+  <ul class="text-sm opacity-90 list-disc pl-5 space-y-1 mb-4">
+    <li><b>A server per worker.</b> herdr runs each named session as a server process of its own with a socket of its own, and a headless <code>herdr --session &lt;name&gt; server</code> stays the child of whatever started it. So each worker runs in a session of its own whose server the provider starts itself, headless, as its own child (on a remote host, the bridge's child), and the provider records that server's identity as the worker's host, read as the pane process's parent and checked against the process it started, on the terms the tmux provider records its server. A server keeps the working directory it was started in, and herdr keeps it running after its last pane is gone, so the provider starts each worker's server with its working directory in that worker's copy and ends it when the worker ends, as the tmux provider ends its server, and section 8's task record holds its identity beside the worker's session reference, as the store holds a subordinate's tmux server beside its delegation attempt's. A later bridge can then end the server by that identity, and the copy sweep reaches it where no record names it. The server of herdr's default session, the one you attach to, is never started by the program and is never a host.</li>
+    <li><b>Why the server is the host.</b> herdr names a pane's own session in its environment (<code>HERDR_SESSION</code>, <code>HERDR_SOCKET_PATH</code>), so the worker can reach its own server, and what that server starts, a pane among them, descends from the server and not from the agent, which is the reach that makes the tmux provider place its server as the worker's host.</li>
+    <li><b>No shell runs in the pane.</b> herdr starts a pane with the program its configuration names as the default shell, falling back to <code>$SHELL</code>, as a login shell on macOS unless the configuration says otherwise, and passes it no argument; it has no option that starts a pane with a command of the caller's choosing (<code>pane split</code> and <code>workspace create</code> take a directory and environment entries). So the provider starts each worker's server under the environment <code>agents.WorkerEnvironment</code> built and with <code>HERDR_CONFIG_PATH</code> naming a configuration file it writes for that worker alone, never your own, as the tmux provider starts its server with no configuration file. That file names as the pane's program a launch file the provider writes for that worker, which replaces itself, by <code>exec</code>, with the agent and the command line the adapter built, quoted by the program, and which exits at once, starting nothing, once it has run for that worker. The agent is then the pane's process from the start, the server's child and the leader of its own process group, as under tmux, and the session reference names it once it is read running the agent's binary. No login or interactive shell runs, so none of your shell's startup files does: with the configuration naming the launch file, the pane's process was the agent the launch file started, under the launch file's own identifier, and startup files that start a process, which ran in a pane whose program was zsh, did not run, even with <code>$SHELL</code> naming zsh and the configuration asking for a login shell. A pane opened later in that session, by the worker or by you, runs the launch file again, which exits, and herdr closes the pane. What the agent runs under is the server's environment plus what herdr sets for a pane, its <code>HERDR_</code> variables and the terminal's, which the provider does not choose. When the agent exits herdr closes the pane, and a capture after that answers the last screen the handle read.</li>
+    <li><b>What else herdr is relied on for:</b> typing into a pane, reading its screen, closing it, and the command you run to attach from this machine. Liveness comes from the agent process's identity, never from herdr's own account of the agent.</li>
+  </ul>
+
+  <p class="font-semibold mb-2">What a remote worker is held to</p>
+  <p class="text-sm opacity-90 mb-3">The same as a local one, rule by rule. Where the mechanism differs, the row says how.</p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-40">Rule</th><th>On a remote host</th></tr></thead>
+      <tbody>
+        <tr><td><b>Placement</b></td><td>Across a machine boundary this machine's kernel can attribute nothing, which is why a push whose ancestry ends at a daemon is refused today (the process model above). The bridge places instead: it walks a caller's ancestry on the remote host's own kernel, the walk the service makes here, up to the agent process of a worker it started or the server of that worker's own herdr session, which the bridge started as its own child for that worker alone and which is the worker's host on the terms the tmux provider's server is. Because no two workers share a server, the host rule places a process as one worker's and never as a neighbour's by sharing; herdr's default session is nobody's host, so a shell in it is placed as nobody's. It hands the service the task it placed, over the transport only the two of them hold. A caller it cannot place is refused there with the typed refusal a local caller gets. Nothing on a remote host is placed as a person's shell: a person works at this machine, and a push to the gate from a remote host that no worker made is refused. No caller states a task and no worker is handed a credential, which is what separates this from the per-worker secret the 2026-10-19 reading rejected.</td></tr>
+        <tr><td><b>Route back</b></td><td>A remote worker's route, <code>assistant worker …</code>, is the same command run on the remote host. It reaches the bridge's socket under the remote root and never this machine's socket. The bridge places the caller and carries the method across; the service decides it exactly as for a local worker and refuses it for anything the bridge did not place as a worker. This is the relayed-socket shape; a second home on the remote host is the alternative compared below.</td></tr>
+        <tr><td><b>The gate</b> (P1, P2, P7)</td><td>The remote copy's <code>assistant</code> remote reaches the bridge's socket and never the gate's bare repository. Each push is a connection of its own to that socket, and the bridge places the process that opened it, by its kernel credentials and ancestry, before it carries a byte. For each push it placed, the service starts a receiving process of its own, leading a process group of its own, which joins the worker set as that one task's worker for exactly its own lifetime. It receives the bytes of that one connection and no other, carried on a stream of the transport that belongs to that connection alone, runs the admission and notification hooks every push goes through, and exits. So the task admission's worker rule reads is the task the bridge placed for those bytes: a second push, of the same task or another, is a second connection, a second placement and a second receiver, and a receiver is never reused or shared. The run validates what was pushed, on this machine, under this machine's trusted configuration. Your code host's credentials never leave this machine: the remote host needs only the coding agent's own login. A push the worker makes to any other remote is not seen by the gate, as for a local worker.</td></tr>
+        <tr><td><b>Isolation</b> (P11)</td><td>The bridge cuts the copy from the commits a local copy is cut from, carried over the transport, never from a checkout already on that host, at exactly <code>tasks/&lt;id&gt;/copy</code> under the remote root: a path it creates for that task, refusing the cut if anything is already there. It asserts it the way a local copy is asserted, by file identity: the copy's root is exactly that path, it is a full clone with its own object store, and it is distinct from every other task's copy. The root itself must be empty or absent when a bridge first uses it, so a root that names a directory already holding your files, your home directory among them, is refused at first use and never adopted. A checkout of your own on that host, inside the root or outside it, is therefore never a task's copy: it is not at a task's copy path, and one placed at that path before the cut refuses the cut. The assertion is the program's, made on that host's filesystem, not the worker's report, and the worker's instructions repeat the check before it creates a branch. A launch whose assertion the bridge cannot make, or cannot return, refuses.</td></tr>
+        <tr><td><b>Liveness</b> (P9)</td><td>A probe of a remote reference goes through the bridge. A remote session reference also records the instance identity of the bridge that started the session. It reads Live only while the transport is up, the bridge answering is that incarnation and still holds the worker's session, and the agent process it started is present by identifier and start time, both read and compared on that host. It reads Dead only when the bridge reads absence there. An unreachable host, a dropped transport, a bridge that does not answer within its deadline, an answer from another home's bridge, and an answer from a later bridge of this home about a process that is still present all read Unobserved, never Dead: a later bridge holds no handle to it, as a restarted local provider holds none to a survivor. herdr's account of an agent (working, idle, blocked) is evidence a coordinator may read through <code>peek</code> and never absorbs a wake on its own: it is herdr's reading of a screen, not a live process signal.</td></tr>
+        <tr><td><b>Recovery</b> (P6)</td><td>A remote task is relaunched only where it ran, in its same copy, through the one anchored relaunch, and only on the proof section 11 already asks for, made on that host by its bridge: the agent process is gone and no process has a working directory under the copy. It is never relaunched on this machine or on another host, because its work is in a copy only that host holds and because an unreachable host proves nothing about duplicate work. A task on an unreachable host reads Unobserved and surfaces again each <code>escalation_window</code>; the program discards nothing it cannot reach. A worker its bridge ended when the grace passed reads Dead once the host answers, and is relaunched in its copy on these terms. Moving a task between machines is deferred (section 12).</td></tr>
+        <tr><td><b>Ownership</b> (P15)</td><td>The bridge is owned by the service. A worker's process group on a remote host is owned by its task, as here, and is ended through the bridge when the task ends. An end the program cannot deliver because the host is unreachable is recorded as owed, surfaced, and delivered when the host answers, never dropped. When the transport has been gone for longer than <code>remote_disconnect_grace</code>, the bridge ends every worker it started and then itself, so while the bridge lives a lost connection bounds how long a worker runs unobserved. That end ends no task and writes nothing: the bridge holds no record and the service cannot read a copy it cannot reach, so the task stays its copy's owner, reads Unobserved while the host is unreachable, and once it answers reads Dead and is relaunched in its copy on the recovery row's terms. A remote copy becomes kept work only when its task ends, on the proof section 6 asks for, the project, the branch and what the copy holds that the default branch lacks, read from the copy by its bridge; a task that ends while its host is unreachable owes that read with its end, and no kept-work entry is written without it.
+          <br /><br />A service that reconnects within the grace reattaches to the same bridge and the sessions it holds only when two things hold. The bridge must be the incarnation the sessions' references record, read from its own instance identity and never from the root's home file, which stays true of every bridge of this home. And the service must prove it is the service: the bridge's socket is reachable by every process of yours on that host, its workers among them, so a reattach is accepted only from a connection that answers with a secret the bridge handed the service over the transport it was started on and that the service holds in memory alone. A service that restarted holds no secret, so it does not reattach: it asks the bridge to end its workers and itself, which needs no secret because any process of yours there could end them anyway, and starts a new one. A reattach is the one place a held session survives the transport it was created over, and it can because its handle never left the program.
+          <br /><br />A bridge starts only when the service starts it, so the service is present at every start: before the new bridge starts anything, the service hands it the session references its store records on that host and the herdr server identity recorded beside each, and the bridge ends each process one of them names that is still present, by identity, and every process with its working directory in a copy, each worker's server among them, since it was started there, and deletes the herdr session each ended server held. Anything else there that it cannot end or prove idle it reports, naming what it is, as section 11's restart step requires of this home. So neither a worker nor its server that a bridge that died left behind runs on without an owner once the host is reached again, and no shell ran beside an agent to leave a process neither reaches (the herdr provider above). On stop and on restart the service reaches every configured remote root this way, and reports a root it cannot reach.</td></tr>
+        <tr><td><b>Configuration</b> (P7)</td><td>Remote hosts are named in your global settings only, section 10's global-only <code>remote_hosts</code>: how to reach each host, its remote root, and the path of the binary the bridge runs. No repository copy, trusted or pushed, may name any of them, because each chooses where, and as what, a process starts with your credentials.</td></tr>
+        <tr><td><b>Records</b> (P14)</td><td>The task has one row, in this home. Section 8's task record gains the machine it runs on, written once at dispatch and kept by promotion and relaunch, empty for this machine, and that field is the one place a task's machine is stored. Everything else points at it. A session reference does not name the machine: it names its task, as every worker's reference does, and a probe of a remote reference goes to the bridge of the machine that task's record names and nowhere else. Beside a remote reference the task record holds the identity of the herdr server hosting it, which is the one record of that server. A kept-work row names the owner it outlived, and its machine is that owner's; carry on gives the new task the kept copy's machine rather than placing it. The detail view and the status line read the same field. The remote root holds copies, each worker's herdr configuration and launch file, the bridge's lock, socket and instance identity, and the name of the home it belongs to, and no record.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="font-semibold mb-2">Which machine a task runs on</p>
+  <p class="text-sm opacity-90 mb-3">
+    Placement is the program's, decided at dispatch, because getting it wrong breaks what you cannot
+    see at the moment of the decision: a disk that fills under a copy, or a runtime fault that only
+    one architecture shows. The development fleet hit such a fault on 2026-10-21, golang/go#82394,
+    reproduced on amd64 and reported against amd64 only, which is why a repository may keep its
+    work off an architecture. The coordinator does not name a machine and no request field can; what
+    it chooses is the role, as today.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-3">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-56">Fact</th><th class="w-56">Where it lives</th><th>Who decides</th></tr></thead>
+      <tbody>
+        <tr><td>Which machines exist and how each is reached</td><td><code>remote_hosts</code>, global-only</td><td>You.</td></tr>
+        <tr><td>How many workers a machine takes, and the free disk and load a dispatch needs there</td><td><code>max_workers</code>, <code>min_free_disk</code>, <code>max_load</code> on each remote host and on this machine (<code>placement.local</code>), global-only</td><td>You set the limits; the program applies them to readings it takes at dispatch.</td></tr>
+        <tr><td>A machine's architecture</td><td>Read from the machine, by its bridge or here; never configured</td><td>The machine itself, its one owner.</td></tr>
+        <tr><td>Which architectures a repository's work may run on</td><td><code>placement.arch</code>, trusted-only</td><td>The repository's default branch. It can only narrow the machines a task may go to.</td></tr>
+        <tr><td>Which eligible machine a task gets</td><td>Nowhere: it is a rule, not a setting</td><td>The program: the eligible machine with the fewest live workers of this home, ties going to this machine. With one remote host, the most the first increment allows, no other tie can arise; an increment that allows more states its own tie rule.</td></tr>
+        <tr><td>A coding agent's remaining quota</td><td>Not read</td><td>Nobody yet: ranking by quota stays deferred (section 12, decision 13). A provider that runs out is section 10's availability failure, as here.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="text-sm opacity-90 mb-6">
+    A machine is eligible when every rule holds on readings taken at dispatch. A reading that cannot
+    be taken, an unreachable host among them, makes the machine ineligible, because missing
+    information is never read as room. With no machine eligible the task stays queued and surfaces at
+    once, naming the rule that refused each machine, and again each <code>escalation_window</code>
+    while it stays queued, as a crashed worker does, so a surface that was missed is not the only one;
+    it is dispatched when a machine becomes eligible.
+  </p>
+
+  <p class="font-semibold mb-2">Compared with a second home on the remote host</p>
+  <div class="grid gap-4 md:grid-cols-2 mb-4">
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">A second home per remote host, with a delegated-task handoff</h4>
+        <p class="text-xs opacity-90">The shape the 2026-10-19 reading of #310 preferred (option A there, GAP-11's old shape A with one subordinate home per host). The remote host runs a service of its own, with its own store and gate, and a task crosses homes by a delegation record.</p>
+        <p class="text-xs opacity-90 mt-2"><b>Keeps:</b> every kernel-attributed relation local to one machine, unchanged: placement, isolation, the sweep, and liveness need nothing new. A remote run goes on while this machine is unreachable.</p>
+        <p class="text-xs opacity-90 mt-2"><b>Costs:</b> a task in two stores, which holds P14 only by declaring one row a pointer, the reason decision 20 rejected that shape for subordinate coordinators; section 11's "never claims another home's work" rewritten; an authenticated service-to-service channel, a delegate-homes key and a delegate resolution tier, none of which exist; your code host's credentials and a second gate on the remote host, whose pass means the same thing only while both builds and both configurations agree (P2); and two services to install, upgrade and recover.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">One home and a bridge (chosen)</h4>
+        <p class="text-xs opacity-90">The remote host holds copies and terminals; the bridge is the program's hands there, holds no record, and decides no task's course.</p>
+        <p class="text-xs opacity-90 mt-2"><b>Keeps:</b> one store, one gate, one supervisor loop, one configuration, and one row per task, so P14 holds structurally, as decision 20 chose; credentials for your code host stay on this machine; a pass is made on one machine by one build.</p>
+        <p class="text-xs opacity-90 mt-2"><b>Costs:</b> a new placement input, the remote kernel's answer carried by the program's own process over the program's own transport; isolation, the sweep and liveness each need a bridge operation; nothing a remote worker does reaches the gate while its host is unreachable; and the bridge's build has to match the service's on every host.</p>
+      </div>
+    </div>
+  </div>
+  <p class="text-sm opacity-90 mb-6">
+    <b>Chosen: one home and a bridge.</b> The second home costs P14 in exactly the way
+    decision 20 already refused, and adds a channel, a key and a tier to buy independence from this
+    machine that a one-developer tool does not need: you work at this machine, so a partition that
+    stops remote pushes stops you too. The bridge keeps every placement attributed by a kernel rather
+    than by a claim, which is the property the 2026-10-19 reading found the thin-process shape lacked.
+    The owner chose it on 2026-10-22 (decision 22).
+  </p>
+
+  <p class="font-semibold mb-1">What this does not cover</p>
+  <ul class="text-sm opacity-90 list-disc pl-5 space-y-1 mb-2">
+    <li>The bridge's answer is as trustworthy as your account on the remote host. A process running as you there that can alter the bridge's memory or its binary defeats placement, as one that can alter the service defeats it here.</li>
+    <li>Until <code>remote_disconnect_grace</code> passes, a worker on an unreachable host runs unobserved; its pushes fail meanwhile and lose nothing, and what it spends is not bounded by anything shorter than the grace.</li>
+    <li>The grace is the bridge's timer, so it bounds nothing once the bridge itself is gone. A bridge that dies while its host is unreachable leaves its workers running until the host is reached again and the next bridge's start ends them, however long that is. Nothing on the host outlives the bridge to enforce the grace; the owner accepted this on 2026-10-22 as a residual gap of the first increment (decision 22), rather than a supervisor or a watchdog on the host.</li>
+    <li>A worker can address another worker's herdr session by name, since <code>herdr session list</code> lists every session and its socket to any process of yours. A pane it opens there runs that session's launch file, which exits at once, but it can type into that worker's agent, and it can rewrite that session's configuration file, which is a file of yours, and have the server reload it, so that a pane it opens there afterwards is a shell descended from that worker's server and placed as that worker's. The host rule has that reach under tmux too, with no rewrite needed, since it places every descendant of a server as that server's worker whoever opened the window (internal/service's <code>placement.go</code>), and a worker can find another worker's socket under the home. Nothing here closes it.</li>
+    <li>A process the agent starts that leaves its process group and works outside the copy is reached by nothing once the agent is gone: no record names it and the copy sweep does not see it. A local worker has the same gap, where agents' sweep finds such a process only in its copy. The launch file is a script, so the host's <code>/bin/sh</code> runs it for the moment before its <code>exec</code>; section 13's startup-file check is what shows that nothing of yours runs then.</li>
+    <li>A push is placed as the process that opened its connection, when it opened it, as a local caller is placed as the peer read when its connection was accepted. A placed process that hands its open connection to a process that is not the worker's is not detected.</li>
+    <li>A worker's process that leaves its ancestry, by double-forking or daemonizing, is placed as nobody's and refused, as here.</li>
+    <li>The sweep on a remote host is the bridge's process listing on that host, so it covers what that listing covers and nothing more.</li>
+    <li>A person attached to a remote worker's session through herdr can type into it, as under tmux, and nothing records it.</li>
+  </ul>
 </section>
 
 <!-- ============================ 9. SURFACES ============================ -->
@@ -2231,18 +2435,22 @@ flowchart TB
   </p>
   <p class="mb-4 opacity-90">
     The <b>usage view</b> is a flag on <code>assistant runs</code>, taking a window. It reads section
-    8's agent invocation record and totals it by agent, model provider, model type, model version, the model identifier the launch used, purpose, role, and effort, and by run and stage
+    8's agent invocation record and totals it by agent, model provider, model type, model version, the model identifier the launch used, purpose, role, effort, and context window, and by run and stage
     where a row names them: calls, failures by category, duration, and each token count. A count the
     agent did not report is shown as unreported and never summed as a zero. A provider, a type, a
-    version, or an effort recorded as not named is totaled on its own and never as one of the named values.
+    version, an effort, or a context window recorded as not named is totaled on its own and never as one of the named values,
+    and one a row predates is totaled as unknown, apart from both.
     It covers the calls a
     stage makes and says so: a worker's turns and any price are not in it. The local protocol
     carries the same read as one open method, so a driving agent gets the same model. It is a
     detailed evidence document in P13's sense, because its rows are agent names, model identifiers,
     and stage purposes; the line pointing at it is phrased. It also carries a ceiling line stating
     where the recorded use stands against section 10's <code>usage_ceiling</code>: no ceiling set,
-    under it, reached, not weighable because a call did not report a count it is set on, or not
-    known because the record could not be read, with the exact figures when a count is set. The
+    under it, reached, not weighable because a call did not report a count it is set on and its
+    agent does not declare that it does not report that count, which includes every call by an
+    agent this build holds no declaration for, or not known because the record could not be read, with the exact
+    figures when a count is set, including how many calls a count leaves out because their agent
+    declares it does not report it. The
     line is over the ceiling's own window, which need not be the window the view was asked for. No
     verb is added.
   </p>
@@ -2387,6 +2595,17 @@ flowchart TB
     the owner's decision rather than a precedent the first three set. Each of its subcommands is one
     service method, and the service, not the client, refuses it for a person's shell, deciding from
     the credentials the socket reports and never from anything the caller says about itself.
+  </p>
+  <p class="mb-8 opacity-90">
+    Workers on another machine add no verb, no flag, and no request field. Remote hosts are section
+    10's global settings and placement is the program's at dispatch, so neither the coordinator nor
+    you name a machine for a task. On a remote host the worker route is the same command, reaching
+    that host's bridge rather than this socket; the service decides each call from the placement the
+    bridge read on that host's kernel and never from anything the caller says about itself, on the
+    terms <a class="link" href="#remote-hosts">workers on another machine</a> gives. <code>peek</code>
+    hands back the command that attaches to a remote worker from this machine. The detail view names
+    the machine a task runs on, and a plain status line names it by the name you gave it in your
+    settings, which is your word and not an internal term (P13).
   </p>
 
   <h3 id="catch-up" class="prd-anchor text-xl font-semibold mb-3">Catching up</h3>
@@ -2652,7 +2871,7 @@ flowchart TB
       <thead><tr><th class="w-52">Key</th><th class="w-28">Default</th><th>Meaning</th></tr></thead>
       <tbody>
         <tr><td><code>agent</code></td><td><code>auto</code></td><td>One agent or an ordered fallback list. Resolved against what is actually runnable at run start. If nothing resolves, the run fails before its first stage rather than reporting command-only validation as a pass. A role that names no agent uses this list. The default fixer names <code>cursor</code> and does not. A role that names its own agent does not consult this list.</td></tr>
-        <tr><td><code>roles</code></td><td><code>fix</code> names <code>cursor</code></td><td>Which agent, model provider, model type, model version, and effort each role runs. The default names <code>fix</code> as <code>cursor</code>, with no model and no effort, and names no other role, so review and worker use <code>agent</code>. A <code>roles</code> table you set replaces that default, except that a table which does not name <code>fix</code> keeps this fixer. A <code>fix</code> role that names no agent leaves the fixer on <code>agent</code>. The program assigns <code>review</code>, <code>fix</code>, and <code>worker</code>; any other name is a worker role a task may name. Same trust class as <code>agent</code>, so a pushed branch sets it only under <code>allow_pushed_commands</code>. The rules are the section below.</td></tr>
+        <tr><td><code>roles</code></td><td><code>fix</code> names <code>cursor</code></td><td>Which agent, model provider, model type, model version, effort, and context window each role runs. The default names <code>fix</code> as <code>cursor</code>, with no model, no effort, and no context window, and names no other role, so review and worker use <code>agent</code>. A <code>roles</code> table you set replaces that default, except that a table which does not name <code>fix</code> keeps this fixer. A <code>fix</code> role that names no agent leaves the fixer on <code>agent</code>. The program assigns <code>review</code>, <code>fix</code>, and <code>worker</code>; any other name is a worker role a task may name. Same trust class as <code>agent</code>, so a pushed branch sets it only under <code>allow_pushed_commands</code>. The rules are the section below.</td></tr>
         <tr><td><code>commands.test</code></td><td>empty</td><td>A targeted check for this change, not a full suite. Deliberately empty by default.</td></tr>
         <tr><td><code>commands.lint</code></td><td>empty</td><td>Static analysis. When empty, the document stage performs a combined pass and routes its lint findings to the lint stage.</td></tr>
         <tr><td><code>commands.format</code></td><td>empty</td><td>Run immediately before pushing.</td></tr>
@@ -2677,12 +2896,18 @@ flowchart TB
         <tr><td><code>stall_inspection_count</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">3</code></td><td>How many times the same unchanged screen may surface before the next surface demands a deeper inspection, section 11's repeated stall. It raises the level of what surfaces and bounds nothing. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>relaunch_attempts</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">2</code></td><td>How many times reconciliation relaunches a task that resolves Failed with its terminal gone, in place, counted from the task's attempt history. Past it the task holds for you, and you decide whether it is retried: nothing retries a task automatically without bound. Zero relaunches nothing and holds every such task. It is a bound on a task, not one of the three loop bounds, and stops no run. The default is chosen, not measured; the limits table bounds it, and the ceiling is chosen, not measured.</td></tr>
         <tr><td><code>stop_grace</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>30s</code></td><td>How long a stop or SIGTERM waits for the groups the service registered to end before ending them by force. The service has exited by then. It is accepted from <code>1s</code> to <code>10m</code>.</td></tr>
+        <tr><td><code>git_deadline</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>10m</code></td><td>How long one invocation of git the service makes may run before it is ended with its process group. A clone, a fetch and a push are the longest, and the repository decides their size, so an operator whose repository needs longer over a slow link raises it, and one who wants a tighter bound lowers it. It is global-only because it bounds a program on your machine, and a repository that could raise it could hold the machine as long as it liked: no repository copy, trusted or pushed, may set it, and a repository file naming it is refused at parse time (P7). Section 8's process model says which deadline bounds which program, and when a caller's own deadline applies instead. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
+        <tr><td><code>gh_deadline</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>2m</code></td><td>How long one invocation of <code>gh</code>, the GitHub command line the service runs to talk to the code host, may run before it is ended with its process group. Each invocation is a handful of requests with a bounded answer, so one still running at the default is taken as wedged rather than slow. It is global-only on <code>git_deadline</code>'s terms, and refused in any repository file on the same terms. The GitLab adapter starts no program, so this does not bound it. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>promotion_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>1h</code></td><td>How long a reported investigation's worker is kept for a promotion before it is ended. Its copy is kept either way.</td></tr>
         <tr><td><code>notify.command</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td>empty</td><td>The operator's private channel: a command line the service runs once for each wake, on the terms <code>commands.test</code> runs under, in the home with the service's environment. Its standard input is the wake object as one JSON line. Each wake is claimed before the command runs and settled once with how the command ended, and it is not offered again, whether the command failed or its end was never recorded; section 8's notification record holds both. What the command prints and how it exits are recorded and never read as an answer or an acknowledgement, and the wake stays waiting for the coordinator. Empty runs nothing. No repository copy, trusted or pushed, may set it; a repository file naming it is refused at parse time (P7).</td></tr>
-        <tr><td><code>session_provider</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>pipe</code></td><td>Which terminal session provider the service starts every worker through: <code>pipe</code>, the reference provider, or <code>tmux</code>. It chooses which program starts every worker, and so which process starts with your credentials, and it is one choice for the whole service, so no repository copy, trusted or pushed, may set it (P7).</td></tr>
+        <tr><td><code>session_provider</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>pipe</code></td><td>Which terminal session provider the service starts every worker through: <code>pipe</code>, the reference provider, or <code>tmux</code>. It chooses which program starts every worker, and so which process starts with your credentials, and it is one choice for the whole service, so no repository copy, trusted or pushed, may set it (P7). A third value, <code>herdr</code>, runs each worker in a herdr session of its own, on a server the program starts for that worker, and is the provider <code>remote_hosts</code> requires: naming a host under any other provider refuses at parse time.</td></tr>
+        <tr><td><code>remote_hosts</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td>empty</td><td>The other machines workers may run on, section 8's <a class="link" href="#remote-hosts">workers on another machine</a>. Each entry names the host as your SSH configuration names it, the absolute remote root on it, which must be empty or absent when a bridge first uses it, the absolute path of the binary its bridge runs, and optionally <code>max_workers</code>, <code>min_free_disk</code>, and <code>max_load</code>, the limits a dispatch there needs. Empty runs every worker on this machine, as today. Each field chooses where, and as what, a process starts with your credentials, so no repository copy, trusted or pushed, may set it; a repository file naming it is refused at parse time (P7).</td></tr>
+        <tr><td><code>placement.local</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td>no limits</td><td><code>max_workers</code>, <code>min_free_disk</code>, and <code>max_load</code> for this machine, on the terms a remote host's are. Unset limits nothing, so a home with no remote host places exactly as today.</td></tr>
+        <tr><td><code>placement.arch</code></td><td>empty</td><td>The architectures this repository's tasks may run on, as the machine reports its own. Empty allows every one. It can only narrow where a task goes and never adds a machine, so it is read from the trusted copy only, never from a pushed commit; a task no eligible machine satisfies stays queued and surfaces, at once and again each <code>escalation_window</code>, rather than running where it was told not to.</td></tr>
+        <tr><td><code>remote_disconnect_grace</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>30m</code></td><td>How long a bridge whose transport is gone keeps the workers it started before it ends them and then itself. Copies are kept either way, and no task ends by it: each is relaunched in its copy once its host answers. It bounds nothing once the bridge itself has died. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>session_reuse</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
         <tr><td><code>decision_model</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>evaluate</code></td><td>The mode of the checks in section 5, "Checks a decision model may add": <code>evaluate</code>, <code>enforce</code>, or <code>off</code>. They run against the one supported provider, and only where the provider's key is in the operator's environment, never in a configuration file; with the key present they send the changed lines of every reviewed file to that provider.</td></tr>
-        <tr><td><code>usage_ceiling.window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>How far back from each comparison the usage ceiling sums section 8's agent invocation record. The ceiling is the home's, not a run's: it is compared against that record across every run within the window, and it is not one of the three loop bounds, so it parks nothing. Before every agent call a stage body or a fix round starts, the service compares it, and when it refuses, that call is not started and the run holds for you on an <code>ask</code> whose remedy lies outside the change, which standing consent leaves alone. Equal counts as reached. A record that cannot be read, or a call in the window that did not report a count a ceiling is set on, refuses too, because missing information is never read as room. What it bounds is section 14, decision 17. The limits table bounds it on both sides. No repository copy, trusted or pushed, may set it or any other <code>usage_ceiling</code> key; a repository file naming one is refused at parse time (P7).</td></tr>
+        <tr><td><code>usage_ceiling.window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>How far back from each comparison the usage ceiling sums section 8's agent invocation record. The ceiling is the home's, not a run's: it is compared against that record across every run within the window, and it is not one of the three loop bounds, so it parks nothing. Before every agent call a stage body or a fix round starts, the service compares it, and when it refuses, that call is not started and the run holds for you on an <code>ask</code> whose remedy lies outside the change, which standing consent leaves alone. Once the ceiling would admit the refused call, answering that hold <code>retry</code> runs the stage it held again in the same run; section 5's Retry row says when that is and what a retry runs. Equal counts as reached. A record that cannot be read, or a call in the window that did not report a count a ceiling is set on, refuses too, because missing information is never read as room. The one exception is a call whose agent declares, in section 8's adapter declaration, that it does not report that count: its silence on that count neither refuses nor is read as a zero, so the total is of the calls that report it, and the figures say how many calls it leaves out. A count the agent declares it reports and left unreported still refuses, a count a call did report is counted whatever its agent declares, and a call by an agent this build holds no declaration for, such as one an earlier build recorded, is held to every count. What it bounds is section 14, decision 17. The limits table bounds it on both sides. No repository copy, trusted or pushed, may set it or any other <code>usage_ceiling</code> key; a repository file naming one is refused at parse time (P7).</td></tr>
         <tr><td><code>usage_ceiling.input_tokens</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">0</code></td><td>The ceiling on recorded input tokens, a whole number. Zero is no ceiling on that count. <code>usage_ceiling.window</code> says what it is compared against and what reaching it does.</td></tr>
         <tr><td><code>usage_ceiling.output_tokens</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">0</code></td><td>The ceiling on recorded output tokens, on the same terms.</td></tr>
         <tr><td><code>usage_ceiling.cache_read_tokens</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">0</code></td><td>The ceiling on recorded cache read tokens, on the same terms.</td></tr>
@@ -2701,14 +2926,14 @@ flowchart TB
 
   <h3 class="text-xl font-semibold mb-3">Roles</h3>
   <p class="mb-4 opacity-90">
-    You assign an agent, a model provider, a model type, a model version, and an effort to a role.
+    You assign an agent, a model provider, a model type, a model version, an effort, and a context window to a role.
     A task names a role. The review stage and the fixer name theirs. The program does not rank
     agents, providers, types, or versions by remaining quota or by price. That choice stays
     deferred, and section 9's usage view is the measurement it would start from.
   </p>
   <p class="mb-4 opacity-90">
-    The default configuration names <code>fix</code> as <code>cursor</code>, with no model and no effort,
-    and names no other role. Review and worker use <code>agent</code> until a document names them.
+    The default configuration names <code>fix</code> as <code>cursor</code>, with no model, no effort, and
+    no context window, and names no other role. Review and worker use <code>agent</code> until a document names them.
     A <code>roles</code> table that does not mention <code>fix</code> keeps that fixer. A <code>fix</code>
     role that names no agent uses <code>agent</code>.
   </p>
@@ -2721,7 +2946,7 @@ flowchart TB
     <code>review</code> or <code>fix</code> is refused at intake and is not created.
   </p>
   <p class="mb-4 opacity-90">
-    A role names one primary agent, with no arguments, and may name one <code>fallback</code> object with its own agent, optional complete model triple, and effort. A backup cannot contain another backup and must name a different agent. The agent is the process that
+    A role names one primary agent, with no arguments, and may name one <code>fallback</code> object with its own agent, optional complete model triple, effort, and context window. A backup does not inherit any of them from its primary. A backup cannot contain another backup and must name a different agent. The agent is the process that
     starts. The model provider is who serves the model, the model type is which of that provider's
     models runs, and the model version is which release of that type runs. Those are not the agent:
     one process can start another provider's model. The provider, the type, and the version are a
@@ -2730,7 +2955,10 @@ flowchart TB
     is two versions. The role does not name a model identifier. The adapter translates the triple
     into the identifier it starts, and that translation is the adapter's. Effort is one of
     <code>low</code>, <code>medium</code>, and <code>high</code>, and it is not a stand-in for the
-    type or the version.
+    type or the version. The context window, the role's <code>context</code>, is one of
+    <code>standard</code> and <code>1m</code>: which window of the named model the launch asks for.
+    It is not a stand-in for the type or the version either, so no version cell spells a window,
+    and nothing infers one from the model identifier.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
     <table class="table table-sm table-zebra">
@@ -2751,26 +2979,32 @@ flowchart TB
   <p class="mb-4 opacity-90">
     A provider, a type, or a version outside that table, a type on the wrong provider, or a version
     in the wrong type's cell, fails at parse time and names the role. Adding a provider, a type, or
-    a version is adding it to that table. A provider, a type, a version, or an effort on a role
+    a version is adding it to that table. A provider, a type, a version, an effort, or a context window on a role
     that names no agent is invalid, because each belongs to one process and means nothing across
-    the <code>agent</code> fallback list. Naming the provider, the type, or the version without the
+    the <code>agent</code> fallback list. A context window on a role that names no triple fails at
+    parse time and names the role: a window is a window of a model, the agent's own model is not
+    one the role names, and no adapter's declaration could be checked against it. Naming the provider, the type, or the version without the
     other two fails at parse time: part of a triple does not say which model runs. Omitting the
     triple means that agent's own model, and the launch records that the provider, the type, and
     the version were not named. Omitting the effort means that agent's own effort, recorded as not
-    named. Omitting the agent means the role uses <code>agent</code> as resolved for a run,
+    named. Omitting the context window means the window that agent starts the named model at
+    on its own, recorded as not named. Omitting the agent means the role uses <code>agent</code> as resolved for a run,
     including its fallback list, and then the role names neither a provider, nor a type, nor a
-    version, nor an effort.
+    version, nor an effort, nor a context window.
   </p>
   <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
     <li>A role name is lowercase letters, digits, and hyphens, starting with a letter. <code>review</code>, <code>fix</code>, and <code>worker</code> are the three the program assigns.</li>
     <li>An effort outside <code>low</code>, <code>medium</code>, and <code>high</code> fails at parse time and names the role.</li>
+    <li>A context window outside <code>standard</code> and <code>1m</code> fails at parse time and names the role. Adding a window is adding it to that set.</li>
     <li>Each adapter declares which version cells of the table it translates. A triple it has not declared is refused before it is launched, naming the role, the provider, the type, and the version. The program does not start a different provider, type, or version in its place, and it does not pick a different agent because that agent declared the triple.</li>
+    <li>Each adapter also declares, for each version cell it translates, which context windows it can start that cell at. A triple and window it has not declared is refused before it is launched, naming the role, the triple, and the window. It is never started at the standard window, or at the agent's own, in its place. Which windows an adapter declares, and how it spells one, are the adapter's, as its translation is. A declaration says what the adapter asks for: the program does not observe the window a started process has, and a declaration does not establish that the installed agent grants it.</li>
     <li>The limits table bounds how many roles there are and how long a name is. Those bounds are chosen, not measured. A provider, a type, and a version have no length of their own, because each is a cell of the table.</li>
   </ul>
   <p class="mb-4 opacity-90">
     A role is resolved when its work is about to start, from the trusted configuration, on
     <code>agent</code>'s terms (P7). A named agent that cannot run, a named effort the adapter
-    cannot express, a provider, type, and version the adapter has not declared, or an agent that
+    cannot express, a provider, type, and version the adapter has not declared, a context window
+    the adapter has not declared for that triple, or an agent that
     has not declared a capability that role's path requires, refuses that launch and names the
     role. Only an explicitly configured backup may replace an unavailable primary, on the terms below. A missing capability or an invalid configuration never selects a backup. A worker role whose agent has not
     declared worker sessions is that refusal, and the task resolves Failed from it. A review or a
@@ -2788,10 +3022,13 @@ flowchart TB
   </p>
   <p class="mb-8 opacity-90">
     A relaunch, and a run that resumes, reads the role again. It does not reuse an agent, a
-    provider, a type, a version, or an effort recorded on an earlier attempt, and it does not
+    provider, a type, a version, an effort, or a context window recorded on an earlier attempt, and it does not
     resume a session that belongs to a different agent than the role now names. The task keeps the
     role name. The invocation records the agent, the provider, the type, the version, the model
-    identifier the adapter started, and the effort the launch actually used.
+    identifier the adapter started, the effort the launch actually used, and the context window it
+    asked for. A change to a role, its context window included, applies from the next launch that
+    resolves the role: a process already started keeps what it was started with, and a session the
+    role resumes is resumed on the terms the role names at that launch.
   </p>
 
   <h3 class="text-xl font-semibold mb-3">Validation rules</h3>
@@ -2831,8 +3068,15 @@ flowchart TB
         <tr><td>Supervision beacon interval ceiling</td><td><code>10m</code></td><td><code>supervision_beacon_interval</code>. Above this a stopped supervisor is invisible for most of an hour at the staleness multiple. Chosen, not measured.</td></tr>
         <tr><td>Stall inspection count floor</td><td><code class="prd-num">1</code></td><td><code>stall_inspection_count</code>. At one every surface of a stall demands an inspection. Chosen, not measured.</td></tr>
         <tr><td>Stall inspection count ceiling</td><td><code class="prd-num">100</code></td><td><code>stall_inspection_count</code>. Above this a stall surfaces more often than anyone would read before an inspection is demanded. Chosen, not measured.</td></tr>
+        <tr><td>Remote host count</td><td><code class="prd-num">1</code></td><td>Elements of <code>remote_hosts</code>. One is what the development fleet runs and what the first increment is verified on; section 12 defers more. Chosen, not measured.</td></tr>
+        <tr><td>Remote disconnect grace floor</td><td><code>1m</code></td><td><code>remote_disconnect_grace</code>. Below this a brief loss of the connection ends every remote worker. Chosen, not measured.</td></tr>
+        <tr><td>Remote disconnect grace ceiling</td><td><code>24h</code></td><td><code>remote_disconnect_grace</code>. Above this an unreachable worker runs unobserved for a day. Chosen, not measured.</td></tr>
         <tr><td>Merge authority entries</td><td><code class="prd-num">64</code></td><td>Elements of <code>autonomy.merge</code>. Chosen, not measured.</td></tr>
         <tr><td>Relaunch attempts ceiling</td><td><code class="prd-num">20</code></td><td><code>relaunch_attempts</code>. Above this a worker that fails the same way every time is restarted for days before you hear. The floor is zero, which is a value you may choose. Chosen, not measured.</td></tr>
+        <tr><td>git deadline floor</td><td><code>1m</code></td><td><code>git_deadline</code>. Below this an ordinary fetch of a large repository is ended before it can finish. Chosen, not measured.</td></tr>
+        <tr><td>git deadline ceiling</td><td><code>2h</code></td><td><code>git_deadline</code>. Above this a wedged git holds a run for longer than a sitting before it is ended. Chosen, not measured.</td></tr>
+        <tr><td>gh deadline floor</td><td><code>10s</code></td><td><code>gh_deadline</code>. Below this an ordinary request to the code host is ended before it can answer. Chosen, not measured.</td></tr>
+        <tr><td>gh deadline ceiling</td><td><code>30m</code></td><td><code>gh_deadline</code>. Above this a wedged <code>gh</code> holds a run for half an hour, far past what a handful of requests takes. Chosen, not measured.</td></tr>
         <tr><td>Usage ceiling window floor</td><td><code>1m</code></td><td><code>usage_ceiling.window</code>. Below this a ceiling bounds little more than the call in flight. Chosen, not measured.</td></tr>
         <tr><td>Usage ceiling window ceiling</td><td><code>8760h</code></td><td><code>usage_ceiling.window</code>. The same year <code>checks_timeout</code> is bounded by. Chosen, not measured.</td></tr>
       </tbody>
@@ -2856,7 +3100,7 @@ flowchart TB
     <li>Resume only fully recorded holds whose isolated copy and stage history both validate. An ambiguous or partially recorded active run fails closed rather than resuming on a guess.</li>
     <li>Before resuming the hold the checks stage raised when <code>checks_timeout</code> elapsed, and only that hold, re-read the pull request by its recorded identifier, never through a lookup that cannot return a merged or closed pull request. A pull request positively read as merged or closed closes that hold by an explicit resolution the service records, naming itself as the resolver and the state it read, and the run ends as section 5's "Waiting on checks" says for that state. Open, unrecognized, or not read stays held. A hold that waits on a person's decision about a finding is not re-read: the pull request's state must not answer a question a person was asked.</li>
     <li>Mark every other stale active run failed, with the reason recorded.</li>
-    <li>Reap orphaned agent processes, remove isolated copies no run owns, and never touch one whose run is still active. A copy no run owns that holds unlanded work becomes a kept-work entry rather than staying on disk unrecorded. Anything else under this home that no record owns, and that cannot be ended or proven idle, is reported, naming what it is, rather than left running silently.</li>
+    <li>Reap orphaned agent processes, remove isolated copies no run owns, and never touch one whose run is still active. A copy no run owns that holds unlanded work becomes a kept-work entry rather than staying on disk unrecorded. Anything else under this home that no record owns, and that cannot be ended or proven idle, is reported, naming what it is, rather than left running silently. The same holds for every configured remote root, through its bridge: before a new bridge starts anything, it ends each process a session reference the store records on that host names, each herdr server recorded beside one, and every process with its working directory in a copy there, each worker's server among them, and reports anything else there it cannot end or prove idle. A root that cannot be reached is reported and its tasks read Unobserved.</li>
     <li>Clear any waiting-on-a-person marker so a recovered failed run is not displayed as still waiting.</li>
   </ol>
 
@@ -2872,6 +3116,7 @@ flowchart TB
       <tbody>
         <tr><td>Terminal gone, work not landed</td><td>Preserve the isolated copy. Prove no live process owns it, then relaunch in that same copy with the same instructions plus a note about what already happened. Never a fresh generic launch while the copy is unaccounted for. Where the platform has no sweep, that proof cannot be made, so the relaunch is refused and goes ahead only on your answer to retry it, given to the hold the refusal raises on the task with <code>--task</code> and <code>--answer</code>, as at the relaunch bound (P6). A task that resolves Reported is not relaunched: its stored report is what it delivered (section 6), so a reported investigation whose terminal is gone is left as it is.</td></tr>
         <tr><td>A subordinate coordinator's terminal gone</td><td>Its session is re-probed on the same terms as a task's. It is relaunched only on the reading that relaunches a task, Unknown from the process tier with a dead terminal, as a new delegation attempt anchored to the attempt history read and bounded by <code>relaunch_attempts</code>; past the bound it holds for you. A probe that reads Unobserved, a dropped connection among them, is left alone, as the ambiguous row says. Ownership never transfers: the delegation stands until its own record ends it, its tasks stay its subordinate's, and the wake is subordinate gone, to the first coordinator. The sentence above still holds: the session is this home's, and nothing here claims another home's work.</td></tr>
+        <tr><td>A remote host unreachable</td><td>Every task on it reads Unobserved and is left alone, as the ambiguous row says, surfacing again each <code>escalation_window</code>. It is never relaunched on this machine or another host. Once the host answers, its bridge makes the terminal-gone row's proof there and the relaunch, if any, happens in the same remote copy; a worker its bridge ended when <code>remote_disconnect_grace</code> passed is relaunched this way, and nothing becomes kept work by it. An end owed to one of its workers is delivered then, with the read of the copy a kept-work entry needs. Nothing on it is discarded while it cannot be reached.</td></tr>
         <tr><td>Terminal alive, screen unchanged</td><td>Only a stall if nothing positively proves progress. A worker thinking for a long time is not stuck.</td></tr>
         <tr><td>Repeated stall on the same unchanged screen</td><td>Escalates. Once the same unchanged screen has surfaced <code>stall_inspection_count</code> times, section 10's key, the next surface demands a deeper inspection rather than another surface look. The count raises the level of what surfaces and stops nothing.</td></tr>
         <tr><td>Ambiguous liveness</td><td>Leave it alone. Relaunching on an ambiguous reading risks two supervisors for one task, which is worse than one late check.</td></tr>
@@ -2968,10 +3213,11 @@ flowchart TB
         <ul class="text-sm opacity-90 space-y-2.5">
           <li><b>Agent adapters beyond Claude Code.</b> Each one is a week of quirks, and agents without a native output schema need a whole parsing path. Build the interface now, the adapters when you need them.</li>
           <li><b>Extra forge adapters.</b> Same reasoning. Do not promise breadth ahead of demand. GitLab landed on that demand, addressed by a specifier that names its host, <code>gitlab.com/group/project</code>, where a GitHub one stays <code>owner/name</code>, and a GitLab project <code>autonomy.merge</code> names is merged on the same terms as a GitHub repository. The other code hosts stay deferred.</li>
-          <li><b>Extra session providers.</b> One reference provider proves the abstraction, and tmux is now a provider beside it, chosen with <code>session_provider</code>. Claude Code workers run under tmux in the adapter's terminal mode, which section 1's Promise 1 and section 6's steering row describe. Further providers prove nothing new.</li>
+          <li><b>Extra session providers.</b> One reference provider proves the abstraction, and tmux is now a provider beside it, chosen with <code>session_provider</code>. Claude Code workers run under tmux in the adapter's terminal mode, which section 1's Promise 1 and section 6's steering row describe. Further providers prove nothing new. herdr is the third, because it is the one that runs a worker on another machine, which is new; section 8's <a class="link" href="#remote-hosts">workers on another machine</a> says why.</li>
+          <li><b>Beyond one remote host on macOS.</b> The first increment is one remote host, reached over SSH, running macOS and herdr, because that is what the development fleet runs (#388) and what it can be verified on. Deferred until a machine of that kind is in use: Linux remote hosts, more than one remote host, a remote host without herdr, any transport but SSH, moving a task between machines, and placing by an agent's remaining quota, which is the deferred ranking below. A remote root shared by two homes is not deferred but refused.</li>
           <li><b>Delegate coordinators in a home of their own.</b> The most complex feature in either source project, and it only earned its cost at a fleet size you had not reached, which is why it was deferred. It is no longer deferred in that form: section 2's subordinate coordinator, a named domain of tasks inside this one home, replaces it, on the terms section 14's decision 20 records.</li>
           <li><b>The direct delivery mode.</b> The gate is the thesis, and this is the one mode that shares unvalidated work. When it is promoted, the program forwards the worker's pushed commit from the gate with an anchored update and the worker gains no second remote, and the merge record is its landed record. The local mode is not deferred: it shares nothing, and section 6 specifies it.</li>
-          <li><b>Ranking agents by remaining quota.</b> Section 10's roles are how you name which agent, model provider, model type, model version, and effort each role runs. The program does not rank them by remaining quota or by price. Explicit failover after a recognized availability failure is section 10's separate rule. Ranking stays deferred, and section 9's usage view is the measurement it would start from.</li>
+          <li><b>Ranking agents by remaining quota.</b> Section 10's roles are how you name which agent, model provider, model type, model version, effort, and context window each role runs. The program does not rank them by remaining quota or by price. Explicit failover after a recognized availability failure is section 10's separate rule. Ranking stays deferred, and section 9's usage view is the measurement it would start from.</li>
           <li><b>Interrupting a worker's turn.</b> It needs proof the turn ended, which nothing reads yet. Stop and relaunch cover the need; an adapter offers interrupt once it declares it with a conformance probe for that proof.</li>
           <li><b>Transcript-based intent inference.</b> Supply intent explicitly first. Inference is a convenience over a mechanism that must already work.</li>
           <li><b>Away mode.</b> Requires the supervision loop to be trustworthy first.</li>
@@ -3046,6 +3292,14 @@ flowchart TB
         <tr><td><b>P13</b></td><td>A static test over every user-facing string: assert the required wording is present and assert the internal vocabulary is absent. Both directions, or it drifts.</td></tr>
         <tr><td><b>P14</b></td><td>A static test asserting each contract appears in its owner and does not appear anywhere else. The negative half is the one that actually holds the line.</td></tr>
         <tr><td><b>P15</b></td><td>Start a run, a worker, a delegation and a notify command. End each owner by its normal path, by a stop, and by killing the service outright. After each, no process this home started remains (checked by process group and by working directory), and a copy holding unlanded work does remain, with a kept-work entry that surfaces at once; a new task in that project does not dispatch until the entry is answered while a person's push still runs and names it, and a discard removes the copy only on the person's answer. A test that starts a service ends it with the test, and CI fails when any process a test started outlives its package.</td></tr>
+        <tr><td rowspan="7"><b>Remote</b></td><td><b>Placement and the gate (P1, P14).</b> Through a real bridge, a push from a process descended from task A's agent is placed as A's and admitted on the worker rule; one from a process on that host descended from no worker, a shell you open there among them, is refused with the typed reason; one descended from task B's agent, or from a process descended from B's own herdr server, is placed as B's however it names A's branch. Pushes from A and from B made while each other's are still being received reach the gate through a receiver each and are admitted as their own task's, and no receiver takes a second push. The two workers' herdr servers are read by process listing as two processes, and the test fails if they are one; a shell opened in herdr's default session is placed as nobody's. A worker route call is placed the same way. The positive control is a push placed as A's that reaches the gate.</td></tr>
+        <tr><td><b>Isolation (P11).</b> The bridge refuses a copy at any path but its task's copy path, a copy sharing another repository's object store, another task's copy, a checkout of the person's on that host inside the root and outside it, a cut into a copy path that already holds anything, and a remote root that is not empty at first use; a launch whose assertion does not come back refuses and starts nothing. The agent's environment, read from the running agent, holds every entry <code>agents.WorkerEnvironment</code> built and none of the variables it removes. With startup files of the person's that start a process and set a variable, neither the process nor the variable appears beside a worker's agent, while the same files run in a pane whose program is the person's shell, which is the check's positive control; a second pane opened in a worker's session starts no second agent, and herdr closes it.</td></tr>
+        <tr><td><b>Liveness and supervision (P9).</b> With the transport cut mid-task, a probe reads Unobserved and never Dead, and the wake surfaces; with the bridge reading the agent gone, Dead. A later bridge reads an earlier bridge's reference Unobserved, never Live, while its process stands. herdr's account of an agent as working, with no other evidence, absorbs no wake.</td></tr>
+        <tr><td><b>Recovery (P6).</b> A task on an unreachable host is never relaunched, here or elsewhere; once the host answers and the bridge proves the agent gone and the copy unowned, the relaunch is the anchored one, in the same remote copy, and the copy's commits are all still there.</td></tr>
+        <tr><td><b>Ownership (P15).</b> Cut the transport with remote workers running: a service that reconnects within the grace reattaches to the same bridge and reads its sessions Live, which is the positive control; a connection to the bridge's socket from a worker, without the secret, is refused as a reattach. Stop, restart, and kill the service: a restarted service does not reattach, and afterwards no process the old bridge started remains. Kill the bridge outright inside the grace and let the service reach the host again: the new bridge ends every process the old references name, every herdr server recorded beside them, and every process with its working directory in a copy before it starts anything, and afterwards no process the old bridge started remains, checked by process group, by working directory, and by herdr's own list of sessions, the workers' servers among them. The same holds when the bridge is killed after it started a worker's server and before the store recorded it. Past the grace, no process the bridge started remains on the host (by process group and by working directory), the copies remain, no kept-work entry is written, and once the host answers each task reads Dead and is relaunched in its copy. End a task while its host is unreachable: no kept-work entry is written until the bridge has read the copy, and one holding unlanded work is then an entry that surfaces at once. An end owed to an unreachable host is delivered when it answers.</td></tr>
+        <tr><td><b>Configuration (P7).</b> A repository file, trusted or pushed, naming <code>remote_hosts</code>, <code>remote_disconnect_grace</code>, or <code>placement.local</code> is refused at parse time; a pushed <code>placement.arch</code> has no effect; a host named under a provider other than herdr refuses; a bridge whose recorded build identity differs from the service's, or that carries no revision or a modified one, makes its host ineligible, and a bridge binary that prints the service's version line while recording another build does too.</td></tr>
+        <tr><td><b>Placement of tasks.</b> A matrix over machines and readings: a limit exceeded, a reading that cannot be taken, and an architecture <code>placement.arch</code> excludes each make a machine ineligible; with none eligible the task stays queued and surfaces at once and again each <code>escalation_window</code>, and a tie goes to this machine. In CI the remote host is the test machine itself reached through the bridge under a separate remote root, and the bridge and herdr are real; a second physical machine, a real network partition, and a second architecture are manual checks, said so where the result is reported.</td></tr>
+        <tr><td><b>Roles</b></td><td>A context window outside <code>standard</code> and <code>1m</code>, one on a role that names no agent, and one on a role that names no triple each fail at parse time and name the role; none is read as a window it did not name (P3's stance on an unrecognized value). A triple and window the adapter has not declared is refused before anything starts, and nothing is started at another window in its place. A branch that sets a role's context window in its own configuration has no effect (P7). The set of windows is spelled once, in the configuration's role table, and every adapter declaration is checked against it (P14). The invocation record keeps a named window, a window not named, and a row from before the column as three facts, and the usage view totals them apart. A relaunch reads the window from the role again.</td></tr>
         <tr><td><b>Judge paths</b></td><td>A fix round after review whose commit adds, changes, deletes, or renames a judge path holds with an <code>ask</code> naming it, including when the fixer's reply says it touched nothing; the same round with no judge path in its commit does not hold. A change that deletes a judge file, or moves one outside every pattern, holds at review; one that edits a judge file produces a <code>note</code>. A branch whose own configuration sets <code>judge_paths</code> has no effect on either.</td></tr>
         <tr><td><b>Graph</b></td><td>A topology with an unbounded back edge fails to build. Two nodes writing one key with no declared merge rule fails to build. A checkpoint restore re-emits the open decision.</td></tr>
         <tr><td><b>Decision model</b></td><td>Against a stand-in provider that answers over the wire, every answer from certain-yes to certain-no, plus an error, a timeout, and an unreadable answer, leaves the findings at least as strict as with the model off: nothing removed, nothing lowered, no stage passed that would have held. In <code>evaluate</code> no answer holds a run, and in every mode a failed call, an unreadable answer, or a missing key holds nothing and is reported. With the mode <code>off</code> or no key, no request leaves the machine. A repository layer that sets the key is rejected at parse time.</td></tr>
@@ -3193,6 +3447,26 @@ flowchart TB
           <td class="prd-num">21</td>
           <td><b>Nothing the program starts outlives its owner, and kept work is never silent</b>, a principle of its own.</td>
           <td>Decided 2026-10-20 after the leaks above. Every started resource has one recorded owner and a bounded end. Unlanded work is the one exception: it is kept, surfaced at once, and no new task starts in its project until a person lands it, carries it on, or discards it. A reported investigation's worker is kept for <code>promotion_window</code> (default 1h, chosen for the prompt cache). The principle binds the program, its tests and the tooling that builds it. It is a principle rather than a section 8 rule because it binds every package that starts anything.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">22</td>
+          <td>Workers may run <b>on another machine of yours, through a bridge, inside this one home</b>, never in a home of their own.</td>
+          <td>Decided 2026-10-22 (#310, #490), the owner accepting every recommendation #490 put forward. Two shapes were compared in section 8's <a class="link" href="#remote-hosts">workers on another machine</a>: a second home per remote host with a delegated-task handoff, which the 2026-10-19 reading of #310 preferred, and one home with a bridge on the remote host, chosen for decision 20's reason, P14 held structurally. Decided with it: (1) remote execution is taken up now, as specification before code, GAP-11 having landed as decision 20; (2) one home and a bridge, not a second home; (3) the bridge places a caller by the remote kernel's ancestry, up to a worker it started or that worker's own herdr server, and nothing on a remote host is placed as a person's shell; (4) each push is a connection of its own, placed by the bridge and received by a receiving process of its own that is never reused, rather than the program fetching from the copy; (5) herdr is the third session provider and the one remote hosts require, <code>session_provider</code> staying one choice, and the agent is the pane's program through a configuration and launch file of the provider's own, so no shell runs in the pane; (6) one herdr session, and so one server, per worker, the reach one worker keeps into another's session stated as a residual gap; (7) herdr's account of an agent is evidence only and absorbs no wake; (8) <code>remote_disconnect_grace</code>, default 30m within 1m to 24h, ends a cut-off bridge's workers and the bridge, but no task, and writes no kept work; (9) a reattach needs the same bridge incarnation and a secret the service holds in memory only, so a restarted service replaces its bridge rather than reattaching, and every new bridge first ends what the store's records name and what works in a copy; (10) a remote task is relaunched only on its own host, in its own copy; (11) the program places a task at dispatch, not the supervisor and not the coordinator; (12) placement limits are global-only, architecture is read from the machine and narrowed only by a trusted <code>placement.arch</code>, a task no machine can take surfaces at once and again each <code>escalation_window</code>, the machine with the fewest live workers wins and a tie goes to this machine, and the task record is the one place a task's machine is stored; (13) placing by remaining quota stays deferred, decision 13 unchanged; (14) the first increment is one macOS remote host over SSH with herdr, and a remote root shared by two homes, or not empty at first use, is refused; (15) the bridge's recorded build identity must equal the service's; (16) in CI the remote host is the test machine itself through a real bridge and real herdr, and a second machine, a real partition and a second architecture are manual checks; (17) a bridge that dies while its host is unreachable leaves its workers running until the host is reached again, accepted as a residual gap of the first increment rather than a supervisor or a watchdog on the host. Section 1, section 2's two rows, section 8's process model, layout, task record and subsection, section 9's paragraph, section 10's rows and limits, section 11's row and restart step, section 12's two items, and section 13's rows carry it. No code implements it at this decision; this text is what the implementation answers to.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">23</td>
+          <td>A role may name <b>a context window</b>, beside its effort, from a closed set.</td>
+          <td>Decided 2026-10-21 (AGE-418). This extends decision 14: a role still names one agent, one triple, and one effort, and may name one context window, <code>standard</code> or <code>1m</code>. Two alternatives were rejected: a version cell such as <code>5.5-1m</code>, which would make a window a release of the model and double every cell that has one, and a window a display infers from the model identifier, which nothing could check. The window needs a complete triple, because each adapter declares its windows per version cell, and a launch the adapter cannot express is refused rather than started at the standard window. Section 10 gains the field and the declaration, section 8's agent invocation record gains the window, older rows reading unknown, and section 9's usage view totals it. It exists because a fleet's workers ran at the long window only through a launcher outside the program, so the role table and what ran disagreed.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">24</td>
+          <td>The usage ceiling <b>does not hold a call to a count its agent declares it does not report</b>.</td>
+          <td>Decided 2026-10-19 (#375). This narrows decision 17's fail-closed reading of an unreported count, which otherwise lets one agent that never reports a count refuse every start for as long as its call stays in the window, so a ceiling on that count could not be used in a home that runs that agent at all. Section 8's adapter declaration gains the counts each adapter reports, held by a conformance probe, and section 10's <code>usage_ceiling.window</code> row and section 9's ceiling line say what the declaration exempts. Two alternatives were rejected: reading an unreported count as zero, which reads missing information as room, and leaving the agent's calls out of every count, which would leave uncounted what it does report. The exemption is the agent's declaration and never a single call's silence: a count the agent declares it reports and left unreported still refuses. The total of an exempt count understates what that agent spent on it, and the figures say how many calls it leaves out.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">25</td>
+          <td>A run held on the usage ceiling <b>is retried in place</b> once there is room, rather than cancelled and started again.</td>
+          <td>Decided 2026-10-19 (#375). Section 5's hold gains a fifth action, Retry, offered only at a hold the usage ceiling raised, and section 10's ceiling row points at it. It runs the stage the ceiling held again from the top, in the same run, so the work before that stage is not repeated. When the call refused was an automatic fix round's, that round is taken again only if the stage, run first, still reports something to fix, so a failure that cleared while the run held costs no fixer call, and it is the round the refusal counted, so it spends none of the stage's round limit again. A fix round you asked for is not taken again, because a retry carries no request; the stage holds on that round's account and you ask again. It is a second cycle through the stage, like Fix, and bounded the same way: each retry leaves the hold back into the stage and counts toward that exit's bound, three per stage per run, a fixed number with no key in section 10. An answer asking for a fourth is refused while the hold is still open, so approve, skip, and cancel remain, and the run-wide budget counts every one. A retry while there is still no room is refused by the ceiling again and holds on the same question; it does not loop. Its way back into the stage is not held to convergence, as a round you ask for is not (decision 8): a retry with still no room leaves the run's state where the retry before it left it, so held to that measure the second such retry would park the run and take the hold, and the answers it offers, with it. The same holds for a fix round the ceiling refuses again after a retry, which repeats the refused round before it, so a retry starts the measure of the stage's own fix rounds afresh: the first such round after it is compared with nothing, and a round that repeats one taken since the retry still parks. What offers the retry is the program's own mark on the ceiling's hold, which no agent's report can carry, so an answer of retry at any other hold is refused while that hold stays open, and a retry drops only the ceiling's hold from those a refused fix round left. Standing consent never gives it, because the ceiling's hold is one whose remedy lies outside the change. The answer does not check for room itself: the stage's call is admitted or refused by the ceiling as any call is.</td>
         </tr>
       </tbody>
     </table>

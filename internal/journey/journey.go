@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -154,7 +155,9 @@ type Options struct {
 // whose path is bounded by the operating system at a length a temporary
 // directory under a long parent exceeds, and the failure that produces is the
 // service refusing to bind with an error about an invalid argument that names
-// nothing about length.
+// nothing about length. The directory is standin.TempDir's, under /tmp on the
+// platforms that host the socket. The pattern is one letter, because the name
+// also carries the registering package's directory and the process identity.
 func Open(opts Options) (*Journey, error) {
 	binary, err := Binary()
 	if err != nil {
@@ -166,7 +169,7 @@ func Open(opts Options) (*Journey, error) {
 	if err := oneWordEach(opts.AgentArguments); err != nil {
 		return nil, err
 	}
-	root, err := os.MkdirTemp("", "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		return nil, fmt.Errorf("journey: making a home root: %w", err)
 	}
@@ -651,13 +654,19 @@ func (j *Journey) WaitReady() error {
 // this returns is therefore the only notice a caller gets that a process
 // outlived its home, and there is nothing here for it to retry.
 func (j *Journey) Kill() error {
+	return j.release((*serving).end)
+}
+
+// release ends the serving process with end, closes its log, and leaves the
+// journey not serving.
+func (j *Journey) release(end func(*serving) error) error {
 	if j.service == nil {
 		return errors.New("journey: this journey is not serving")
 	}
 	service := j.service
 	j.service = nil
 	var errs []error
-	if err := service.end(); err != nil {
+	if err := end(service); err != nil {
 		errs = append(errs, err)
 	}
 	if service.log != nil {
@@ -790,18 +799,23 @@ func (j *Journey) Database() (string, error) {
 // at it, and a harness that removed it would take the evidence of what a run
 // did along with it.
 //
-// The removal retries, bounded, because killing the service reaches that one
-// process and nothing it spawned: a git invocation a run had in flight - the
-// fetch or worktree add that builds the run's isolated copy under repos/ -
-// survives the kill briefly and can recreate entries while RemoveAll walks,
-// which surfaces as "directory not empty". Such an orphan fails and exits on
-// its own once its paths are gone, so a retry meets a quiet tree; a removal
-// still failing at the bound is reported, because by then nothing this
-// harness started explains it.
+// A serving process is ended with everything it started that is still its
+// descendant (endTree), not alone as Kill ends it, and the home is removed
+// once those are gone. Killing the service alone reaches nothing it
+// spawned: a git a run had in flight, the fetch or worktree add that builds
+// the run's isolated copy, runs in a group of its own, survives the kill,
+// and once past its start makes its target's directories again under a
+// home already removed (TestCloseLeavesNoHomeAGitTheServiceStartedWouldRemake).
+//
+// The removal still retries, bounded, for a writer endTree does not reach,
+// which its comment names: one recreating entries while RemoveAll walks
+// surfaces as "directory not empty". A removal still failing at the bound is
+// reported. One such writer that makes entries after a removal succeeded
+// leaves them, and nothing here sees it.
 func (j *Journey) Close() error {
 	var errs []error
 	if j.service != nil {
-		errs = append(errs, j.Kill())
+		errs = append(errs, j.release((*serving).endTree))
 	}
 	if err := j.removeHome(); err != nil {
 		errs = append(errs, fmt.Errorf("journey: removing the home %s: %w", j.root, err))

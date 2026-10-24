@@ -15,7 +15,6 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/supervisor/feed"
@@ -377,7 +376,7 @@ func (s *Service) parkedRun(ctx context.Context, repositoryID, branch string) (*
 // the rest of a status is still worth having.
 func (s *Service) branchState(ctx context.Context, workingPath string) *machine.Branch {
 	state := &machine.Branch{WorkingPath: workingPath}
-	working, err := vcs.OpenWorktree(ctx, workingPath, vcs.WithRedactor(redact.New()))
+	working, err := vcs.OpenWorktree(ctx, workingPath, s.git()...)
 	if err != nil {
 		state.Detail = err.Error()
 		return state
@@ -733,7 +732,9 @@ func peerOf(req ipc.Request) string {
 // falling back to defaults: PRD section 10 makes invalid configuration a
 // parse-time failure that names the offending key. A document that is not
 // there is a different case and is the defaults, which that section says in as
-// many words.
+// many words. A document that parses and asks for something this build would
+// not do refuses too, through refusalUnhonored, rather than being read as if
+// it asked for something else.
 //
 // The repository layer is deliberately absent here. PRD section 10 reads its
 // two copies per run - the trusted one from the default branch at a freshly
@@ -757,6 +758,9 @@ func resolveConfig(path string) (config.Layer, config.Config, string, error) {
 	resolution, err := config.Resolve(global, config.Absent(config.OriginTrusted))
 	if err != nil {
 		return config.Layer{}, config.Config{}, "", err
+	}
+	if err := refusalUnhonored(global, resolution.Config); err != nil {
+		return config.Layer{}, config.Config{}, "", fmt.Errorf("service: %s: %w", path, err)
 	}
 	return global, resolution.Config, digestOf(document), nil
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/machine"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -61,9 +60,23 @@ import (
 // # The claim is the attempt, and the dispatched entry is not it
 //
 // Two dispatchers of one task cannot both cut: the dispatch is claimed by
-// store.BeginTaskAttempt, anchored to the highest attempt this dispatcher
-// read, and the loser is refused with ErrTaskMoved before it reads the
-// primary or touches the path. The "dispatched" entry intake or Release
+// store.BeginFirstTaskAttempt for a task with no attempt, and by
+// store.BeginDispatchAttempt, store.BeginTaskAttempt held by kept work, for a
+// retry, each anchored to the highest attempt
+// this dispatcher read, and the loser is refused with ErrTaskMoved before it
+// reads the primary. Before a first claim nothing touches the path either:
+// no attempt has cut a copy, so a dispatch sweeps nothing then (#562), and
+// whatever it finds standing after it wins is refused rather than swept or
+// used, below. A retry sweeps before its claim, so that a sweep that does
+// not clear records nothing; two retries anchored to the same attempt would
+// both sweep before the anchor decided between them, and it is the slot and
+// the home's lock below, not the anchor, that keep there from being two.
+// The first claim records the task's
+// machine, and it is always this one: this build reads no remote host, so it
+// places every task here, and a retry stays where the first claim put it.
+// Before a first claim the repository's trusted copy is read (unhonored.go's
+// placeable), and a copy that does not allow this machine, or that cannot be
+// read, leaves the task queued with nothing claimed. The "dispatched" entry intake or Release
 // appended is the state fact the dispatch is decided from, and it is never
 // the claim: it says the task is to be dispatched, not that anyone is.
 //
@@ -84,8 +97,9 @@ import (
 // not.
 //
 // A retry after a crash is a new attempt of the same task, and it finds
-// whatever the crashed one left at the path. A path already standing there is
-// swept before the claim, on sweep.go's terms, because a crash between a
+// whatever the crashed one left at the path. A path already standing there
+// when the retry reads its attempts is swept before the claim, on
+// sweep.go's terms, because a crash between a
 // worker's start and the record of its session leaves a process no record
 // names, and the sweep finds it by the copy instead. Where the platform has
 // no sweep, agents.ErrSweepUnsupported, nothing proves that process absent,
@@ -99,8 +113,12 @@ import (
 // and is never removed or written into (P6; copyStanding takes the same
 // stance toward a run's copy): a half-written directory fails the
 // assertion, and that failure is recorded as the refusal with the path
-// untouched. The one directory this file does
-// remove is a clone this same call just made and could not shape - the task
+// untouched. A path that stands after the claim and that this dispatch
+// neither cut nor asked the sweep of, at a first claim or appearing after a
+// retry's check, is asserted the same way and then refused as not isolated
+// even when the assertion passes, because nothing proves it unowned, and it
+// too is left as it stands. The one directory this file does remove is a
+// clone this same call just made and could not shape - the task
 // branch could not be created in it, or HEAD could not be detached - which
 // holds no work and is the program's own; it is removed so that the next
 // attempt cuts a fresh one rather than proving a clone standing on the wrong
@@ -136,8 +154,9 @@ import (
 // was never claimed is not dispatched or launched. internal/store owns which
 // entries hold which task (keptworkhold.go), and three places ask it: this
 // file through KeptWorkHolding right after the task's resolution is read,
-// before any sweep, clone or claim; store.BeginDispatchAttempt inside the
-// attempt claim; and store.ClaimAttemptLaunch inside the launch claim
+// before any sweep, clone or claim; inside the attempt claim
+// (store.BeginFirstTaskAttempt, or store.BeginDispatchAttempt for a retry);
+// and store.ClaimAttemptLaunch inside the launch claim
 // launch.go makes as its last write before the worker's process starts. The
 // last is what binds the hold to the launch itself: an entry recorded while
 // the copy is cut or asserted is read by that claim, and the worker is not
@@ -269,7 +288,9 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // assertion, is retried at the next open and not at the next release, which
 // is what keeps a failure that repeats from adding an attempt per run that
 // settles. A task refused resolves Failed from the entry the refusal appended
-// and is kept out by the resolver as well as by the slot.
+// and is kept out by the resolver as well as by the slot. The one exception
+// is a task placeable left queued: it claimed nothing, so its slot is given
+// back and the next pass reads its repository's trusted copy again.
 //
 // The tasks are read under the read side of the intake exclusion
 // createTask holds across an intake, so a pass never reads a task whose
@@ -330,6 +351,9 @@ func (s *Service) dispatchDue(ctx context.Context) {
 			continue
 		case errors.Is(err, store.ErrTaskMoved):
 			s.log.Printf("task %s was not dispatched here: %v", r.Record.ID, err)
+			continue
+		case errors.Is(err, errTaskUnplaced):
+			s.log.Printf("task %s stays queued: %v", r.Record.ID, err)
 			continue
 		default:
 			s.log.Printf("task %s was not dispatched: %v", r.Record.ID, err)
@@ -394,6 +418,21 @@ func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, erro
 	return d, err
 }
 
+// settleOrRelease ends a dispatch's hold on its slot: a dispatch left queued
+// by placeable claimed nothing, so its slot is given back and the next pass
+// reads the trusted copy again, and every other outcome settles the slot
+// with the proof, or none, for the service's lifetime.
+func (s *Service) settleOrRelease(id string, settle func(tasks.Isolation), proof tasks.Isolation, err error) {
+	if errors.Is(err, errTaskUnplaced) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		delete(s.isolated, id)
+		delete(s.claiming, id)
+		return
+	}
+	settle(proof)
+}
+
 // redispatchTask is dispatchTask for a retry answered on the hold a dispatch
 // over an unsweepable standing copy raised. It takes the task's slot through
 // claimRelaunch, because the refusal that raised the hold settled the slot
@@ -412,12 +451,12 @@ func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, er
 	return d, err
 }
 
-// settleDispatch settles the slot a dispatch took with what it ended at, or,
-// for a dispatch kept work held, gives the slot back through
-// releaseHeldSlot; this file's opening comment says why.
+// settleDispatch ends a dispatch's hold on its slot: for a dispatch kept
+// work held it gives the slot back through releaseHeldSlot, this file's
+// opening comment says why, and every other outcome is settleOrRelease's.
 func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tasks.Isolation), d dispatched, err error) {
 	if !errors.Is(err, store.ErrDispatchHeld) {
-		settle(d.proof)
+		s.settleOrRelease(id, settle, d.proof, err)
 		return
 	}
 	if s.betweenHeldAndRelease != nil {
@@ -562,10 +601,28 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	if _, launched := latestSession(attempts); launched {
 		return dispatched{}, fmt.Errorf("%w: task %s attempt %d", errTaskLaunched, id, latest)
 	}
-	// A copy already standing is a retry's, swept before the claim on
-	// sweep.go's terms; a copy about to be cut has nothing in it to sweep.
+	// The first claim places the task, so it is made only once the
+	// repository's trusted copy allows this machine; a later attempt stays
+	// where the first claim put it (store.BeginDispatchAttempt places
+	// nothing).
+	if latest == 0 {
+		if err := s.placeable(ctx, repository, id); err != nil {
+			return dispatched{}, err
+		}
+	}
+	// A copy already standing at a retry is the earlier attempt's, swept
+	// before the claim on sweep.go's terms; a copy about to be cut has
+	// nothing in it to sweep. A first claim sweeps nothing: no attempt has
+	// cut a copy, so whatever stands at the path is either a concurrent
+	// winner's, which only the winner may touch (#562), or nobody's
+	// attempt's, which the check after the claim refuses.
 	var swept copySwept
-	if _, err := os.Lstat(copyPath); err == nil {
+	var stood bool
+	if latest > 0 {
+		_, err := os.Lstat(copyPath)
+		stood = err == nil
+	}
+	if stood {
 		if swept, err = s.sweepStandingCopy(ctx, id, copyPath); err != nil {
 			return dispatched{}, err
 		}
@@ -594,7 +651,12 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	if s.betweenAttemptReadAndClaim != nil {
 		s.betweenAttemptReadAndClaim()
 	}
-	attempt, err := s.store.BeginDispatchAttempt(ctx, id, latest)
+	var attempt store.TaskAttempt
+	if latest == 0 {
+		attempt, err = s.store.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine())
+	} else {
+		attempt, err = s.store.BeginDispatchAttempt(ctx, id, latest)
+	}
 	if err != nil {
 		return dispatched{}, err
 	}
@@ -606,19 +668,25 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 		return dispatched{}, err
 	}
 
-	// The copy: whatever stands at the path, or a fresh clone when nothing
-	// does.
+	// The copy: a fresh clone when nothing stands at the path, or what the
+	// sweep before the claim was asked of. A path standing now that this
+	// dispatch neither cut nor asked the sweep of, at a first claim or one
+	// that appeared after the check before a retry's claim, is asserted and
+	// then refused as not isolated, never given a worker unswept.
 	if _, err := os.Lstat(copyPath); errors.Is(err, os.ErrNotExist) {
 		if err := s.cutTaskCopy(ctx, record, repository.WorkingPath, copyPath, gatePath, base); err != nil {
 			return dispatched{}, err
 		}
 	} else if err != nil {
 		return dispatched{}, fmt.Errorf("service: reading the copy of task %s at %s: %w", id, copyPath, err)
+	} else if !stood {
+		swept.unswept = fmt.Errorf("%s stands, and attempt %d of task %s neither cut it nor swept it before its claim",
+			copyPath, attempt.Sequence, id)
 	}
 
 	// The observation and the proof.
 	env := agents.WorkerEnvironment(os.Environ(), nil)
-	obs, err := vcs.Observe(ctx, copyPath, vcs.WithRedactor(redact.New()))
+	obs, err := vcs.Observe(ctx, copyPath, s.git()...)
 	if err != nil {
 		if errors.Is(err, vcs.ErrNotARepository) {
 			return dispatched{}, s.refuseIsolation(ctx, id, attempt.Sequence, resolved.State.Basis.EventSequence,
@@ -640,7 +708,7 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	}
 
 	// The copy's snapshot, then the line the worker is told to run.
-	snapshot, err := copySnapshot(ctx, proof.Copy)
+	snapshot, err := s.copySnapshot(ctx, proof.Copy)
 	if err != nil {
 		return dispatched{}, fmt.Errorf("service: reading the references of the copy of task %s: %w", id, err)
 	}
@@ -734,7 +802,7 @@ func (s *Service) gatePathOf(ctx context.Context, repository store.Repository) (
 // which is the base a task's copy starts from. A primary with no local
 // default branch is refused: the base would otherwise be invented.
 func (s *Service) recordPrimary(ctx context.Context, id string, attempt int64, repository store.Repository) (string, error) {
-	primary, err := vcs.OpenWorktree(ctx, repository.WorkingPath, vcs.WithRedactor(redact.New()))
+	primary, err := vcs.OpenWorktree(ctx, repository.WorkingPath, s.git()...)
 	if err != nil {
 		return "", fmt.Errorf("service: opening the primary checkout of task %s: %w", id, err)
 	}
@@ -780,7 +848,7 @@ func (s *Service) cutTaskCopy(ctx context.Context, record store.Task, primary, c
 	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
 		return fmt.Errorf("service: creating the directory of task %s: %w", record.ID, err)
 	}
-	cloned, err := vcs.Clone(ctx, primary, copyPath, "", vcs.WithRedactor(redact.New()))
+	cloned, err := vcs.Clone(ctx, primary, copyPath, "", s.git()...)
 	if err != nil {
 		return fmt.Errorf("service: cloning the primary checkout for task %s: %w", record.ID, err)
 	}
@@ -848,8 +916,8 @@ const isolationRefusedKind = "isolation-refused"
 
 // copySnapshot reads what the proven copy holds: HEAD, the branch it is on,
 // and every reference, through internal/vcs's read-only operations.
-func copySnapshot(ctx context.Context, copyPath string) (store.CopySnapshot, error) {
-	copied, err := vcs.OpenWorktree(ctx, copyPath, vcs.WithRedactor(redact.New()))
+func (s *Service) copySnapshot(ctx context.Context, copyPath string) (store.CopySnapshot, error) {
+	copied, err := vcs.OpenWorktree(ctx, copyPath, s.git()...)
 	if err != nil {
 		return store.CopySnapshot{}, err
 	}

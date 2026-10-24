@@ -115,6 +115,8 @@ func (refusingFactory) Name() string { return "claude" }
 
 func (refusingFactory) AutoEligible() bool { return true }
 
+func (refusingFactory) Declares() agents.Capabilities { return agents.Capabilities{} }
+
 func (refusingFactory) New(context.Context, []string) (agents.Runner, error) {
 	return nil, errors.New("no agent is installed on this machine")
 }

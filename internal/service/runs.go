@@ -39,7 +39,7 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	if err != nil {
 		return machine.Run{}, err
 	}
-	working, err := vcs.OpenWorktree(ctx, req.WorkingPath, vcs.WithRedactor(redact.New()))
+	working, err := vcs.OpenWorktree(ctx, req.WorkingPath, s.git()...)
 	if err != nil {
 		return machine.Run{}, err
 	}
@@ -162,7 +162,7 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 	if err != nil {
 		return machine.Run{}, err
 	}
-	working, err := vcs.OpenWorktree(ctx, req.WorkingPath, vcs.WithRedactor(redact.New()))
+	working, err := vcs.OpenWorktree(ctx, req.WorkingPath, s.git()...)
 	if err != nil {
 		return machine.Run{}, err
 	}
@@ -403,6 +403,9 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 	if err != nil {
 		return machine.Run{}, err
 	}
+	if err := s.checkRetry(ctx, record.ID, req); err != nil {
+		return machine.Run{}, err
+	}
 	if _, err := built.runs.Release(ctx, record.ID); err != nil {
 		return machine.Run{}, err
 	}
@@ -482,6 +485,37 @@ func (s *Service) fixRequestFor(ctx context.Context, runID string, req machine.R
 		return "", fmt.Errorf("%w: run %s: %w", ipc.ErrInvalidRequest, runID, err)
 	}
 	return req.Fix.Encode()
+}
+
+// checkRetry refuses a retry at a hold that does not offer one, before
+// anything is recorded, so the decision stays open: PRD section 5 offers the
+// retry only at the usage ceiling's hold, and pipeline.CheckRetry reads that
+// off the held stage's recorded report. It is the caller's answer being
+// wrong rather than this service failing, so it crosses the wire as
+// ipc.ErrInvalidRequest with pipeline's refusal beneath it. The retry node
+// refuses the same shape again, so this is the early half and not the only
+// one.
+//
+// It does not ask whether the ceiling has room now. The stage's call is
+// admitted or refused by admitInvocation as any call is, so a retry with no
+// room holds on the same question again, and a reading taken here would be a
+// second one that could disagree with the call's own.
+func (s *Service) checkRetry(ctx context.Context, runID string, req machine.RespondRequest) error {
+	if req.Answer != string(pipeline.OutcomeRetry) {
+		return nil
+	}
+	cp, err := s.checkpoints.Latest(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("service: reading where run %s holds: %w", runID, err)
+	}
+	stage, ok := heldStage(cp.Position)
+	if !ok {
+		return fmt.Errorf("service: run %s holds at %q, which is no stage's hold", runID, cp.Position)
+	}
+	if err := pipeline.CheckRetry(cp.State, stage); err != nil {
+		return fmt.Errorf("%w: run %s: %w", ipc.ErrInvalidRequest, runID, err)
+	}
+	return nil
 }
 
 // heldStage is the stage whose hold a run stands at.
@@ -1408,6 +1442,10 @@ func (s *Service) reconcile(ctx context.Context, runID string) (store.Run, error
 // because it is continued, and the first read of the resumed wait reads the
 // pull request itself, which is step 1.
 func (s *Service) recover(ctx context.Context) {
+	// What a read of a default branch left in a gate, when a service stopped
+	// between its fetch and its removal, is removed first, before anything
+	// recovery starts can read one; readrefs.go owns why that is safe.
+	s.sweepReadRefs(ctx)
 	// Standing consent writes a decision's hold row before it applies the
 	// answer, so a service that stopped between the two left a row open.
 	// Each is finished from the run's history before any run is continued,
@@ -2097,6 +2135,12 @@ func stageViews(state graph.State) []machine.Stage {
 // report as the stage recorded it. Nothing here shortens, ranks, or rewrites
 // it, and a report that cannot be read is left out rather than replaced by
 // this package's account of it.
+//
+// The options are the halt point's, less the retry wherever the hold does
+// not offer it: every stage's hold declares it, because which hold a stage
+// raises is known only once it has run, and pipeline.RetryOffered says which
+// do. A report that cannot be read offers no retry, which is the answer
+// checkRetry would give too.
 func decisionView(decision graph.Decision, state graph.State) *machine.Decision {
 	view := &machine.Decision{Decision: decision}
 	for _, stage := range pipeline.Order() {
@@ -2107,9 +2151,24 @@ func decisionView(decision graph.Decision, state graph.State) *machine.Decision 
 		if report, err := pipeline.StageReport(state, stage); err == nil {
 			view.Findings = report.Held()
 		}
+		if offered, err := pipeline.RetryOffered(state, stage); err != nil || !offered {
+			view.Options = withoutOption(view.Options, string(pipeline.OutcomeRetry))
+		}
 		break
 	}
 	return view
+}
+
+// withoutOption returns options less every occurrence of option, as a new
+// slice.
+func withoutOption(options []string, option string) []string {
+	out := make([]string, 0, len(options))
+	for _, o := range options {
+		if o != option {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // publishRunState tells subscribers that a run moved. It is a state event, so

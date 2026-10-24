@@ -101,6 +101,12 @@ type KeptWork struct {
 	Branch Optional[string] `json:"branch"`
 	// CopyPath is where the copy stands.
 	CopyPath string `json:"copy_path"`
+	// Machine is the machine the copy stands on, on Task.Machine's terms:
+	// the owner's, read off the owner task's row on every read and stored
+	// on no kept work row (P14), so it is the machine that task records
+	// now, which its dispatch wrote once. A run's copy stands under this
+	// home's worktrees, so a run's entry is always this machine's, empty.
+	Machine string `json:"machine,omitempty"`
 	// Holds is the commits the copy's references and HEAD stood on when it
 	// was kept, refs/stash among them for a task's clone, and the commit
 	// HEAD stood on for a run's worktree: the copy's own state, which is
@@ -545,15 +551,23 @@ func (s *Store) AnswerKeptWork(ctx context.Context, id int64, a KeptAnswer, by R
 }
 
 const keptWorkColumns = `SELECT id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
-	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, lacks, against, unestablished`
+	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, lacks, against, unestablished,
+	(SELECT task.machine FROM task WHERE task.id = kept_work.task_id)`
 
 func scanKeptWork(sc scanner) (KeptWork, error) {
 	var k KeptWork
 	var holds, kept string
-	var surfaced, answer, by, answered, closure, proof, closed, lacks Optional[string]
+	var surfaced, answer, by, answered, closure, proof, closed, lacks, machine Optional[string]
 	if err := sc.Scan(&k.ID, &k.TaskID, &k.RunID, &k.RepositoryID, &k.Branch, &k.CopyPath, &holds, &k.Reason, &k.Detail,
-		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &lacks, &k.Against, &k.Unestablished); err != nil {
+		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &lacks, &k.Against, &k.Unestablished,
+		&machine); err != nil {
 		return KeptWork{}, err
+	}
+	if name, ok := machine.Get(); ok {
+		if err := validRemoteHost(name); err != nil {
+			return KeptWork{}, fmt.Errorf("the owner's column machine: %w", err)
+		}
+		k.Machine = name
 	}
 	if err := json.Unmarshal([]byte(holds), &k.Holds); err != nil {
 		return KeptWork{}, fmt.Errorf("column holds: %w", err)

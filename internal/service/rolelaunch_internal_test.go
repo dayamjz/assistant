@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -111,29 +113,7 @@ func TestReviewAndFixRolesStartTheAgentTheyName(t *testing.T) {
 	if _, err := built.stages.Run(ctx, agents.PurposeLint, inv); err != nil {
 		t.Fatalf("lint: %v", err)
 	}
-	if _, err := s.store.UpsertRepository(ctx, store.Repository{
-		ID: "repo-1", WorkingPath: dir, UpstreamURL: "https://example.test/one.git", DefaultBranch: "main",
-	}); err != nil {
-		t.Fatalf("UpsertRepository: %v", err)
-	}
-	build, err := store.CurrentBuild()
-	if err != nil {
-		t.Fatal(err)
-	}
-	run, err := s.store.CreateRun(ctx, store.Run{
-		ID: "run-1", RepositoryID: "repo-1", Branch: "topic", SubmittedHead: "abc",
-		Intent: "work", IntentSource: "push", Build: build, ConfigDigest: "cfg",
-	})
-	if err != nil {
-		t.Fatalf("CreateRun: %v", err)
-	}
-	fixer, err := built.runs.Fixer(ctx, run.ID)
-	if err != nil {
-		t.Fatalf("Fixer: %v", err)
-	}
-	if _, err := fixer.Apply(ctx, inv); err != nil {
-		t.Fatalf("fix: %v", err)
-	}
+	applyFix(t, s, built, inv)
 
 	calls := agent.Calls()
 	if len(calls) != 3 {
@@ -203,7 +183,7 @@ func TestReviewFallsBackWithoutInheritingThePrimaryModel(t *testing.T) {
 	backup := standin.NewCursor(t, standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: standin.Text("backup review")}}})
 	s := roleService(t, primary.Runner())
 	s.catalog = agents.NewCatalog(fixedRunner{runner: primary.Runner()}, fixedRunner{runner: backup.Runner()})
-	s.cfg.Roles = config.Roles{config.RoleReview: {Agent: "claude", Provider: "anthropic", Type: "opus", Version: "5.5", Effort: "high", Fallback: &config.Role{Agent: "cursor"}}}
+	s.cfg.Roles = config.Roles{config.RoleReview: {Agent: "claude", Provider: "anthropic", Type: "opus", Version: "5.5", Effort: "high", ContextWindow: config.Context1M, Fallback: &config.Role{Agent: "cursor"}}}
 	built, err := s.driverFor(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -213,9 +193,113 @@ func TestReviewFallsBackWithoutInheritingThePrimaryModel(t *testing.T) {
 	if err != nil || result.Text != "backup review" {
 		t.Fatalf("review: %q %v", result.Text, err)
 	}
+	if tried := primary.Calls(); len(tried) != 1 || tried[0].Model() != "claude-opus-5-5[1m]" {
+		t.Fatalf("the primary was tried as %v, want once at claude-opus-5-5[1m]", tried)
+	}
 	calls := backup.Calls()
 	if len(calls) != 1 || calls[0].Model() != "" || flagValue(calls[0].Args, "--effort") != "" || calls[0].Session() != "" {
 		t.Fatalf("backup inherited primary settings or session: %v", calls)
+	}
+}
+
+// A review role and a fix role that name a context window start the model at
+// that window: the review on Opus 5.5 at 1m reaches the command line as
+// claude-opus-5-5[1m], and the fixer on Sonnet 5 at standard as the plain
+// claude-sonnet-5. Each launch records the window it was asked for, and the
+// lint launch, whose purpose no role names, records it as not named.
+func TestReviewAndFixRolesStartTheContextWindowTheyName(t *testing.T) {
+	ctx := t.Context()
+	rec := &roleRecorder{}
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{{
+		Times: standin.Always,
+		Reply: standin.Text("done"),
+	}}}, agents.WithRecorder(rec))
+	s := roleService(t, agent.Runner())
+	s.cfg.Roles = config.Roles{
+		config.RoleReview: {Agent: agents.ClaudeName, Provider: "anthropic", Type: "opus", Version: "5.5", ContextWindow: config.Context1M},
+		config.RoleFix:    {Agent: agents.ClaudeName, Provider: "anthropic", Type: "sonnet", Version: "5", ContextWindow: config.ContextStandard},
+	}
+	built, err := s.driverFor(ctx)
+	if err != nil {
+		t.Fatalf("driverFor: %v", err)
+	}
+	inv := agents.Invocation{Prompt: "look", Shape: agents.ShapeText, Dir: t.TempDir()}
+	for _, purpose := range []agents.Purpose{agents.PurposeReview, agents.PurposeLint} {
+		if _, err := built.stages.Run(ctx, purpose, inv); err != nil {
+			t.Fatalf("%s: %v", purpose, err)
+		}
+	}
+	applyFix(t, s, built, inv)
+
+	calls := agent.Calls()
+	if len(calls) != 3 || calls[0].Model() != "claude-opus-5-5[1m]" || calls[1].Model() != "" || calls[2].Model() != "claude-sonnet-5" {
+		t.Fatalf("the stand-in saw %v, want review at claude-opus-5-5[1m], lint at no model, and fix at claude-sonnet-5", calls)
+	}
+	got := rec.snapshot()
+	if len(got) != 3 ||
+		got[0].ContextWindow != config.Context1M || got[0].Model != "claude-opus-5-5[1m]" ||
+		got[1].ContextWindow != "" ||
+		got[2].ContextWindow != config.ContextStandard || got[2].Model != "claude-sonnet-5" {
+		t.Fatalf("recorded launches = %+v, want review at 1m, lint not named, and fix at standard", got)
+	}
+}
+
+// applyFix starts the fix role the way a run's fix stage does: through the
+// run's Fixer, over a run recorded against a repository at inv.Dir.
+func applyFix(t *testing.T, s *Service, built *driver, inv agents.Invocation) {
+	t.Helper()
+	ctx := t.Context()
+	if _, err := s.store.UpsertRepository(ctx, store.Repository{
+		ID: "repo-1", WorkingPath: inv.Dir, UpstreamURL: "https://example.test/one.git", DefaultBranch: "main",
+	}); err != nil {
+		t.Fatalf("UpsertRepository: %v", err)
+	}
+	build, err := store.CurrentBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := s.store.CreateRun(ctx, store.Run{
+		ID: "run-1", RepositoryID: "repo-1", Branch: "topic", SubmittedHead: "abc",
+		Intent: "work", IntentSource: "push", Build: build, ConfigDigest: "cfg",
+	})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	fixer, err := built.runs.Fixer(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Fixer: %v", err)
+	}
+	if _, err := fixer.Apply(ctx, inv); err != nil {
+		t.Fatalf("fix: %v", err)
+	}
+}
+
+// A role whose context window its adapter has not declared on that model is
+// refused before anything starts, naming the role, and nothing is started at
+// the standard window in its place. Haiku 4.5 is a cell Claude declares no
+// 1m window on, and Codex declares no window at all.
+func TestAnUndeclaredContextWindowIsRefusedBeforeLaunch(t *testing.T) {
+	ctx := t.Context()
+	for _, tc := range []struct {
+		name string
+		role config.Role
+	}{
+		{"claude haiku at 1m", config.Role{Agent: agents.ClaudeName, Provider: "anthropic", Type: "haiku", Version: "4.5", ContextWindow: config.Context1M}},
+		{"codex at standard", config.Role{Agent: agents.CodexName, Provider: "openai", Type: "gpt", Version: "6-astra", ContextWindow: config.ContextStandard}},
+		{"a window with no model", config.Role{Agent: agents.ClaudeName, ContextWindow: config.Context1M}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := standin.New(t, standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: standin.Text("done")}}})
+			s := roleService(t, agent.Runner())
+			s.cfg.Roles = config.Roles{config.RoleReview: tc.role}
+			_, err := s.driverFor(ctx)
+			if !errors.Is(err, agents.ErrUndeclaredModel) || !strings.Contains(err.Error(), "review") {
+				t.Fatalf("driverFor = %v, want ErrUndeclaredModel naming the review role", err)
+			}
+			if calls := agent.Calls(); len(calls) != 0 {
+				t.Fatalf("an agent was started in the refused launch's place: %v", calls)
+			}
+		})
 	}
 }
 
@@ -282,8 +366,9 @@ type argumentFactory struct {
 	args  []string
 }
 
-func (f argumentFactory) Name() string       { return f.inner.Name() }
-func (f argumentFactory) AutoEligible() bool { return false }
+func (f argumentFactory) Name() string                  { return f.inner.Name() }
+func (f argumentFactory) AutoEligible() bool            { return false }
+func (f argumentFactory) Declares() agents.Capabilities { return f.inner.Declares() }
 func (f argumentFactory) New(ctx context.Context, args []string) (agents.Runner, error) {
 	return f.inner.New(ctx, append(args, f.args...))
 }
@@ -312,7 +397,7 @@ func TestAReviewPrimaryIsRetriedAfterItsExecutableReturns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(path, bytes, 0700); err != nil {
+	if err = procgroup.WriteProgram(path, bytes, 0700); err != nil {
 		t.Fatal(err)
 	}
 	result, err = built.stages.Run(t.Context(), agents.PurposeReview, inv)
@@ -321,5 +406,20 @@ func TestAReviewPrimaryIsRetriedAfterItsExecutableReturns(t *testing.T) {
 	}
 	if len(primary.Calls()) != 1 || len(backup.Calls()) != 1 {
 		t.Fatal("recovered primary was not selected")
+	}
+}
+
+// A review role that names a context window and no agent is refused, naming
+// the role, rather than run on the agent list at whatever window that agent
+// starts: a window belongs to one process, as an effort does.
+func TestAContextWindowOnARoleWithNoAgentIsRefused(t *testing.T) {
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: standin.Text("done")}}})
+	s := roleService(t, agent.Runner())
+	s.cfg.Roles = config.Roles{config.RoleReview: {ContextWindow: config.Context1M}}
+	if _, err := s.driverFor(t.Context()); err == nil || !strings.Contains(err.Error(), "review") || !strings.Contains(err.Error(), "context window") {
+		t.Fatalf("driverFor = %v, want a refusal naming the review role and its context window", err)
+	}
+	if calls := agent.Calls(); len(calls) != 0 {
+		t.Fatalf("an agent was started for the refused role: %v", calls)
 	}
 }

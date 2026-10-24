@@ -27,6 +27,8 @@ func (f heldFactory) Name() string { return f.name }
 
 func (heldFactory) AutoEligible() bool { return true }
 
+func (f heldFactory) Declares() agents.Capabilities { return f.runner.Capabilities() }
+
 func (f heldFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 
 // Every entry Route and Resolve pass over carries a stable reason from the

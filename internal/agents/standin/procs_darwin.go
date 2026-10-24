@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 
 	"golang.org/x/sys/unix"
 )
@@ -84,4 +85,17 @@ func procArgs(pid int) (string, []string, []string, error) {
 		rest = rest[end+1:]
 	}
 	return executable, args, env, nil
+}
+
+// foreignProcess reports whether pid runs as another user's: its effective
+// user, as the process table holds it (Eproc.Ucred.Uid), is not this
+// process's effective user. It is read so that a listing passes over only
+// the processes of another user's whose command line it could not read,
+// rather than assuming that of every read that failed (processesWhere).
+func foreignProcess(pid int) (bool, error) {
+	k, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil {
+		return false, err
+	}
+	return int(k.Eproc.Ucred.Uid) != os.Geteuid(), nil
 }

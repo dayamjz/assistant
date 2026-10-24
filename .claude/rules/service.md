@@ -52,10 +52,13 @@ paths: ["internal/service/**"]
 - Kept work: `cleanup.go`'s `keepWork` is the one call that turns a copy
   kept for its work into a kept work entry, from every cleanup site and from
   recovery's `reclaimAtRecovery`; `supervise.go` raises each open
-  entry about a task once as a `kept-work` wake, and status and the catch-up
-  read list them. `dispatch.go` holds a new task's dispatch while its
+  entry about a task once as a `kept-work` wake, `keptworkwake.go` raises
+  an entry no task names once on the queue's third shape, an entry with
+  `surfaced_at` recorded is raised on neither again, and status and the
+  catch-up read list them. `dispatch.go` holds a new task's dispatch while its
   project has an open entry, asking internal/store's one predicate
-  (`KeptWorkHolding`, `BeginDispatchAttempt` at the claim, and
+  (`KeptWorkHolding`, `BeginFirstTaskAttempt` or, for a retried dispatch,
+  `BeginDispatchAttempt` at the claim, and
   `launch.go`'s `ClaimAttemptLaunch` before the worker starts);
   `releaseHeldSlot` gives the slot back and reads the hold again, and a
   removal asks again (`redispatchAfterRemoval`); `taskView` and `report`

@@ -13,6 +13,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -69,6 +70,13 @@ func newRelaunchSubject(t *testing.T) *relaunchSubject {
 func restartedService(t *testing.T, sub *launchSubject) (*Service, *standin.Agent) {
 	t.Helper()
 	agent := workerStandIn(t)
+	return restartedServiceOver(t, sub, agent), agent
+}
+
+// restartedServiceOver is restartedService resolving agent, for a test that
+// needs the restarted service's worker under a particular adapter.
+func restartedServiceOver(t *testing.T, sub *launchSubject, agent *standin.Agent) *Service {
+	t.Helper()
 	s := &Service{
 		home: sub.service.home, store: sub.service.store, log: sub.service.log,
 		catalog: agents.NewCatalog(fixedRunner{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()}), registry: newRegistry(),
@@ -84,7 +92,7 @@ func restartedService(t *testing.T, sub *launchSubject) (*Service, *standin.Agen
 		}
 		s.stopCancel()
 	})
-	return s, agent
+	return s
 }
 
 // eventKinds is the task's history as a list of kinds, in sequence order.
@@ -575,14 +583,14 @@ func TestATaskWhoseSessionIsAnotherHomesIsNotReconciled(t *testing.T) {
 	if _, err := records.CreateTask(ctx, store.Task{ID: id, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: copyPath}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	attempt, err := records.BeginTaskAttempt(ctx, id, 0)
+	attempt, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine())
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The other home's reference, naming a process that is not running, so
 	// the one thing keeping it from reading Dead is the home marker.
 	foreign := session.Reference{Home: session.HomeMarker(other), Task: id, PID: 1 << 30, Start: 1}
-	if err := records.SetAttemptSession(ctx, id, attempt.Sequence, foreign.String()); err != nil {
+	if err := records.SetAttemptSession(ctx, id, attempt.Sequence, foreign.String(), store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	agent := workerStandIn(t)
@@ -895,7 +903,8 @@ func TestUnobservedNeverRelaunchesOrDeletesTheStandingCopy(t *testing.T) {
 
 	cleaner, err := tasks.NewCleaner(tasks.CleanupDeps{
 		Home: sub.service.home, Store: sub.records,
-		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))),
+		Forge:       forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))),
+		GitDeadline: config.DefaultGitDeadline,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -907,5 +916,62 @@ func TestUnobservedNeverRelaunchesOrDeletesTheStandingCopy(t *testing.T) {
 	}
 	if _, err := os.Stat(left); err != nil {
 		t.Fatalf("cleanup under Unobserved removed the standing copy: %v", err)
+	}
+}
+
+// A relaunch reads the role again rather than reusing what the first attempt
+// was started with: a worker launched at context 1m, relaunched after the
+// operator's role changed to standard, starts at the standard window, and
+// each attempt records the identifier it asked for.
+func TestARelaunchReadsTheContextWindowFromTheRoleAgain(t *testing.T) {
+	t.Parallel()
+	const unestablished = "a relaunch reading its role's context window again"
+	requireSweepClearsHere(t, unestablished)
+	ctx := t.Context()
+	sub := newLaunchSubject(t, claudeWorkerStandIn(t))
+	role := config.Role{Agent: agents.ClaudeName, Provider: "anthropic", Type: "opus", Version: "5.5", ContextWindow: config.Context1M}
+	sub.service.cfg.Roles = config.Roles{config.RoleWorker: role}
+	sub.service.terminals = heldTerminals{sub.service}
+	d, err := sub.service.dispatchTask(ctx, sub.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	first, err := sub.service.launchTask(ctx, d)
+	if err != nil {
+		t.Fatalf("launching: %v", err)
+	}
+	provider, _, _ := sub.service.sessionOf(sub.task)
+	for _, err := range sub.service.closeSessions() {
+		t.Fatalf("ending the first worker: %v", err)
+	}
+	waitLiveness(t, provider, first.Reference().String(), taskstate.Dead)
+
+	agent := claudeWorkerStandIn(t)
+	restart := restartedServiceOver(t, sub, agent)
+	role.ContextWindow = config.ContextStandard
+	restart.cfg.Roles = config.Roles{config.RoleWorker: role}
+	restart.reconcileTasks(ctx)
+	restart.work.Wait()
+
+	provider, launched, ok := restart.sessionOf(sub.task)
+	if !ok {
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "the restarted service holds no session after the relaunch")
+	}
+	attempts, err := sub.records.TaskAttempts(ctx, sub.task)
+	if err != nil || len(attempts) != 2 {
+		t.Fatalf("the task has attempts %+v (%v), want two", attempts, err)
+	}
+	if was, now := attempts[0].Model.Or(""), attempts[1].Model.Or(""); was != "claude-opus-5-5[1m]" || now != "claude-opus-5-5" {
+		t.Fatalf("the attempts asked for %q then %q, want claude-opus-5-5[1m] then claude-opus-5-5", was, now)
+	}
+	waitCaptured(t, provider, launched, claudeWorkerStarted)
+	var started []string
+	for _, call := range agent.Calls() {
+		if call.Worker {
+			started = append(started, call.Model())
+		}
+	}
+	if len(started) != 1 || started[0] != "claude-opus-5-5" {
+		t.Fatalf("the relaunched worker was started with --model %q, want claude-opus-5-5", started)
 	}
 }

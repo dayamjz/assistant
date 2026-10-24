@@ -58,6 +58,10 @@ type AgentInvocation struct {
 	// Effort is the effort the launch was asked for, on the same terms as
 	// Provider.
 	Effort Optional[string]
+	// ContextWindow is the context window the launch was asked for, on the
+	// same terms as Provider: unknown on a row from before the column, known
+	// empty when the launch named none.
+	ContextWindow Optional[string]
 	// SessionUse is what the invocation did with the run's durable session.
 	SessionUse string
 	// Started is when the agent process was started.
@@ -117,13 +121,13 @@ func (s *Store) AppendAgentInvocation(ctx context.Context, inv AgentInvocation) 
 			INSERT INTO agent_invocation (
 				purpose, agent, model, session_use, started, duration_ns, failure,
 				input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, turns,
-				run, stage, role, provider, model_type, version, effort)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				run, stage, role, provider, model_type, version, effort, context_window)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			inv.Purpose, inv.Agent, inv.Model, inv.SessionUse,
 			encodeTime(inv.Started), int64(inv.Duration), inv.Failure,
 			inv.InputTokens, inv.OutputTokens, inv.CacheReadTokens,
 			inv.CacheCreationTokens, inv.Turns, inv.Run, inv.Stage,
-			inv.Role, inv.Provider, inv.Type, inv.Version, inv.Effort)
+			inv.Role, inv.Provider, inv.Type, inv.Version, inv.Effort, inv.ContextWindow)
 		if err != nil {
 			return err
 		}
@@ -172,7 +176,7 @@ func (s *Store) agentInvocations(ctx context.Context, where string, args []any) 
 	rows, err := s.read.QueryContext(ctx, `
 		SELECT seq, purpose, agent, model, session_use, started, duration_ns, failure,
 			input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, turns,
-			run, stage, role, provider, model_type, version, effort
+			run, stage, role, provider, model_type, version, effort, context_window
 		FROM agent_invocation `+where+` ORDER BY seq`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading agent invocations: %w", err)
@@ -188,7 +192,7 @@ func (s *Store) agentInvocations(ctx context.Context, where string, args []any) 
 			&inv.SessionUse, &started, &durationNS, &inv.Failure,
 			&inv.InputTokens, &inv.OutputTokens, &inv.CacheReadTokens,
 			&inv.CacheCreationTokens, &inv.Turns, &inv.Run, &inv.Stage,
-			&inv.Role, &inv.Provider, &inv.Type, &inv.Version, &inv.Effort); err != nil {
+			&inv.Role, &inv.Provider, &inv.Type, &inv.Version, &inv.Effort, &inv.ContextWindow); err != nil {
 			return nil, fmt.Errorf("store: reading agent invocations: %w", err)
 		}
 		if inv.Started, err = decodeTime(started); err != nil {

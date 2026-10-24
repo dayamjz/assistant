@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/dayamjz/assistant/internal/gate"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -45,6 +44,7 @@ func (s *Service) newQueue() (*tasks.Queue, error) {
 		GatePath:     s.gatePathOf,
 		Posture:      s.projectPosture,
 		Roles:        s.cfg.Roles,
+		GitDeadline:  s.cfg.GitDeadline,
 	})
 }
 
@@ -62,7 +62,7 @@ func (s *Service) branchInGate(ctx context.Context, repository store.Repository,
 	if err != nil {
 		return false, fmt.Errorf("service: locating the gate repository of %s: %w", repository.ID, err)
 	}
-	bare, err := vcs.OpenBare(ctx, repositoryPath, vcs.WithRedactor(redact.New()))
+	bare, err := vcs.OpenBare(ctx, repositoryPath, s.git()...)
 	if err != nil {
 		return false, fmt.Errorf("service: opening the gate repository of %s: %w", repository.ID, err)
 	}

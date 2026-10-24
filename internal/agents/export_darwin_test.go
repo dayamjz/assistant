@@ -81,6 +81,14 @@ var LsofOutput = systemLsof.run
 // LsofDeadline is the deadline the listing's lsof run carries.
 const LsofDeadline = lsofDeadline
 
+// LsofGrace is the grace an lsof run under deadline gives procgroup.Run,
+// which is how long output held open past lsof's exit is waited on.
+var LsofGrace = lsofGrace
+
+// ErrLsofNoSelf is the listing's refusal of lsof output that does not report
+// this process's own working directory.
+var ErrLsofNoSelf = errLsofNoSelf
+
 // ReadCwdsWithLsof is the listing's read of the working directories, made
 // through the same run with program in place of /usr/sbin/lsof and
 // deadline in place of LsofDeadline, so a test can cancel ctx partway.
@@ -92,9 +100,28 @@ func ReadCwdsWithLsof(ctx context.Context, program string, deadline time.Duratio
 // lsof's run made through the same code with program in place of
 // /usr/sbin/lsof and deadline in place of LsofDeadline, so a test can stand
 // a program that never exits where lsof is.
-func SweepWithLsof(ctx context.Context, s *Sweeper, dir, program string, deadline time.Duration) (SweepResult, error) {
+//
+// Beside the sweep's answer it returns how long lsof's run took, from the
+// listing starting it to the listing having its answer, which is the
+// interval deadline bounds. The reads of the process table the listing
+// makes before that run are not under deadline, so a time taken around the
+// whole sweep is not one deadline bounds. It is zero when the listing
+// answered without starting the run.
+func SweepWithLsof(ctx context.Context, s *Sweeper, dir, program string, deadline time.Duration) (SweepResult, time.Duration, error) {
 	run := lsofRun{program: program, deadline: deadline}
-	return s.sweep(ctx, dir, func(ctx context.Context, d string) (listing, error) {
-		return listUnderReading(ctx, d, run.readCwds)
+	var took time.Duration
+	r, err := s.sweep(ctx, dir, func(ctx context.Context, d string) (listing, error) {
+		return listUnderReading(ctx, d, func(ctx context.Context) (map[int]string, error) {
+			started := time.Now()
+			defer func() { took = time.Since(started) }()
+			return run.readCwds(ctx)
+		})
 	})
+	return r, took, err
 }
+
+// LsofShare is the part of a run's deadline lsof itself is given before its
+// group is ended. A run whose lsof is still running when it passes answers
+// no earlier than this past its start; one whose lsof exited sooner, with
+// its output still held open a grace later, answers ErrSweepTimedOut then.
+var LsofShare = lsofShare

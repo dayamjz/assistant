@@ -83,6 +83,7 @@ func offeredLocally(t *testing.T, w launched) (head, tip string, offer store.Hol
 // TestALocalApprovalRefusesAPeerOffATerminalAndTheWorker's.
 func TestALocalTasksPushStartsNoRunAndItsApprovalFastForwards(t *testing.T) {
 	t.Parallel()
+	needsTerminal(t)
 	principles.Cite(t, principles.P6)
 	principles.Cite(t, principles.P1)
 	launchedWorkerUnder(t, store.TaskDelivery, "task/local", store.Known(config.DeliveryLocal), func(w launched) {
@@ -170,6 +171,7 @@ func TestALocalTasksPushStartsNoRunAndItsApprovalFastForwards(t *testing.T) {
 // terminal's foreground witnesses a terminal and not a person.
 func TestALocalApprovalRefusesAPeerOffATerminalAndTheWorker(t *testing.T) {
 	t.Parallel()
+	needsTerminal(t)
 	principles.Cite(t, principles.P6)
 	launchedWorkerUnder(t, store.TaskDelivery, "task/local", store.Known(config.DeliveryLocal), func(w launched) {
 		records := openRecords(t, w.home)

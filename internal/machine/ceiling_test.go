@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -44,7 +45,7 @@ func TestCeilingOfComparesTheRecordOverItsWindow(t *testing.T) {
 		{"over it", []store.AgentInvocation{spent(101, 1, time.Hour)}, machine.CeilingReached},
 		{"over it before the window", []store.AgentInvocation{spent(1000, 1, 25*time.Hour)}, machine.CeilingUnder},
 	} {
-		got := machine.CeilingOf(ceiling(100, 0), usageReadAt, c.rows)
+		got := machine.CeilingOf(ceiling(100, 0), usageReadAt, c.rows, nil)
 		if got.Standing != c.want {
 			t.Errorf("%s: standing %s, want %s (%s)", c.name, got.Standing, c.want, got.Figures())
 		}
@@ -56,10 +57,10 @@ func TestCeilingOfComparesTheRecordOverItsWindow(t *testing.T) {
 			t.Errorf("%s: compared %+v, but UsageOf totals %+v", c.name, got.Counts[0].Recorded, usage.Total.InputTokens)
 		}
 	}
-	if got := machine.CeilingOf(ceiling(0, 0), usageReadAt, []store.AgentInvocation{spent(1e9, 1e9, time.Hour)}); got.Standing != machine.CeilingOff || len(got.Counts) != 0 {
+	if got := machine.CeilingOf(ceiling(0, 0), usageReadAt, []store.AgentInvocation{spent(1e9, 1e9, time.Hour)}, nil); got.Standing != machine.CeilingOff || len(got.Counts) != 0 {
 		t.Errorf("a ceiling with no count set compared %+v", got)
 	}
-	both := machine.CeilingOf(ceiling(1000, 10), usageReadAt, []store.AgentInvocation{spent(5, 10, time.Hour)})
+	both := machine.CeilingOf(ceiling(1000, 10), usageReadAt, []store.AgentInvocation{spent(5, 10, time.Hour)}, nil)
 	if both.Standing != machine.CeilingReached || both.Counts[0].Standing != machine.CeilingUnder || both.Counts[1].Standing != machine.CeilingReached {
 		t.Errorf("one count reached of two compared %+v", both)
 	}
@@ -75,14 +76,14 @@ func TestCeilingOfComparesTheRecordOverItsWindow(t *testing.T) {
 func TestCeilingOfRefusesWhatTheRecordDoesNotEstablish(t *testing.T) {
 	t.Parallel()
 	silent := call("claude", "", "review", time.Hour)
-	got := machine.CeilingOf(ceiling(100, 0), usageReadAt, []store.AgentInvocation{spent(10, 1, time.Hour), silent})
+	got := machine.CeilingOf(ceiling(100, 0), usageReadAt, []store.AgentInvocation{spent(10, 1, time.Hour), silent}, nil)
 	if got.Standing != machine.CeilingUnestablished || got.Counts[0].Recorded.Unreported != 1 {
 		t.Errorf("an unreported count compared %+v", got)
 	}
 	if !strings.Contains(got.Figures(), "at least 10 (1 of 2 calls unreported)") {
 		t.Errorf("the figures %q do not say the total is a lower bound", got.Figures())
 	}
-	over := machine.CeilingOf(ceiling(100, 0), usageReadAt, []store.AgentInvocation{spent(150, 1, time.Hour), silent})
+	over := machine.CeilingOf(ceiling(100, 0), usageReadAt, []store.AgentInvocation{spent(150, 1, time.Hour), silent}, nil)
 	if over.Standing != machine.CeilingReached {
 		t.Errorf("a reported total already past the ceiling, beside an unreported call, compared %s", over.Standing)
 	}
@@ -94,7 +95,7 @@ func TestCeilingOfRefusesWhatTheRecordDoesNotEstablish(t *testing.T) {
 		t.Errorf("an unset ceiling over an unreadable record compared %s, want off", off.Standing)
 	}
 	noWindow := config.UsageCeiling{InputTokens: 100}
-	if got := machine.CeilingOf(noWindow, usageReadAt, []store.AgentInvocation{spent(1000, 1, time.Second)}); got.Standing != machine.CeilingUnread {
+	if got := machine.CeilingOf(noWindow, usageReadAt, []store.AgentInvocation{spent(1000, 1, time.Second)}, nil); got.Standing != machine.CeilingUnread {
 		t.Errorf("a ceiling with no window compared %s, want unread", got.Standing)
 	}
 	refusing := map[machine.CeilingStanding]bool{
@@ -109,6 +110,102 @@ func TestCeilingOfRefusesWhatTheRecordDoesNotEstablish(t *testing.T) {
 	if !slices.Equal(machine.CeilingStandings(), []machine.CeilingStanding{machine.CeilingOff, machine.CeilingUnder,
 		machine.CeilingReached, machine.CeilingUnestablished, machine.CeilingUnread}) {
 		t.Errorf("CeilingStandings() = %v", machine.CeilingStandings())
+	}
+}
+
+// declaring is the declarations a test weighs calls against: claude declares
+// every count, quiet declares output tokens alone, and any other agent has no
+// declaration in this build.
+func declaring(agent string) (agents.Capabilities, bool) {
+	switch agent {
+	case "claude":
+		return agents.Declare(agents.CountCapabilities()...), true
+	case "quiet":
+		return agents.Declare(agents.CapabilityReportsOutputTokens), true
+	}
+	return agents.Capabilities{}, false
+}
+
+// by is row as a call by agent.
+func by(agent string, row store.AgentInvocation) store.AgentInvocation {
+	row.Agent = agent
+	return row
+}
+
+// #375's second item at the comparison: a call whose agent declares it does
+// not report a count is left out of that count, so its silence neither
+// refuses nor is read as a zero, and the figures say how many calls the
+// count leaves out. The exemption is the declaration and never the silence:
+// the same silent call by an agent that declares the count, by an agent this
+// build holds no declaration for, or weighed with no declarations at all,
+// still leaves the total unestablished. A count a call did report is in the
+// total whatever its agent declares, and a call before the window is in
+// neither the total nor the calls left out.
+func TestCeilingOfLeavesOutACountTheAgentDeclaresItDoesNotReport(t *testing.T) {
+	t.Parallel()
+	reported := spent(10, 1, time.Hour)
+	silent := call("quiet", "", "review", time.Hour)
+
+	got := machine.CeilingOf(ceiling(100, 0), usageReadAt, []store.AgentInvocation{reported, silent}, declaring)
+	if got.Standing != machine.CeilingUnder || got.Counts[0].Exempt != 1 || got.Counts[0].Recorded.Unreported != 1 {
+		t.Errorf("a silent call by an agent declaring it does not report the count compared %+v", got)
+	}
+	if want := "input_tokens 10 (1 of 2 calls by agents that do not report it left out) of 100 (under)"; !strings.Contains(got.Figures(), want) {
+		t.Errorf("the figures %q do not carry %q", got.Figures(), want)
+	}
+
+	for _, c := range []struct {
+		name     string
+		agent    string
+		declared machine.Declarations
+	}{
+		{"an agent declaring the count", "claude", declaring},
+		{"an agent with no declaration", "gone", declaring},
+		{"no declarations at all", "quiet", nil},
+	} {
+		got := machine.CeilingOf(ceiling(100, 0), usageReadAt, []store.AgentInvocation{reported, by(c.agent, silent)}, c.declared)
+		if got.Standing != machine.CeilingUnestablished || got.Counts[0].Exempt != 0 {
+			t.Errorf("%s: a silent call compared %+v, want unestablished with nothing left out", c.name, got)
+		}
+	}
+
+	mixed := machine.CeilingOf(ceiling(100, 0), usageReadAt, []store.AgentInvocation{reported, silent, by("claude", silent)}, declaring)
+	if mixed.Standing != machine.CeilingUnestablished || mixed.Counts[0].Exempt != 1 {
+		t.Errorf("a left-out call beside one that refuses compared %+v", mixed)
+	}
+	if want := "at least 10 (2 of 3 calls unreported, 1 of them by agents that do not report it)"; !strings.Contains(mixed.Figures(), want) {
+		t.Errorf("the figures %q do not carry %q", mixed.Figures(), want)
+	}
+
+	spoke := by("quiet", spent(95, 1, time.Hour))
+	if got := machine.CeilingOf(ceiling(100, 0), usageReadAt, []store.AgentInvocation{reported, spoke, silent}, declaring); got.Standing != machine.CeilingReached || got.Counts[0].Exempt != 1 {
+		t.Errorf("a count reported by an agent declaring it does not report it compared %+v, want it counted and reached", got)
+	}
+
+	old := call("quiet", "", "review", 25*time.Hour)
+	if got := machine.CeilingOf(ceiling(100, 0), usageReadAt, []store.AgentInvocation{reported, old}, declaring); got.Counts[0].Exempt != 0 || got.Standing != machine.CeilingUnder {
+		t.Errorf("a silent call before the window compared %+v, want nothing left out", got)
+	}
+
+	view := machine.UsageViewOf(machine.CeilingWindow(ceiling(100, 0)), ceiling(100, 0), usageReadAt, []store.AgentInvocation{reported, silent}, declaring)
+	if view.Ceiling.Standing != machine.CeilingUnder || view.Ceiling.Counts[0].Exempt != 1 {
+		t.Errorf("the usage view weighs the same calls as %+v", view.Ceiling)
+	}
+}
+
+// Every count a ceiling may be set on reads the declaration of the
+// capability that names it, one row each, so a count cannot be left with no
+// declaration to exempt it and a declaration cannot name a count the ceiling
+// does not weigh.
+func TestEveryCeilingCountReadsTheCapabilityThatNamesIt(t *testing.T) {
+	t.Parallel()
+	if got, want := machine.CeilingCountReports(), agents.CountCapabilities(); !slices.Equal(got, want) {
+		t.Fatalf("the ceiling reads declarations of %v, the capability table's counts are %v", got, want)
+	}
+	for i, name := range machine.CeilingCountNames() {
+		if want := agents.Capability("reports_" + name); machine.CeilingCountReports()[i] != want {
+			t.Errorf("the ceiling on %s reads %s, want %s", name, machine.CeilingCountReports()[i], want)
+		}
 	}
 }
 
@@ -130,14 +227,21 @@ func TestEveryCeilingCountIsAKeyOfTheSchema(t *testing.T) {
 
 // The hold the ceiling raises is an ask whose remedy lies outside the change,
 // so P3 holds it for a person and standing consent does not answer it with a
-// fix round; it carries the hold row and the exact figures, and a report of it
+// fix round; it is marked as a call that never started, which offers its hold
+// the retry; it carries the hold row and the exact figures, and a report of it
 // validates the way the stage node holds every report to.
 func TestTheCeilingHoldIsAnAskForAPersonCarryingTheFigures(t *testing.T) {
 	t.Parallel()
-	reached := machine.CeilingOf(ceiling(100, 0), usageReadAt, []store.AgentInvocation{spent(150, 1, time.Hour)})
+	reached := machine.CeilingOf(ceiling(100, 0), usageReadAt, []store.AgentInvocation{spent(150, 1, time.Hour)}, nil)
 	f := machine.CeilingHeldFinding(reached)
 	if f.Action != findings.ActionAsk || !f.RemedyOutsideChange || !f.Holds() || f.FixEligible() {
 		t.Errorf("the hold's finding is %+v, want an ask outside the change", f)
+	}
+	// Marked as work that never started, which is what offers the stage's
+	// hold PRD section 5's retry, and kept through the normalization every
+	// stage report passes.
+	if !f.NotStarted || !machine.CeilingHeldReport(reached).Normalize().HasHeldNotStarted() {
+		t.Errorf("the hold's finding is %+v, want it marked as a call that never started", f)
 	}
 	for _, part := range []string{machine.CeilingHoldPhrase(machine.CeilingReached).String(), "input_tokens 150 of 100 (reached)", "over the last 1d"} {
 		if !strings.Contains(f.Description, part) {

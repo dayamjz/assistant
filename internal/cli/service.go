@@ -26,6 +26,15 @@ import (
 // so this waits for the second rather than reporting the first.
 const readyTimeout = 10 * time.Second
 
+// readyWait is the bound waitReady holds its wait for an answer to, which is
+// every wait for a service to answer: a start that launched the service, a
+// restart's wait for its successor, and a managed install's or start's wait
+// for the service the manager started. It is readyTimeout;
+// export_test.go's AwaitReadinessUntilTheTestsDeadline replaces it for a test
+// in this process whose subject is not that bound. The wait for a stop to be
+// observed, stoppedAnswering, does not read it and keeps readyTimeout.
+var readyWait = readyTimeout
+
 // readyPoll is how often the wait re-asks.
 const readyPoll = 25 * time.Millisecond
 
@@ -203,6 +212,19 @@ func (in *invocation) startableConfiguration() error {
 // detached from this process's own lifetime, because the service outlives the
 // command that started it.
 //
+// It is not a short-lived program, so it does not run through procgroup and
+// carries no invocation deadline: what it starts is the service itself,
+// which runs until it is stopped, and is the exception the owner's decision
+// on #430 makes of a long-lived process, on that decision's terms. On unix
+// the copy leads a session, and so a process group, of its own (detach).
+// Its recorded owner is the service itself, which holds the home's lock
+// for as long as it serves (PRD section 8). What ends it is its stop, a
+// stop request or SIGTERM, which PRD section 8 bounds by stop_grace, or
+// the operating system ending it outright. The launching command bounds
+// only its own wait for readiness, readyTimeout, and ends nothing when that
+// wait runs out. A restart's successor, which the outgoing service launches
+// through this same path, is the same exception.
+//
 // The channel it returns is closed once that copy has exited. It is waited for
 // on a goroutine of its own, so nothing here blocks for the life of the
 // service; a command that ends first simply stops watching, and the service,
@@ -239,7 +261,8 @@ func (in *invocation) launch() (<-chan struct{}, error) {
 // than when the wait runs out, and both failures point at the service log,
 // where a service that held the home's lock and could not start writes why.
 func (in *invocation) waitReady(ctx context.Context, replacing string, exited <-chan struct{}) (machine.Service, error) {
-	deadline := time.Now().Add(readyTimeout)
+	bound := readyWait
+	deadline := time.Now().Add(bound)
 	for {
 		health, err := in.serviceHealth(ctx)
 		switch {
@@ -251,7 +274,7 @@ func (in *invocation) waitReady(ctx context.Context, replacing string, exited <-
 			return machine.Service{}, fmt.Errorf("the service exited before it answered a readiness check; why is in its log at %s", in.home.ServiceLog())
 		}
 		if !time.Now().Before(deadline) {
-			return machine.Service{}, fmt.Errorf("the service did not become ready within %s; its log is at %s", readyTimeout, in.home.ServiceLog())
+			return machine.Service{}, fmt.Errorf("the service did not become ready within %s; its log is at %s", bound, in.home.ServiceLog())
 		}
 		select {
 		case <-ctx.Done():

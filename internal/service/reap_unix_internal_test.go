@@ -57,7 +57,7 @@ func holdingAgent(t *testing.T) *standin.Agent {
 // pending, which is where a run stands before anything executes it.
 func reapHome(t *testing.T, runIDs ...string) *home.Home {
 	t.Helper()
-	root, err := os.MkdirTemp("", "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}
@@ -391,28 +391,6 @@ func TestAKilledServiceLeavesItsRecordAndTheNextOneEndsThatGroupAlone(t *testing
 	if left, err := s.store.ProcessRecords(t.Context()); err != nil || len(left) != 0 {
 		t.Fatalf("after recovery the records are %+v, %v, want none", left, err)
 	}
-}
-
-// matchingCommandLines is what a kill matched on a command line would reach:
-// every process whose command line, as ps prints it, contains pattern. It is
-// the positive control's half and nothing in the product does it.
-func matchingCommandLines(t *testing.T, pattern string) map[int]bool {
-	t.Helper()
-	out, err := exec.Command("ps", "-A", "-ww", "-o", "pid=,args=").Output()
-	if err != nil {
-		t.Fatalf("listing processes for the positive control: %v", err)
-	}
-	matched := map[int]bool{}
-	for line := range strings.Lines(string(out)) {
-		fields := strings.Fields(line)
-		if len(fields) < 2 || !strings.Contains(line, pattern) {
-			continue
-		}
-		if pid, err := strconv.Atoi(fields[0]); err == nil {
-			matched[pid] = true
-		}
-	}
-	return matched
 }
 
 // TestRecoveryLeavesAloneWhatItCannotVerifyAndWhatIsActive establishes P6's

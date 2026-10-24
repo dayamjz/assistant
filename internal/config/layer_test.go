@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -100,15 +101,21 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"relaunch_attempts": 3,
 		"stop_grace": "45s",
 		"command_timeout": "45m",
+		"git_deadline": "20m",
+		"gh_deadline": "3m",
 		"commit": {"fix_message": "fix(gate): {summary}"},
 		"allow_pushed_commands": true,
 		"autonomy": {"merge": ["owner/name"]},
 		"delivery": "local",
 		"allow_standing_consent": true,
-		"session_provider": "tmux",
+		"session_provider": "herdr",
 		"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4},
 		"notify": {"command": "notify-me --channel private"},
-		"run_usage_budget": {"output_tokens": 5}
+		"run_usage_budget": {"output_tokens": 5},
+		"remote_hosts": [{"host": "studio", "root": "/Users/me/remote", "bridge": "/Users/me/bin/assistant",
+			"max_workers": 4, "min_free_disk": "20GiB", "max_load": 6.5}],
+		"placement": {"local": {"max_workers": 8, "min_free_disk": "500MB", "max_load": 12}, "arch": ["arm64", "amd64"]},
+		"remote_disconnect_grace": "2h"
 	}`
 	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
@@ -167,8 +174,22 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	if c.Delivery != DeliveryLocal {
 		t.Errorf("Delivery = %q", c.Delivery)
 	}
-	if c.SessionProvider != SessionProviderTmux {
+	if c.SessionProvider != SessionProviderHerdr {
 		t.Errorf("SessionProvider = %q", c.SessionProvider)
+	}
+	wantHosts := []RemoteHost{{Host: "studio", Root: "/Users/me/remote", Bridge: "/Users/me/bin/assistant",
+		Limits: PlacementLimits{MaxWorkers: 4, MinFreeDiskBytes: 20 << 30, MaxLoad: 6.5}}}
+	if !reflect.DeepEqual(c.RemoteHosts, wantHosts) {
+		t.Errorf("RemoteHosts = %+v, want %+v", c.RemoteHosts, wantHosts)
+	}
+	if c.PlacementLocal != (PlacementLimits{MaxWorkers: 8, MinFreeDiskBytes: 500 * 1000 * 1000, MaxLoad: 12}) {
+		t.Errorf("PlacementLocal = %+v", c.PlacementLocal)
+	}
+	if strings.Join(c.PlacementArch, ",") != "arm64,amd64" {
+		t.Errorf("PlacementArch = %v", c.PlacementArch)
+	}
+	if c.RemoteDisconnectGrace != 2*time.Hour {
+		t.Errorf("RemoteDisconnectGrace = %v", c.RemoteDisconnectGrace)
 	}
 	if c.UsageCeiling != (UsageCeiling{Window: 24 * time.Hour, InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3, CacheCreationTokens: 4}) {
 		t.Errorf("UsageCeiling = %+v", c.UsageCeiling)
@@ -251,6 +272,10 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"command timeout as a number", `{"command_timeout": 30}`, KeyCommandTimeout, "30"},
 		{"command timeout under the floor", `{"command_timeout": "59s"}`, KeyCommandTimeout, `"59s"`},
 		{"command timeout over the ceiling", `{"command_timeout": "25h"}`, KeyCommandTimeout, `"25h"`},
+		{"git deadline under the floor", `{"git_deadline": "59s"}`, KeyGitDeadline, `"59s"`},
+		{"git deadline over the ceiling", `{"git_deadline": "121m"}`, KeyGitDeadline, `"121m"`},
+		{"gh deadline under the floor", `{"gh_deadline": "9s"}`, KeyGHDeadline, `"9s"`},
+		{"gh deadline over the ceiling", `{"gh_deadline": "31m"}`, KeyGHDeadline, `"31m"`},
 		{"session provider misspelled", `{"session_provider": "Tmux"}`, KeySessionProvider, `"Tmux"`},
 		{"session provider not offered", `{"session_provider": "zellij"}`, KeySessionProvider, `"zellij"`},
 		{"session provider not a string", `{"session_provider": true}`, KeySessionProvider, "true"},

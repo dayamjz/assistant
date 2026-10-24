@@ -265,6 +265,18 @@ func TestADispatchedInvestigationTaskIsCutADetachedCloneWithNoRemote(t *testing.
 // account for. A second task whose standing copy is a repository of the
 // wrong shape is refused with the shape's own token, so the two refusals
 // read apart in the history.
+//
+// The retry sweeps each standing copy before its claim, and that sweep is
+// refused, leaving the retry for the next start, while any process of this
+// host that it cannot read runs, as P6 requires. Such a process can start
+// after service.RequireSweepClearsHere looked and be gone before the task is
+// read (#592), so every sweep is recorded, the start must have asked exactly
+// one of each copy, and each is held to service.SweepsAsked.UntilClear,
+// which meets a refusal its own answer puts on processes the test did not
+// place in the copy by opening the next service, the next start. A refused
+// sweep stops the retry before its claim, so the next start reads what this
+// one read. Once both sweeps have cleared, a task that does not read failed
+// from the refusal fails the test: no sweep explains it.
 func TestARetryAfterACrashRefusesTheHalfWrittenCopyAndLeavesIt(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
@@ -293,23 +305,38 @@ func TestARetryAfterACrashRefusesTheHalfWrittenCopyAndLeavesIt(t *testing.T) {
 		records := openRecords(t, h)
 		defer func() { _ = records.Close() }()
 		for _, id := range []string{half, wrong} {
-			if _, err := records.BeginTaskAttempt(t.Context(), id, 0); err != nil {
+			if _, err := records.BeginFirstTaskAttempt(t.Context(), id, store.OnThisMachine()); err != nil {
 				t.Fatalf("beginning the crashed attempt: %v", err)
 			}
 		}
 	}()
 
-	withService(t, h, func(running serviceUnderTest) {
-		for _, id := range []string{half, wrong} {
-			if got := taskState(t, running.client, id); got.State != taskstate.Failed || got.Source != taskstate.SourceEvent {
-				service.FatalUnlessSweepsStoppedClearing(t, unestablished, "after the retry task %s resolves %s from %s, want failed from the refusal", id, got.State, got.Source)
-			} else if detail := got.Detail.Or(""); strings.Contains(detail, string(taskstate.RefusedNotIsolated)) ||
-				strings.Contains(detail, string(taskstate.RefusedWrongShape)) {
-				t.Fatalf("the resolution of %s carries the reason in its detail %q; the reason is evidence in the "+
-					"history, not part of the answer", id, detail)
-			}
+	o, sweeps := service.WithSweepsRecordedForTest(options(t, h))
+	running, closeService := openService(t, o)
+	defer func() { closeService() }()
+	for _, id := range []string{half, wrong} {
+		copyPath, _ := h.TaskCopy(id)
+		if n := sweeps.Of(copyPath); n != 1 {
+			t.Fatalf("the start asked %d sweep(s) of task %s's standing copy %s, want the retry's one", n, id, copyPath)
 		}
-	})
+	}
+	for _, id := range []string{half, wrong} {
+		copyPath, _ := h.TaskCopy(id)
+		sweeps.UntilClear(t, unestablished, copyPath, func() {
+			closeService()
+			running, closeService = openService(t, o)
+		})
+	}
+	for _, id := range []string{half, wrong} {
+		if got := taskState(t, running.client, id); got.State != taskstate.Failed || got.Source != taskstate.SourceEvent {
+			t.Fatalf("after the retry, whose sweep of the copy cleared, task %s resolves %s from %s, want failed from the refusal", id, got.State, got.Source)
+		} else if detail := got.Detail.Or(""); strings.Contains(detail, string(taskstate.RefusedNotIsolated)) ||
+			strings.Contains(detail, string(taskstate.RefusedWrongShape)) {
+			t.Fatalf("the resolution of %s carries the reason in its detail %q; the reason is evidence in the "+
+				"history, not part of the answer", id, detail)
+		}
+	}
+	closeService()
 
 	if got, err := os.ReadFile(stray); err != nil || string(got) != "left by a service that died\n" {
 		t.Fatalf("the half-written path was not left as found: %q, %v", got, err)

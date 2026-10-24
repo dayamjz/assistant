@@ -14,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -235,7 +236,8 @@ func unprovenLines(t *testing.T, w launched) int {
 // task whose copy holds a commit that reached no upstream lands while its
 // worker runs. The pass ends the worker and asks the decision once, which
 // refuses as unproven; further passes, at the beacon's floor, do not ask
-// again for the same terminal, which is the pass's bound. A stop then asks
+// again for the same terminal within the spacing landed.go leaves between
+// two asks, which is minutes. A stop then asks
 // once more and registers no hold, and the decision refuses again: the copy
 // stands with the commit in it, no cleanup record is written, and the task
 // stays Landed. P6: nothing the worker committed is lost to the stop or to
@@ -292,6 +294,54 @@ func TestALandedCopyWhoseProofFailsIsKeptAfterTheStop(t *testing.T) {
 		}
 		if head := git(t, copyPath, "rev-parse", "HEAD"); head != unpushed {
 			t.Fatalf("the copy's head is %s after the stop, want the unpushed commit %s", head, unpushed)
+		}
+	})
+}
+
+// The pass asks again, on its spacing and up to its bound, for a landed task
+// whose cleanup the decision refused under a Dead terminal, rather than
+// remembering the terminal as tried for good: a refusal can change with the
+// world, and only a later ask lets a removal follow. The copy holds a commit
+// that reached no upstream, so every ask refuses as unproven. With the
+// spacing at the beacon's floor, the decision is asked LandedCleanupAsks
+// times over the one dead terminal and then no more, read over several
+// further spacings; the copy stands with the commit in it and no cleanup
+// record is written (P6, P12). The bound is read over wall time, so a pass
+// delayed past it would leave the last assertion unexercised rather than
+// failed.
+func TestARefusedLandedCleanupIsAskedAgainUpToItsBound(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P12)
+	principles.Cite(t, principles.P6)
+	spacing := func(o service.Options) service.Options { return service.WithCleanupAskSpacingForTest(o, time.Second) }
+	streamWorkerWith(t, "task/askagain", passingConfig, spacing, func(w launched, _ *standin.Agent) {
+		copyPath := resolvedCopy(t, w.home, w.task)
+		if err := os.WriteFile(copyPath+"/unpushed.txt", []byte("work that reached no upstream\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		git(t, copyPath, "add", "unpushed.txt")
+		git(t, copyPath, "commit", "--quiet", "-m", "work that reached no upstream")
+		unpushed := git(t, copyPath, "rev-parse", "HEAD")
+		land(t, w, "task/askagain")
+
+		deadline := time.Now().Add(60 * time.Second)
+		for unprovenLines(t, w) < service.LandedCleanupAsks {
+			if !time.Now().Before(deadline) {
+				log, _ := os.ReadFile(w.home.ServiceLog())
+				t.Fatalf("the decision was asked %d times, want %d over the dead terminal:\n%s",
+					unprovenLines(t, w), service.LandedCleanupAsks, log)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		time.Sleep(4 * time.Second)
+		if n := unprovenLines(t, w); n != service.LandedCleanupAsks {
+			t.Fatalf("the decision was asked %d times over one dead terminal, want the bound %d", n, service.LandedCleanupAsks)
+		}
+		if _, err := recordsOf(t, w.home).TaskCleanup(t.Context(), w.task); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("a cleanup record was written for a copy whose work reached no upstream: %v", err)
+		}
+		if head := git(t, copyPath, "rev-parse", "HEAD"); head != unpushed {
+			t.Fatalf("the copy's head is %s, want the unpushed commit %s", head, unpushed)
 		}
 	})
 }

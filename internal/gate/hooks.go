@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 const (
@@ -92,8 +94,7 @@ func installHooks(repo, home, id, command string) error {
 		if err := preserveCustomHook(dir, hook.name); err != nil {
 			return err
 		}
-		script := hookScript(hook, home, id, command)
-		if err := replaceFile(filepath.Join(dir, hook.name), []byte(script), hookMode); err != nil {
+		if err := writeHook(filepath.Join(dir, hook.name), hookScript(hook, home, id, command)); err != nil {
 			return err
 		}
 	}
@@ -141,7 +142,18 @@ func writeSeal(repo, path string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating %s: %w", dir, err)
 	}
-	return replaceFile(path, []byte(sealScript()), hookMode)
+	return writeHook(path, sealScript())
+}
+
+// writeHook puts script in place at path as a hook, through
+// procgroup.WriteProgram: git runs a hook as a program, and a push may
+// arrive as soon as it is in place. The replacement is whole, so a push
+// that runs while a hook is replaced runs the old hook or the new one.
+func writeHook(path, script string) error {
+	if err := procgroup.WriteProgram(path, []byte(script), hookMode); err != nil {
+		return fmt.Errorf("gate: writing the hook %s: %w", path, err)
+	}
+	return nil
 }
 
 // sealScript renders the admission hook a sealed gate refuses with. It names

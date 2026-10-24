@@ -220,16 +220,16 @@ func TestAcknowledgeAllRefusesAMixedBatchWhole(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := appended.Wake.ID
-	if err := s.AcknowledgeAll(ctx, []int64{id}, []int64{99}, AcknowledgedByCoordinator()); !errors.Is(err, ErrWakeUnknown) {
+	if err := s.AcknowledgeAll(ctx, []int64{id}, []int64{99}, nil, AcknowledgedByCoordinator()); !errors.Is(err, ErrWakeUnknown) {
 		t.Fatalf("the mixed batch = %v, want ErrWakeUnknown", err)
 	}
 	if rows, err := s.TaskWakes(ctx, "abcdefghij23"); err != nil || len(rows) != 1 || !rows[0].Queued() {
 		t.Fatalf("after the refusal the task's wakes are %+v (%v), want the one still queued", rows, err)
 	}
-	if err := s.AcknowledgeAll(ctx, nil, nil, AcknowledgedByCoordinator()); err == nil {
+	if err := s.AcknowledgeAll(ctx, nil, nil, nil, AcknowledgedByCoordinator()); err == nil {
 		t.Fatal("an empty batch was accepted")
 	}
-	if err := s.AcknowledgeAll(ctx, []int64{id}, nil, AcknowledgedByCoordinator()); err != nil {
+	if err := s.AcknowledgeAll(ctx, []int64{id}, nil, nil, AcknowledgedByCoordinator()); err != nil {
 		t.Fatal(err)
 	}
 	if rows, err := s.TaskWakes(ctx, "abcdefghij23"); err != nil || rows[0].Queued() {

@@ -43,6 +43,8 @@ type incorporating struct {
 	// baseCommit is the base as the upstream holds it now, fetched by the
 	// caller, and empty when the upstream holds no base.
 	baseCommit string
+	// recorder records a replay that applied and was kept.
+	recorder rebaseRecorder
 }
 
 // incorporateBranch brings into the run's head the commits the branch under
@@ -163,6 +165,9 @@ func incorporateBranch(ctx context.Context, copied *vcs.Repository, f incorporat
 			}
 			return pipeline.Output{Report: replayNotVerified(f, target, observed, before, replayed, own, unverified)},
 				true, nil
+		}
+		if err := f.recorder.record(ctx, before, observed, head); err != nil {
+			return pipeline.Output{}, false, err
 		}
 	}
 	writes := map[pipeline.Key]graph.Value{pipeline.KeyHead: graph.TextValue(head)}
