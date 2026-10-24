@@ -100,7 +100,7 @@ import "testing"
 func TestPasses(t *testing.T) {}
 """,
     "fail/fail_test.go": """package fail
-import "testing"
+import ("fmt"; "strings"; "testing")
 func TestTop(t *testing.T) {
 	t.Logf("claims PRD principle P6")
 	t.Errorf("the first reason")
@@ -109,12 +109,67 @@ func TestTop(t *testing.T) {
 func TestParent(t *testing.T) {
 	t.Run("sub a", func(t *testing.T) { t.Fatal("sub a broke") })
 	t.Run("sub b", func(t *testing.T) {})
+	t.Run("sub c", func(t *testing.T) {
+		t.Run("inner", func(t *testing.T) { t.Error("inner broke") })
+	})
 }
-// A test may log another go test's output, a failing subtest included.
-// Indented by t.Log, it is not this package's.
+// A test may log another go test's output, failing subtests included, whose
+// names this package's passing tests and subtests also have. Written through t.Log or
+// t.Output, it is not this package's.
+func TestFixture(t *testing.T) {
+	t.Run("child", func(t *testing.T) {})
+}
 func TestLogsAFixturesOutput(t *testing.T) {
-	t.Log("fixture output:\\n=== RUN   TestFixture/child\\n    --- FAIL: TestFixture/child (0.00s)\\n" +
-		"--- FAIL: TestFixture (0.00s)\\nFAIL\\tgithub.com/x/y\\t0.1s")
+	t.Log(fixtureOutput)
+	fmt.Fprint(t.Output(), fixtureOutput)
+	writeTrimmed(t, fixtureOutput)
+	t.Run("deeper", func(t *testing.T) {
+		t.Log(fixtureOutput)
+		fmt.Fprint(t.Output(), fixtureOutput)
+		writeTrimmed(t, fixtureOutput)
+	})
+}
+// Each line trimmed, so t.Output puts the subtest's --- FAIL four spaces in,
+// at the column of a real one.
+func writeTrimmed(t *testing.T, out string) {
+	for _, line := range strings.Split(out, "\\n") {
+		fmt.Fprintln(t.Output(), strings.TrimSpace(line))
+	}
+}
+const fixtureOutput = "=== RUN   TestFixture\\n=== RUN   TestFixture/child\\n" +
+	"    fixture_test.go:9: the fixture's reason\\n" +
+	"    --- FAIL: TestFixture/child (0.00s)\\n    --- FAIL: TestParent/sub_b (0.00s)\\n" +
+	"--- FAIL: TestFixture (0.00s)\\n" +
+	"FAIL\\tgithub.com/x/y\\t0.1s\\n"
+// A failing test's own message, not one in output it wrote before it.
+func TestFailsAfterWritingAFixturesOutput(t *testing.T) {
+	fmt.Fprint(t.Output(), fixtureOutput)
+	t.Error("its own reason")
+}
+""",
+    "logs/logs_test.go": """package logs
+import ("fmt"; "strings"; "testing")
+// Only passing tests, one of which writes another go test's failing output.
+func TestFixture(t *testing.T) {
+	t.Run("child", func(t *testing.T) {})
+}
+func TestLogsAFixturesOutput(t *testing.T) {
+	out := "=== RUN   TestFixture/child\\n    --- FAIL: TestFixture/child (0.00s)\\n--- FAIL: TestFixture (0.00s)\\n"
+	t.Log(out)
+	fmt.Fprint(t.Output(), out)
+	for _, line := range strings.Split(out, "\\n") {
+		fmt.Fprintln(t.Output(), strings.TrimSpace(line))
+	}
+}
+""",
+    "writes/writes_test.go": """package writes
+import ("fmt"; "testing")
+// A passing test that writes a fixture's failing output, of tests this
+// package does not have.
+func TestWritesAFixturesOutput(t *testing.T) {
+	out := "=== RUN   TestOther/child\\n    --- FAIL: TestOther/child (0.00s)\\n--- FAIL: TestOther (0.00s)\\n"
+	t.Log(out)
+	fmt.Fprint(t.Output(), out)
 }
 """,
     "timeout/timeout_test.go": """package timeout
@@ -152,7 +207,7 @@ class RealGoTestOutputTest(unittest.TestCase):
                 (root / name).parent.mkdir(parents=True, exist_ok=True)
                 (root / name).write_text(source)
             env = {**os.environ, "GOFLAGS": "", "GOWORK": "off"}
-            result = subprocess.run(["go", "test", "-v", "-count=1", "-timeout", "5s", "./..."],
+            result = subprocess.run(["go", "test", "-v", "-count=1", "-p", "2", "-timeout", "5s", "./..."],
                                     cwd=root, env=env, capture_output=True, text=True, timeout=300)
         cls.output = (result.stdout + result.stderr).split("\n")
         cls.status = result.returncode
@@ -169,12 +224,18 @@ class RealGoTestOutputTest(unittest.TestCase):
             "build: build setup failed",
             "package: exits (package)",
             "package: panics (package)",
+            "test: fail TestFailsAfterWritingAFixturesOutput",
             "test: fail TestParent",
             "test: fail TestTop",
             "timeout: timeout TestSlow",
         ], "\n".join(self.output))
         self.assertEqual(records["test: fail TestTop"].detail.split(": ", 1)[1], "the first reason")
-        self.assertEqual(records["test: fail TestParent"].subtests, ["TestParent/sub_a"])
+        self.assertEqual(records["test: fail TestFailsAfterWritingAFixturesOutput"].detail.split(": ", 1)[1],
+                         "its own reason")
+        self.assertEqual(records["test: fail TestParent"].subtests,
+                         ["TestParent/sub_a", "TestParent/sub_c", "TestParent/sub_c/inner"])
+        # TestParent logged nothing itself; its first failed subtest says why.
+        self.assertRegex(records["test: fail TestParent"].detail, r"^fail_test\.go:\d+: sub a broke$")
         self.assertEqual(records["timeout: timeout TestSlow"].subtests, ["TestSlow/inner"])
         self.assertEqual(records["package: panics (package)"].detail, "panic: boom at init")
         self.assertEqual(records["package: exits (package)"].detail, "no failing test was named")
@@ -183,6 +244,49 @@ class RealGoTestOutputTest(unittest.TestCase):
         raw, _ = self.records_raw()
         framed_records, _ = self.records(framed(self.output))
         self.assertEqual(sorted(raw), sorted(framed_records))
+
+    def test_output_cut_inside_a_result_block_names_the_test_and_its_failed_subtest(self):
+        # A cancel during the print can stop the output anywhere, here just
+        # after TestParent's first failed subtest, before its package's
+        # result line. The test is named under the cut-off package, with
+        # that subtest, described by the subtest's message.
+        cut = next(i for i, l in enumerate(self.output) if l == "    --- FAIL: TestParent/sub_a (0.00s)")
+        start = max(i for i in range(cut) if ledger.GO_PACKAGE_END.match(self.output[i]))
+        lines = framed(self.output[start + 1:cut + 1])
+        group = next(i for i, l in enumerate(lines) if l.endswith(ledger.GROUP_START))
+        group_end = next(i for i, l in enumerate(lines) if i > group and l.endswith(ledger.GROUP_END))
+        records, unattributed = self.records(lines[:group_end])
+        self.assertFalse(unattributed)
+        self.assertEqual(sorted(records), ["test: (output cut off) TestParent", "test: (output cut off) TestTop"])
+        parent = records["test: (output cut off) TestParent"]
+        self.assertEqual(parent.subtests, ["TestParent/sub_a"])
+        self.assertEqual(parent.token, "TestParent")
+        self.assertRegex(parent.detail, r"^fail_test\.go:\d+: sub a broke$")
+
+    def test_a_fixtures_failure_written_by_a_passing_package_is_not_one_when_the_output_is_cut(self):
+        # The logs and writes packages pass; a test in each writes a
+        # fixture's failing output, of tests the package also has (logs)
+        # or does not (writes). Cut before the package's own ok line (a
+        # cancel during the print), its output names no failure, so the job
+        # is unattributed rather than a made-up cut-off failure.
+        for package in ("logs", "writes"):
+            with self.subTest(package=package):
+                self.check_cut_before_the_ok_line_names_nothing(package)
+
+    def check_cut_before_the_ok_line_names_nothing(self, package):
+        ok = f"ok  \tgithub.com/example/m/{package}\t"
+        end = next(i for i, l in enumerate(self.output) if l.startswith(ok))
+        start = max((i for i in range(end) if ledger.GO_PACKAGE_END.match(self.output[i])), default=-1)
+        block = self.output[start + 1:end]
+        self.assertTrue(block[0].startswith("=== RUN   Test"), "\n".join(block))
+        self.assertTrue(any("    --- FAIL: Test" in l and "/child" in l for l in block), "\n".join(block))
+        lines = framed(block)
+        start = next(i for i, l in enumerate(lines) if l.endswith(ledger.GROUP_START))
+        group_end = next(i for i, l in enumerate(lines) if i > start and l.endswith(ledger.GROUP_END))
+        self.assertIn(block[-1], lines[group_end - 1])
+        records, unattributed = self.records(lines[:group_end])
+        self.assertEqual(records, {})
+        self.assertTrue(unattributed)
 
     def records_raw(self):
         records, unattributed, _ = ledger.parse_lines(self.output, raw=True)
@@ -212,22 +316,6 @@ class LoudTest(unittest.TestCase):
         self.assertEqual(sorted(r.key for r in records), [
             "leak: internal/vcs something new 77",
             "run-leak: (whole run) unparsed LEAK socket-ish /tmp/xN"])
-
-    def test_a_failed_subtest_names_its_test_without_the_parents_line(self):
-        # go test -v prints a parent's --- FAIL line before its subtests'
-        # (checked with Go 1.26, parallel subtests included), so output cut
-        # between the two still names the parent. The parser does not rely
-        # on that order: a failed subtest alone names its test.
-        lines = framed(["=== RUN   TestParent", "=== RUN   TestParent/sub_a",
-                        "    x_test.go:6: sub a broke", "    --- FAIL: TestParent/sub_a (0.00s)"])
-        start = next(i for i, l in enumerate(lines) if l.endswith(ledger.GROUP_START))
-        end = next(i for i, l in enumerate(lines) if i > start and l.endswith(ledger.GROUP_END))
-        records, unattributed, _ = ledger.parse_lines(lines[:end])  # cut before the group ends
-        keys = {r.key: r for r in records}
-        self.assertFalse(unattributed)
-        self.assertEqual(sorted(keys), ["test: (output cut off) TestParent"])
-        self.assertEqual(keys["test: (output cut off) TestParent"].subtests, ["TestParent/sub_a"])
-        self.assertEqual(keys["test: (output cut off) TestParent"].token, "TestParent")
 
     def test_a_group_with_nothing_named_in_it_is_unattributed(self):
         records, unattributed, _ = ledger.parse_lines(framed(["something went wrong", "FAIL"]))

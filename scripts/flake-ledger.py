@@ -22,11 +22,18 @@ What it reads, and from where:
   (a build failure, a panic outside a test, or a per-package leak). A
   failure the output stopped after, before its package's result line (a
   cancel during the print), is counted under the package "(output cut off)".
-  The package's own lines are told apart from output a test logged by
-  where they start: go test -v prints === RUN and a test's --- FAIL at
-  column 0, and t.Log indents what it logs. Output a test writes to stdout
-  itself, unindented, cannot be told apart in text; go test -json can
-  (#601).
+  The package's own lines are told apart from what a test writes by
+  where they sit. go test -v prints === lines and a top-level test's
+  --- line at column 0, and its subtests' --- lines indented right
+  after that one, with no other line between; what a test writes
+  through t.Log or t.Output starts four spaces in (MESSAGE_INDENT). So
+  a failed subtest is read only in its top-level test's result block
+  (_result_line), and a --- FAIL line a test writes, another go test's
+  output for instance, names nothing however it is laid out. A test's
+  first message is read only at four spaces, so a deeper file:line in
+  output it writes is not taken for its own. What a test writes to
+  stdout itself, unindented, cannot be told apart in text; go test
+  -json can (#601).
 - The leak check's leftovers, from the same group: `LEAK package=...` is a
   per-package leak, a `LEAK` line without `package=` a whole-run leftover.
   The self-test's planted leftovers print outside the group and are not
@@ -80,10 +87,14 @@ STAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ")
 GROUP_START = "##[group]full test output"
 GROUP_END = "##[endgroup]"
 STEP_START = "##[group]Run "
-GO_FAIL = re.compile(r"^(\s*)--- FAIL: (\S+)")
+GO_RESULT = re.compile(r"^(\s*)--- (FAIL|PASS|SKIP): (\S+)")
 GO_PACKAGE_END = re.compile(r"^(ok|FAIL)\s+(\S+)(?:\s+(\[[^\]]+\]|\S+))?")
 GO_CONTEXT = re.compile(r"^=== (?:RUN|CONT|NAME)\s+(\S+)")
-GO_MESSAGE = re.compile(r"^\s+(\S+\.go:\d+: .*)")
+GO_MESSAGE = re.compile(r"^(\s+)(\S+\.go:\d+: .*)")
+# go test -v starts the first line of each t.Log or t.Error four spaces in,
+# at any depth of test, and its later lines eight; each line written to
+# t.Output also starts four spaces in.
+MESSAGE_INDENT = "    "
 # internal/principles.Cite logs this before a test's own messages; it never
 # says why a test failed.
 CITE_MESSAGE = re.compile(r"^\S+\.go:\d+: claims PRD principle ")
@@ -213,7 +224,9 @@ class LogParser:
         self.records = []
         # Per Go package block, reset at each ok/FAIL package line.
         self.failed_tops, self.failed_subs = set(), set()
-        self.ran = set()  # tests and subtests this package's own === RUN lines named
+        # The top-level test whose result block the last line was in: its
+        # --- line at column 0, then its subtests' --- lines (_result_line).
+        self.result_top = None
         self.first = {}  # top-level test -> the first message logged under it
         self.messages = {}
         self.context = ""
@@ -278,6 +291,8 @@ class LogParser:
         self._add(Record("unittest", script, name, detail, token=method))
 
     def _go_line(self, line):
+        if self._result_line(line):
+            return
         if self.reading_running:
             running = GO_RUNNING.match(line)
             if running:
@@ -288,27 +303,17 @@ class LogParser:
             self.reading_running = False
         context = GO_CONTEXT.match(line)
         if context:
-            # At column 0, so the package's own: a test's logged output is
-            # indented by t.Log.
+            # At column 0, so the package's own: what a test writes is
+            # indented (MESSAGE_INDENT).
             self.context = context.group(1)
-            self.ran.add(context.group(1))
             return
         message = GO_MESSAGE.match(line)
         if message and self.context and self.context not in self.messages \
-                and not CITE_MESSAGE.match(message.group(1)):
-            self.messages[self.context] = message.group(1)[:200]
-        failed = GO_FAIL.match(line)
-        if failed:
-            indent, name = failed.group(1), failed.group(2)
-            if not indent:
-                self.failed_tops.add(name)
-                self.first.setdefault(name, self.messages.get(name, ""))
-            elif "/" in name:
-                # A subtest. An indented name with no slash is output a test
-                # logged (a fixture's own go test), not a test of this package.
-                self.failed_subs.add(name)
-                self.first.setdefault(name.split("/", 1)[0], self.messages.get(name, ""))
-            return
+                and message.group(1) == MESSAGE_INDENT \
+                and not CITE_MESSAGE.match(message.group(2)):
+            # The test's own message; a deeper file:line is a line of
+            # something it wrote, such as a fixture's output.
+            self.messages[self.context] = message.group(2)[:200]
         timeout = GO_TIMEOUT.match(line)
         if timeout:
             self.timeout = (timeout.group(1), [])
@@ -345,6 +350,34 @@ class LogParser:
         if end and "/" in end.group(2):
             self._end_package(end.group(1), short_package(end.group(2)), end.group(3) or "")
 
+    def _result_line(self, line):
+        """Reads a --- line of the package's own, and says whether it was one.
+
+        A top-level test's --- line starts at column 0, where nothing a test
+        writes through t.Log or t.Output can; go test -v prints its
+        subtests' --- lines right after it, indented, with no other line
+        between. An indented --- line anywhere else is one a test wrote (a
+        fixture's own go test output, say) and names nothing here.
+        """
+        result = GO_RESULT.match(line)
+        indent, verdict, name = result.groups() if result else ("", "", "")
+        if result and not indent:
+            self.result_top = name
+        elif not (result and self.result_top):
+            self.result_top = None
+            return False
+        if verdict == "FAIL":
+            top = name.split("/", 1)[0]
+            if indent:
+                self.failed_subs.add(name)
+            else:
+                self.failed_tops.add(name)
+            # A test that logged nothing itself is described by its first
+            # failed subtest's message.
+            if not self.first.get(top):
+                self.first[top] = self.messages.get(name, "")
+        return True
+
     def _package_leak(self, package, rest):
         self.block_leaks.append(rest)
         process = LEAK_PACKAGE_PROCESS.match(rest)
@@ -364,7 +397,7 @@ class LogParser:
         if verdict == "FAIL":
             self._fail_package(package, suffix)
         self.failed_tops, self.failed_subs, self.first = set(), set(), {}
-        self.ran = set()
+        self.result_top = None
         self.messages = {}
         self.context = ""
         self.block_leaks = []
@@ -376,12 +409,7 @@ class LogParser:
         before = len(self.records)
         running = self.timeout[1] if self.timeout else []
         running_tops = {t.split("/", 1)[0] for t in running}
-        # A failed subtest this package ran names its test even when the
-        # test's own --- FAIL line never printed (go test -v prints it first,
-        # but output can be cut anywhere). One it never ran is output a test
-        # logged, such as a fixture's own go test, and names nothing.
-        sub_tops = {s.split("/", 1)[0] for s in self.failed_subs if s in self.ran}
-        for top in sorted(self.failed_tops | running_tops | sub_tops):
+        for top in sorted(self.failed_tops | running_tops):
             subtests = [s for s in self.failed_subs | set(running) if s.startswith(top + "/")]
             if top in running_tops:
                 detail = f"test timed out after {self.timeout[0]}"
