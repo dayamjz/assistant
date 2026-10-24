@@ -336,22 +336,17 @@ type Cleaner struct {
 	// git are the options every repository this Cleaner opens is opened
 	// with, from gitOptions.
 	git []vcs.Option
-	// betweenDiscardReadAndCheck runs in a discard after its read of the
-	// loss and before the copy's state is read again and compared. It is
-	// nil in production and set only by this package's tests, which use it
-	// to change the copy between the read the digest is checked on and the
-	// check.
+	// betweenDiscardReadAndCheck runs in a discard once the digest is
+	// checked and before anything is set aside. It is nil in production
+	// and set only by this package's tests, which use it to change the copy
+	// between the read the digest is checked on and what is set aside.
 	betweenDiscardReadAndCheck func()
-	// betweenWorktreeRemovalAndRecord runs in a discard of a run's copy
-	// after the worktree's directory is removed and before its directory in
-	// the gate is checked and git removes its record. It is nil in
-	// production and set only through BetweenWorktreeRemovalAndRecordForTest.
-	betweenWorktreeRemovalAndRecord func()
-	// inRecordRemoval runs in a discard of a run's copy after the last
-	// check of the worktree's record in the gate and before anything in it
-	// is removed. It is nil in production and set only through
-	// InRecordRemovalForTest.
-	inRecordRemoval func()
+	// betweenAsideAndCheck runs in a discard after what was shown is set
+	// aside and before the copy is read again, and an error it returns ends
+	// the discard there, as a service that stopped there leaves it. It is
+	// nil in production and set only by this package's tests and through
+	// BetweenAsideAndCheckForTest.
+	betweenAsideAndCheck func() error
 	// betweenProofAndRemoval runs after the proof is recorded and before
 	// the copy is re-read and removed. It is nil in production and set only
 	// by this package's tests, which use it to change the copy inside the
@@ -407,29 +402,17 @@ func (c *Cleaner) InterruptBeforeMarkForTest(tb testing.TB, f func() error) erro
 	return nil
 }
 
-// BetweenWorktreeRemovalAndRecordForTest makes every discard of a run's
-// copy this Cleaner makes run f once the worktree's directory is removed
-// and before its directory in the gate is checked and its record removed,
-// so a test can write into that moment. It takes the test and refuses a nil
-// one, on InterruptBeforeMarkForTest's terms.
-func (c *Cleaner) BetweenWorktreeRemovalAndRecordForTest(tb testing.TB, f func()) error {
-	if tb == nil {
-		return errors.New("tasks: BetweenWorktreeRemovalAndRecordForTest is a test's seam and takes the test")
-	}
-	c.betweenWorktreeRemovalAndRecord = f
-	return nil
-}
-
-// InRecordRemovalForTest makes every discard of a run's copy this Cleaner
-// makes run f after the last check of the worktree's record in the gate
-// and before anything in it is removed, so a test can write into that
-// moment. It takes the test and refuses a nil one, on
+// BetweenAsideAndCheckForTest makes every discard this Cleaner makes run f
+// once what the discard showed is set aside and before the copy is read
+// again, so a test can write into that moment; an error f returns ends the
+// discard there with what was set aside left standing, as a service that
+// stopped there leaves it. It takes the test and refuses a nil one, on
 // InterruptBeforeMarkForTest's terms.
-func (c *Cleaner) InRecordRemovalForTest(tb testing.TB, f func()) error {
+func (c *Cleaner) BetweenAsideAndCheckForTest(tb testing.TB, f func() error) error {
 	if tb == nil {
-		return errors.New("tasks: InRecordRemovalForTest is a test's seam and takes the test")
+		return errors.New("tasks: BetweenAsideAndCheckForTest is a test's seam and takes the test")
 	}
-	c.inRecordRemoval = f
+	c.betweenAsideAndCheck = f
 	return nil
 }
 

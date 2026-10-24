@@ -822,18 +822,18 @@ func TestARunsDiscardCountsOnlyWhatItsRemovalDestroys(t *testing.T) {
 	})
 }
 
-// A run's discard removes its worktree only as the copy was read, the
-// final full review of 74949eb, finding 1, for a run's linked worktree: a
-// commit made in it immediately before the removal, which writes the
-// worktree's own directory in the gate and no file of the worktree's,
-// refuses the confirmed discard with the worktree standing at that commit
-// and the entry open; and a file written into that directory once the
-// worktree is removed, before the record is checked or after its last
-// check (the delta review of 8ddafcb, which saw git's forced removal
-// delete one written then), leaves git's record of it standing with the
-// file, the worktree itself gone as shown and the entry discarded, the
-// record whole when the file came before its last check. A worktree whose
-// .git file points at a record outside the gate's worktrees directory is
+// A run's discard removes its worktree only when, with what it showed set
+// aside, nothing of the worktree is left that the removal would lose, the
+// owner's decision of 2026-10-24 after rounds 15 to 21: a commit made in it
+// immediately before what was shown is set aside, which writes the
+// worktree's own directory in the gate and no file of the worktree's
+// (the final full review of 74949eb, finding 1), and a file written into
+// that directory once what was shown is set aside (where the delta review
+// of 8ddafcb saw git's forced removal delete one), each refuse the
+// confirmed discard with the worktree standing at its HEAD with its
+// files, the written file where it was written, nothing left set aside and
+// the entry open with its confirmation withdrawn. A worktree whose .git
+// file points at a record outside the gate's worktrees directory is
 // refused with nothing removed, the record standing where it was; and so
 // is one whose .git file points at another worktree's record in the same
 // gate (the delta review of e036141), the other worktree keeping its HEAD,
@@ -848,15 +848,14 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
 	const (
-		beforeRemoval = "a commit immediately before the removal"
-		duringRemoval = "a file written into the record during the removal"
-		afterCheck    = "a file written into the record after its last check"
+		beforeRemoval = "a commit immediately before what was shown is set aside"
+		afterAside    = "a file written into the record once what was shown is set aside"
 		outsideGate   = "a record outside the gate"
 		siblingRecord = "the record of another copy"
 		siblingLink   = "a .git linked to another copy's"
 		control       = "nothing written, the positive control"
 	)
-	for _, c := range []string{beforeRemoval, duringRemoval, afterCheck, outsideGate, siblingRecord, siblingLink, control} {
+	for _, c := range []string{beforeRemoval, afterAside, outsideGate, siblingRecord, siblingLink, control} {
 		t.Run(c, func(t *testing.T) {
 			t.Parallel()
 			h := newHome(t)
@@ -916,10 +915,8 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 			switch c {
 			case beforeRemoval:
 				o = service.WithDiscardRemovalSeamsForTest(t, o, pause, nil)
-			case duringRemoval:
-				o = service.WithWorktreeRemovalSeamForTest(t, o, pause)
-			case afterCheck:
-				o = service.WithRecordRemovalSeamForTest(t, o, pause)
+			case afterAside:
+				o = service.WithDiscardAsideSeamForTest(t, o, func() error { pause(); return nil })
 			}
 			withServiceOptions(t, o, func(under serviceUnderTest) {
 				ctx := t.Context()
@@ -935,7 +932,8 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 				go func() {
 					answered <- under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, shown.Loss.Digest), &done)
 				}()
-				var committed string
+				var committed, headBefore string
+				headBefore = git(t, entry.CopyPath, "rev-parse", "HEAD")
 				if c != control && c != outsideGate && c != siblingRecord && c != siblingLink {
 					select {
 					case <-paused:
@@ -944,13 +942,10 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 					}
 					switch c {
 					case beforeRemoval:
-						git(t, entry.CopyPath, "commit", "--quiet", "--allow-empty", "-m", "made immediately before the removal")
+						git(t, entry.CopyPath, "commit", "--quiet", "--allow-empty", "-m", "made immediately before what was shown is set aside")
 						committed = git(t, entry.CopyPath, "rev-parse", "HEAD")
-					case duringRemoval, afterCheck:
-						if _, err := os.Stat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
-							t.Fatalf("the worktree stands at the seam after its removal: %v", err)
-						}
-						if err := writeFile(filepath.Join(record, "written-during-removal"), "kept with the record\n"); err != nil {
+					case afterAside:
+						if err := writeFile(filepath.Join(record, "written-once-set-aside"), "kept with the record\n"); err != nil {
 							t.Fatal(err)
 						}
 					}
@@ -958,25 +953,27 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 				}
 				err := <-answered
 				switch c {
-				case beforeRemoval:
+				case beforeRemoval, afterAside:
 					if !errors.Is(err, ipc.ErrRefused) {
-						t.Fatalf("the confirmed discard over a commit made before the removal = %+v, %v; want it refused", done, err)
+						t.Fatalf("the confirmed discard over %s = %+v, %v; want it refused", c, done, err)
 					}
-					if head := git(t, entry.CopyPath, "rev-parse", "HEAD"); head != committed {
-						t.Fatalf("the worktree's HEAD reads %s after the refusal; want the commit %s", head, committed)
+					want := headBefore
+					if c == beforeRemoval {
+						want = committed
+					}
+					if head := git(t, entry.CopyPath, "rev-parse", "HEAD"); head != want {
+						t.Fatalf("the worktree's HEAD reads %s after the refusal; want %s", head, want)
+					}
+					if c == afterAside {
+						if raw, err := os.ReadFile(filepath.Join(record, "written-once-set-aside")); err != nil || string(raw) != "kept with the record\n" {
+							t.Fatalf("the file written into the record reads %q, %v; want it standing", raw, err)
+						}
+					}
+					if aside, err := filepath.Glob(filepath.Join(filepath.Dir(entry.CopyPath), ".*.discarding")); err != nil || len(aside) != 0 {
+						t.Fatalf("set aside after the refusal: %v, %v; want nothing (the service log reads:\n%s)", aside, err, readServiceLog(t, h))
 					}
 					if got, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !got.Open() || got.DiscardDigest.IsKnown() {
 						t.Fatalf("the entry reads %+v, %v after the refusal; want it open with its confirmation withdrawn", got, err)
-					}
-				case duringRemoval, afterCheck:
-					if err != nil || done.Effect != machine.KeptWorkDiscarded {
-						t.Fatalf("the confirmed discard with its record written during the removal = %+v, %v; want it discarded", done, err)
-					}
-					if raw, err := os.ReadFile(filepath.Join(record, "written-during-removal")); err != nil || string(raw) != "kept with the record\n" {
-						t.Fatalf("the file written into the record reads %q, %v; want the record left standing with it", raw, err)
-					}
-					if _, err := os.Stat(filepath.Join(record, "HEAD")); c == duringRemoval && err != nil {
-						t.Fatalf("the record's HEAD is gone after a change before its last check: %v; want the record left whole", err)
 					}
 				case outsideGate, siblingRecord, siblingLink:
 					if !errors.Is(err, ipc.ErrRefused) {
@@ -1006,8 +1003,6 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 					if list := git(t, gate, "worktree", "list", "--porcelain"); strings.Contains(list, entry.CopyPath) {
 						t.Fatalf("the gate still lists the worktree:\n%s", list)
 					}
-				}
-				if c != beforeRemoval && c != outsideGate && c != siblingRecord && c != siblingLink {
 					if _, err := os.Stat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
 						t.Fatalf("the worktree stands after the discard: %v", err)
 					}
@@ -1415,4 +1410,96 @@ func TestOneCallCarriesOutADiscardConfirmationAtATime(t *testing.T) {
 			t.Fatalf("the discarded copy still stands: %v", err)
 		}
 	})
+}
+
+// What a discard set aside and did not finish with is put back before an
+// answer reads the copy, the owner's decision of 2026-10-24 that a discard
+// deletes nothing it does not finish: a run's kept worktree holds a file
+// no commit records, shown and confirmed. A discard that stops once it has
+// set that file aside leaves its confirmation standing and the file beside
+// the worktree, and the next discard answer carries the confirmation out
+// on the worktree put back, which removes it. A discard over a file
+// written where the shown one was moved from refuses, the confirmation
+// withdrawn, and leaves both, so the next answer is refused naming what
+// could not be put back; once the file written meanwhile is removed, the
+// next answer puts the shown file back and shows the loss as it was. The
+// positive control for the first is the worktree removed only then;
+// without the put-back the second answer is refused for good.
+func TestADiscardThatDidNotFinishIsPutBackBeforeTheCopyIsRead(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+	for _, c := range []string{"stopped once set aside", "a file written where one was set aside"} {
+		t.Run(c, func(t *testing.T) {
+			t.Parallel()
+			h := newHome(t)
+			subject := newSubject(t)
+			recordRepository(t, h, subject)
+			entry := keptEntryOf(t, h, subject)
+			scratch := filepath.Join(entry.CopyPath, "scratch.txt")
+			if err := writeFile(scratch, "not committed\n"); err != nil {
+				t.Fatal(err)
+			}
+			stopped := errors.New("stopped once what was shown was set aside")
+			var once sync.Once
+			seam := func() error {
+				var err error
+				once.Do(func() {
+					if c == "stopped once set aside" {
+						err = stopped
+						return
+					}
+					err = writeFile(scratch, "written meanwhile\n")
+				})
+				return err
+			}
+			withServiceOptions(t, service.WithDiscardAsideSeamForTest(t, options(t, h), seam), func(under serviceUnderTest) {
+				ctx := t.Context()
+				var shown machine.KeptWorkAnswered
+				if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &shown); err != nil || shown.Loss == nil {
+					t.Fatalf("the discard shown = %+v, %v", shown, err)
+				}
+				var done machine.KeptWorkAnswered
+				if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, shown.Loss.Digest), &done); err == nil {
+					t.Fatalf("the confirmed discard = %+v; want it stopped or refused", done)
+				}
+				if _, err := os.Stat(entry.CopyPath); err != nil {
+					t.Fatalf("the worktree is gone after a discard that did not finish: %v", err)
+				}
+				if c == "stopped once set aside" {
+					if _, err := os.Lstat(scratch); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("scratch.txt stands in the worktree after the stop: %v; the case would test nothing", err)
+					}
+					var again machine.KeptWorkAnswered
+					if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &again); err != nil ||
+						again.Effect != machine.KeptWorkDiscarded {
+						t.Fatalf("the next discard answer = %+v, %v; want the standing confirmation carried out", again, err)
+					}
+					if _, err := os.Stat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("the worktree stands after the confirmation was carried out: %v", err)
+					}
+					return
+				}
+				var refused machine.KeptWorkAnswered
+				err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &refused)
+				if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "scratch.txt") {
+					t.Fatalf("the next discard answer = %+v, %v; want it refused naming scratch.txt", refused, err)
+				}
+				if raw, err := os.ReadFile(scratch); err != nil || string(raw) != "written meanwhile\n" {
+					t.Fatalf("scratch.txt holds %q, %v; want what was written meanwhile", raw, err)
+				}
+				if err := os.Remove(scratch); err != nil {
+					t.Fatal(err)
+				}
+				var again machine.KeptWorkAnswered
+				if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &again); err != nil || again.Loss == nil ||
+					again.Loss.Digest != shown.Loss.Digest {
+					t.Fatalf("the discard shown once the file is removed = %+v, %v; want the loss shown first, %s", again, err, shown.Loss.Digest)
+				}
+				if raw, err := os.ReadFile(scratch); err != nil || string(raw) != "not committed\n" {
+					t.Fatalf("scratch.txt holds %q, %v once put back; want what was shown", raw, err)
+				}
+			})
+		})
+	}
 }

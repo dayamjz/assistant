@@ -343,6 +343,14 @@ var WriteExceptions = []WriteException{
 		Why: "Takes the write permission off the instructions file's directory and puts it back; the modes are a directory's.",
 	},
 	{
+		File: "internal/tasks/kept_aside.go", Function: "(*Cleaner).restoreAside",
+		Why: "Makes a directory a discard emptied again with the mode it had; the mode is a directory's.",
+	},
+	{
+		File: "internal/tasks/kept_aside_test.go", Function: "TestARestoreTakesOutOnlyWhatItWroteAndMakesItsDirectoriesAgain",
+		Why: "Gives a tracked file's directory a mode the umask cannot make, so a restore must put it back; the mode is a directory's.",
+	},
+	{
 		File: "internal/tasks/kept_discard_test.go", Function: "TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown",
 		Why: "Puts back a tracked file's committed mode after a checkout, because a discard's digest reads it; nothing runs the file.",
 	},

@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -811,88 +812,145 @@ func TestALossNamesEveryPathItDestroysThatNothingElseHolds(t *testing.T) {
 	}
 }
 
-// Anything written into the copy after Discard's last read, the one the
-// digest is checked on, refuses the discard and is left as it was written,
-// the final full review of 74949eb, finding 1: a file git ignores is
-// written (the reviewer's sequence), a tracked file is edited, a commit is
-// made, or a file is deleted, at two moments. Between that read and the
-// check of the copy's state, the check refuses with ErrLossChanged and
-// nothing is removed. After the check, immediately before the removal,
-// where Discard's callback runs, the removal itself refuses on reaching
-// the change, which stands as written, and what it removed before that
-// was each entry as it was read, and so shown; a deletion there destroys
-// nothing more and goes ahead, and the loss Discard returns is the one
-// shown: it names a file the loss showed as lost though another process
-// deleted it, and not a clean tracked file it never showed. A cleanup keeping the copy at the moment
-// finds the entry already standing, so nothing but the refusal could have
-// kept the change. The positive control is the same discard with nothing
-// written, which removes the clone. Before the removal was held to the
-// copy as read, every one of these was destroyed with the clone and the
-// discard reported done.
-func TestAnythingWrittenAfterADiscardsLastReadRefusesIt(t *testing.T) {
+// copySnapshot is everything a discard sets aside and puts back, read from
+// the clone at copyPath: its working tree, its references and root
+// references, HEAD, its index and its reflogs, each by what it holds, and
+// whether anything stands beside it where a discard sets things aside.
+func copySnapshot(t *testing.T, copyPath string) string {
+	t.Helper()
+	tree, err := workingState(copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for p, s := range tree {
+		lines = append(lines, fmt.Sprintf("tree %s %v %s", strings.TrimPrefix(p, copyPath), s.mode, s.held))
+	}
+	for _, ref := range strings.Split(strings.TrimSpace(rawGit(t, copyPath, "for-each-ref", "--format=%(refname) %(objectname)")), "\n") {
+		lines = append(lines, "ref "+ref)
+	}
+	if orig, err := rawGitErr(copyPath, "rev-parse", "--verify", "--quiet", "ORIG_HEAD"); err == nil {
+		lines = append(lines, "ORIG_HEAD "+orig)
+	}
+	head := rawGit(t, copyPath, "rev-parse", "HEAD")
+	target, _ := rawGitErr(copyPath, "symbolic-ref", "--quiet", "HEAD")
+	lines = append(lines, "HEAD "+head+" "+target)
+	index, err := hashFile(filepath.Join(copyPath, ".git", "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines = append(lines, "index "+index)
+	if logs, err := readCopyState(filepath.Join(copyPath, ".git", "logs")); err == nil {
+		for p, s := range logs {
+			lines = append(lines, fmt.Sprintf("log %s %s", strings.TrimPrefix(p, copyPath), s.held))
+		}
+	}
+	if _, err := os.Lstat(asideDir(copyPath)); err == nil {
+		lines = append(lines, "aside stands")
+	}
+	slices.Sort(lines)
+	return strings.Join(lines, "\n")
+}
+
+// withoutLines is snapshot, a copySnapshot, without the lines that begin
+// with any of prefixes.
+func withoutLines(snapshot string, prefixes []string) string {
+	var kept []string
+	for _, line := range strings.Split(snapshot, "\n") {
+		if !slices.ContainsFunc(prefixes, func(p string) bool { return strings.HasPrefix(line, p) }) {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
+// A discard deletes only what it showed and the person confirmed, the
+// owner's decision of 2026-10-24 after rounds 15 to 21 each found a way the
+// earlier removal deleted what it had not shown. Every one of those ways is
+// now a refusal that deletes nothing: a file git ignores written after the
+// preview's read (round 15's late write), a tracked file edited, a commit
+// made, a clean tracked file deleted, a file the loss showed edited or
+// deleted and a file inside a directory it showed deleted (rounds 20 and
+// 21), a
+// replacement reference added and a graft file added (round 19), each at
+// two moments, before the discard sets what it showed aside and right
+// after (the changes to what was shown only before, since afterwards it is
+// already aside). Each refuses with ErrLossChanged and the copy, its
+// working tree, references, root references, HEAD, index and reflogs, is
+// as it was with the change made, with nothing left aside; except a commit
+// made once HEAD was moved off the lost commit, which HEAD cannot be put
+// back over without leaving it unnamed, so the discard leaves what it set
+// aside standing, refuses with ErrAsideStands as well, and Loss refuses
+// until it is put back. The commit pushed after the preview is
+// TestALossTakesWhatTheUpstreamHoldsAsHeld's. The positive control is the
+// same discard with nothing written, which removes the clone and leaves
+// nothing aside.
+func TestEveryChangeADiscardDidNotShowRefusesIt(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	type change struct {
 		name  string
-		write func(t *testing.T, copyPath string)
-		// stands fails t unless what write did is still in the copy.
-		stands func(t *testing.T, copyPath string)
+		write func(t *testing.T, copyPath, base string)
+		// touches is what of copySnapshot's lines the change itself makes
+		// differ, which a refusal after setting aside leaves as changed.
+		touches []string
 	}
-	holds := func(name, want string) func(t *testing.T, copyPath string) {
-		return func(t *testing.T, copyPath string) {
-			t.Helper()
-			if raw, err := os.ReadFile(filepath.Join(copyPath, name)); err != nil || string(raw) != want {
-				t.Errorf("%s reads %q, %v after the refusal; want %q", name, raw, err, want)
-			}
-		}
-	}
-	var late string
 	changes := []change{
-		{name: "a file git ignores", write: func(t *testing.T, copyPath string) {
+		{name: "a file git ignores", write: func(t *testing.T, copyPath, _ string) {
 			if err := os.WriteFile(filepath.Join(copyPath, "secret.txt"), []byte("written inside the window\n"), 0o600); err != nil {
 				t.Error(err)
 			}
-		}, stands: holds("secret.txt", "written inside the window\n")},
-		{name: "a tracked file edited", write: func(t *testing.T, copyPath string) {
-			if err := os.WriteFile(filepath.Join(copyPath, "own.txt"), []byte("edited inside the window\n"), 0o600); err != nil {
+		}, touches: []string{"tree /secret.txt "}},
+		{name: "a tracked file edited", write: func(t *testing.T, copyPath, _ string) {
+			if err := os.WriteFile(filepath.Join(copyPath, "f.txt"), []byte("edited inside the window\n"), 0o600); err != nil {
 				t.Error(err)
 			}
-		}, stands: holds("own.txt", "edited inside the window\n")},
-		{name: "a commit", write: func(t *testing.T, copyPath string) {
-			late = strings.TrimSpace(commit(t, copyPath, "late.txt", "committed inside the window\n", "a commit inside the window"))
-		}, stands: func(t *testing.T, copyPath string) {
-			t.Helper()
-			if head := strings.TrimSpace(rawGit(t, copyPath, "rev-parse", "HEAD")); head != late {
-				t.Errorf("HEAD reads %s after the refusal; want the commit made inside the window, %s", head, late)
-			}
+		}, touches: []string{"tree /f.txt "}},
+		{name: "a commit", write: func(t *testing.T, copyPath, _ string) {
+			// Writing no reflog, so the commit moves HEAD and nothing else
+			// a discard sets aside.
+			rawGit(t, copyPath, "-c", "core.logAllRefUpdates=false", "commit", "--quiet", "--allow-empty", "-m", "a commit inside the window")
 		}},
-		{name: "a tracked file deleted", write: func(t *testing.T, copyPath string) {
-			if err := os.Remove(filepath.Join(copyPath, "own.txt")); err != nil {
+		{name: "a file shown as lost edited", write: func(t *testing.T, copyPath, _ string) {
+			if err := os.WriteFile(filepath.Join(copyPath, "scratch.txt"), []byte("edited inside the window\n"), 0o600); err != nil {
 				t.Error(err)
 			}
-		}, stands: func(t *testing.T, copyPath string) {
-			t.Helper()
-			if _, err := os.Lstat(filepath.Join(copyPath, "own.txt")); !errors.Is(err, os.ErrNotExist) {
-				t.Errorf("own.txt stands after the refusal: %v; want it deleted as it was", err)
+		}},
+		{name: "a file inside a directory shown as lost deleted", write: func(t *testing.T, copyPath, _ string) {
+			if err := os.Remove(filepath.Join(copyPath, "notes", "a.txt")); err != nil {
+				t.Error(err)
 			}
 		}},
-		{name: "a file shown as lost deleted", write: func(t *testing.T, copyPath string) {
+		{name: "a clean tracked file deleted", write: func(t *testing.T, copyPath, _ string) {
+			if err := os.Remove(filepath.Join(copyPath, "f.txt")); err != nil {
+				t.Error(err)
+			}
+		}, touches: []string{"tree /f.txt "}},
+		{name: "a file shown as lost deleted", write: func(t *testing.T, copyPath, _ string) {
 			if err := os.Remove(filepath.Join(copyPath, "scratch.txt")); err != nil {
 				t.Error(err)
 			}
-		}, stands: func(t *testing.T, copyPath string) {
-			t.Helper()
-			if _, err := os.Lstat(filepath.Join(copyPath, "scratch.txt")); !errors.Is(err, os.ErrNotExist) {
-				t.Errorf("scratch.txt stands after the refusal: %v; want it deleted as it was", err)
+		}},
+		{name: "a replacement reference", write: func(t *testing.T, copyPath, base string) {
+			rawGit(t, copyPath, "replace", "--graft", base)
+		}, touches: []string{"ref refs/replace/"}},
+		{name: "a graft file", write: func(t *testing.T, copyPath, base string) {
+			if err := os.WriteFile(filepath.Join(copyPath, ".git", "info", "grafts"), []byte(base+"\n"), 0o600); err != nil {
+				t.Error(err)
 			}
 		}},
 		{name: "nothing, the positive control"},
 	}
-	for _, moment := range []string{"before the check", "before the removal"} {
+	for _, moment := range []string{"before setting aside", "after setting aside"} {
 		for _, c := range changes {
+			if moment == "after setting aside" && strings.Contains(c.name, "shown as lost") {
+				continue
+			}
 			t.Run(moment+"/"+c.name, func(t *testing.T) {
 				s := newCleanupSubject(t, forgetest.Script{})
 				ctx := context.Background()
 				tk := s.deliveryTask(t, "task/window")
+				commit(t, tk.copy, "base.txt", "a tracked file\n", "a tracked file")
+				base := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "HEAD"))
 				commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
 				_, err := s.cleanUp(t, tk.id)
 				kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
@@ -909,73 +967,87 @@ func TestAnythingWrittenAfterADiscardsLastReadRefusesIt(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(tk.copy, ".git", "info", "exclude"), []byte("secret.txt\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				// A file no commit records, which the loss shows as lost.
+				// A file and a directory no commit records, which the loss
+				// shows as lost.
 				if err := os.WriteFile(filepath.Join(tk.copy, "scratch.txt"), []byte("not committed\n"), 0o600); err != nil {
 					t.Fatal(err)
+				}
+				for _, name := range []string{"a.txt", "b.txt"} {
+					if err := os.MkdirAll(filepath.Join(tk.copy, "notes"), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(tk.copy, "notes", name), []byte("a note\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
 				}
 				shown, err := s.cleaner.Loss(ctx, got.Entry)
 				if err != nil {
 					t.Fatal(err)
 				}
-				named := func(l Loss, path string) bool {
-					return slices.ContainsFunc(l.Files, func(f LostPath) bool { return f.Path == path })
-				}
-				if !named(shown, "scratch.txt") || named(shown, "own.txt") {
-					t.Fatalf("the loss shown names %+v; want scratch.txt and not own.txt, which HEAD holds", shown.Files)
-				}
-				var inside KeptEntry
-				var after copyState
-				window := func() {
-					if c.write != nil {
-						c.write(t, tk.copy)
-					}
-					if inside, err = s.cleaner.Keep(ctx, kept); err != nil {
-						t.Error(err)
-					}
-					if after, err = readCopyState(tk.copy); err != nil {
-						t.Error(err)
-					}
-				}
+				// A commit made once HEAD is set aside moves HEAD, so the
+				// discard cannot put HEAD back without leaving that commit
+				// unnamed: it leaves what it set aside standing and says so.
+				stands := moment == "after setting aside" && c.name == "a commit"
+				var after string
 				var callback func() error
-				if moment == "before the check" {
-					s.cleaner.betweenDiscardReadAndCheck = window
-				} else {
-					callback = func() error { window(); return nil }
+				switch moment {
+				case "before setting aside":
+					callback = func() error {
+						if c.write != nil {
+							c.write(t, tk.copy, base)
+						}
+						after = copySnapshot(t, tk.copy)
+						return nil
+					}
+				default:
+					after = withoutLines(copySnapshot(t, tk.copy), c.touches)
+					s.cleaner.betweenAsideAndCheck = func() error {
+						if c.write != nil {
+							c.write(t, tk.copy, base)
+						}
+						return nil
+					}
 				}
 				lost, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", callback)
-				deletion := c.name == "a tracked file deleted" || c.name == "a file shown as lost deleted"
-				if c.write == nil || (moment == "before the removal" && deletion) {
+				if c.write == nil {
 					if err != nil {
-						t.Fatalf("Discard on the digest shown, %s %s: %v", c.name, moment, err)
+						t.Fatalf("Discard on the digest shown, %s: %v", moment, err)
 					}
 					if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
 						t.Fatalf("the clone still stands: %v", err)
 					}
-					// The loss returned is the one shown, whatever another
-					// process removed after the check: it names scratch.txt,
-					// which the loss showed, deleted or not, and not own.txt,
-					// which it never showed, deleted or not.
-					if lost.Digest != shown.Digest || !named(lost, "scratch.txt") || named(lost, "own.txt") {
-						t.Fatalf("Discard returned the loss %s naming %+v; want the one shown, %s, naming scratch.txt and not own.txt",
-							lost.Digest, lost.Files, shown.Digest)
+					if _, err := os.Lstat(asideDir(tk.copy)); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("what was set aside still stands: %v", err)
+					}
+					if lost.Digest != shown.Digest {
+						t.Fatalf("Discard returned the loss %s, want the one shown, %s", lost.Digest, shown.Digest)
 					}
 					return
 				}
-				if !errors.Is(err, ErrLossChanged) {
-					t.Fatalf("Discard on the digest shown, %s %s = %+v, %v; want ErrLossChanged", c.name, moment, lost, err)
-				}
-				c.stands(t, tk.copy)
-				if moment == "before the check" {
-					now, err := readCopyState(tk.copy)
-					if err != nil {
-						t.Fatal(err)
+				if stands {
+					if !errors.Is(err, ErrAsideStands) || !errors.Is(err, ErrLossChanged) {
+						t.Fatalf("Discard on the digest shown, a commit after setting aside = %+v, %v; want ErrLossChanged and ErrAsideStands", lost, err)
 					}
-					if changed := after.changedSince(now, func(string) bool { return false }); len(changed) > 0 {
-						t.Errorf("the discard refused at its check changed the copy: %v", changed)
+					if _, err := os.Lstat(asideDir(tk.copy)); err != nil {
+						t.Fatalf("what was set aside is gone: %v; want it standing", err)
 					}
+					if _, err := s.cleaner.Loss(ctx, got.Entry); !errors.Is(err, ErrAsideStands) {
+						t.Fatalf("Loss with what was set aside standing = %v; want ErrAsideStands", err)
+					}
+					if subject := strings.TrimSpace(rawGit(t, tk.copy, "log", "-1", "--format=%s", "HEAD")); subject != "a commit inside the window" {
+						t.Fatalf("HEAD names %q; want the commit made inside the window", subject)
+					}
+					return
 				}
-				if inside.Entry.ID != got.Entry.ID && c.name != "a commit" {
-					t.Fatalf("a cleanup inside the window kept %+v; want entry %d, the one standing", inside.Entry, got.Entry.ID)
+				if !errors.Is(err, ErrLossChanged) || errors.Is(err, ErrAsideStands) {
+					t.Fatalf("Discard on the digest shown, %s %s = %+v, %v; want ErrLossChanged with everything put back", c.name, moment, lost, err)
+				}
+				now := copySnapshot(t, tk.copy)
+				if moment == "after setting aside" {
+					now = withoutLines(now, c.touches)
+				}
+				if now != after {
+					t.Fatalf("the refused discard (%v) left the copy as\n%s\nwant it as it was\n%s", err, now, after)
 				}
 			})
 		}
@@ -1027,7 +1099,16 @@ func TestADiscardTakesTheObjectsItsOwnReadFetches(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		added = before.changedSince(now, func(string) bool { return false })
+		for p, e := range now {
+			if was, ok := before[p]; !ok || was != e {
+				added = append(added, p)
+			}
+		}
+		for p := range before {
+			if _, ok := now[p]; !ok {
+				t.Errorf("the discard's read removed %s", p)
+			}
+		}
 	}
 	if _, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", nil); err != nil {
 		t.Fatalf("Discard on the digest shown, after the upstream moved: %v", err)
@@ -1036,9 +1117,9 @@ func TestADiscardTakesTheObjectsItsOwnReadFetches(t *testing.T) {
 		t.Fatal("the discard's read added nothing to the copy; want the objects of the commit it fetched")
 	}
 	objects := filepath.Join(tk.copy, ".git", "objects") + string(filepath.Separator)
-	for _, change := range added {
-		if !strings.HasPrefix(change, objects) || !strings.HasSuffix(change, " was added") {
-			t.Fatalf("the discard's read changed %s; want only objects added", change)
+	for _, p := range added {
+		if _, existed := before[p]; existed || !strings.HasPrefix(p, objects) {
+			t.Fatalf("the discard's read changed %s; want only objects added", p)
 		}
 	}
 	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
@@ -1582,8 +1663,10 @@ func TestALossTakesWhatTheUpstreamHoldsAsHeld(t *testing.T) {
 	}
 
 	// A commit shown as lost that the upstream takes up before the
-	// confirmation is held then, not gone, so the confirmation removes
-	// the copy.
+	// confirmation is held then, so the loss is not the one shown: the
+	// confirmation refuses naming it and leaves the copy as it stands
+	// (round 21's sequence, in which the discard went ahead and returned a
+	// loss other than the one shown).
 	rawGit(t, tk.copy, "switch", "-q", "-c", "side")
 	side := strings.TrimSpace(commit(t, tk.copy, "side.txt", "work on a side branch\n", "a side commit"))
 	rawGit(t, tk.copy, "switch", "-q", "task/held")
@@ -1592,11 +1675,13 @@ func TestALossTakesWhatTheUpstreamHoldsAsHeld(t *testing.T) {
 		t.Fatalf("Loss lacks %v, %v; want the side commit %s", shown.Lacks, err, side)
 	}
 	s.push(t, tk.copy, "side")
-	if _, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", nil); err != nil {
-		t.Fatalf("confirming what was shown once the upstream holds %s = %v; want the copy removed", side, err)
+	before := copySnapshot(t, tk.copy)
+	if _, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, ErrLossChanged) ||
+		!strings.Contains(err.Error(), side) {
+		t.Fatalf("confirming what was shown once the upstream holds %s = %v; want ErrLossChanged naming it", side, err)
 	}
-	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the copy still stands after the confirmed discard: %v", err)
+	if now := copySnapshot(t, tk.copy); now != before {
+		t.Fatalf("the refused discard left the copy as\n%s\nwant it as it was\n%s", now, before)
 	}
 }
 

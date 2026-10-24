@@ -80,9 +80,9 @@ import (
 // later, in its one write, none of them left holding the project's new
 // tasks over a copy that is gone: internal/tasks' Discard goes ahead only
 // once it has found the copy, from before its read of the loss until that
-// moment, holding exactly what was shown, and removes each entry only as
-// it found it, so every entry kept by then was kept from the state the
-// removal destroyed. That moment is recorded on the entry before the
+// moment, holding exactly what was shown, and deletes only what was
+// shown, so every entry kept by then was kept from the state the removal
+// destroyed. That moment is recorded on the entry before the
 // removal (store.RecordKeptWorkDiscardRead) and the mark takes it from
 // there, so a mark the next start completes over a copy already gone is
 // bounded by the moment the removal went ahead and never by its own, which
@@ -95,19 +95,16 @@ import (
 // not marked or a discard confirmed (store.ErrKeptWorkCopyOwed, refused
 // with refusedOwed): each still needs the copy where it stands.
 //
-// What is left is internal/tasks' kept_remove.go's. Anything written into
-// the copy after the read the digest is checked on refuses the removal,
-// and the confirmation is withdrawn, so the entry is listed again over the
-// copy as it stands, with what was removed before the refusal, each entry
-// as shown, gone. What a process writes through a descriptor it opened in
-// the copy before the removal moved that file aside is lost with it. An
-// entry a cleanup records while the copy is being removed, from a copy
-// partly gone, is kept after the moment and left open over a copy that is
-// gone. A run's worktree record, its directory in the gate, is removed as
-// read too and never by git; one that changed after the worktree was
-// removed is left standing in the gate, whole or from the entry that
-// differed on, and logged, and the discard is done, since the copy went
-// as it was shown.
+// What is left is internal/tasks' kept_aside.go's. Anything about the
+// copy that differs from what was shown, or anything it still holds once
+// what was shown is set aside, refuses the discard with everything put
+// back and the confirmation withdrawn, so the entry is listed again over
+// the copy as it stands. What could not be put back, because something
+// was written where it goes, stays beside the copy and is named, the
+// confirmation withdrawn the same way, and the copy is read again only
+// once a later discard answer puts it back. What a process writes through
+// a descriptor it opened in the copy before the discard set that file
+// aside is lost with it.
 
 // # What "person-only" is enforced by, and what it is not
 //
@@ -168,6 +165,9 @@ func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry st
 		default:
 			return done, nil
 		}
+	}
+	if err := s.putBackDiscard(ctx, entry); err != nil {
+		return machine.KeptWorkAnswered{}, refusedLoss(entry, err)
 	}
 	loss, err := s.cleaner.Loss(ctx, entry)
 	if err != nil {
@@ -234,7 +234,7 @@ func refusedLoss(entry store.KeptWork, err error) error {
 	case errors.Is(err, tasks.ErrLossUnestablished):
 		return fmt.Errorf("%w: kept work entry %d was not discarded: %v; the next cleanup of the unchanged copy establishes it, "+
 			"and until then what a discard would lose cannot be shown exactly", ipc.ErrRefused, entry.ID, err)
-	case errors.Is(err, tasks.ErrCopyGone):
+	case errors.Is(err, tasks.ErrCopyGone), errors.Is(err, tasks.ErrAsideStands), errors.Is(err, tasks.ErrRecordNotTheCopys):
 		return fmt.Errorf("%w: kept work entry %d was not discarded: %w", ipc.ErrRefused, entry.ID, err)
 	}
 	return err
@@ -263,7 +263,7 @@ type discardWithdrawn struct {
 }
 
 func (e *discardWithdrawn) Error() string {
-	if errors.Is(e.cause, tasks.ErrRecordNotTheCopys) {
+	if errors.Is(e.cause, tasks.ErrRecordNotTheCopys) || errors.Is(e.cause, tasks.ErrAsideStands) {
 		return fmt.Sprintf("the copy cannot be removed as it stands (%v), so the confirmation was withdrawn, the copy left "+
 			"standing and the entry is open again", e.cause)
 	}
@@ -310,19 +310,9 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 		}
 	}
 	digest := entry.DiscardDigest.Or("")
-	gatePath := ""
-	if runID, ok := entry.RunID.Get(); ok {
-		owner, err := s.store.Run(ctx, runID)
-		if err != nil {
-			return machine.KeptWorkAnswered{}, err
-		}
-		repository, err := s.store.Repository(ctx, owner.RepositoryID)
-		if err != nil {
-			return machine.KeptWorkAnswered{}, err
-		}
-		if gatePath, err = s.gatePathOf(ctx, repository); err != nil {
-			return machine.KeptWorkAnswered{}, err
-		}
+	gatePath, err := s.discardGatePath(ctx, entry)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
 	}
 	// The callback runs once Discard has found the copy, from before its
 	// read of the loss until now, holding what was shown, and immediately
@@ -338,14 +328,7 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 		}
 		return s.store.RecordKeptWorkDiscardRead(ctx, entry.ID, digest, time.Now())
 	})
-	var left *tasks.WorktreeRecordLeft
-	if errors.As(err, &left) {
-		// The copy is gone as shown; only git's record of the worktree,
-		// changed after the read, was left standing.
-		s.log.Printf("kept work entry %d: %v", entry.ID, left)
-		err = nil
-	}
-	if errors.Is(err, tasks.ErrLossChanged) || errors.Is(err, tasks.ErrRecordNotTheCopys) {
+	if errors.Is(err, tasks.ErrLossChanged) || errors.Is(err, tasks.ErrRecordNotTheCopys) || errors.Is(err, tasks.ErrAsideStands) {
 		open, werr := s.store.WithdrawKeptWorkDiscard(ctx, entry.ID, digest)
 		if werr != nil {
 			return machine.KeptWorkAnswered{}, fmt.Errorf("service: kept work entry %d: the copy changed since its discard was "+
@@ -370,6 +353,42 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 	s.dispatchInBackground()
 	gone := lossOf(lost)
 	return machine.KeptWorkAnswered{Entry: marked, Effect: machine.KeptWorkDiscarded, Loss: &gone}, nil
+}
+
+// discardGatePath is the gate repository a run's copy is a worktree of,
+// and empty for a task's clone, which tasks.Cleaner's Discard and PutBack
+// take.
+func (s *Service) discardGatePath(ctx context.Context, entry store.KeptWork) (string, error) {
+	runID, ok := entry.RunID.Get()
+	if !ok {
+		return "", nil
+	}
+	owner, err := s.store.Run(ctx, runID)
+	if err != nil {
+		return "", err
+	}
+	repository, err := s.store.Repository(ctx, owner.RepositoryID)
+	if err != nil {
+		return "", err
+	}
+	return s.gatePathOf(ctx, repository)
+}
+
+// putBackDiscard puts back what a discard of the entry's copy that did not
+// finish left set aside (tasks.Cleaner.PutBack), holding the copy's
+// discard slot so no discard of it runs meanwhile, before an answer reads
+// the copy; it refuses while a discard of the copy is being carried out.
+func (s *Service) putBackDiscard(ctx context.Context, entry store.KeptWork) error {
+	if !s.claimDiscard(entry.CopyPath) {
+		return fmt.Errorf("%w: kept work entry %d: a discard of its copy is being carried out now; "+
+			"answer again once it is done", ipc.ErrRefused, entry.ID)
+	}
+	defer s.releaseDiscard(entry.CopyPath)
+	gatePath, err := s.discardGatePath(ctx, entry)
+	if err != nil {
+		return err
+	}
+	return s.cleaner.PutBack(ctx, entry, gatePath)
 }
 
 // claimDiscard takes the copy's discard slot in this service, false when a

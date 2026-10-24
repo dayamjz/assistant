@@ -330,52 +330,26 @@ func keptDefaultTip(ctx context.Context, l landing) (string, string) {
 // branches and remote-tracking references, stands on now reaches. A
 // remote-tracking reference holds nothing of itself. Any read that fails
 // leaves it unestablished.
-// gone is, of shown, the commits a discard was shown as lost that are
-// neither among them now nor held: a commit the copy no longer holds,
-// which is a change to what was shown.
-func lostFrom(ctx context.Context, l landing, reach vcs.Reach, names []string, refs []vcs.Ref, shown []string) (lost held, others, gone []string) {
+func lostFrom(ctx context.Context, l landing, reach vcs.Reach, names []string, refs []vcs.Ref) (lost held, others []string) {
 	defer l.forget(ctx)
 	defer l.forgetHeld(ctx)
 	tip, detail := keptDefaultTip(ctx, l)
 	if detail != "" {
-		return held{unestablished: detail}, nil, nil
+		return held{unestablished: detail}, nil
 	}
 	holding, detail := upstreamHeld(ctx, l, names, refs)
 	if detail != "" {
-		return held{unestablished: detail}, nil, nil
+		return held{unestablished: detail}, nil
 	}
 	commits, others, err := l.repo.NotReachedFrom(ctx, reach, tip, holding...)
 	if err != nil {
 		return held{unestablished: "which commits and objects the copy's names hold that the default branch at " + tip +
-			" and the upstream lack could not be read: " + err.Error()}, nil, nil
+			" and the upstream lack could not be read: " + err.Error()}, nil
 	}
 	if commits == nil {
 		commits = []string{}
 	}
-	for _, c := range shown {
-		if slices.Contains(commits, c) {
-			continue
-		}
-		taken, err := l.repo.IsAncestor(ctx, c, tip)
-		switch {
-		case errors.Is(err, vcs.ErrRefNotFound):
-			gone = append(gone, c)
-			continue
-		case err != nil:
-			return held{unestablished: "whether the default branch at " + tip + " holds " + c + ", shown as lost, could not be read: " +
-				err.Error()}, nil, nil
-		case taken:
-			continue
-		}
-		left, _, err := l.repo.NotReachedFrom(ctx, vcs.Reach{Objects: []string{c}}, tip, holding...)
-		if err != nil {
-			return held{unestablished: "whether the upstream holds " + c + ", shown as lost, could not be read: " + err.Error()}, nil, nil
-		}
-		if slices.Contains(left, c) {
-			gone = append(gone, c)
-		}
-	}
-	return held{lacks: commits, against: tip}, others, gone
+	return held{lacks: commits, against: tip}, others
 }
 
 // keptHeldRef is the name, under a landing's namespace, of the references

@@ -93,19 +93,12 @@ func WithDiscardRemovalSeamsForTest(tb testing.TB, o Options, inWindow func(), b
 	return o
 }
 
-// WithWorktreeRemovalSeamForTest returns o with a run's copy's discard
-// running f once the worktree's directory is removed and before its record
-// is, for this package's external tests.
-func WithWorktreeRemovalSeamForTest(tb testing.TB, o Options, f func()) Options {
-	o.discardRemovalTest, o.inWorktreeRemoval = tb, f
-	return o
-}
-
-// WithRecordRemovalSeamForTest returns o with a run's copy's discard
-// running f after the last check of the worktree's record in the gate and
-// before anything in it is removed, for this package's external tests.
-func WithRecordRemovalSeamForTest(tb testing.TB, o Options, f func()) Options {
-	o.discardRemovalTest, o.inRecordRemoval = tb, f
+// WithDiscardAsideSeamForTest returns o with a discard running f once
+// what it showed is set aside and before the copy is read again, for this
+// package's external tests; an error f returns ends the discard there, as
+// a service that stopped there leaves it.
+func WithDiscardAsideSeamForTest(tb testing.TB, o Options, f func() error) Options {
+	o.discardRemovalTest, o.afterDiscardAside = tb, f
 	return o
 }
 

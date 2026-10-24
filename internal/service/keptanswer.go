@@ -282,6 +282,14 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 	// What the copy holds is read as it stands now, by the one computation
 	// a discard shows (tasks.Loss), never from the entry's record of the
 	// copy when it was kept.
+	// What a discard that did not finish set aside is put back first, so
+	// the copy is read whole.
+	if err := s.putBackDiscard(ctx, entry); err != nil {
+		if errors.Is(err, tasks.ErrAsideStands) || errors.Is(err, tasks.ErrRecordNotTheCopys) {
+			return refuse(err.Error())
+		}
+		return landing{}, err
+	}
 	loss, err := s.cleaner.Loss(ctx, entry)
 	switch {
 	case errors.Is(err, tasks.ErrCopyGone):
