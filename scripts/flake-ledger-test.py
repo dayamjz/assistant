@@ -366,6 +366,9 @@ class RealGoTestOutputTest(unittest.TestCase):
         issues = [{"number": n, "state": "open", "title": f"tempdirs: {name} leaks a process", "body": ""}
                   for n, name in enumerate(tests, 1)]
         issues.append({"number": 100, "state": "open", "title": "tempdirs: TestCases flakes.", "body": ""})
+        # Another parent's subtests of the same names are other tests.
+        issues += [{"number": 200 + n, "state": "open", "title": f"tempdirs: TestOther/{name} leaks a process", "body": ""}
+                   for n, name in enumerate(tests, 1)]
         find = ledger.matcher(issues)
         for n, name in enumerate(tests, 1):
             if name.startswith("TestBuild"):
@@ -1182,6 +1185,16 @@ class ClosedIssueTest(unittest.TestCase):
         self.entry = entry
         return entry["failed_on_main_after_close"], text
 
+    def test_an_issue_about_another_tests_subtest_of_the_same_name_is_not_the_failures(self):
+        # #552 names the real test; this issue names a subtest of that name
+        # under another test.
+        github = FakeGitHub(LOGS)
+        github.data["issues"] = [{"number": 900, "state": "open", "body": "", "closed_at": None,
+                                  "title": "service: TestOther/TestConcurrentDispatchOfOneTaskClaimsOneAttempt flakes"}]
+        _, data, _ = run_report(github)
+        entry = next(f for f in data["failures"] if f["name"] == "TestConcurrentDispatchOfOneTaskClaimsOneAttempt")
+        self.assertEqual(entry["issues"], {"open": [], "closed": []})
+
     def test_a_failure_on_main_after_its_issue_closed_is_flagged(self):
         # #552 closed 2026-10-23T09:27:38Z.
         flagged, text = self.dispatch("main", "2026-10-23T10:00:00Z")
@@ -1223,6 +1236,14 @@ class MatchTest(unittest.TestCase):
         self.assertEqual([i["number"] for i in find("TestFooBar")["open"]], [1])
         self.assertEqual(find("TestFoo")["open"], [])
 
+    def test_a_failed_test_is_not_another_tests_subtest_of_its_name(self):
+        titles = {1: "service.TestTop flakes", 2: "TestTop/sub flakes", 3: "TestOther/TestTop flakes"}
+        find = ledger.matcher([{"number": n, "state": "open", "title": t, "body": ""} for n, t in titles.items()])
+        self.assertEqual([i["number"] for i in find("TestTop", test=True)["open"]], [1, 2])
+        # A leaked program's name may follow a path.
+        find = ledger.matcher([{"number": 4, "state": "open", "title": "/usr/libexec/mdworker_shared stays", "body": ""}])
+        self.assertEqual([i["number"] for i in find("mdworker_shared")["open"]], [4])
+
     def test_a_test_token_matches_its_test_or_an_ancestor_named_whole(self):
         test = "TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out"
         titles = {
@@ -1233,12 +1254,15 @@ class MatchTest(unittest.TestCase):
             4: "service: TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out/deeper leaves a child",
             5: "service: TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out",
             548: "service: TestAHeldProcessEndsWithItsTestOnEveryPath's child never recorded its held process",
+            6: "service: TestOther/TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out leaves a child",
         }
         find = ledger.matcher([{"number": n, "state": "open", "title": t, "body": ""} for n, t in titles.items()])
         # The test itself or an ancestor, named whole; a sibling, a
-        # descendant or the slashless directory name is another test.
+        # descendant, another parent's subtest of that name, or the
+        # slashless directory name is another test.
         self.assertEqual(sorted(i["number"] for i in find(test, True)["open"]), [1, 2, 548, 563])
-        self.assertEqual(sorted(i["number"] for i in find(test)["open"]), [1, 4, 563])
+        # As a failed test's name it is a word, so its descendants match too.
+        self.assertEqual(sorted(i["number"] for i in find(test, test=True)["open"]), [1, 4, 563])
 
 
 if __name__ == "__main__":

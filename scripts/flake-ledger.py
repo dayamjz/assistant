@@ -64,7 +64,8 @@ group (WATCHDOG).
 Issues are matched by text: an issue whose title or body contains a record's
 match token (a test's top-level name, a leaked command's base name, or the
 record key itself) is that record's issue. A leak from a test's t.TempDir
-is matched by that test's full name or an ancestor's, written whole
+is matched by that test's full name or an ancestor's, written whole, and
+no test name counts after a slash, where it is another test's subtest
 (matcher). The markdown prints each token, so an issue can be linked by
 writing it into the issue.
 """
@@ -921,21 +922,26 @@ def collect(github, cache, runs, workers=4):
 
 
 def matcher(issues):
-    """Returns a function from match token to the issues naming it."""
+    """Returns a function from match token to the issues naming it:
+    find(token, ancestors, test), where test says the token is a test's
+    top-level name (records of kind test and timeout)."""
     texts = [(i["number"], i["state"], i.get("title") or "", (i.get("title") or "") + "\n" + (i.get("body") or ""),
               i.get("closed_at")) for i in issues]
 
-    def find(token, ancestors=False):
+    def find(token, ancestors=False, test=False):
+        # A test's name never follows a slash in it: after one it is another
+        # test's subtest. A program's name may follow a path.
+        before = r"(?<![A-Za-z0-9_/])" if test or ancestors else r"(?<![A-Za-z0-9_])"
         if ancestors:
             # The test or an ancestor, written whole: followed only by the
             # end, white space, or closing punctuation before one of those,
             # a possessive 's allowed. A sibling or a descendant (a slash
             # follows) is another test.
             names = [token[:i] for i, c in enumerate(token) if c == "/"] + [token]
-            pattern = re.compile(r"(?<![A-Za-z0-9_])(?:" + "|".join(map(re.escape, names)) +
+            pattern = re.compile(before + "(?:" + "|".join(map(re.escape, names)) +
                                  r")(?=(?:'s)?[.,;:!?)\]}'\"`]*(?:\s|$))")
         else:
-            pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(token) + r"(?![A-Za-z0-9_])")
+            pattern = re.compile(before + re.escape(token) + r"(?![A-Za-z0-9_])")
         found = {"open": [], "closed": []}
         for number, state, title, text, closed_at in texts:
             if pattern.search(text):
@@ -991,7 +997,7 @@ def pull_request_finder(pulls):
 
 def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, pulls):
     # Without the issues, which issue names a failure is unknown, not "none".
-    find = matcher(issues) if issues is not None else (lambda token, ancestors=False: None)
+    find = matcher(issues) if issues is not None else (lambda token, ancestors=False, test=False: None)
     pr_of = pull_request_finder(pulls)
     entries = {}
     unattributed, cancelled, counted = [], {"superseded": 0, "cancelled": 0}, 0
@@ -1052,7 +1058,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
             "hidden_by_rerun": sum(1 for o in occ if o["hidden_by_rerun"]),
             "first_seen": min(o["failed_at"] for o in occ),
             "last_seen": max(o["failed_at"] for o in occ),
-            "issues": find(entry["token"], entry["ancestors"]),
+            "issues": find(entry["token"], entry["ancestors"], entry["kind"] in ("test", "timeout")),
         })
         # A closed issue's failure seen on main after it closed: the fix did
         # not hold, or the issue named the wrong cause. A branch's run after
