@@ -64,8 +64,11 @@ class RealLogTest(unittest.TestCase):
     def test_a_per_package_leak_names_the_test_whose_temp_dir_it_ran_from(self):
         records, unattributed = parse("per-package-leak.log")
         self.assertFalse(unattributed)
-        leak = records["leak: internal/service child.test from TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out"]
-        self.assertTrue(leak.prefix)
+        # The leaked program ran from TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out4138430518/001,
+        # the t.TempDir of the subtest the package's own === RUN line names.
+        leak = records["leak: internal/service child.test from TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out"]
+        self.assertEqual(leak.token, "TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out")
+        self.assertTrue(leak.ancestors)
         self.assertIn("test: internal/service TestADispatchersTrustedReadIsItsOwn", records)
         self.assertEqual(len(records), 2)
 
@@ -184,7 +187,12 @@ func TestRetry3(t *testing.T) { logTempDir(t) }
 func TestCases(t *testing.T) {
 	t.Run("case-1.x=y", logTempDir)
 	t.Run("a long subtest name that runs past the sixty four bytes Go keeps", logTempDir)
+	t.Run("case-leaked", logTempDir)
+	t.Run("case-unrelated", logTempDir)
 }
+// Their directories differ only in digits, which MkdirTemp adds too.
+func TestBuild(t *testing.T) { logTempDir(t) }
+func TestBuild2(t *testing.T) { logTempDir(t) }
 """,
     "timeout/timeout_test.go": """package timeout
 import ("testing"; "time")
@@ -340,27 +348,40 @@ class RealGoTestOutputTest(unittest.TestCase):
         self.assertTrue(unattributed)
 
     def test_a_leak_from_a_tests_temp_dir_is_matched_to_the_issue_naming_that_test(self):
-        # Real t.TempDir paths: Go cuts the test's name to 64 bytes, drops
-        # slashes and other symbols, and adds random digits.
-        dirs = [m.groups() for m in map(re.compile(r"tempdir (\S+) (\S+)$").search, self.output) if m]
-        self.assertEqual(len(dirs), 4, "\n".join(self.output))
+        # Real t.TempDir paths (Go cuts the test's name to 64 bytes, drops
+        # slashes and other symbols, and adds random digits), each leak line
+        # where the leak check prints it: in its package's output, before the
+        # package's result line.
+        ok = next(i for i, l in enumerate(self.output) if l.startswith("ok  \tgithub.com/example/m/tempdirs\t"))
+        start = max(i for i in range(ok) if ledger.GO_PACKAGE_END.match(self.output[i]))
+        block = self.output[start + 1:ok]
+        dirs = [m.groups() for m in map(re.compile(r"tempdir (\S+) (\S+)$").search, block) if m]
+        self.assertEqual(len(dirs), 8, "\n".join(block))
         package = "/home/runner/work/assistant/assistant/internal/tempdirs"
-        lines = framed([f"LEAK package={package} process pid={n} start=1 command={d}/child --flag"
-                        for n, (_, d) in enumerate(dirs, 1)] +
-                       ["FAIL\tgithub.com/dayamjz/assistant/internal/tempdirs\t1s"])
-        records, _, _ = ledger.parse_lines(lines)
-        issues = [{"number": n, "state": "open", "title": f"tempdirs: {name} leaks its child", "body": ""}
-                  for n, (name, _) in enumerate(dirs, 1)]
-        find = ledger.matcher(issues)
+        leaks = [f"LEAK package={package} process pid={n} start=1 command={d}/child --flag"
+                 for n, (_, d) in enumerate(dirs, 1)]
+        records, _, _ = ledger.parse_lines(framed(block + ["FAIL"] + leaks + ["FAIL\tgithub.com/example/m/tempdirs\t1s"]))
         by_token = {r.token: r for r in records}
-        self.assertEqual(len(by_token), 4, [r.key for r in records])
-        for n, (name, folder) in enumerate(dirs, 1):
+        tests = [name for name, _ in dirs]
+        issues = [{"number": n, "state": "open", "title": f"tempdirs: {name} leaks a process", "body": ""}
+                  for n, name in enumerate(tests, 1)]
+        issues.append({"number": 100, "state": "open", "title": "tempdirs: TestCases flakes.", "body": ""})
+        find = ledger.matcher(issues)
+        for n, name in enumerate(tests, 1):
+            if name.startswith("TestBuild"):
+                continue
             with self.subTest(test=name):
-                # The directory t.TempDir made, without os.MkdirTemp's digits.
-                record = by_token.get(Path(folder).parent.name.rstrip("0123456789"))
+                record = by_token.get(name)
                 self.assertIsNotNone(record, [r.key for r in records])
-                self.assertTrue(record.prefix, record.key)
-                self.assertEqual([i["number"] for i in find(record.token, record.prefix)["open"]], [n])
+                self.assertEqual(record.name, f"child from {name}")
+                self.assertTrue(record.ancestors, record.key)
+                want = [n, 100] if name.startswith("TestCases/") else [n]
+                self.assertEqual([i["number"] for i in find(record.token, record.ancestors)["open"]], want)
+        # TestBuild's and TestBuild2's directories cannot be told apart, so
+        # their leaks name no test: they are matched by the program's name.
+        unresolved = [r for r in records if r.token == "child"]
+        self.assertEqual([r.name for r in unresolved], ["child from TestBuild (test not resolved)"])
+        self.assertFalse(unresolved[0].ancestors)
 
     def records_raw(self):
         records, unattributed, _ = ledger.parse_lines(self.output, raw=True)
@@ -1202,13 +1223,22 @@ class MatchTest(unittest.TestCase):
         self.assertEqual([i["number"] for i in find("TestFooBar")["open"]], [1])
         self.assertEqual(find("TestFoo")["open"], [])
 
-    def test_a_tempdir_token_matches_the_subtest_it_came_from(self):
-        issue = {"number": 563, "state": "open", "body": "",
-                 "title": "service: TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out can leave its child"}
-        find = ledger.matcher([issue])
-        self.assertEqual([i["number"] for i in find("TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out", True)["open"]],
-                         [563])
-        self.assertEqual(find("TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out")["open"], [])
+    def test_a_test_token_matches_its_test_or_an_ancestor_named_whole(self):
+        test = "TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out"
+        titles = {
+            563: f"service: {test} can leave its child",
+            1: "service: `TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out`, again.",
+            2: "service: TestAHeldProcessEndsWithItsTestOnEveryPath flakes on macOS.",
+            3: "service: TestAHeldProcessEndsWithItsTestOnEveryPath/killed leaves a child",
+            4: "service: TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out/deeper leaves a child",
+            5: "service: TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out",
+            548: "service: TestAHeldProcessEndsWithItsTestOnEveryPath's child never recorded its held process",
+        }
+        find = ledger.matcher([{"number": n, "state": "open", "title": t, "body": ""} for n, t in titles.items()])
+        # The test itself or an ancestor, named whole; a sibling, a
+        # descendant or the slashless directory name is another test.
+        self.assertEqual(sorted(i["number"] for i in find(test, True)["open"]), [1, 2, 548, 563])
+        self.assertEqual(sorted(i["number"] for i in find(test)["open"]), [1, 4, 563])
 
 
 if __name__ == "__main__":

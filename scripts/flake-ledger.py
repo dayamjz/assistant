@@ -63,8 +63,10 @@ group (WATCHDOG).
 
 Issues are matched by text: an issue whose title or body contains a record's
 match token (a test's top-level name, a leaked command's base name, or the
-record key itself) is that record's issue. The markdown prints each token,
-so an issue can be linked by writing it into the issue.
+record key itself) is that record's issue. A leak from a test's t.TempDir
+is matched by that test's full name or an ancestor's, written whole
+(matcher). The markdown prints each token, so an issue can be linked by
+writing it into the issue.
 """
 
 import argparse
@@ -166,12 +168,11 @@ def tempdir_keeps(c):
     return c.isalpha() or c.isnumeric() or c in TEMPDIR_SYMBOLS
 
 
-def tempdir_test(command):
-    """The t.TempDir name, without its random digits, of the test a leaked
-    program ran from (a directory starting Test, made of characters Go
-    keeps there, ending in digits), or None. Digits that end the test's
-    own name go with the random ones, so TestRetry3 reads as TestRetry;
-    matcher compares this to tempdir_pattern of each test an issue names."""
+def tempdir_of(command):
+    """The t.TempDir name, without its random digits, that a leaked program
+    ran from (a directory starting Test, made of characters Go keeps there,
+    ending in digits), or None. Digits that end a test's own name go with
+    the random ones, so TestRetry3's reads as TestRetry."""
     words = command.split()
     for part in (words[0].split("/") if words else []):
         if part.startswith("Test") and part[-1:].isdigit() and all(map(tempdir_keeps, part)):
@@ -198,16 +199,16 @@ def short_package(import_path):
 class Record:
     """One failure seen in one job: what failed, and the match token for issues."""
 
-    def __init__(self, kind, package, name, detail="", subtests=(), token=None, prefix=False):
+    def __init__(self, kind, package, name, detail="", subtests=(), token=None, ancestors=False):
         self.kind = kind
         self.package = package
         self.name = name
         self.detail = detail
         self.subtests = sorted(set(subtests))
         self.token = token or self.key
-        # A prefix token (a t.TempDir name) is matched by any test an issue
-        # names whose t.TempDir name it starts with (matcher).
-        self.prefix = prefix
+        # A test's full name, matched by an issue naming it or an ancestor
+        # whole (matcher).
+        self.ancestors = ancestors
         # Which failed step's part of the log it was read in (LogParser.section);
         # used while reading one job, not stored.
         self.section = None
@@ -219,12 +220,12 @@ class Record:
     def to_dict(self):
         return {"kind": self.kind, "package": self.package, "name": self.name,
                 "detail": self.detail, "subtests": self.subtests, "token": self.token,
-                "prefix": self.prefix}
+                "ancestors": self.ancestors}
 
     @classmethod
     def from_dict(cls, data):
         return cls(data["kind"], data["package"], data["name"], data.get("detail", ""),
-                   data.get("subtests", ()), data.get("token"), data.get("prefix", False))
+                   data.get("subtests", ()), data.get("token"), data.get("ancestors", False))
 
 
 class LogParser:
@@ -244,6 +245,7 @@ class LogParser:
         self.records = []
         # Per Go package block, reset at each ok/FAIL package line.
         self.failed_tops, self.failed_subs = set(), set()
+        self.ran = set()  # the tests and subtests the package's === lines name
         # The top-level test whose result block the last line was in: its
         # --- line at column 0, then its subtests' --- lines (_result_line).
         self.result_top = None
@@ -326,6 +328,7 @@ class LogParser:
             # At column 0, so the package's own: what a test writes is
             # indented (MESSAGE_INDENT).
             self.context = context.group(1)
+            self.ran.add(self.context)
             return
         message = GO_MESSAGE.match(line)
         if message and self.context and self.context not in self.messages \
@@ -406,17 +409,26 @@ class LogParser:
             self._add(Record("leak", package, name, rest[:200]))
             return
         command = process.group(1)
-        name, test = command_name(command), tempdir_test(command)
-        if test:
-            self._add(Record("leak", package, f"{name} from {test}", command[:200],
-                             token=test, prefix=True))
-        else:
+        name, folder = command_name(command), tempdir_of(command)
+        if not folder:
             self._add(Record("leak", package, name, command[:200], token=name))
+            return
+        # The leak check prints a package's leak inside that package's output,
+        # so its test is one of the tests the package ran whose t.TempDir
+        # name is the folder's. Exactly one, or the leak names no test.
+        tests = [t for t in self.ran if tempdir_pattern(t).rstrip("0123456789") == folder]
+        if len(tests) == 1:
+            self._add(Record("leak", package, f"{name} from {tests[0]}", command[:200],
+                             token=tests[0], ancestors=True))
+        else:
+            self._add(Record("leak", package, f"{name} from {folder} (test not resolved)", command[:200],
+                             token=name))
 
     def _end_package(self, verdict, package, suffix):
         if verdict == "FAIL":
             self._fail_package(package, suffix)
         self.failed_tops, self.failed_subs, self.first = set(), set(), {}
+        self.ran = set()
         self.result_top = None
         self.messages = {}
         self.context = ""
@@ -913,18 +925,20 @@ def matcher(issues):
     texts = [(i["number"], i["state"], i.get("title") or "", (i.get("title") or "") + "\n" + (i.get("body") or ""),
               i.get("closed_at")) for i in issues]
 
-    names = [set(re.findall(r"\bTest[A-Za-z0-9_/]{6,}", text)) for _, _, _, text, _ in texts]
-
-    def find(token, prefix=False):
-        pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(token) + r"(?![A-Za-z0-9_])")
+    def find(token, ancestors=False):
+        if ancestors:
+            # The test or an ancestor, written whole: followed only by the
+            # end, white space, or closing punctuation before one of those,
+            # a possessive 's allowed. A sibling or a descendant (a slash
+            # follows) is another test.
+            names = [token[:i] for i, c in enumerate(token) if c == "/"] + [token]
+            pattern = re.compile(r"(?<![A-Za-z0-9_])(?:" + "|".join(map(re.escape, names)) +
+                                 r")(?=(?:'s)?[.,;:!?)\]}'\"`]*(?:\s|$))")
+        else:
+            pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(token) + r"(?![A-Za-z0-9_])")
         found = {"open": [], "closed": []}
-        for (number, state, title, text, closed_at), tests in zip(texts, names):
-            # A t.TempDir token (tempdir_test) is found by an issue naming its
-            # test or a test that test's name starts with: compared as Go
-            # names the directory, so TestA/sub is TestAsub and a long name
-            # is cut. Digits ending a name are ambiguous there and dropped.
-            near = prefix and any(token.startswith(tempdir_pattern(t).rstrip("0123456789")) for t in tests)
-            if near or pattern.search(text):
+        for number, state, title, text, closed_at in texts:
+            if pattern.search(text):
                 item = {"number": number, "title": title}
                 if state != "open":
                     item["closed_at"] = closed_at
@@ -977,7 +991,7 @@ def pull_request_finder(pulls):
 
 def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, pulls):
     # Without the issues, which issue names a failure is unknown, not "none".
-    find = matcher(issues) if issues is not None else (lambda token, prefix=False: None)
+    find = matcher(issues) if issues is not None else (lambda token, ancestors=False: None)
     pr_of = pull_request_finder(pulls)
     entries = {}
     unattributed, cancelled, counted = [], {"superseded": 0, "cancelled": 0}, 0
@@ -1011,7 +1025,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
             record = Record.from_dict(data)
             entry = entries.setdefault(record.key, {
                 "key": record.key, "kind": record.kind, "package": record.package,
-                "name": record.name, "token": record.token, "prefix": record.prefix, "subtests": set(),
+                "name": record.name, "token": record.token, "ancestors": record.ancestors, "subtests": set(),
                 "details": [], "occurrences": []})
             entry["subtests"].update(record.subtests)
             if record.detail and record.detail not in entry["details"] and len(entry["details"]) < 3:
@@ -1038,7 +1052,7 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
             "hidden_by_rerun": sum(1 for o in occ if o["hidden_by_rerun"]),
             "first_seen": min(o["failed_at"] for o in occ),
             "last_seen": max(o["failed_at"] for o in occ),
-            "issues": find(entry["token"], entry["prefix"]),
+            "issues": find(entry["token"], entry["ancestors"]),
         })
         # A closed issue's failure seen on main after it closed: the fix did
         # not hold, or the issue named the wrong cause. A branch's run after
