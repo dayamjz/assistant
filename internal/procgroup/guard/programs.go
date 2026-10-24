@@ -327,7 +327,35 @@ var WriteExceptions = []WriteException{
 		Why: "Puts back the mode of a home's root, a directory, that the test made unreadable.",
 	},
 	{
+		File: "internal/service/keptanswer_test.go", Function: "TestALandingWhoseRunCannotStartLeavesTheEntryOpen",
+		Why: "Takes the write permission off the gate's refs/assistant directory and puts it back; the modes are a directory's.",
+	},
+	{
+		File: "internal/service/keptcarryon_test.go", Function: "TestAFailedAdoptionHoldsTheTaskAndAFreshCloneIsNotTakenForTheCopy",
+		Why: "Takes the write permission off the kept copy's parent directory, so its rename fails, and puts it back; the modes are a directory's.",
+	},
+	{
 		File: "internal/store/storetest/storetest.go", Function: "Seed",
 		Why: "Copies a database template, an SQLite file, with the template's own mode.",
+	},
+	{
+		File: "internal/tasks/intake_test.go", Function: "TestANoteIsAppendedToTheInstructionsOnceAndWhole",
+		Why: "Takes the write permission off the instructions file's directory and puts it back; the modes are a directory's.",
+	},
+	{
+		File: "internal/tasks/kept_discard_test.go", Function: "TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown",
+		Why: "Puts back a tracked file's committed mode after a checkout, because a discard's digest reads it; nothing runs the file.",
+	},
+	{
+		File: "internal/tasks/kept_discard_test.go", Function: "TestADiscardDigestIsFramedAndCarriesModes",
+		Why: "Gives a planted script an execute bit as the mode a discard's digest must carry; nothing runs the script.",
+	},
+	{
+		File: "internal/tasks/kept_discard_test.go", Function: "TestALossNamesEveryPathItDestroysThatNothingElseHolds",
+		Why: "Gives a tracked file an execute bit as the mode change a loss must name; nothing runs the file.",
+	},
+	{
+		File: "internal/vcs/objects_test.go", Function: "TestBlobObjectIsGitsIdentityOfTheEntry",
+		Why: "Gives a committed file an execute bit so its tree entry is an executable's; nothing runs the file.",
 	},
 }
