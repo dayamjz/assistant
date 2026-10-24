@@ -290,6 +290,111 @@ func TestReflogValuesReadEveryValueOfEveryLog(t *testing.T) {
 	}
 }
 
+// oldGitVar names a git binary older than the one on PATH, the oldest this
+// package supports among them, which TestRootRefsAreListedUnderEveryGit
+// runs RootRefs under too when it is set; doc.go's Requirements say which.
+const oldGitVar = "ASSISTANT_TEST_OLD_GIT"
+
+// RootRefs lists the references git keeps outside refs/ for a working copy
+// under every git this package supports, the git on PATH and, when
+// ASSISTANT_TEST_OLD_GIT names one, an older one (the final full review of
+// 221c3b1 found git 2.36 to 2.44 refusing the option RootRefs used): HEAD,
+// ORIG_HEAD a reset left, and a root reference of another name, FOO_HEAD,
+// each at its commit, and one at an annotated tag peeled to the tag's
+// commit; never FETCH_HEAD or MERGE_HEAD, which git lists as no
+// reference, nor a file or a directory named like one that is none, nor
+// anything under refs/; and for a linked worktree its own
+// ORIG_HEAD and one only it has, not the main working copy's.
+func TestRootRefsAreListedUnderEveryGit(t *testing.T) {
+	gitEnvironment(t)
+	gits := []string{"git"}
+	if old := os.Getenv(oldGitVar); old != "" {
+		gits = append(gits, old)
+	} else {
+		t.Logf("%s is not set, so RootRefs is run under the git on PATH alone", oldGitVar)
+	}
+	for _, binary := range gits {
+		t.Run(filepath.Base(filepath.Dir(filepath.Dir(binary)))+"/"+filepath.Base(binary), func(t *testing.T) {
+			dir := t.TempDir()
+			rawGit(t, dir, "init", "--quiet", ".")
+			rawGit(t, dir, "commit", "--quiet", "--allow-empty", "-m", "A")
+			a := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD"))
+			rawGit(t, dir, "commit", "--quiet", "--allow-empty", "-m", "B")
+			b := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD"))
+			rawGit(t, dir, "reset", "--quiet", "--hard", a)
+			rawGit(t, dir, "update-ref", "FOO_HEAD", b)
+			rawGit(t, dir, "tag", "--annotate", "--message", "a tag a root reference names", "annotated", b)
+			tag := strings.TrimSpace(rawGit(t, dir, "rev-parse", "annotated"))
+			rawGit(t, dir, "update-ref", "TAG_HEAD", tag)
+			writeFile(t, filepath.Join(dir, ".git", "FETCH_HEAD"), b+"\t\tbranch 'main' of somewhere\n")
+			writeFile(t, filepath.Join(dir, ".git", "MERGE_HEAD"), b+"\n")
+			// Named as a root reference and none: a file git reads as a
+			// broken reference and a directory.
+			writeFile(t, filepath.Join(dir, ".git", "JUNK_HEAD"), "not a reference\n")
+			// Holding a commit, and named with a lowercase letter, which git
+			// takes as no root reference.
+			writeFile(t, filepath.Join(dir, ".git", "Mixed_HEAD"), b+"\n")
+			if err := os.Mkdir(filepath.Join(dir, ".git", "DIR_HEAD"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			other := filepath.Join(t.TempDir(), "other")
+			rawGit(t, dir, "worktree", "add", "--quiet", "--detach", other, b)
+			rawGit(t, other, "reset", "--quiet", "--hard", a)
+			rawGit(t, other, "update-ref", "BAR_HEAD", a)
+
+			read := func(path string) map[string]string {
+				t.Helper()
+				repo, err := vcs.OpenWorktree(ctx(t), path, vcs.WithGitBinary(binary))
+				if err != nil {
+					t.Fatal(err)
+				}
+				roots, err := repo.RootRefs(ctx(t))
+				if err != nil {
+					t.Fatalf("RootRefs under %s: %v", binary, err)
+				}
+				// The reading for a git without --include-root-refs, run
+				// under this git too, finds the same references.
+				byName, err := vcs.RootRefsByNameForTest(ctx(t), repo)
+				if err != nil {
+					t.Fatalf("RootRefs' reading by name under %s: %v", binary, err)
+				}
+				sortRefs := func(refs []vcs.Ref) []vcs.Ref {
+					out := slices.Clone(refs)
+					slices.SortFunc(out, func(x, y vcs.Ref) int { return strings.Compare(x.Name, y.Name) })
+					return out
+				}
+				if !slices.Equal(sortRefs(roots), sortRefs(byName)) {
+					t.Errorf("under %s RootRefs lists %+v and the reading by name %+v; want the same references", binary, roots, byName)
+				}
+				found := map[string]string{}
+				for _, ref := range roots {
+					if strings.HasPrefix(ref.Name, "refs/") {
+						t.Errorf("RootRefs listed %s, a reference under refs/", ref.Name)
+					}
+					found[ref.Name] = ref.Commit
+				}
+				return found
+			}
+			mine := read(dir)
+			if mine["HEAD"] != a || mine["ORIG_HEAD"] != b || mine["FOO_HEAD"] != b || mine["TAG_HEAD"] != b {
+				t.Errorf("RootRefs under %s = %v; want HEAD at %s, ORIG_HEAD, FOO_HEAD and TAG_HEAD, peeled, at %s", binary, mine, a, b)
+			}
+			for _, special := range []string{"FETCH_HEAD", "MERGE_HEAD", "JUNK_HEAD", "DIR_HEAD", "Mixed_HEAD"} {
+				if _, ok := mine[special]; ok {
+					t.Errorf("RootRefs under %s listed %s, which git lists as no reference", binary, special)
+				}
+			}
+			theirs := read(other)
+			if theirs["HEAD"] != a || theirs["ORIG_HEAD"] != b || theirs["BAR_HEAD"] != a {
+				t.Errorf("RootRefs of the linked worktree under %s = %v; want its own HEAD and BAR_HEAD at %s and ORIG_HEAD at %s", binary, theirs, a, b)
+			}
+			if _, ok := theirs["FOO_HEAD"]; ok {
+				t.Errorf("RootRefs of the linked worktree under %s listed FOO_HEAD, the main working copy's", binary)
+			}
+		})
+	}
+}
+
 // StoredObjects is the blob git would store for each file: a file checked
 // out with CRLF under its attributes reads as the LF blob it was checked out
 // from, though its bytes differ, a file with no conversion as its bytes, in

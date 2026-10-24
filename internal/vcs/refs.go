@@ -2,7 +2,10 @@ package vcs
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 )
 
@@ -118,7 +121,20 @@ func (r *Repository) ListRefs(ctx context.Context, patterns ...string) ([]Ref, e
 // merge leaves naming where HEAD stood, AUTO_MERGE, CHERRY_PICK_HEAD or
 // REBASE_HEAD, each this working copy's own. FETCH_HEAD and MERGE_HEAD are
 // not among them: git lists neither as a reference.
+//
+// That option is git 2.45's (rootRefsFloor). Under an older git, which keeps
+// every reference in files since it has no other reference backend, they
+// are read as git 2.45 defines a root reference (isRootRefName) from the
+// names in this working copy's own repository directory, each resolved by
+// git, so the answer is the same set under either.
 func (r *Repository) RootRefs(ctx context.Context) ([]Ref, error) {
+	listed, err := r.gitAtLeast(ctx, rootRefsFloor)
+	if err != nil {
+		return nil, err
+	}
+	if !listed {
+		return r.rootRefsByName(ctx)
+	}
 	refs, err := r.listRefs(ctx, "root-refs", "for-each-ref", "--include-root-refs", refFormat)
 	if err != nil {
 		return nil, err
@@ -130,6 +146,67 @@ func (r *Repository) RootRefs(ctx context.Context) ([]Ref, error) {
 		}
 	}
 	return roots, nil
+}
+
+// rootRefsFloor is the git version whose for-each-ref takes
+// --include-root-refs, as major and minor.
+var rootRefsFloor = [2]int{2, 45}
+
+// rootRefsByName is RootRefs under a git older than rootRefsFloor: every
+// name in this working copy's own repository directory that isRootRefName
+// takes, resolved by git to the object it names and the one that peels to,
+// in name order. A name git does not resolve, a broken file or a directory
+// among them, is not a reference and is left out, as git leaves it out of
+// its own listing; one whose read fails otherwise is an error.
+func (r *Repository) rootRefsByName(ctx context.Context) ([]Ref, error) {
+	out, err := r.run(ctx, "git-dir", "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return nil, err
+	}
+	dir := strings.TrimSpace(string(out))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("vcs: reading the root references in %s: %w", dir, err)
+	}
+	var refs []Ref
+	for _, e := range entries {
+		if !isRootRefName(e.Name()) {
+			continue
+		}
+		object, err := r.run(ctx, "root-ref", "rev-parse", "--verify", "--quiet", "--end-of-options", e.Name())
+		if err != nil {
+			var cmdErr *CommandError
+			if errors.As(err, &cmdErr) {
+				continue
+			}
+			return nil, err
+		}
+		peeled, err := r.run(ctx, "root-ref-peeled", "rev-parse", "--verify", "--quiet", "--end-of-options", e.Name()+"^{}")
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, Ref{Name: e.Name(), Object: strings.TrimSpace(string(object)), Commit: strings.TrimSpace(string(peeled))})
+	}
+	return refs, nil
+}
+
+// isRootRefName is git 2.45's rule for a root reference's name: uppercase
+// letters, '-' and '_' alone, ending in _HEAD or one of the few names that
+// do not, and neither FETCH_HEAD nor MERGE_HEAD, which git keeps as no
+// reference.
+func isRootRefName(name string) bool {
+	if name == "" || name == "FETCH_HEAD" || name == "MERGE_HEAD" {
+		return false
+	}
+	for _, c := range name {
+		if (c < 'A' || c > 'Z') && c != '-' && c != '_' {
+			return false
+		}
+	}
+	if strings.HasSuffix(name, "_HEAD") {
+		return true
+	}
+	return slices.Contains([]string{"HEAD", "AUTO_MERGE", "BISECT_EXPECTED_REV", "NOTES_MERGE_PARTIAL", "NOTES_MERGE_REF", "MERGE_AUTOSTASH"}, name)
 }
 
 // refFormat is the format every reference listing reads: each reference's
