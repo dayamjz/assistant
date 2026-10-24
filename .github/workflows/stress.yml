@@ -67,4 +67,3 @@ jobs:
           CI_TEST_PACKAGES: ${{ inputs.packages || './...' }}
           CI_TEST_COUNT: ${{ inputs.count || '1' }}
         run: bash scripts/ci-test.sh
-
