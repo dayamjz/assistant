@@ -748,6 +748,8 @@ def linux_leftovers(package):
 
 
 KINFO_PROC_SIZE = 648  # sizeof(struct kinfo_proc) from sys/sysctl.h, 64-bit
+E_PPID_OFFSET = 560  # kinfo_proc.kp_eproc.e_ppid, 64-bit; the guard's tests check it on known parents
+LAUNCHD = 1  # the pid an orphan is reparented to on macOS
 SZOMB = 5  # extern_proc.p_stat of a process that has exited, from sys/proc.h
 P_WEXIT = 0x00002000  # extern_proc.p_flag of a process working on exiting, from sys/proc.h
 SANDBOX_FILTER_GLOBAL_NAME = 2  # sandbox_check's filter for a Mach service name; the guard's tests fail if wrong
@@ -759,8 +761,9 @@ RUNNING, EXITING, EXITED = "running", "exiting", "exited"
 
 
 def darwin_records(mib):
-    """The kinfo_proc records sysctl returns for mib, as (pid, start, state):
-    start is the kernel's start time in the form process_start uses; state is
+    """The kinfo_proc records sysctl returns for mib, as (pid, start, state,
+    parent): parent is the record's parent pid (eproc.e_ppid), and start is
+    the kernel's start time in the form process_start uses; state is
     EXITED for a zombie (p_stat SZOMB), EXITING for a process that is not one
     yet but whose p_flag has P_WEXIT, the flag ps shows as E, and RUNNING
     otherwise. A process held in its exit reads EXITING, not yet a zombie,
@@ -786,24 +789,27 @@ def darwin_records(mib):
                            f"not whole {KINFO_PROC_SIZE}-byte records")
     records = []
     for offset in range(0, size.value, KINFO_PROC_SIZE):
-        # extern_proc: p_starttime at 0, p_flag at 32, p_stat at 36, p_pid at 40.
+        # extern_proc: p_starttime at 0, p_flag at 32, p_stat at 36, p_pid at
+        # 40; eproc, which follows it, puts e_ppid at 560 of the record.
         sec, usec = struct.unpack_from("<qi", buffer.raw, offset)
         flag, = struct.unpack_from("<i", buffer.raw, offset + 32)
         pid, = struct.unpack_from("<i", buffer.raw, offset + 40)
+        parent, = struct.unpack_from("<i", buffer.raw, offset + E_PPID_OFFSET)
         if buffer.raw[offset + 36] == SZOMB:
             state = EXITED
         elif flag & P_WEXIT:
             state = EXITING
         else:
             state = RUNNING
-        records.append((pid, f"{sec}.{usec:06d}", state))
+        records.append((pid, f"{sec}.{usec:06d}", state, parent))
     return records
 
 
 def darwin_table():
-    """Map (pid, start) to its state (darwin_records), for every process in
-    the kernel's table (sysctl kern.proc.all), whatever its user."""
-    return {(pid, start): state for pid, start, state in darwin_records((1, 14, 0))}
+    """Map (pid, start) to (state, parent pid) (darwin_records), for every
+    process in the kernel's table (sysctl kern.proc.all), whatever its user."""
+    return {(pid, start): (state, parent)
+            for pid, start, state, parent in darwin_records((1, 14, 0))}
 
 
 def darwin_process(pid):
@@ -883,6 +889,31 @@ class Sandbox:
         return inside == 1 and outside == 0
 
 
+def start_order(key):
+    """Sort key for a (pid, start): the start time as numbers."""
+    return tuple(map(int, key[1].split(".")))
+
+
+def started_outside(table, pending, outside):
+    """Add to outside each process of pending (a key to (description,
+    unmarked)) that read as unmarked and whose parent in table settled
+    outside the sandbox, started no later than it, and is not launchd
+    (darwin_marked), until no more can be added: a parent added here counts
+    for its own children."""
+    current = {key[0]: key for key in table}
+    added = True
+    while added:
+        added = False
+        for key, (_, unmarked) in pending.items():
+            if key in outside or not unmarked:
+                continue
+            parent = current.get(table[key][1])
+            if (parent is not None and parent[0] != LAUNCHD and parent in outside
+                    and start_order(parent) <= start_order(key)):
+                outside.add(key)
+                added = True
+
+
 def darwin_marked(sandbox):
     """Every (pid, start) a settled reading finds running in sandbox.
 
@@ -900,16 +931,33 @@ def darwin_marked(sandbox):
     held in its exit through SETTLE_READINGS listings makes this an error
     rather than a reading without what it started. A process that exits
     before its mark is read, and started nothing, is not found.
+
+    Except: an unmarked process that could not be settled so is settled
+    outside the sandbox when its parent in the same listing (its record's
+    e_ppid) settled outside it, started no later than it did, and is not
+    launchd. A process is in the sandbox only if the process that started it
+    was, since the sandbox is inherited and cannot be left (Sandbox). The
+    rule takes a recorded parent other than launchd, which adopts orphans,
+    to be the process that started this one; a record naming some other
+    process, as when a debugger outside the sandbox traces one of the
+    package's processes as it exits, would settle that process outside, and
+    that is the rule's gap. It matters because any process of any user that
+    starts and exits while a listing is read would otherwise force another
+    listing, and steady churn on a busy machine then never let one settle
+    (#553: 66 of 100 runs of a clean package failed so beside three loops
+    of /usr/bin/true). Settled this way, a process's own children follow by
+    the same rule from it, in the same listing.
+
     SETTLE_READINGS listings without one that settles are an error naming
     what the last left unsettled.
     """
-    found, settled = set(), set()
+    found, settled, outside = set(), set(), set()
     for _ in range(SETTLE_READINGS):
-        unsettled = []
+        pending = {}
         # Newest first: a process the package left is among the last started.
         table = darwin_table()
-        for key in sorted(table, key=lambda k: tuple(map(int, k[1].split("."))), reverse=True):
-            if table[key] == EXITED or key in settled:
+        for key in sorted(table, key=start_order, reverse=True):
+            if table[key][0] == EXITED or key in settled:
                 continue
             mark = sandbox.marks(key[0])
             reading = darwin_process(key[0])
@@ -918,10 +966,14 @@ def darwin_marked(sandbox):
                 found.add(key)
             if mark or (running and mark is not None):
                 settled.add(key)
+                if not mark:
+                    outside.add(key)
             if not running or mark is None:
                 state = "gone" if reading is None or reading[0] != key[1] else reading[1]
-                unsettled.append(f"pid={key[0]} start={key[1]} {state}"
-                                 + (", its mark unread" if mark is None else ""))
+                pending[key] = (f"pid={key[0]} start={key[1]} parent={table[key][1]} {state}"
+                                + (", its mark unread" if mark is None else ""), mark is False)
+        started_outside(table, pending, outside)
+        unsettled = [said for key, (said, _) in pending.items() if key not in outside]
         if not unsettled:
             return found
     raise RuntimeError(f"no reading of the process table settled in {SETTLE_READINGS} "
