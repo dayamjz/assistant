@@ -879,6 +879,60 @@ else:
 """
 
 
+# Seconds a program a test starts in a process of its own may run.
+OWNED_DEADLINE = 600
+
+
+class Owned:
+    """A program a test started under the ledger's own watchdog
+    (ledger.WATCHDOG), with the watchdog's stdin a pipe from this test run,
+    so it ends with what it started when the test run ends, killed included
+    (P15), or at OWNED_DEADLINE. pid is the program's own; signals to it
+    reach it, and the watchdog exits with its status."""
+
+    def __init__(self, command, env):
+        self.watchdog = subprocess.Popen([sys.executable, "-I", "-c", ledger.WATCHDOG, str(OWNED_DEADLINE), *command],
+                                         env=env, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL, start_new_session=True)
+        # The watchdog's children are its anchor (a shell) and the program.
+        deadline = time.monotonic() + 30
+        self.pid = None
+        while self.pid is None:
+            listing = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+            for line in listing.splitlines():
+                pid, ppid, command_line = line.split(None, 2)
+                if int(ppid) == self.watchdog.pid and "while read -r _" not in command_line:
+                    self.pid = int(pid)
+            if self.pid is None:
+                if self.watchdog.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError("the watchdog did not start the program")
+                time.sleep(0.05)
+
+    def poll(self):
+        return self.watchdog.poll()
+
+    def wait(self, timeout=None):
+        return self.watchdog.wait(timeout=timeout)
+
+    @property
+    def returncode(self):
+        return self.watchdog.returncode
+
+    def send_signal(self, sig):
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(self.pid, sig)
+
+    def kill(self):
+        self.send_signal(signal.SIGKILL)
+
+    def end(self):
+        """Ends the program and what it started now (its watchdog's stdin
+        closes), and waits for the watchdog."""
+        with contextlib.suppress(OSError):
+            self.watchdog.stdin.close()
+        self.watchdog.wait(timeout=30)
+
+
 class StandInProcess(unittest.TestCase):
     """A real program named `program` first on PATH that blocks and starts
     a child holding none of its pipes, as a hung gh or go would, and records
@@ -922,6 +976,36 @@ class StandInProcess(unittest.TestCase):
             time.sleep(0.1)
         return self.with_watchdogs(self.started(count))
 
+    def killed_runner_leaves_nothing(self, helper):
+        """Runs this class's helper (a method name) in a test runner of its
+        own, kills that runner once the stand-in has started, and requires
+        everything between the runner and the stand-in to end with it."""
+        start = ("import importlib.util as u, os; from pathlib import Path; "
+                 f"s = u.spec_from_file_location('flake_ledger_test', {str(Path(__file__).resolve())!r}); "
+                 "m = u.module_from_spec(s); s.loader.exec_module(m); "
+                 f"t = m.{type(self).__name__}({self._testMethodName!r}); t.env = dict(os.environ); "
+                 f"t.pids = Path(os.environ['FAKE_GH_PIDS']); t.{helper}(); input()")
+        runner = subprocess.Popen([sys.executable, "-c", start], env=self.env, stdin=subprocess.PIPE,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: runner.poll() is None and (runner.kill(), runner.wait()))
+        self.addCleanup(runner.stdin.close)
+        pids = self.wait_for_start(runner)
+        listing = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True).stdout
+        parent_of = dict(tuple(map(int, line.split())) for line in listing.splitlines())
+        between = set(pids)
+        for pid in pids:
+            while pid not in (runner.pid, 1, 0):
+                between.add(pid)
+                pid = parent_of.get(pid, 0)
+        # And what each of those started beside the chain: the watchdogs' anchors.
+        between |= {pid for pid, parent in parent_of.items() if parent in between}
+        # At least the program, a gh watchdog, its anchor, the stand-in and its child.
+        self.assertGreaterEqual(len(between), 5, sorted(between))
+        self.addCleanup(lambda: [alive_pid(p) and os.kill(p, signal.SIGKILL) for p in between])
+        runner.kill()
+        runner.wait(timeout=10)
+        self.assert_ended(sorted(between))
+
     def with_watchdogs(self, pids):
         """pids and the watchdogs that started them, which must end too."""
         parents = set()
@@ -958,22 +1042,29 @@ class GoTestBoundTest(StandInProcess):
         self.assertRegex(str(raised[0]), "timed out")
         self.assert_ended(self.started())
 
-    def test_a_killed_test_run_ends_its_go_test_and_what_it_started(self):
+    def caller(self):
+        """A process of its own that calls run_go_test; it keeps its
+        temporary directory inside this test's own folder, since a killed
+        process removes nothing and the test's cleanup removes that folder."""
         start = ("import importlib.util as u; "
                  f"s = u.spec_from_file_location('flake_ledger_test', {str(Path(__file__).resolve())!r}); "
                  "m = u.module_from_spec(s); s.loader.exec_module(m); m.run_go_test()")
-        # A killed process removes nothing, so its temporary directory is
-        # one inside this test's own folder, which the test's cleanup removes.
-        scratch = self.pids.with_name("tmp")
-        scratch.mkdir()
-        process = subprocess.Popen([sys.executable, "-c", start], env={**self.env, "TMPDIR": str(scratch)},
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait()))
+        self.scratch = self.pids.with_name("tmp")
+        self.scratch.mkdir(exist_ok=True)
+        process = Owned([sys.executable, "-c", start], {**self.env, "TMPDIR": str(self.scratch)})
+        self.addCleanup(process.end)
+        return process
+
+    def test_a_killed_test_run_ends_its_go_test_and_what_it_started(self):
+        process = self.caller()
         pids = self.wait_for_start(process)
         process.kill()
         process.wait(timeout=10)
         self.assert_ended(pids)
-        self.assertEqual(len(list(scratch.glob("*/go.mod"))), 1, "the killed run's module is not under the test's folder")
+        self.assertEqual(len(list(self.scratch.glob("*/go.mod"))), 1, "the killed run's module is not under the test's folder")
+
+    def test_a_killed_test_runner_ends_the_caller_it_started_and_what_that_started(self):
+        self.killed_runner_leaves_nothing("caller")
 
 
 class RunListTest(StandInProcess):
@@ -1113,9 +1204,8 @@ class GhProcessTest(StandInProcess):
         self.assert_ended(self.started())
 
     def ledger(self):
-        process = subprocess.Popen([sys.executable, str(SCRIPT), "--repo", "dayamjz/assistant", "--no-cache"],
-                                   env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait()))
+        process = Owned([sys.executable, str(SCRIPT), "--repo", "dayamjz/assistant", "--no-cache"], self.env)
+        self.addCleanup(process.end)
         return process
 
     def interrupted_promptly(self, process, pids):
@@ -1153,6 +1243,9 @@ class GhProcessTest(StandInProcess):
         process.kill()
         process.wait(timeout=10)
         self.assert_ended(pids)
+
+    def test_a_killed_test_runner_ends_the_ledger_it_started_and_what_that_started(self):
+        self.killed_runner_leaves_nothing("ledger")
 
 
 def alive_pid(pid):
