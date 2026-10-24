@@ -221,8 +221,11 @@ func launchedWorkerConfigured(t *testing.T, shape store.TaskShape, branch string
 // task's worker leads, and the provider and session the service holds for
 // it, so a body can end the worker through the same handle the service
 // observes it through. sweeps is every sweep the service asked of a copy,
-// each answered by the real sweep, and is nil where the launch was not
-// launchedWorkerConfigured's.
+// each answered by the real sweep, and is nil where the launch was neither
+// launchedWorkerConfigured's nor streamWorkerWith's. reopen, set by
+// streamWorkerWith alone, closes the running service and opens the next
+// over the same options, the next start, and returns it; running is then
+// the closed one.
 type launched struct {
 	running    serviceUnderTest
 	home       *home.Home
@@ -233,6 +236,7 @@ type launched struct {
 	provider   session.Provider
 	session    *session.Session
 	sweeps     *service.SweepsAsked
+	reopen     func() serviceUnderTest
 }
 
 // askPastHostSweeps makes a request that sweeps task's copy before it acts,

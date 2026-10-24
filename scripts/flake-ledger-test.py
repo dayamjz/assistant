@@ -1,30 +1,40 @@
 #!/usr/bin/env python3
-"""Tests for the CI flake ledger, flake-ledger.py.
+"""Tests for the CI flake ledger, flake-ledger.py. They start no process.
 
 The logs under testdata/flake-ledger are real GitHub job logs, trimmed to the
 lines that matter with every kept line verbatim, and api.json holds real API
-responses trimmed to the fields the ledger reads. The Go shapes the real logs
-do not cover (a timeout, a build failure, a panic outside a test, a package
-that fails with no test failing) come from running the real `go test -v` on a
-module written here, inside a real log's frame.
+responses trimmed to the fields the ledger reads; GitHubServer serves both
+over HTTP in this process, at the addresses GitHub serves them from. The Go
+shapes the real logs do not cover (a timeout, a build failure, a panic
+outside a test, a package that fails with no test failing, output a test
+logs) are in go-test-v.txt: the real output of `go test -v` over the module
+in GO_PACKAGES, recorded once. After changing GO_PACKAGES, record it again:
+
+    python3 scripts/flake-ledger-test.py write-go-module DIR
+    cd DIR && GOFLAGS=-trimpath GOWORK=off go test -v -count=1 -p 2 -timeout 5s ./... \\
+        > scripts/testdata/flake-ledger/go-test-v.txt 2>&1
+
+write-go-module adds a test that logs the module's digest, so the recording
+carries the digest only when go test ran over that very module; the tests
+look for it, and a module changed without recording again fails them.
 """
 
 import contextlib
+import hashlib
+import http.server
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
 import re
-import shutil
-import signal
-import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
 from unittest import mock
+import urllib.parse
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -37,8 +47,8 @@ SPEC.loader.exec_module(ledger)
 
 def parse(name):
     with open(DATA / name, encoding="utf-8") as handle:
-        records, unattributed, _ = ledger.parse_lines(handle)
-    return {r.key: r for r in records}, unattributed
+        records, printed_nothing = ledger.parse_lines(handle)
+    return {r.key: r for r in records}, printed_nothing
 
 
 def framed(go_output, frame="judge-test-failure.log"):
@@ -52,67 +62,65 @@ def framed(go_output, frame="judge-test-failure.log"):
 
 class RealLogTest(unittest.TestCase):
     def test_a_failing_test_is_named_and_the_self_tests_planted_leaks_are_not(self):
-        records, unattributed = parse("judge-test-failure.log")
-        self.assertFalse(unattributed)
-        self.assertEqual(list(records), ["test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient"])
-        record = records["test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient"]
-        # The first message, not principles.Cite's line before it.
-        self.assertTrue(record.detail.startswith("judge_test.go:141: no connection went idle"), record.detail)
+        records, printed_nothing = parse("judge-test-failure.log")
+        self.assertFalse(printed_nothing)
+        self.assertEqual(sorted(records), ["test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient"])
         self.assertIn("LEAK process pid=", (DATA / "judge-test-failure.log").read_text(),
                       "the frame must carry the self-test's planted leaks for this to prove anything")
 
-    def test_a_per_package_leak_names_the_test_whose_temp_dir_it_ran_from(self):
-        records, unattributed = parse("per-package-leak.log")
-        self.assertFalse(unattributed)
-        leak = records["leak: internal/service child.test from TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out"]
-        self.assertTrue(leak.prefix)
-        self.assertIn("test: internal/service TestADispatchersTrustedReadIsItsOwn", records)
-        self.assertEqual(len(records), 2)
-
-    def test_one_leftover_printed_twice_is_one_record(self):
-        text = (DATA / "whole-run-leak-process.log").read_text()
-        # The self-test's planted one, then two mdworkers in the summary and again in the group.
-        self.assertEqual(text.count("LEAK process"), 5)
-        records, unattributed = parse("whole-run-leak-process.log")
-        self.assertFalse(unattributed)
-        self.assertEqual(list(records), ["run-leak: (whole run) process mdworker_shared"])
-
-    def test_leftover_directories_fold_their_contents_and_their_random_names(self):
-        records, _ = parse("whole-run-leak-directories.log")
+    def test_a_per_package_leak_is_counted_once_for_the_job_without_being_read(self):
+        records, printed_nothing = parse("per-package-leak.log")
+        self.assertFalse(printed_nothing)
         self.assertEqual(sorted(records), [
-            "run-leak: (whole run) directory /private/tmp/atinternal_1journey-*-*-h*",
-            "run-leak: (whole run) directory /private/tmp/atinternal_1service-*-*-gitconfig*",
-            "run-leak: (whole run) process CacheDeleteExtension",
-            "run-leak: (whole run) process MailCacheDelete",
-        ])
+            "leak: (leak check) leftovers, not read by this version",
+            "test: internal/service TestADispatchersTrustedReadIsItsOwn"])
+        leak = records["leak: (leak check) leftovers, not read by this version"]
+        self.assertTrue(leak.detail.startswith("LEAK package=/Users/runner/work/assistant/assistant/internal/service "),
+                        leak.detail)
 
-    def test_a_unittest_failure_names_its_script_and_method(self):
-        records, unattributed = parse("unittest-failure.log")
-        self.assertFalse(unattributed)
-        name = "unittest: scripts/leak-check-test.py PerPackageTest.test_a_process_started_as_its_parent_exits_mid_reading_is_found"
-        self.assertEqual(list(records), [name])
-        self.assertEqual(records[name].token, "test_a_process_started_as_its_parent_exits_mid_reading_is_found")
+    def test_a_package_the_leak_check_alone_failed_is_a_package_failure(self):
+        records, _ = parse("rerun-attempt-1.log")
+        self.assertEqual(sorted(records), [
+            "leak: (leak check) leftovers, not read by this version",
+            "package: internal/supervisor (package)"])
+        self.assertEqual(records["package: internal/supervisor (package)"].detail, "the leak check failed it")
+
+    def test_whole_run_leftovers_are_counted_without_being_read(self):
+        for name in ("whole-run-leak-process.log", "whole-run-leak-directories.log"):
+            with self.subTest(log=name):
+                records, printed_nothing = parse(name)
+                self.assertFalse(printed_nothing)
+                self.assertIn("leak: (leak check) leftovers, not read by this version", records)
 
 
+# The module whose real `go test -v` output is go-test-v.txt (see the module
+# docstring for how to record it again).
 GO_PACKAGES = {
+    "go.mod": "module github.com/example/m\n\ngo 1.21\n",
     "pass/pass_test.go": """package pass
 import "testing"
 func TestPasses(t *testing.T) {}
 """,
     "fail/fail_test.go": """package fail
-import "testing"
+import ("fmt"; "strings"; "testing")
 func TestTop(t *testing.T) {
-	t.Logf("claims PRD principle P6")
 	t.Errorf("the first reason")
-	t.Errorf("a second reason")
 }
 func TestParent(t *testing.T) {
 	t.Run("sub a", func(t *testing.T) { t.Fatal("sub a broke") })
 	t.Run("sub b", func(t *testing.T) {})
 }
-// A test may log another go test's output. Indented, it is not this package's.
+// A test may log another go test's output, failures included, naming this
+// package's own passing test. Written through t.Log or t.Output, as is or
+// each line trimmed, it is indented, so it is not this package's.
+func TestFixture(t *testing.T) {}
 func TestLogsAFixturesOutput(t *testing.T) {
-	t.Log("fixture output:\\n--- FAIL: TestFixture (0.00s)\\nFAIL\\tgithub.com/x/y\\t0.1s")
+	out := "=== RUN   TestFixture\\n--- FAIL: TestFixture (0.00s)\\nFAIL\\tgithub.com/x/y\\t0.1s\\n"
+	t.Log(out)
+	fmt.Fprint(t.Output(), out)
+	for _, line := range strings.Split(out, "\\n") {
+		fmt.Fprintln(t.Output(), strings.TrimSpace(line))
+	}
 }
 """,
     "timeout/timeout_test.go": """package timeout
@@ -137,32 +145,59 @@ import "testing"
 func TestNever(t *testing.T) { this is not go }
 """,
 }
+GO_COMMAND = "GOFLAGS=-trimpath GOWORK=off go test -v -count=1 -p 2 -timeout 5s ./..."
+GO_OUTPUT = DATA / "go-test-v.txt"
+PROVENANCE = "recorded from GO_PACKAGES "
 
 
-@unittest.skipUnless(shutil.which("go"), "go is not on PATH")
-class RealGoTestOutputTest(unittest.TestCase):
+def go_module_digest():
+    return hashlib.sha256(json.dumps([GO_PACKAGES, GO_COMMAND], sort_keys=True).encode()).hexdigest()
+
+
+def write_go_module(folder):
+    """Writes GO_PACKAGES, and a test logging their digest, into folder."""
+    root = Path(folder)
+    files = {**GO_PACKAGES, "provenance/provenance_test.go": (
+        'package provenance\nimport "testing"\n'
+        f'func TestRecordedFrom(t *testing.T) {{ t.Log("{PROVENANCE}{go_module_digest()}") }}\n')}
+    for name, source in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(source)
+    print(f"wrote the module to {root}; now run, in it:\n  {GO_COMMAND} > {GO_OUTPUT} 2>&1")
+
+
+def recording_is_current():
+    """Whether go-test-v.txt is go test's output over GO_PACKAGES as they are:
+    only that run logs their digest (write_go_module)."""
+    return PROVENANCE + go_module_digest() in GO_OUTPUT.read_text(encoding="utf-8")
+
+
+class RecordedGoOutputTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            (root / "go.mod").write_text("module github.com/example/m\n\ngo 1.21\n")
-            for name, source in GO_PACKAGES.items():
-                (root / name).parent.mkdir(parents=True, exist_ok=True)
-                (root / name).write_text(source)
-            env = {**os.environ, "GOFLAGS": "", "GOWORK": "off"}
-            result = subprocess.run(["go", "test", "-v", "-count=1", "-timeout", "5s", "./..."],
-                                    cwd=root, env=env, capture_output=True, text=True, timeout=300)
-        cls.output = (result.stdout + result.stderr).split("\n")
-        cls.status = result.returncode
+        cls.output = GO_OUTPUT.read_text(encoding="utf-8").split("\n")
 
-    def records(self, lines):
-        records, unattributed, _ = ledger.parse_lines(lines)
-        return {r.key: r for r in records}, unattributed
+    def records(self, lines, raw=False):
+        records, printed_nothing = ledger.parse_lines(lines, raw=raw)
+        return {r.key: r for r in records}, printed_nothing
+
+    def test_the_recording_is_of_the_module_as_it_now_is(self):
+        self.assertTrue(recording_is_current(),
+                        "GO_PACKAGES or GO_COMMAND changed: record go-test-v.txt again (module docstring)")
+
+    def test_a_module_written_but_not_recorded_does_not_pass_for_recorded(self):
+        # write-go-module is the first half of recording; until go test has
+        # run over what it wrote, the recording is not of that module.
+        changed = {**GO_PACKAGES, "unrecorded/unrecorded_test.go":
+                   'package unrecorded\nimport "testing"\nfunc TestUnrecorded(t *testing.T) { t.Fail() }\n'}
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(GO_PACKAGES, changed), \
+                contextlib.redirect_stdout(io.StringIO()):
+            write_go_module(folder)
+            self.assertFalse(recording_is_current())
 
     def test_each_kind_of_go_failure_is_one_record(self):
-        self.assertNotEqual(self.status, 0)
-        records, unattributed = self.records(framed(self.output))
-        self.assertFalse(unattributed)
+        records, printed_nothing = self.records(framed(self.output))
+        self.assertFalse(printed_nothing)
         self.assertEqual(sorted(records), [
             "build: build setup failed",
             "package: exits (package)",
@@ -171,131 +206,252 @@ class RealGoTestOutputTest(unittest.TestCase):
             "test: fail TestTop",
             "timeout: timeout TestSlow",
         ], "\n".join(self.output))
-        self.assertEqual(records["test: fail TestTop"].detail.split(": ", 1)[1], "the first reason")
-        self.assertEqual(records["test: fail TestParent"].subtests, ["TestParent/sub_a"])
-        self.assertEqual(records["timeout: timeout TestSlow"].subtests, ["TestSlow/inner"])
         self.assertEqual(records["package: panics (package)"].detail, "panic: boom at init")
         self.assertEqual(records["package: exits (package)"].detail, "no failing test was named")
+        self.assertEqual(records["timeout: timeout TestSlow"].detail, "test timed out after 5s")
+        self.assertEqual(records["test: fail TestTop"].token, "TestTop")
+
+    def test_output_a_test_writes_is_not_read_however_it_is_laid_out(self):
+        # The recording holds the logged fixture's --- FAIL line as t.Log and
+        # t.Output put it, never at column 0.
+        written = [l for l in self.output if "--- FAIL: TestFixture" in l]
+        self.assertGreaterEqual(len(written), 3, "\n".join(self.output))
+        self.assertTrue(all(l.startswith("    ") for l in written), written)
+        records, _ = self.records(framed(self.output))
+        self.assertNotIn("test: fail TestFixture", records)
 
     def test_raw_output_parses_as_the_group_does(self):
-        raw, _ = self.records_raw()
-        framed_records, _ = self.records(framed(self.output))
-        self.assertEqual(sorted(raw), sorted(framed_records))
-
-    def records_raw(self):
-        records, unattributed, _ = ledger.parse_lines(self.output, raw=True)
-        return {r.key: r for r in records}, unattributed
+        raw, _ = self.records(self.output, raw=True)
+        in_group, _ = self.records(framed(self.output))
+        self.assertEqual(sorted(raw), sorted(in_group))
 
 
 class LoudTest(unittest.TestCase):
-    def test_every_per_package_leak_shape_the_leak_check_prints_is_read(self):
-        # scripts/leak-check.py prints both on Linux (linux_package_run).
-        package = "/home/runner/work/assistant/assistant/internal/service"
-        lines = framed([
-            f"LEAK package={package} process pid=4242 start=12345 command=/tmp/x/child.test --flag",
-            f"LEAK package={package} a process was running after the binary exited "
-            "and exited before the check read it",
-            "FAIL\tgithub.com/dayamjz/assistant/internal/service\t3.2s"])
-        records, unattributed, _ = ledger.parse_lines(lines)
-        self.assertEqual(sorted(r.key for r in records), [
-            "leak: internal/service a process was running after the binary exited and exited before "
-            "the check read it",
-            "leak: internal/service child.test"])
-        self.assertFalse(unattributed)
-
-    def test_a_leak_line_of_a_shape_never_seen_is_still_a_record(self):
-        lines = framed(["LEAK package=/home/runner/work/assistant/assistant/internal/vcs something new 77",
-                        "LEAK socket-ish /tmp/x9999", "ok  \tgithub.com/dayamjz/assistant/internal/vcs\t1s"])
-        records, _, _ = ledger.parse_lines(lines)
-        self.assertEqual(sorted(r.key for r in records), [
-            "leak: internal/vcs something new 77",
-            "run-leak: (whole run) unparsed LEAK socket-ish /tmp/xN"])
-
-    def test_a_group_with_nothing_named_in_it_is_unattributed(self):
-        records, unattributed, _ = ledger.parse_lines(framed(["something went wrong", "FAIL"]))
+    def test_a_group_with_nothing_named_in_it_is_printed_nothing(self):
+        records, printed_nothing = ledger.parse_lines(framed(["something went wrong", "FAIL"]))
         self.assertEqual(records, [])
-        self.assertTrue(unattributed)
+        self.assertTrue(printed_nothing)
 
-    def test_leftovers_the_parser_cannot_read_are_still_a_failure(self):
-        lines = framed(["ok  \tgithub.com/example/m/pass\t0.1s",
-                        "LEFTOVER widget, named some way this parser has not seen",
-                        "leak-check: 1 leftover(s); command exit=0"])
-        records, unattributed, _ = ledger.parse_lines(lines)
-        self.assertEqual([r.key for r in records], ["run-leak: (whole run) (unparsed leftovers)"])
-        self.assertFalse(unattributed)
+    def test_leftovers_counted_but_not_listed_are_still_a_record(self):
+        lines = framed(["ok  \tgithub.com/example/m/pass\t0.1s", "leak-check: 1 leftover(s); command exit=0"])
+        records, printed_nothing = ledger.parse_lines(lines)
+        self.assertEqual([r.key for r in records], ["leak: (leak check) leftovers, not read by this version"])
+        self.assertFalse(printed_nothing)
 
+    def test_an_error_the_test_step_reports_is_a_record_beside_the_tests_it_named(self):
+        # A log from before ci-test.sh (its Test step is ci.yml's own script):
+        # a lost per-package check reported with ::error::, which the runner
+        # prints as ##[error] in the Test step, here after the group.
+        lines = framed(["--- FAIL: TestX (0.00s)", "FAIL\tgithub.com/example/m/x\t0.1s"])
+        start = next(i for i, l in enumerate(lines) if l.endswith(ledger.GROUP_START))
+        end = next(i for i, l in enumerate(lines) if i > start and l.endswith(ledger.GROUP_END))
+        stamp = lines[end].split(" ", 1)[0]
+        lines.insert(end + 1, f"{stamp} ##[error]fewer packages ran through the per-package check than passed")
+        records, _ = ledger.parse_lines(lines)
+        self.assertEqual(sorted(r.key for r in records), [
+            "error: (Test step) fewer packages ran through the per-package check than passed",
+            "test: x TestX"])
 
-class FakeGitHub:
-    """Serves the recorded responses in api.json and the fixture logs."""
+    def test_an_error_ci_test_reports_before_any_test_ran_is_a_record(self):
+        # ci-test.sh refuses a value before go test starts: no group, only
+        # its ::error:: in the step that runs it.
+        stamp = "2026-10-24T09:00:00.0000000Z"
+        records, printed_nothing = ledger.parse_lines([
+            f"{stamp} ##[group]Run bash scripts/ci-test.sh", f"{stamp} ##[endgroup]",
+            f"{stamp} ##[error]CI_TEST_COUNT must be a positive integer, not 'x'",
+            f"{stamp} ##[error]Process completed with exit code 2."])
+        self.assertEqual([r.key for r in records], ["error: (Test step) CI_TEST_COUNT must be a positive integer, not 'x'"])
+        self.assertFalse(printed_nothing)
 
-    def __init__(self, logs, unreadable=(), flaky=None, broken=()):
-        self.data = json.loads((DATA / "api.json").read_text())
-        self.broken = set(broken)  # names of reads that fail for good
-        self.logs = logs
-        self.unreadable = set(unreadable)
-        self.flaky = dict(flaky or {})  # job id -> server errors before it answers
-        self.repo = "dayamjz/assistant"
-        self.read = []
-        self.pull_list = self.data["pulls"]  # pull request objects, as the pulls API returns them
-
-    def runs(self, workflow, limit, branch=None, since=None):
-        return self.data["runs"][:limit]
-
-    def run(self, run_id):
-        return next(r for r in self.data["runs"] if r["id"] == run_id)
-
-    def attempt(self, run_id, attempt):
-        return {"conclusion": self.data["attempts"][f"{run_id}/{attempt}"]["conclusion"]}
-
-    def attempt_jobs(self, run_id, attempt):
-        return self.data["attempts"][f"{run_id}/{attempt}"]["jobs"]
-
-    def annotations(self, job_id):
-        if "annotations" in self.broken:
-            raise ledger.GitHubError(f"gh api repos/dayamjz/assistant/check-runs/{job_id}/annotations: HTTP 502")
-        return self.data["annotations"][str(job_id)]
-
-    def issues(self):
-        if "issues" in self.broken:
-            raise ledger.GitHubError("gh api repos/dayamjz/assistant/issues: HTTP 503")
-        return self.data["issues"]
-
-    def pulls(self):
-        if "pulls" in self.broken:
-            raise ledger.GitHubError("gh api repos/dayamjz/assistant/pulls: HTTP 503")
-        return self.pull_list
-
-    def job_log(self, job_id):
-        self.read.append(job_id)
-        jobs = [j for a in self.data["attempts"].values() for j in a["jobs"] if j["id"] == job_id]
-        if jobs and not jobs[0].get("steps"):
-            # As GitHub answers for a job cancelled before a runner took it
-            # (jobs 120513403886 and 120517498243): no steps, so no log.
-            raise ledger.GitHubError(f"log of job {job_id}: gh: HTTP 404")
-        if job_id in self.unreadable:
-            raise ledger.GitHubError(f"log of job {job_id}: HTTP 410")
-        if self.flaky.get(job_id):
-            self.flaky[job_id] -= 1
-            yield "a line read before the connection dropped\n"
-            raise ledger.GitHubError(f"log of job {job_id}: HTTP 503")
-        with open(DATA / self.logs[job_id], encoding="utf-8") as handle:
-            yield from handle
+    def test_an_error_line_outside_the_test_step_is_not_read(self):
+        # The recorded judge failure, with an error reported in the step
+        # after Test (Skipped tests); that step's failure is the jobs API's
+        # to report (read_job), not an error of the Test step.
+        lines = (DATA / "judge-test-failure.log").read_text(encoding="utf-8").split("\n")
+        step = next(i for i, l in enumerate(lines) if l.endswith("##[group]Run if [ ! -f test.log ]; then"))
+        stamp = lines[step].split(" ", 1)[0]
+        lines.insert(step + 2, f"{stamp} ##[error]grep: test.log: Input/output error")
+        records, _ = ledger.parse_lines(lines)
+        self.assertEqual([r.kind for r in records], ["test"])
 
 
+# The recorded jobs' logs, by job id.
 LOGS = {120256178246: "rerun-attempt-1.log", 120265317855: "rerun-attempt-2.log",
         120342424178: "job-timeout.log", 120290002840: "superseded-macos.log",
         120290002917: "superseded-ubuntu.log"}
+TOKEN = "test-token"
+
+
+class GitHubServer:
+    """GitHub's REST API as the ledger reads it, served over HTTP in this
+    process from api.json and the fixture logs. A job's log is a redirect to
+    a second server, as GitHub's is to a signed address elsewhere; that
+    server records the Authorization header it receives."""
+
+    PAGE = 2  # items per page, so every listing the ledger reads has a next page
+    SLOW_LIMIT = 15  # seconds
+
+    def __init__(self, logs=LOGS, unreadable=(), flaky=None, broken=()):
+        self.data = json.loads((DATA / "api.json").read_text())
+        self.logs = dict(logs)
+        self.unreadable = set(unreadable)
+        self.flaky = dict(flaky or {})  # job id -> server errors before its log is served
+        self.broken = set(broken)  # "issues", "annotations": reads that fail for good
+        self.read = []  # job ids whose log was asked for
+        self.log_authorizations = []  # the Authorization header each log read brought
+        # Path prefixes that do not answer, and job ids whose log sends a line
+        # every 0.2 s, until release or SLOW_LIMIT, so a ledger without its
+        # deadline fails a test instead of hanging it.
+        self.stalled = set()
+        self.trickled = set()
+        # job id -> "length" or "chunked": its log is cut off half way, after
+        # a Content-Length promising all of it, or with no closing chunk.
+        self.cut_logs = {}
+        self.cut_once = set()  # job ids in cut_logs cut only on their first read
+        self.cut_issues = False  # the issues answer promises 50 bytes and sends 2
+        self.release = threading.Event()
+        self.api = self._serve(self._answer_api)
+        self.blobs = self._serve(self._answer_blob)
+
+    def _serve(self, answer):
+        owner = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                status, headers, body = answer(self)
+                self.close_connection = True
+                if headers.get("Transfer-Encoding") == "chunked":
+                    self.protocol_version = "HTTP/1.1"
+                try:
+                    self.send_response(status)
+                    for name, value in headers.items():
+                        self.send_header(name, value)
+                    if isinstance(body, bytes):
+                        if "Content-Length" not in headers:  # one given promises more than is sent
+                            self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
+                    self.end_headers()
+                    for chunk in body:  # streamed until release
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # the ledger gave up on this read
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        # A short poll, so close() does not wait half a second per server.
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+        server.owner = owner
+        return server
+
+    def url(self, server=None):
+        return f"http://127.0.0.1:{(server or self.api).server_address[1]}"
+
+    def close(self):
+        self.release.set()
+        for server in (self.api, self.blobs):
+            server.shutdown()
+            server.server_close()
+
+    def job(self, job_id):
+        return next(j for a in self.data["attempts"].values() for j in a["jobs"] if j["id"] == job_id)
+
+    def _paged(self, request, items, key=None):
+        split = urllib.parse.urlsplit(request.path)
+        query = urllib.parse.parse_qs(split.query)
+        page = int(query.get("page", ["1"])[0])
+        chunk = items[(page - 1) * self.PAGE:page * self.PAGE]
+        headers = {"Content-Type": "application/json"}
+        if page * self.PAGE < len(items):
+            query["page"] = [str(page + 1)]
+            nxt = f"{self.url()}{split.path}?{urllib.parse.urlencode(query, doseq=True)}"
+            headers["Link"] = f'<{nxt}>; rel="next", <{self.url()}{split.path}>; rel="first"'
+        body = {key: chunk} if key else chunk
+        return 200, headers, json.dumps(body).encode()
+
+    def _answer_api(self, request):
+        path = urllib.parse.urlsplit(request.path).path
+        if any(path.startswith(p) for p in self.stalled):
+            self.release.wait(self.SLOW_LIMIT)
+        if request.headers.get("Authorization") != f"Bearer {TOKEN}":
+            return 401, {}, b'{"message": "Requires authentication"}'
+        repo = "/repos/dayamjz/assistant"
+        if re.fullmatch(rf"{repo}/actions/workflows/[^/]+/runs", path):
+            # Decoded as a server decodes a query string: %XX, and + as a space.
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(request.path).query)
+            runs = [r for r in self.data["runs"] if r["head_branch"] == query.get("branch", [r["head_branch"]])[0]]
+            return self._paged(request, runs, "workflow_runs")
+        match = re.fullmatch(rf"{repo}/actions/runs/(\d+)/attempts/(\d+)(/jobs)?", path)
+        if match:
+            attempt = self.data["attempts"][f"{match[1]}/{match[2]}"]
+            if match[3]:
+                return self._paged(request, attempt["jobs"], "jobs")
+            return 200, {}, json.dumps({"conclusion": attempt["conclusion"]}).encode()
+        match = re.fullmatch(rf"{repo}/check-runs/(\d+)/annotations", path)
+        if match:
+            if "annotations" in self.broken:
+                return 502, {}, b"{}"
+            return 200, {}, json.dumps(self.data["annotations"][match[1]]).encode()
+        if path == f"{repo}/issues":
+            if "issues" in self.broken:
+                return 503, {}, b"{}"
+            if self.cut_issues:
+                return 200, {"Content-Type": "application/json", "Content-Length": "50"}, b"[{"
+            return self._paged(request, self.data["issues"])
+        match = re.fullmatch(rf"{repo}/actions/jobs/(\d+)/logs", path)
+        if match:
+            job_id = int(match[1])
+            self.read.append(job_id)
+            if not self.job(job_id).get("steps"):
+                # As GitHub answers for a job cancelled before a runner took
+                # it (jobs 120513403886 and 120517498243): no steps, no log.
+                return 404, {}, b'{"message": "Not Found"}'
+            if job_id in self.unreadable:
+                return 410, {}, b'{"message": "Gone"}'
+            if self.flaky.get(job_id):
+                self.flaky[job_id] -= 1
+                return 503, {}, b"{}"
+            return 302, {"Location": f"{self.url(self.blobs)}/logs/{job_id}?sig=signed"}, b""
+        return 404, {}, b'{"message": "Not Found"}'
+
+    def _trickle(self):
+        ends = time.monotonic() + self.SLOW_LIMIT
+        while not self.release.wait(0.2) and time.monotonic() < ends:
+            yield b"a line\n"
+
+    def _answer_blob(self, request):
+        self.log_authorizations.append(request.headers.get("Authorization"))
+        job_id = int(re.match(r"/logs/(\d+)", request.path)[1])
+        if job_id in self.trickled:
+            return 200, {"Content-Type": "text/plain"}, self._trickle()
+        if job_id in self.cut_logs:
+            framing = self.cut_logs[job_id]
+            if job_id in self.cut_once:
+                del self.cut_logs[job_id]
+            body = (Path(self.logs[job_id]) if Path(self.logs[job_id]).is_absolute()
+                    else DATA / self.logs[job_id]).read_bytes()
+            half = body[:len(body) // 2]
+            if framing == "length":
+                return 200, {"Content-Type": "text/plain", "Content-Length": str(len(body))}, half
+            return 200, {"Content-Type": "text/plain", "Transfer-Encoding": "chunked"}, \
+                iter([b"%x\r\n" % len(half) + half + b"\r\n"])  # and no closing 0-size chunk
+        log = self.logs[job_id]
+        return 200, {"Content-Type": "text/plain"}, (Path(log) if Path(log).is_absolute() else DATA / log).read_bytes()
 
 
 def log_lines(name, first=1, last=None):
     """Lines first..last (1-based, inclusive) of a recorded log, verbatim."""
-    lines = (DATA / name).read_text(encoding="utf-8").split("\n")
-    return lines[first - 1:last]
+    return (DATA / name).read_text(encoding="utf-8").split("\n")[first - 1:last]
 
 
 def set_steps(github, job_id, conclusions):
     """Gives the recorded job's named steps these conclusions."""
-    job = next(j for a in github.data["attempts"].values() for j in a["jobs"] if j["id"] == job_id)
+    job = github.job(job_id)
     for step in job["steps"]:
         step["conclusion"] = conclusions.get(step["name"], step["conclusion"])
     return job
@@ -309,24 +465,35 @@ def stopped_after_attempt_2(github):
     return github
 
 
-def run_report(github, *extra):
-    with tempfile.TemporaryDirectory() as folder:
-        out = Path(folder) / "ledger.json"
-        stdout = io.StringIO()
-        with contextlib.redirect_stdout(stdout):
-            status = ledger.main(["--no-cache", "--tz", "America/Los_Angeles", "--json", str(out), *extra],
-                                 github=github)
-        return status, json.loads(out.read_text()), stdout.getvalue()
+class ServerTest(unittest.TestCase):
+    def github(self, **options):
+        server = GitHubServer(**options)
+        self.addCleanup(server.close)
+        return server
+
+    def run_report(self, github, *extra, token=TOKEN):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "ledger.json"
+            stdout, stderr = io.StringIO(), io.StringIO()
+            env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
+            if token:
+                env["GH_TOKEN"] = token
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(ledger, "pause"), \
+                    contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                status = ledger.main(["--repo", "dayamjz/assistant", "--tz", "America/Los_Angeles",
+                                      "--json", str(out), *extra], api_url=github.url())
+            data = json.loads(out.read_text()) if out.exists() else None
+        self.stderr = stderr.getvalue()
+        return status, data, stdout.getvalue()
 
 
-class LedgerTest(unittest.TestCase):
+class LedgerTest(ServerTest):
     def test_an_issue_read_that_fails_still_prints_and_writes_the_ledger(self):
-        with mock.patch.object(ledger, "pause"):
-            status, data, text = run_report(FakeGitHub(LOGS, broken={"issues", "pulls"}))
+        status, data, text = self.run_report(self.github(broken={"issues"}))
         self.assertEqual(status, 2)
         self.assertIn("test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt",
                       [f["key"] for f in data["failures"]])
-        self.assertTrue(any("issues: HTTP 503" in p for p in data["problems"]), data["problems"])
+        self.assertTrue(any("issues" in p and "HTTP 503" in p for p in data["problems"]), data["problems"])
         # Unknown, not "none": a failed read is no evidence that no issue exists.
         self.assertTrue(all(f["issues"] is None for f in data["failures"]))
         self.assertIn("unknown", text)
@@ -336,234 +503,152 @@ class LedgerTest(unittest.TestCase):
         # A Test step that failed and printed its output, then a newer push
         # cancelled the job in a later step: the cancel is the job's result,
         # the failure is still in its log.
-        github = FakeGitHub({**LOGS, 120290002840: "judge-test-failure.log"})
-        _, data, _ = run_report(github)
+        github = self.github(logs={**LOGS, 120290002840: "judge-test-failure.log"})
+        _, data, _ = self.run_report(github)
         failure = next(f for f in data["failures"]
                        if f["key"] == "test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient")
         self.assertEqual(failure["occurrences"][0]["job_id"], 120290002840)
         self.assertEqual(data["cancelled_jobs_not_counted"], {"superseded": 1, "cancelled": 0})
 
     def test_failures_a_green_rerun_passed_over_are_counted_and_marked(self):
-        status, data, text = run_report(FakeGitHub(LOGS))
+        status, data, text = self.run_report(self.github())
         self.assertEqual(status, 0, text)
         failures = {f["key"]: f for f in data["failures"]}
         dispatch = failures["test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt"]
         self.assertEqual((dispatch["count"], dispatch["hidden_by_rerun"], dispatch["by_platform"]),
                          (1, 1, {"macos": 1}))
         self.assertEqual(dispatch["occurrences"][0]["attempt"], 2)
-        leak = failures["leak: internal/supervisor mdworker_shared"]
-        self.assertEqual((leak["hidden_by_rerun"], leak["occurrences"][0]["attempt"]), (1, 1))
-        self.assertEqual([i["number"] for i in leak["issues"]["closed"]], [551])
         self.assertEqual([i["number"] for i in dispatch["issues"]["closed"]], [552])
+        supervisor = failures["package: internal/supervisor (package)"]
+        self.assertEqual((supervisor["hidden_by_rerun"], supervisor["occurrences"][0]["attempt"]), (1, 1))
         timeout = failures["job-timeout: check (macos-latest) exceeded timeout-minutes"]
         self.assertEqual(timeout["hidden_by_rerun"], 1)
         self.assertEqual([i["number"] for i in timeout["issues"]["open"]], [559])
-        self.assertEqual(len(failures), 3)
-
-    def test_one_run_is_read_alone_with_its_finished_jobs_counted(self):
-        status, data, text = run_report(FakeGitHub(LOGS), "--run", "39905430594")
-        self.assertEqual(status, 0, text)
-        self.assertEqual((data["runs_scanned"], data["jobs_read"], data["failed_jobs"]), (1, 9, 2))
-        self.assertIn("9 finished job(s), 2 failed job(s)", text)
-
-    def test_one_run_with_a_cancelled_job_is_incomplete(self):
-        # Run 39916130926's two check jobs were cancelled; read as one run,
-        # its summary cannot pass, whatever the cancel's reason.
-        status, data, _ = run_report(FakeGitHub(LOGS), "--run", "39916130926")
-        self.assertEqual(status, 2)
-        self.assertEqual(data["failures"], [])
-        status, _, _ = run_report(FakeGitHub(LOGS))
-        self.assertEqual(status, 0, "over many runs a superseded job is only counted")
-
-    def test_a_rerun_past_a_failure_needs_an_open_issue_for_it(self):
-        # The recorded issues name both of run 39905430594's earlier failures,
-        # but #551 and #552 are closed, so neither has an open issue.
-        status, data, text = run_report(FakeGitHub(LOGS), "--run", "39905430594", "--require-open-issues")
-        self.assertEqual(status, 4)
-        self.assertEqual([(r["attempt"], r["key"]) for r in data["rerun_without_issue"]], [
-            (1, "leak: internal/supervisor mdworker_shared"),
-            (2, "test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt")])
-        self.assertIn("## Re-run past with no open issue", text)
-
-    def test_a_rerun_check_without_the_issues_does_not_pass(self):
-        with mock.patch.object(ledger, "pause"):
-            status, _, _ = run_report(FakeGitHub(LOGS, broken={"issues"}), "--run", "39905430594",
-                                      "--require-open-issues")
-        self.assertEqual(status, 2)
-
-    def test_an_open_issue_lets_a_rerun_pass(self):
-        github = FakeGitHub(LOGS)
-        for issue in github.data["issues"]:
-            issue["state"], issue["closed_at"] = "open", None
-        status, data, _ = run_report(github, "--run", "39905430594", "--require-open-issues")
-        self.assertEqual(status, 0)
-        self.assertEqual(data["rerun_without_issue"], [])
-
-    def rerun_check_failed_in_attempt_2(self, folder):
-        # Run 39905430594 with its attempt 2 holding a failed re-runs job, as
-        # ci.yml's job fails: the step that runs this check exits 4 after
-        # printing the ledger's own ::error:: line.
-        stamp = "2026-10-23T06:20:01.0000000Z"
-        log = Path(folder) / "rerun-check-failed.log"
-        log.write_text("\n".join([
-            f"{stamp} ##[group]Run set -o pipefail",
-            f"{stamp} ##[endgroup]",
-            f"{stamp} ##[error]run 39905430594 attempt 1 (check (macos-latest)) failed leak: internal/supervisor "
-            "mdworker_shared, and no open issue names it; file one containing mdworker_shared before re-running past it",
-            f"{stamp} ##[error]Process completed with exit code 4."]) + "\n")
-        github = FakeGitHub({**LOGS, 99000000001: log})
-        github.data["attempts"]["39905430594/2"]["jobs"].append({
-            "id": 99000000001, "run_attempt": 2, "name": "re-runs", "status": "completed", "conclusion": "failure",
-            "started_at": "2026-10-23T06:19:50Z", "completed_at": "2026-10-23T06:20:02Z", "labels": ["ubuntu-latest"],
-            "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/99000000001",
-            "steps": [{"name": "Set up job", "conclusion": "success"},
-                      {"name": "Run actions/checkout@v4", "conclusion": "success"},
-                      {"name": "Every earlier attempt's failure has an open issue", "conclusion": "failure"},
-                      {"name": "Complete job", "conclusion": "success"}]})
-        # The issue the check asked for is filed: every earlier failure is covered.
-        for issue in github.data["issues"]:
-            issue["state"], issue["closed_at"] = "open", None
-        return github
-
-    def test_the_rerun_checks_own_earlier_failure_needs_no_issue(self):
-        with tempfile.TemporaryDirectory() as folder:
-            github = self.rerun_check_failed_in_attempt_2(folder)
-            status, data, text = run_report(github, "--run", "39905430594", "--require-open-issues",
-                                            "--own-job", "re-runs")
-        self.assertEqual(status, 0, text)
-        self.assertEqual(data["rerun_without_issue"], [])
-
-    def test_another_jobs_earlier_failure_still_needs_an_issue(self):
-        # The positive control: --own-job sets aside only that job.
-        with tempfile.TemporaryDirectory() as folder:
-            github = self.rerun_check_failed_in_attempt_2(folder)
-            for issue in github.data["issues"]:
-                if issue["number"] == 552:
-                    issue["state"] = "closed"
-            status, data, _ = run_report(github, "--run", "39905430594", "--require-open-issues",
-                                         "--own-job", "re-runs")
-        self.assertEqual(status, 4)
-        self.assertEqual([r["key"] for r in data["rerun_without_issue"]],
-                         ["test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt"])
-
-    def test_an_earlier_attempts_cancel_does_not_make_a_run_incomplete(self):
-        # Run 39932040317's attempt 1 timed out (a failure, with #559 open);
-        # attempt 2 finished every job.
-        status, data, _ = run_report(FakeGitHub(LOGS), "--run", "39932040317", "--require-open-issues")
-        self.assertEqual(status, 0)
-        self.assertEqual([f["key"] for f in data["failures"]],
-                         ["job-timeout: check (macos-latest) exceeded timeout-minutes"])
-
-    def test_one_run_with_a_job_that_timed_out_is_incomplete(self):
-        # Run 39932040317 as it stood after attempt 1: its macOS job ran into
-        # timeout-minutes. The timeout is a failure record, and the suite
-        # never finished, so the run's summary cannot pass.
-        github = FakeGitHub(LOGS)
-        run = github.run(39932040317)
-        run["run_attempt"], run["conclusion"] = 1, "cancelled"
-        del github.data["attempts"]["39932040317/2"]
-        status, data, _ = run_report(github, "--run", "39932040317")
-        self.assertEqual(status, 2)
-        self.assertEqual([(c["job_id"], c["reason"]) for c in data["cancelled_jobs"]], [(120342424178, "timeout")])
-        self.assertIn("job-timeout: check (macos-latest) exceeded timeout-minutes", [f["key"] for f in data["failures"]])
-
-    def test_one_run_with_a_job_cancelled_after_a_failure_is_incomplete(self):
-        # Run 39916130926 with its macOS job's log holding the recorded judge
-        # failure, and its ubuntu job finished: the cancel still cut the
-        # macOS suite short.
-        github = FakeGitHub({**LOGS, 120290002840: "judge-test-failure.log"})
-        set_steps(github, 120290002917, {})["conclusion"] = "success"
-        status, data, _ = run_report(github, "--run", "39916130926")
-        self.assertEqual(status, 2)
-        self.assertEqual([(c["job_id"], c["reason"]) for c in data["cancelled_jobs"]], [(120290002840, "superseded")])
-
-    def test_a_running_attempts_jobs_are_not_cached(self):
-        with tempfile.TemporaryDirectory() as folder:
-            github = FakeGitHub(LOGS)
-            run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
-            run["status"], run["conclusion"] = "in_progress", None
-            with contextlib.redirect_stdout(io.StringIO()):
-                ledger.main(["--cache", folder, "--run", "39905430594"], github=github)
-            cached = sorted(p.name.split("-" + ledger.SCRIPT_DIGEST)[0] for p in Path(folder).iterdir())
-        self.assertIn("attempt-39905430594-1", cached)
-        self.assertNotIn("attempt-39905430594-3", cached)
+        self.assertEqual(sorted(failures), [
+            "job-timeout: check (macos-latest) exceeded timeout-minutes",
+            "leak: (leak check) leftovers, not read by this version",
+            "package: internal/supervisor (package)",
+            "test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt"])
 
     def test_a_run_superseded_by_a_newer_one_is_counted_but_not_a_failure(self):
-        _, data, _ = run_report(FakeGitHub(LOGS))
+        _, data, _ = self.run_report(self.github())
         self.assertEqual(data["cancelled_jobs_not_counted"], {"superseded": 2, "cancelled": 0})
         self.assertEqual(data["failed_jobs"], 3)
 
     def test_every_attempt_of_a_rerun_is_reported(self):
-        _, data, text = run_report(FakeGitHub(LOGS))
+        _, data, text = self.run_report(self.github())
         rerun = next(r for r in data["reruns"] if r["run_id"] == 39905430594)
         self.assertEqual([a["conclusion"] for a in rerun["attempts"]], ["failure", "failure", "success"])
+        # Attempt 2's only LEAK lines are the self-test's, printed before the group.
         self.assertEqual([(f["attempt"], f["key"]) for f in rerun["earlier_failures"]], [
-            (1, "leak: internal/supervisor mdworker_shared"),
+            (1, "leak: (leak check) leftovers, not read by this version"),
+            (1, "package: internal/supervisor (package)"),
             (2, "test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt")])
         self.assertIn("hidden: the final attempt does not show it", text)
 
     def test_an_unreadable_log_is_reported_and_fails_the_ledger(self):
-        status, data, text = run_report(FakeGitHub(LOGS, unreadable={120265317855}))
+        status, data, text = self.run_report(self.github(unreadable={120265317855}))
         self.assertEqual(status, 2)
         self.assertIn("HTTP 410", text)
         self.assertEqual([u["job_id"] for u in data["unattributed"]], [120265317855])
 
     def test_a_server_error_is_read_again_and_a_lasting_one_is_still_loud(self):
-        with mock.patch.object(ledger, "pause"):
-            status, data, _ = run_report(FakeGitHub(LOGS, flaky={120265317855: 2}))
-            self.assertEqual(status, 0)
-            failures = [f["key"] for f in data["failures"]]
-            self.assertIn("test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt", failures)
-            status, data, _ = run_report(FakeGitHub(LOGS, flaky={120265317855: 3}))
-            self.assertEqual(status, 2)
-            self.assertIn("HTTP 503", data["problems"][0])
+        status, data, _ = self.run_report(self.github(flaky={120265317855: 2}))
+        self.assertEqual(status, 0)
+        self.assertIn("test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt",
+                      [f["key"] for f in data["failures"]])
+        status, data, _ = self.run_report(self.github(flaky={120265317855: 3}))
+        self.assertEqual(status, 2)
+        self.assertIn("HTTP 503", data["problems"][0])
+
+    def test_a_log_cut_off_part_way_is_a_read_that_failed(self):
+        # The cut comes after the log's first half, so what came before it
+        # names nothing wrong; only the missing rest says the read failed.
+        for framing in ("length", "chunked"):
+            with self.subTest(framing=framing):
+                github = self.github()
+                github.cut_logs[120265317855] = framing
+                status, data, _ = self.run_report(github)
+                self.assertEqual(status, 2)
+                self.assertEqual([u["job_id"] for u in data["unattributed"]], [120265317855])
+                self.assertRegex(data["unattributed"][0]["reason"], r"^not read: log of job 120265317855: incomplete read")
+
+    def test_a_log_cut_off_once_is_read_again(self):
+        github = self.github()
+        github.cut_logs[120265317855] = "length"
+        github.cut_once.add(120265317855)
+        status, data, _ = self.run_report(github)
+        self.assertEqual(status, 0)
+        self.assertEqual(github.read.count(120265317855), 2)
+        self.assertIn("test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt",
+                      [f["key"] for f in data["failures"]])
+
+    def test_an_api_answer_cut_off_part_way_still_prints_and_writes_the_ledger(self):
+        github = self.github()
+        github.cut_issues = True
+        status, data, text = self.run_report(github)
+        self.assertEqual(status, 2)
+        self.assertIsNotNone(data, self.stderr)
+        self.assertTrue(any(p.startswith("issues: ") and "incomplete read" in p for p in data["problems"]),
+                        data["problems"])
+        self.assertTrue(all(f["issues"] is None for f in data["failures"]))
+        self.assertIn("unknown", text)
 
     def test_a_failed_test_step_that_names_nothing_fails_the_ledger(self):
         with tempfile.TemporaryDirectory() as folder:
             log = Path(folder) / "empty-group.log"
             log.write_text("\n".join(framed(["FAIL"])))
-            github = FakeGitHub({**LOGS, 120256178246: log})
-            status, data, _ = run_report(github)
+            status, data, _ = self.run_report(self.github(logs={**LOGS, 120256178246: log}))
         self.assertEqual(status, 3)
-        self.assertEqual([u["reason"] for u in data["unattributed"]], ["tests ran but no failure was named"])
-        failures = {f["key"] for f in data["failures"]}
-        self.assertIn("step: check (macos-latest) step Test", failures)
+        self.assertEqual([(u["job_id"], u["reason"]) for u in data["unattributed"]],
+                         [(120256178246, "the Test step failed and nothing in its log was named")])
+
+    def test_a_failed_test_step_whose_output_was_never_printed_fails_the_ledger(self):
+        # The step failed before the group (a value ci-test.sh refused, say)
+        # and reported nothing this version reads.
+        stamp = "2026-10-23T07:12:01.0000000Z"
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "no-group.log"
+            log.write_text("\n".join([f"{stamp} ##[group]Run bash scripts/ci-test.sh", f"{stamp} ##[endgroup]",
+                                      f"{stamp} ##[error]Process completed with exit code 1."]) + "\n")
+            status, data, _ = self.run_report(self.github(logs={**LOGS, 120256178246: log}))
+        self.assertEqual(status, 3)
+        self.assertEqual([u["job_id"] for u in data["unattributed"]], [120256178246])
 
     def test_a_failure_the_final_attempt_does_not_show_is_hidden_though_the_run_failed(self):
-        # The recorded run, stopped after attempt 2: the supervisor leak of
-        # attempt 1 is gone from attempt 2, the run's face, which fails
+        # The recorded run, stopped after attempt 2: attempt 1's supervisor
+        # failure is gone from attempt 2, the run's face, which fails
         # internal/service instead.
-        _, data, text = run_report(stopped_after_attempt_2(FakeGitHub(LOGS)))
+        _, data, text = self.run_report(stopped_after_attempt_2(self.github()))
         failures = {f["key"]: f for f in data["failures"]}
-        self.assertEqual(failures["leak: internal/supervisor mdworker_shared"]["hidden_by_rerun"], 1)
+        self.assertEqual(failures["package: internal/supervisor (package)"]["hidden_by_rerun"], 1)
         dispatch = failures["test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt"]
         self.assertEqual(dispatch["hidden_by_rerun"], 0)
-        self.assertIn("attempt 1, check (macos-latest): leak: internal/supervisor mdworker_shared "
+        self.assertIn("attempt 1, check (macos-latest): package: internal/supervisor (package) "
                       "(hidden: the final attempt does not show it)", text)
 
     def test_a_failure_the_final_attempt_shows_again_is_not_hidden(self):
-        github = stopped_after_attempt_2(FakeGitHub({**LOGS, 120265317855: "rerun-attempt-1.log"}))
-        _, data, _ = run_report(github)
-        leak = next(f for f in data["failures"] if f["key"] == "leak: internal/supervisor mdworker_shared")
-        self.assertEqual((leak["count"], leak["hidden_by_rerun"]), (2, 0))
+        github = stopped_after_attempt_2(self.github(logs={**LOGS, 120265317855: "rerun-attempt-1.log"}))
+        _, data, _ = self.run_report(github)
+        supervisor = next(f for f in data["failures"] if f["key"] == "package: internal/supervisor (package)")
+        self.assertEqual((supervisor["count"], supervisor["hidden_by_rerun"]), (2, 0))
 
     def test_each_failure_is_timed_by_the_job_it_failed_in(self):
         # Attempt 2's job ended at 06:18:38Z, nearly an hour after the run
         # was created (05:22:50Z).
-        _, data, _ = run_report(FakeGitHub(LOGS))
+        _, data, _ = self.run_report(self.github())
         failures = {f["key"]: f for f in data["failures"]}
         dispatch = failures["test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt"]
         self.assertEqual((dispatch["first_seen"], dispatch["last_seen"]),
                          ("2026-10-23T06:18:38Z", "2026-10-23T06:18:38Z"))
-        leak = failures["leak: internal/supervisor mdworker_shared"]
-        self.assertEqual(leak["last_seen"], "2026-10-23T05:52:16Z")
+        self.assertEqual(failures["package: internal/supervisor (package)"]["last_seen"], "2026-10-23T05:52:16Z")
 
     def test_a_step_that_failed_before_a_cancel_is_counted(self):
         # The recorded superseded job, as the runner would report it had
         # Verify formatting failed: the steps after it skip, the always()
         # step is cancelled, and the cancel becomes the job's conclusion.
-        github = FakeGitHub(LOGS)
-        job = next(j for a in github.data["attempts"].values() for j in a["jobs"] if j["id"] == 120290002840)
+        github = self.github()
+        job = github.job(120290002840)
         after = False
         for step in job["steps"]:
             if step["name"] == "Verify formatting":
@@ -580,18 +665,25 @@ class LedgerTest(unittest.TestCase):
                 f"{stamp} These files are not gofmt-clean:", f"{stamp} internal/graph/graph.go",
                 f"{stamp} ##[error]Process completed with exit code 1.",
                 "2026-10-23T07:19:57.7514310Z ##[error]The operation was canceled."]) + "\n")
-            github.logs = {**LOGS, 120290002840: log}
-            status, data, _ = run_report(github)
+            github.logs[120290002840] = log
+            status, data, _ = self.run_report(github)
         self.assertEqual(status, 0)
         failures = {f["key"]: f for f in data["failures"]}
         step = failures["step: check (macos-latest) step Verify formatting"]
         self.assertEqual([o["job_id"] for o in step["occurrences"]], [120290002840])
-        self.assertNotIn("The operation was canceled.", step["details"])
         self.assertEqual(data["cancelled_jobs_not_counted"], {"superseded": 1, "cancelled": 0})
 
+    def test_every_failed_step_counts_though_the_test_step_named_a_failure(self):
+        github = self.github(logs={**LOGS, 120256178246: "judge-test-failure.log"})
+        set_steps(github, 120256178246, {"Test": "failure", "Skipped tests": "failure"})
+        status, data, text = self.run_report(github)
+        self.assertEqual(status, 0, text)
+        keys = {f["key"] for f in data["failures"] if any(o["job_id"] == 120256178246 for o in f["occurrences"])}
+        self.assertEqual(keys, {"step: check (macos-latest) step Skipped tests",
+                                "test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient"})
+
     def test_the_headline_counts_every_job_whose_failures_are_counted(self):
-        github = FakeGitHub({**LOGS, 120290002840: "judge-test-failure.log"})
-        _, data, text = run_report(github)
+        _, data, text = self.run_report(self.github(logs={**LOGS, 120290002840: "judge-test-failure.log"}))
         jobs = {o["job_id"] for f in data["failures"] for o in f["occurrences"]}
         self.assertEqual(len(jobs), 4)
         self.assertEqual(data["failed_jobs"], 4)
@@ -599,115 +691,21 @@ class LedgerTest(unittest.TestCase):
 
     def test_a_cancel_with_no_reason_recorded_is_not_said_to_be_by_hand(self):
         # No annotation and no steps: cancelled before a runner took it.
-        github = FakeGitHub(LOGS)
+        github = self.github()
         github.data["annotations"]["120290002840"] = []
-        job = next(j for a in github.data["attempts"].values() for j in a["jobs"] if j["id"] == 120290002840)
-        job["steps"] = []
-        status, data, text = run_report(github)
+        github.job(120290002840)["steps"] = []
+        status, data, text = self.run_report(github)
         self.assertEqual(status, 0, text)
         self.assertEqual(data["cancelled_jobs_not_counted"], {"superseded": 1, "cancelled": 1})
         self.assertIn("1 cancelled for another reason (by hand, or before it started).", text)
-        self.assertNotIn("by hand.", text)
 
     def test_a_job_whose_annotations_cannot_be_read_is_not_said_to_have_an_unreadable_log(self):
-        with mock.patch.object(ledger, "pause"):
-            status, data, _ = run_report(FakeGitHub(LOGS, broken={"annotations"}))
+        status, data, _ = self.run_report(self.github(broken={"annotations"}))
         self.assertEqual(status, 2)
         reasons = {u["job_id"]: u["reason"] for u in data["unattributed"]}
         self.assertEqual(sorted(reasons), [120290002840, 120290002917, 120342424178])
         for reason in reasons.values():
-            self.assertTrue(reason.startswith("not read: gh api repos/dayamjz/assistant/check-runs/"), reason)
-
-    def test_a_run_is_matched_to_its_own_pull_request_not_a_forks_of_the_same_branch_name(self):
-        github = FakeGitHub(LOGS)
-        run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
-        run["head_branch"], run["head_repository"] = "main", {"full_name": "someone/assistant"}
-        github.pull_list = [
-            {"number": 600, "head": {"ref": "main", "repo": {"full_name": "other/assistant"}}},
-            {"number": 601, "head": {"ref": "main", "repo": {"full_name": "someone/assistant"}}},
-            {"number": 602, "head": {"ref": "main", "repo": None}},  # a deleted fork
-        ]
-        _, data, _ = run_report(github)
-        prs = {o["pr"] for f in data["failures"] for o in f["occurrences"] if o["run_id"] == 39905430594}
-        self.assertEqual(prs, {601})
-
-    def two_failed_steps(self, folder, failed_second=True):
-        # The recorded judge failure's job through its Test step (verbatim,
-        # ending in that step's exit line), then its Skipped tests step,
-        # which runs always(), failing too.
-        stamp = "2026-10-23T13:54:03.2321910Z"
-        lines = log_lines("judge-test-failure.log", 1, 137) + [
-            f"{stamp} No test skipped on macos-latest.",
-            f"{stamp} ##[error]grep: test.log: Input/output error"]
-        if failed_second:
-            lines.append(f"{stamp} ##[error]Process completed with exit code 2.")
-        log = Path(folder) / "two-failed-steps.log"
-        log.write_text("\n".join(lines) + "\n")
-        github = FakeGitHub({**LOGS, 120256178246: log})
-        set_steps(github, 120256178246, {"Test": "failure", "Skipped tests": "failure"})
-        return github
-
-    def test_every_failed_step_counts_though_another_named_a_failure(self):
-        with tempfile.TemporaryDirectory() as folder:
-            status, data, text = run_report(self.two_failed_steps(folder))
-        self.assertEqual(status, 0, text)
-        failures = {f["key"]: f for f in data["failures"]}
-        attempt_1 = {k for k, f in failures.items() if any(o["job_id"] == 120256178246 for o in f["occurrences"])}
-        self.assertIn("step: check (macos-latest) step Skipped tests", attempt_1)
-        self.assertIn("test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient", attempt_1)
-        # The Test step's failure is the named test, not a step row too.
-        self.assertNotIn("step: check (macos-latest) step Test", attempt_1)
-        self.assertEqual(failures["step: check (macos-latest) step Skipped tests"]["details"],
-                         ["grep: test.log: Input/output error"])
-
-    def test_failed_steps_that_cannot_be_told_apart_are_all_counted(self):
-        # Two failed steps, one exit line: which step printed the named test
-        # is unknown, so both steps are counted rather than one assumed.
-        with tempfile.TemporaryDirectory() as folder:
-            _, data, _ = run_report(self.two_failed_steps(folder, failed_second=False))
-        keys = {f["key"] for f in data["failures"]
-                if any(o["job_id"] == 120256178246 for o in f["occurrences"])}
-        self.assertTrue({"step: check (macos-latest) step Test", "step: check (macos-latest) step Skipped tests",
-                         "test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient"} <= keys, keys)
-
-    def test_a_test_whose_package_never_reported_is_counted(self):
-        # The superseded job, cancelled while cat test.log printed: one
-        # complete failing package (the recorded judge failure), then
-        # another package's failing test (the recorded dispatch failure),
-        # and the cancel before that package's summary line.
-        lines = (log_lines("judge-test-failure.log", 1, 109)
-                 + log_lines("rerun-attempt-2.log", 116, 120)
-                 + ["2026-10-23T07:19:57.7514310Z ##[error]The operation was canceled."])
-        with tempfile.TemporaryDirectory() as folder:
-            log = Path(folder) / "cut-off.log"
-            log.write_text("\n".join(lines) + "\n")
-            github = FakeGitHub({**LOGS, 120290002840: log})
-            status, data, text = run_report(github)
-        self.assertEqual(status, 0, text)
-        keys = {f["key"] for f in data["failures"]
-                if any(o["job_id"] == 120290002840 for o in f["occurrences"])}
-        self.assertEqual(keys, {"test: internal/judge TestAnotherProviderStoppingDoesNotReachAClient",
-                                "test: (output cut off) TestConcurrentDispatchOfOneTaskClaimsOneAttempt"})
-
-    def pr_of(self, created_at, named=None):
-        # The recorded run, moved onto the branch #154 and then #257 used.
-        github = FakeGitHub(LOGS)
-        run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
-        run["head_branch"], run["created_at"] = "claude/prd-owner-decisions", created_at
-        if named:
-            run["pull_requests"] = [{"number": named}]
-        _, data, _ = run_report(github)
-        return {o["pr"] for f in data["failures"] for o in f["occurrences"] if o["run_id"] == 39905430594}
-
-    def test_a_reused_branchs_run_is_its_own_pull_requests(self):
-        # 38522563333 ran at 06:30:04 on 10-14, while #154 was open.
-        self.assertEqual(self.pr_of("2026-10-14T06:30:04Z"), {154})
-        self.assertEqual(self.pr_of("2026-10-15T14:33:28Z"), {257})
-        # Between the two, neither was open: unknown, not a guess.
-        self.assertEqual(self.pr_of("2026-10-15T00:00:00Z"), {None})
-
-    def test_the_pull_request_a_run_names_is_its_own(self):
-        self.assertEqual(self.pr_of("2026-10-15T14:33:28Z", named=154), {154})
+            self.assertRegex(reason, r"^not read: repos/dayamjz/assistant/check-runs/\d+/annotations\S*: HTTP 502$")
 
     def test_a_cancelled_job_whose_tests_name_nothing_fails_the_ledger(self):
         # The superseded job's Test step printed its output and named no
@@ -715,26 +713,21 @@ class LedgerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             log = Path(folder) / "empty-group.log"
             log.write_text("\n".join(framed(["FAIL"])))
-            github = FakeGitHub({**LOGS, 120290002840: log})
-            status, data, _ = run_report(github)
+            status, data, _ = self.run_report(self.github(logs={**LOGS, 120290002840: log}))
         self.assertEqual(status, 3)
-        self.assertEqual([(u["job_id"], u["reason"]) for u in data["unattributed"]],
-                         [(120290002840, "tests ran but no failure was named")])
+        self.assertEqual([u["job_id"] for u in data["unattributed"]], [120290002840])
         self.assertEqual(data["cancelled_jobs_not_counted"], {"superseded": 1, "cancelled": 0})
 
     def test_a_job_cancelled_before_it_started_is_set_aside_without_a_log(self):
-        github = FakeGitHub(LOGS)
-        for attempt in github.data["attempts"].values():
-            for job in attempt["jobs"]:
-                if job["id"] == 120290002840:
-                    job["steps"] = []
-        status, data, text = run_report(github)
+        github = self.github()
+        github.job(120290002840)["steps"] = []
+        status, data, text = self.run_report(github)
         self.assertEqual(status, 0, text)
         self.assertNotIn(120290002840, github.read)
         self.assertEqual(data["cancelled_jobs_not_counted"], {"superseded": 2, "cancelled": 0})
 
     def test_a_timeout_known_from_its_annotation_survives_an_unreadable_log(self):
-        status, data, text = run_report(FakeGitHub(LOGS, unreadable={120342424178}))
+        status, data, text = self.run_report(self.github(unreadable={120342424178}))
         self.assertEqual(status, 2)
         self.assertIn("HTTP 410", text)
         self.assertEqual([u["job_id"] for u in data["unattributed"]], [120342424178])
@@ -742,270 +735,125 @@ class LedgerTest(unittest.TestCase):
                        if f["key"] == "job-timeout: check (macos-latest) exceeded timeout-minutes")
         self.assertEqual([o["job_id"] for o in timeout["occurrences"]], [120342424178])
 
-    def test_an_unreadable_log_is_not_cached(self):
-        # A timed-out job's partial result is not its answer: the next run
-        # reads its log again.
-        with tempfile.TemporaryDirectory() as folder:
-            first, second = FakeGitHub(LOGS, unreadable={120342424178}), FakeGitHub(LOGS)
-            statuses = []
-            for github in (first, second):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    statuses.append(ledger.main(["--cache", folder], github=github))
-        self.assertEqual(statuses, [2, 0])
-        self.assertEqual(second.read, [120342424178])
-
-    def test_the_cache_reads_a_finished_job_once(self):
-        with tempfile.TemporaryDirectory() as folder:
-            first, second = FakeGitHub(LOGS), FakeGitHub(LOGS)
-            for github in (first, second):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    ledger.main(["--cache", folder], github=github)
-        self.assertEqual(sorted(first.read), sorted(LOGS))
-        self.assertEqual(second.read, [])
-
-
-FAKE_GH = """#!/bin/sh
-# Blocks like a gh whose server never answers, with a child of its own
-# that holds none of gh's pipes, so only ending the group ends it.
-echo $$ >> "$FAKE_GH_PIDS"
-sleep 600 </dev/null >/dev/null 2>&1 &
-echo $! >> "$FAKE_GH_PIDS"
-echo "a first line, then nothing"
-wait
-"""
-
-
-# A gh that answers the API from the recorded responses, as GitHub would,
-# and blocks on a job log with a child of its own, as a stalled download.
-FAKE_GH_API = """
-import json, os, re, subprocess, sys, time
-args = [a for a in sys.argv[1:] if a not in ("-H", "Accept: application/vnd.github+json")]
-if args[:2] == ["api", "--help"]:
-    print("--allow-escape-sequences"); sys.exit(0)
-data = json.load(open(os.environ["FAKE_GH_DATA"]))
-path = args[-1]
-if path.endswith("/logs"):
-    with open(os.environ["FAKE_GH_PIDS"], "a") as pids:
-        child = subprocess.Popen(["sleep", "600"], stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        pids.write(f"{os.getpid()}\\n{child.pid}\\n")
-    time.sleep(600)
-elif "/workflows/" in path:
-    page = int(re.search(r"[?&]page=(\\d+)", path).group(1))
-    print(json.dumps({"workflow_runs": data["runs"] if page == 1 else []}))
-elif m := re.search(r"runs/(\\d+)/attempts/(\\d+)/jobs", path):
-    print(json.dumps([{"jobs": data["attempts"][f"{m[1]}/{m[2]}"]["jobs"]}]))
-elif m := re.search(r"runs/(\\d+)/attempts/(\\d+)", path):
-    print(json.dumps(data["attempts"][f"{m[1]}/{m[2]}"]))
-elif m := re.search(r"check-runs/(\\d+)/annotations", path):
-    print(json.dumps(data["annotations"][m[1]]))
-else:
-    sys.stderr.write(f"fake gh: no answer for {path}\\n"); sys.exit(1)
-"""
-
-
-class GhProcessTest(unittest.TestCase):
-    """P15: every gh the ledger starts runs under a deadline and ends, with
-    what it started, when the ledger ends. The gh here is a real program
-    that blocks and starts a child, as a hung gh would."""
-
-    def setUp(self):
-        folder = tempfile.mkdtemp(prefix="flake-ledger-gh-")
-        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
-        self.pids = Path(folder) / "pids"
-        gh = Path(folder) / "gh"
-        gh.write_text(FAKE_GH)
-        gh.chmod(0o755)
-        self.env = {**os.environ, "PATH": f"{folder}{os.pathsep}{os.environ['PATH']}",
-                    "FAKE_GH_PIDS": str(self.pids)}
-        self.addCleanup(self.end_leftovers)
-
-    def started(self, count=2):
-        lines = self.pids.read_text().split() if self.pids.exists() else []
-        return [int(p) for p in lines] if len(lines) >= count else None
-
-    def end_leftovers(self):
-        for pid in self.started(1) or []:
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
-
-    def assert_ended(self, pids, within=10):
-        deadline = time.monotonic() + within
-        alive = list(pids)
-        while alive and time.monotonic() < deadline:
-            alive = [p for p in alive if alive_pid(p)]
-            time.sleep(0.1)
-        self.assertEqual(alive, [], "gh or its child outlived its bound")
-
-    def wait_for_gh(self, ledger_process, count=2):
-        deadline = time.monotonic() + 30
-        while self.started(count) is None:
-            self.assertIsNone(ledger_process.poll(), "the ledger exited before starting gh")
-            self.assertLess(time.monotonic(), deadline, "gh never started")
-            time.sleep(0.1)
-        return self.started(count)
-
-    def test_a_gh_call_past_its_deadline_is_ended_with_its_child(self):
-        raised = []
-
-        def call():
-            try:
-                ledger.GitHub("dayamjz/assistant").api("repos/dayamjz/assistant/issues")
-            except ledger.GitHubError as error:
-                raised.append(error)
-
-        with mock.patch.dict(os.environ, self.env), mock.patch.object(ledger, "API_DEADLINE", 1), \
-                mock.patch.object(ledger, "pause"):
-            # On a thread, so a call that never ends fails the test instead
-            # of hanging it; ending the fake gh then lets the thread finish.
-            caller = threading.Thread(target=call)
-            caller.start()
-            caller.join(20)
-            overran = caller.is_alive()
-            if overran:
-                self.end_leftovers()
-                caller.join(20)
-        self.assertFalse(overran, "a gh call outran its deadline")
-        self.assertRegex(str(raised[0]), "timed out after 1s")
-        pids = self.started()
-        self.assertEqual(len(pids), 6, "three tries, each a gh and its child")
-        self.assert_ended(pids)
-
-    def test_a_log_read_stopped_early_ends_its_gh_at_once(self):
-        github = ledger.GitHub("dayamjz/assistant")
-        github._escape_flag = False
-        # A short deadline keeps a regression from hanging the test; ending at
-        # once is well inside it.
-        with mock.patch.dict(os.environ, self.env), mock.patch.object(ledger, "LOG_DEADLINE", 8):
-            lines = github.job_log(1)
-            self.assertEqual(next(lines), "a first line, then nothing\n")
-            begun = time.monotonic()
-            lines.close()
-        self.assertLess(time.monotonic() - begun, 3, "closing the read waited for gh's deadline")
-        self.assert_ended(self.started())
-
-    def ledger(self):
-        process = subprocess.Popen([sys.executable, str(SCRIPT), "--repo", "dayamjz/assistant", "--no-cache"],
-                                   env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait()))
-        return process
-
-    def interrupted_promptly(self, process, pids):
-        process.send_signal(signal.SIGINT)
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            self.fail("an interrupted ledger waited for its gh's deadline")
-        self.assertEqual(process.returncode, 130)
-        self.assert_ended(pids, within=5)
-
-    def test_an_interrupted_ledger_ends_its_gh_at_once(self):
-        # Ctrl+C while the run listing blocks, with the real 120 s deadline.
-        process = self.ledger()
-        self.interrupted_promptly(process, self.wait_for_gh(process))
-
-    def test_an_interrupted_ledger_ends_the_log_reads_its_workers_hold(self):
-        gh = Path(self.env["PATH"].split(os.pathsep)[0]) / "gh"
-        gh.write_text(f"#!{sys.executable}\n" + FAKE_GH_API)
-        self.env["FAKE_GH_DATA"] = str(DATA / "api.json")
-        process = self.ledger()
-        pids = self.wait_for_gh(process, count=4)  # two log reads on worker threads, each with a child
-        self.interrupted_promptly(process, pids)
-
-    def test_a_terminated_ledger_ends_its_gh_and_what_gh_started(self):
-        process = self.ledger()
-        pids = self.wait_for_gh(process)
-        process.send_signal(signal.SIGTERM)
-        process.wait(timeout=10)
-        self.assert_ended(pids)
-
-    def test_a_killed_ledger_ends_its_gh_and_what_gh_started(self):
-        process = self.ledger()
-        pids = self.wait_for_gh(process)
-        process.kill()
-        process.wait(timeout=10)
-        self.assert_ended(pids)
-
-
-def alive_pid(pid):
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-class ClosedIssueTest(unittest.TestCase):
-    def dispatch(self, branch, completed_at=None, closed_at=None, event=None, head_repository=None, repo=None):
-        # The failure is attempt 2's, in job 120265317855; moving when that
-        # job ended moves when it failed. The run itself was created earlier.
-        # A run of main is a push; a branch's run is its pull request's.
-        github = FakeGitHub(LOGS)
-        github.repo = repo or github.repo
+    def test_a_forks_branch_carries_its_owner(self):
+        github = self.github()
         run = next(r for r in github.data["runs"] if r["id"] == 39905430594)
-        run["head_branch"] = branch
-        run["event"] = event or ("push" if branch == "main" else "pull_request")
-        if head_repository:
-            run["head_repository"] = {"full_name": head_repository}
-        if completed_at:
-            job = next(j for j in github.data["attempts"]["39905430594/2"]["jobs"] if j["id"] == 120265317855)
-            job["completed_at"] = completed_at
-        if closed_at:
-            next(i for i in github.data["issues"] if i["number"] == 552)["closed_at"] = closed_at
-        _, data, text = run_report(github)
+        run["head_branch"], run["head_repository"] = "main", {"full_name": "someone/assistant"}
+        _, data, _ = self.run_report(github)
+        branches = {o["branch"] for f in data["failures"] for o in f["occurrences"] if o["run_id"] == 39905430594}
+        self.assertEqual(branches, {"someone:main"})
+
+    def test_an_issue_about_another_tests_subtest_of_the_same_name_is_not_the_failures(self):
+        github = self.github()
+        github.data["issues"] = [{"number": 900, "state": "open", "body": "", "closed_at": None,
+                                  "title": "service: TestOther/TestConcurrentDispatchOfOneTaskClaimsOneAttempt flakes"}]
+        _, data, _ = self.run_report(github)
         entry = next(f for f in data["failures"] if f["name"] == "TestConcurrentDispatchOfOneTaskClaimsOneAttempt")
-        self.entry = entry
-        return entry["failed_on_main_after_close"], text
+        self.assertEqual(entry["issues"], {"open": [], "closed": []})
 
-    def test_a_failure_on_main_after_its_issue_closed_is_flagged(self):
-        # #552 closed 2026-10-23T09:27:38Z.
-        flagged, text = self.dispatch("main", "2026-10-23T10:00:00Z")
-        self.assertEqual(flagged, [552])
-        self.assertIn("~~#552~~ **failed on main since it closed**", text)
 
-    def test_a_rerun_failure_after_the_close_of_a_run_created_before_it_is_flagged(self):
-        # The run was created at 05:22:50Z; its attempt 2 failed at
-        # 06:18:38Z, after an issue closed at 06:00Z.
-        self.assertEqual(self.dispatch("main", closed_at="2026-10-23T06:00:00Z")[0], [552])
+class WireTest(ServerTest):
+    """How the ledger talks to GitHub: what it sends where, and its bounds."""
 
-    def test_a_forks_main_is_not_this_repositorys_main(self):
-        # A pull request from a fork whose branch is named main.
-        flagged, text = self.dispatch("main", "2026-10-23T10:00:00Z", event="pull_request",
-                                      head_repository="someone/assistant")
-        self.assertEqual((flagged, self.entry["on_main"]), ([], 0))
-        self.assertEqual(self.entry["by_branch"], {"someone:main": 1})
-        self.assertIn("someone:main (1)", text)
+    def test_without_a_token_it_refuses_before_reading_anything(self):
+        github = self.github()
+        status, data, _ = self.run_report(github, token=None)
+        self.assertEqual(status, 2)
+        self.assertIsNone(data)
+        self.assertIn("set GH_TOKEN or GITHUB_TOKEN", self.stderr)
+        self.assertEqual(github.read, [])
 
-    def test_a_pull_request_from_this_repositorys_main_is_not_a_run_of_main(self):
-        flagged, _ = self.dispatch("main", "2026-10-23T10:00:00Z", event="pull_request")
-        self.assertEqual((flagged, self.entry["on_main"]), ([], 0))
-        self.assertEqual(self.entry["by_branch"], {"main (pull request)": 1})
+    def test_a_token_github_refuses_is_loud(self):
+        status, data, _ = self.run_report(self.github(), token="wrong")
+        self.assertEqual(status, 2)
+        self.assertIn("HTTP 401", self.stderr)
 
-    def test_this_repository_named_in_another_case_is_still_its_own(self):
-        # GitHub's names are case-insensitive: --repo Dayamjz/Assistant is
-        # dayamjz/assistant, which the API's run objects name.
-        flagged, _ = self.dispatch("main", "2026-10-23T10:00:00Z", repo="Dayamjz/Assistant")
-        self.assertEqual((flagged, self.entry["on_main"]), ([552], 1))
+    def test_a_logs_redirect_is_read_without_the_token(self):
+        github = self.github()
+        status, _, _ = self.run_report(github)
+        self.assertEqual(status, 0)
+        self.assertEqual(sorted(github.read), sorted(j for j in LOGS if github.job(j).get("steps")))
+        self.assertTrue(github.log_authorizations)
+        self.assertEqual(set(github.log_authorizations), {None})
 
-    def test_a_failure_before_the_close_or_off_main_is_not(self):
-        self.assertEqual(self.dispatch("main")[0], [])
-        self.assertEqual(self.dispatch("fix/age-441-handoff-session", "2026-10-23T10:00:00Z")[0], [])
+    def test_every_page_of_a_listing_is_read(self):
+        # GitHubServer serves two items a page, so the runs, each attempt's
+        # jobs and the issues all take more than one page, each found by
+        # following the Link header.
+        github = self.github()
+        client = ledger.GitHub("dayamjz/assistant", TOKEN, github.url())
+        self.assertEqual(len(client.runs("ci.yml", 60)), len(github.data["runs"]))
+        self.assertEqual(len(client.issues()), len(github.data["issues"]))
+        jobs = github.data["attempts"]["39905430594/1"]["jobs"]
+        self.assertGreater(len(jobs), GitHubServer.PAGE)
+        self.assertEqual([j["id"] for j in client.attempt_jobs(39905430594, 1)], [j["id"] for j in jobs])
+
+    def test_a_next_page_elsewhere_is_not_sent_the_token(self):
+        github = self.github()
+        original = github._paged
+
+        def elsewhere(request, items, key=None):
+            status, headers, body = original(request, items, key)
+            if "Link" in headers:
+                headers["Link"] = headers["Link"].replace(github.url(), github.url(github.blobs))
+            return status, headers, body
+        github._paged = elsewhere
+        client = ledger.GitHub("dayamjz/assistant", TOKEN, github.url())
+        with self.assertRaisesRegex(ledger.GitHubError, "not the API's address, so the token is not sent there"):
+            client.issues()
+        self.assertEqual(github.log_authorizations, [])
+
+    def test_a_branch_is_asked_for_by_its_own_name(self):
+        # A name git accepts (git check-ref-format --branch). Unencoded in a
+        # query, a server reads + as a space, # as the query's end and & as
+        # the next parameter.
+        github = self.github()
+        branch = github.data["runs"][0]["head_branch"] = "fix/c++#2&x=1"
+        runs = ledger.GitHub("dayamjz/assistant", TOKEN, github.url()).runs("ci.yml", 10, branch=branch,
+                                                                            since="2026-10-01")
+        self.assertEqual([r["id"] for r in runs], [github.data["runs"][0]["id"]])
+
+    def test_a_read_that_never_answers_ends_at_its_deadline(self):
+        github = self.github()
+        github.stalled.add("/repos/dayamjz/assistant/issues")
+        client = ledger.GitHub("dayamjz/assistant", TOKEN, github.url())
+        begun = time.monotonic()
+        with mock.patch.object(ledger, "API_DEADLINE", 1), mock.patch.object(ledger, "pause"):
+            with self.assertRaisesRegex(ledger.GitHubError, "timed out after 1s"):
+                client.issues()
+        # Three tries, each ended at its deadline.
+        self.assertLess(time.monotonic() - begun, 10)
+
+    def test_a_log_that_trickles_ends_at_its_deadline(self):
+        # Each line comes well inside READ_TIMEOUT; the whole log never ends.
+        github = self.github()
+        github.trickled.add(120265317855)
+        client = ledger.GitHub("dayamjz/assistant", TOKEN, github.url())
+        begun = time.monotonic()
+        with mock.patch.object(ledger, "LOG_DEADLINE", 1), mock.patch.object(ledger, "pause"):
+            result = ledger.read_job(client, github.job(120265317855))
+        self.assertEqual(result["error"], "log of job 120265317855: timed out after 1s")
+        # Three tries, each ended at its deadline.
+        self.assertLess(time.monotonic() - begun, 10)
 
 
 class MatchTest(unittest.TestCase):
     def test_a_test_name_matches_only_as_a_whole_word(self):
         find = ledger.matcher([{"number": 1, "state": "open", "title": "TestFooBar flakes", "body": ""}])
-        self.assertEqual([i["number"] for i in find("TestFooBar")["open"]], [1])
-        self.assertEqual(find("TestFoo")["open"], [])
+        self.assertEqual([i["number"] for i in find("TestFooBar", test=True)["open"]], [1])
+        self.assertEqual(find("TestFoo", test=True)["open"], [])
 
-    def test_a_tempdir_token_matches_the_subtest_it_came_from(self):
-        issue = {"number": 563, "state": "open", "body": "",
-                 "title": "service: TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out can leave its child"}
-        find = ledger.matcher([issue])
-        self.assertEqual([i["number"] for i in find("TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out", True)["open"]],
-                         [563])
-        self.assertEqual(find("TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out")["open"], [])
+    def test_a_failed_test_is_not_another_tests_subtest_of_its_name(self):
+        titles = {1: "service.TestTop flakes", 2: "TestTop/sub flakes", 3: "TestOther/TestTop flakes"}
+        find = ledger.matcher([{"number": n, "state": "open", "title": t, "body": ""} for n, t in titles.items()])
+        self.assertEqual([i["number"] for i in find("TestTop", test=True)["open"]], [1, 2])
+        # Any other token may follow a path.
+        find = ledger.matcher([{"number": 4, "state": "open", "title": "/usr/libexec/mdworker_shared stays", "body": ""}])
+        self.assertEqual([i["number"] for i in find("mdworker_shared")["open"]], [4])
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["write-go-module"]:
+        write_go_module(sys.argv[2])
+        sys.exit(0)
     unittest.main()

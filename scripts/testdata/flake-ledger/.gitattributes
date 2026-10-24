@@ -1,2 +1,4 @@
 # Real CI job logs, kept verbatim: their trailing spaces are what GitHub served.
 *.log -whitespace
+# Real go test -v output, kept verbatim: t.Log and t.Output indent blank lines too.
+go-test-v.txt -whitespace

@@ -186,8 +186,7 @@ func TestUnderTmuxAServerKilledOutrightReadsDeadAndARestartRelaunches(t *testing
 
 	o, _ = workerOptions(t, h)
 	var second session.Reference
-	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
+	withRestartedService(t, o, h, id, unestablished, func(running serviceUnderTest, provider session.Provider, launched *session.Session) {
 		if _, ok := provider.(*session.Tmux); !ok {
 			t.Fatalf("the restarted service relaunched through %T, want the tmux provider", provider)
 		}
@@ -285,8 +284,7 @@ func TestUnderTmuxASurvivorOfTheServiceReadsUnobservedAndIsSurfacedNotRelaunched
 	})
 
 	o, _ = workerOptions(t, h)
-	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
+	withRestartedService(t, o, h, id, unestablished, func(running serviceUnderTest, provider session.Provider, launched *session.Session) {
 		waitCapture(t, provider, launched, "worker ready")
 		if launched.Reference() == first {
 			t.Fatalf("the relaunch reused the first attempt's reference %s", first)
