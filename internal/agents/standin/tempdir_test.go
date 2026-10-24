@@ -572,3 +572,38 @@ func TestAReplacedOwnerIdentityIsReclaimed(t *testing.T) {
 		t.Fatalf("replaced identity left %s: %v", path, err)
 	}
 }
+
+// TestReclaimProcessRemovesAReplacedOwner keeps a directory this process
+// still owns and removes one recorded with the same pid and a different
+// start. A killed child cannot sweep its own namespace, so the parent
+// reclaims by pid.
+func TestReclaimProcessRemovesAReplacedOwner(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	self, found, err := agents.Identify(os.Getpid())
+	if err != nil || !found {
+		t.Fatalf("identifying this process: %+v, %v, %v", self, found, err)
+	}
+	tag, err := RegisteredTempTag()
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := TempDir("live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(live) }()
+	gone, err := replacedTempDir(tag, agents.Identity{PID: self.PID, Start: self.Start + 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(gone) }()
+	if err := ReclaimProcess(self.PID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(live); err != nil {
+		t.Fatalf("live directory %s: %v", live, err)
+	}
+	if _, err := os.Stat(gone); !os.IsNotExist(err) {
+		t.Fatalf("replaced identity left %s: %v", gone, err)
+	}
+}

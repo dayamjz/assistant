@@ -116,6 +116,46 @@ func SweepTempDirs() error {
 	return nil
 }
 
+// ReclaimProcess removes temp directories whose recorded owner is pid when
+// that process is not still present. A live owner is left, and a name that
+// does not parse is left. A failed identity read is returned and that
+// directory is not removed.
+func ReclaimProcess(pid int) error {
+	if pid <= 0 {
+		return fmt.Errorf("standin: reclaiming temp directories of pid %d", pid)
+	}
+	entries, err := os.ReadDir(tempRoot())
+	if err != nil {
+		return fmt.Errorf("standin: listing test temp directories: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "at") {
+			continue
+		}
+		rest := strings.TrimPrefix(entry.Name(), "at")
+		_, ownerPart, ok := strings.Cut(rest, "-")
+		if !ok {
+			continue
+		}
+		owner, ok := parseTempOwner(ownerPart)
+		if !ok || owner.PID != pid {
+			continue
+		}
+		presence, err := owner.Presence()
+		if err != nil {
+			return fmt.Errorf("standin: checking owner of %s: %w", entry.Name(), err)
+		}
+		if presence == agents.PresencePresent {
+			continue
+		}
+		path := filepath.Join(tempRoot(), entry.Name())
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("standin: reclaiming %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
 // namespaceFromFile is the caller's directory within its module. '_' encodes
 // as "_0" and '/' as "_1", so a directory named a_b and directories a/b or
 // a/_b do not match. The encoding emits no hyphen, and the trailing hyphen

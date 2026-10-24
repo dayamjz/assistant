@@ -66,6 +66,13 @@ import (
 // module builds is built where the guard allows: a command built by
 // procgroup.Command and handed to procgroup.Run names no starter outside
 // internal/procgroup.
+//
+// Each name is one the type checker resolves. The control fixture names
+// every entry, so a string that matches no function fails that test.
+// golang.org/x/sys/unix.ForkExec is not an entry: that package has Exec
+// and no ForkExec in the version this module requires, and a call to the
+// missing name does not type-check. A later version that adds ForkExec
+// fails the test that looks the name up until Starters lists it.
 var Starters = []string{
 	"os/exec.Command",
 	"os/exec.CommandContext",

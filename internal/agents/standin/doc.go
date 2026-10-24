@@ -75,7 +75,8 @@
 // parse. SocketDir, the tmux wrapper RunOwned installs, and a library a
 // test calls (storetest's database template) call TempDir, which stamps
 // the namespace the running TestMain recorded, so the next start of that
-// package reclaims them.
+// package reclaims them. A parent whose child was killed before that sweep
+// reclaims the child's directories with ReclaimProcess and the child's pid.
 //
 // A package that forgets it would otherwise read the resulting agent failures
 // as the code under test misbehaving. The first New in a process refuses

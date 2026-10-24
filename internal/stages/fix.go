@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -100,6 +101,38 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 // what makes the round mean anything to the stages after it: every one of them
 // reads a commit, and a working copy with uncommitted edits is not one.
 //
+// A rebase the rebase stage left in progress is the conflict on the new base.
+// The round commits a resolution that differs from the commit the rebase is
+// stopped on and continues, so the conflicting commit is not replayed again
+// ahead of the fix. A resolution that matches that commit records no new
+// tree. That step is skipped, not continued: continue finishes a step that
+// is already committed, and this one was not. Skipping drops the patch and
+// keeps a step already replayed. Aborting would drop that step, and the next
+// replay would stop on the original commit. The round reports the head when
+// the rebase has finished or stopped on a later conflict. A stop with nothing
+// unmerged is an error, and the round does not report a head. A round that
+// leaves the index and the worktree unchanged aborts the rebase only when
+// the copy's HEAD is not the head the run already records, and reports that
+// nothing changed, so the stage's next execution starts a new rebase rather
+// than meeting one left in progress. When HEAD is that recorded head, an
+// earlier round of this rebase has already committed it. Aborting would
+// remove that commit from the working copy and leave the recorded head
+// naming a commit the copy no longer has, so the round leaves the rebase in
+// progress and writes no new head.
+//
+// A round that changed something but left a conflicted file as the conflict
+// left it, with the same conflict stages in the index and the same worktree
+// state, did not resolve that file. Committing would stage it with whatever
+// it holds, conflict markers included, and mark it resolved. So the round
+// commits nothing, leaves the rebase stopped with the fixer's edits in the
+// working tree, writes no new head, and its summary names the files. The
+// conflicted files it did change are staged, which keeps them resolved for
+// the next round without committing them. A file
+// still conflicted that was not conflicted when the round began is treated
+// the same way. A file whose content already is its resolution is resolved
+// by staging it, which the conflict finding tells the fixer. A rebase the
+// fixer ended itself fails the round before anything is committed.
+//
 // pipeline.KeyHead is the write that carries it, and it is the write that makes
 // the graph's convergence bound meaningful: a round that changed nothing leaves
 // state as it was, and the loop ends rather than asking again forever.
@@ -143,6 +176,9 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 //     the commit takes every change in the copy, including anything a previous
 //     failed round left behind. The copy is the run's own and nothing else
 //     writes to it, which bounds that to this run's own history.
+//   - A conflicted file the fixer changed counts as resolved whatever it now
+//     holds. Nothing in the round reads its content, so one the fixer edited
+//     and left with conflict markers in it is committed with them.
 func Fix(deps FixDeps) pipeline.Fixer {
 	return pipeline.Fixer{
 		Reads: []pipeline.Key{
@@ -195,6 +231,26 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 			"stages: reading where the copy of run %s stands before its %s fix round: %w",
 			facts.run, in.Stage, err)
 	}
+	rebasing, err := copied.RebaseStatus(ctx)
+	if err != nil {
+		return pipeline.FixOutput{}, fmt.Errorf(
+			"stages: reading whether a rebase is in progress before the %s fix round: %w",
+			in.Stage, err)
+	}
+	var digest string
+	var conflicts map[string]string
+	if rebasing {
+		digest, err = copied.UncommittedDigest(ctx)
+		if err != nil {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: reading the conflicted copy before the %s fix round: %w", in.Stage, err)
+		}
+		conflicts, err = copied.ConflictRecords(ctx)
+		if err != nil {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: reading the conflicted files before the %s fix round: %w", in.Stage, err)
+		}
+	}
 
 	fixer, err := deps.Fixer(ctx, facts.run)
 	if err != nil {
@@ -235,19 +291,106 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 	}
 	body := fixBody(deps.redact, result.Text, rendered)
 
-	committed, err := copied.CommitAllWithBody(ctx, subject, body)
-	if errors.Is(err, vcs.ErrNothingToCommit) {
-		return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
+	if rebasing {
+		// The fixer was told not to touch history. A rebase it ended is not
+		// the one this round was given, and committing onto what it left
+		// would be followed by a continue with nothing to continue.
+		still, err := copied.RebaseStatus(ctx)
+		if err != nil {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: reading whether the rebase is still in progress after the %s fix round: %w",
+				in.Stage, err)
+		}
+		if !still {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: the rebase the %s fix round was given is no longer in progress, so the "+
+					"fixer ended it and nothing was committed", in.Stage)
+		}
+		after, err := copied.UncommittedDigest(ctx)
+		if err != nil {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: reading the conflicted copy after the %s fix round: %w", in.Stage, err)
+		}
+		if after == digest {
+			standing, err := copied.ResolveCommit(ctx, "HEAD")
+			if err != nil {
+				return pipeline.FixOutput{}, fmt.Errorf(
+					"stages: reading where the copy stands after the %s fix round left it unchanged: %w",
+					in.Stage, err)
+			}
+			if standing == facts.head {
+				// The run already records this commit, so an earlier round
+				// committed it during this rebase. Aborting would take it
+				// off the working copy and leave KeyHead naming it.
+				return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
+			}
+			if err := copied.RebaseAbort(ctx); err != nil {
+				return pipeline.FixOutput{}, fmt.Errorf(
+					"stages: abandoning the rebase the %s fix round left unchanged: %w", in.Stage, err)
+			}
+			return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
+		}
+		// Committing stages every path, which marks a conflict resolved
+		// whatever the file holds. A conflicted file the fixer left as the
+		// conflict left it is one it could not resolve, so the step is not
+		// committed and the rebase stays stopped on it. The files it did
+		// change are staged, so a later round compares only what is still
+		// conflicted and does not take this round's resolution for an
+		// untouched conflict.
+		left, err := copied.ConflictRecords(ctx)
+		if err != nil {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: reading the conflicted files after the %s fix round: %w", in.Stage, err)
+		}
+		if unresolved, resolved := splitConflicts(conflicts, left); len(unresolved) > 0 {
+			if err := copied.StagePaths(ctx, resolved); err != nil {
+				return pipeline.FixOutput{}, fmt.Errorf(
+					"stages: staging the conflicted files the %s fix round resolved: %w", in.Stage, err)
+			}
+			return pipeline.FixOutput{Summary: conflictsLeft(in.Stage, unresolved, summary)}, nil
+		}
 	}
-	if err != nil {
+
+	committed, err := copied.CommitAllWithBody(ctx, subject, body)
+	skipped := false
+	if errors.Is(err, vcs.ErrNothingToCommit) {
+		if !rebasing {
+			return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
+		}
+		// The resolution matches the commit the rebase is stopped on, so the
+		// step was staged and not committed. Skip it. Continue would be asked
+		// to finish a step that has no commit.
+		if err := copied.RebaseSkip(ctx); err != nil && !errors.Is(err, vcs.ErrRebaseConflict) {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: skipping the empty rebase step after the %s fix round: %w", in.Stage, err)
+		}
+		skipped = true
+		committed = before
+	} else if err != nil {
 		return pipeline.FixOutput{}, fmt.Errorf(
 			"stages: committing what the %s stage's fix round changed: %w", in.Stage, err)
-	}
-	if committed == before {
+	} else if committed == before && !rebasing {
 		// Belt and braces: CommitAll reports ErrNothingToCommit for this, and
 		// a commit identical to the one before it would otherwise be reported
 		// as progress the convergence bound could not see.
 		return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
+	}
+	if rebasing && !skipped {
+		if err := copied.RebaseContinue(ctx); err != nil && !errors.Is(err, vcs.ErrRebaseConflict) {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: continuing the rebase after the %s fix round: %w", in.Stage, err)
+		}
+	}
+	if rebasing {
+		// The head this round reports is where the copy stands now, including
+		// when a later commit stopped on a new conflict. A rebase still
+		// stopped with nothing unmerged has not moved past this step, and
+		// reporting that head would leave the next round to abort it.
+		now, err := rebaseAdvanced(ctx, copied, in.Stage)
+		if err != nil {
+			return pipeline.FixOutput{}, err
+		}
+		committed = now
 	}
 
 	holds, err := judgeRound(ctx, copied, deps.Config.JudgePaths, in, before, committed)
@@ -261,6 +404,35 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 	}, nil
 }
 
+// rebaseAdvanced reads HEAD after a skip or a continue. A rebase that is
+// still in progress is a later conflict only when a path is unmerged. One
+// that is stopped with a clean index is not a head this round may report.
+func rebaseAdvanced(ctx context.Context, copied *vcs.Repository, stage pipeline.Stage) (string, error) {
+	active, err := copied.RebaseStatus(ctx)
+	if err != nil {
+		return "", fmt.Errorf(
+			"stages: reading whether a rebase is in progress after the %s fix round: %w", stage, err)
+	}
+	if active {
+		changes, err := copied.Changes(ctx)
+		if err != nil {
+			return "", fmt.Errorf(
+				"stages: reading the rebase after the %s fix round: %w", stage, err)
+		}
+		if !changes.Unmerged {
+			return "", fmt.Errorf(
+				"stages: the %s fix round left the rebase stopped with nothing unmerged", stage)
+		}
+	}
+	now, err := copied.ResolveCommit(ctx, "HEAD")
+	if err != nil {
+		return "", fmt.Errorf(
+			"stages: reading where the copy stands after the %s fix round moved its rebase: %w",
+			stage, err)
+	}
+	return now, nil
+}
+
 // nothingChanged is the summary for a round that left the copy as it was. It
 // carries what the agent said, because that is the account of why nothing
 // changed, and says plainly that nothing did.
@@ -268,6 +440,46 @@ func nothingChanged(stage pipeline.Stage, summary string) string {
 	return fmt.Sprintf("The %s stage's fix round changed no file, so the change stands as it was. "+
 		"What the fixer reported: %s", stage, summary)
 }
+
+// splitConflicts divides the paths still conflicted after a round, each list
+// in order. unresolved holds those the round did not resolve: the fixer left
+// the path's conflict stages and its worktree state as they were, or the
+// path was not conflicted when the round began, so the fixer did not resolve
+// what is there now. resolved holds those the fixer changed and did not
+// stage.
+func splitConflicts(before, after map[string]string) (unresolved, resolved []string) {
+	for path, record := range after {
+		if was, ok := before[path]; !ok || was == record {
+			unresolved = append(unresolved, path)
+		} else {
+			resolved = append(resolved, path)
+		}
+	}
+	slices.Sort(unresolved)
+	slices.Sort(resolved)
+	return unresolved, resolved
+}
+
+// conflictsLeft is the summary for a rebase round that left a conflicted file
+// unresolved. It names the files, as many as maxConflictsNamed, and says that
+// nothing was committed, followed by what the agent said.
+func conflictsLeft(stage pipeline.Stage, paths []string, summary string) string {
+	named := make([]string, 0, maxConflictsNamed)
+	for _, path := range paths[:min(len(paths), maxConflictsNamed)] {
+		named = append(named, fmt.Sprintf("%q", path))
+	}
+	list := strings.Join(named, ", ")
+	if more := len(paths) - len(named); more > 0 {
+		list += fmt.Sprintf(", and %d more", more)
+	}
+	return fmt.Sprintf("The %s stage's fix round left %d conflicted file(s) as the conflict left them (%s), "+
+		"so nothing was committed and the rebase is still stopped on that conflict. "+
+		"What the fixer reported: %s", stage, len(paths), list, summary)
+}
+
+// maxConflictsNamed bounds how many unresolved files a summary names, because
+// the summary is carried into the next round's prompt. Chosen, not measured.
+const maxConflictsNamed = 5
 
 // fixSummary is the agent's account of the round, redacted and bounded, as
 // config.FixMessagePlaceholder is rendered with: the first line of what the

@@ -327,7 +327,15 @@ var WriteExceptions = []WriteException{
 		Why: "Puts back the mode of a home's root, a directory, that the test made unreadable.",
 	},
 	{
+		File: "internal/stages/rebase_conflict_test.go", Function: "(modeFixer).Apply",
+		Why: "Sets the executable bit on the conflicted file the fixer resolves. The test does not run that file.",
+	},
+	{
 		File: "internal/store/storetest/storetest.go", Function: "Seed",
 		Why: "Copies a database template, an SQLite file, with the template's own mode.",
+	},
+	{
+		File: "internal/vcs/rebase_test.go", Function: "TestUncommittedDigestSeesAModeOnlyChangeOnAConflictedPath",
+		Why: "Sets the executable bit on a conflicted file so the digest sees a mode-only change. The test does not run that file.",
 	},
 }
