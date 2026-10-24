@@ -76,6 +76,45 @@ func TestAPromotionAnswersItsCopysKeptWorkAsCarryOn(t *testing.T) {
 	})
 }
 
+// A promotion that fails after its flip still asks for the dispatch pass
+// the flip's answer to kept work calls for, the final full review of
+// c5c581c: as above, a running investigation's copy has an open entry that
+// holds a delivery task of the project, and the branch the promotion is to
+// create already stands in the copy, so the flip answers the entry carry on
+// and the promotion then fails creating the branch. The held task
+// dispatches. Before the pass was asked whatever the promotion returned, it
+// stayed undispatched until something unrelated asked for a pass.
+func TestAPromotionThatFailsAfterItsFlipStillDispatchesWhatItsAnswerFreed(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	streamWorkerOf(t, store.TaskInvestigation, "", nil, func(w launched, _ *standin.Agent) {
+		ctx := t.Context()
+		entry := keptOnCopyOf(t, w)
+		var created machine.TaskCreated
+		if err := w.running.client.Call(ctx, ipc.MethodTaskCreate, machine.TaskCreateRequest{
+			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
+			Repository: w.repository.ID, Branch: "task/held-by-kept",
+		}, &created); err != nil {
+			t.Fatal(err)
+		}
+		waitLog(t, w.home, "task "+created.Record.ID+" waits: ")
+		copyPath, err := w.home.TaskCopy(w.task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		git(t, copyPath, "branch", "task/promoted")
+
+		if _, err := promoteRunningInvestigation(t, w, "task/promoted", ""); err == nil {
+			t.Fatal("the promotion onto a branch already standing in the copy succeeded; want it to fail after its flip")
+		}
+		closed, err := recordsOf(t, w.home).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || closed.Open() || closed.Answer.Or("") != store.KeptCarryOn {
+			t.Fatalf("after the failed promotion the entry reads %+v, %v; want the flip's carry-on answer, or the test reads nothing", closed, err)
+		}
+		waitAttempts(t, w.home, created.Record.ID)
+	})
+}
+
 // A promotion touches no entry but its copy's: a refused promotion leaves
 // the copy's entry open, a promotion of a task whose copy has no entry
 // writes nothing, and an open entry on another task's copy in the project
