@@ -1,0 +1,99 @@
+# github.com/example/m/build
+build/build_test.go:3:37: expected ';', found is
+FAIL	github.com/example/m/build [setup failed]
+=== RUN   TestPasses
+--- PASS: TestPasses (0.00s)
+PASS
+FAIL	github.com/example/m/exits	0.142s
+=== RUN   TestTop
+    fail_test.go:4: the first reason
+--- FAIL: TestTop (0.00s)
+=== RUN   TestParent
+=== RUN   TestParent/sub_a
+    fail_test.go:7: sub a broke
+=== RUN   TestParent/sub_b
+--- FAIL: TestParent (0.00s)
+    --- FAIL: TestParent/sub_a (0.00s)
+    --- PASS: TestParent/sub_b (0.00s)
+=== RUN   TestFixture
+--- PASS: TestFixture (0.00s)
+=== RUN   TestLogsAFixturesOutput
+    fail_test.go:16: === RUN   TestFixture
+        --- FAIL: TestFixture (0.00s)
+        FAIL	github.com/x/y	0.1s
+        
+    === RUN   TestFixture
+    --- FAIL: TestFixture (0.00s)
+    FAIL	github.com/x/y	0.1s
+    === RUN   TestFixture
+    --- FAIL: TestFixture (0.00s)
+    FAIL	github.com/x/y	0.1s
+    
+--- PASS: TestLogsAFixturesOutput (0.00s)
+FAIL
+FAIL	github.com/example/m/fail	0.137s
+panic: boom at init
+
+goroutine 1 [running]:
+github.com/example/m/panics.init.0()
+	github.com/example/m/panics/panics_test.go:3 +0x2c
+FAIL	github.com/example/m/panics	0.189s
+=== RUN   TestPasses
+--- PASS: TestPasses (0.00s)
+PASS
+ok  	github.com/example/m/pass	0.179s
+=== RUN   TestRecordedFrom
+    provenance_test.go:3: recorded from GO_PACKAGES a454f2686e22a256afda9c37ce1e0b46def75ccbdca77db41cc7aebe3726e542
+--- PASS: TestRecordedFrom (0.00s)
+PASS
+ok  	github.com/example/m/provenance	0.129s
+=== RUN   TestQuick
+--- PASS: TestQuick (0.00s)
+=== RUN   TestSlow
+=== RUN   TestSlow/inner
+panic: test timed out after 5s
+	running tests:
+		TestSlow (5s)
+		TestSlow/inner (5s)
+
+goroutine 33 [running]:
+testing.(*M).startAlarm.func1()
+	testing/testing.go:2802 +0x2cc
+created by time.goFunc
+	time/sleep.go:215 +0x38
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x7c0508666008, {0x101072daf?, 0x70ea7e80102e9e0?}, 0x1011c3f00)
+	testing/testing.go:2109 +0x3bc
+testing.runTests.func1(0x7c0508666008)
+	testing/testing.go:2585 +0x40
+testing.tRunner(0x7c0508666008, 0x7c0508622c48)
+	testing/testing.go:2036 +0xc4
+testing.runTests({0x1010763f1, 0x14}, {0x1010786b6, 0x1c}, 0x7c05086282e8, {0x1011e6640, 0x2, 0x2}, {0x8080808080808054?, 0x101074b79?, ...})
+	testing/testing.go:2583 +0x3f0
+testing.(*M).Run(0x7c0508626a00)
+	testing/testing.go:2443 +0x578
+main.main()
+	_testmain.go:48 +0x80
+
+goroutine 21 [chan receive]:
+testing.(*T).Run(0x7c0508666488, {0x10107269d?, 0x7c0508623f58?}, 0x1011c3f88)
+	testing/testing.go:2109 +0x3bc
+github.com/example/m/timeout.TestSlow(0x7c0508666488?)
+	github.com/example/m/timeout/timeout_test.go:5 +0x30
+testing.tRunner(0x7c0508666488, 0x1011c3f00)
+	testing/testing.go:2036 +0xc4
+created by testing.(*T).Run in goroutine 1
+	testing/testing.go:2101 +0x3a8
+
+goroutine 22 [sleep]:
+time.Sleep(0xdf8475800)
+	runtime/time.go:363 +0x150
+github.com/example/m/timeout.TestSlow.func1(0x7c05086666c8?)
+	github.com/example/m/timeout/timeout_test.go:5 +0x28
+testing.tRunner(0x7c05086666c8, 0x1011c3f88)
+	testing/testing.go:2036 +0xc4
+created by testing.(*T).Run in goroutine 21
+	testing/testing.go:2101 +0x3a8
+FAIL	github.com/example/m/timeout	5.138s
+FAIL

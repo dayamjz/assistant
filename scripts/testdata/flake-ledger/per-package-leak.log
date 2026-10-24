@@ -116,10 +116,14 @@
 2026-10-23T11:02:25.9313380Z ok  	github.com/dayamjz/assistant/internal/safety	1.285s
 2026-10-23T11:02:25.9325380Z ok  	github.com/dayamjz/assistant/internal/scope	1.285s
 2026-10-23T11:02:25.9349860Z === RUN   TestADispatchersTrustedReadIsItsOwn
+2026-10-23T11:02:25.9353440Z === RUN   TestAHeldProcessEndsWithItsTestOnEveryPath
+2026-10-23T11:02:25.9904140Z === RUN   TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out
 2026-10-23T11:02:25.9908260Z === CONT  TestADispatchersTrustedReadIsItsOwn
 2026-10-23T11:02:25.9908470Z     dispatch_internal_test.go:193: claims PRD principle P7
 2026-10-23T11:02:25.9911290Z     dispatch_internal_test.go:229: a dispatcher failed for a reason other than the claim: service: task yhiutwkjsciw gets no worker because its standing copy was not cleared: swept /Users/runner/work/_temp/tmp.CoxOoW/TestADispatchersTrustedReadIsItsOwn2196104214/001/tasks/yhiutwkjsciw/copy: 0 ended, 0 exited before a signal, 0 replaced, 0 survived, 0 unverified, 270 not readable of which 1 could be in it (pid 987 uids 501/0/0 name "sudo")
 2026-10-23T11:02:25.9911450Z --- FAIL: TestADispatchersTrustedReadIsItsOwn (2.24s)
+2026-10-23T11:02:26.0011070Z --- PASS: TestAHeldProcessEndsWithItsTestOnEveryPath (0.00s)
+2026-10-23T11:02:26.0012980Z     --- PASS: TestAHeldProcessEndsWithItsTestOnEveryPath/timed_out (20.29s)
 2026-10-23T11:02:26.0013120Z FAIL
 2026-10-23T11:02:26.0015810Z LEAK package=/Users/runner/work/assistant/assistant/internal/service process pid=16462 start=1792752950.080757 command=/Users/runner/work/_temp/tmp.CoxOoW/TestAHeldProcessEndsWithItsTestOnEveryPathtimed_out4138430518/001/child.test --standin-sweep=16455:1792752950030505 --standin-sweep-dir=/tmp/atinternal_1service-cp3-hnh7c2xsix-tmux-2916605583
 2026-10-23T11:02:26.0016810Z leak-check: package /Users/runner/work/assistant/assistant/internal/service left processes running

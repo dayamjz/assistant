@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Count every failure in recent CI runs, by test, platform and branch.
 
-Run: python3 scripts/flake-ledger.py [--limit 60] [--json ledger.json]
-One run, from inside it: python3 scripts/flake-ledger.py --run <id>
+Run: GH_TOKEN=$(gh auth token) python3 scripts/flake-ledger.py --repo owner/name [--limit 60] [--json ledger.json]
 Parse one log: python3 scripts/flake-ledger.py parse <log>... (a job log as
 GitHub serves it, or raw `go test -v` output with --raw)
 
@@ -15,147 +14,120 @@ final attempt concluded: the final attempt is all a run's checks show. Each
 failure is timed by the job it failed in, since a re-run can come hours after
 its run was created.
 
-What it reads, and from where:
-- Go tests, from the Test step's `full test output` group, which ci.yml
-  prints only when that step fails. `--- FAIL` lines name tests and
-  subtests; `panic: test timed out` names the tests still running; a
-  `FAIL <package>` line with no failing test under it is a package failure
-  (a build failure, a panic outside a test, or a per-package leak). A
-  failure the output stopped after, before its package's result line (a
-  cancel during the print), is counted under the package "(output cut off)".
-- The leak check's leftovers, from the same group: `LEAK package=...` is a
-  per-package leak, a `LEAK` line without `package=` a whole-run leftover.
-  The self-test's planted leftovers print outside the group and are not
+This is the first version, kept small on purpose: it names what it can read
+plainly and reports everything else in a failed job as not attributed. From
+a failed or cancelled job it reads:
+- A Go test that failed, from a `--- FAIL:` line at column 0 in the Test
+  step's `full test output` group (scripts/ci-test.sh prints the group only
+  when the step fails). go test -v prints a top-level test's result line at
+  column 0, and what a test writes through t.Log or t.Output is indented, so
+  output a test logs, another go test's included, is not read as a failure;
+  text a test writes to stdout itself, unindented, can be. Subtests are not
   read.
-- Python unittest failures (`FAIL: test_x (...)`) anywhere in the log.
-- A job cancelled at its timeout-minutes bound, from the job's annotations.
-  A cancelled job's log is read like a failed one's, and what failed in it
-  before the cancel counts; a cancelled job with nothing failed in it
-  (superseded by a newer run of the same ref, or cancelled otherwise) is not
-  a failure and is only counted.
-- Any other failed step (vet, gofmt, lint, a step after Test) as a step
-  failure naming the step and its last error line, in a failed or a
-  cancelled job, whatever else the job named (unexplained_steps).
+- The top-level tests a `panic: test timed out` lists as running.
+- A package that failed with no test named: `[setup failed]` or
+  `[build failed]` as a build failure, otherwise a package failure, with its
+  first `panic:` line when it printed one.
+- Leftovers the leak check reported in the group (any `LEAK` line, or a
+  `leak-check: N leftover(s)` count above zero): one record for the job; the
+  leftovers themselves are not read.
+- An error the Test step reported (an `##[error]` line in it other than its
+  exit line), by its message. The Test step is told by its command
+  (TEST_COMMANDS).
+- Any failed step other than Test, by its name.
+- A job cancelled at its timeout-minutes bound, from its annotations, with
+  the packages `scripts/ci-test.sh unfinished` lists as never reported
+  (still running or not started) when its log has that line. A
+  cancelled job with nothing failed in it (superseded by a newer run of the
+  same ref, or cancelled otherwise) is only counted.
 
-It is loud where it cannot see: a log or API read that fails makes it exit 2
-(a failed issue read leaves each failure's issues unknown, never "none"),
-and a failed or cancelled job whose log shows tests ran but in which nothing
-was named makes it exit 3 (listed under "Unattributed"). With --run, a job
-of the run's latest attempt that timed out or was cancelled is exit 2 too,
-whatever it recorded before it stopped: its suite did not finish. With
+It is loud where it cannot see: a read that fails makes it exit 2 (a failed
+issue read leaves each failure's issues unknown, never "none"), and a failed
+or cancelled job whose Test step failed, or that names no failed step, with
+none of the above read in it makes it exit 3 (listed as not attributed).
+With --run ID it reads that one run, finished or not (its finished jobs),
+and a job of the run's latest attempt that timed out or was cancelled is
+exit 2 too, whatever it recorded first: its suite did not finish. With
 --require-open-issues, a failure an earlier attempt had that no open issue
-names is exit 4: a re-run may pass a test, but not silently. The check's
-own job (--own-job) failing in an earlier attempt is not such a failure. Each still
-prints the ledger.
+names is exit 4: a re-run may pass a test, but not silently. The job running
+that check (--own-job) failing in an earlier attempt is not such a failure.
+Each still prints the ledger.
 
-Every gh it starts runs under a deadline (API_DEADLINE, LOG_DEADLINE) in a
-process group of its own, watched by a small watchdog that ends the group at
-the deadline, when the ledger stops (Ctrl+C included), or as soon as the
-ledger exits, however it exits (start_gh).
+It reads the GitHub REST API over HTTPS in this process (API_URL, which is
+GITHUB_API_URL in GitHub Actions), with the token from GH_TOKEN or
+GITHUB_TOKEN, and starts no other program. Each read waits at most
+READ_TIMEOUT for any one piece of data, and at most API_DEADLINE in all (a
+job's log LOG_DEADLINE), enforced by an interval timer; so the ledger runs
+in one thread, on a platform with SIGALRM (Linux and macOS). A job's log is
+served from a signed address GitHub redirects to; the token is sent only to
+the API's own address.
 
 Issues are matched by text: an issue whose title or body contains a record's
-match token (a test's top-level name, a leaked command's base name, or the
-record key itself) is that record's issue. The markdown prints each token,
-so an issue can be linked by writing it into the issue.
+match token is that record's issue. A test's token is its top-level name,
+matched as a word and not after a slash, where it would be another test's
+subtest; any other record's token is its key. The markdown prints each
+token, so an issue can be linked by writing it into the issue.
 """
 
 import argparse
-import concurrent.futures
+import contextlib
 import datetime
-import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import re
-import subprocess
+import signal
 import sys
-import tempfile
-import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 pause = time.sleep  # between tries of a read GitHub failed with a server error
-SCRIPT_DIGEST = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
 
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 STAMP = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z ")
 GROUP_START = "##[group]full test output"
 GROUP_END = "##[endgroup]"
 STEP_START = "##[group]Run "
-GO_FAIL = re.compile(r"^(\s*)--- FAIL: (\S+)")
+# The step that runs the suite, by name in the jobs API, and in the log by
+# its command: scripts/ci-test.sh from 2026-10-24 (#574), before that a
+# script of ci.yml's own whose first line no other step's shares.
+TEST_STEP = "Test"
+TEST_COMMANDS = ("bash scripts/ci-test.sh", "set -o pipefail")
+GO_FAIL = re.compile(r"^--- FAIL: (\S+)")
 GO_PACKAGE_END = re.compile(r"^(ok|FAIL)\s+(\S+)(?:\s+(\[[^\]]+\]|\S+))?")
-GO_CONTEXT = re.compile(r"^=== (?:RUN|CONT|NAME)\s+(\S+)")
-GO_MESSAGE = re.compile(r"^\s+(\S+\.go:\d+: .*)")
-# internal/principles.Cite logs this before a test's own messages; it never
-# says why a test failed.
-CITE_MESSAGE = re.compile(r"^\S+\.go:\d+: claims PRD principle ")
-# A t.TempDir component: the test's name with its slashes dropped, then digits.
-TEST_TEMPDIR = re.compile(r"^(Test[A-Za-z0-9_]+?)\d+$")
 GO_TIMEOUT = re.compile(r"^panic: test timed out after (\S+)")
 GO_RUNNING = re.compile(r"^\s+(Test\S*|Example\S*|Fuzz\S*|Benchmark\S*) \(")
 GO_PANIC = re.compile(r"^panic: (.*)")
-# Every line the leak check prints for a package starts so; the processes it
-# names carry a command, and a process it saw too late to read does not.
-LEAK_PACKAGE = re.compile(r"^LEAK package=(\S+) (.*)$")
-LEAK_PACKAGE_PROCESS = re.compile(r"^process pid=\d+ start=\S+ command=(.*)$")
-LEAK_PROCESS = re.compile(r"^LEAK process pid=\d+ start=\S+ command=(.*)$")
-LEAK_ENTRY = re.compile(r"^LEAK (directory|file|socket|symlink|fifo|entry) (.+)$")
+LEAK_LINE = re.compile(r"^LEAK ")
 LEAK_TOTAL = re.compile(r"^leak-check: (\d+) leftover\(s\); command exit=")
-UNITTEST = re.compile(r"^(FAIL|ERROR): (\w+) \(([\w.]+?)\)(?: \((.*)\))?\s*$")
-UNITTEST_SUMMARY = re.compile(r"^FAILED \((?:failures|errors)=")
 ERROR_LINE = re.compile(r"^##\[error\](.*)")
-GUARD_ERROR = "fewer packages ran through the per-package check than passed"
 # scripts/ci-test.sh unfinished, after a run cut off before it ended.
 UNFINISHED = re.compile(r"^ci-test: cut off before these packages reported: (.*)$")
 TIMEOUT_ANNOTATION = "exceeded the maximum execution time"
 SUPERSEDED_ANNOTATION = "higher priority waiting request"
-# The error line the runner prints in the step a cancel stops.
-CANCEL_ERROR = "The operation was canceled"
-# The error line that ends a run step that failed, in every recorded log.
-FAILED_STEP_END = "Process completed with exit code"
-# The package of a failure whose package's result line the log never printed.
-CUT_OFF_PACKAGE = "(output cut off)"
-MODULE_ROOT = re.compile(r"^/(?:Users|home)/runner/work/[^/]+/[^/]+")
+# The error lines a step's end prints: a run step that failed, and a cancel.
+STEP_END_ERRORS = ("Process completed with exit code", "The operation was canceled")
+
+API_URL = os.environ.get("GITHUB_API_URL") or "https://api.github.com"
+# Seconds one read may wait for any one piece of data, and for a whole API
+# response or job log. A read that runs out counts as a server error, so
+# retried() may make it twice more.
+READ_TIMEOUT = 30
+API_DEADLINE = 120
+LOG_DEADLINE = 300
+REDIRECTS = (301, 302, 303, 307, 308)
+# What reading a response can raise: the socket's errors, and http.client's
+# for a malformed or cut-off answer (IncompleteRead, which is not an OSError).
+READ_ERRORS = (OSError, http.client.HTTPException)
 
 
 def clean(line):
     """Strip the BOM, GitHub's timestamp prefix and terminal escapes."""
     line = line.rstrip("\r\n").lstrip("\ufeff")
     return ANSI.sub("", STAMP.sub("", line, count=1))
-
-
-def normalize_path(path):
-    """Fold the parts of a leftover path that differ on every run."""
-    path = re.sub(r"/_temp/tmp\.[A-Za-z0-9]+", "/_temp/tmp.*", path)
-    path = re.sub(r"/var/folders/[^/]+/[^/]+/T", "/var/folders/*/*/T", path)
-    # internal/agents/standin's TempDir names: at<tag>-<pid36>-<start36>-<pattern><random>.
-    path = re.sub(r"/(at[a-z0-9_]+)-[0-9a-z]+-[0-9a-z]+-([^/]*?)\d+(?=/|$)", r"/\1-*-*-\2*", path)
-    return re.sub(r"\d{4,}", "N", path)
-
-
-def command_name(command):
-    """A leaked command's stable name: its program's base name."""
-    words = command.split()
-    if not words:
-        return "(no command)"
-    return re.sub(r"\d{4,}", "N", os.path.basename(words[0]) or words[0])
-
-
-def tempdir_test(command):
-    """The test whose t.TempDir a leaked program ran from, or None. Go drops
-    the slash from a subtest's name there, so this is a prefix of nothing
-    shorter than the top-level test's name plus the subtest's."""
-    words = command.split()
-    for part in (words[0].split("/") if words else []):
-        match = TEST_TEMPDIR.match(part)
-        if match:
-            return match.group(1)
-    return None
-
-
-def package_of(path):
-    """A runner's absolute package directory as a module-relative one."""
-    relative = MODULE_ROOT.sub("", path).lstrip("/")
-    return relative or "."
 
 
 def short_package(import_path):
@@ -171,18 +143,12 @@ def short_package(import_path):
 class Record:
     """One failure seen in one job: what failed, and the match token for issues."""
 
-    def __init__(self, kind, package, name, detail="", subtests=(), token=None, prefix=False):
+    def __init__(self, kind, package, name, detail="", token=None):
         self.kind = kind
         self.package = package
         self.name = name
         self.detail = detail
-        self.subtests = sorted(set(subtests))
         self.token = token or self.key
-        # A prefix token is matched by any test name in an issue that it starts with.
-        self.prefix = prefix
-        # Which failed step's part of the log it was read in (LogParser.section);
-        # used while reading one job, not stored.
-        self.section = None
 
     @property
     def key(self):
@@ -190,13 +156,11 @@ class Record:
 
     def to_dict(self):
         return {"kind": self.kind, "package": self.package, "name": self.name,
-                "detail": self.detail, "subtests": self.subtests, "token": self.token,
-                "prefix": self.prefix}
+                "detail": self.detail, "token": self.token}
 
     @classmethod
     def from_dict(cls, data):
-        return cls(data["kind"], data["package"], data["name"], data.get("detail", ""),
-                   data.get("subtests", ()), data.get("token"), data.get("prefix", False))
+        return cls(data["kind"], data["package"], data["name"], data.get("detail", ""), data.get("token"))
 
 
 class LogParser:
@@ -209,45 +173,35 @@ class LogParser:
     def __init__(self, raw=False):
         self.raw = raw
         self.in_group = raw
+        self.in_test_step = False
         self.saw_group = False
-        self.saw_unittest_failure = False
-        self.step = ""
-        self.errors = []
+        self.group_lines = 0
         self.records = []
-        # Per Go package block, reset at each ok/FAIL package line.
-        self.failed_tops, self.failed_subs = set(), set()
-        self.first = {}  # top-level test -> the first message logged under it
-        self.messages = {}
-        self.context = ""
-        self.block_leaks = []
-        self.block_panic = ""
+        self.errors = []  # what the Test step reported on ##[error] lines
+        self.leftovers = ""  # the first leftover line the leak check printed
+        self.unfinished = None  # the packages ci-test.sh unfinished listed, once it printed them
+        self._new_package()
+
+    def _new_package(self):
+        # Per Go package's output, ended by its ok or FAIL line.
+        self.failed = []  # top-level tests a column-0 --- FAIL line named
         self.timeout = None  # (after, [running tests]) once a timeout panic is seen
         self.reading_running = False
-        self.run_leaks = []
-        self.run_leak_total = None
-        self.group_lines = 0
-        self.unfinished = None
-        # The log in sections, each ended by the exit line a failed step
-        # prints (FAILED_STEP_END): section k is the k-th failed step's part.
-        self.section = 0
-        self.run_leak_total_section = 0
-
-    def _add(self, record, section=None):
-        record.section = self.section if section is None else section
-        self.records.append(record)
+        self.panic = ""
+        self.leaked = False
 
     def feed(self, line):
         line = clean(line)
         if not self.raw:
             if line.startswith(GROUP_START):
-                self.in_group = True
-                self.saw_group = True
+                self.in_group = self.saw_group = True
                 return
             if self.in_group and line.startswith(GROUP_END):
                 self.in_group = False
                 return
             if line.startswith(STEP_START):
-                self.step = line[len(STEP_START):].strip()
+                self.in_test_step = line[len(STEP_START):].strip() in TEST_COMMANDS
+                return
         if self.in_group:
             self.group_lines += 1
             self._go_line(line)
@@ -257,32 +211,8 @@ class LogParser:
             self.unfinished = unfinished.group(1).split()
             return
         error = ERROR_LINE.match(line)
-        if error:
-            message = error.group(1).strip()
-            self.errors.append(message)
-            if GUARD_ERROR in message:
-                self._add(Record("guard", "(per-package check)", GUARD_ERROR))
-            if message.startswith(FAILED_STEP_END):
-                self.section += 1
-            return
-        self._unittest_line(line)
-
-    def _unittest_line(self, line):
-        if UNITTEST_SUMMARY.match(line):
-            self.saw_unittest_failure = True
-            return
-        match = UNITTEST.match(line)
-        if not match:
-            return
-        method, where, params = match.group(2), match.group(3), match.group(4)
-        # Python 3.11+ prints module.Class.method, earlier ones module.Class.
-        parts = where.split(".")
-        if parts[-1] == method:
-            parts = parts[:-1]
-        name = f"{parts[-1]}.{method}" if parts and parts[-1] != "__main__" else method
-        script = next((w for w in self.step.split() if w.endswith(".py")), self.step or "(unittest)")
-        detail = f"{match.group(1)}" + (f" ({params})" if params else "")
-        self._add(Record("unittest", script, name, detail, token=method))
+        if error and self.in_test_step and not error.group(1).startswith(STEP_END_ERRORS):
+            self.errors.append(error.group(1).strip())
 
     def _go_line(self, line):
         if self.reading_running:
@@ -293,25 +223,10 @@ class LogParser:
             if line.strip() in ("", "running tests:"):
                 return
             self.reading_running = False
-        context = GO_CONTEXT.match(line)
-        if context:
-            self.context = context.group(1)
-            return
-        message = GO_MESSAGE.match(line)
-        if message and self.context and self.context not in self.messages \
-                and not CITE_MESSAGE.match(message.group(1)):
-            self.messages[self.context] = message.group(1)[:200]
         failed = GO_FAIL.match(line)
         if failed:
-            indent, name = failed.group(1), failed.group(2)
-            if not indent:
-                self.failed_tops.add(name)
-                self.first.setdefault(name, self.messages.get(name, ""))
-            elif "/" in name:
-                # A subtest. An indented name with no slash is output a test
-                # logged (a fixture's own go test), not a test of this package.
-                self.failed_subs.add(name)
-                self.first.setdefault(name.split("/", 1)[0], self.messages.get(name, ""))
+            if failed.group(1) not in self.failed:
+                self.failed.append(failed.group(1))
             return
         timeout = GO_TIMEOUT.match(line)
         if timeout:
@@ -319,141 +234,72 @@ class LogParser:
             self.reading_running = True
             return
         panic = GO_PANIC.match(line)
-        if panic and not self.block_panic:
-            self.block_panic = panic.group(1)[:200]
-            return
-        leak = LEAK_PACKAGE.match(line)
-        if leak:
-            # Recorded where it is read, from the line's own package, so a
-            # leak is counted whatever its package's verdict line says.
-            self._package_leak(package_of(leak.group(1)), leak.group(2))
-            return
-        process = LEAK_PROCESS.match(line)
-        if process:
-            self.run_leaks.append(("process", command_name(process.group(1)), process.group(1), self.section))
-            return
-        entry = LEAK_ENTRY.match(line)
-        if entry:
-            self.run_leaks.append((entry.group(1), normalize_path(entry.group(2)), entry.group(2), self.section))
-            return
-        if line.startswith("LEAK "):
-            # A shape this parser does not know is still a leftover.
-            self.run_leaks.append(("unparsed", re.sub(r"\d{4,}", "N", line), line, self.section))
+        if panic:
+            self.panic = self.panic or panic.group(1)[:200]
             return
         total = LEAK_TOTAL.match(line)
-        if total:
-            self.run_leak_total = int(total.group(1))
-            self.run_leak_total_section = self.section
+        if LEAK_LINE.match(line) or (total and int(total.group(1)) > 0):
+            self.leftovers = self.leftovers or line[:200]
+            self.leaked = True
             return
         end = GO_PACKAGE_END.match(line)
         if end and "/" in end.group(2):
-            self._end_package(end.group(1), short_package(end.group(2)), end.group(3) or "")
-
-    def _package_leak(self, package, rest):
-        self.block_leaks.append(rest)
-        process = LEAK_PACKAGE_PROCESS.match(rest)
-        if not process:
-            name = re.sub(r"\d{4,}", "N", rest)
-            self._add(Record("leak", package, name, rest[:200]))
-            return
-        command = process.group(1)
-        name, test = command_name(command), tempdir_test(command)
-        if test:
-            self._add(Record("leak", package, f"{name} from {test}", command[:200],
-                             token=test, prefix=True))
-        else:
-            self._add(Record("leak", package, name, command[:200], token=name))
-
-    def _end_package(self, verdict, package, suffix):
-        if verdict == "FAIL":
-            self._fail_package(package, suffix)
-        self.failed_tops, self.failed_subs, self.first = set(), set(), {}
-        self.messages = {}
-        self.context = ""
-        self.block_leaks = []
-        self.block_panic = ""
-        self.timeout = None
-        self.reading_running = False
+            if end.group(1) == "FAIL":
+                self._fail_package(short_package(end.group(2)), end.group(3) or "")
+            self._new_package()
 
     def _fail_package(self, package, suffix):
         before = len(self.records)
-        running = self.timeout[1] if self.timeout else []
-        running_tops = {t.split("/", 1)[0] for t in running}
-        for top in sorted(self.failed_tops | running_tops):
-            subtests = [s for s in self.failed_subs | set(running) if s.startswith(top + "/")]
-            if top in running_tops:
-                detail = f"test timed out after {self.timeout[0]}"
-                self._add(Record("timeout", package, top, detail, subtests, token=top))
-            else:
-                self._add(Record("test", package, top, self.first.get(top, ""), subtests, token=top))
-        if self.timeout and not running:
-            self._add(Record("timeout", package, "(package)",
-                             f"test timed out after {self.timeout[0]}"))
-        if len(self.records) == before and not self.block_leaks:
-            if suffix.startswith("["):
-                self._add(Record("build", package, suffix.strip("[]")))
-            else:
-                detail = f"panic: {self.block_panic}" if self.block_panic else "no failing test was named"
-                self._add(Record("package", package, "(package)", detail))
+        tops = []
+        if self.timeout:
+            after, running = self.timeout
+            tops = list(dict.fromkeys(t.split("/", 1)[0] for t in running))
+            for top in tops:
+                self.records.append(Record("timeout", package, top, f"test timed out after {after}", token=top))
+            if not tops:
+                self.records.append(Record("timeout", package, "(package)", f"test timed out after {after}"))
+        for name in self.failed:
+            if name not in tops:
+                self.records.append(Record("test", package, name, token=name))
+        if len(self.records) > before:
+            return
+        if suffix.startswith("["):
+            self.records.append(Record("build", package, suffix.strip("[]")))
+        elif self.panic:
+            self.records.append(Record("package", package, "(package)", f"panic: {self.panic}"))
+        elif self.leaked:
+            self.records.append(Record("package", package, "(package)", "the leak check failed it"))
+        else:
+            self.records.append(Record("package", package, "(package)", "no failing test was named"))
 
     def finish(self):
-        """The records, plus whether tests visibly ran but nothing was named."""
-        if self.failed_tops or self.failed_subs or self.timeout or self.block_panic:
-            # The output stopped (a cancel during `cat test.log`) after a
-            # failure but before its package's result line: the failure is
-            # still one, under a package the log never named.
-            self._fail_package(CUT_OFF_PACKAGE, "")
-        if self.run_leaks:
-            directories = [full for kind, _, full, _ in self.run_leaks if kind == "directory"]
-            for kind, stable, full, section in self.run_leaks:
-                if any(full.startswith(d + "/") for d in directories):
-                    continue  # inside a leftover directory already reported
-                token = stable if kind in ("process", "unparsed") else os.path.basename(stable.rstrip("/"))
-                self._add(Record("run-leak", "(whole run)", f"{kind} {stable}", full[:200], token=token),
-                          section)
-        if self.run_leak_total and not self.run_leaks:
-            self._add(Record("run-leak", "(whole run)", "(unparsed leftovers)",
-                             f"leak-check reported {self.run_leak_total} leftover(s) "
-                             "that this parser did not read"), self.run_leak_total_section)
-        # One record per failure per job: the summary and the leak check can
-        # print one failure more than once.
+        """The records, and whether the test output was printed but named nothing."""
+        if self.leftovers:
+            self.records.append(Record("leak", "(leak check)", "leftovers, not read by this version",
+                                       self.leftovers))
+        for message in self.errors:
+            self.records.append(Record("error", "(Test step)", message[:120], message[:200]))
         unique = {}
         for record in self.records:
-            if record.key in unique:
-                unique[record.key].subtests = sorted(set(unique[record.key].subtests) | set(record.subtests))
-            else:
-                unique[record.key] = record
+            unique.setdefault(record.key, record)
         self.records = list(unique.values())
-        tests_ran = self.saw_group or self.saw_unittest_failure or (self.raw and self.group_lines)
-        return self.records, bool(tests_ran) and not self.records
-
-
-def parse_job_log(lines):
-    """parse_lines for a job log, plus the packages a cut-off run never
-    reported, from scripts/ci-test.sh unfinished's line: None for a log
-    without one (a job from before it existed, or one cut off before go test
-    started)."""
-    parser = LogParser()
-    for line in lines:
-        parser.feed(line)
-    records, unattributed = parser.finish()
-    return records, unattributed, parser.errors, parser.unfinished
+        printed = self.saw_group or (self.raw and self.group_lines)
+        return self.records, bool(printed) and not self.records
 
 
 def parse_lines(lines, raw=False):
     parser = LogParser(raw=raw)
     for line in lines:
         parser.feed(line)
-    records, unattributed = parser.finish()
-    return records, unattributed, parser.errors
+    return parser.finish()
 
 
 class GitHubError(Exception):
-    """A gh call failed; the ledger is incomplete without its answer."""
+    """A read of GitHub failed; the ledger is incomplete without its answer."""
 
     @property
     def transient(self):
-        return bool(re.search(r"HTTP 5\d\d|HTTP 429|timed out|connection reset", str(self)))
+        return bool(re.search(r"HTTP 5\d\d|HTTP 429|timed out|connection reset|incomplete read", str(self)))
 
 
 def retried(read, tries=3):
@@ -468,159 +314,122 @@ def retried(read, tries=3):
             pause(2 ** attempt)
 
 
-# Seconds one gh call may take before it is ended: an API read (a paginated
-# one included), and one job's log, which can run to megabytes. A call ended
-# at its deadline counts as a server error, so retried() may make it twice
-# more.
-API_DEADLINE = 120
-LOG_DEADLINE = 300
-
-# Runs one gh in a process group of its own and ends that group, gh and what
-# gh started, when gh exits, when the deadline passes, or when the ledger's end
-# of stdin closes, which the kernel does however the ledger exits, killed
-# included. The watchdog runs in a session of its own, so a signal meant for
-# the ledger's terminal does not stop it before it has ended gh.
-WATCHDOG = r"""
-import os, signal, subprocess, sys, threading
-deadline, command = float(sys.argv[1]), sys.argv[2:]
-child = subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True)
-
-def end(status, message=None):
+@contextlib.contextmanager
+def deadline(seconds, what):
+    """Raises GitHubError in the code it wraps once seconds have passed,
+    whatever that code waits on: an interval timer, so only in the main
+    thread."""
+    def expire(signum, frame):
+        raise GitHubError(f"{what}: timed out after {seconds:g}s")
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
     try:
-        os.killpg(child.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    if message:
-        sys.stderr.write(message + "\n")
-        sys.stderr.flush()
-    os._exit(status)
-
-def owner_gone():
-    sys.stdin.buffer.read()
-    end(125, "the flake ledger exited")
-
-threading.Thread(target=owner_gone, daemon=True).start()
-try:
-    status = child.wait(timeout=deadline)
-except subprocess.TimeoutExpired:
-    end(124, f"timed out after {deadline:g}s")
-end(status if status >= 0 else 128 - status)
-"""
-
-
-# The gh calls running now, so a ledger that is stopping (Ctrl+C, or any
-# exception through collect) ends them all at once instead of waiting for
-# their deadlines, and starts no more.
-_live_gh = set()
-_live_gh_lock = threading.Lock()
-_stopping = False
-
-
-def start_gh(args, deadline):
-    """A running gh under the watchdog: stdout a pipe, stderr a file, and
-    stdin the pipe whose closing ends it. A gh call ends with everything it
-    started at its deadline, when it is released (release_gh), or when the
-    ledger exits; a program gh starts that leaves gh's process group is not
-    followed. Once the ledger is stopping, no gh starts."""
-    errors = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
-    with _live_gh_lock:
-        if _stopping:
-            errors.close()
-            raise GitHubError("gh " + " ".join(args) + ": not started, the ledger is stopping")
-        process = subprocess.Popen(
-            [sys.executable, "-I", "-c", WATCHDOG, str(deadline), "gh", *args],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
-            text=True, encoding="utf-8", errors="replace", start_new_session=True)
-        _live_gh.add(process)
-    return process, errors
-
-
-def release_gh(process):
-    """Closes the watchdog's stdin: a gh still running is ended now, with
-    what it started. Safe to call more than once and from any thread."""
-    try:
-        process.stdin.close()
-    except (OSError, ValueError):
-        pass
-
-
-def end_every_gh():
-    """Stops the ledger's gh calls: each running one is ended now, and none
-    starts after."""
-    global _stopping
-    with _live_gh_lock:
-        _stopping = True
-        live = list(_live_gh)
-    for process in live:
-        release_gh(process)
-
-
-def finish_gh(process, errors, read_to_end=True):
-    """gh's exit status and what it printed on stderr, once it has ended. A
-    read that stopped early releases gh first, so it ends now rather than at
-    its deadline; after a full read, stdin stays open until gh has exited,
-    so its own status is the one reported."""
-    if not read_to_end:
-        release_gh(process)
-    status = process.wait()
-    release_gh(process)
-    with _live_gh_lock:
-        _live_gh.discard(process)
-    errors.seek(0)
-    message = errors.read().strip()
-    errors.close()
-    return status, message
-
-
-def gh_output(args, deadline=None):
-    """(status, stdout, stderr) of one bounded gh call."""
-    process, errors = start_gh(args, API_DEADLINE if deadline is None else deadline)
-    read_to_end = False
-    try:
-        output = process.stdout.read()
-        read_to_end = True
+        yield
     finally:
-        process.stdout.close()
-        status, message = finish_gh(process, errors, read_to_end)
-    return status, output, message
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is the caller's to follow, so the token never goes along."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def read_error(what, error):
+    """A GitHubError for an exception reading a response."""
+    if isinstance(error, http.client.IncompleteRead):
+        return GitHubError(f"{what}: incomplete read ({len(error.partial)} bytes, {error.expected} more expected)")
+    return GitHubError(f"{what}: {getattr(error, 'reason', error)}")
+
+
+def next_link(header):
+    """The rel="next" address of a Link header, or None."""
+    for part in (header or "").split(","):
+        match = re.match(r'\s*<([^>]+)>\s*;\s*rel="next"', part)
+        if match:
+            return match.group(1)
+    return None
 
 
 class GitHub:
-    """The few GitHub reads the ledger makes, all through the gh CLI, each
-    under a deadline (start_gh)."""
+    """The few GitHub reads the ledger makes, each bounded (READ_TIMEOUT and
+    API_DEADLINE or LOG_DEADLINE)."""
 
-    def __init__(self, repo):
+    def __init__(self, repo, token, api_url=None):
         self.repo = repo
-        self._escape_flag = None
+        self.token = token
+        self.api_url = (api_url or API_URL).rstrip("/")
+        self.origin = urllib.parse.urlsplit(self.api_url)[:2]
+        self.opener = urllib.request.build_opener(_NoRedirect)
 
-    def _gh(self, args):
+    def _open(self, url, what, auth):
+        """The response to a GET of url; a redirect is returned, not followed."""
+        headers = {"Accept": "application/vnd.github+json", "User-Agent": "assistant-flake-ledger",
+                   "X-GitHub-Api-Version": "2022-11-28"}
+        if auth:
+            if urllib.parse.urlsplit(url)[:2] != self.origin:
+                raise GitHubError(f"{what}: {url} is not the API's address, so the token is not sent there")
+            headers["Authorization"] = f"Bearer {self.token}"
+        try:
+            return self.opener.open(urllib.request.Request(url, headers=headers), timeout=READ_TIMEOUT)
+        except urllib.error.HTTPError as error:
+            if error.code in REDIRECTS:
+                return error
+            error.close()
+            raise GitHubError(f"{what}: HTTP {error.code}") from None
+        except (urllib.error.URLError, *READ_ERRORS) as error:
+            raise read_error(what, error) from None
+
+    def _json(self, url):
+        """(body, next page's address) of one API response, read again on a
+        server error."""
+        what = url[len(self.api_url) + 1:] if url.startswith(self.api_url) else url
+
         def read():
-            status, output, message = gh_output(args)
-            if status != 0:
-                raise GitHubError(f"gh {' '.join(args)}: {message or status}")
-            return output
+            with deadline(API_DEADLINE, what):
+                response = self._open(url, what, auth=True)
+                try:
+                    if response.status in REDIRECTS:
+                        raise GitHubError(f"{what}: HTTP {response.status}")
+                    try:
+                        body = response.read()  # raises IncompleteRead on a body cut short
+                    except READ_ERRORS as error:
+                        raise read_error(what, error) from None
+                    link = response.headers.get("Link")
+                finally:
+                    response.close()
+            try:
+                return json.loads(body), next_link(link)
+            except ValueError:
+                raise GitHubError(f"{what}: the answer is not JSON") from None
         return retried(read)
 
-    def api(self, path, paginate=False):
-        args = ["api", "-H", "Accept: application/vnd.github+json", path]
-        if paginate:
-            args[1:1] = ["--paginate", "--slurp"]
-        data = json.loads(self._gh(args))
-        return data
+    def api(self, path):
+        return self._json(f"{self.api_url}/{path}")[0]
+
+    def pages(self, path):
+        """Every page of a listing, following GitHub's Link header."""
+        items, url = [], f"{self.api_url}/{path}"
+        while url:
+            body, url = self._json(url)
+            items.append(body)
+        return items
 
     def runs(self, workflow, limit, branch=None, since=None):
-        runs, page = [], 1
-        while len(runs) < limit:
-            query = f"per_page=100&page={page}&status=completed"
-            if branch:
-                query += f"&branch={branch}"
-            if since:
-                query += f"&created=>={since}"
-            batch = self.api(f"repos/{self.repo}/actions/workflows/{workflow}/runs?{query}")["workflow_runs"]
-            if not batch:
-                break
-            runs.extend(batch)
-            page += 1
+        # Encoded, so a branch name with + # & or % in it is asked for as it is.
+        query = {"per_page": 100, "status": "completed"}
+        if branch:
+            query["branch"] = branch
+        if since:
+            query["created"] = f">={since}"
+        runs = []
+        url = (f"{self.api_url}/repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow, safe='')}/runs?"
+               f"{urllib.parse.urlencode(query)}")
+        while url and len(runs) < limit:
+            body, url = self._json(url)
+            runs.extend(body["workflow_runs"])
         return runs[:limit]
 
     def run(self, run_id):
@@ -630,41 +439,55 @@ class GitHub:
         return self.api(f"repos/{self.repo}/actions/runs/{run_id}/attempts/{attempt}")
 
     def attempt_jobs(self, run_id, attempt):
-        pages = self.api(f"repos/{self.repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100",
-                         paginate=True)
+        pages = self.pages(f"repos/{self.repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")
         return [job for page in pages for job in page["jobs"]]
 
     def annotations(self, job_id):
         return self.api(f"repos/{self.repo}/check-runs/{job_id}/annotations?per_page=100")
 
     def issues(self):
-        pages = self.api(f"repos/{self.repo}/issues?state=all&per_page=100", paginate=True)
+        pages = self.pages(f"repos/{self.repo}/issues?state=all&per_page=100")
         return [i for page in pages for i in page if "pull_request" not in i]
 
-    def pulls(self):
-        pages = self.api(f"repos/{self.repo}/pulls?state=all&per_page=100", paginate=True)
-        return [p for page in pages for p in page]
-
     def job_log(self, job_id):
-        """Yields the job's log lines as gh streams them."""
-        if self._escape_flag is None:
-            status, help_text, message = gh_output(["api", "--help"])
-            if status != 0:
-                raise GitHubError(f"gh api --help: {message or status}")
-            self._escape_flag = "--allow-escape-sequences" in help_text
-        args = ["api"] + (["--allow-escape-sequences"] if self._escape_flag else [])
-        args.append(f"repos/{self.repo}/actions/jobs/{job_id}/logs")
-        process, errors = start_gh(args, LOG_DEADLINE)
-        read_to_end = False
+        """Yields the job's log lines as they arrive. GitHub answers with a
+        redirect to the log's own signed address, which is read without the
+        token. A log cut off part way raises once its end is reached (a
+        chunked one when its closing chunk never comes, one with a
+        Content-Length when bytes it promised are missing), so the caller
+        never takes part of a log for all of it. The caller bounds the whole
+        read (read_job)."""
+        what = f"log of job {job_id}"
+        response = self._open(f"{self.api_url}/repos/{self.repo}/actions/jobs/{job_id}/logs", what, auth=True)
         try:
-            for line in process.stdout:
-                yield line
-            read_to_end = True
+            if response.status in REDIRECTS:
+                location = response.headers.get("Location")
+                response.close()
+                if not location:
+                    raise GitHubError(f"{what}: HTTP {response.status} with no Location")
+                response = self._open(urllib.parse.urljoin(self.api_url + "/", location), what, auth=False)
+                if response.status in REDIRECTS:
+                    raise GitHubError(f"{what}: HTTP {response.status} from the log's own address")
+            pending = b""
+            while True:
+                # read(), not readline(): readline ends quietly at a cut-off
+                # chunked body, where read() raises.
+                try:
+                    chunk = response.read(65536)
+                except READ_ERRORS as error:
+                    raise read_error(what, error) from None
+                if not chunk:
+                    break
+                *lines, pending = (pending + chunk).split(b"\n")
+                for raw in lines:
+                    yield raw.decode("utf-8", "replace") + "\n"
+            if response.length:
+                # A Content-Length's remainder: read() ends quietly there.
+                raise GitHubError(f"{what}: incomplete read ({response.length} more bytes expected)")
+            if pending:
+                yield pending.decode("utf-8", "replace")
         finally:
-            process.stdout.close()
-            status, message = finish_gh(process, errors, read_to_end)
-        if status != 0:
-            raise GitHubError(f"log of job {job_id}: {message or status}")
+            response.close()
 
 
 def platform_of(job):
@@ -675,80 +498,13 @@ def platform_of(job):
     return (job.get("labels") or ["unknown"])[0]
 
 
-class Cache:
-    """What a finished job or attempt says, keyed by this script's digest so
-    any edit to the parser reads every log again. A finished job's log, and
-    the jobs of a finished attempt, never change; a re-run is a new attempt."""
-
-    def __init__(self, directory):
-        self.directory = Path(directory) if directory else None
-        if self.directory:
-            self.directory.mkdir(parents=True, exist_ok=True)
-
-    def _path(self, name):
-        return self.directory / f"{name}-{SCRIPT_DIGEST}.json"
-
-    def get(self, name):
-        if not self.directory:
-            return None
-        try:
-            return json.loads(self._path(name).read_text())
-        except (OSError, ValueError):
-            return None
-
-    def put(self, name, value):
-        if self.directory:
-            path = self._path(name)
-            tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-            tmp.write_text(json.dumps(value))
-            tmp.replace(path)
-
-
 def failed_steps(job):
     return [s["name"] for s in job.get("steps") or [] if s.get("conclusion") == "failure"]
 
 
-def step_detail(errors):
-    """A failed step's last error line, its exit line only when it has nothing else."""
-    return next((e for e in reversed(errors) if not e.startswith((FAILED_STEP_END, CANCEL_ERROR))),
-                next((e for e in reversed(errors) if e.startswith(FAILED_STEP_END)), ""))[:200]
-
-
-def unexplained_steps(job, records, errors, cancel):
-    """A step record for each failed step no record was read from: a failed
-    step (vet, gofmt, a second step after Test) is a failure whatever else
-    in the job was named, in a cancelled job too.
-
-    The log is split at each failed step's exit line, in step order. When
-    there are as many exit lines as failed steps, the k-th section is the
-    k-th failed step's, and a step with a record in its section is explained
-    by it. When the counts differ, which step a record came from is unknown,
-    so every failed step is counted rather than one assumed explained."""
-    failed = failed_steps(job)
-    if not failed:
-        # Nothing failed by name: a failed job is still a failure; a cancel
-        # with nothing in it is only a cancel.
-        if records or cancel:
-            return []
-        return [Record("step", job["name"], "step (no failed step reported)", step_detail(errors))]
-    ends = [i for i, e in enumerate(errors) if e.startswith(FAILED_STEP_END)]
-    if len(ends) != len(failed):
-        return [Record("step", job["name"], f"step {s}", step_detail(errors)) for s in failed]
-    explained = {r.section for r in records}
-    steps = []
-    for k, name in enumerate(failed):
-        if k not in explained:
-            own = errors[(ends[k - 1] + 1 if k else 0):ends[k] + 1]
-            steps.append(Record("step", job["name"], f"step {name}", step_detail(own)))
-    return steps
-
-
-def read_job(github, cache, job):
+def read_job(github, job):
     """Records for one failed or cancelled job: {"records": [...], "unattributed": bool,
     "cancel": None | "timeout" | "superseded" | "cancelled", "error": None | str}."""
-    cached = cache.get(f"job-{job['id']}")
-    if cached is not None:
-        return cached
     result = {"records": [], "unattributed": False, "cancel": None, "error": None}
     if job["conclusion"] in ("cancelled", "timed_out"):
         if job["conclusion"] == "timed_out":
@@ -770,114 +526,97 @@ def read_job(github, cache, job):
         if not job.get("steps"):
             # Cancelled before a runner took it: no step ran, so there is no
             # output to read and GitHub keeps no log (it answers 404).
-            cache.put(f"job-{job['id']}", result)
             return result
-    # A log that fails part way is parsed again from its start. A cancelled
-    # job's log is read too: a cancel in a later step is the job's result
-    # even when its Test step had already failed and printed why.
+    failed = failed_steps(job)
+    for name in failed:
+        if name != TEST_STEP:
+            result["records"].append(Record("step", job["name"], f"step {name}").to_dict())
+
+    def read():
+        # A log that fails part way is read again from its start.
+        with deadline(LOG_DEADLINE, f"log of job {job['id']}"):
+            parser = LogParser()
+            for line in github.job_log(job["id"]):
+                parser.feed(line)
+            return (*parser.finish(), parser.unfinished)
     try:
-        records, unattributed, errors, unfinished = retried(lambda: parse_job_log(github.job_log(job["id"])))
+        records, printed_nothing, unfinished = retried(read)
     except GitHubError as error:
-        # What the annotations already proved stays; the result is partial,
-        # so it is not cached and the next run reads the log again.
+        # What the annotations and steps already proved stays.
         result["error"] = str(error)
         return result
     if result["cancel"] == "timeout" and unfinished is not None:
+        # The timeout row was the first one added.
         result["records"][0]["detail"] += "; not reported: " + (" ".join(unfinished) or "(none)")
-    records = records + unexplained_steps(job, records, errors, result["cancel"])
     result["records"] += [r.to_dict() for r in records]
-    result["unattributed"] = unattributed
-    cache.put(f"job-{job['id']}", result)
+    # The Test step failed, or the job failed naming no step, and the log
+    # explained none of it.
+    test_failed = TEST_STEP in failed or (not failed and result["cancel"] is None)
+    result["unattributed"] = printed_nothing or (test_failed and not records)
     return result
 
 
-def attempt_of(github, cache, run, attempt):
-    """The jobs and conclusion of one attempt of a run. Only an attempt that
-    has finished is cached: a running one's jobs are still changing."""
-    name = f"attempt-{run['id']}-{attempt}"
-    cached = cache.get(name)
-    if cached is not None:
-        return cached
+def run_jobs(github, run):
+    """Every failed or cancelled job of every attempt of one run, and how
+    many of its jobs had finished."""
     final = run.get("run_attempt") or 1
-    jobs = github.attempt_jobs(run["id"], attempt)
-    conclusion = run["conclusion"] if attempt == final else github.attempt(run["id"], attempt).get("conclusion")
-    value = {"jobs": jobs, "conclusion": conclusion}
-    if attempt < final or run.get("status") == "completed":
-        cache.put(name, value)
-    return value
-
-
-def run_jobs(github, cache, run):
-    """Every failed or cancelled job of every attempt of one run."""
-    final = run.get("run_attempt") or 1
-    seen, jobs, attempts, problems, completed = set(), [], [], [], 0
+    seen, jobs, attempts, problems, finished = set(), [], [], [], 0
     for attempt in range(1, final + 1):
         try:
-            listed = attempt_of(github, cache, run, attempt)
+            listed = github.attempt_jobs(run["id"], attempt)
+            conclusion = run["conclusion"] if attempt == final else github.attempt(run["id"], attempt).get("conclusion")
         except GitHubError as error:
             problems.append(f"run {run['id']} attempt {attempt}: {error}")
             continue
-        attempts.append({"attempt": attempt, "conclusion": listed["conclusion"]})
-        for job in listed["jobs"]:
+        attempts.append({"attempt": attempt, "conclusion": conclusion})
+        for job in listed:
             if job["id"] in seen:
                 continue  # a job listed under more than one attempt is read once
             seen.add(job["id"])
             if job.get("status") != "completed":
-                continue
-            completed += 1
+                continue  # a running attempt's job: its result is not known yet
+            finished += 1
             if job.get("conclusion") in ("success", "skipped", "neutral"):
                 continue
             jobs.append((run, job))
     rerun = {"run": run, "attempts": attempts} if final > 1 else None
-    return jobs, rerun, problems, completed
+    return jobs, rerun, problems, finished
 
 
-def collect(github, cache, runs, workers=4):
+def collect(github, runs):
     """Every failed job of every attempt of each run, with its records."""
-    jobs, reruns, problems, completed = [], [], [], 0
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
-    try:
-        for found, rerun, trouble, finished in pool.map(lambda run: run_jobs(github, cache, run), runs):
-            completed += finished
-            jobs.extend(found)
-            problems.extend(trouble)
-            if rerun:
-                reruns.append(rerun)
-        results = {}
-        futures = {pool.submit(read_job, github, cache, job): job["id"] for _, job in jobs}
-        for future in concurrent.futures.as_completed(futures):
-            job_id = futures[future]
-            try:
-                results[job_id] = future.result()
-            except GitHubError as error:
-                results[job_id] = {"records": [], "unattributed": False, "cancel": None, "error": str(error)}
-            if results[job_id].get("error"):
-                problems.append(results[job_id]["error"])
-    except BaseException:
-        # Ctrl+C, or anything else ending the collection: end the workers'
-        # gh calls now, or the shutdown below waits for their deadlines.
-        end_every_gh()
-        raise
-    finally:
-        pool.shutdown(wait=True, cancel_futures=True)
-    return jobs, results, reruns, problems, completed
+    jobs, reruns, problems, results, finished = [], [], [], {}, 0
+    for run in runs:
+        found, rerun, trouble, done = run_jobs(github, run)
+        jobs.extend(found)
+        problems.extend(trouble)
+        finished += done
+        if rerun:
+            reruns.append(rerun)
+    for _, job in jobs:
+        try:
+            results[job["id"]] = read_job(github, job)
+        except GitHubError as error:
+            results[job["id"]] = {"records": [], "unattributed": False, "cancel": None, "error": str(error)}
+        if results[job["id"]].get("error"):
+            problems.append(results[job["id"]]["error"])
+    return jobs, results, reruns, problems, finished
 
 
 def matcher(issues):
-    """Returns a function from match token to the issues naming it."""
+    """Returns find(token, test) -> the issues naming token. A test's token
+    (test=True) is not matched after a slash, where it names another test's
+    subtest; any other token may follow one, as a program's name follows a
+    path."""
     texts = [(i["number"], i["state"], i.get("title") or "", (i.get("title") or "") + "\n" + (i.get("body") or ""),
               i.get("closed_at")) for i in issues]
 
-    names = [set(re.findall(r"\bTest[A-Za-z0-9_/]{6,}", text)) for _, _, _, text, _ in texts]
-
-    def find(token, prefix=False):
-        pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(token) + r"(?![A-Za-z0-9_])")
+    def find(token, test=False):
+        before = r"(?<![A-Za-z0-9_/])" if test else r"(?<![A-Za-z0-9_])"
+        pattern = re.compile(before + re.escape(token) + r"(?![A-Za-z0-9_])")
         found = {"open": [], "closed": []}
-        for (number, state, title, text, closed_at), tests in zip(texts, names):
-            # Go drops a subtest's slash from its t.TempDir, so an issue naming
-            # TestA/sub is found by the token TestAsub.
-            near = prefix and any(token.startswith(t.replace("/", "")) for t in tests)
-            if near or pattern.search(text):
+        for number, state, title, text, closed_at in texts:
+            if pattern.search(text):
                 item = {"number": number, "title": title}
                 if state != "open":
                     item["closed_at"] = closed_at
@@ -887,58 +626,24 @@ def matcher(issues):
 
 
 def branch_of(run, repo):
-    """The run's branch as the ledger names it. A fork's branch carries its
-    owner (someone:main), and a pull request's run of a branch named main is
-    "main (pull request)", so "main" alone is only this repository's main
-    run for itself: a push, schedule or dispatch."""
+    """The run's branch, with its owner when it is a fork's (someone:main)."""
     branch = run.get("head_branch") or ""
     head = (run.get("head_repository") or {}).get("full_name")
     if head and head.lower() != repo.lower():  # GitHub's names ignore case
         return f"{head.split('/')[0]}:{branch}"
-    if branch == "main" and run.get("event") in ("pull_request", "pull_request_target"):
-        return "main (pull request)"
     return branch
 
 
-def pull_request_finder(pulls):
-    """Returns a function from a run to its pull request's number, or None.
-    A run that names its pull request (the API's pull_requests, which GitHub
-    leaves empty once a pull request closes, and for a fork's) has that one.
-    Otherwise it is the one pull request of the run's head repository and
-    branch that was open when the run was created: a branch can be reused by
-    a later pull request. None when no such pull request, or more than one,
-    was open then: unknown, never a guess."""
-    by_head = {}
-    for pull in pulls:
-        head = pull.get("head") or {}
-        key = (((head.get("repo") or {}).get("full_name") or "").lower(), head.get("ref"))
-        by_head.setdefault(key, []).append(pull)
-
-    def find(run):
-        if run.get("event") not in ("pull_request", "pull_request_target"):
-            return None
-        named = [p.get("number") for p in run.get("pull_requests") or [] if p.get("number")]
-        if len(named) == 1:
-            return named[0]
-        key = (((run.get("head_repository") or {}).get("full_name") or "").lower(), run.get("head_branch"))
-        at = run.get("created_at") or ""
-        open_then = [p["number"] for p in by_head.get(key, [])
-                     if (p.get("created_at") or "") <= at and (not p.get("closed_at") or at <= p["closed_at"])]
-        return open_then[0] if len(open_then) == 1 else None
-    return find
-
-
-def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, pulls, completed=None):
+def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, finished=None):
     # Without the issues, which issue names a failure is unknown, not "none".
-    find = matcher(issues) if issues is not None else (lambda token, prefix=False: None)
-    pr_of = pull_request_finder(pulls)
+    find = matcher(issues) if issues is not None else (lambda token, test=False: None)
     entries = {}
     unattributed, cancelled, cancelled_jobs, counted = [], {"superseded": 0, "cancelled": 0}, [], 0
     for run, job in jobs:
         result = results.get(job["id"]) or {"records": [], "error": "not read"}
         if result.get("cancel"):
-            # Every job that did not run to its end, whatever it recorded:
-            # a timeout or a cancel after a failure still cut its suite short.
+            # Every job that timed out or was cancelled, whatever it recorded
+            # first: one run's summary (--run) cannot pass with any of them.
             cancelled_jobs.append({"run_id": run["id"], "job_id": job["id"], "job": job["name"],
                                    "attempt": job.get("run_attempt", 1),
                                    "final_attempt": run.get("run_attempt") or 1, "reason": result["cancel"]})
@@ -948,13 +653,12 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
                 and not result.get("unattributed")):
             cancelled[result["cancel"]] += 1
             continue
-        counted += 1  # a failed job: a failure, a read problem, or output that named nothing
+        counted += 1
         final = run.get("run_attempt") or 1
         occurrence = {
             "run_id": run["id"], "attempt": job.get("run_attempt", 1), "final_attempt": final,
             "job_id": job["id"], "job": job["name"], "platform": platform_of(job),
             "branch": branch_of(run, repo), "event": run.get("event"),
-            "pr": pr_of(run),
             "sha": run.get("head_sha"), "created_at": run.get("created_at"),
             # When the job that failed ended; a completed job always has it.
             "failed_at": job.get("completed_at") or job.get("started_at") or run.get("created_at"),
@@ -962,17 +666,14 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
             "run_conclusion": run["conclusion"],
         }
         if result.get("error"):
-            # Records known without the log (a timeout's annotation) still count.
             unattributed.append({**occurrence, "reason": f"not read: {result['error']}"})
         elif result.get("unattributed"):
-            unattributed.append({**occurrence, "reason": "tests ran but no failure was named"})
+            unattributed.append({**occurrence, "reason": "the Test step failed and nothing in its log was named"})
         for data in result["records"]:
             record = Record.from_dict(data)
             entry = entries.setdefault(record.key, {
                 "key": record.key, "kind": record.kind, "package": record.package,
-                "name": record.name, "token": record.token, "prefix": record.prefix, "subtests": set(),
-                "details": [], "occurrences": []})
-            entry["subtests"].update(record.subtests)
+                "name": record.name, "token": record.token, "details": [], "occurrences": []})
             if record.detail and record.detail not in entry["details"] and len(entry["details"]) < 3:
                 entry["details"].append(record.detail)
             entry["occurrences"].append(dict(occurrence))
@@ -989,26 +690,17 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
             by_platform[o["platform"]] = by_platform.get(o["platform"], 0) + 1
             by_branch[o["branch"]] = by_branch.get(o["branch"], 0) + 1
         entry.update({
-            "subtests": sorted(entry["subtests"]),
             "count": len(occ),
             "by_platform": by_platform,
             "by_branch": by_branch,
-            "on_main": by_branch.get("main", 0),
             "hidden_by_rerun": sum(1 for o in occ if o["hidden_by_rerun"]),
             "first_seen": min(o["failed_at"] for o in occ),
             "last_seen": max(o["failed_at"] for o in occ),
-            "issues": find(entry["token"], entry["prefix"]),
+            "issues": find(entry["token"], entry["kind"] in ("test", "timeout")),
         })
-        # A closed issue's failure seen on main after it closed: the fix did
-        # not hold, or the issue named the wrong cause. A branch's run after
-        # the close may predate the fix, so only main counts.
-        on_main = [o["failed_at"] for o in occ if o["branch"] == "main"]
-        entry["failed_on_main_after_close"] = [
-            i["number"] for i in (entry["issues"] or {"closed": []})["closed"]
-            if i.get("closed_at") and any(stamp > i["closed_at"] for stamp in on_main)]
         entry["occurrences"].sort(key=lambda o: o["failed_at"], reverse=True)
         failures.append(entry)
-    failures.sort(key=lambda e: (-e["count"], -e["on_main"], e["key"]))
+    failures.sort(key=lambda e: (-e["count"], e["key"]))
     rerun_rows = []
     for item in reruns:
         run = item["run"]
@@ -1024,20 +716,19 @@ def build_ledger(repo, workflow, runs, jobs, results, reruns, problems, issues, 
         "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "repo": repo, "workflow": workflow,
         "runs_scanned": len(runs),
-        "jobs_read": completed,
         "window": {"first": min((r["created_at"] for r in runs), default=None),
                    "last": max((r["created_at"] for r in runs), default=None)},
+        "jobs_read": finished,
         "failed_jobs": counted,
         "cancelled_jobs_not_counted": cancelled,
         "cancelled_jobs": cancelled_jobs,
         # Failures an earlier attempt had that no open issue names: what a
-        # re-run would otherwise pass over in silence.
+        # re-run would otherwise pass over in silence. Unknown issues are no
+        # answer here; the failed read makes the ledger exit 2 first.
         "rerun_without_issue": [
             dict(zip(("run_id", "attempt", "job", "key", "token"), row)) for row in sorted({
                 (o["run_id"], o["attempt"], o["job"], e["key"], e["token"])
                 for e in failures for o in e["occurrences"]
-                # Unknown issues are no answer here; the failed read makes the
-                # ledger exit 2 before --require-open-issues could pass it.
                 if o["attempt"] < o["final_attempt"] and e["issues"] is not None and not e["issues"]["open"]})],
         "failures": failures, "unattributed": unattributed, "reruns": rerun_rows, "problems": problems,
     }
@@ -1054,10 +745,7 @@ def issue_text(entry):
     found = entry["issues"]
     if found is None:
         return "unknown (the issues could not be read)"
-    parts = [f"#{i['number']}" for i in found["open"]]
-    parts += [f"~~#{i['number']}~~" + (" **failed on main since it closed**"
-                                       if i["number"] in entry["failed_on_main_after_close"] else "")
-              for i in found["closed"]]
+    parts = [f"#{i['number']}" for i in found["open"]] + [f"~~#{i['number']}~~" for i in found["closed"]]
     if parts:
         return " ".join(parts)
     # A test is matched by its own name; say what else would match.
@@ -1074,7 +762,7 @@ def markdown(ledger, zone):
     out.append(f"# Flake ledger: {ledger['repo']} {ledger['workflow']}")
     out.append("")
     jobs = f"{ledger['jobs_read']} finished job(s), " if ledger.get("jobs_read") is not None else ""
-    out.append(f"{ledger['runs_scanned']} run(s), {local_time(window['first'], zone)} to "
+    out.append(f"{ledger['runs_scanned']} completed runs, {local_time(window['first'], zone)} to "
                f"{local_time(window['last'], zone)}; every attempt read. {jobs}{ledger['failed_jobs']} failed "
                f"job(s); not counted: {ledger['cancelled_jobs_not_counted']['superseded']} superseded by a "
                f"newer run, {ledger['cancelled_jobs_not_counted']['cancelled']} cancelled for another reason "
@@ -1086,8 +774,8 @@ def markdown(ledger, zone):
         for problem in ledger["problems"]:
             out.append(f"- read failed: {cell(problem)}")
         for item in ledger["unattributed"]:
-            out.append(f"- run {item['run_id']} attempt {item['attempt']} {item['job']} ({item['branch']}): "
-                       f"{item['reason']} {item['url']}")
+            out.append(f"- not attributed: run {item['run_id']} attempt {item['attempt']} {item['job']} "
+                       f"({item['branch']}): {item['reason']} {item['url']}")
         out.append("")
     out.append("## Failures")
     out.append("")
@@ -1095,21 +783,20 @@ def markdown(ledger, zone):
                "from an earlier attempt that the run's final attempt does not show; *last seen* is when the "
                "job that failed ended. Struck-through issues are closed.")
     out.append("")
-    out.append("| Count | Failure | Kind | ubuntu | macos | main | hidden | other branches | last seen | issues |")
-    out.append("|---:|---|---|---:|---:|---:|---:|---|---|---|")
+    out.append("| Count | Failure | Kind | ubuntu | macos | hidden | branches | last seen | issues |")
+    out.append("|---:|---|---|---:|---:|---:|---|---|---|")
     for entry in ledger["failures"]:
-        others = sorted(((n, b) for b, n in entry["by_branch"].items() if b != "main"), reverse=True)
-        other = ", ".join(f"{b} ({n})" for n, b in others[:3]) + (f", +{len(others) - 3}" if len(others) > 3 else "")
-        name = f"{entry['package']} `{entry['name']}`"
-        if entry["subtests"]:
-            name += " (" + ", ".join(f"`{s.split('/', 1)[1]}`" for s in entry["subtests"][:3])
-            name += f", +{len(entry['subtests']) - 3})" if len(entry["subtests"]) > 3 else ")"
+        branches = sorted(((n, b) for b, n in entry["by_branch"].items()), reverse=True)
+        shown = ", ".join(f"{b} ({n})" for n, b in branches[:3])
+        if len(branches) > 3:
+            shown += f", +{len(branches) - 3}"
         out.append("| " + " | ".join(cell(c) for c in [
-            entry["count"], name, entry["kind"], entry["by_platform"].get("ubuntu", 0),
-            entry["by_platform"].get("macos", 0), entry["on_main"], entry["hidden_by_rerun"] or "-",
-            other or "-", local_time(entry["last_seen"], zone), issue_text(entry)]) + " |")
+            entry["count"], f"{entry['package']} `{entry['name']}`", entry["kind"],
+            entry["by_platform"].get("ubuntu", 0), entry["by_platform"].get("macos", 0),
+            entry["hidden_by_rerun"] or "-", shown or "-", local_time(entry["last_seen"], zone),
+            issue_text(entry)]) + " |")
     if not ledger["failures"]:
-        out.append("| 0 | no failures in this window | | | | | | | | |")
+        out.append("| 0 | no failures in this window | | | | | | | |")
     out.append("")
     if ledger["rerun_without_issue"]:
         out.append("## Re-run past with no open issue")
@@ -1132,18 +819,6 @@ def markdown(ledger, zone):
     return "\n".join(out)
 
 
-def default_cache():
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
-    return os.path.join(base, "assistant-flake-ledger")
-
-
-def detect_repo():
-    status, output, message = gh_output(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"])
-    if status != 0 or not output.strip():
-        raise GitHubError(f"cannot tell the repository; pass --repo ({message})")
-    return output.strip()
-
-
 def zone_of(name):
     if not name:
         return datetime.datetime.now().astimezone().tzinfo
@@ -1151,8 +826,7 @@ def zone_of(name):
     return ZoneInfo(name)
 
 
-def report(args, github=None):
-    github = github or GitHub(args.repo or detect_repo())
+def report(args, github):
     if args.run:
         runs = [github.run(args.run)]
     else:
@@ -1160,23 +834,18 @@ def report(args, github=None):
     if not runs:
         print(f"flake-ledger: no completed runs of {args.workflow} in {github.repo}", file=sys.stderr)
         return 2
-    cache = Cache(None if args.no_cache else args.cache)
-    jobs, results, reruns, problems, completed = collect(github, cache, runs)
-    issues, pulls = None, []
+    jobs, results, reruns, problems, finished = collect(github, runs)
+    issues = None
     try:
         issues = github.issues()
     except GitHubError as error:
         problems.append(f"issues: {error}")
-    try:
-        pulls = github.pulls()
-    except GitHubError as error:
-        problems.append(f"pull requests: {error}")
-    workflow = os.path.basename(runs[0].get("path") or "") if args.run else args.workflow
-    ledger = build_ledger(github.repo, workflow or args.workflow, runs, jobs, results, reruns, problems,
-                          issues, pulls, completed)
+    workflow = (os.path.basename(runs[0].get("path") or "") if args.run else "") or args.workflow
+    ledger = build_ledger(github.repo, workflow, runs, jobs, results, reruns, problems, issues,
+                          finished if args.run else None)
     if args.own_job:
-        # The check's own job failing in an earlier attempt was its verdict
-        # on the other failures, which this run judges again; it is not a
+        # The check's own job failing in an earlier attempt was its verdict on
+        # the other failures, which this run judges again; it is not a
         # failure that needs an issue of its own.
         ledger["rerun_without_issue"] = [r for r in ledger["rerun_without_issue"] if r["job"] != args.own_job]
     if args.json:
@@ -1185,14 +854,13 @@ def report(args, github=None):
         print(json.dumps(ledger, indent=2))
     else:
         print(markdown(ledger, zone_of(args.tz)))
-    if ledger["problems"] or any(u["reason"].startswith("not read") for u in ledger["unattributed"]):
+    if ledger["problems"]:
         return 2
     latest = [c for c in ledger["cancelled_jobs"] if c["attempt"] == c["final_attempt"]]
     if args.run and latest:
-        # One run's summary cannot say its tests passed when some of its
-        # latest attempt's jobs never finished them, whatever cancelled them
-        # and whatever they recorded first: a timeout is a failure record and
-        # still an unfinished suite. An earlier attempt's cancel was re-run.
+        # One run's summary cannot say its tests passed when a job of its
+        # latest attempt never finished them, whatever cancelled it and
+        # whatever it recorded first. An earlier attempt's cancel was re-run.
         reasons = ", ".join(f"{c['job']} ({c['reason']})" for c in latest)
         print(f"flake-ledger: {len(latest)} job(s) of run {args.run}'s latest attempt did not finish: "
               f"{reasons}, so its results are incomplete", file=sys.stderr)
@@ -1212,28 +880,29 @@ def parse_command(args):
     status = 0
     for name in args.logs:
         with open(name, encoding="utf-8", errors="replace") as handle:
-            records, unattributed, _ = parse_lines(handle, raw=args.raw)
+            records, printed_nothing = parse_lines(handle, raw=args.raw)
         for record in records:
             print(json.dumps({"log": name, **record.to_dict()}))
-        if unattributed:
-            print(f"flake-ledger: {name}: tests ran but no failure was named", file=sys.stderr)
+        if printed_nothing:
+            print(f"flake-ledger: {name}: the test output named no failure", file=sys.stderr)
             status = 3
     return status
 
 
-def main(argv=None, github=None):
+def main(argv=None, api_url=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command")
     parse = sub.add_parser("parse", help="print the failure records of local log files as JSON lines")
     parse.add_argument("--raw", action="store_true", help="the logs are plain `go test -v` output")
     parse.add_argument("logs", nargs="+")
-    parser.add_argument("--repo", help="owner/name (default: the current checkout's GitHub repository)")
+    parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"),
+                        help="owner/name (default: GITHUB_REPOSITORY)")
     parser.add_argument("--workflow", default="ci.yml")
     parser.add_argument("--limit", type=int, default=60, help="most recent completed runs to read")
     parser.add_argument("--branch", help="only runs of this branch")
     parser.add_argument("--since", help="only runs created on or after this date (YYYY-MM-DD)")
     parser.add_argument("--run", type=int, metavar="ID",
-                        help="only this run, finished or not (its finished jobs); for a workflow's own summary")
+                        help="only this run, finished or not (its finished jobs); for a workflow's own check")
     parser.add_argument("--require-open-issues", action="store_true",
                         help="exit 4 when a failure of an attempt before a run's latest has no open issue")
     parser.add_argument("--own-job", metavar="NAME",
@@ -1242,18 +911,19 @@ def main(argv=None, github=None):
     parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
     parser.add_argument("--json", metavar="PATH", help="also write the JSON ledger here")
     parser.add_argument("--tz", help="time zone for the markdown (default: this machine's)")
-    parser.add_argument("--cache", default=default_cache(), help="parsed-log cache directory")
-    parser.add_argument("--no-cache", action="store_true")
     args = parser.parse_args(argv)
-    global _stopping
-    with _live_gh_lock:
-        # A new report starts its own gh calls; an earlier one in this
-        # process has already joined its workers.
-        _stopping = False
+    if args.command == "parse":
+        return parse_command(args)
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        print("flake-ledger: set GH_TOKEN or GITHUB_TOKEN to a token that can read the repository "
+              "(for example GH_TOKEN=$(gh auth token))", file=sys.stderr)
+        return 2
+    if not args.repo:
+        print("flake-ledger: pass --repo owner/name (GITHUB_REPOSITORY is not set)", file=sys.stderr)
+        return 2
     try:
-        if args.command == "parse":
-            return parse_command(args)
-        return report(args, github)
+        return report(args, GitHub(args.repo, token, api_url))
     except GitHubError as error:
         print(f"flake-ledger: {error}", file=sys.stderr)
         return 2
@@ -1263,6 +933,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        end_every_gh()
         print("flake-ledger: interrupted", file=sys.stderr)
         sys.exit(130)

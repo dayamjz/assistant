@@ -68,14 +68,24 @@ jobs:
         run: python3 scripts/leak-check-test.py -v
 
       # The flake ledger's tests (scripts/flake-ledger.py, which the CI lanes
-      # read failures from). They run the real go test, so they come after
-      # setup-go; nothing in the parser depends on the platform it runs on.
+      # read failures from). They start no process and read nothing from the
+      # network but a server they run on 127.0.0.1; nothing in the ledger
+      # depends on the platform beyond SIGALRM, which both runners have.
       - name: Flake ledger tests
         if: matrix.os == 'ubuntu-latest'
         run: python3 scripts/flake-ledger-test.py -v
+
+      # The CI test script's own tests (scripts/ci-test-test.py): the values
+      # it refuses before anything runs.
       - name: CI test script tests
         if: matrix.os == 'ubuntu-latest'
         run: python3 scripts/ci-test-test.py -v
+
+      # The repeat gate's plan (scripts/repeat-plan.py): which packages a
+      # pull request's change makes .github/workflows/repeat.yml run.
+      - name: Repeat plan tests
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 scripts/repeat-plan-test.py -v
 
       # The race suite in CI's test environment. scripts/ci-test.sh owns that
       # environment (Linux's PID namespace, macOS's TMPDIR, the leak check
@@ -178,11 +188,13 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v4
+      # shell: bash runs with pipefail, so the ledger's exit is the step's.
+      # The script starts with the ledger, not set -o pipefail, which the
+      # ledger takes for the Test step of a log from before ci-test.sh.
       - name: Every earlier attempt's failure has an open issue
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -o pipefail
           python3 scripts/flake-ledger.py --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" \
-            --require-open-issues --own-job re-runs --no-cache --tz America/Los_Angeles \
-            | tee -a "$GITHUB_STEP_SUMMARY"
+            --require-open-issues --own-job re-runs --tz America/Los_Angeles | tee -a "$GITHUB_STEP_SUMMARY"
