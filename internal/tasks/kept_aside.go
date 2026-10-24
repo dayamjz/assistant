@@ -55,6 +55,28 @@ import (
 // was confirmed, and that only once the copy is gone. A stop part way
 // leaves the journal, and the next discard of the copy puts everything
 // back before it reads anything; until then Loss refuses with ErrAsideStands.
+//
+// What this does not cover:
+//
+//   - Between the read once everything is set aside and the removal, a
+//     file written into a run's worktree record in the gate goes with it,
+//     since git removes that directory whole, and so does a file git
+//     ignores written into the worktree, which git's removal without
+//     force does not refuse; for a task's clone, a file git does not see
+//     written between removeOnProof's last inventory and the removal goes
+//     with the clone, P12 cleanup's own window.
+//   - What a process writes through a descriptor it opened in the copy
+//     before the discard moved that file aside is lost with it.
+//   - A clone removal that fails part way is not put back: what was set
+//     aside was confirmed and goes, and what was removed of the rest,
+//     which the read found empty of work, stays removed.
+//   - P12 cleanup does not look for what a stopped discard set aside: one
+//     that removes the copy on a proof before the next answer leaves it,
+//     and the next confirmed discard finds the copy gone and removes it,
+//     all of it confirmed by that discard.
+//   - A file written exactly where something set aside goes back keeps
+//     both, and the copy is not read again until a person moves one of
+//     them (ErrAsideStands names which).
 
 // ErrAsideStands is returned by Loss and by Discard for a copy beside which
 // a discard that did not finish left what it set aside, and by Discard
