@@ -437,6 +437,64 @@ func TestWorktreeRemovalRefusesWhenItWouldDiscardWork(t *testing.T) {
 	}
 }
 
+// WorktreeRecordPointsAt reads the .git file a linked worktree's record
+// names as its own: for a worktree git added, the positive control, the
+// worktree's own .git file, and each of two worktrees' records names its
+// own and not the other's; a relative path is read against the record; and
+// a record with no gitdir file, an empty one, or one of two lines is an
+// error rather than a guess.
+func TestAWorktreeRecordNamesTheWorktreeItBelongsTo(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	source, _, second := sourceRepo(t)
+	repo, err := vcs.OpenWorktree(c, source)
+	if err != nil {
+		t.Fatalf("OpenWorktree: %v", err)
+	}
+	paths := []string{filepath.Join(t.TempDir(), "one"), filepath.Join(t.TempDir(), "two")}
+	var records []string
+	for _, p := range paths {
+		wt, err := repo.AddWorktree(c, vcs.WorktreeSpec{Path: p, Commit: second})
+		if err != nil {
+			t.Fatalf("AddWorktree: %v", err)
+		}
+		obs, err := vcs.Observe(c, wt.Path())
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, obs.GitDir)
+	}
+	for i, record := range records {
+		got, err := vcs.WorktreeRecordPointsAt(record)
+		if err != nil {
+			t.Fatalf("WorktreeRecordPointsAt(%s): %v", record, err)
+		}
+		want, err := filepath.EvalSymlinks(filepath.Join(paths[i], ".git"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved, err := filepath.EvalSymlinks(got); err != nil || resolved != want {
+			t.Fatalf("the record %s names %s (%v); want worktree %d's .git file, %s", record, got, err, i, want)
+		}
+	}
+	dir := t.TempDir()
+	relative := filepath.Join(dir, "relative")
+	writeFile(t, filepath.Join(relative, "gitdir"), "../../wt/.git\n")
+	if got, err := vcs.WorktreeRecordPointsAt(relative); err != nil || got != filepath.Clean(filepath.Join(relative, "../../wt/.git")) {
+		t.Fatalf("the relative record names %s, %v; want it read against the record", got, err)
+	}
+	for name, content := range map[string]string{"empty": "", "two lines": "/a/.git\n/b/.git\n"} {
+		bad := filepath.Join(dir, strings.ReplaceAll(name, " ", "-"))
+		writeFile(t, filepath.Join(bad, "gitdir"), content)
+		if got, err := vcs.WorktreeRecordPointsAt(bad); err == nil {
+			t.Errorf("a record whose gitdir file is %s names %s; want an error", name, got)
+		}
+	}
+	if got, err := vcs.WorktreeRecordPointsAt(filepath.Join(dir, "none")); err == nil {
+		t.Errorf("a record with no gitdir file names %s; want an error", got)
+	}
+}
+
 func TestOpenRefusesTheWrongKindOfPath(t *testing.T) {
 	gitEnvironment(t)
 	c := ctx(t)

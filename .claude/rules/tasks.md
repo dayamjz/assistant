@@ -71,7 +71,9 @@ paths: ["internal/tasks/**"]
   read before the loss read and again after the checks, objects that read
   adds aside, and each entry removed only while it is as read, a run's
   record in the gate, held to be a directory of the gate's worktrees
-  directory, removed so too and never through git's forced removal),
+  directory whose pointer back names the copy's own `.git` file
+  (`vcs.WorktreeRecordPointsAt`), removed so too and never through git's
+  forced removal),
   behind a person's answer and no proof.
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (an exclusively created partial of a fresh name, then a

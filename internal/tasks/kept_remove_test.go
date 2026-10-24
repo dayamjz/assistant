@@ -206,38 +206,63 @@ func TestARenameThatMustNotReplaceRefusesToLandOnAName(t *testing.T) {
 	}
 }
 
-// recordOfGate takes a directory of the gate's own worktrees directory as a
-// worktree's record, the positive control, also when it is reached through
-// a link, and refuses one anywhere else: the gate's worktrees directory
-// itself, a directory under a record, and a directory outside the gate.
-func TestAWorktreeRecordIsTakenOnlyFromTheGatesWorktrees(t *testing.T) {
+// recordOfCopy takes as the copy's record a directory of the gate's own
+// worktrees directory whose pointer back names the copy's own .git file,
+// the positive control, also when the record is reached through a link,
+// and refuses every other: the gate's worktrees directory itself, a
+// directory under a record, a directory outside the gate, another
+// worktree's record of the same gate (the delta review of e036141), and a
+// record with no pointer back.
+func TestAWorktreeRecordIsTakenOnlyAsTheCopysOwn(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	root := t.TempDir()
 	gate := filepath.Join(root, "gate.git")
-	record := filepath.Join(gate, "worktrees", "run")
-	outside := filepath.Join(root, "elsewhere", ".git")
-	for _, dir := range []string{filepath.Join(record, "logs"), outside} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+	plant := func(name string) (record, copyPath string) {
+		t.Helper()
+		record = filepath.Join(gate, "worktrees", name)
+		copyPath = filepath.Join(root, "copies", name)
+		for _, dir := range []string{filepath.Join(record, "logs"), copyPath} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(copyPath, ".git"), []byte("gitdir: "+record+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(record, "gitdir"), []byte(filepath.Join(copyPath, ".git")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return record, copyPath
+	}
+	record, copyPath := plant("run")
+	other, _ := plant("other")
+	bare := filepath.Join(gate, "worktrees", "bare")
+	if err := os.MkdirAll(bare, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "elsewhere", ".git")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
 	}
 	linked := filepath.Join(root, "linked")
 	if err := os.Symlink(gate, linked); err != nil {
 		t.Fatal(err)
 	}
-	if err := recordOfGate(record, gate); err != nil {
-		t.Fatalf("the gate's own worktree record was refused: %v", err)
+	if err := recordOfCopy(record, gate, copyPath); err != nil {
+		t.Fatalf("the copy's own record was refused: %v", err)
 	}
-	if err := recordOfGate(filepath.Join(linked, "worktrees", "run"), gate); err != nil {
-		t.Fatalf("the record reached through a link was refused: %v", err)
+	if err := recordOfCopy(filepath.Join(linked, "worktrees", "run"), gate, copyPath); err != nil {
+		t.Fatalf("the copy's own record reached through a link was refused: %v", err)
 	}
 	for name, dir := range map[string]string{
 		"the worktrees directory itself": filepath.Join(gate, "worktrees"),
 		"a directory under a record":     filepath.Join(record, "logs"),
 		"a directory outside the gate":   outside,
+		"another worktree's record":      other,
+		"a record with no pointer back":  bare,
 	} {
-		if err := recordOfGate(dir, gate); !errors.Is(err, ErrRecordOutsideGate) {
-			t.Errorf("%s, %s, reads %v as a worktree record; want ErrRecordOutsideGate", name, dir, err)
+		if err := recordOfCopy(dir, gate, copyPath); !errors.Is(err, ErrRecordNotTheCopys) {
+			t.Errorf("%s, %s, reads %v as the copy's record; want ErrRecordNotTheCopys", name, dir, err)
 		}
 	}
 }

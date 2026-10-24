@@ -834,7 +834,11 @@ func TestARunsDiscardCountsOnlyWhatItsRemovalDestroys(t *testing.T) {
 // file, the worktree itself gone as shown and the entry discarded, the
 // record whole when the file came before its last check. A worktree whose
 // .git file points at a record outside the gate's worktrees directory is
-// refused with nothing removed, the record standing where it was. The
+// refused with nothing removed, the record standing where it was; and so
+// is one whose .git file points at another worktree's record in the same
+// gate (the delta review of e036141), the other worktree keeping its HEAD,
+// its index with the work staged there alone, and a status git can read.
+// The
 // positive control is the same confirmed discard with nothing written,
 // which removes both. Each change is made by the test while the discard
 // waits at its seam, so it falls in the moment named.
@@ -847,9 +851,10 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 		duringRemoval = "a file written into the record during the removal"
 		afterCheck    = "a file written into the record after its last check"
 		outsideGate   = "a record outside the gate"
+		siblingRecord = "the record of another copy"
 		control       = "nothing written, the positive control"
 	)
-	for _, c := range []string{beforeRemoval, duringRemoval, afterCheck, outsideGate, control} {
+	for _, c := range []string{beforeRemoval, duringRemoval, afterCheck, outsideGate, siblingRecord, control} {
 		t.Run(c, func(t *testing.T) {
 			t.Parallel()
 			h := newHome(t)
@@ -875,6 +880,24 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 				record = git(t, entry.CopyPath, "rev-parse", "--absolute-git-dir")
 				if resolved, err := filepath.EvalSymlinks(outside); err != nil || record != resolved && record != outside {
 					t.Fatalf("git reads the worktree's record at %s; want it at %s (%v)", record, outside, err)
+				}
+			}
+			var sibling string
+			if c == siblingRecord {
+				// Another worktree of the same gate, with work staged in its
+				// index alone, and this copy's .git file pointed at its record.
+				sibling = filepath.Join(t.TempDir(), "sibling")
+				git(t, gate, "worktree", "add", "--quiet", "--detach", sibling, git(t, entry.CopyPath, "rev-parse", "HEAD"))
+				if err := writeFile(filepath.Join(sibling, "staged.txt"), "staged in the other worktree alone\n"); err != nil {
+					t.Fatal(err)
+				}
+				git(t, sibling, "add", "staged.txt")
+				theirs := git(t, sibling, "rev-parse", "--absolute-git-dir")
+				if err := writeFile(filepath.Join(entry.CopyPath, ".git"), "gitdir: "+theirs+"\n"); err != nil {
+					t.Fatal(err)
+				}
+				if record = git(t, entry.CopyPath, "rev-parse", "--absolute-git-dir"); record != theirs {
+					t.Fatalf("git reads this copy's record at %s; want the other worktree's, %s", record, theirs)
 				}
 			}
 			paused, resume := make(chan struct{}), make(chan struct{})
@@ -904,7 +927,7 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 					answered <- under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, shown.Loss.Digest), &done)
 				}()
 				var committed string
-				if c != control && c != outsideGate {
+				if c != control && c != outsideGate && c != siblingRecord {
 					select {
 					case <-paused:
 					case err := <-answered:
@@ -946,9 +969,14 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 					if _, err := os.Stat(filepath.Join(record, "HEAD")); c == duringRemoval && err != nil {
 						t.Fatalf("the record's HEAD is gone after a change before its last check: %v; want the record left whole", err)
 					}
-				case outsideGate:
+				case outsideGate, siblingRecord:
 					if !errors.Is(err, ipc.ErrRefused) {
-						t.Fatalf("the confirmed discard of a worktree whose record is outside the gate = %+v, %v; want it refused", done, err)
+						t.Fatalf("the confirmed discard of a worktree whose record is %s = %+v, %v; want it refused", c, done, err)
+					}
+					if c == siblingRecord {
+						if status := git(t, sibling, "status", "--porcelain"); status != "A  staged.txt" {
+							t.Fatalf("the other worktree's status reads %q after the refusal; want its staged work, A  staged.txt", status)
+						}
 					}
 					if _, err := os.Stat(filepath.Join(record, "HEAD")); err != nil {
 						t.Fatalf("the record outside the gate lost its HEAD: %v; want it standing", err)
@@ -970,7 +998,7 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 						t.Fatalf("the gate still lists the worktree:\n%s", list)
 					}
 				}
-				if c != beforeRemoval && c != outsideGate {
+				if c != beforeRemoval && c != outsideGate && c != siblingRecord {
 					if _, err := os.Stat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
 						t.Fatalf("the worktree stands after the discard: %v", err)
 					}

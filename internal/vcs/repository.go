@@ -406,6 +406,29 @@ func (r *Repository) removeWorktree(ctx context.Context, path string, discard bo
 	return err
 }
 
+// WorktreeRecordPointsAt reads which .git file the linked worktree record
+// at record, a directory under a repository's worktrees directory, names
+// as its own: the path its gitdir file holds, which git's repository
+// layout (gitrepository-layout(5)) documents as the path back to the .git
+// file that points at the record, read against the record when git wrote
+// it relative. It reads that one file and runs no git. A record without
+// one, or whose file is not one path on one line, is an error, so a caller
+// tying a record to its worktree refuses rather than guesses.
+func WorktreeRecordPointsAt(record string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(record, "gitdir"))
+	if err != nil {
+		return "", fmt.Errorf("vcs: reading which worktree the record at %s belongs to: %w", record, err)
+	}
+	text := strings.TrimSuffix(string(raw), "\n")
+	if text == "" || strings.ContainsAny(text, "\n\r\x00") {
+		return "", fmt.Errorf("vcs: the record at %s names its worktree as %q, which is not one path", record, raw)
+	}
+	if !filepath.IsAbs(text) {
+		text = filepath.Join(record, text)
+	}
+	return filepath.Clean(text), nil
+}
+
 // PruneWorktrees removes administrative records for worktrees whose
 // directories are gone. It does not delete any directory.
 func (r *Repository) PruneWorktrees(ctx context.Context) error {

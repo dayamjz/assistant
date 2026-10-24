@@ -263,7 +263,7 @@ type discardWithdrawn struct {
 }
 
 func (e *discardWithdrawn) Error() string {
-	if errors.Is(e.cause, tasks.ErrRecordOutsideGate) {
+	if errors.Is(e.cause, tasks.ErrRecordNotTheCopys) {
 		return fmt.Sprintf("the copy cannot be removed as it stands (%v), so the confirmation was withdrawn, the copy left "+
 			"standing and the entry is open again", e.cause)
 	}
@@ -345,7 +345,7 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 		s.log.Printf("kept work entry %d: %v", entry.ID, left)
 		err = nil
 	}
-	if errors.Is(err, tasks.ErrLossChanged) || errors.Is(err, tasks.ErrRecordOutsideGate) {
+	if errors.Is(err, tasks.ErrLossChanged) || errors.Is(err, tasks.ErrRecordNotTheCopys) {
 		open, werr := s.store.WithdrawKeptWorkDiscard(ctx, entry.ID, digest)
 		if werr != nil {
 			return machine.KeptWorkAnswered{}, fmt.Errorf("service: kept work entry %d: the copy changed since its discard was "+
