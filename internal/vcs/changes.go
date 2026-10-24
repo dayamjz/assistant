@@ -205,22 +205,15 @@ func (r *Repository) ConflictRecords(ctx context.Context) (map[string]string, er
 	if err != nil {
 		return nil, err
 	}
-	stages := make(map[string][]string)
-	for entry := range strings.SplitSeq(string(out), "\x00") {
-		if entry == "" {
-			continue
-		}
-		meta, path, found := strings.Cut(entry, "\t")
-		if !found || meta == "" || path == "" {
-			return nil, &outputError{op: "ls-files", detail: "unrecognized entry " + entry}
-		}
-		stages[path] = append(stages[path], meta)
+	stages, err := parseUnmerged(out)
+	if err != nil {
+		return nil, err
 	}
 	records := make(map[string]string, len(stages))
-	for path, lines := range stages {
+	for path, entries := range stages {
 		sum := sha256.New()
-		for _, line := range lines {
-			if err := digestWrite(sum, []byte(line)); err != nil {
+		for _, entry := range entries {
+			if err := digestWrite(sum, []byte(entry.meta)); err != nil {
 				return nil, err
 			}
 			if err := digestWrite(sum, []byte{0}); err != nil {

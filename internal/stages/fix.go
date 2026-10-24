@@ -129,9 +129,15 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 // conflicted files it did change are staged, which keeps them resolved for
 // the next round without committing them. A file
 // still conflicted that was not conflicted when the round began is treated
-// the same way. A file whose content already is its resolution is resolved
-// by staging it, which the conflict finding tells the fixer. A rebase the
-// fixer ended itself fails the round before anything is committed.
+// the same way. So is a file that was conflicted when the round began and
+// still holds a marker line git wrote for that conflict, as
+// vcs.ConflictMarkers reads one, whether the fixer edited it or staged it:
+// one the fixer staged is put back into conflict in the index, with what it
+// holds left in the working tree, so the stage's next execution finds it
+// unmerged rather than continuing the rebase with the markers. A file whose
+// content already is its resolution is resolved by staging it, which the
+// conflict finding tells the fixer. A rebase the fixer ended itself fails
+// the round before anything is committed.
 //
 // pipeline.KeyHead is the write that carries it, and it is the write that makes
 // the graph's convergence bound meaningful: a round that changed nothing leaves
@@ -176,9 +182,11 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 //     the commit takes every change in the copy, including anything a previous
 //     failed round left behind. The copy is the run's own and nothing else
 //     writes to it, which bounds that to this run's own history.
-//   - A conflicted file the fixer changed counts as resolved whatever it now
-//     holds. Nothing in the round reads its content, so one the fixer edited
-//     and left with conflict markers in it is committed with them.
+//   - A conflicted file the fixer changed counts as resolved once it holds
+//     none of the marker lines git wrote for its conflict. That is the only
+//     reading of its content, so a file that keeps both sides' text, or only
+//     the separator line, without those marker lines is committed as it is.
+//     vcs.ConflictMarkers names what else it does not recognize as a marker.
 func Fix(deps FixDeps) pipeline.Fixer {
 	return pipeline.Fixer{
 		Reads: []pipeline.Key{
@@ -239,6 +247,7 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 	}
 	var digest string
 	var conflicts map[string]string
+	var markers map[string][]string
 	if rebasing {
 		digest, err = copied.UncommittedDigest(ctx)
 		if err != nil {
@@ -249,6 +258,11 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 		if err != nil {
 			return pipeline.FixOutput{}, fmt.Errorf(
 				"stages: reading the conflicted files before the %s fix round: %w", in.Stage, err)
+		}
+		markers, err = copied.ConflictMarkers(ctx)
+		if err != nil {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: reading the conflict markers before the %s fix round: %w", in.Stage, err)
 		}
 	}
 
@@ -332,17 +346,30 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 		}
 		// Committing stages every path, which marks a conflict resolved
 		// whatever the file holds. A conflicted file the fixer left as the
-		// conflict left it is one it could not resolve, so the step is not
-		// committed and the rebase stays stopped on it. The files it did
-		// change are staged, so a later round compares only what is still
-		// conflicted and does not take this round's resolution for an
-		// untouched conflict.
+		// conflict left it, or one that still holds a marker git wrote for
+		// the conflict, is one it did not resolve, so the step is not
+		// committed and the rebase stays stopped on it. Such a file the fixer
+		// staged is put back into conflict, or the stage's next execution
+		// would find nothing unmerged and continue with the markers. The
+		// files it did resolve are staged, so a later round compares only
+		// what is still conflicted and does not take this round's
+		// resolution for an untouched conflict.
 		left, err := copied.ConflictRecords(ctx)
 		if err != nil {
 			return pipeline.FixOutput{}, fmt.Errorf(
 				"stages: reading the conflicted files after the %s fix round: %w", in.Stage, err)
 		}
-		if unresolved, resolved := splitConflicts(conflicts, left); len(unresolved) > 0 {
+		marked, err := copied.MarkersLeft(ctx, markers)
+		if err != nil {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: reading the conflict markers after the %s fix round: %w", in.Stage, err)
+		}
+		if unresolved, resolved, restore := splitConflicts(conflicts, left, marked); len(unresolved) > 0 {
+			if err := copied.UnresolvePaths(ctx, restore); err != nil {
+				return pipeline.FixOutput{}, fmt.Errorf(
+					"stages: putting back the conflicts the %s fix round staged with their markers: %w",
+					in.Stage, err)
+			}
 			if err := copied.StagePaths(ctx, resolved); err != nil {
 				return pipeline.FixOutput{}, fmt.Errorf(
 					"stages: staging the conflicted files the %s fix round resolved: %w", in.Stage, err)
@@ -441,23 +468,36 @@ func nothingChanged(stage pipeline.Stage, summary string) string {
 		"What the fixer reported: %s", stage, summary)
 }
 
-// splitConflicts divides the paths still conflicted after a round, each list
-// in order. unresolved holds those the round did not resolve: the fixer left
-// the path's conflict stages and its worktree state as they were, or the
-// path was not conflicted when the round began, so the fixer did not resolve
-// what is there now. resolved holds those the fixer changed and did not
-// stage.
-func splitConflicts(before, after map[string]string) (unresolved, resolved []string) {
+// splitConflicts divides what a round left of the conflicts, each list in
+// order. before and after are the conflict records taken when the round
+// began and when it ended, and marked holds the paths conflicted when it
+// began whose file still holds a marker git wrote for the conflict.
+//
+// unresolved holds the paths the round did not resolve: a path still
+// conflicted whose conflict stages and worktree state the fixer left as they
+// were, a path still conflicted that was not conflicted when the round
+// began, so the fixer did not resolve what is there now, and every marked
+// path, staged or not. restore holds the marked paths the fixer staged,
+// which are no longer conflicted in the index. resolved holds the paths
+// still conflicted that the fixer changed and left no marker in.
+func splitConflicts(before, after map[string]string, marked []string) (unresolved, resolved, restore []string) {
 	for path, record := range after {
-		if was, ok := before[path]; !ok || was == record {
+		if was, ok := before[path]; !ok || was == record || slices.Contains(marked, path) {
 			unresolved = append(unresolved, path)
 		} else {
 			resolved = append(resolved, path)
 		}
 	}
+	for _, path := range marked {
+		if _, ok := after[path]; !ok {
+			unresolved = append(unresolved, path)
+			restore = append(restore, path)
+		}
+	}
 	slices.Sort(unresolved)
 	slices.Sort(resolved)
-	return unresolved, resolved
+	slices.Sort(restore)
+	return unresolved, resolved, restore
 }
 
 // conflictsLeft is the summary for a rebase round that left a conflicted file
@@ -472,7 +512,8 @@ func conflictsLeft(stage pipeline.Stage, paths []string, summary string) string 
 	if more := len(paths) - len(named); more > 0 {
 		list += fmt.Sprintf(", and %d more", more)
 	}
-	return fmt.Sprintf("The %s stage's fix round left %d conflicted file(s) as the conflict left them (%s), "+
+	return fmt.Sprintf("The %s stage's fix round left %d conflicted file(s) unresolved, as the conflict "+
+		"left them or with a conflict marker git wrote still in them (%s), "+
 		"so nothing was committed and the rebase is still stopped on that conflict. "+
 		"What the fixer reported: %s", stage, len(paths), list, summary)
 }

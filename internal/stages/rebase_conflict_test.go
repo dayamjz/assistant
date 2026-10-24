@@ -1034,3 +1034,153 @@ func (f editingFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.
 	f.edit()
 	return f.inner.Apply(ctx, inv)
 }
+
+// TestAConflictEditedWithItsMarkersLeftIsNotCommitted is one commit that
+// conflicts on two files. The fixer resolves the code and edits the README
+// without removing the conflict markers git wrote into it. The README was
+// changed, so it is not an untouched conflict, but committing it would
+// record the markers as its resolution. The round has to leave the rebase
+// stopped on the README's conflict and report no head, and no commit the
+// run records may carry the markers.
+func TestAConflictEditedWithItsMarkersLeftIsNotCommitted(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal, readmePath: upstreamReadme})
+	result, err := runRebaseRounds(t, s, "resolved the code and edited the README",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				write(t, s.dir, totalPath, resolvedTotal)
+				write(t, s.dir, readmePath, "Edited above the conflict.\n"+read(t, s.dir, readmePath))
+			}}
+		},
+		expectReadmeStillConflicted(t, s))
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	expectMarkersNeverRecorded(t, s, result)
+}
+
+// TestAConflictStagedWithItsMarkersIsNotCommitted is the same two files. The
+// fixer resolves the code and stages the README as the conflict left it,
+// which takes it out of the index's unmerged entries. Committing would
+// record the markers, and so would a later continue that found nothing
+// unmerged. The round has to put the README's conflict back in the index,
+// leave the rebase stopped on it, and report no head.
+func TestAConflictStagedWithItsMarkersIsNotCommitted(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal, readmePath: upstreamReadme})
+	result, err := runRebaseRounds(t, s, "resolved the code and staged the README",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				write(t, s.dir, totalPath, resolvedTotal)
+				git(t, s.dir, "add", "--", readmePath)
+			}}
+		},
+		expectReadmeStillConflicted(t, s))
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	expectMarkersNeverRecorded(t, s, result)
+}
+
+// markerReadme is a newer base's README that documents conflict markers, so
+// lines shaped like git's markers are part of one side of the conflict.
+const markerReadme = "Total adds up numbers on the newer base.\n\n" +
+	"A conflict looks like this:\n\n" +
+	"<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\n"
+
+// TestMarkerShapedLinesOfAResolutionAreCommitted is the positive control for
+// the leftover-marker guard. The README's newer base holds lines shaped like
+// conflict markers, and the fixer's resolution keeps them and adds a
+// heading underlined with exactly seven equals signs. None of those is a
+// marker git wrote for this conflict, so the resolution is committed and the
+// rebase finishes on the new base.
+func TestMarkerShapedLinesOfAResolutionAreCommitted(t *testing.T) {
+	s := newSubject(t)
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal, readmePath: markerReadme})
+	const resolvedReadme = "Total sums every value it is given, on the newer base.\n\n" +
+		"Example\n=======\n\n" +
+		"A conflict looks like this:\n\n" +
+		"<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\n"
+	result, err := runRebaseRounds(t, s, "resolved both conflicted files",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				if !strings.Contains(read(t, s.dir, readmePath), ">>>>>>> "+s.head[:7]) {
+					t.Errorf("the README holds no marker git wrote for the conflict:\n%s", read(t, s.dir, readmePath))
+				}
+				write(t, s.dir, totalPath, resolvedTotal)
+				write(t, s.dir, readmePath, resolvedReadme)
+			}}
+		},
+		func(round int, _ pipeline.FixOutput, err error) {
+			if err != nil {
+				t.Errorf("fix round %d: %v", round, err)
+			}
+		})
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	head := git(t, s.dir, "rev-parse", "HEAD")
+	base := git(t, s.dir, "rev-parse", "refs/remotes/"+stages.UpstreamRemote+"/main")
+	if result.Status != graph.StatusCompleted || !isAncestor(t, s.dir, base, head) {
+		t.Fatalf("status %s, head %s, upstream %s is ancestor %v; the resolution has to land on the new base",
+			result.Status, head, base, isAncestor(t, s.dir, base, head))
+	}
+	if got := git(t, s.dir, "show", "HEAD:"+readmePath); got != strings.TrimSpace(resolvedReadme) {
+		t.Fatalf("HEAD's %s =\n%s\nwant the resolution", readmePath, got)
+	}
+}
+
+// expectReadmeStillConflicted checks the first round of a run whose fixer
+// left the README holding the markers git wrote: the round reports no head,
+// names the README, and leaves it conflicted in the index with the rebase
+// stopped on it.
+func expectReadmeStillConflicted(t *testing.T, s *subject) func(int, pipeline.FixOutput, error) {
+	return func(round int, out pipeline.FixOutput, err error) {
+		if err != nil {
+			t.Errorf("fix round %d: %v", round, err)
+			return
+		}
+		if round != 1 {
+			return
+		}
+		if head, ok := out.Writes[pipeline.KeyHead]; ok {
+			t.Errorf("the first round reported head %v with %s still holding its markers", head, readmePath)
+		}
+		if !strings.Contains(out.Summary, readmePath) {
+			t.Errorf("the first round's summary does not name %s: %s", readmePath, out.Summary)
+		}
+		if unmerged := git(t, s.dir, "ls-files", "-u", "--", readmePath); unmerged == "" {
+			t.Errorf("after the first round %s is no longer conflicted in the index", readmePath)
+		}
+		repo, err := vcs.OpenWorktree(t.Context(), s.dir)
+		if err != nil {
+			t.Fatalf("opening the copy after the first round: %v", err)
+		}
+		if active, err := repo.RebaseStatus(t.Context()); err != nil || !active {
+			t.Errorf("after the first round, rebase in progress %v, error %v; want it stopped on the conflict", active, err)
+		}
+	}
+}
+
+// expectMarkersNeverRecorded checks the end of a run whose fixer never
+// removed the README's markers: the run did not complete, neither the head
+// it records nor the copy's HEAD carries them, and the submitted commit is
+// kept.
+func expectMarkersNeverRecorded(t *testing.T, s *subject, result graph.Result) {
+	t.Helper()
+	if result.Status == graph.StatusCompleted {
+		t.Fatalf("the run completed with %s never resolved", readmePath)
+	}
+	recorded := textAt(t, result.State, pipeline.KeyHead)
+	for _, commit := range []string{recorded, git(t, s.dir, "rev-parse", "HEAD")} {
+		if readme := git(t, s.dir, "show", commit+":"+readmePath); strings.Contains(readme, "<<<<<<<") {
+			t.Fatalf("commit %s records conflict markers in %s:\n%s", commit, readmePath, readme)
+		}
+	}
+	if git(t, s.dir, "cat-file", "-t", s.head) != "commit" {
+		t.Fatalf("the submitted commit %s is gone", s.head)
+	}
+	t.Logf("the run stopped with %s at recorded head %s", result.Status, recorded)
+}
