@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -192,23 +193,57 @@ func TestHEADMovesWithoutTouchingTheWorkingTree(t *testing.T) {
 	}
 }
 
-// The index is reset to a commit's tree without touching the working tree,
-// and a path the index holds is written only where nothing stands:
-// ResetIndexTo the first commit leaves b.txt, which only the second
-// holds, in the working tree and out of the index; CheckoutMissing of
-// a.txt, deleted, writes the first commit's content, and of a.txt again,
-// now standing and then edited, refuses and leaves the edit.
-func TestTheIndexIsResetAndOnlyMissingPathsAreWritten(t *testing.T) {
+// An index path is replaced whole and no other is touched, and a path
+// the index holds is written only where nothing stands:
+// ReplaceIndexEntries puts a.txt back at the first commit's blob and
+// takes b.txt out, leaving both files of the working tree and leaving
+// c.txt, staged and named by neither, staged; it puts a.txt back
+// conflicted, stages 1 and 3, and back at stage 0 again; it refuses an
+// entry at a path not among those replaced and an object of the wrong
+// length before git runs. CheckoutMissing of a.txt, deleted, writes the
+// index's content, and of a.txt again, now standing and then edited,
+// refuses and leaves the edit.
+func TestTheIndexIsReplacedByPathAndOnlyMissingPathsAreWritten(t *testing.T) {
 	repo, dir, _, first, _ := asideSubject(t)
 	c := ctx(t)
-	if err := repo.ResetIndexTo(c, first); err != nil {
-		t.Fatalf("ResetIndexTo: %v", err)
+	writeFile(t, filepath.Join(dir, "c.txt"), "staged\n")
+	rawGit(t, dir, "add", "c.txt")
+	staged := rawGit(t, dir, "ls-files", "--stage", "--", "c.txt")
+	a := strings.TrimSpace(rawGit(t, dir, "rev-parse", first+":a.txt"))
+	if err := repo.ReplaceIndexEntries(c, []string{"a.txt", "b.txt"}, []vcs.IndexEntry{{Mode: "100644", Object: a, Path: "a.txt"}}); err != nil {
+		t.Fatalf("ReplaceIndexEntries: %v", err)
 	}
-	if files := strings.TrimSpace(rawGit(t, dir, "ls-files")); files != "a.txt" {
-		t.Fatalf("the index lists %q; want the first commit's a.txt alone", files)
+	if files := strings.Fields(rawGit(t, dir, "ls-files")); !slices.Equal(files, []string{"a.txt", "c.txt"}) {
+		t.Fatalf("the index lists %q; want a.txt and c.txt", files)
 	}
-	if _, err := os.Lstat(filepath.Join(dir, "b.txt")); err != nil {
-		t.Fatalf("b.txt is gone from the working tree: %v", err)
+	if got := rawGit(t, dir, "ls-files", "--stage", "--", "a.txt"); !strings.Contains(got, a+" 0\ta.txt") {
+		t.Fatalf("a.txt's entry reads %q; want %s at stage 0", got, a)
+	}
+	if got := rawGit(t, dir, "ls-files", "--stage", "--", "c.txt"); got != staged {
+		t.Fatalf("c.txt's entry reads %q; want it untouched, %q", got, staged)
+	}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s is gone from the working tree: %v", name, err)
+		}
+	}
+	conflicted := []vcs.IndexEntry{{Mode: "100644", Object: a, Stage: 1, Path: "a.txt"}, {Mode: "100644", Object: a, Stage: 3, Path: "a.txt"}}
+	if err := repo.ReplaceIndexEntries(c, []string{"a.txt"}, conflicted); err != nil {
+		t.Fatalf("ReplaceIndexEntries conflicted: %v", err)
+	}
+	if got := strings.Count(rawGit(t, dir, "ls-files", "--stage", "--", "a.txt"), "a.txt"); got != 2 {
+		t.Fatalf("a.txt has %d entries once conflicted; want stages 1 and 3", got)
+	}
+	if err := repo.ReplaceIndexEntries(c, []string{"a.txt"}, []vcs.IndexEntry{{Mode: "100644", Object: a, Path: "a.txt"}}); err != nil {
+		t.Fatalf("ReplaceIndexEntries back to stage 0: %v", err)
+	}
+	if got := rawGit(t, dir, "ls-files", "--stage", "--", "a.txt"); strings.Count(got, "a.txt") != 1 || !strings.Contains(got, " 0\ta.txt") {
+		t.Fatalf("a.txt's entries read %q; want one at stage 0", got)
+	}
+	for _, bad := range []vcs.IndexEntry{{Mode: "100644", Object: a, Path: "b.txt"}, {Mode: "100644", Object: a[:10], Path: "a.txt"}} {
+		if err := repo.ReplaceIndexEntries(c, []string{"a.txt"}, []vcs.IndexEntry{bad}); !errors.Is(err, vcs.ErrInvalidArgument) {
+			t.Fatalf("ReplaceIndexEntries(%+v) = %v; want an argument refusal", bad, err)
+		}
 	}
 	if err := os.Remove(filepath.Join(dir, "a.txt")); err != nil {
 		t.Fatal(err)

@@ -402,11 +402,22 @@ func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte
 	return r.runWith(ctx, op, nil, args...)
 }
 
+// runInput is run with stdin as git's standard input, for the one
+// operation that hands git its entries that way (ReplaceIndexEntries).
+func (r *Repository) runInput(ctx context.Context, op string, stdin []byte, args ...string) ([]byte, error) {
+	return r.runFull(ctx, op, nil, stdin, args...)
+}
+
 // runWith is run with extra environment entries set after the environment is
 // stripped, for the one operation that points git at a scratch index of its
 // own (TreeWithEntries). Nothing a caller's environment carries can reach git
 // through it: only what this package passes does.
 func (r *Repository) runWith(ctx context.Context, op string, extra []string, args ...string) ([]byte, error) {
+	return r.runFull(ctx, op, extra, nil, args...)
+}
+
+// runFull is runWith with stdin as git's standard input, nil for none.
+func (r *Repository) runFull(ctx context.Context, op string, extra []string, stdin []byte, args ...string) ([]byte, error) {
 	ctx, cancel := procgroup.Bound(ctx, r.set.deadline)
 	defer cancel()
 	addr := r.addressing()
@@ -422,6 +433,9 @@ func (r *Repository) runWith(ctx context.Context, op string, extra []string, arg
 	// A nil Stdin is os.DevNull, so anything git reads from standard input
 	// sees EOF rather than waiting for a person.
 	cmd.Stdin = nil
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	stdout := &capWriter{limit: r.set.maxOutput}
 	// Standard error is diagnostic text rather than a result, so it is kept up
