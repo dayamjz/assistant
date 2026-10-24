@@ -78,6 +78,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 
 pause = time.sleep  # between tries of a read GitHub failed with a server error
 SCRIPT_DIGEST = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
@@ -628,13 +629,15 @@ class GitHub:
 
     def runs(self, workflow, limit, branch=None, since=None):
         runs, page = [], 1
+        # Encoded, so a branch name with + # & or % in it is asked for as it is.
+        listing = f"repos/{self.repo}/actions/workflows/{urllib.parse.quote(workflow, safe='')}/runs"
         while len(runs) < limit:
-            query = f"per_page=100&page={page}&status=completed"
+            query = {"per_page": 100, "page": page, "status": "completed"}
             if branch:
-                query += f"&branch={branch}"
+                query["branch"] = branch
             if since:
-                query += f"&created=>={since}"
-            batch = self.api(f"repos/{self.repo}/actions/workflows/{workflow}/runs?{query}")["workflow_runs"]
+                query["created"] = f">={since}"
+            batch = self.api(f"{listing}?{urllib.parse.urlencode(query)}")["workflow_runs"]
             if not batch:
                 break
             runs.extend(batch)

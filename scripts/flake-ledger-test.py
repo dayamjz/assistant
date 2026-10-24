@@ -196,21 +196,49 @@ func TestNever(t *testing.T) { this is not go }
 }
 
 
+# Seconds the real go test below may take, building included.
+GO_TEST_DEADLINE = 300
+
+
+def run_go_test(deadline=GO_TEST_DEADLINE):
+    """go test -v over GO_PACKAGES in a module of its own: (status, output
+    lines), stdout and stderr together as CI's test.log has them.
+
+    go runs under the ledger's own watchdog (ledger.WATCHDOG), so go and
+    what it starts in its process group end at the deadline, when this
+    returns or raises, and when the process that called it ends, killed
+    included. A deadline passed raises."""
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        (root / "go.mod").write_text("module github.com/example/m\n\ngo 1.21\n")
+        for name, source in GO_PACKAGES.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(source)
+        env = {**os.environ, "GOFLAGS": "", "GOWORK": "off"}
+        command = ["go", "test", "-v", "-count=1", "-p", "2", "-timeout", "5s", "./..."]
+        watched = subprocess.Popen([sys.executable, "-I", "-c", ledger.WATCHDOG, str(deadline), *command],
+                                   cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, start_new_session=True)
+        read = False
+        try:
+            output = watched.stdout.read()
+            read = True
+        finally:
+            watched.stdout.close()
+            if not read:
+                watched.stdin.close()  # ends go now, with what it started
+            status = watched.wait()
+            watched.stdin.close()
+    if status == 124:
+        raise RuntimeError(f"go test timed out after {deadline}s:\n{output}")
+    return status, output.split("\n")
+
+
 @unittest.skipUnless(shutil.which("go"), "go is not on PATH")
 class RealGoTestOutputTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            (root / "go.mod").write_text("module github.com/example/m\n\ngo 1.21\n")
-            for name, source in GO_PACKAGES.items():
-                (root / name).parent.mkdir(parents=True, exist_ok=True)
-                (root / name).write_text(source)
-            env = {**os.environ, "GOFLAGS": "", "GOWORK": "off"}
-            result = subprocess.run(["go", "test", "-v", "-count=1", "-p", "2", "-timeout", "5s", "./..."],
-                                    cwd=root, env=env, capture_output=True, text=True, timeout=300)
-        cls.output = (result.stdout + result.stderr).split("\n")
-        cls.status = result.returncode
+        cls.status, cls.output = run_go_test()
 
     def records(self, lines):
         records, unattributed, _ = ledger.parse_lines(lines)
@@ -753,7 +781,7 @@ wait
 # A gh that answers the API from the recorded responses, as GitHub would,
 # and blocks on a job log with a child of its own, as a stalled download.
 FAKE_GH_API = """
-import json, os, re, subprocess, sys, time
+import json, os, re, subprocess, sys, time, urllib.parse
 args = [a for a in sys.argv[1:] if a not in ("-H", "Accept: application/vnd.github+json")]
 if args[:2] == ["api", "--help"]:
     print("--allow-escape-sequences"); sys.exit(0)
@@ -766,8 +794,10 @@ if path.endswith("/logs"):
         pids.write(f"{os.getpid()}\\n{child.pid}\\n")
     time.sleep(600)
 elif "/workflows/" in path:
-    page = int(re.search(r"[?&]page=(\\d+)", path).group(1))
-    print(json.dumps({"workflow_runs": data["runs"] if page == 1 else []}))
+    # Decoded as a server decodes a query string: %XX, and + as a space.
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+    runs = [r for r in data["runs"] if r["head_branch"] == query.get("branch", [r["head_branch"]])[0]]
+    print(json.dumps({"workflow_runs": runs if query["page"] == ["1"] else []}))
 elif m := re.search(r"runs/(\\d+)/attempts/(\\d+)/jobs", path):
     print(json.dumps([{"jobs": data["attempts"][f"{m[1]}/{m[2]}"]["jobs"]}]))
 elif m := re.search(r"runs/(\\d+)/attempts/(\\d+)", path):
@@ -779,18 +809,20 @@ else:
 """
 
 
-class GhProcessTest(unittest.TestCase):
-    """P15: every gh the ledger starts runs under a deadline and ends, with
-    what it started, when the ledger ends. The gh here is a real program
-    that blocks and starts a child, as a hung gh would."""
+class StandInProcess(unittest.TestCase):
+    """A real program named `program` first on PATH that blocks and starts
+    a child holding none of its pipes, as a hung gh or go would, and records
+    both pids."""
+
+    program = None
 
     def setUp(self):
-        folder = tempfile.mkdtemp(prefix="flake-ledger-gh-")
+        folder = tempfile.mkdtemp(prefix=f"flake-ledger-{self.program}-")
         self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
         self.pids = Path(folder) / "pids"
-        gh = Path(folder) / "gh"
-        gh.write_text(FAKE_GH)
-        gh.chmod(0o755)
+        program = Path(folder) / self.program
+        program.write_text(FAKE_GH)
+        program.chmod(0o755)
         self.env = {**os.environ, "PATH": f"{folder}{os.pathsep}{os.environ['PATH']}",
                     "FAKE_GH_PIDS": str(self.pids)}
         self.addCleanup(self.end_leftovers)
@@ -810,15 +842,83 @@ class GhProcessTest(unittest.TestCase):
         while alive and time.monotonic() < deadline:
             alive = [p for p in alive if alive_pid(p)]
             time.sleep(0.1)
-        self.assertEqual(alive, [], "gh or its child outlived its bound")
+        self.assertEqual(alive, [], f"{self.program} or its child outlived its bound")
 
-    def wait_for_gh(self, ledger_process, count=2):
+    def wait_for_start(self, owner, count=2):
         deadline = time.monotonic() + 30
         while self.started(count) is None:
-            self.assertIsNone(ledger_process.poll(), "the ledger exited before starting gh")
-            self.assertLess(time.monotonic(), deadline, "gh never started")
+            self.assertIsNone(owner.poll(), f"its owner exited before starting {self.program}")
+            self.assertLess(time.monotonic(), deadline, f"{self.program} never started")
             time.sleep(0.1)
         return self.started(count)
+
+
+class GoTestBoundTest(StandInProcess):
+    """P15: the go test the real-output tests start ends with what it
+    started, at its deadline and when the test run that started it ends."""
+
+    program = "go"
+
+    def test_a_go_test_past_its_deadline_is_ended_with_its_child(self):
+        raised = []
+
+        def call():
+            try:
+                run_go_test(deadline=1)
+            except Exception as error:
+                raised.append(error)
+
+        with mock.patch.dict(os.environ, self.env):
+            caller = threading.Thread(target=call)
+            caller.start()
+            caller.join(20)
+            overran = caller.is_alive()
+            if overran:
+                self.end_leftovers()
+                caller.join(20)
+        self.assertFalse(overran, "go test outran its deadline")
+        self.assertRegex(str(raised[0]), "timed out")
+        self.assert_ended(self.started())
+
+    def test_a_killed_test_run_ends_its_go_test_and_what_it_started(self):
+        start = ("import importlib.util as u; "
+                 f"s = u.spec_from_file_location('flake_ledger_test', {str(Path(__file__).resolve())!r}); "
+                 "m = u.module_from_spec(s); s.loader.exec_module(m); m.run_go_test()")
+        process = subprocess.Popen([sys.executable, "-c", start], env=self.env,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait()))
+        pids = self.wait_for_start(process)
+        process.kill()
+        process.wait(timeout=10)
+        self.assert_ended(pids)
+
+
+class RunListTest(StandInProcess):
+    """What the run listing asks GitHub for, read as GitHub reads it."""
+
+    program = "gh"
+
+    def test_a_branch_is_asked_for_by_its_own_name(self):
+        # A name git accepts (git check-ref-format --branch). Unencoded in a
+        # query, a server reads + as a space, # as the query's end and & as
+        # the next parameter.
+        data = json.loads((DATA / "api.json").read_text())
+        branch = data["runs"][0]["head_branch"] = "fix/c++#2&x=1"
+        answers = Path(self.pids).with_name("api.json")
+        answers.write_text(json.dumps(data))
+        gh = Path(self.env["PATH"].split(os.pathsep)[0]) / "gh"
+        gh.write_text(f"#!{sys.executable}\n" + FAKE_GH_API)
+        with mock.patch.dict(os.environ, {**self.env, "FAKE_GH_DATA": str(answers)}):
+            runs = ledger.GitHub("dayamjz/assistant").runs("ci.yml", 10, branch=branch, since="2026-10-01")
+        self.assertEqual([r["id"] for r in runs], [data["runs"][0]["id"]])
+
+
+class GhProcessTest(StandInProcess):
+    """P15: every gh the ledger starts runs under a deadline and ends, with
+    what it started, when the ledger ends. The gh here is a real program
+    that blocks and starts a child, as a hung gh would."""
+
+    program = "gh"
 
     def test_a_gh_call_past_its_deadline_is_ended_with_its_child(self):
         raised = []
@@ -877,26 +977,26 @@ class GhProcessTest(unittest.TestCase):
     def test_an_interrupted_ledger_ends_its_gh_at_once(self):
         # Ctrl+C while the run listing blocks, with the real 120 s deadline.
         process = self.ledger()
-        self.interrupted_promptly(process, self.wait_for_gh(process))
+        self.interrupted_promptly(process, self.wait_for_start(process))
 
     def test_an_interrupted_ledger_ends_the_log_reads_its_workers_hold(self):
         gh = Path(self.env["PATH"].split(os.pathsep)[0]) / "gh"
         gh.write_text(f"#!{sys.executable}\n" + FAKE_GH_API)
         self.env["FAKE_GH_DATA"] = str(DATA / "api.json")
         process = self.ledger()
-        pids = self.wait_for_gh(process, count=4)  # two log reads on worker threads, each with a child
+        pids = self.wait_for_start(process, count=4)  # two log reads on worker threads, each with a child
         self.interrupted_promptly(process, pids)
 
     def test_a_terminated_ledger_ends_its_gh_and_what_gh_started(self):
         process = self.ledger()
-        pids = self.wait_for_gh(process)
+        pids = self.wait_for_start(process)
         process.send_signal(signal.SIGTERM)
         process.wait(timeout=10)
         self.assert_ended(pids)
 
     def test_a_killed_ledger_ends_its_gh_and_what_gh_started(self):
         process = self.ledger()
-        pids = self.wait_for_gh(process)
+        pids = self.wait_for_start(process)
         process.kill()
         process.wait(timeout=10)
         self.assert_ended(pids)
