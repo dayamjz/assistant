@@ -669,3 +669,44 @@ func TestADiscardsMarkIsBoundedByTheReadRecordedOnTheEntry(t *testing.T) {
 		t.Errorf("a read rewritten on a closed entry was not refused by the schema: %v", err)
 	}
 }
+
+// KeptWorkCarriedOnBy reads the entries a carry on answered for a task, the
+// copy identity each recorded with them, and nothing else: a claim not yet
+// carried out is not among them, nor an entry carried on by another task,
+// and a task no carry on named reads none.
+func TestTheKeptWorkATaskCarriedOnIsReadByThatTask(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedRun(t, s) // records the repository the tasks name
+	finished := seedTaskOnBranch(t, s, "finishedaaaa", "topic", 0)
+	keep := func(path string) KeptWork {
+		t.Helper()
+		k, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: finished.ID, CopyPath: path,
+			Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return k
+	}
+	answered, owed, other := keep("/kept/one"), keep("/kept/two"), keep("/kept/three")
+	carrier := seedTaskOnBranch(t, s, "carriesonaaa", "topic", finished.Row)
+	elsewhere := seedTaskOnBranch(t, s, "carriesonbbb", "topic", carrier.Row)
+	nobody := seedTaskOnBranch(t, s, "carriesnonea", "topic", elsewhere.Row)
+	carryOnKept(t, s, answered.ID, carrier.ID)
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, owed.ID, carrier.ID, "copy-owed", ResolvedByPerson()); err != nil {
+		t.Fatal(err)
+	}
+	carryOnKept(t, s, other.ID, elsewhere.ID)
+
+	got, err := s.KeptWorkCarriedOnBy(ctx, carrier.ID)
+	if err != nil || len(got) != 1 || got[0].ID != answered.ID || got[0].CarriedOnCopy.Or("") != fmt.Sprintf("copy-of-%d", answered.ID) {
+		t.Fatalf("KeptWorkCarriedOnBy(carrier) = %+v, %v; want entry %d with its copy identity alone", got, err, answered.ID)
+	}
+	if got, err := s.KeptWorkCarriedOnBy(ctx, elsewhere.ID); err != nil || len(got) != 1 || got[0].ID != other.ID {
+		t.Fatalf("KeptWorkCarriedOnBy(elsewhere) = %+v, %v; want entry %d", got, err, other.ID)
+	}
+	if got, err := s.KeptWorkCarriedOnBy(ctx, nobody.ID); err != nil || len(got) != 0 {
+		t.Fatalf("KeptWorkCarriedOnBy(nobody) = %+v, %v; want none", got, err)
+	}
+}

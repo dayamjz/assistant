@@ -86,7 +86,9 @@ paths: ["internal/store/**"]
   whole by `WithdrawKeptWorkCarryOn` only while the task's row does not
   exist; and the answer, written only with `carried_on_at` by
   `MarkKeptWorkCarriedOn`, given the task the claim names, once that task
-  exists and owns the copy, which the triggers enforce; keptWorkDiscardMigration records a
+  exists and owns the copy, which the triggers enforce, and
+  `KeptWorkCarriedOnBy` reads the answered entries back for that task, the
+  copy identity dispatch holds the adopted copy to; keptWorkDiscardMigration records a
   discard as two facts: the person's confirmation (`discard_digest`, what
   it was shown, with the commits, who and when), written whole on an open
   entry by `ConfirmKeptWorkDiscard`, which leaves it open and listed, and

@@ -1179,6 +1179,28 @@ func (s *Store) KeptWorkCarryOnsOwed(ctx context.Context) ([]KeptWork, error) {
 	return out, nil
 }
 
+// KeptWorkCarriedOnBy returns every entry answered carry-on naming taskID,
+// the task it created, oldest first: the copy each records
+// (CarriedOnCopy) is the one that task owns, which internal/service's
+// dispatch reads to tell the adopted copy standing at the task's path from
+// anything else standing there. An entry still owed, claimed and not yet
+// answered, is not among them, and a task no answer named reads none.
+func (s *Store) KeptWorkCarriedOnBy(ctx context.Context, taskID string) ([]KeptWork, error) {
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	rows, err := s.read.QueryContext(ctx, keptWorkColumns+` FROM kept_work
+		WHERE carried_on_task = ? AND answer = ? AND carried_on_at IS NOT NULL ORDER BY id`, taskID, string(KeptCarryOn))
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the kept work task %s carried on: %w", taskID, err)
+	}
+	out, err := scanKeptWorkRows(rows)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the kept work task %s carried on: %w", taskID, err)
+	}
+	return out, nil
+}
+
 // RecordKeptWorkDiscardRead records at as when the read of the copy the
 // removal of digest's confirmation is held to began, which the caller
 // writes once that read found the copy holding what the confirmation was

@@ -122,9 +122,10 @@ import (
 // until a later call or start adopts it.
 //
 // Once the slot is given back a dispatch pass is asked for, and the task
-// dispatches over its standing copy on dispatch.go's terms: swept, asserted
-// again at its own path, and launched with the instructions file, note
-// included. Other open entries of the project still hold it, as they hold
+// dispatches over its standing copy on dispatch.go's terms: recognized at
+// its first claim by the identity the answer recorded, swept once that
+// claim has won, asserted again at its own path, and launched with the
+// instructions file, note included. Other open entries of the project still hold it, as they hold
 // any new task.
 
 // carryOnHeading is the heading the carry-on note is appended to the
