@@ -68,18 +68,19 @@ paths: ["internal/tasks/**"]
   and nothing else (`seal`: HEAD, the commits and objects lost, each path
   lost with what it holds, decided from the copy and never from what git
   reports changed, and the indicators; the header names what it does not
-  cover), refusing an unestablished entry; `Discard` removes the copy only
-  on that digest, with every commit lost now among those shown and every
-  one shown still in the copy or taken up upstream, and only as the copy
-  was read (`kept_remove.go`: the state of everything the removal destroys
-  read before the loss read and again after the checks, objects that read
-  adds aside, and each entry removed only while it is as read, a run's
-  record in the gate, taken from the gate's own registry
-  (`vcs.WorktreeRecords`, read from the gate and held to git's listing)
-  and never by following the copy's `.git`, the copy's files refused when
-  they disagree with it (`copyRecord`), removed so too and never through
-  git's forced removal),
-  behind a person's answer and no proof.
+  cover), refusing an unestablished entry; `Discard` deletes only what
+  that digest names, the commits lost held to those shown exactly, and
+  never removes a copy by force (the owner's decision of 2026-10-24):
+  `kept_aside.go` sets the confirmed items aside recoverably, journalled,
+  reads the loss again, which must hold nothing more (`emptyOfWork`), and
+  only then removes the directory, a run's worktree by git's removal
+  without force and a task's clone on P12's proof, putting everything back
+  on any refusal; a run's record in the gate is taken from the gate's own
+  registry (`vcs.WorktreeRecords`, read from the gate and held to git's
+  listing) and never by following the copy's `.git`, the copy refused when
+  its files disagree with it (`copyRecord`); what a discard that did not
+  finish set aside is put back by the next `Discard` or `PutBack` before
+  anything is read, and `Loss` refuses until then (`ErrAsideStands`).
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (an exclusively created partial of a fresh name, then a
   rename; a path standing as a link is `*InstructionsLinkError`), so a file

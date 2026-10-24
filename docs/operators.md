@@ -643,19 +643,32 @@ among them, that differs from what git writes into every new repository),
 a directory lost whole named once with a trailing slash; whether git
 reports a change, a file or a stash; and a digest of exactly what is
 shown, each file by what it holds. It records and removes nothing. Given
-again with `--confirm DIGEST` it removes the copy only while everything
-shown is as it was, so a commit, an edit, a file or a stash made since is
-refused and you are told to look again; a change that loses nothing more,
-such as a branch made at a commit already listed, is not. Anything written
-into the copy after that last look, even while it is being removed, refuses
-the removal and is left in the copy; only what a program writes through a
-file it already had open there as the removal reaches that file is lost
-with it. Your
+again with `--confirm DIGEST` it deletes what you were shown and nothing
+else, and only while everything shown is as it was: a commit, an edit, a
+file or a stash made since is refused and you are told to look again, and
+so is a commit you were shown that the default branch or the upstream has
+taken up since, since the loss is then not the one you confirmed; a change
+that loses nothing more, such as a branch made at a commit already listed,
+is not. It first sets what you were shown aside beside the copy, so it can
+be put back, then reads the copy again, and removes the copy only when
+nothing is left in it that would be lost: a run's copy by git's own
+worktree removal without force, which refuses when anything is left, and
+a task's copy only when one of the cleanup proofs then holds for what
+remains, so a task's copy whose remaining commits no proof covers (for
+example a branch the upstream holds under another name) is refused and
+stays. Anything written into the copy after your last look, even while it
+is being set aside, refuses the discard and everything set aside is put
+back; only what a program writes through a file it already had open there
+as the discard moves that file aside is lost with it. If something was
+written exactly where a file set aside goes back, both are kept: the new
+one in the copy, yours beside it in a directory named after the copy with
+`.discarding` at the end, the refusal names it, and the entry is not shown
+again until you move one of the two out of the way. Your
 confirmation is recorded first, with what it was shown and who gave it,
 and the entry stays open and listed until the copy is gone; only then is
 it answered discard. If the service stops in between, the next start
-removes the copy if it still holds what you were shown; if the copy
-changed meanwhile, your confirmation is withdrawn, the copy stays, and
+puts back anything set aside and removes the copy if it still holds what
+you were shown; if the copy changed meanwhile, your confirmation is withdrawn, the copy stays, and
 the entry is listed again for you to look at and answer afresh. A copy
 kept again at another state has an entry for each state; discarding the
 copy answers and closes all of them kept by the time its removal went
