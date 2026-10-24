@@ -2,6 +2,7 @@ package vcs
 
 import (
 	"context"
+	"strconv"
 	"strings"
 )
 
@@ -106,4 +107,48 @@ func parseChanges(out string) (Changes, error) {
 		}
 	}
 	return c, nil
+}
+
+// IndexEntry is one entry of the index as git ls-files -s prints it: the
+// mode, the object the entry names, its stage, and its path. An ordinary
+// entry is stage 0; an unmerged path has an entry per stage, 1 to 3, and no
+// stage 0.
+type IndexEntry struct {
+	Mode   string
+	Object string
+	Stage  int
+	Path   string
+}
+
+// IndexEntries is every entry of the index, every stage included, in git's
+// order: the staged content of every tracked path by object identity, and
+// of a conflicted path each side git holds. It reads and writes nothing,
+// and refuses with ErrNotARepository on a bare repository, which has no
+// index of a working copy's.
+func (r *Repository) IndexEntries(ctx context.Context) ([]IndexEntry, error) {
+	if r.kind != KindWorktree {
+		return nil, &openError{path: r.path, kind: KindWorktree}
+	}
+	out, err := r.run(ctx, "ls-files", "ls-files", "--stage", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var entries []IndexEntry
+	for _, line := range strings.Split(string(out), "\x00") {
+		if line == "" {
+			continue
+		}
+		// "mode object stage<TAB>path"
+		head, path, ok := strings.Cut(line, "\t")
+		fields := strings.Fields(head)
+		if !ok || len(fields) != 3 || path == "" {
+			return nil, &outputError{op: "ls-files", detail: "unrecognized entry " + line}
+		}
+		stage, err := strconv.Atoi(fields[2])
+		if err != nil {
+			return nil, &outputError{op: "ls-files", detail: "unrecognized stage in " + line}
+		}
+		entries = append(entries, IndexEntry{Mode: fields[0], Object: fields[1], Stage: stage, Path: path})
+	}
+	return entries, nil
 }

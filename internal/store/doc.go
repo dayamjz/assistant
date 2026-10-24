@@ -203,8 +203,12 @@
 // reports. The basis is the one thing an open unestablished entry may later
 // have filled in, once, through EstablishKeptWork, and the update trigger
 // holds it to that one direction and to an open row, so an answered or
-// closed row is sealed whole. Its one revision otherwise closes it, made once and only while
-// it is open: AnswerKeptWork with a person's answer and its Resolver, or the
+// closed row is sealed whole. A discard confirmation may be written on an
+// open row and withdrawn whole, which leaves it open (keptWorkDiscardMigration),
+// and while it is owed the moment its removal went ahead may be recorded
+// under it and is withdrawn with it (keptWorkDiscardReadMigration). Its
+// one revision otherwise closes it, made once and only while
+// it is open: a person's answer and its Resolver, or the
 // program's KeptRemovedOnProof, which only MarkCleanupRemoved and
 // MarkRunCleanupRemoved write, in the transaction that marks the owner's
 // copy removed on a proof, so the program never closes an entry by
@@ -225,8 +229,9 @@
 // keptworkhold.go is the one predicate (a task naming a project, with no
 // attempt whose worker started by a recorded session, whose project has an
 // open entry), read by
-// KeptWorkHolding, by BeginDispatchAttempt and by ClaimAttemptLaunch
-// (migration 52's launch_claimed_at, written once immediately before a
+// KeptWorkHolding, by the dispatch claims (BeginFirstTaskAttempt, and
+// BeginDispatchAttempt for a retried dispatch) and by ClaimAttemptLaunch
+// (attemptLaunchMigration's launch_claimed_at, written once immediately before a
 // worker's process starts), each refusing a held task with a
 // *DispatchHeldError in the transaction that would write. It is derived from
 // the records on every read and stored nowhere. BeginTaskAttempt, the

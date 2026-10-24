@@ -67,7 +67,8 @@ import (
 // reads the primary. Before a first claim nothing touches the path either:
 // no attempt has cut a copy, so a dispatch sweeps nothing then (#562), and
 // whatever it finds standing after it wins is refused rather than swept or
-// used, below. A retry sweeps before its claim, so that a sweep that does
+// used, below, but for the copy a carry on adopted for the task, which the
+// winner sweeps after its claim and then uses. A retry sweeps before its claim, so that a sweep that does
 // not clear records nothing; two retries anchored to the same attempt would
 // both sweep before the anchor decided between them, and it is the slot and
 // the home's lock below, not the anchor, that keep there from being two.
@@ -117,7 +118,16 @@ import (
 // neither cut nor asked the sweep of, at a first claim or appearing after a
 // retry's check, is asserted the same way and then refused as not isolated
 // even when the assertion passes, because nothing proves it unowned, and it
-// too is left as it stands. The one directory this file does remove is a
+// too is left as it stands. The one copy a first claim finds standing and
+// owns is the one a carry on adopted for the task (keptcarryon.go): an
+// entry answered carry-on naming the task records that directory's file
+// identity, and adoptedCopyStands holds what stands to it, so a clone of
+// the same history is not taken for it. The winner sweeps that copy after
+// its claim, on sweep.go's terms, since the previous owner's processes may
+// still be in it, and a sweep that does not clear leaves the attempt
+// claimed with no worker, which the next dispatch retries over its standing
+// copy as above; with no sweep on the platform it raises the no-sweep hold
+// keyed by the attempt it claimed, which that retry reads. The one directory this file does remove is a
 // clone this same call just made and could not shape - the task
 // branch could not be created in it, or HEAD could not be detached - which
 // holds no work and is the program's own; it is removed so that the next
@@ -613,9 +623,10 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	// A copy already standing at a retry is the earlier attempt's, swept
 	// before the claim on sweep.go's terms; a copy about to be cut has
 	// nothing in it to sweep. A first claim sweeps nothing: no attempt has
-	// cut a copy, so whatever stands at the path is either a concurrent
-	// winner's, which only the winner may touch (#562), or nobody's
-	// attempt's, which the check after the claim refuses.
+	// cut a copy, so whatever stands at the path is a concurrent winner's,
+	// which only the winner may touch (#562), the copy a carry on adopted,
+	// which the winner sweeps after its claim, or nobody's attempt's, which
+	// the check after the claim refuses.
 	var swept copySwept
 	var stood bool
 	if latest > 0 {
@@ -668,11 +679,12 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 		return dispatched{}, err
 	}
 
-	// The copy: a fresh clone when nothing stands at the path, or what the
-	// sweep before the claim was asked of. A path standing now that this
-	// dispatch neither cut nor asked the sweep of, at a first claim or one
-	// that appeared after the check before a retry's claim, is asserted and
-	// then refused as not isolated, never given a worker unswept.
+	// The copy: a fresh clone when nothing stands at the path, what the
+	// sweep before the claim was asked of, or at a first claim the copy a
+	// carry on adopted, swept now. A path standing now that this dispatch
+	// neither cut nor asked the sweep of, at a first claim or one that
+	// appeared after the check before a retry's claim, is asserted and then
+	// refused as not isolated, never given a worker unswept.
 	if _, err := os.Lstat(copyPath); errors.Is(err, os.ErrNotExist) {
 		if err := s.cutTaskCopy(ctx, record, repository.WorkingPath, copyPath, gatePath, base); err != nil {
 			return dispatched{}, err
@@ -680,8 +692,34 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	} else if err != nil {
 		return dispatched{}, fmt.Errorf("service: reading the copy of task %s at %s: %w", id, copyPath, err)
 	} else if !stood {
-		swept.unswept = fmt.Errorf("%s stands, and attempt %d of task %s neither cut it nor swept it before its claim",
-			copyPath, attempt.Sequence, id)
+		adopted := false
+		if latest == 0 {
+			if adopted, err = s.adoptedCopyStands(ctx, id, copyPath); err != nil {
+				return dispatched{}, err
+			}
+		}
+		if !adopted {
+			swept.unswept = fmt.Errorf("%s stands, and attempt %d of task %s neither cut it nor swept it before its claim",
+				copyPath, attempt.Sequence, id)
+		} else {
+			// The copy a carry on adopted for this task, swept now that this
+			// dispatch won the first claim, so only the winner touches it
+			// (#562), on sweep.go's terms as a retry's is before its claim.
+			if swept, err = s.sweepStandingCopy(ctx, id, copyPath); err != nil {
+				return dispatched{}, err
+			}
+			if swept.unsupported {
+				h, err := s.holdDispatchUnswept(ctx, id, attempt.Sequence, swept.words)
+				if err != nil {
+					return dispatched{}, fmt.Errorf("service: task %s is not dispatched with no process sweep, "+
+						"and its hold could not be registered: %w", id, err)
+				}
+				return dispatched{}, &dispatchUnswept{Task: id, Hold: h}
+			}
+			if swept.words != "" {
+				s.log.Printf("task %s is dispatched over the copy it carried on: %s", id, swept.words)
+			}
+		}
 	}
 
 	// The observation and the proof.
@@ -722,6 +760,25 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 		id: id, proof: proof, attempt: attempt.Sequence, want: want, instructions: instructions,
 		anchor: resolved.State.Basis.EventSequence,
 	}, nil
+}
+
+// adoptedCopyStands reports whether what stands at copyPath is the copy a
+// carry on adopted for task id: an entry answered carry-on naming the task
+// records that copy's file identity (store.KeptWorkCarriedOnBy), and what
+// stands is that directory (isCarriedOnCopy, keptcarryon.go's own check).
+// Anything else standing there, a clone of the same history among it, is
+// not, and a task no carry on created has no such entry.
+func (s *Service) adoptedCopyStands(ctx context.Context, id, copyPath string) (bool, error) {
+	entries, err := s.store.KeptWorkCarriedOnBy(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if s.isCarriedOnCopy(entry, copyPath) == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // expectation is what a task's copy is asserted against and launched with,

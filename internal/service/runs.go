@@ -1524,6 +1524,12 @@ func (s *Service) recover(ctx context.Context) {
 	// rather than staying on disk unrecorded; cleanup.go owns what a refusal
 	// becomes.
 	s.reclaimAtRecovery(ctx, read)
+	// A land answer to kept work that a stopped service recorded and did
+	// not carry out is completed now, on keptanswer.go's terms, before the
+	// tasks its entry held are dispatched below.
+	s.completeLandingsAtOpen(ctx)
+	s.completeCarryOnsAtOpen(ctx)
+	s.completeDiscardsAtOpen(ctx)
 	// PRD section 11's fleet reconciliation, after the runs and before
 	// anything is served: the queued wakes are drained as input, every task
 	// of this home is read with its terminal probed under a bound, and a

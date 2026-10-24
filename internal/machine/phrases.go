@@ -256,11 +256,11 @@ var phraseLandedLocallyNow = Phrase{
 // structured rendering carries and this row points at, and the row names
 // the three answers. It says what this build does: the task starts once
 // every entry is decided or its work turns up somewhere safe, and the
-// answers themselves are not yet something this build takes.
+// three answers are given on section 9's hold answer.
 var phraseTaskWaitsOnKeptWork = Phrase{
 	Outcome:     "This work has not begun, because work kept in a local copy of the same project is waiting on your decision first.",
 	Consequence: "It begins on its own once that copy's work is decided or turns up somewhere safe; your own pushes and work already under way go ahead regardless.",
-	Decision:    "Read which copy with assistant --json tasks and the work's identifier; its answers are land, carry on or discard, which this build does not yet take from you.",
+	Decision:    "Read which copy with assistant --json tasks and the work's identifier; its answers are land, carry on or discard, given with --answer and --hold naming the entry's key.",
 }
 
 // phraseTaskHeld is the row for a task internal/taskstate resolved Held from
@@ -1987,6 +1987,7 @@ func TablePhrases() []Phrase {
 		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept, phraseRepairAdded, phraseRepairNotYetAdded)
 	out = append(out, keptWorkRows()...)
+	out = append(out, keptAnswerRows()...)
 	out = append(out, cleanupRows()...)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseNoticeQueued, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)

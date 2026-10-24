@@ -194,6 +194,26 @@ const taskMachineMigration = "task machine and remote session host"
 // launch claim, for the reason sealCheckpointTableMigration is a constant.
 const attemptLaunchMigration = "task attempt launch claim"
 
+// keptWorkLandingMigration names the migration that adds the run a land
+// answer to kept work started, for the reason sealCheckpointTableMigration
+// is a constant.
+const keptWorkLandingMigration = "kept work landing run"
+
+// keptWorkCarryOnMigration names the migration that adds the task a carry
+// on answer to kept work created, for the reason sealCheckpointTableMigration
+// is a constant.
+const keptWorkCarryOnMigration = "kept work carry-on task"
+
+// keptWorkDiscardMigration names the migration that adds a person's
+// confirmation of a discard of kept work, what it was shown, and when the
+// copy went, for the reason sealCheckpointTableMigration is a constant.
+const keptWorkDiscardMigration = "kept work discard"
+
+// keptWorkDiscardReadMigration names the migration that adds when the read
+// a discard's removal was held to began, for the reason
+// sealCheckpointTableMigration is a constant.
+const keptWorkDiscardReadMigration = "kept work discard read"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2469,6 +2489,195 @@ var schema = []migration{
 				WHEN OLD.launch_claimed_at IS NOT NULL
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a task attempt''s launch is claimed once and the claim is not rewritten');
+				END`,
+		},
+	},
+	{
+		version: 58,
+		name:    keptWorkLandingMigration,
+		statements: []string{
+			// A land answer to a kept work entry, PRD section 6's "the
+			// program carries the work to the gate as a delivery", as two
+			// facts. The claim is landing_claimed_at and landing_by, who
+			// asked, written together by ClaimKeptWorkLanding on an entry
+			// neither answered nor closed, which stays open, before the run
+			// is started, so two answers landing one entry start one run
+			// between them; withdrawn together by WithdrawKeptWorkLanding,
+			// while it is unanswered, when the run could not be started. The
+			// answer is the landing's outcome: answer land, from the claim,
+			// with landed_run, the run it started, in one write by
+			// RecordKeptWorkLanding once the run is recorded, so no entry is
+			// ever answered land before its run exists. landed_run names a
+			// run by identifier and holds no foreign key, so forgetting a
+			// repository's runs is not refused by the entries that name
+			// them.
+			`ALTER TABLE kept_work ADD COLUMN landing_claimed_at TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN landing_by TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN landed_run TEXT`,
+			`CREATE TRIGGER kept_work_landing_is_claimed_whole
+				BEFORE UPDATE OF landing_claimed_at, landing_by ON kept_work
+				WHEN (NEW.landing_claimed_at IS NOT OLD.landing_claimed_at OR NEW.landing_by IS NOT OLD.landing_by)
+					AND NOT (OLD.answer IS NULL AND OLD.closure IS NULL AND NEW.answer IS NULL AND (
+						(OLD.landing_claimed_at IS NULL AND OLD.landing_by IS NULL
+							AND NEW.landing_claimed_at IS NOT NULL AND NEW.landing_by IS NOT NULL)
+						OR (OLD.landing_claimed_at IS NOT NULL AND OLD.landing_by IS NOT NULL
+							AND NEW.landing_claimed_at IS NULL AND NEW.landing_by IS NULL)))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry''s landing is claimed whole on an open entry and withdrawn whole while it is unanswered');
+				END`,
+			`CREATE TRIGGER kept_work_land_answer_is_its_run
+				BEFORE UPDATE OF answer ON kept_work
+				WHEN NEW.answer = 'land' AND (NEW.landed_run IS NULL OR NEW.landing_claimed_at IS NULL)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is answered land only with the run its landing started');
+				END`,
+			`CREATE TRIGGER kept_work_lands_once
+				BEFORE UPDATE OF landed_run ON kept_work
+				WHEN OLD.landed_run IS NOT NULL OR NEW.landed_run IS NULL OR NEW.landing_claimed_at IS NULL OR NEW.answer IS NOT 'land'
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry records the run its landing started once, with its land answer, after its landing was claimed');
+				END`,
+		},
+	},
+	{
+		version: 59,
+		name:    keptWorkCarryOnMigration,
+		statements: []string{
+			// The task a carry on creates, PRD section 6's "a worker is
+			// relaunched in that same copy": a new task of the same project
+			// and branch whose copy is the kept copy, recorded as two facts.
+			// The claim is carried_on_task, the task's identifier, reserved
+			// before its row is written, carried_on_copy, what only the kept
+			// copy itself has (read by the caller and opaque here, so the
+			// task adopts that copy and no other), carry_on_by and
+			// carry_on_claimed_at, written together by ClaimKeptWorkCarryOn
+			// on an entry neither answered nor closed, which stays open, and
+			// withdrawn together by WithdrawKeptWorkCarryOn, while it is
+			// unanswered, when the task could not be created. The answer is
+			// the adoption's outcome: answer carry-on, from the claim, with
+			// carried_on_at, when the task came to own the copy, in one
+			// write by MarkKeptWorkCarriedOn, so no entry is ever answered
+			// carry-on before its task owns the copy. A promotion writes the
+			// claim, the answer and carried_on_at in its one write, naming
+			// the promoted task and no copy, since the copy never moves.
+			// Neither the task nor the copy holds a foreign key: the task
+			// row does not exist yet when the claim names it.
+			`ALTER TABLE kept_work ADD COLUMN carried_on_task TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carried_on_copy TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carry_on_by TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carry_on_claimed_at TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carried_on_at TEXT`,
+			`CREATE TRIGGER kept_work_carry_on_is_claimed_whole
+				BEFORE UPDATE OF carried_on_task, carried_on_copy, carry_on_by, carry_on_claimed_at ON kept_work
+				WHEN (NEW.carried_on_task IS NOT OLD.carried_on_task OR NEW.carried_on_copy IS NOT OLD.carried_on_copy
+						OR NEW.carry_on_by IS NOT OLD.carry_on_by OR NEW.carry_on_claimed_at IS NOT OLD.carry_on_claimed_at)
+					AND NOT (OLD.answer IS NULL AND OLD.closure IS NULL AND (
+						(OLD.carried_on_task IS NULL AND OLD.carried_on_copy IS NULL AND OLD.carry_on_by IS NULL
+							AND OLD.carry_on_claimed_at IS NULL
+							AND NEW.carried_on_task IS NOT NULL AND NEW.carry_on_by IS NOT NULL AND NEW.carry_on_claimed_at IS NOT NULL
+							AND (NEW.carried_on_copy IS NOT NULL OR (NEW.answer = 'carry-on' AND NEW.carried_on_at IS NOT NULL)))
+						OR (NEW.answer IS NULL
+							AND OLD.carried_on_task IS NOT NULL AND OLD.carry_on_by IS NOT NULL AND OLD.carry_on_claimed_at IS NOT NULL
+							AND NEW.carried_on_task IS NULL AND NEW.carried_on_copy IS NULL AND NEW.carry_on_by IS NULL
+							AND NEW.carry_on_claimed_at IS NULL)))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry''s carry-on claim is written whole on an open entry and withdrawn whole while it is unanswered');
+				END`,
+			`CREATE TRIGGER kept_work_carry_on_answer_is_its_adoption
+				BEFORE UPDATE OF answer ON kept_work
+				WHEN NEW.answer = 'carry-on' AND (NEW.carried_on_at IS NULL OR NEW.carried_on_task IS NULL)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is answered carry-on only once its task owns the copy');
+				END`,
+			`CREATE TRIGGER kept_work_carried_on_once
+				BEFORE UPDATE OF carried_on_at ON kept_work
+				WHEN OLD.carried_on_at IS NOT NULL OR NEW.carried_on_at IS NULL OR NEW.carried_on_task IS NULL OR NEW.answer IS NOT 'carry-on'
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is carried on once, with its carry-on answer, by the task its claim names');
+				END`,
+		},
+	},
+	{
+		version: 60,
+		name:    keptWorkDiscardMigration,
+		statements: []string{
+			// PRD section 6's discard: "the program shows exactly what will
+			// be lost, and it removes the copy only on that answer, recording
+			// who discarded what", as two facts. The person's confirmation
+			// is discard_digest, what they were shown, discard_lacks, the
+			// commits it was shown as lost, discard_by and
+			// discard_confirmed_at, written together by
+			// ConfirmKeptWorkDiscard on an entry neither answered nor
+			// closed, which stays open, and withdrawn together by
+			// WithdrawKeptWorkDiscard, while it is still unanswered, when the
+			// copy no longer holds what was shown. The answer is the removal's
+			// outcome: answer discard, from the confirmation, with
+			// discarded_at, when the copy went, in one write by
+			// MarkKeptWorkDiscarded once the copy is gone, so no entry is
+			// ever answered discard over a copy that stands.
+			`ALTER TABLE kept_work ADD COLUMN discard_digest TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN discard_lacks TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN discard_by TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN discard_confirmed_at TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN discarded_at TEXT`,
+			`CREATE TRIGGER kept_work_discard_is_confirmed_whole
+				BEFORE UPDATE OF discard_digest, discard_lacks, discard_by, discard_confirmed_at ON kept_work
+				WHEN (NEW.discard_digest IS NOT OLD.discard_digest OR NEW.discard_lacks IS NOT OLD.discard_lacks
+						OR NEW.discard_by IS NOT OLD.discard_by OR NEW.discard_confirmed_at IS NOT OLD.discard_confirmed_at)
+					AND NOT (OLD.answer IS NULL AND (
+						(OLD.closure IS NULL
+							AND OLD.discard_digest IS NULL AND OLD.discard_lacks IS NULL AND OLD.discard_by IS NULL AND OLD.discard_confirmed_at IS NULL
+							AND NEW.discard_digest IS NOT NULL AND NEW.discard_lacks IS NOT NULL AND NEW.discard_by IS NOT NULL
+							AND NEW.discard_confirmed_at IS NOT NULL)
+						OR (NEW.answer IS NULL
+							AND OLD.discard_digest IS NOT NULL AND OLD.discard_lacks IS NOT NULL AND OLD.discard_by IS NOT NULL
+							AND OLD.discard_confirmed_at IS NOT NULL
+							AND NEW.discard_digest IS NULL AND NEW.discard_lacks IS NULL AND NEW.discard_by IS NULL
+							AND NEW.discard_confirmed_at IS NULL)))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry''s discard confirmation is written whole on an open entry and withdrawn whole while it is unanswered');
+				END`,
+			`CREATE TRIGGER kept_work_discard_answer_is_its_removal
+				BEFORE UPDATE OF answer ON kept_work
+				WHEN NEW.answer = 'discard' AND (NEW.discarded_at IS NULL OR NEW.discard_digest IS NULL)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is answered discard only with the removal of its copy');
+				END`,
+			`CREATE TRIGGER kept_work_is_discarded_once
+				BEFORE UPDATE OF discarded_at ON kept_work
+				WHEN OLD.discarded_at IS NOT NULL OR NEW.discarded_at IS NULL OR NEW.discard_digest IS NULL OR NEW.answer IS NOT 'discard'
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is discarded once, with its discard answer, on the confirmation that was shown what it loses');
+				END`,
+		},
+	},
+	{
+		version: 61,
+		name:    keptWorkDiscardReadMigration,
+		statements: []string{
+			// The moment a discard's removal went ahead, recorded by
+			// RecordKeptWorkDiscardRead once the copy was found holding
+			// what the confirmation was shown and immediately before the
+			// removal, so the mark bounds the entries it takes by it even
+			// when a service that stopped after the removal leaves the
+			// mark to the next start, which finds the copy gone and reads
+			// nothing. It is written only under the confirmation of an
+			// entry neither answered nor closed, moved by each removal a
+			// later call makes of a copy still standing, and withdrawn
+			// with the confirmation.
+			`ALTER TABLE kept_work ADD COLUMN discard_read_at TEXT`,
+			`CREATE TRIGGER kept_work_discard_read_is_under_its_confirmation
+				BEFORE UPDATE OF discard_read_at, discard_digest ON kept_work
+				WHEN NEW.discard_read_at IS NOT NULL AND NEW.discard_digest IS NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry records a discard''s read only under its confirmation');
+				END`,
+			`CREATE TRIGGER kept_work_discard_read_is_written_while_owed
+				BEFORE UPDATE OF discard_read_at ON kept_work
+				WHEN NEW.discard_read_at IS NOT OLD.discard_read_at
+					AND NOT (OLD.answer IS NULL AND (NEW.discard_read_at IS NULL OR OLD.closure IS NULL))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry''s discard read is written only while its discard is owed');
 				END`,
 		},
 	},

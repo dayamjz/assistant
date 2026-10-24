@@ -27,6 +27,10 @@ paths: ["internal/tasks/**"]
 - It is P12's decision and the only writer of the cleanup record. An
   inconclusive proof is a `ProofAttempt` on the `*CleanupRefusal`, never a
   proof, and no remedy names a flag.
+- Every repository the `Cleaner` opens is read without replacement
+  references or a graft file (`vcs.WithoutReplaceObjects`, set in
+  `NewCleaner`), so neither a cleanup proof nor a discard's loss reads a
+  commit's parents as anything but what its object records.
 - It is also the one writer of the kept work record: `Keep` reads what a
   kept copy holds from the copy (the entry's identity), reads what of it
   the default branch, fresh and fetched by identifier, lacks (`lacking` in
@@ -40,6 +44,48 @@ paths: ["internal/tasks/**"]
   proof. And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
   refusals are a copy kept for its work; `kept_test.go` places every reason.
+- `kept_discard.go` is the copy's half of PRD section 6's discard, and
+  `Loss` is also what `internal/service`'s land answer decides from: `Loss`
+  reads what removing the copy would lose: the commits that anything the
+  removal destroys names reaches (HEAD, a reference, a root reference such
+  as ORIG_HEAD, a reflog entry by either of its values, `vcs.ReflogValues`;
+  for a run's worktree only its own and their logs' values,
+  `vcs.ReflogValuesOf`, and the stash entries it made, `ownStash`, never
+  the gate's shared references or their reflogs, which the removal leaves
+  and which hold nothing either) and
+  nothing held reaches, the default branch and what the upstream holds
+  now: every object the copy names that it advertises, by identity, and
+  the commit its branch of the same name as one of the copy's branches or
+  remote-tracking references stands on, fetched by identifier
+  (`upstreamHeld`; a remote-tracking reference holds nothing of itself),
+  and every other object such a name or value
+  records that is not itself held, read from the copy now (`lostFrom`),
+  every path whose content or deletion nothing else holds (`kept_lost.go`,
+  decided from the copy against HEAD's tree, the index and what git writes
+  into a new repository, a file by the blob git would store for it,
+  `vcs.StoredObjects`, ignored files and deletions included) and the
+  inventory's three indicators, with a digest over exactly what is shown
+  and nothing else (`seal`: HEAD, the commits and objects lost, each path
+  lost with what it holds, decided from the copy and never from what git
+  reports changed, and the indicators; the header names what it does not
+  cover), refusing an unestablished entry; `Discard` removes the copy only
+  on that digest, with every commit lost now among those shown and every
+  one shown still in the copy or taken up upstream, and only as the copy
+  was read (`kept_remove.go`: the state of everything the removal destroys
+  read before the loss read and again after the checks, objects that read
+  adds aside, and each entry removed only while it is as read, a run's
+  record in the gate, taken from the gate's own registry
+  (`vcs.WorktreeRecords`, read from the gate and held to git's listing)
+  and never by following the copy's `.git`, the copy's files refused when
+  they disagree with it (`copyRecord`), removed so too and never through
+  git's forced removal),
+  behind a person's answer and no proof.
+- Intake writes the instructions file whole and never through a link,
+  `writeWhole` (an exclusively created partial of a fresh name, then a
+  rename; a path standing as a link is `*InstructionsLinkError`), so a file
+  under the name is never partial, and `CompleteIntake` is intake's second
+  step for a row a stop left without its file, removing stale partials as
+  names; `InterruptAfterRecordForTest` is the seam between the two.
 
 Read `doc.go` before changing the floor or the clear condition, and for the
 residual gaps; read `promote.go`'s opening comment and `doc.go` before

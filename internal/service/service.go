@@ -199,6 +199,52 @@ type Options struct {
 	// hands them to internal/tasks' InterruptBeforeMarkForTest.
 	cleanupTest          testing.TB
 	interruptCleanupMark func() error
+	// intakeTest and interruptIntake are intake's seam between a task's row
+	// and its instructions file, which export_test.go's
+	// WithIntakeInterruptForTest sets and the product never does; Open hands
+	// them to internal/tasks' InterruptAfterRecordForTest.
+	intakeTest      testing.TB
+	interruptIntake func() error
+	// landingTest and interruptLanding are a landing's seam between its run
+	// and the entry's record of it, which export_test.go's
+	// WithLandingInterruptForTest sets and the product never does.
+	landingTest      testing.TB
+	interruptLanding func(run string) error
+	// carryOnTest and interruptCarryOn are a carry on's seam between the
+	// copy's move to the new task and the entry's mark, which
+	// export_test.go's WithCarryOnInterruptForTest sets and the product
+	// never does.
+	carryOnTest      testing.TB
+	interruptCarryOn func() error
+	// interruptCarryOnClaim is a carry on's seam between the answer's read
+	// or write of the claim and its completion, which export_test.go's
+	// WithCarryOnClaimInterruptForTest sets, with carryOnTest, and the
+	// product never does.
+	interruptCarryOnClaim func() error
+	// discardTest and interruptDiscard are a discard's seam between the
+	// record of the person's confirmation and the copy's removal, which
+	// export_test.go's WithDiscardInterruptForTest sets and the product
+	// never does.
+	discardTest      testing.TB
+	interruptDiscard func() error
+	// discardRemovalTest, inDiscardWindow and interruptDiscardMark are a
+	// discard's seams inside the removal's window, after its last read of
+	// the copy and before the removal, and between the removal and the
+	// mark, which export_test.go's WithDiscardRemovalSeamsForTest sets and
+	// the product never does.
+	discardRemovalTest   testing.TB
+	inDiscardWindow      func()
+	interruptDiscardMark func() error
+	// inWorktreeRemoval is the cleaner's seam inside a run's copy's
+	// discard, after the worktree's directory is removed and before its
+	// record is, which export_test.go's WithWorktreeRemovalSeamForTest sets
+	// with discardRemovalTest and the product never does.
+	inWorktreeRemoval func()
+	// inRecordRemoval is the cleaner's seam inside a run's copy's discard
+	// after the last check of the worktree's record and before anything in
+	// it is removed, which export_test.go's WithRecordRemovalSeamForTest
+	// sets with discardRemovalTest and the product never does.
+	inRecordRemoval func()
 	// cleanupAskSpacing replaces landedAskSpacing for this service, which
 	// export_test.go's WithCleanupAskSpacingForTest sets and the product
 	// never does; zero is landedAskSpacing.
@@ -407,6 +453,52 @@ type Service struct {
 	// production and set only by this package's tests, which use it to
 	// close the entry and run another dispatch pass inside that window.
 	betweenHeldAndRelease func()
+	// betweenLandingClaimAndStart runs in a landing of kept work after its
+	// claim and before it brings the commit into the gate and starts the
+	// run. It is nil in production and set only by this package's tests,
+	// which use it to make a second answer inside that window.
+	betweenLandingClaimAndStart func()
+	// betweenLandingStartAndRecord runs in a landing after its run was
+	// started and before the run is named on the entry, and an error it
+	// returns ends the landing there, as a service that stopped there
+	// leaves it. It is nil in production and set only through
+	// WithLandingInterruptForTest.
+	betweenLandingStartAndRecord func(run string) error
+	// betweenCarryOnMoveAndMark runs in a carry on after the copy was moved
+	// to the new task's path and before anything else, and an error it
+	// returns ends the carry on there, as a service that stopped there
+	// leaves it. It is nil in production and set only through
+	// WithCarryOnInterruptForTest.
+	betweenCarryOnMoveAndMark func() error
+	// betweenCarryOnClaimAndCompletion runs in a carry-on answer after it
+	// read or wrote the entry's claim and before the completion reads the
+	// entry, and an error it returns ends the answer there. It is nil in
+	// production and set only through WithCarryOnClaimInterruptForTest.
+	betweenCarryOnClaimAndCompletion func() error
+	// betweenDiscardRecordAndRemoval runs in a discard after the person's
+	// confirmation was recorded, once the call carrying it out holds the
+	// copy's discard slot, and before the copy is read for its removal;
+	// an error it returns ends the discard there, as a service that
+	// stopped there leaves it. It is nil in production and set only
+	// through WithDiscardInterruptForTest.
+	betweenDiscardRecordAndRemoval func() error
+	// inDiscardWindow runs in a discard after its last read of the copy and
+	// before the removal, and betweenDiscardRemovalAndMark after the
+	// removal and before the mark, an error it returns ending the discard
+	// there, as a service that stopped there leaves it. Both are nil in
+	// production and set only through WithDiscardRemovalSeamsForTest.
+	inDiscardWindow              func()
+	betweenDiscardRemovalAndMark func() error
+	// landings is the kept work entries a landing is carrying out in this
+	// service now, keyed by entry: the in-process half of the landing's
+	// exactly-once, on keptanswer.go's terms. It is read and written under
+	// mu.
+	landings map[int64]bool
+	// discards is the copies a discard confirmation is being carried out or
+	// withdrawn for in this service now, keyed by copy path: the in-process
+	// half of keptdiscard.go's one carrier of a confirmation. It is read
+	// and written under mu.
+	discards map[string]bool
 	// betweenTrustedFetchAndResolve runs in fetchTrusted after the default
 	// branch has been fetched under ref and before ref is resolved. It is nil
 	// in production and set only by this package's tests, which use it to
@@ -795,9 +887,50 @@ func (s *Service) openParts(ctx context.Context, o Options, lookup func(string) 
 	if s.queue, err = s.newQueue(); err != nil {
 		return err
 	}
+	if o.interruptLanding != nil {
+		if o.landingTest == nil {
+			return errors.New("service: the landing interrupt is a test's seam and takes the test")
+		}
+		s.betweenLandingStartAndRecord = o.interruptLanding
+	}
+	if o.interruptCarryOn != nil {
+		if o.carryOnTest == nil {
+			return errors.New("service: the carry-on interrupt is a test's seam and takes the test")
+		}
+		s.betweenCarryOnMoveAndMark = o.interruptCarryOn
+	}
+	if o.interruptCarryOnClaim != nil {
+		if o.carryOnTest == nil {
+			return errors.New("service: the carry-on claim interrupt is a test's seam and takes the test")
+		}
+		s.betweenCarryOnClaimAndCompletion = o.interruptCarryOnClaim
+	}
+	if o.interruptDiscard != nil {
+		if o.discardTest == nil {
+			return errors.New("service: the discard interrupt is a test's seam and takes the test")
+		}
+		s.betweenDiscardRecordAndRemoval = o.interruptDiscard
+	}
+	if o.inDiscardWindow != nil || o.interruptDiscardMark != nil {
+		if o.discardRemovalTest == nil {
+			return errors.New("service: the discard removal seams are a test's and take the test")
+		}
+		s.inDiscardWindow, s.betweenDiscardRemovalAndMark = o.inDiscardWindow, o.interruptDiscardMark
+	}
+	if o.interruptIntake != nil {
+		if err := s.queue.InterruptAfterRecordForTest(o.intakeTest, o.interruptIntake); err != nil {
+			return err
+		}
+	}
 	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge,
 		GitDeadline: s.cfg.GitDeadline}); err == nil && o.interruptCleanupMark != nil {
 		err = s.cleaner.InterruptBeforeMarkForTest(o.cleanupTest, o.interruptCleanupMark)
+	}
+	if err == nil && o.inWorktreeRemoval != nil {
+		err = s.cleaner.BetweenWorktreeRemovalAndRecordForTest(o.discardRemovalTest, o.inWorktreeRemoval)
+	}
+	if err == nil && o.inRecordRemoval != nil {
+		err = s.cleaner.InRecordRemovalForTest(o.discardRemovalTest, o.inRecordRemoval)
 	}
 	if err != nil {
 		return err

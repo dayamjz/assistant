@@ -254,6 +254,9 @@ var renderings = []rendering{
 	{name: "health", voice: VoicePhrased, of: typeOf[machine.Health](), render: func(w io.Writer, v any) { writeln(w, machine.HealthPhrase(v.(machine.Health))) }},
 	{name: "admission", voice: VoicePhrased, of: typeOf[machine.Admission](), render: func(w io.Writer, v any) { readOutAdmission(w, v.(machine.Admission)) }},
 	{name: "notification", voice: VoicePhrased, of: typeOf[machine.Notification](), render: func(w io.Writer, v any) { readOutNotification(w, v.(machine.Notification)) }},
+	{name: "kept work answer", voice: VoicePhrased, of: typeOf[machine.KeptWorkAnswered](), render: func(w io.Writer, v any) {
+		writeln(w, machine.KeptWorkAnsweredPhrase(v.(machine.KeptWorkAnswered)))
+	}},
 	{name: "task answer", voice: VoicePhrased, of: typeOf[machine.TaskAnswered](), render: func(w io.Writer, v any) {
 		a := v.(machine.TaskAnswered)
 		writeln(w, machine.TaskAnsweredPhrase(a))

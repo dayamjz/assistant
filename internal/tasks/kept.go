@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -272,14 +274,8 @@ func (h held) established() bool { return h.against != "" }
 func lacking(ctx context.Context, l landing, reaches []string) held {
 	defer l.forget(ctx)
 	unestablished := func(detail string) held { return held{unestablished: detail} }
-	if l.upstream == "" {
-		return unestablished("the record names no repository, so there is no default branch to read")
-	}
-	tip, detail := l.defaultTip(ctx)
+	tip, detail := keptDefaultTip(ctx, l)
 	if detail != "" {
-		return unestablished(detail)
-	}
-	if detail := l.fetch(ctx, tip, keptDefaultRef); detail != "" {
 		return unestablished(detail)
 	}
 	lacks := []string{}
@@ -296,4 +292,213 @@ func lacking(ctx context.Context, l landing, reaches []string) held {
 		}
 	}
 	return held{lacks: lacks, against: tip}
+}
+
+// keptDefaultTip is the default branch tip a kept copy is compared against,
+// read now and fetched into the copy by identifier, on lacking's terms, or
+// why it could not be.
+func keptDefaultTip(ctx context.Context, l landing) (string, string) {
+	if l.upstream == "" {
+		return "", "the record names no repository, so there is no default branch to read"
+	}
+	tip, detail := l.defaultTip(ctx)
+	if detail != "" {
+		return "", detail
+	}
+	if detail := l.fetch(ctx, tip, keptDefaultRef); detail != "" {
+		return "", detail
+	}
+	return tip, ""
+}
+
+// lostFrom is what a discard of the copy loses: what nothing held reaches,
+// held being the default branch and what the upstream holds now and
+// nothing else, the gate a run's worktree belongs to included, decided
+// from the copy's own objects and from everything that names one in what the
+// removal destroys (reach, as Loss composes it) rather than from the
+// references Keep reads. It is the commits any of it reaches that neither
+// the default branch nor anything the upstream holds reaches, a commit
+// only a reflog entry's previous value, a root reference such as
+// ORIG_HEAD or the stash records among them, and every object reach names
+// that is not a commit and is not itself held, a reflog's value of any
+// type among them (vcs.NotReachedFrom). The default branch is read on
+// lacking's terms. What the upstream holds now is held (upstreamHeld):
+// every object named, of names, that the upstream advertises, by identity,
+// an annotated tag cloned with the copy and a branch the upstream also
+// has among them, with everything it reaches; and everything the commit
+// the upstream's branch of the same name as one of refs, the copy's
+// branches and remote-tracking references, stands on now reaches. A
+// remote-tracking reference holds nothing of itself. Any read that fails
+// leaves it unestablished.
+// gone is, of shown, the commits a discard was shown as lost that are
+// neither among them now nor held: a commit the copy no longer holds,
+// which is a change to what was shown.
+func lostFrom(ctx context.Context, l landing, reach vcs.Reach, names []string, refs []vcs.Ref, shown []string) (lost held, others, gone []string) {
+	defer l.forget(ctx)
+	defer l.forgetHeld(ctx)
+	tip, detail := keptDefaultTip(ctx, l)
+	if detail != "" {
+		return held{unestablished: detail}, nil, nil
+	}
+	holding, detail := upstreamHeld(ctx, l, names, refs)
+	if detail != "" {
+		return held{unestablished: detail}, nil, nil
+	}
+	commits, others, err := l.repo.NotReachedFrom(ctx, reach, tip, holding...)
+	if err != nil {
+		return held{unestablished: "which commits and objects the copy's names hold that the default branch at " + tip +
+			" and the upstream lack could not be read: " + err.Error()}, nil, nil
+	}
+	if commits == nil {
+		commits = []string{}
+	}
+	for _, c := range shown {
+		if slices.Contains(commits, c) {
+			continue
+		}
+		taken, err := l.repo.IsAncestor(ctx, c, tip)
+		switch {
+		case errors.Is(err, vcs.ErrRefNotFound):
+			gone = append(gone, c)
+			continue
+		case err != nil:
+			return held{unestablished: "whether the default branch at " + tip + " holds " + c + ", shown as lost, could not be read: " +
+				err.Error()}, nil, nil
+		case taken:
+			continue
+		}
+		left, _, err := l.repo.NotReachedFrom(ctx, vcs.Reach{Objects: []string{c}}, tip, holding...)
+		if err != nil {
+			return held{unestablished: "whether the upstream holds " + c + ", shown as lost, could not be read: " + err.Error()}, nil, nil
+		}
+		if slices.Contains(left, c) {
+			gone = append(gone, c)
+		}
+	}
+	return held{lacks: commits, against: tip}, others, gone
+}
+
+// keptHeldRef is the name, under a landing's namespace, of the references
+// upstreamHeld fetches what the upstream's branches stand on under, one
+// per commit, deleted with the read (forgetHeld).
+const keptHeldRef = "kept-upstream-held"
+
+// upstreamHeld is what lostFrom takes as held beside the default branch:
+// what the upstream holds now, read from what it advertises now and never
+// from the copy's record of it. It is every object of names the upstream
+// advertises, as an object a reference points at or as the commit an
+// annotated tag it advertises peels to, compared by identifier, so a tag
+// or a branch the copy holds that the upstream holds too, unchanged, is
+// held and one the upstream does not hold or holds at another object is
+// not; and, for each of the copy's branches and remote-tracking references
+// (refs), the commit the upstream's branch of the same name stands on now,
+// fetched into the copy by identifier under the read's namespace when
+// names does not hold it, so what the copy's reference names is held when
+// that commit reaches it, a branch the upstream moved on since among them.
+// A remote-tracking reference is the copy's record of a remote as last
+// fetched, so it holds nothing of itself: what it names that the upstream
+// no longer reaches, a branch deleted or rewound there since, is not held.
+// The same name is only where this looks for a branch; what is held is
+// decided by what the advertised commit reaches. A remote-tracking
+// reference is looked up as every branch name its name could end in, since
+// a remote's name may hold a slash, and as the upstream's HEAD when it
+// ends in HEAD. Every object returned is one the copy holds, so the walk
+// can exclude it. Or why the upstream could not be read, or a commit it
+// advertises could not be fetched.
+func upstreamHeld(ctx context.Context, l landing, names []string, refs []vcs.Ref) ([]string, string) {
+	advertised, err := l.repo.RemoteRefs(ctx, l.upstream)
+	if err != nil {
+		return nil, "the references the upstream holds could not be read: " + err.Error()
+	}
+	upstream := map[string]bool{}
+	branches := map[string]string{}
+	for _, ref := range advertised {
+		upstream[ref.Object], upstream[ref.Commit] = true, true
+		if ref.Name == "HEAD" || strings.HasPrefix(ref.Name, "refs/heads/") {
+			branches[ref.Name] = ref.Commit
+		}
+	}
+	named := map[string]bool{}
+	for _, object := range names {
+		named[object] = true
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, object := range names {
+		if upstream[object] && !seen[object] {
+			seen[object] = true
+			out = append(out, object)
+		}
+	}
+	var fetch []string
+	for _, ref := range refs {
+		for _, name := range upstreamBranchNames(ref.Name) {
+			commit, ok := branches[name]
+			if !ok || commit == "" || seen[commit] {
+				continue
+			}
+			seen[commit] = true
+			out = append(out, commit)
+			if !named[commit] {
+				fetch = append(fetch, commit)
+			}
+		}
+	}
+	if len(fetch) > 0 {
+		spec := vcs.FetchSpec{Remote: l.upstream}
+		for i, commit := range fetch {
+			spec.Refspecs = append(spec.Refspecs, "+"+commit+":"+l.namespace+"/"+keptHeldRef+"/"+strconv.Itoa(i))
+		}
+		// A commit the fetch did not land is not held by the copy, and the
+		// walk excluding it fails on it rather than reading past it.
+		if err := l.repo.Fetch(ctx, spec); err != nil {
+			return nil, "what the upstream's branches stand on could not be fetched: " + err.Error()
+		}
+	}
+	return out, ""
+}
+
+// upstreamBranchNames is every name the upstream could advertise the branch
+// a copy's reference stands for under: a branch's own name, and for a
+// remote-tracking reference refs/remotes/<remote>/<branch> every branch its
+// name could end in, or the upstream's HEAD for one ending in HEAD. Any
+// other reference stands for none.
+func upstreamBranchNames(ref string) []string {
+	if strings.HasPrefix(ref, "refs/heads/") {
+		return []string{ref}
+	}
+	rest, ok := strings.CutPrefix(ref, "refs/remotes/")
+	if !ok {
+		return nil
+	}
+	var out []string
+	for i := strings.Index(rest, "/"); i >= 0 && i < len(rest)-1; {
+		branch := rest[i+1:]
+		if branch == "HEAD" {
+			out = append(out, "HEAD")
+		} else {
+			out = append(out, "refs/heads/"+branch)
+		}
+		next := strings.Index(branch, "/")
+		if next < 0 {
+			break
+		}
+		i += 1 + next
+	}
+	return out
+}
+
+// forgetHeld deletes the references upstreamHeld fetched under, best
+// effort, as forget does the others.
+func (l landing) forgetHeld(ctx context.Context) {
+	if l.repo == nil || l.namespace == "" {
+		return
+	}
+	refs, err := l.repo.ListRefs(ctx, l.namespace+"/"+keptHeldRef+"/")
+	if err != nil {
+		return
+	}
+	for _, ref := range refs {
+		_ = l.repo.DeleteRef(ctx, ref.Name)
+	}
 }

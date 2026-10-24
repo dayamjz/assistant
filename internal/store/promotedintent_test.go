@@ -70,7 +70,7 @@ func TestTheDeliveryIntentIsWrittenOnceByPromotion(t *testing.T) {
 		t.Fatalf("an investigation carries the delivery intent %v, want none", got)
 	}
 	if _, _, err := s.TransitionTaskShape(ctx, promoted.ID, TaskInvestigation, TaskDelivery, "repo-1", "promoted",
-		config.DeliveryGated, "Deliver it.", 2, "promoted in the test"); err != nil {
+		config.DeliveryGated, "Deliver it.", 2, "promoted in the test", ResolvedByMachineInterface()); err != nil {
 		t.Fatalf("the promotion's own write of the intent: %v", err)
 	}
 	if got := intentOf(t, s, promoted.ID); got != Known("Deliver it.") {
@@ -170,7 +170,7 @@ func TestThePromotedIntentMigrationKeepsEarlierTasks(t *testing.T) {
 		t.Fatal("the reapplied migration let an earlier promoted task be given an intent later")
 	}
 	if _, _, err := s.TransitionTaskShape(ctx, "taskaaaaaacg", TaskInvestigation, TaskDelivery, "repo-1", "later",
-		config.DeliveryGated, "Deliver it.", 2, "promoted after the migration"); err != nil {
+		config.DeliveryGated, "Deliver it.", 2, "promoted after the migration", ResolvedByMachineInterface()); err != nil {
 		t.Fatalf("a promotion after the reapplied migration: %v", err)
 	}
 	if got := intentOf(t, s, "taskaaaaaacg"); got != Known("Deliver it.") {

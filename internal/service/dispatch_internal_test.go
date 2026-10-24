@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -362,6 +363,170 @@ func TestACopyNoDispatchCutOrSweptIsRefused(t *testing.T) {
 			}
 			if n := swept.Load(); n != 0 {
 				t.Fatalf("the dispatch asked %d sweeps, want none", n)
+			}
+			if bytes, err := os.ReadFile(filepath.Join(subject.copy, "kept.txt")); err != nil || string(bytes) != "work\n" {
+				t.Fatalf("the standing copy's work is %q (%v), want it as it was left", bytes, err)
+			}
+		})
+	}
+}
+
+// The one copy a first claim takes that it did not cut is the one a carry on
+// adopted for the task: an entry answered carry-on names the task and
+// records that directory's identity. The dispatch that wins the first claim
+// sweeps it, after the claim, so a dispatcher that loses never touches it
+// (#562), and then uses it as it stands (P6). Another directory standing at
+// the path is refused as TestACopyNoDispatchCutOrSweptIsRefused's is, even
+// when it is the same history cut the same way, and a sweep that does not
+// clear gives no worker; on a host whose sweeps cannot clear, the adopted
+// copy's dispatch is not established, on sweep_internal_test.go's terms,
+// while the order of its sweep still is. A retry is held to the rule a
+// retry keeps: the adopted copy appearing after its check, before its
+// claim, is refused like any other. The sweep asked is the real one,
+// recorded on the way through with how many attempts stood when it was
+// asked.
+func TestOnlyTheCopyACarryOnAdoptedIsTakenAtAFirstClaimAndSweptAfterIt(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	for _, c := range []struct {
+		name    string
+		replace bool  // another directory stands where the adopted copy stood
+		sweep   error // what the sweep answers, or the real sweep when nil
+		retry   bool  // a retry whose check found nothing, the copy back before its claim
+	}{
+		{name: "the adopted copy"},
+		{name: "another directory", replace: true},
+		{name: "a sweep that does not clear", sweep: errors.New("the listing failed")},
+		{name: "a retry it appears for", retry: true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			subject := newDispatchSubject(t)
+			ctx := t.Context()
+			plantTaskCopy(t, subject)
+			identity, err := tasks.IdentifyCopy(subject.copy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry := keepWorkIn(t, subject.records)
+			if _, err := subject.records.ClaimKeptWorkCarryOn(ctx, entry.ID, subject.task, identity.String(), store.ResolvedByPerson()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := subject.records.MarkKeptWorkCarriedOn(ctx, entry.ID, subject.task); err != nil {
+				t.Fatal(err)
+			}
+			if c.replace {
+				if err := os.Rename(subject.copy, filepath.Join(t.TempDir(), "moved")); err != nil {
+					t.Fatal(err)
+				}
+				plantTaskCopy(t, subject)
+			}
+			if c.retry {
+				if _, err := subject.records.BeginFirstTaskAttempt(ctx, subject.task, store.OnThisMachine()); err != nil {
+					t.Fatal(err)
+				}
+				away := filepath.Join(t.TempDir(), "away")
+				if err := os.Rename(subject.copy, away); err != nil {
+					t.Fatal(err)
+				}
+				subject.service.betweenAttemptReadAndClaim = func() {
+					if err := os.Rename(away, subject.copy); err != nil {
+						t.Error(err)
+					}
+				}
+				_, err := subject.service.dispatchClaimed(ctx, subject.task)
+				var refused *isolationRefused
+				if !errors.As(err, &refused) || refused.Attempt != 2 || refused.Reason != taskstate.RefusedNotIsolated ||
+					!strings.Contains(refused.Cause.Error(), "neither cut it nor swept it") {
+					t.Fatalf("the retry returned %v, want attempt 2 refused as not isolated by this guard", err)
+				}
+				if bytes, err := os.ReadFile(filepath.Join(subject.copy, "kept.txt")); err != nil || string(bytes) != "work\n" {
+					t.Fatalf("the standing copy's work is %q (%v), want it as it was left", bytes, err)
+				}
+				return
+			}
+
+			var mu sync.Mutex
+			var swept []string
+			var attemptsAtSweep []int
+			real := agents.NewSweeper(subject.service.home, reapGrace, nil).Sweep
+			subject.service.sweepCopy = func(ctx context.Context, dir string) (agents.SweepResult, error) {
+				attempts, err := subject.records.TaskAttempts(ctx, subject.task)
+				if err != nil {
+					t.Error(err)
+				}
+				mu.Lock()
+				swept = append(swept, dir)
+				attemptsAtSweep = append(attemptsAtSweep, len(attempts))
+				mu.Unlock()
+				if c.sweep != nil {
+					return agents.SweepResult{}, c.sweep
+				}
+				return real(ctx, dir)
+			}
+			// Two dispatchers, the first held after its trusted read until
+			// the second has returned, so the first loses the claim.
+			var fetched atomic.Int32
+			returned := make(chan struct{})
+			var returnOnce sync.Once
+			subject.service.betweenTrustedFetchAndResolve = func(string) {
+				if fetched.Add(1) == 1 {
+					<-returned
+				}
+			}
+			var wg sync.WaitGroup
+			errs := make([]error, 2)
+			for i := range errs {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					defer returnOnce.Do(func() { close(returned) })
+					_, errs[i] = subject.service.dispatchClaimed(ctx, subject.task)
+				}()
+			}
+			wg.Wait()
+			var won error
+			lost := 0
+			for _, err := range errs {
+				if errors.Is(err, store.ErrTaskMoved) {
+					lost++
+				} else {
+					won = err
+				}
+			}
+			if lost != 1 {
+				t.Fatalf("%d dispatchers lost the claim, want one: %v", lost, errs)
+			}
+
+			if !c.replace {
+				if len(swept) != 1 || swept[0] != subject.copy || attemptsAtSweep[0] != 1 {
+					t.Fatalf("the sweeps asked were of %v with %v attempts standing, want one of %s after the claim",
+						swept, attemptsAtSweep, subject.copy)
+				}
+			}
+			switch {
+			case c.replace:
+				var refused *isolationRefused
+				if !errors.As(won, &refused) || refused.Reason != taskstate.RefusedNotIsolated ||
+					!strings.Contains(refused.Cause.Error(), "neither cut it nor swept it") {
+					t.Fatalf("the dispatch over another directory returned %v, want it refused as not isolated by this guard", won)
+				}
+				if len(swept) != 0 {
+					t.Fatalf("the dispatch swept %v, want nothing swept of a directory no carry on adopted", swept)
+				}
+			case c.sweep != nil:
+				var unswept *copyUnswept
+				if !errors.As(won, &unswept) {
+					t.Fatalf("the dispatch returned %v, want no worker for a copy the sweep did not clear", won)
+				}
+			default:
+				// Dispatching needs the real sweep to clear, which a host
+				// whose sweeps cannot does not, on sweep_internal_test.go's
+				// terms; the order of the sweep above holds either way.
+				if won != nil {
+					fatalUnlessSweepsStoppedClearing(t, "that a carried-on task is dispatched over the copy it adopted",
+						"the dispatch over the adopted copy returned %v, want it dispatched", won)
+				}
 			}
 			if bytes, err := os.ReadFile(filepath.Join(subject.copy, "kept.txt")); err != nil || string(bytes) != "work\n" {
 				t.Fatalf("the standing copy's work is %q (%v), want it as it was left", bytes, err)

@@ -18,6 +18,11 @@ import (
 // writing the instructions and claiming an overlap are its judgment (PRD
 // section 7); everything the program decides from them is Create's.
 type Request struct {
+	// ID is the identifier to record the task under, for a caller that
+	// reserved it with home.NewTaskID before intake because it holds the
+	// task's copy ready at home.TaskCopy; empty means intake mints one. An
+	// identifier home.ValidTaskID refuses is refused by the store.
+	ID string
 	// Shape is the task's shape as text, decoded against store.TaskShape's
 	// closed set at this edge and refused outside it.
 	Shape string
@@ -187,9 +192,11 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 			return Created{}, fmt.Errorf("tasks: the repository the task works in: %w", err)
 		}
 	}
-	id, err := home.NewTaskID()
-	if err != nil {
-		return Created{}, err
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		if id, err = home.NewTaskID(); err != nil {
+			return Created{}, err
+		}
 	}
 	copyPath, err := q.home.TaskCopy(id)
 	if err != nil {
@@ -244,11 +251,58 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 		return Created{}, err
 	}
 
+	if q.betweenRecordAndInstructions != nil {
+		if err := q.betweenRecordAndInstructions(); err != nil {
+			return Created{}, err
+		}
+	}
 	instructions, err := q.writeInstructions(id, req.Instructions)
 	if err != nil {
 		return Created{}, err
 	}
 	return Created{Task: created, Cause: cause, BlockerState: blockerState, Instructions: instructions}, nil
+}
+
+// CompleteIntake is intake's second step, the instructions file under the
+// task's directory, for a task whose row Create wrote and whose file a stop
+// left unwritten: it writes text there when no file stands and leaves a
+// file that does as it is, and returns the file's path. A file that stands
+// is whole, because intake writes it through writeWhole, to a partial file
+// of a fresh name and then a rename, so a stop inside the write leaves
+// nothing under the file's name and this writes it; a file under the name
+// is never a partial one, and every partial file beside it is removed here,
+// as a name and never through a link. An instructions file that stands as a
+// symbolic link is refused with an *InstructionsLinkError, neither accepted
+// nor written through nor renamed over, and nothing is written. A task with no row is store.ErrNotFound, wrapped, since the
+// record comes first and this writes no record. Its one caller is internal/service's carry on of kept
+// work, which creates the task under an identifier it reserved and
+// completes a stopped intake from the entry at the next start.
+func (q *Queue) CompleteIntake(ctx context.Context, id, text string) (string, error) {
+	if _, err := q.store.Task(ctx, id); err != nil {
+		return "", err
+	}
+	path, err := q.home.TaskInstructions(id)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		return "", &InstructionsLinkError{Path: path}
+	case err == nil:
+		// The file is whole; a partial file a stop left beside it is
+		// removed, since nothing else will.
+		if err := removePartials(path); err != nil {
+			return "", fmt.Errorf("tasks: removing the partial instructions of task %s: %w", id, err)
+		}
+		return path, nil
+	case !errors.Is(err, os.ErrNotExist):
+		return "", fmt.Errorf("tasks: reading the instructions of task %s: %w", id, err)
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("%w: no instructions", ErrRequest)
+	}
+	return q.writeInstructions(id, text)
 }
 
 // recordedPosture is the posture a delivery task is recorded under, at
@@ -365,10 +419,152 @@ func (q *Queue) writeInstructions(id, text string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", fmt.Errorf("tasks: creating the directory of task %s: %w", id, err)
 	}
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+	if err := writeWhole(path, []byte(text)); err != nil {
 		return "", fmt.Errorf("tasks: writing the instructions of task %s: %w", id, err)
 	}
 	return path, nil
+}
+
+// ErrInstructionsLink matches every *InstructionsLinkError.
+var ErrInstructionsLink = errors.New("tasks: a task's instructions file is a symbolic link")
+
+// InstructionsLinkError is the refusal to write or accept a task's
+// instructions file that stands as a symbolic link: writing through it
+// would write where the link points, and renaming over it would put the
+// instructions where a link was planted, so neither is done and nothing is
+// written.
+type InstructionsLinkError struct {
+	// Path is the instructions file's path.
+	Path string
+}
+
+// Error names the path.
+func (e *InstructionsLinkError) Error() string {
+	return fmt.Sprintf("tasks: %s is a symbolic link, and a task's instructions are written to a file of their own and never through one", e.Path)
+}
+
+// Unwrap makes the refusal match ErrInstructionsLink.
+func (e *InstructionsLinkError) Unwrap() error { return ErrInstructionsLink }
+
+// writeWhole writes content to path whole and never through a link. It
+// refuses a path that stands as a symbolic link with an
+// *InstructionsLinkError. Otherwise it creates a partial file beside path
+// with os.CreateTemp, which opens a fresh name exclusively (O_CREATE and
+// O_EXCL), so no file or link planted beside path is ever opened; it writes
+// and syncs that file and renames it over path, which the filesystem makes
+// one step and which replaces a link's name rather than following it. So a
+// stop at any point leaves either no file under path or the whole content
+// there, never part of it. A stop between the write and the rename leaves a
+// partial file beside path, under partialPattern; the next write over the
+// same path and CompleteIntake remove every one, through removePartials,
+// which removes each name itself and never follows it. The Lstat before the
+// rename and the rename are two steps, so a link planted at path between
+// them is replaced by the rename, never written through.
+func writeWhole(path string, content []byte) error {
+	if err := refuseLink(path); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), partialPrefix(path)+"*")
+	if err != nil {
+		return err
+	}
+	partial := f.Name()
+	fail := func(err error) error {
+		_ = f.Close()
+		_ = os.Remove(partial)
+		return err
+	}
+	if _, err := f.Write(content); err != nil {
+		return fail(err)
+	}
+	if err := f.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(partial)
+		return err
+	}
+	if err := os.Rename(partial, path); err != nil {
+		_ = os.Remove(partial)
+		return err
+	}
+	return removePartials(path)
+}
+
+// AppendNote appends note, a section the program writes into a task's
+// instructions under heading, to the instructions file at path once and
+// whole. The file is rewritten through writeWhole, so a write that fails,
+// a filesystem taking only part of it among them, leaves the file as it
+// was, never part of the note, and the next call writes it again. The file
+// already holds the note when it holds it whole after a blank line, and is
+// then left as it is; a note an earlier append left partial, the file
+// ending in the blank line, the heading and less than the rest of the
+// note, is completed rather than taken for the note or written a second
+// time. The heading alone is never read as the note, so an earlier
+// section under the same heading, another task's note copied into this
+// one's text, is no reason not to write this one. A note that does not
+// begin with heading is refused before anything is read, and so is a
+// path that stands as a symbolic link, with an *InstructionsLinkError.
+func AppendNote(path, heading, note string) error {
+	if heading == "" || !strings.HasPrefix(note, heading) {
+		return fmt.Errorf("tasks: a note appended to the instructions begins with its heading %q", heading)
+	}
+	if err := refuseLink(path); err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	text := string(raw)
+	whole := "\n\n" + note
+	if strings.Contains(text, whole) {
+		return nil
+	}
+	for n := len(whole) - 1; n >= len("\n\n"+heading); n-- {
+		if strings.HasSuffix(text, whole[:n]) {
+			text = text[:len(text)-n]
+			break
+		}
+	}
+	return writeWhole(path, []byte(text+whole))
+}
+
+// refuseLink refuses a path that stands as a symbolic link, and reports
+// nothing for one that is a file or is not there.
+func refuseLink(path string) error {
+	info, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil
+	case err != nil:
+		return err
+	case info.Mode()&os.ModeSymlink != 0:
+		return &InstructionsLinkError{Path: path}
+	}
+	return nil
+}
+
+// partialPrefix is the name every partial file of path begins with.
+func partialPrefix(path string) string { return "." + filepath.Base(path) + ".partial" }
+
+// removePartials removes every partial file of path a stop left beside it,
+// found by name, each removed as a name with os.Remove, which removes a
+// link itself and never what it points to.
+func removePartials(path string) error {
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), partialPrefix(path)) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(filepath.Dir(path), e.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // branchNameRefusal says why a branch name is refused, or nothing when it is

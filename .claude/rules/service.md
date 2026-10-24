@@ -63,7 +63,31 @@ paths: ["internal/service/**"]
   `releaseHeldSlot` gives the slot back and reads the hold again, and a
   removal asks again (`redispatchAfterRemoval`); `taskView` and `report`
   name the entries.
-  Answers are #411's remaining part.
+  `keptanswer.go` is the answer (`keptwork.answer`, reached by section 9's
+  hold answer with `--hold kept-work/N`): every answer is claimed or
+  confirmed on the open entry first and written only with its outcome, so
+  an answer under way never hides the entry. Land, decided from the copy
+  as it stands through `internal/tasks`' `Loss`, the reading a discard
+  shows and never the entry's recorded `Lacks`, refused for any lost path
+  of the working tree or index and anything lost HEAD does not carry
+  (`tasks.Cleaner.LeftBehind`, read as `Loss` reads), claimed once (`ClaimKeptWorkLanding`), carried out
+  through `startPushedBranch` and answered with its run, the claim
+  withdrawn when no run could start; carry on (`keptcarryon.go`), claimed first with the
+  entry left open, which creates a new task through `queue.Create` with
+  the identifier the claim named, a promoted task's recorded
+  `DeliveryIntent` as its instructions, and adopts the kept copy, the answer
+  written only with the adoption and the claim withdrawn when intake
+  refuses the task; and discard (`keptdiscard.go`), shown with a digest and
+  removed only on it through `internal/tasks`' `Loss` and `Discard`, the
+  person's confirmation recorded first with the entry left open and the
+  answer written only with the removal (two facts, so an entry is never
+  answered over a copy that stands; a copy that changed has the
+  confirmation withdrawn), and what "person-only" is and is not enforced
+  by stated in its header, a confirmation held to `foreground.go`'s
+  relation as the approval hold is; all three completed at open when a
+  stopped service left them. A promotion answers its copy's entry carry on in the
+  flip, which is `store.TransitionTaskShape`'s write with the resolver
+  `promoteTask` passes.
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances
   in, and `report` reads it rather than inferring it.

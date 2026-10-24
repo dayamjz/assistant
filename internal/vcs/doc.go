@@ -227,4 +227,8 @@
 // 2.38, and it checks its own floor before running and refuses with
 // ErrUnsupportedGit below it, because its answer is one a caller removes a
 // copy on and a git that misread the request must not produce one.
+// RootRefs uses for-each-ref's --include-root-refs on git 2.45 or newer and
+// reads the same references by name below it, so it answers on 2.36 too;
+// its test runs both readings under the git on PATH and holds them equal,
+// and under an older git as well when ASSISTANT_TEST_OLD_GIT names one.
 package vcs

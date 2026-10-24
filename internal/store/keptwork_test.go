@@ -95,23 +95,17 @@ func TestKeptWorkIsAnsweredOnceAndOtherwiseSealed(t *testing.T) {
 		t.Fatalf("surfacing an unknown entry = %v; want ErrNotFound", err)
 	}
 
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, "keep", ResolvedByMachineInterface()); !errors.Is(err, ErrUnknownKeptAnswer) {
-		t.Fatalf("an answer outside the set = %v; want ErrUnknownKeptAnswer", err)
-	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, Resolver{}); !errors.Is(err, ErrNoResolver) {
+	if _, err := s.ClaimKeptWorkLanding(ctx, entry.ID, Resolver{}); !errors.Is(err, ErrNoResolver) {
 		t.Fatalf("an answer from nobody = %v; want ErrNoResolver", err)
 	}
-	answered, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface())
-	if err != nil {
-		t.Fatalf("AnswerKeptWork: %v", err)
+	answered := landKept(t, s, entry.ID)
+	if answered.Answer.Or("") != KeptLand || answered.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || !answered.AnsweredAt.IsKnown() {
+		t.Fatalf("answered = %+v; want land by the machine interface, timed", answered)
 	}
-	if answered.Answer.Or("") != KeptDiscard || answered.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || !answered.AnsweredAt.IsKnown() {
-		t.Fatalf("answered = %+v; want discard by the machine interface, timed", answered)
-	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkAnswered) {
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkAnswered) {
 		t.Fatalf("a second answer = %v; want ErrKeptWorkAnswered", err)
 	}
-	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || got.Answer.Or("") != KeptDiscard {
+	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || got.Answer.Or("") != KeptLand {
 		t.Fatalf("after a refused second answer the entry reads %+v, %v; want the first answer", got, err)
 	}
 	if unanswered, err := s.OpenKeptWork(ctx); err != nil || len(unanswered) != 0 {
@@ -149,9 +143,7 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, answered.ID, KeptCarryOn, ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
+	landKept(t, s, answered.ID)
 	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run.ID, Proof: Known(CleanupProofRemoteBranch), Examined: []string{"aaaa"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -166,13 +158,13 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 		!closed.ClosedAt.IsKnown() || closed.Answered() || closed.Open() {
 		t.Fatalf("after the removal the entry reads %+v, %v; want it closed as removed on the remote-branch proof", closed, err)
 	}
-	if kept, err := s.KeptWorkEntry(ctx, answered.ID); err != nil || kept.Answer.Or("") != KeptCarryOn || kept.Closure.IsKnown() {
+	if kept, err := s.KeptWorkEntry(ctx, answered.ID); err != nil || kept.Answer.Or("") != KeptLand || kept.Closure.IsKnown() {
 		t.Fatalf("the answered entry reads %+v, %v; want its answer kept and no closure", kept, err)
 	}
 	if listed, err := s.OpenKeptWork(ctx); err != nil || len(listed) != 0 {
 		t.Fatalf("OpenKeptWork = %+v, %v; want none", listed, err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, open.ID, KeptDiscard, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkClosed) {
+	if _, err := s.ConfirmKeptWorkDiscard(ctx, open.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkClosed) {
 		t.Fatalf("answering a closed entry = %v; want ErrKeptWorkClosed", err)
 	}
 	for name, statement := range map[string]string{
@@ -220,7 +212,7 @@ func TestARepositoryWithOpenKeptWorkIsNotForgotten(t *testing.T) {
 		if !errors.As(err, &open) || !errors.Is(err, ErrKeptWorkOpen) || len(open.Entries) != 1 || open.Entries[0].ID != entry.ID {
 			t.Fatalf("%s = %v, want a KeptWorkOpenError naming entry %d", name, err, entry.ID)
 		}
-		for _, want := range []string{entry.CopyPath, "run " + run.ID, "aaaa", "#411 part 2", "discard"} {
+		for _, want := range []string{entry.CopyPath, "run " + run.ID, "aaaa", "kept-work/", "--answer land"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("%s's refusal %q does not name %q", name, err, want)
 			}

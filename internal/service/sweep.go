@@ -24,9 +24,10 @@ import (
 // ask agents.Sweeper of the standing copy before they claim an attempt:
 // relaunch.go after its re-probe, dispatch.go when a retry finds the copy
 // path already there. A dispatch that is about to cut the copy has nothing
-// to sweep, and a first claim sweeps nothing: no attempt has cut a copy, so
-// what stands there is a concurrent winner's or nobody's attempt's, and
-// dispatch.go refuses the second after its claim (#562). This
+// to sweep, and a first claim sweeps nothing before it: no attempt has cut
+// a copy, so what stands there is a concurrent winner's, the copy a carry
+// on adopted, which dispatch.go sweeps once its claim has won, or nobody's
+// attempt's, which dispatch.go refuses after its claim (#562). This
 // file is how the answer is read, and there are four readings; the one rule
 // between them is that a sweep that could not be made is never read as one
 // that found nothing.

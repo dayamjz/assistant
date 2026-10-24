@@ -75,10 +75,23 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // whether the copy was cut from that repository is a fact about the copy,
 // which internal/tasks' Promote answers for, and the store records what it
 // was asked to. Its one writer is that function.
+//
+// by is who promoted, which the copy's open kept work entries, if any, are
+// answered carry-on as (PRD section 6: "the promotion records the entry's
+// answer as carry on, which closes it"), naming the promoted task as the
+// task carrying them on, in this same transaction; a zero Resolver is
+// ErrNoResolver and nothing is written. A copy one of whose entries holds a
+// discard confirmation not yet carried out is refused with
+// ErrKeptWorkCopyOwed, wrapped, and nothing is written: that discard is
+// removing the copy, and is carried out or withdrawn first.
 func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to TaskShape, repository, branch string,
-	delivery config.Delivery, intent string, anchor int64, detail string) (Task, TaskEvent, error) {
+	delivery config.Delivery, intent string, anchor int64, detail string, by Resolver) (Task, TaskEvent, error) {
 	if strings.TrimSpace(id) == "" {
 		return Task{}, TaskEvent{}, fmt.Errorf("store: a shape transition names no task")
+	}
+	who, err := resolverText(by)
+	if err != nil {
+		return Task{}, TaskEvent{}, fmt.Errorf("store: task %s: a promotion records who promoted: %w", id, err)
 	}
 	if from != TaskInvestigation || to != TaskDelivery {
 		return Task{}, TaskEvent{}, fmt.Errorf("store: task %s: %w, not %q to %q", id, ErrShapeTransition, from, to)
@@ -98,7 +111,7 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 
 	now := nowUTC()
 	var sequence int64
-	err := s.inTx(ctx, func(tx *sql.Tx) error {
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		var stands string
 		if err := tx.QueryRowContext(ctx, `SELECT shape FROM task WHERE id = ?`, id).Scan(&stands); err != nil {
 			return errNoRows(err)
@@ -121,16 +134,46 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 		if tip != anchor {
 			return &TaskMovedError{Task: id, Anchor: AnchoredEvent, Expected: anchor, Stands: tip}
 		}
+		// A discard confirmed on the copy's entry and not yet carried out
+		// is removing the copy the promotion would continue in, and a carry
+		// on claimed is moving it to another task.
+		var confirmed int64
+		var what string
+		switch err := tx.QueryRowContext(ctx, `SELECT id, CASE WHEN discard_digest IS NOT NULL THEN 'confirmed discard'
+				ELSE 'claimed carry on by task ' || carried_on_task END FROM kept_work
+			WHERE task_id = ? AND answer IS NULL AND closure IS NULL AND (discard_digest IS NOT NULL OR carried_on_task IS NOT NULL)
+			ORDER BY id LIMIT 1`, id).Scan(&confirmed, &what); {
+		case err == nil:
+			return fmt.Errorf("%w: entry %d of its copy is %s", ErrKeptWorkCopyOwed, confirmed, what)
+		case !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE task SET shape = ?, repository_id = ?, branch = ?, delivery = ?, delivery_intent = ? WHERE id = ?`,
 			string(to), repository, branch, string(delivery), intent, id); err != nil {
 			return err
 		}
 		sequence = tip + 1
-		_, err := tx.ExecContext(ctx,
+		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO task_event (task_id, sequence, kind, detail, at) VALUES (?, ?, ?, ?, ?)`,
-			id, sequence, PromotedEventKind, detail, encodeTime(now))
-		return err
+			id, sequence, PromotedEventKind, detail, encodeTime(now)); err != nil {
+			return err
+		}
+		// PRD section 6: a promotion of a task whose copy has an open kept
+		// work entry records the entry's answer as carry on, naming the
+		// promoted task itself as the one carrying it on, since the worker
+		// continues in that same copy, and the entry closes with the
+		// promotion and never without it. An entry on another copy is not
+		// touched. The claim, the answer and the copy's ownership are one
+		// write, since the promoted task owns the copy already.
+		at := encodeTime(now)
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = ?, answered_by = ?, answered_at = ?, carried_on_task = ?,
+			carry_on_by = ?, carry_on_claimed_at = ?, carried_on_at = ?
+			WHERE task_id = ? AND answer IS NULL AND closure IS NULL`,
+			string(KeptCarryOn), who, at, id, who, at, at, id); err != nil {
+			return fmt.Errorf("recording the copy's kept work as carried on by the promotion: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		var moved *TaskMovedError

@@ -14,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/service"
+	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/supervisor/feed"
 )
@@ -82,7 +83,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		own          repeated
 		task         string
 		hold         string
-		targetRun    bool
+		runFlag      runTarget
+		confirm      string
 		domain       string
 		consent      bool
 	)
@@ -95,9 +97,12 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&domain, "domain", "", "with --answer: the delegated domain whose hold is answered, the one raised once its "+
 			"coordinator was begun again as many times as the program begins it on its own; retry begins it once more and stop ends the delegation")
 		set.StringVar(&hold, "hold", "", "with --task --answer: which of the task's own holds to close "+
-			"(the hold's key, or a finding id under that task); without it the only open one is answered, and more than one open is refused")
-		set.BoolVar(&targetRun, "run", false, "with --task --answer: answer the task's current run even while "+
-			"the task still has holds of its own open")
+			"(the hold's key, or a finding id under that task); without it the only open one is answered, and more than one open is refused; "+
+			"a kept work entry's key, kept-work/N, answers that entry, with --task or --run=RUN naming whose copy it is")
+		set.StringVar(&confirm, "confirm", "", "with --answer discard and --hold kept-work/N: the digest a discard shown beforehand carried; "+
+			"without it the discard shows what would be lost and removes nothing")
+		set.Var(&runFlag, "run", "with --task --answer: answer the task's current run even while "+
+			"the task still has holds of its own open; written --run=RUN with --answer and --hold kept-work/N, the run whose kept copy is answered")
 		set.Var(&cancel, cancelFlagName, "end this branch's run, wherever it stands; written --"+cancelFlagName+
 			"=RUN it ends the run RUN instead, from anywhere")
 		set.StringVar(&skip, "skip", "", "comma-separated stages this one run does not take")
@@ -134,8 +139,16 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	}
 	tasked := flagWasSet(in.flags, "task")
 	holding := flagWasSet(in.flags, "hold")
-	running := flagWasSet(in.flags, "run")
+	targetRun := runFlag.on && !runFlag.named
+	running := flagWasSet(in.flags, "run") && !runFlag.named
 	domained := flagWasSet(in.flags, "domain")
+	if _, kept := store.ParseKeptWorkKey(hold); kept || runFlag.named || flagWasSet(in.flags, "confirm") {
+		return in.keptWorkAnswer(ctx, keptWorkFlags{
+			answered: answered, answer: answer, hold: hold, kept: kept, task: task, tasked: tasked,
+			run: runFlag, runSet: flagWasSet(in.flags, "run"), fixing: fixing, others: in.flagsBeside(),
+			confirm: confirm, confirmSet: flagWasSet(in.flags, "confirm"),
+		})
+	}
 	switch {
 	case domained && strings.TrimSpace(domain) == "":
 		return nil, usagef("--domain was given no domain; it takes the name of the delegated domain whose hold is answered")
@@ -801,3 +814,118 @@ func splitList(value string) []string {
 	}
 	return out
 }
+
+// runTarget is --run: alone, with --task --answer, it answers the task's
+// current run, and written --run=RUN it names the run whose kept copy a
+// kept work answer is for, PRD section 9's hold answer. It is a boolean flag
+// to the flag package on cancelFlag's terms, so --run alone keeps its
+// meaning and the run is written joined to it.
+type runTarget struct {
+	// on is whether --run was given true or with a run.
+	on bool
+	// named is whether a run was written joined to it.
+	named bool
+	// run is the run named.
+	run string
+}
+
+// String is the run as given, for the flag package's usage text.
+func (r *runTarget) String() string { return r.run }
+
+// Set records the flag.
+func (r *runTarget) Set(value string) error {
+	switch value {
+	case "true":
+		r.on, r.named, r.run = true, false, ""
+	case "false":
+		r.on, r.named, r.run = false, false, ""
+	default:
+		r.on, r.named, r.run = true, true, value
+	}
+	return nil
+}
+
+// IsBoolFlag tells the flag package --run may be given alone.
+func (r *runTarget) IsBoolFlag() bool { return true }
+
+// keptWorkFlags is what keptWorkAnswer reads off the command line.
+type keptWorkFlags struct {
+	answered, kept, tasked, runSet, fixing bool
+	answer, hold, task                     string
+	run                                    runTarget
+	// confirm is --confirm, read with --answer discard alone.
+	confirm    string
+	confirmSet bool
+	// others names every other flag that was given, which an answer to kept
+	// work reads none of.
+	others []string
+}
+
+// keptWorkAnswer answers a kept work entry, PRD section 9's hold answer
+// given --hold kept-work/N: --answer is land, carry-on or discard, and
+// exactly one of --task and --run=RUN names whose copy the entry is. Every
+// other flag is refused rather than ignored.
+func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any, error) {
+	switch {
+	case !f.kept && f.confirmSet:
+		return nil, usagef("--confirm takes the digest a discard of kept work was shown, and is read only with --answer discard and --hold kept-work/N")
+	case !f.kept:
+		return nil, usagef("--run=RUN names the run whose kept copy is answered, and is read only with --hold kept-work/N and --answer")
+	case !f.answered:
+		return nil, usagef("--hold %s names a kept work entry, and it is read only with --answer land, carry-on or discard", f.hold)
+	case f.tasked && f.run.named:
+		return nil, usagef("--task and --run=RUN both name whose copy the kept work is; pass one")
+	case !f.tasked && !f.run.named:
+		if f.runSet {
+			return nil, usagef("--run with kept work names its run joined to it, as --run=RUN")
+		}
+		return nil, usagef("--hold %s names a kept work entry; name whose copy it is with --task or --run=RUN", f.hold)
+	case f.tasked && f.runSet:
+		return nil, usagef("--run answers a task's current run, and --hold %s a kept work entry; pass one", f.hold)
+	case f.run.named && strings.TrimSpace(f.run.run) == "":
+		return nil, usagef("--run= was given no run; it takes the identifier of the run whose kept copy is answered")
+	case f.confirmSet && f.answer != string(store.KeptDiscard):
+		return nil, usagef("--confirm is read with --answer discard alone, and was given with --answer %s", f.answer)
+	case f.confirmSet && strings.TrimSpace(f.confirm) == "":
+		return nil, usagef("--confirm was given no digest; it takes the one a discard shown beforehand carried")
+	case len(f.others) > 0:
+		return nil, usagef("an answer to kept work reads --answer, --hold, --task or --run=RUN, and --confirm with discard, and not --%s", f.others[0])
+	}
+	// A discard is confirmed only by a person at a terminal, PRD section
+	// 6's "you discard it yourself" as the owner decided it on #411: a
+	// confirmation under --json, or from a process not at one, is refused
+	// here, before anything reaches the service, with the row that says so.
+	// What that buys and does not is keptdiscard.go's header in
+	// internal/service.
+	if f.confirmSet && (in.json || !in.env.Interactive) {
+		return nil, discardNeedsTerminal{}
+	}
+	in.progressf("answering kept work %s with %q", f.hold, f.answer)
+	var answered machine.KeptWorkAnswered
+	err := in.callService(ctx, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+		Task: f.task, Run: f.run.run, Hold: f.hold, Answer: f.answer, Confirm: f.confirm,
+	}, &answered)
+	return answered, err
+}
+
+// flagsBeside names the flags given to the command with no verb other than
+// the four an answer to kept work reads and the two every command takes, in
+// the order the flag package visits them.
+func (in *invocation) flagsBeside() []string {
+	var out []string
+	in.flags.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "answer", "hold", "task", "run", "confirm", jsonFlagName, homeFlagName:
+		default:
+			out = append(out, f.Name)
+		}
+	})
+	return out
+}
+
+// discardNeedsTerminal is the refusal of a discard confirmation given where
+// no person is at a terminal. Its text is the row a person reads.
+type discardNeedsTerminal struct{}
+
+// Error is the row, which says all there is.
+func (discardNeedsTerminal) Error() string { return machine.PhraseDiscardNeedsTerminal.String() }

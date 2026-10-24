@@ -136,9 +136,7 @@ func TestAKeptEntryIsEstablishedOnceFromUnestablished(t *testing.T) {
 			t.Errorf("%s was not refused by the seal: %v", name, err)
 		}
 	}
-	if _, err := s.AnswerKeptWork(ctx, open.ID, KeptCarryOn, ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
+	landKept(t, s, open.ID)
 	if _, err := s.EstablishKeptWork(ctx, open.ID, "dddd", []string{"cccc"}); !errors.Is(err, ErrKeptWorkAnswered) {
 		t.Fatalf("establishing an answered entry = %v; want ErrKeptWorkAnswered", err)
 	}
@@ -191,9 +189,7 @@ func TestKeptWorkOfReadsTheEntryStandingForACopyState(t *testing.T) {
 	if _, err := s.KeptWorkOf(ctx, "/w/of", []string{"bbbb", "aaaa"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("KeptWorkOf with the commits in another order = %v; want ErrNotFound, as the write keys them", err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
+	landKept(t, s, entry.ID)
 	if got, err := s.KeptWorkOf(ctx, "/w/of", []string{"aaaa", "bbbb"}); err != nil || got.ID != entry.ID || !got.Answered() {
 		t.Fatalf("KeptWorkOf of an answered entry = %+v, %v; want it as it stands", got, err)
 	}

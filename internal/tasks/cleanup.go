@@ -336,6 +336,22 @@ type Cleaner struct {
 	// git are the options every repository this Cleaner opens is opened
 	// with, from gitOptions.
 	git []vcs.Option
+	// betweenDiscardReadAndCheck runs in a discard after its read of the
+	// loss and before the copy's state is read again and compared. It is
+	// nil in production and set only by this package's tests, which use it
+	// to change the copy between the read the digest is checked on and the
+	// check.
+	betweenDiscardReadAndCheck func()
+	// betweenWorktreeRemovalAndRecord runs in a discard of a run's copy
+	// after the worktree's directory is removed and before its directory in
+	// the gate is checked and git removes its record. It is nil in
+	// production and set only through BetweenWorktreeRemovalAndRecordForTest.
+	betweenWorktreeRemovalAndRecord func()
+	// inRecordRemoval runs in a discard of a run's copy after the last
+	// check of the worktree's record in the gate and before anything in it
+	// is removed. It is nil in production and set only through
+	// InRecordRemovalForTest.
+	inRecordRemoval func()
 	// betweenProofAndRemoval runs after the proof is recorded and before
 	// the copy is re-read and removed. It is nil in production and set only
 	// by this package's tests, which use it to change the copy inside the
@@ -366,7 +382,13 @@ func NewCleaner(d CleanupDeps) (*Cleaner, error) {
 	case d.GitDeadline <= 0:
 		return nil, fmt.Errorf("%w: no git deadline", ErrIncomplete)
 	}
-	return &Cleaner{home: d.Home, store: d.Store, forge: d.Forge, git: gitOptions(d.GitDeadline)}, nil
+	// Every repository the cleaner opens is read as its objects record it
+	// (vcs.WithoutReplaceObjects): what a copy holds, what a proof finds
+	// landed and what a discard shows as lost are decided from the object
+	// graph itself, so a replacement reference in the copy can neither
+	// hide a commit from the loss nor make one read as landed.
+	return &Cleaner{home: d.Home, store: d.Store, forge: d.Forge,
+		git: append(gitOptions(d.GitDeadline), vcs.WithoutReplaceObjects())}, nil
 }
 
 // InterruptBeforeMarkForTest makes every removal this Cleaner makes stop
@@ -382,6 +404,32 @@ func (c *Cleaner) InterruptBeforeMarkForTest(tb testing.TB, f func() error) erro
 		return errors.New("tasks: InterruptBeforeMarkForTest is a test's seam and takes the test")
 	}
 	c.betweenRemovalAndMark = f
+	return nil
+}
+
+// BetweenWorktreeRemovalAndRecordForTest makes every discard of a run's
+// copy this Cleaner makes run f once the worktree's directory is removed
+// and before its directory in the gate is checked and its record removed,
+// so a test can write into that moment. It takes the test and refuses a nil
+// one, on InterruptBeforeMarkForTest's terms.
+func (c *Cleaner) BetweenWorktreeRemovalAndRecordForTest(tb testing.TB, f func()) error {
+	if tb == nil {
+		return errors.New("tasks: BetweenWorktreeRemovalAndRecordForTest is a test's seam and takes the test")
+	}
+	c.betweenWorktreeRemovalAndRecord = f
+	return nil
+}
+
+// InRecordRemovalForTest makes every discard of a run's copy this Cleaner
+// makes run f after the last check of the worktree's record in the gate
+// and before anything in it is removed, so a test can write into that
+// moment. It takes the test and refuses a nil one, on
+// InterruptBeforeMarkForTest's terms.
+func (c *Cleaner) InRecordRemovalForTest(tb testing.TB, f func()) error {
+	if tb == nil {
+		return errors.New("tasks: InRecordRemovalForTest is a test's seam and takes the test")
+	}
+	c.inRecordRemoval = f
 	return nil
 }
 
