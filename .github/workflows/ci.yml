@@ -180,11 +180,13 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v4
+      # shell: bash runs with pipefail, so the ledger's exit is the step's.
+      # The script starts with the ledger, not set -o pipefail, which the
+      # ledger takes for the Test step of a log from before ci-test.sh.
       - name: Every earlier attempt's failure has an open issue
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -o pipefail
           python3 scripts/flake-ledger.py --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" \
-            --require-open-issues --own-job re-runs --no-cache --tz America/Los_Angeles \
-            | tee -a "$GITHUB_STEP_SUMMARY"
+            --require-open-issues --own-job re-runs --tz America/Los_Angeles | tee -a "$GITHUB_STEP_SUMMARY"
