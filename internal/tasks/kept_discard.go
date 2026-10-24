@@ -146,9 +146,10 @@ import (
 // record of the worktree, checked again before the worktree is removed and
 // after, and then removed as read itself rather than through git, whose
 // forced removal (vcs.RemoveWorktreeDiscardingChanges, which nothing here
-// calls) deletes whatever the directory holds by then; a record anywhere
-// but a directory of the gate's worktrees directory is refused
-// (recordOfCopy), and so is one whose pointer back names another worktree.
+// calls) deletes whatever the directory holds by then. Which record is the
+// copy's is read from the gate's own registry and never by following the
+// copy's .git, and a copy whose files disagree with it is refused
+// (copyRecord).
 // What stands behind the removal is the digest match
 // against the person's answer rather than a P12 proof, which a discard by
 // its nature has none of. A copy already gone is not refused:
@@ -271,12 +272,10 @@ var ErrLossUnestablished = errors.New("tasks: what the copy holds that the defau
 // ErrCopyGone is returned by Loss for an entry whose copy is not standing.
 var ErrCopyGone = errors.New("tasks: the kept copy is gone")
 
-// ErrRecordNotTheCopys is returned by Discard for a run's copy whose
-// worktree record, the directory its .git file points at, is not this
-// copy's record in the gate: not a directory of the gate's worktrees
-// directory, or one whose own pointer back names another worktree's .git
-// file. The discard removes that directory itself, so it removes nothing
-// of the copy then.
+// ErrRecordNotTheCopys is returned by Discard for a run's copy that the
+// gate's own registry does not tie to exactly one record, or whose own
+// files disagree with that record (copyRecord). The discard removes that
+// record itself, so it removes nothing of the copy then.
 var ErrRecordNotTheCopys = errors.New("tasks: the worktree's record is not this copy's in the gate, so the copy was not removed")
 
 // ErrLossChanged is returned by Discard when the copy no longer holds
@@ -773,7 +772,7 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 	} else if err != nil {
 		return Loss{}, fmt.Errorf("tasks: reading the copy at %s: %w", entry.CopyPath, err)
 	}
-	roots, appendOnly, err := c.removed(ctx, entry)
+	roots, appendOnly, err := c.removed(ctx, entry, gatePath)
 	if err != nil {
 		return Loss{}, err
 	}
@@ -829,9 +828,6 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 	if err != nil {
 		return Loss{}, fmt.Errorf("tasks: opening the gate repository at %s: %w", gatePath, err)
 	}
-	if err := recordOfCopy(roots[1], bare.Path(), entry.CopyPath); err != nil {
-		return Loss{}, fmt.Errorf("tasks: the worktree at %s: %w", entry.CopyPath, err)
-	}
 	lock, err := gate.LockCopies(ctx, bare.Path())
 	if err != nil {
 		return Loss{}, fmt.Errorf("tasks: waiting to discard the copy at %s: %w", entry.CopyPath, err)
@@ -874,45 +870,6 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 	return loss, nil
 }
 
-// recordOfCopy refuses, with ErrRecordNotTheCopys, a record the copy's .git
-// file points at that is not the copy's own in the gate: it must be a
-// directory of the gate's own worktrees directory, and its pointer back
-// (vcs.WorktreeRecordPointsAt) must name the copy's own .git file, every
-// path read with its links resolved. The discard removes that directory
-// itself, so one the copy's .git file points elsewhere, another
-// repository's or another worktree's of the same gate among them, is never
-// removed. The forward pointer is the record itself, read from the copy.
-func recordOfCopy(record, gatePath, copyPath string) error {
-	resolvedRecord, err := filepath.EvalSymlinks(record)
-	if err != nil {
-		return err
-	}
-	resolvedGate, err := filepath.EvalSymlinks(gatePath)
-	if err != nil {
-		return err
-	}
-	if filepath.Dir(resolvedRecord) != filepath.Join(resolvedGate, "worktrees") {
-		return fmt.Errorf("%w: its record is %s, which is not a worktree directory of the gate at %s", ErrRecordNotTheCopys, record, gatePath)
-	}
-	back, err := vcs.WorktreeRecordPointsAt(resolvedRecord)
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrRecordNotTheCopys, err)
-	}
-	resolvedBack, err := filepath.EvalSymlinks(back)
-	if err != nil {
-		return fmt.Errorf("%w: its record %s names %s, which cannot be read: %w", ErrRecordNotTheCopys, record, back, err)
-	}
-	own, err := filepath.EvalSymlinks(filepath.Join(copyPath, ".git"))
-	if err != nil {
-		return err
-	}
-	if resolvedBack != own {
-		return fmt.Errorf("%w: its record %s belongs to the worktree whose .git file is %s, not this copy's, %s",
-			ErrRecordNotTheCopys, record, back, own)
-	}
-	return nil
-}
-
 // changedNow is what of root differs now from recorded, its state as read.
 func changedNow(recorded copyState, root string) ([]string, error) {
 	now, err := readCopyState(root)
@@ -946,18 +903,86 @@ func (e *WorktreeRecordLeft) Error() string {
 // removed is what removing the entry's copy destroys, as removeAsRead and
 // readCopyState read it, and what the loss read itself may add there: a
 // task's clone, whole, whose objects a fetch by identifier adds to; or a
-// run's worktree and its own directory in the gate, in that order, whose
-// shared objects the gate keeps, so nothing may be added under either.
-func (c *Cleaner) removed(ctx context.Context, entry store.KeptWork) ([]string, func(string) bool, error) {
+// run's worktree and its own record in the gate (copyRecord), in that
+// order, whose shared objects the gate keeps, so nothing may be added
+// under either.
+func (c *Cleaner) removed(ctx context.Context, entry store.KeptWork, gatePath string) ([]string, func(string) bool, error) {
 	if entry.TaskID.IsKnown() {
 		return []string{entry.CopyPath}, objectsAdded(filepath.Join(entry.CopyPath, ".git")), nil
 	}
-	obs, err := vcs.Observe(ctx, entry.CopyPath, c.git...)
+	bare, err := vcs.OpenBare(ctx, gatePath, c.git...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("tasks: reading the worktree at %s: %w", entry.CopyPath, err)
+		return nil, nil, fmt.Errorf("tasks: opening the gate repository at %s: %w", gatePath, err)
 	}
-	if filepath.Clean(obs.GitDir) == filepath.Clean(obs.CommonDir) {
-		return nil, nil, fmt.Errorf("tasks: the run's copy at %s is not a linked worktree: its repository is %s", entry.CopyPath, obs.GitDir)
+	record, err := copyRecord(ctx, bare, entry.CopyPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tasks: the worktree at %s: %w", entry.CopyPath, err)
 	}
-	return []string{entry.CopyPath, obs.GitDir}, func(string) bool { return false }, nil
+	return []string{entry.CopyPath, record}, func(string) bool { return false }, nil
+}
+
+// copyRecord is the run's copy's record in the gate, the directory a
+// discard removes with the worktree, established from the gate's side
+// alone and never by following anything in the copy: the one record the
+// gate's registry (vcs.WorktreeRecords, read from the gate and held to
+// git's own listing) names the copy's path as its worktree, the path read
+// with its parent's links resolved and the copy's own name as it stands.
+// The copy's own files must then agree with that record, read without
+// following them: the copy's path is a directory and no link, its .git is
+// a regular file and no link, and that file names exactly that record.
+// Anything else is refused with ErrRecordNotTheCopys and nothing is read
+// or removed, so no record but the copy's own, another worktree's of the
+// same gate among them, is ever taken for it, whatever the copy's .git
+// says or points at.
+func copyRecord(ctx context.Context, bare *vcs.Repository, copyPath string) (string, error) {
+	info, err := os.Lstat(copyPath)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("%w: %s is not a directory", ErrRecordNotTheCopys, copyPath)
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(copyPath))
+	if err != nil {
+		return "", err
+	}
+	worktree := filepath.Join(parent, filepath.Base(copyPath))
+	records, err := bare.WorktreeRecords(ctx)
+	if err != nil {
+		return "", fmt.Errorf("%w: the gate's records could not be read: %w", ErrRecordNotTheCopys, err)
+	}
+	var mine []string
+	for _, r := range records {
+		if r.Worktree == worktree {
+			mine = append(mine, r.Record)
+		}
+	}
+	// WorktreeRecords names each worktree git lists once.
+	if len(mine) == 0 {
+		return "", fmt.Errorf("%w: the gate records no worktree at %s", ErrRecordNotTheCopys, worktree)
+	}
+	record := mine[0]
+	dotGit := filepath.Join(copyPath, ".git")
+	gitInfo, err := os.Lstat(dotGit)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrRecordNotTheCopys, err)
+	}
+	if !gitInfo.Mode().IsRegular() {
+		return "", fmt.Errorf("%w: %s is not a regular file", ErrRecordNotTheCopys, dotGit)
+	}
+	raw, err := os.ReadFile(dotGit)
+	if err != nil {
+		return "", err
+	}
+	pointer, ok := strings.CutPrefix(strings.TrimSuffix(string(raw), "\n"), "gitdir: ")
+	if !ok || pointer == "" || strings.ContainsAny(pointer, "\n\r\x00") {
+		return "", fmt.Errorf("%w: %s reads %q, which names no one record", ErrRecordNotTheCopys, dotGit, raw)
+	}
+	if !filepath.IsAbs(pointer) {
+		pointer = filepath.Join(copyPath, pointer)
+	}
+	if filepath.Clean(pointer) != record {
+		return "", fmt.Errorf("%w: %s names the record %s, and the gate records %s for this copy", ErrRecordNotTheCopys, dotGit, pointer, record)
+	}
+	return record, nil
 }

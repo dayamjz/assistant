@@ -70,10 +70,11 @@ paths: ["internal/tasks/**"]
   was read (`kept_remove.go`: the state of everything the removal destroys
   read before the loss read and again after the checks, objects that read
   adds aside, and each entry removed only while it is as read, a run's
-  record in the gate, held to be a directory of the gate's worktrees
-  directory whose pointer back names the copy's own `.git` file
-  (`vcs.WorktreeRecordPointsAt`), removed so too and never through git's
-  forced removal),
+  record in the gate, taken from the gate's own registry
+  (`vcs.WorktreeRecords`, read from the gate and held to git's listing)
+  and never by following the copy's `.git`, the copy's files refused when
+  they disagree with it (`copyRecord`), removed so too and never through
+  git's forced removal),
   behind a person's answer and no proof.
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (an exclusively created partial of a fresh name, then a

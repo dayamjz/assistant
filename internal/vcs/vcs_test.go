@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -492,6 +493,88 @@ func TestAWorktreeRecordNamesTheWorktreeItBelongsTo(t *testing.T) {
 	}
 	if got, err := vcs.WorktreeRecordPointsAt(filepath.Join(dir, "none")); err == nil {
 		t.Errorf("a record with no gitdir file names %s; want an error", got)
+	}
+}
+
+// WorktreeRecords reads a repository's linked worktrees from its own side:
+// for two worktrees git added, the positive control, each worktree's path
+// with the record git reads it through; and the read is an error, never a
+// guess, when an entry of the worktrees directory is not a directory, when
+// a record names no worktree's .git file, and when two records name one
+// worktree.
+func TestTheRepositoryRecordsEachWorktreeOnce(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	setup := func(t *testing.T) (*vcs.Repository, string, []string, []string) {
+		t.Helper()
+		source, _, second := sourceRepo(t)
+		repo, err := vcs.OpenWorktree(c, source)
+		if err != nil {
+			t.Fatalf("OpenWorktree: %v", err)
+		}
+		root, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var paths, records []string
+		for _, name := range []string{"one", "two"} {
+			p := filepath.Join(root, name)
+			wt, err := repo.AddWorktree(c, vcs.WorktreeSpec{Path: p, Commit: second})
+			if err != nil {
+				t.Fatalf("AddWorktree: %v", err)
+			}
+			obs, err := vcs.Observe(c, wt.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			paths, records = append(paths, p), append(records, obs.GitDir)
+		}
+		obs, err := vcs.Observe(c, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return repo, obs.CommonDir, paths, records
+	}
+	repo, _, paths, records := setup(t)
+	got, err := repo.WorktreeRecords(c)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("WorktreeRecords = %+v, %v; want the two worktrees", got, err)
+	}
+	for i, p := range paths {
+		if !slices.Contains(got, vcs.WorktreeRecord{Worktree: p, Record: records[i]}) {
+			t.Errorf("WorktreeRecords = %+v; want %s with its record %s", got, p, records[i])
+		}
+	}
+	for name, spoil := range map[string]func(t *testing.T, common string, records []string){
+		"a file among the records": func(t *testing.T, common string, _ []string) {
+			writeFile(t, filepath.Join(common, "worktrees", "stray"), "not a record\n")
+		},
+		"a record naming no .git file": func(t *testing.T, _ string, records []string) {
+			writeFile(t, filepath.Join(records[1], "gitdir"), "/somewhere/else\n")
+		},
+		"two records naming one worktree": func(t *testing.T, common string, records []string) {
+			raw, err := os.ReadFile(filepath.Join(records[0], "gitdir"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			twin := filepath.Join(common, "worktrees", "twin")
+			for _, f := range []string{"HEAD", "commondir"} {
+				body, err := os.ReadFile(filepath.Join(records[0], f))
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, filepath.Join(twin, f), string(body))
+			}
+			writeFile(t, filepath.Join(twin, "gitdir"), string(raw))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo, common, _, records := setup(t)
+			spoil(t, common, records)
+			if got, err := repo.WorktreeRecords(c); err == nil {
+				t.Fatalf("WorktreeRecords with %s = %+v; want an error", name, got)
+			}
+		})
 	}
 }
 

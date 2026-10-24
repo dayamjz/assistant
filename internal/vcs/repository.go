@@ -429,6 +429,69 @@ func WorktreeRecordPointsAt(record string) (string, error) {
 	return filepath.Clean(text), nil
 }
 
+// WorktreeRecord is one linked worktree a repository records, read from
+// the repository's side.
+type WorktreeRecord struct {
+	// Worktree is the worktree's directory as its record names it: the
+	// directory of the .git file the record's pointer back names.
+	Worktree string
+	// Record is the record's own directory, a directory of the
+	// repository's worktrees directory.
+	Record string
+}
+
+// WorktreeRecords reads every linked worktree the repository records, from
+// the repository's side alone: each directory of its common directory's
+// worktrees directory, with the worktree its pointer back names
+// (WorktreeRecordPointsAt), held to git's own listing (ListWorktrees).
+// Every worktree git lists, the repository's own first entry aside, must
+// be the worktree exactly one record names, the directory of the .git file
+// its pointer back names, or the read is an error rather than a guess;
+// so is a record whose pointer back cannot be read, or an entry of the
+// worktrees directory that is not a directory. Nothing under any worktree
+// is read, so nothing a worktree holds can change what this returns.
+func (r *Repository) WorktreeRecords(ctx context.Context) ([]WorktreeRecord, error) {
+	out, err := r.run(ctx, "common-dir", "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return nil, err
+	}
+	common := strings.TrimSpace(string(out))
+	listed, err := r.ListWorktrees(ctx)
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(common, "worktrees")
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("vcs: reading the worktree records under %s: %w", dir, err)
+	}
+	var records []WorktreeRecord
+	named := map[string]int{}
+	for _, e := range entries {
+		record := filepath.Join(dir, e.Name())
+		if !e.IsDir() {
+			return nil, fmt.Errorf("vcs: %s, under the worktree records, is not a directory", record)
+		}
+		back, err := WorktreeRecordPointsAt(record)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, WorktreeRecord{Worktree: filepath.Dir(back), Record: record})
+		named[filepath.Dir(back)]++
+	}
+	for i, w := range listed {
+		// git lists the repository's own entry first, its main working
+		// tree or the bare repository, which has no record.
+		if i == 0 || w.Bare {
+			continue
+		}
+		if named[filepath.Clean(w.Path)] != 1 {
+			return nil, fmt.Errorf("vcs: git lists the worktree %s, which %d records under %s name", w.Path, named[filepath.Clean(w.Path)], dir)
+		}
+	}
+	return records, nil
+}
+
 // PruneWorktrees removes administrative records for worktrees whose
 // directories are gone. It does not delete any directory.
 func (r *Repository) PruneWorktrees(ctx context.Context) error {
