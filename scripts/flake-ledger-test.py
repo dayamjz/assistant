@@ -358,6 +358,9 @@ class GitHubServer:
             server.shutdown()
             server.server_close()
 
+    def run(self, run_id):
+        return next(r for r in self.data["runs"] if r["id"] == run_id)
+
     def job(self, job_id):
         return next(j for a in self.data["attempts"].values() for j in a["jobs"] if j["id"] == job_id)
 
@@ -386,6 +389,9 @@ class GitHubServer:
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(request.path).query)
             runs = [r for r in self.data["runs"] if r["head_branch"] == query.get("branch", [r["head_branch"]])[0]]
             return self._paged(request, runs, "workflow_runs")
+        match = re.fullmatch(rf"{repo}/actions/runs/(\d+)", path)
+        if match:
+            return 200, {}, json.dumps(self.run(int(match[1]))).encode()
         match = re.fullmatch(rf"{repo}/actions/runs/(\d+)/attempts/(\d+)(/jobs)?", path)
         if match:
             attempt = self.data["attempts"][f"{match[1]}/{match[2]}"]
@@ -750,6 +756,160 @@ class LedgerTest(ServerTest):
         _, data, _ = self.run_report(github)
         entry = next(f for f in data["failures"] if f["name"] == "TestConcurrentDispatchOfOneTaskClaimsOneAttempt")
         self.assertEqual(entry["issues"], {"open": [], "closed": []})
+
+
+class OneRunTest(ServerTest):
+    """--run: one run, finished or not, read as its own workflow's check; and
+    --require-open-issues, which fails a re-run past a failure no open issue
+    names."""
+
+    def test_one_run_is_read_alone_with_its_finished_jobs_counted(self):
+        status, data, text = self.run_report(self.github(), "--run", "39905430594")
+        self.assertEqual(status, 0, text)
+        self.assertEqual((data["runs_scanned"], data["jobs_read"], data["failed_jobs"]), (1, 9, 2))
+        self.assertIn("9 finished job(s), 2 failed job(s)", text)
+
+    def test_a_running_attempts_unfinished_jobs_are_not_read(self):
+        # The run as its re-runs job sees it: attempt 3 still running, its
+        # macOS check job not finished.
+        github = self.github()
+        run = github.run(39905430594)
+        run["status"], run["conclusion"] = "in_progress", None
+        job = github.data["attempts"]["39905430594/3"]["jobs"][0]
+        job["status"], job["conclusion"] = "in_progress", None
+        status, data, _ = self.run_report(github, "--run", "39905430594")
+        self.assertEqual(status, 0)
+        self.assertEqual(data["jobs_read"], 8)
+        self.assertNotIn(job["id"], github.read)
+
+    def test_one_run_with_a_cancelled_job_is_incomplete(self):
+        # Run 39916130926's two check jobs were cancelled (superseded): read
+        # as one run, its check cannot pass, whatever the cancel's reason.
+        status, data, _ = self.run_report(self.github(), "--run", "39916130926")
+        self.assertEqual(status, 2)
+        self.assertEqual(data["failures"], [])
+        self.assertIn("latest attempt did not finish", self.stderr)
+        status, _, _ = self.run_report(self.github())
+        self.assertEqual(status, 0, "over many runs a superseded job is only counted")
+
+    def test_one_run_with_a_job_that_timed_out_is_incomplete(self):
+        # Run 39932040317 as it stood after attempt 1, its macOS job cut off
+        # at timeout-minutes: a failure, and a suite that never finished.
+        github = self.github()
+        run = github.run(39932040317)
+        run["run_attempt"], run["conclusion"] = 1, "cancelled"
+        del github.data["attempts"]["39932040317/2"]
+        status, data, _ = self.run_report(github, "--run", "39932040317")
+        self.assertEqual(status, 2)
+        self.assertEqual([(c["job_id"], c["reason"]) for c in data["cancelled_jobs"]], [(120342424178, "timeout")])
+        self.assertIn("job-timeout: check (macos-latest) exceeded timeout-minutes", [f["key"] for f in data["failures"]])
+
+    def test_one_run_with_a_job_cancelled_after_a_failure_is_incomplete(self):
+        github = self.github(logs={**LOGS, 120290002840: "judge-test-failure.log"})
+        set_steps(github, 120290002917, {})["conclusion"] = "success"
+        status, data, _ = self.run_report(github, "--run", "39916130926")
+        self.assertEqual(status, 2)
+        self.assertEqual([(c["job_id"], c["reason"]) for c in data["cancelled_jobs"]], [(120290002840, "superseded")])
+
+    def test_an_earlier_attempts_cancel_does_not_make_a_run_incomplete(self):
+        # Run 39932040317's attempt 1 timed out (#559 is open); attempt 2
+        # finished every job.
+        status, data, _ = self.run_report(self.github(), "--run", "39932040317", "--require-open-issues")
+        self.assertEqual(status, 0)
+        self.assertEqual([f["key"] for f in data["failures"]],
+                         ["job-timeout: check (macos-latest) exceeded timeout-minutes"])
+
+    def test_a_rerun_past_a_failure_needs_an_open_issue_for_it(self):
+        # #551 and #552 are closed, and nothing names this version's leak or
+        # package rows, so none of run 39905430594's earlier failures has an
+        # open issue.
+        status, data, text = self.run_report(self.github(), "--run", "39905430594", "--require-open-issues")
+        self.assertEqual(status, 4)
+        self.assertEqual([(r["attempt"], r["key"]) for r in data["rerun_without_issue"]], [
+            (1, "leak: (leak check) leftovers, not read by this version"),
+            (1, "package: internal/supervisor (package)"),
+            (2, "test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt")])
+        self.assertIn("## Re-run past with no open issue", text)
+        self.assertIn("::error::run 39905430594 attempt 2 (check (macos-latest)) failed test: internal/service "
+                      "TestConcurrentDispatchOfOneTaskClaimsOneAttempt, and no open issue names it", self.stderr)
+
+    def test_a_rerun_check_without_the_issues_does_not_pass(self):
+        status, _, _ = self.run_report(self.github(broken={"issues"}), "--run", "39905430594", "--require-open-issues")
+        self.assertEqual(status, 2)
+
+    def open_issues_naming_every_earlier_failure(self, github):
+        for issue in github.data["issues"]:
+            issue["state"], issue["closed_at"] = "open", None
+        github.data["issues"].append({
+            "number": 901, "state": "open", "closed_at": None, "title": "supervisor leaks under the leak check",
+            "body": "Rows: leak: (leak check) leftovers, not read by this version; package: internal/supervisor (package)"})
+
+    def test_open_issues_let_a_rerun_pass(self):
+        github = self.github()
+        self.open_issues_naming_every_earlier_failure(github)
+        status, data, _ = self.run_report(github, "--run", "39905430594", "--require-open-issues")
+        self.assertEqual(status, 0)
+        self.assertEqual(data["rerun_without_issue"], [])
+
+    def test_a_failure_of_the_latest_attempt_needs_no_issue_to_pass_this_check(self):
+        # Run 39905430594 as it stood after attempt 2: attempt 2's failure
+        # (#552 closed) is the run's own red result, not one a re-run passed
+        # over; attempt 1's are covered by open issues.
+        github = stopped_after_attempt_2(self.github())
+        self.open_issues_naming_every_earlier_failure(github)
+        next(i for i in github.data["issues"] if i["number"] == 552)["state"] = "closed"
+        status, data, _ = self.run_report(github, "--run", "39905430594", "--require-open-issues")
+        self.assertEqual(status, 0)
+        self.assertEqual(data["rerun_without_issue"], [])
+        self.assertIn("test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt",
+                      [f["key"] for f in data["failures"]])
+
+    def rerun_check_failed_in_attempt_2(self, folder):
+        # Run 39905430594 with its attempt 2 holding a failed re-runs job, as
+        # ci.yml's job fails: its step exits 4 after the ledger's ::error::.
+        stamp = "2026-10-23T06:20:01.0000000Z"
+        log = Path(folder) / "rerun-check-failed.log"
+        log.write_text("\n".join([
+            f"{stamp} ##[group]Run python3 scripts/flake-ledger.py --repo \"$GITHUB_REPOSITORY\" --run \"$GITHUB_RUN_ID\" \\",
+            f"{stamp} ##[endgroup]",
+            f"{stamp} ##[error]run 39905430594 attempt 1 (check (macos-latest)) failed package: internal/supervisor "
+            "(package), and no open issue names it; file one containing package: internal/supervisor (package) "
+            "before re-running past it",
+            f"{stamp} ##[error]Process completed with exit code 4."]) + "\n")
+        github = self.github(logs={**LOGS, 99000000001: log})
+        github.data["attempts"]["39905430594/2"]["jobs"].append({
+            "id": 99000000001, "run_attempt": 2, "name": "re-runs", "status": "completed", "conclusion": "failure",
+            "started_at": "2026-10-23T06:19:50Z", "completed_at": "2026-10-23T06:20:02Z", "labels": ["ubuntu-latest"],
+            "html_url": "https://github.com/dayamjz/assistant/actions/runs/39905430594/job/99000000001",
+            "steps": [{"name": "Set up job", "conclusion": "success"},
+                      {"name": "Run actions/checkout@v4", "conclusion": "success"},
+                      {"name": "Every earlier attempt's failure has an open issue", "conclusion": "failure"},
+                      {"name": "Complete job", "conclusion": "success"}]})
+        self.open_issues_naming_every_earlier_failure(github)
+        return github
+
+    def test_the_rerun_checks_own_earlier_failure_needs_no_issue(self):
+        with tempfile.TemporaryDirectory() as folder:
+            github = self.rerun_check_failed_in_attempt_2(folder)
+            status, data, text = self.run_report(github, "--run", "39905430594", "--require-open-issues",
+                                                 "--own-job", "re-runs")
+        self.assertEqual(status, 0, text)
+        self.assertEqual(data["rerun_without_issue"], [])
+        # Its failed step is still a row, and its error lines are not read as a Test step's.
+        keys = {f["key"] for f in data["failures"]}
+        self.assertIn("step: re-runs step Every earlier attempt's failure has an open issue", keys)
+        self.assertFalse(any(k.startswith("error:") for k in keys), keys)
+
+    def test_another_jobs_earlier_failure_still_needs_an_issue(self):
+        # The positive control: --own-job sets aside only that job.
+        with tempfile.TemporaryDirectory() as folder:
+            github = self.rerun_check_failed_in_attempt_2(folder)
+            next(i for i in github.data["issues"] if i["number"] == 552)["state"] = "closed"
+            status, data, _ = self.run_report(github, "--run", "39905430594", "--require-open-issues",
+                                              "--own-job", "re-runs")
+        self.assertEqual(status, 4)
+        self.assertEqual([r["key"] for r in data["rerun_without_issue"]],
+                         ["test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt"])
 
 
 class WireTest(ServerTest):
