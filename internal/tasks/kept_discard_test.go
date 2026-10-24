@@ -1018,6 +1018,100 @@ func TestADiscardTakesTheObjectsItsOwnReadFetches(t *testing.T) {
 	}
 }
 
+// Loss reads the copy's object graph as the objects record it, never
+// through a replacement reference, the final full review of c5c581c: in a
+// kept clone the task commits B, which holds work nothing else does, and
+// then U, which takes that work out of the tree and adds work of its own,
+// so the copy is kept; a replacement reference
+// or the clone's graft file grafts U onto the commit B was made on, and
+// the reflogs are expired, so
+// nothing but U's own parent names B. Loss lists B as lost as well as U,
+// and a discard on that digest is the one that removes the clone. Read
+// through the replacement, B was hidden: the loss listed U alone and a
+// discard on its digest destroyed B's work unshown.
+// internal/vcs's TestAHandleWithoutReplaceObjectsReadsTheGraphAsRecorded is
+// the positive control, the replacement hiding B from a walk that honours it.
+func TestALossReadsThroughNoReplacementReference(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	for _, how := range []string{"a replacement reference", "a graft file"} {
+		t.Run(how, func(t *testing.T) {
+			s := newCleanupSubject(t, forgetest.Script{})
+			ctx := context.Background()
+			tk := s.deliveryTask(t, "task/replaced")
+			base := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "HEAD"))
+			b := strings.TrimSpace(commit(t, tk.copy, "unique.txt", "what only B holds\n", "B, the task's unique work"))
+			rawGit(t, tk.copy, "rm", "-q", "unique.txt")
+			u := strings.TrimSpace(commit(t, tk.copy, "tip.txt", "U's own work\n", "U, taking B's work out and adding its own"))
+			graft(t, tk.copy, how, u, base)
+			rawGit(t, tk.copy, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+			if log := rawGit(t, tk.copy, "reflog", "--format=%H", "--all"); strings.Contains(log, b) {
+				t.Fatalf("a reflog still names B:\n%s", log)
+			}
+			_, err := s.cleanUp(t, tk.id)
+			kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+			if !ok {
+				t.Fatal("an unproven refusal is not kept work")
+			}
+			got, err := s.cleaner.Keep(ctx, kept)
+			if err != nil || !got.Entry.Established() {
+				t.Fatalf("Keep = %+v, %v", got, err)
+			}
+			l, err := s.cleaner.Loss(ctx, got.Entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(l.Lacks, b) || !slices.Contains(l.Lacks, u) {
+				t.Fatalf("Loss lacks %v; want B %s and U %s, B read through U's own parent", l.Lacks, b, u)
+			}
+			if _, err := s.cleaner.Discard(ctx, got.Entry, l.Digest, l.Lacks, "", nil); err != nil {
+				t.Fatalf("Discard on the digest shown: %v", err)
+			}
+		})
+	}
+}
+
+// graft sets parent as commit's only parent in the clone at copyPath, by a
+// replacement reference or by the clone's graft file, as how names.
+func graft(t *testing.T, copyPath, how, commit, parent string) {
+	t.Helper()
+	if how == "a graft file" {
+		if err := os.MkdirAll(filepath.Join(copyPath, ".git", "info"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(copyPath, ".git", "info", "grafts"), []byte(commit+" "+parent+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	rawGit(t, copyPath, "replace", "--graft", commit, parent)
+}
+
+// A cleanup proof reads the copy as its objects record it too: in a clone
+// the task commits work the default branch lacks, and a replacement
+// reference, or the clone's graft file, grafts the default branch's tip
+// onto that commit,
+// so read through it the default branch would already hold the task's
+// work. The cleanup refuses as unproven and keeps the copy. Read through
+// the replacement, the default-branch proof found the work landed and the
+// copy was removed with it.
+func TestACleanupProofReadsThroughNoReplacementReference(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	for _, how := range []string{"a replacement reference", "a graft file"} {
+		t.Run(how, func(t *testing.T) {
+			s := newCleanupSubject(t, forgetest.Script{})
+			tk := s.deliveryTask(t, "task/replaced-main")
+			main := strings.TrimSpace(rawGit(t, tk.copy, "rev-parse", "HEAD"))
+			own := strings.TrimSpace(commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit"))
+			graft(t, tk.copy, how, main, own)
+			_, err := s.cleanUp(t, tk.id)
+			refusedWith(t, err, ReasonUnproven)
+			if _, err := os.Stat(filepath.Join(tk.copy, "own.txt")); err != nil {
+				t.Fatalf("the copy's work is gone after the cleanup: %v", err)
+			}
+		})
+	}
+}
+
 // Loss lists every commit the removal destroys that the default branch
 // lacks, whatever names it, and every object a name points at that is not
 // a commit, the reviewer's sequence on #475 and its kin: in a kept clone a

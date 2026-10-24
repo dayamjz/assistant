@@ -27,6 +27,10 @@ paths: ["internal/tasks/**"]
 - It is P12's decision and the only writer of the cleanup record. An
   inconclusive proof is a `ProofAttempt` on the `*CleanupRefusal`, never a
   proof, and no remedy names a flag.
+- Every repository the `Cleaner` opens is read without replacement
+  references or a graft file (`vcs.WithoutReplaceObjects`, set in
+  `NewCleaner`), so neither a cleanup proof nor a discard's loss reads a
+  commit's parents as anything but what its object records.
 - It is also the one writer of the kept work record: `Keep` reads what a
   kept copy holds from the copy (the entry's identity), reads what of it
   the default branch, fresh and fetched by identifier, lacks (`lacking` in

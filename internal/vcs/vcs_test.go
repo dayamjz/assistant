@@ -578,6 +578,56 @@ func TestTheRepositoryRecordsEachWorktreeOnce(t *testing.T) {
 	}
 }
 
+// WithoutReplaceObjects reads the object graph as the objects record it:
+// in a repository where M <- B <- U and either a replacement reference or
+// a graft file (info/grafts) sets M as U's parent, B is not U's ancestor
+// read through either, the positive control, which is what makes a walk
+// that honours them miss B; under the option B is U's ancestor, for the
+// handle and for one opened from it.
+func TestAHandleWithoutReplaceObjectsReadsTheGraphAsRecorded(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	for _, how := range []string{"a replacement reference", "a graft file"} {
+		t.Run(how, func(t *testing.T) {
+			source, base, _ := sourceRepo(t)
+			writeFile(t, filepath.Join(source, "b.txt"), "what only B holds\n")
+			rawGit(t, source, "add", "b.txt")
+			rawGit(t, source, "commit", "-q", "-m", "B")
+			b := strings.TrimSpace(rawGit(t, source, "rev-parse", "HEAD"))
+			rawGit(t, source, "rm", "-q", "b.txt")
+			rawGit(t, source, "commit", "-q", "-m", "U")
+			u := strings.TrimSpace(rawGit(t, source, "rev-parse", "HEAD"))
+			if how == "a graft file" {
+				writeFile(t, filepath.Join(source, ".git", "info", "grafts"), u+" "+strings.TrimSpace(base)+"\n")
+			} else {
+				rawGit(t, source, "replace", "--graft", u, strings.TrimSpace(base))
+			}
+
+			plain, err := vcs.OpenWorktree(c, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reaches, err := plain.IsAncestor(c, b, u); err != nil || reaches {
+				t.Fatalf("without the option B reads as U's ancestor (%v, %v); want %s to hide it, or the test reads nothing", reaches, err, how)
+			}
+			real, err := vcs.OpenWorktree(c, source, vcs.WithoutReplaceObjects())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reaches, err := real.IsAncestor(c, b, u); err != nil || !reaches {
+				t.Fatalf("under WithoutReplaceObjects B reads as U's ancestor %v, %v; want true", reaches, err)
+			}
+			wt, err := real.AddWorktree(c, vcs.WorktreeSpec{Path: filepath.Join(t.TempDir(), "wt"), Commit: u})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reaches, err := wt.IsAncestor(c, b, u); err != nil || !reaches {
+				t.Fatalf("a handle opened from one without replace objects reads B as U's ancestor %v, %v; want true", reaches, err)
+			}
+		})
+	}
+}
+
 func TestOpenRefusesTheWrongKindOfPath(t *testing.T) {
 	gitEnvironment(t)
 	c := ctx(t)

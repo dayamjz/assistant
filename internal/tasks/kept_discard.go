@@ -45,7 +45,10 @@ import (
 // to or the one it moved from (reflogValues), a commit reset away and a
 // stash among them, that nothing held reaches, with every object such a
 // name or value records that is not a commit and is not itself held
-// (lostFrom), all decided by git from the copy's own objects. Held is the
+// (lostFrom), all decided by git from the copy's own objects as they record
+// them, never through a replacement reference or a graft file, which every
+// repository the Cleaner opens is read without (vcs.WithoutReplaceObjects),
+// so neither can hide a commit from the walk. Held is the
 // default branch, read fresh as Keep reads it; and what the upstream holds
 // now (upstreamHeld): every object the copy names that the upstream
 // advertises now, compared by identifier, a tag cloned with the copy and a

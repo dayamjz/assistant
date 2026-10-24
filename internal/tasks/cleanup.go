@@ -382,7 +382,13 @@ func NewCleaner(d CleanupDeps) (*Cleaner, error) {
 	case d.GitDeadline <= 0:
 		return nil, fmt.Errorf("%w: no git deadline", ErrIncomplete)
 	}
-	return &Cleaner{home: d.Home, store: d.Store, forge: d.Forge, git: gitOptions(d.GitDeadline)}, nil
+	// Every repository the cleaner opens is read as its objects record it
+	// (vcs.WithoutReplaceObjects): what a copy holds, what a proof finds
+	// landed and what a discard shows as lost are decided from the object
+	// graph itself, so a replacement reference in the copy can neither
+	// hide a commit from the loss nor make one read as landed.
+	return &Cleaner{home: d.Home, store: d.Store, forge: d.Forge,
+		git: append(gitOptions(d.GitDeadline), vcs.WithoutReplaceObjects())}, nil
 }
 
 // InterruptBeforeMarkForTest makes every removal this Cleaner makes stop
