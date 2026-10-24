@@ -17,9 +17,14 @@ import (
 // read of the loss and again once every check has passed, refuses with
 // ErrLossChanged when the two differ in anything but what the loss read
 // itself may write (objectsAdded), and then removes each entry only while
-// it is the entry the state recorded (removeAsRead). So a file written,
-// changed, linked or removed after the read the digest was checked on,
-// by any process, refuses the discard rather than being destroyed unshown.
+// it is the entry the state recorded (removeAsRead). So an entry written,
+// changed, linked or made after the read the digest was checked on, by any
+// process, refuses the discard rather than being destroyed unshown,
+// whether the check or the removal finds it. An entry removed is refused
+// only by the check: one removed after the check, while the copy is being
+// removed, is not, since removing the copy without it destroys nothing it
+// held, and the loss Discard returns is then the one shown, naming it as
+// lost though another process removed it.
 //
 // What it does not cover: a process that opened a file in the copy before
 // that file is moved aside for its removal can still write to it through
