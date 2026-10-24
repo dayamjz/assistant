@@ -172,6 +172,20 @@ func TestWritesAFixturesOutput(t *testing.T) {
 	fmt.Fprint(t.Output(), out)
 }
 """,
+    "tempdirs/tempdirs_test.go": """package tempdirs
+import "testing"
+// Each logs its name and its t.TempDir, so a test can build the command of a
+// program run from there, as the leak check names it.
+func logTempDir(t *testing.T) { t.Log("tempdir", t.Name(), t.TempDir()) }
+func TestASurvivingSubordinateIsPlacedFromItsRecordAfterARestartAndEndedByTheDomainsEnd(t *testing.T) {
+	logTempDir(t)
+}
+func TestRetry3(t *testing.T) { logTempDir(t) }
+func TestCases(t *testing.T) {
+	t.Run("case-1.x=y", logTempDir)
+	t.Run("a long subtest name that runs past the sixty four bytes Go keeps", logTempDir)
+}
+""",
     "timeout/timeout_test.go": """package timeout
 import ("testing"; "time")
 func TestQuick(t *testing.T) {}
@@ -324,6 +338,29 @@ class RealGoTestOutputTest(unittest.TestCase):
         records, unattributed = self.records(lines[:group_end])
         self.assertEqual(records, {})
         self.assertTrue(unattributed)
+
+    def test_a_leak_from_a_tests_temp_dir_is_matched_to_the_issue_naming_that_test(self):
+        # Real t.TempDir paths: Go cuts the test's name to 64 bytes, drops
+        # slashes and other symbols, and adds random digits.
+        dirs = [m.groups() for m in map(re.compile(r"tempdir (\S+) (\S+)$").search, self.output) if m]
+        self.assertEqual(len(dirs), 4, "\n".join(self.output))
+        package = "/home/runner/work/assistant/assistant/internal/tempdirs"
+        lines = framed([f"LEAK package={package} process pid={n} start=1 command={d}/child --flag"
+                        for n, (_, d) in enumerate(dirs, 1)] +
+                       ["FAIL\tgithub.com/dayamjz/assistant/internal/tempdirs\t1s"])
+        records, _, _ = ledger.parse_lines(lines)
+        issues = [{"number": n, "state": "open", "title": f"tempdirs: {name} leaks its child", "body": ""}
+                  for n, (name, _) in enumerate(dirs, 1)]
+        find = ledger.matcher(issues)
+        by_token = {r.token: r for r in records}
+        self.assertEqual(len(by_token), 4, [r.key for r in records])
+        for n, (name, folder) in enumerate(dirs, 1):
+            with self.subTest(test=name):
+                # The directory t.TempDir made, without os.MkdirTemp's digits.
+                record = by_token.get(Path(folder).parent.name.rstrip("0123456789"))
+                self.assertIsNotNone(record, [r.key for r in records])
+                self.assertTrue(record.prefix, record.key)
+                self.assertEqual([i["number"] for i in find(record.token, record.prefix)["open"]], [n])
 
     def records_raw(self):
         records, unattributed, _ = ledger.parse_lines(self.output, raw=True)

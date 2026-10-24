@@ -101,8 +101,9 @@ MESSAGE_INDENT = "    "
 # internal/principles.Cite logs this before a test's own messages; it never
 # says why a test failed.
 CITE_MESSAGE = re.compile(r"^\S+\.go:\d+: claims PRD principle ")
-# A t.TempDir component: the test's name with its slashes dropped, then digits.
-TEST_TEMPDIR = re.compile(r"^(Test[A-Za-z0-9_]+?)\d+$")
+# The symbols Go keeps in a t.TempDir name besides letters and numbers
+# (testing.common.TempDir).
+TEMPDIR_SYMBOLS = "!#$%&()+,-.=@^_{}~ "
 GO_TIMEOUT = re.compile(r"^panic: test timed out after (\S+)")
 GO_RUNNING = re.compile(r"^\s+(Test\S*|Example\S*|Fuzz\S*|Benchmark\S*) \(")
 GO_PANIC = re.compile(r"^panic: (.*)")
@@ -151,15 +152,30 @@ def command_name(command):
     return re.sub(r"\d{4,}", "N", os.path.basename(words[0]) or words[0])
 
 
+def tempdir_pattern(test):
+    """The name Go gives a test's t.TempDir before os.MkdirTemp's random
+    digits: the test's full name cut to 64 bytes, then without the symbols
+    outside TEMPDIR_SYMBOLS (a subtest's slash among them)."""
+    cut = test.encode()[:64].decode("utf-8", "ignore")
+    return "".join(c for c in cut if tempdir_keeps(c))
+
+
+def tempdir_keeps(c):
+    """Whether Go keeps the character c in a t.TempDir name: a letter, a
+    number (as Python classes them) or one of TEMPDIR_SYMBOLS."""
+    return c.isalpha() or c.isnumeric() or c in TEMPDIR_SYMBOLS
+
+
 def tempdir_test(command):
-    """The test whose t.TempDir a leaked program ran from, or None. Go drops
-    the slash from a subtest's name there, so this is a prefix of nothing
-    shorter than the top-level test's name plus the subtest's."""
+    """The t.TempDir name, without its random digits, of the test a leaked
+    program ran from (a directory starting Test, made of characters Go
+    keeps there, ending in digits), or None. Digits that end the test's
+    own name go with the random ones, so TestRetry3 reads as TestRetry;
+    matcher compares this to tempdir_pattern of each test an issue names."""
     words = command.split()
     for part in (words[0].split("/") if words else []):
-        match = TEST_TEMPDIR.match(part)
-        if match:
-            return match.group(1)
+        if part.startswith("Test") and part[-1:].isdigit() and all(map(tempdir_keeps, part)):
+            return part.rstrip("0123456789")
     return None
 
 
@@ -189,7 +205,8 @@ class Record:
         self.detail = detail
         self.subtests = sorted(set(subtests))
         self.token = token or self.key
-        # A prefix token is matched by any test name in an issue that it starts with.
+        # A prefix token (a t.TempDir name) is matched by any test an issue
+        # names whose t.TempDir name it starts with (matcher).
         self.prefix = prefix
         # Which failed step's part of the log it was read in (LogParser.section);
         # used while reading one job, not stored.
@@ -902,9 +919,11 @@ def matcher(issues):
         pattern = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(token) + r"(?![A-Za-z0-9_])")
         found = {"open": [], "closed": []}
         for (number, state, title, text, closed_at), tests in zip(texts, names):
-            # Go drops a subtest's slash from its t.TempDir, so an issue naming
-            # TestA/sub is found by the token TestAsub.
-            near = prefix and any(token.startswith(t.replace("/", "")) for t in tests)
+            # A t.TempDir token (tempdir_test) is found by an issue naming its
+            # test or a test that test's name starts with: compared as Go
+            # names the directory, so TestA/sub is TestAsub and a long name
+            # is cut. Digits ending a name are ambiguous there and dropped.
+            near = prefix and any(token.startswith(tempdir_pattern(t).rstrip("0123456789")) for t in tests)
             if near or pattern.search(text):
                 item = {"number": number, "title": title}
                 if state != "open":
