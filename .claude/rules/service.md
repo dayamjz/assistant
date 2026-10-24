@@ -70,7 +70,7 @@ paths: ["internal/service/**"]
   as it stands through `internal/tasks`' `Loss`, the reading a discard
   shows and never the entry's recorded `Lacks`, refused for any lost path
   of the working tree or index and anything lost HEAD does not carry
-  (`leftBehind`), claimed once (`ClaimKeptWorkLanding`), carried out
+  (`tasks.Cleaner.LeftBehind`, read as `Loss` reads), claimed once (`ClaimKeptWorkLanding`), carried out
   through `startPushedBranch` and answered with its run, the claim
   withdrawn when no run could start; carry on (`keptcarryon.go`), claimed first with the
   entry left open, which creates a new task through `queue.Create` with

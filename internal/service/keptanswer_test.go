@@ -550,6 +550,98 @@ func landTask(under serviceUnderTest, t *testing.T, task string, entry store.Kep
 	return out, err
 }
 
+// A land answer reads what HEAD carries from the copy's objects as they
+// record them, as the discard's loss does, the final full review of
+// 221c3b1: a delivery task's clone holds its own commit U on its branch,
+// HEAD on it, and unique work on a side commit B on another branch, and a
+// graft file or a replacement reference makes B U's parent. The loss lists
+// B as lost, and the land is refused naming B, as it is with no graft.
+// Read through the graft, U carried B and the land went ahead, the entry
+// answered without B ever reaching validation.
+func TestALandingReadsWhatHEADCarriesThroughNoGraft(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	for _, how := range []string{"a graft file", "a replacement reference"} {
+		t.Run(how, func(t *testing.T) {
+			t.Parallel()
+			h := newHome(t)
+			subject := newSubject(t)
+			repository := recordRepository(t, h, subject)
+			const branch = "task/kept"
+			id, err := home.NewTaskID()
+			if err != nil {
+				t.Fatal(err)
+			}
+			copyPath, err := h.TaskCopy(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := records.CreateTask(t.Context(), store.Task{
+				ID: id, Shape: store.TaskDelivery, Project: "the parser", Mode: "headless", WorktreePath: copyPath,
+				RepositoryID: store.Known(repository.ID), Branch: store.Known(branch),
+			}, store.Disposition{}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := records.BeginFirstTaskAttempt(t.Context(), id, store.OnThisMachine()); err != nil {
+				t.Fatal(err)
+			}
+			if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone", store.SessionHost{}); err != nil {
+				t.Fatal(err)
+			}
+			_ = records.Close()
+			if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			git(t, filepath.Dir(copyPath), "clone", "--quiet", repository.UpstreamURL, copyPath)
+			git(t, copyPath, "checkout", "--quiet", "-b", "aside")
+			if err := writeFile(filepath.Join(copyPath, "aside.txt"), "work only the side commit holds\n"); err != nil {
+				t.Fatal(err)
+			}
+			git(t, copyPath, "add", "-A")
+			git(t, copyPath, "commit", "--quiet", "-m", "B, on another branch")
+			b := git(t, copyPath, "rev-parse", "HEAD")
+			git(t, copyPath, "checkout", "--quiet", "-")
+			git(t, copyPath, "checkout", "--quiet", "-b", branch)
+			if err := writeFile(filepath.Join(copyPath, "own.txt"), "the task's own work\n"); err != nil {
+				t.Fatal(err)
+			}
+			git(t, copyPath, "add", "-A")
+			git(t, copyPath, "commit", "--quiet", "-m", "U, the task's own commit")
+			u := git(t, copyPath, "rev-parse", "HEAD")
+			if how == "a graft file" {
+				if err := writeFile(filepath.Join(copyPath, ".git", "info", "grafts"), u+" "+b+"\n"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				git(t, copyPath, "replace", "--graft", u, b)
+			}
+			entry := keepTaskCopy(t, h, id)
+			if !slices.Contains(entry.Lacks, b) || !slices.Contains(entry.Lacks, u) {
+				t.Fatalf("the copy kept reads %+v; want it lacking B %s and U %s", entry, b, u)
+			}
+			withService(t, h, func(under serviceUnderTest) {
+				_, err := landTask(under, t, id, entry)
+				var behind string
+				if err != nil {
+					_, rest, _ := strings.Cut(err.Error(), "and its copy holds ")
+					behind, _, _ = strings.Cut(rest, ", which HEAD does not carry")
+				}
+				if !errors.Is(err, ipc.ErrRefused) || !slices.Contains(strings.Split(behind, ", "), b) {
+					t.Fatalf("landing U with B grafted under it by %s = %v; want it refused naming B %s among what HEAD leaves behind", how, err, b)
+				}
+				if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() {
+					t.Fatalf("after the refusal the entry reads %+v, %v; want it open", still, err)
+				}
+			})
+		})
+	}
+}
+
 // A land answer decides from the copy as it stands, never from what the
 // entry recorded it holding when it was kept, the reviewer's sequence: a
 // delivery task's clone is kept at its commit A, then a commit B is made on

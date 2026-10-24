@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -52,8 +51,9 @@ import (
 // when it shows one of git's indicators, a tracked change, an untracked
 // file or a stash, a run's own entries of the gate's; and when it shows a
 // commit lost that HEAD does not reach, or another object lost that HEAD's
-// history does not hold (leftBehind): a commit on another reference, in a
-// stash or recorded only by a reflog entry's either value, a commit amended
+// history does not hold (tasks.Cleaner.LeftBehind, read from the object
+// graph Loss reads): a commit on another reference, in a stash or recorded
+// only by a reflog entry's either value, a commit amended
 // or rebased away among them, and an annotated tag only the copy holds,
 // which a landing never carries. Nothing Loss takes as held refuses it, so
 // what the upstream holds now, a tag or a branch cloned with the copy and
@@ -312,7 +312,7 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 		return refuse("its copy's HEAD names no commit")
 	}
 	out.head = loss.Head
-	behind, err := s.leftBehind(ctx, entry, loss)
+	behind, err := s.cleaner.LeftBehind(ctx, entry, loss)
 	if err != nil {
 		return landing{}, err
 	}
@@ -323,41 +323,6 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 			out.head, strings.Join(behind, ", "), entry.CopyPath))
 	}
 	return out, nil
-}
-
-// leftBehind is what of loss a landing of HEAD does not carry, each named
-// for a refusal: every commit lost that HEAD does not reach, and every
-// other object lost that HEAD's history does not hold (vcs.NotHeldBy), an
-// annotated tag always among them, since a landing carries no tag.
-func (s *Service) leftBehind(ctx context.Context, entry store.KeptWork, loss tasks.Loss) ([]string, error) {
-	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, s.git()...)
-	if err != nil {
-		return nil, fmt.Errorf("service: opening the kept copy at %s: %w", entry.CopyPath, err)
-	}
-	var behind []string
-	for _, lost := range loss.Lacks {
-		reaches, err := copied.IsAncestor(ctx, lost, loss.Head)
-		if err != nil {
-			return nil, fmt.Errorf("service: reading whether HEAD of the kept copy at %s reaches %s: %w", entry.CopyPath, lost, err)
-		}
-		if !reaches {
-			behind = append(behind, lost)
-		}
-	}
-	objects := make([]string, len(loss.Objects))
-	for i, o := range loss.Objects {
-		objects[i] = o.Object
-	}
-	missing, err := copied.NotHeldBy(ctx, loss.Head, objects)
-	if err != nil {
-		return nil, fmt.Errorf("service: reading what HEAD of the kept copy at %s holds: %w", entry.CopyPath, err)
-	}
-	for _, o := range loss.Objects {
-		if slices.Contains(missing, o.Object) {
-			behind = append(behind, o.Type+" "+o.Object+" ("+strings.Join(o.Names, ", ")+")")
-		}
-	}
-	return behind, nil
 }
 
 // completeLanding carries out a land answer already recorded on the entry,

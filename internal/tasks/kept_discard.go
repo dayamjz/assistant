@@ -143,8 +143,10 @@ import (
 // read of the loss the digest is checked on and again once every check has
 // passed, and a difference in anything but the objects that read itself
 // adds refuses with ErrLossChanged before anything is removed. Each entry
-// is then removed only while it is as read, so a change made while the
-// copy is being removed refuses too. A run's worktree is removed so under
+// is then removed only while it is as read, so an entry written, changed
+// or made while the copy is being removed refuses too; one removed then
+// does not, since the removal destroys nothing more for it (kept_remove.go
+// says so whole). A run's worktree is removed so under
 // the gate's copies lock, and so is its own directory in the gate, git's
 // record of the worktree, checked again before the worktree is removed and
 // after, and then removed as read itself rather than through git, whose
@@ -901,6 +903,45 @@ type WorktreeRecordLeft struct {
 func (e *WorktreeRecordLeft) Error() string {
 	return fmt.Sprintf("tasks: the worktree at %s was discarded, and its record in the gate at %s was left standing, "+
 		"since it changed after the copy was read: %s", e.Copy, e.Record, strings.Join(e.Changed, "; "))
+}
+
+// LeftBehind is what of loss, as Loss read it, a landing of HEAD does not
+// carry, each named for a refusal: every commit lost that HEAD does not reach, and every
+// other object lost that HEAD's history does not hold (vcs.NotHeldBy), an
+// annotated tag always among them, since a landing carries no tag. It
+// reads the copy through this Cleaner's handles, as Loss does, so what
+// HEAD reaches is decided from the object graph Loss decided the loss
+// from (NewCleaner's vcs.WithoutReplaceObjects), never through a graft
+// file or a replacement reference.
+func (c *Cleaner) LeftBehind(ctx context.Context, entry store.KeptWork, loss Loss) ([]string, error) {
+	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, c.git...)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: opening the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	var behind []string
+	for _, lost := range loss.Lacks {
+		reaches, err := copied.IsAncestor(ctx, lost, loss.Head)
+		if err != nil {
+			return nil, fmt.Errorf("tasks: reading whether HEAD of the kept copy at %s reaches %s: %w", entry.CopyPath, lost, err)
+		}
+		if !reaches {
+			behind = append(behind, lost)
+		}
+	}
+	objects := make([]string, len(loss.Objects))
+	for i, o := range loss.Objects {
+		objects[i] = o.Object
+	}
+	missing, err := copied.NotHeldBy(ctx, loss.Head, objects)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: reading what HEAD of the kept copy at %s holds: %w", entry.CopyPath, err)
+	}
+	for _, o := range loss.Objects {
+		if slices.Contains(missing, o.Object) {
+			behind = append(behind, o.Type+" "+o.Object+" ("+strings.Join(o.Names, ", ")+")")
+		}
+	}
+	return behind, nil
 }
 
 // removed is what removing the entry's copy destroys, as removeAsRead and
