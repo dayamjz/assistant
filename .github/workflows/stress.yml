@@ -3,9 +3,9 @@ name: Stress
 # Runs the race suite several times per OS, in exactly the check job's test
 # environment, so a flake surfaces here instead of in a pull request that
 # then pays for it in re-runs and re-reviews. The schedule runs it on main; a
-# dispatch runs it on the ref it is started on. The summary job lists every
-# test that failed at least once, from the same ledger the CI lanes read
-# (python3 scripts/flake-ledger.py --workflow stress.yml for past runs).
+# dispatch runs it on the ref it is started on. Each job fails on its own
+# failures, and its log's "full test output" group holds them; a summary
+# of every test that failed at least once waits for the flake ledger.
 #
 # Cost: the repository is public, so hosted runner minutes are not billed.
 # A run is 6 jobs, about 3 x 22 ubuntu and 3 x 29 macOS minutes, 2 at a
@@ -50,7 +50,7 @@ jobs:
     name: stress (${{ matrix.os }}, run ${{ matrix.run }})
     runs-on: ${{ matrix.os }}
     # A suite takes up to 37 minutes on macOS (#559); a job that still runs
-    # out is reported as a job timeout by the summary.
+    # out fails as cancelled.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -68,29 +68,3 @@ jobs:
           CI_TEST_COUNT: ${{ inputs.count || '1' }}
         run: bash scripts/ci-test.sh
 
-  summary:
-    name: summary
-    needs: stress
-    # Not when the run was cancelled; a job of it that timed out or was
-    # cancelled alone makes the summary fail as incomplete.
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      actions: read
-      contents: read
-      issues: read
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@v4
-      # Reads this run's finished jobs and the logs of the ones that failed.
-      # It fails when a log cannot be read, a failed job names nothing, or a
-      # job was cancelled, so a summary that saw nothing does not pass as a
-      # clean one.
-      - name: Every test that failed at least once
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -o pipefail
-          python3 scripts/flake-ledger.py --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" \
-            --no-cache --tz America/Los_Angeles | tee -a "$GITHUB_STEP_SUMMARY"
