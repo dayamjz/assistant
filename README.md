@@ -13,7 +13,7 @@ Assistant is a **local-first orchestration and delivery system** for AI coding a
 | Without Assistant | With Assistant |
 | --- | --- |
 | Manually juggle several coding sessions | Coordinate isolated parallel workers and delegate task domains |
-| Use one model or effort level for every job | Configure agents, model providers, versions, and effort by role |
+| Use one model or effort level for every job | Configure agents, model providers, versions, effort, and context window by role |
 | Lose context when a session ends | Track durable task and run state, resuming what can be recovered |
 | Push changes and then discover mistakes | Submit changes to a separate, multi-stage validation gate |
 | Wonder what an agent spent or left behind | Inspect recorded usage, budgets, holds, and kept work |
@@ -22,7 +22,7 @@ Assistant is a **local-first orchestration and delivery system** for AI coding a
 
 A primary coordinator can launch task workers and delegate a **named domain** to a subordinate coordinator. A subordinate manages tasks within its assigned domain; decisions beyond its authority escalate to the primary coordinator. This keeps ownership and permissions explicit.
 
-You can define roles for workers, reviews, and fixes, choosing the **agent**, **model provider**, **model family and version**, and **reasoning effort**. Roles can also specify an explicit fallback for recognized availability or quota failures. Assistant refuses unsupported model/agent combinations instead of silently substituting another one.
+You can define roles for workers, reviews, and fixes, choosing the **agent**, **model provider**, **model family and version**, **reasoning effort**, and a **context window** (`standard` or `1m`) where the adapter declares that window for the model. Roles can also specify an explicit fallback for recognized availability or quota failures. Assistant refuses unsupported model/agent combinations, and a context window the adapter has not declared, instead of silently substituting another one.
 
 ```mermaid
 flowchart TD
@@ -223,7 +223,7 @@ assistant watch
 | Usage records, per-run budgets, home-wide ceilings | **Available** |
 | Kept-work visibility | **Available**; resolution flows are being expanded |
 | Cross-machine placement, bridge, herdr provider | **In development** ([GitHub #490](https://github.com/dayamjz/assistant/pull/490), [Linear AGE-310](https://linear.app/zolutions/issue/AGE-310/gap-12-remote-worker-execution)) |
-| Role-level configurable context windows | **In development** ([Linear AGE-418](https://linear.app/zolutions/issue/AGE-418/roles-let-a-role-name-a-context-window-claudes-1m-so-a-configured)) |
+| Role-level configurable context windows | **Available** (a role names `context` as `standard` or `1m` beside a complete model triple; an undeclared window is refused before launch). See [multi-agent support](docs/multi-agent-support.md). |
 | Automatic cloud worker provisioning | **Future direction** |
 
 The roadmap shows intent, not a shipping commitment. The implementation and [operator guide](docs/operators.md) are authoritative for actual behavior.
