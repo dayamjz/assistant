@@ -811,22 +811,162 @@ func TestALossNamesEveryPathItDestroysThatNothingElseHolds(t *testing.T) {
 	}
 }
 
-// The window between a discard's last read of the copy and the removal is
-// not closed, and this test holds what it leaves to what kept_discard.go's
-// header says, the reviewer's sequence on #475: a file git ignores, written
-// into the clone after Discard's last read and before the removal, is
-// destroyed with it, Discard reports the removal done, and what it returns
-// as lost does not name the file. A cleanup keeping the copy inside the
-// window finds the entry already standing and records no other, since the
-// copy's identity, the path and the commits its references and HEAD stand
-// on, is what it was, so nothing is left to list the file. A change that closes the window
-// fails this test, and the header and internal/service's statement of the
-// window are to be rewritten with it.
-func TestAFileWrittenAfterADiscardsLastReadIsDestroyedUnshown(t *testing.T) {
+// Anything written into the copy after Discard's last read, the one the
+// digest is checked on, refuses the discard and is left as it was written,
+// the final full review of 74949eb, finding 1: a file git ignores is
+// written (the reviewer's sequence), a tracked file is edited, a commit is
+// made, or a file is deleted, at two moments. Between that read and the
+// check of the copy's state, the check refuses with ErrLossChanged and
+// nothing is removed. After the check, immediately before the removal,
+// where Discard's callback runs, the removal itself refuses on reaching
+// the change, which stands as written, and what it removed before that
+// was each entry as it was read, and so shown; a deletion there destroys
+// nothing more and goes ahead. A cleanup keeping the copy at the moment
+// finds the entry already standing, so nothing but the refusal could have
+// kept the change. The positive control is the same discard with nothing
+// written, which removes the clone. Before the removal was held to the
+// copy as read, every one of these was destroyed with the clone and the
+// discard reported done.
+func TestAnythingWrittenAfterADiscardsLastReadRefusesIt(t *testing.T) {
 	principles.Cite(t, principles.P6)
+	type change struct {
+		name  string
+		write func(t *testing.T, copyPath string)
+		// stands fails t unless what write did is still in the copy.
+		stands func(t *testing.T, copyPath string)
+	}
+	holds := func(name, want string) func(t *testing.T, copyPath string) {
+		return func(t *testing.T, copyPath string) {
+			t.Helper()
+			if raw, err := os.ReadFile(filepath.Join(copyPath, name)); err != nil || string(raw) != want {
+				t.Errorf("%s reads %q, %v after the refusal; want %q", name, raw, err, want)
+			}
+		}
+	}
+	var late string
+	changes := []change{
+		{name: "a file git ignores", write: func(t *testing.T, copyPath string) {
+			if err := os.WriteFile(filepath.Join(copyPath, "secret.txt"), []byte("written inside the window\n"), 0o600); err != nil {
+				t.Error(err)
+			}
+		}, stands: holds("secret.txt", "written inside the window\n")},
+		{name: "a tracked file edited", write: func(t *testing.T, copyPath string) {
+			if err := os.WriteFile(filepath.Join(copyPath, "own.txt"), []byte("edited inside the window\n"), 0o600); err != nil {
+				t.Error(err)
+			}
+		}, stands: holds("own.txt", "edited inside the window\n")},
+		{name: "a commit", write: func(t *testing.T, copyPath string) {
+			late = strings.TrimSpace(commit(t, copyPath, "late.txt", "committed inside the window\n", "a commit inside the window"))
+		}, stands: func(t *testing.T, copyPath string) {
+			t.Helper()
+			if head := strings.TrimSpace(rawGit(t, copyPath, "rev-parse", "HEAD")); head != late {
+				t.Errorf("HEAD reads %s after the refusal; want the commit made inside the window, %s", head, late)
+			}
+		}},
+		{name: "a file deleted", write: func(t *testing.T, copyPath string) {
+			if err := os.Remove(filepath.Join(copyPath, "own.txt")); err != nil {
+				t.Error(err)
+			}
+		}, stands: func(t *testing.T, copyPath string) {
+			t.Helper()
+			if _, err := os.Lstat(filepath.Join(copyPath, "own.txt")); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("own.txt stands after the refusal: %v; want it deleted as it was", err)
+			}
+		}},
+		{name: "nothing, the positive control"},
+	}
+	for _, moment := range []string{"before the check", "before the removal"} {
+		for _, c := range changes {
+			t.Run(moment+"/"+c.name, func(t *testing.T) {
+				s := newCleanupSubject(t, forgetest.Script{})
+				ctx := context.Background()
+				tk := s.deliveryTask(t, "task/window")
+				commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+				_, err := s.cleanUp(t, tk.id)
+				kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+				if !ok {
+					t.Fatal("an unproven refusal is not kept work")
+				}
+				got, err := s.cleaner.Keep(ctx, kept)
+				if err != nil || !got.Entry.Established() {
+					t.Fatalf("Keep = %+v, %v", got, err)
+				}
+				if err := os.MkdirAll(filepath.Join(tk.copy, ".git", "info"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(tk.copy, ".git", "info", "exclude"), []byte("secret.txt\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				shown, err := s.cleaner.Loss(ctx, got.Entry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var inside KeptEntry
+				var after copyState
+				window := func() {
+					if c.write != nil {
+						c.write(t, tk.copy)
+					}
+					if inside, err = s.cleaner.Keep(ctx, kept); err != nil {
+						t.Error(err)
+					}
+					if after, err = readCopyState(tk.copy); err != nil {
+						t.Error(err)
+					}
+				}
+				var callback func() error
+				if moment == "before the check" {
+					s.cleaner.betweenDiscardReadAndCheck = window
+				} else {
+					callback = func() error { window(); return nil }
+				}
+				lost, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", callback)
+				if c.write == nil || (moment == "before the removal" && c.name == "a file deleted") {
+					if err != nil {
+						t.Fatalf("Discard on the digest shown, %s %s: %v", c.name, moment, err)
+					}
+					if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("the clone still stands: %v", err)
+					}
+					if lost.Digest != shown.Digest {
+						t.Fatalf("Discard returned the loss %s, want the one shown, %s", lost.Digest, shown.Digest)
+					}
+					return
+				}
+				if !errors.Is(err, ErrLossChanged) {
+					t.Fatalf("Discard on the digest shown, %s %s = %+v, %v; want ErrLossChanged", c.name, moment, lost, err)
+				}
+				c.stands(t, tk.copy)
+				if moment == "before the check" {
+					now, err := readCopyState(tk.copy)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if changed := after.changedSince(now, func(string) bool { return false }); len(changed) > 0 {
+						t.Errorf("the discard refused at its check changed the copy: %v", changed)
+					}
+				}
+				if inside.Entry.ID != got.Entry.ID && c.name != "a commit" {
+					t.Fatalf("a cleanup inside the window kept %+v; want entry %d, the one standing", inside.Entry, got.Entry.ID)
+				}
+			})
+		}
+	}
+}
+
+// What Discard's own read of the loss adds to the copy is not a change it
+// refuses: the upstream's main moves on between the discard shown and the
+// discard confirmed, so the confirmation's read fetches the commit main
+// stands on into the copy by identifier, which adds objects and nothing
+// else, and the discard on the digest shown removes the clone. The read
+// is checked to have added objects, so the test is of that allowance.
+// Without objects counted as the read's own, every discard confirmed after
+// the upstream moved is refused.
+func TestADiscardTakesTheObjectsItsOwnReadFetches(t *testing.T) {
+	principles.Cite(t, principles.P15)
 	s := newCleanupSubject(t, forgetest.Script{})
 	ctx := context.Background()
-	tk := s.deliveryTask(t, "task/window")
+	tk := s.deliveryTask(t, "task/fetched")
 	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
 	_, err := s.cleanUp(t, tk.id)
 	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
@@ -837,39 +977,44 @@ func TestAFileWrittenAfterADiscardsLastReadIsDestroyedUnshown(t *testing.T) {
 	if err != nil || !got.Entry.Established() {
 		t.Fatalf("Keep = %+v, %v", got, err)
 	}
-	if err := os.MkdirAll(filepath.Join(tk.copy, ".git", "info"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tk.copy, ".git", "info", "exclude"), []byte("secret.txt\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	shown, err := s.cleaner.Loss(ctx, got.Entry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	secret := filepath.Join(tk.copy, "secret.txt")
-	var inside KeptEntry
-	window := func() error {
-		if err := os.WriteFile(secret, []byte("written inside the window\n"), 0o600); err != nil {
-			t.Error(err)
-		}
-		if inside, err = s.cleaner.Keep(ctx, kept); err != nil {
-			t.Error(err)
-		}
-		return nil
+	seed := filepath.Join(t.TempDir(), "seed")
+	rawGit(t, filepath.Dir(seed), "clone", "-q", s.upstream, seed)
+	moved := strings.TrimSpace(commit(t, seed, "upstream.txt", "the upstream's next work\n", "the upstream moved on"))
+	rawGit(t, seed, "push", "-q", "origin", "main")
+	if _, err := rawGitErr(tk.copy, "cat-file", "-e", moved); err == nil {
+		t.Fatalf("the copy holds %s before the discard; want its read to be what fetches it", moved)
 	}
-	lost, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", window)
+	before, err := readCopyState(tk.copy)
 	if err != nil {
-		t.Fatalf("Discard on the digest shown, a file written inside the window: %v", err)
+		t.Fatal(err)
+	}
+	var added []string
+	s.cleaner.betweenDiscardReadAndCheck = func() {
+		now, err := readCopyState(tk.copy)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		added = before.changedSince(now, func(string) bool { return false })
+	}
+	if _, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", nil); err != nil {
+		t.Fatalf("Discard on the digest shown, after the upstream moved: %v", err)
+	}
+	if len(added) == 0 {
+		t.Fatal("the discard's read added nothing to the copy; want the objects of the commit it fetched")
+	}
+	objects := filepath.Join(tk.copy, ".git", "objects") + string(filepath.Separator)
+	for _, change := range added {
+		if !strings.HasPrefix(change, objects) || !strings.HasSuffix(change, " was added") {
+			t.Fatalf("the discard's read changed %s; want only objects added", change)
+		}
 	}
 	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the clone still stands: %v", err)
-	}
-	if slices.ContainsFunc(lost.Files, func(f LostPath) bool { return f.Path == "secret.txt" }) {
-		t.Fatalf("Discard returned %+v as lost; the window is closed, so rewrite the statements of it", lost.Files)
-	}
-	if inside.Entry.ID != got.Entry.ID {
-		t.Fatalf("a cleanup inside the window kept %+v; want entry %d, the one standing", inside.Entry, got.Entry.ID)
 	}
 }
 

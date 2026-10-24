@@ -646,7 +646,11 @@ shown, each file by what it holds. It records and removes nothing. Given
 again with `--confirm DIGEST` it removes the copy only while everything
 shown is as it was, so a commit, an edit, a file or a stash made since is
 refused and you are told to look again; a change that loses nothing more,
-such as a branch made at a commit already listed, is not. Your
+such as a branch made at a commit already listed, is not. Anything written
+into the copy after that last look, even while it is being removed, refuses
+the removal and is left in the copy; only what a program writes through a
+file it already had open there as the removal reaches that file is lost
+with it. Your
 confirmation is recorded first, with what it was shown and who gave it,
 and the entry stays open and listed until the copy is gone; only then is
 it answered discard. If the service stops in between, the next start
@@ -654,10 +658,10 @@ removes the copy if it still holds what you were shown; if the copy
 changed meanwhile, your confirmation is withdrawn, the copy stays, and
 the entry is listed again for you to look at and answer afresh. A copy
 kept again at another state has an entry for each state; discarding the
-copy answers and closes all of them kept by the time its removal read the
-copy, also when the service stopped after the removal and the next start
-finishes it, and one kept after that read stays listed; carrying it on
-does the same for those kept by the time you answered. While one entry of a copy has an answer still being
+copy answers and closes all of them kept by the time its removal went
+ahead, also when the service stopped after the removal and the next start
+finishes it; carrying it on answers and closes all of them, since the
+whole copy moves to the new task. While one entry of a copy has an answer still being
 carried out (a landing whose run is not started yet, a carry on or a
 discard not finished), the copy's other entries are not answered, and the
 task is not promoted; the answer under way finishes on its own or at the

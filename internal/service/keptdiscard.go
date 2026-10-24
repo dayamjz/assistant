@@ -76,39 +76,36 @@ import (
 // A copy kept again at another state has an entry per state, and a
 // discard removes the copy whole, which is what was shown and confirmed.
 // So the mark answers and marks every open entry of the copy kept by the
-// time the removal's read of the copy began, or by the confirmation when
-// that is later, in its one write, none of them left holding the project's
-// new tasks over a copy that is gone: the removal went ahead only because
-// that read found nothing lost that was not shown, so it covers the state
-// each of them was kept from. That read's start is recorded on the entry
-// before the removal (store.RecordKeptWorkDiscardRead) and the mark takes
-// it from there, so a mark the next start completes over a copy already
-// gone is bounded by the read the removal was held to and never by its
-// own, which reads nothing; a copy gone with no read recorded, removed by
-// something other than this confirmation's removal, is marked by the
-// confirmation alone. completeDiscard reads its
+// moment the removal went ahead, or by the confirmation when that is
+// later, in its one write, none of them left holding the project's new
+// tasks over a copy that is gone: internal/tasks' Discard goes ahead only
+// once it has found the copy, from before its read of the loss until that
+// moment, holding exactly what was shown, and removes each entry only as
+// it found it, so every entry kept by then was kept from the state the
+// removal destroyed. That moment is recorded on the entry before the
+// removal (store.RecordKeptWorkDiscardRead) and the mark takes it from
+// there, so a mark the next start completes over a copy already gone is
+// bounded by the moment the removal went ahead and never by its own, which
+// reads nothing; a copy gone with no moment recorded, removed by something
+// other than this confirmation's removal, is marked by the confirmation
+// alone. completeDiscard reads its
 // entry again first, so a call that finds it marked reports it discarded.
 // No answer and no confirmation is written while another entry of the copy
 // holds one not yet carried out, a land whose run is not named, a carry on
 // not marked or a discard confirmed (store.ErrKeptWorkCopyOwed, refused
 // with refusedOwed): each still needs the copy where it stands.
 //
-// What is left: the moment between the removal's last read of the copy
-// and the removal is not closed (internal/tasks' Discard names it).
-// Anything written into the copy in that moment, a file git ignores, an
-// edit or a deletion among it, is destroyed with the copy without having
-// been shown, and the mark answers and marks the entries all the same, so
-// nothing stays listed for it. A cleanup that keeps the copy then records
-// no new entry for such a change: an entry is keyed by the copy's path and
-// the commits its references and HEAD stand on (store.KeptWorkOf), which a
-// file, an edit or a deletion leaves as they were, so the cleanup finds the
-// entry already standing. Only a change to those commits in that moment
-// has a cleanup record a new entry, kept after the removal's read began and
-// so not marked: it is left open over a copy that is gone, and listed. One
-// a cleanup records after the confirmation and before that read is marked
-// with the rest when the read finds nothing lost unshown, a reference made
-// or removed at a commit already shown or held upstream among it, and the
-// removal is refused when it does.
+// What is left is internal/tasks' kept_remove.go's. Anything written into
+// the copy after the read the digest is checked on refuses the removal,
+// and the confirmation is withdrawn, so the entry is listed again over the
+// copy as it stands, with what was removed before the refusal, each entry
+// as shown, gone. What a process writes through a descriptor it opened in
+// the copy before the removal moved that file aside is lost with it. An
+// entry a cleanup records while the copy is being removed, from a copy
+// partly gone, is kept after the moment and left open over a copy that is
+// gone. A run's worktree record that changed after the worktree was
+// removed is left standing in the gate and logged, and the discard is
+// done, since the copy went as it was shown.
 
 // # What "person-only" is enforced by, and what it is not
 //
@@ -321,22 +318,27 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 			return machine.KeptWorkAnswered{}, err
 		}
 	}
-	// The removal is held to a read of the copy that begins now, so every
-	// entry of the copy kept by now was kept from a state that read covers.
-	// Once the read finds the copy holding what was shown, its start is
-	// recorded before the removal, so the mark is bounded by it even when
-	// a service that stops after the removal leaves the mark to the next
-	// start, which finds the copy gone, reads nothing and records nothing.
-	read := time.Now()
+	// The callback runs once Discard has found the copy, from before its
+	// read of the loss until now, holding what was shown, and immediately
+	// before the removal, which removes each entry only as it was found. So
+	// every entry of the copy kept by now was kept from that state, the one
+	// destroyed. Now is recorded before the removal, so the mark is bounded
+	// by it even when a service that stops after the removal leaves the
+	// mark to the next start, which finds the copy gone, reads nothing and
+	// records nothing.
 	lost, err := s.cleaner.Discard(ctx, entry, digest, entry.DiscardLacks, gatePath, func() error {
-		if err := s.store.RecordKeptWorkDiscardRead(ctx, entry.ID, digest, read); err != nil {
-			return err
-		}
 		if s.inDiscardWindow != nil {
 			s.inDiscardWindow()
 		}
-		return nil
+		return s.store.RecordKeptWorkDiscardRead(ctx, entry.ID, digest, time.Now())
 	})
+	var left *tasks.WorktreeRecordLeft
+	if errors.As(err, &left) {
+		// The copy is gone as shown; only git's record of the worktree,
+		// changed after the read, was left standing.
+		s.log.Printf("kept work entry %d: %v", entry.ID, left)
+		err = nil
+	}
 	if errors.Is(err, tasks.ErrLossChanged) {
 		open, werr := s.store.WithdrawKeptWorkDiscard(ctx, entry.ID, digest)
 		if werr != nil {

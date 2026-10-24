@@ -235,6 +235,11 @@ type Options struct {
 	discardRemovalTest   testing.TB
 	inDiscardWindow      func()
 	interruptDiscardMark func() error
+	// inWorktreeRemoval is the cleaner's seam inside a run's copy's
+	// discard, after the worktree's directory is removed and before its
+	// record is, which export_test.go's WithWorktreeRemovalSeamForTest sets
+	// with discardRemovalTest and the product never does.
+	inWorktreeRemoval func()
 	// cleanupAskSpacing replaces landedAskSpacing for this service, which
 	// export_test.go's WithCleanupAskSpacingForTest sets and the product
 	// never does; zero is landedAskSpacing.
@@ -915,6 +920,9 @@ func (s *Service) openParts(ctx context.Context, o Options, lookup func(string) 
 	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge,
 		GitDeadline: s.cfg.GitDeadline}); err == nil && o.interruptCleanupMark != nil {
 		err = s.cleaner.InterruptBeforeMarkForTest(o.cleanupTest, o.interruptCleanupMark)
+	}
+	if err == nil && o.inWorktreeRemoval != nil {
+		err = s.cleaner.BetweenWorktreeRemovalAndRecordForTest(o.discardRemovalTest, o.inWorktreeRemoval)
 	}
 	if err != nil {
 		return err

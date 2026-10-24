@@ -93,6 +93,14 @@ func WithDiscardRemovalSeamsForTest(tb testing.TB, o Options, inWindow func(), b
 	return o
 }
 
+// WithWorktreeRemovalSeamForTest returns o with a run's copy's discard
+// running f once the worktree's directory is removed and before its record
+// is, for this package's external tests.
+func WithWorktreeRemovalSeamForTest(tb testing.TB, o Options, f func()) Options {
+	o.discardRemovalTest, o.inWorktreeRemoval = tb, f
+	return o
+}
+
 // WithCleanupAskSpacingForTest returns o with the spacing the supervisor
 // pass leaves between two asks of one landed task's cleanup set to d, for
 // this package's external tests, which cannot wait landedAskSpacing.

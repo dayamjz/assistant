@@ -1205,13 +1205,14 @@ func (s *Store) KeptWorkCarriedOnBy(ctx context.Context, taskID string) ([]KeptW
 	return out, nil
 }
 
-// RecordKeptWorkDiscardRead records at as when the read of the copy the
-// removal of digest's confirmation is held to began, which the caller
-// writes once that read found the copy holding what the confirmation was
-// shown and before the removal: MarkKeptWorkDiscarded bounds the entries
-// it takes by it, so the bound is the read the removal was held to even
-// when the mark is left to a later call that finds the copy gone. A later
-// read of a copy still standing records its own. An entry answered is
+// RecordKeptWorkDiscardRead records at as the moment the removal of
+// digest's confirmation went ahead, which the caller writes once it found
+// the copy holding what the confirmation was shown, from before its read
+// of the loss until then, and immediately before the removal:
+// MarkKeptWorkDiscarded bounds the entries it takes by it, so the bound is
+// the moment the removal went ahead even when the mark is left to a later
+// call that finds the copy gone. A later removal of a copy still standing
+// records its own. An entry answered is
 // ErrKeptWorkAnswered, one closed ErrKeptWorkClosed, and one holding no
 // confirmation of digest ErrKeptWorkNotConfirmed; nothing is written then.
 func (s *Store) RecordKeptWorkDiscardRead(ctx context.Context, id int64, digest string, at time.Time) error {
@@ -1249,16 +1250,17 @@ var ErrKeptWorkDiscarded = errors.New("store: the kept work entry is already dis
 // shown is gone, the discard's second fact, once: the entry is answered
 // discard, by who confirmed and as of when, with the instant the copy
 // went, in one write that also answers and marks every other open entry
-// of the same copy kept by the read the removal was held to began, or by
-// the confirmation when that is later, the copy kept again at another
-// state, with the same confirmation, since the copy is gone for all of
-// them. The read is the one RecordKeptWorkDiscardRead recorded on the
-// entry, never the caller's clock, so a mark left to a call that finds the
-// copy gone is bounded by the read the removal was held to: an entry kept
-// by then was kept from a state that read covers, and one kept after it
-// may hold what the removal destroyed unread, and is left open. With no
-// read recorded, a copy that went without a removal of this confirmation,
-// the bound is the confirmation. An entry already
+// of the same copy kept by the moment the removal went ahead, or by the
+// confirmation when that is later, the copy kept again at another state,
+// with the same confirmation, since the copy is gone for all of them. The
+// moment is the one RecordKeptWorkDiscardRead recorded on the entry, never
+// the caller's clock, so a mark left to a call that finds the copy gone is
+// bounded by the moment the removal went ahead: the caller records it only
+// once the copy is found holding what was shown, so an entry kept by then
+// was kept from the state the removal destroyed, and one kept after it,
+// while the copy was being removed, is left open. With no moment recorded,
+// a copy that went without a removal of this confirmation, the bound is
+// the confirmation. An entry already
 // marked is ErrKeptWorkDiscarded, one answered otherwise
 // ErrKeptWorkAnswered, one closed on a proof ErrKeptWorkClosed, one with no
 // confirmation ErrKeptWorkNotDiscard, and an unknown identifier

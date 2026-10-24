@@ -134,22 +134,30 @@ import (
 //
 // # The removal
 //
-// Discard removes a task's clone with os.RemoveAll and a run's linked
-// worktree through vcs.RemoveWorktreeDiscardingChanges under the gate's
-// copies lock, the discarding removal cleanup.go names as reachable and
+// Discard removes the copy only as it was read (kept_remove.go). The state
+// of everything the removal destroys, a task's clone whole, or a run's
+// linked worktree and its own directory in the gate, is read before the
+// read of the loss the digest is checked on and again once every check has
+// passed, and a difference in anything but the objects that read itself
+// adds refuses with ErrLossChanged before anything is removed. Each entry
+// is then removed only while it is as read, so a change made while the
+// copy is being removed refuses too. A run's worktree is removed so under
+// the gate's copies lock, its directory in the gate checked again before
+// and after, and then vcs.RemoveWorktreeDiscardingChanges removes git's
+// record of it, the discarding removal cleanup.go names as reachable and
 // unused: this is its one use, and what stands behind it is the digest
 // match against the person's answer rather than a P12 proof, which a
 // discard by its nature has none of. A copy already gone is not refused:
 // the answer and the digest it carried say the removal was wanted, and
 // nothing stands to lose.
 //
-// What the removal does not cover: the moment between Discard's last read
-// of the copy, the one that checks the digest, and the removal is not
-// closed. Anything written into the copy in it, a file git ignores among
-// it, is destroyed without having been shown, and what Discard returns as
-// lost does not name it; nothing here stops a process writing into the
-// copy while it is removed. internal/service's keptdiscard.go says what
-// the record is left holding then.
+// What the removal does not cover is kept_remove.go's: what a process
+// writes through a descriptor it opened in the copy before the file was
+// moved aside for removal, and, after a refusal partway through the
+// removal, the entries removed before it, each gone as it was shown. A
+// run's worktree record that changes after its worktree is removed is left
+// standing rather than removed (WorktreeRecordLeft). internal/service's
+// keptdiscard.go says what the record is left holding then.
 
 // Loss is what discarding a kept copy would lose, as read now.
 type Loss struct {
@@ -729,9 +737,17 @@ func hashFile(path string) (string, error) {
 // them must be lost now or held by the default branch, so one the copy no
 // longer holds is refused. Each refusal is ErrLossChanged. gate is the gate
 // repository a run's copy is a worktree of, and is not read for a task's.
-// beforeRemoval, when not nil, runs once every check has passed and before
-// the removal, and an error it returns is returned with nothing removed. A
+// The removal is held to the copy as read, on this file's header's terms:
+// anything written into the copy after the read the digest is checked on
+// refuses with ErrLossChanged, with nothing removed when it is found
+// before the removal and the rest of the copy left as it stands when it is
+// found during it. beforeRemoval, when not nil, runs once every check has
+// passed, the copy found as read among them, immediately before the
+// removal, and an error it returns is returned with nothing removed. A
 // copy already gone returns the zero Loss and no error, and runs nothing.
+// A run's copy whose record in the gate changed after its worktree was
+// removed returns the loss and a *WorktreeRecordLeft: the copy is gone as
+// shown and the record stands.
 //
 // What the commit check does not cover: a default branch that moved only
 // forward over commits the copy does not hold changes nothing here, and one
@@ -739,6 +755,19 @@ func hashFile(path string) (string, error) {
 // proceed; one that was rewound or force-pushed past a commit it had can
 // make the copy the only place that commit is, which is refused.
 func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest string, shown []string, gatePath string, beforeRemoval func() error) (Loss, error) {
+	if _, err := os.Lstat(entry.CopyPath); errors.Is(err, os.ErrNotExist) {
+		return Loss{}, nil
+	} else if err != nil {
+		return Loss{}, fmt.Errorf("tasks: reading the copy at %s: %w", entry.CopyPath, err)
+	}
+	roots, appendOnly, err := c.removed(ctx, entry)
+	if err != nil {
+		return Loss{}, err
+	}
+	read, err := readCopyState(roots...)
+	if err != nil {
+		return Loss{}, err
+	}
 	loss, gone, err := c.loss(ctx, entry, shown)
 	if errors.Is(err, ErrCopyGone) {
 		return Loss{}, nil
@@ -762,13 +791,23 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 		return Loss{}, fmt.Errorf("%w: the copy no longer holds %s, which the discard was shown as lost and the default branch does not hold",
 			ErrLossChanged, strings.Join(gone, ", "))
 	}
+	if c.betweenDiscardReadAndCheck != nil {
+		c.betweenDiscardReadAndCheck()
+	}
+	now, err := readCopyState(roots...)
+	if err != nil {
+		return Loss{}, err
+	}
+	if changed := read.changedSince(now, appendOnly); len(changed) > 0 {
+		return Loss{}, fmt.Errorf("%w: the copy changed after it was read for the digest: %s", ErrLossChanged, strings.Join(changed, "; "))
+	}
 	if beforeRemoval != nil {
 		if err := beforeRemoval(); err != nil {
 			return Loss{}, err
 		}
 	}
 	if entry.TaskID.IsKnown() {
-		if err := os.RemoveAll(entry.CopyPath); err != nil {
+		if err := removeAsRead(entry.CopyPath, now); err != nil {
 			return Loss{}, fmt.Errorf("tasks: discarding the copy at %s: %w", entry.CopyPath, err)
 		}
 		return loss, nil
@@ -782,8 +821,78 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 		return Loss{}, fmt.Errorf("tasks: waiting to discard the copy at %s: %w", entry.CopyPath, err)
 	}
 	defer func() { _ = lock.Release() }()
+	// The worktree's own directory in the gate, its HEAD, index and logs,
+	// which a commit in the worktree writes without touching a file of the
+	// worktree's, is held to its state before anything is removed, so such
+	// a change refuses with nothing removed, and again before git removes
+	// it with the worktree's record.
+	admin := roots[1]
+	recorded := now.under(admin)
+	if changed, err := changedNow(recorded, admin); err != nil {
+		return Loss{}, err
+	} else if len(changed) > 0 {
+		return Loss{}, fmt.Errorf("%w: the worktree's directory in the gate changed after the copy was read: %s", ErrLossChanged, strings.Join(changed, "; "))
+	}
+	if err := removeAsRead(entry.CopyPath, now); err != nil {
+		return Loss{}, fmt.Errorf("tasks: discarding the copy at %s: %w", entry.CopyPath, err)
+	}
+	if c.betweenWorktreeRemovalAndRecord != nil {
+		c.betweenWorktreeRemovalAndRecord()
+	}
+	if changed, err := changedNow(recorded, admin); err != nil {
+		return Loss{}, err
+	} else if len(changed) > 0 {
+		return loss, &WorktreeRecordLeft{Copy: entry.CopyPath, Record: admin, Changed: changed}
+	}
 	if err := bare.RemoveWorktreeDiscardingChanges(ctx, entry.CopyPath); err != nil {
 		return Loss{}, fmt.Errorf("tasks: discarding the copy at %s: %w", entry.CopyPath, err)
 	}
 	return loss, nil
+}
+
+// changedNow is what of root differs now from recorded, its state as read.
+func changedNow(recorded copyState, root string) ([]string, error) {
+	now, err := readCopyState(root)
+	if err != nil {
+		return nil, err
+	}
+	return recorded.changedSince(now, func(string) bool { return false }), nil
+}
+
+// WorktreeRecordLeft is what Discard returns, beside the loss, for a run's
+// copy whose worktree it removed as read and whose own directory in the
+// gate, git's record of the worktree, changed after the copy was read and
+// before the record was to be removed. The copy is gone, holding exactly
+// what was shown, so the discard is done; the record is left standing as
+// it was changed rather than removed, and nothing in this program prunes
+// it. Record is that directory and Changed what differed.
+type WorktreeRecordLeft struct {
+	Copy    string
+	Record  string
+	Changed []string
+}
+
+// Error names the copy removed and the record left.
+func (e *WorktreeRecordLeft) Error() string {
+	return fmt.Sprintf("tasks: the worktree at %s was discarded, and its record in the gate at %s was left standing, "+
+		"since it changed after the copy was read: %s", e.Copy, e.Record, strings.Join(e.Changed, "; "))
+}
+
+// removed is what removing the entry's copy destroys, as removeAsRead and
+// readCopyState read it, and what the loss read itself may add there: a
+// task's clone, whole, whose objects a fetch by identifier adds to; or a
+// run's worktree and its own directory in the gate, in that order, whose
+// shared objects the gate keeps, so nothing may be added under either.
+func (c *Cleaner) removed(ctx context.Context, entry store.KeptWork) ([]string, func(string) bool, error) {
+	if entry.TaskID.IsKnown() {
+		return []string{entry.CopyPath}, objectsAdded(filepath.Join(entry.CopyPath, ".git")), nil
+	}
+	obs, err := vcs.Observe(ctx, entry.CopyPath, c.git...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("tasks: reading the worktree at %s: %w", entry.CopyPath, err)
+	}
+	if filepath.Clean(obs.GitDir) == filepath.Clean(obs.CommonDir) {
+		return nil, nil, fmt.Errorf("tasks: the run's copy at %s is not a linked worktree: its repository is %s", entry.CopyPath, obs.GitDir)
+	}
+	return []string{entry.CopyPath, obs.GitDir}, func(string) bool { return false }, nil
 }

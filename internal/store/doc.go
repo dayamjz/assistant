@@ -205,7 +205,7 @@
 // holds it to that one direction and to an open row, so an answered or
 // closed row is sealed whole. A discard confirmation may be written on an
 // open row and withdrawn whole, which leaves it open (keptWorkDiscardMigration),
-// and while it is owed the start of its removal's read may be recorded
+// and while it is owed the moment its removal went ahead may be recorded
 // under it and is withdrawn with it (keptWorkDiscardReadMigration). Its
 // one revision otherwise closes it, made once and only while
 // it is open: a person's answer and its Resolver, or the

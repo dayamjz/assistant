@@ -2655,16 +2655,16 @@ var schema = []migration{
 		version: 61,
 		name:    keptWorkDiscardReadMigration,
 		statements: []string{
-			// When the read of the copy a discard's removal was held to
-			// began, recorded by RecordKeptWorkDiscardRead once that read
-			// found the copy holding what the confirmation was shown and
-			// before the removal, so the mark bounds the entries it takes
-			// by that read even when a service that stopped after the
-			// removal leaves the mark to the next start, which finds the
-			// copy gone and reads nothing. It is written only under the
-			// confirmation of an entry neither answered nor closed, moved
-			// by each read a later call makes of a copy still standing,
-			// and withdrawn with the confirmation.
+			// The moment a discard's removal went ahead, recorded by
+			// RecordKeptWorkDiscardRead once the copy was found holding
+			// what the confirmation was shown and immediately before the
+			// removal, so the mark bounds the entries it takes by it even
+			// when a service that stopped after the removal leaves the
+			// mark to the next start, which finds the copy gone and reads
+			// nothing. It is written only under the confirmation of an
+			// entry neither answered nor closed, moved by each removal a
+			// later call makes of a copy still standing, and withdrawn
+			// with the confirmation.
 			`ALTER TABLE kept_work ADD COLUMN discard_read_at TEXT`,
 			`CREATE TRIGGER kept_work_discard_read_is_under_its_confirmation
 				BEFORE UPDATE OF discard_read_at, discard_digest ON kept_work

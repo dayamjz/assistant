@@ -97,11 +97,11 @@ paths: ["internal/store/**"]
   gone, which the triggers enforce. Carry on and discard each move or
   remove the whole copy, so each mark answers and marks every other open
   entry of the copy, for a carry on whenever it was kept, since its state
-  moved with the copy, and for a discard those kept by the time the
-  removal's read of the copy began, which `RecordKeptWorkDiscardRead`
+  moved with the copy, and for a discard those kept by the moment the
+  removal went ahead, the copy found as shown, which `RecordKeptWorkDiscardRead`
   records on the entry before the removal (migration 61's
   `discard_read_at`, written only under an owed confirmation and withdrawn
-  with it) so a mark the next start completes is bounded by that read;
+  with it) so a mark the next start completes is bounded by that moment;
   and no answer, claim
   or confirmation is written while an entry of the copy holds one not yet
   carried out, a claim or confirmation on the entry itself included

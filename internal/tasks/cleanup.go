@@ -336,6 +336,17 @@ type Cleaner struct {
 	// git are the options every repository this Cleaner opens is opened
 	// with, from gitOptions.
 	git []vcs.Option
+	// betweenDiscardReadAndCheck runs in a discard after its read of the
+	// loss and before the copy's state is read again and compared. It is
+	// nil in production and set only by this package's tests, which use it
+	// to change the copy between the read the digest is checked on and the
+	// check.
+	betweenDiscardReadAndCheck func()
+	// betweenWorktreeRemovalAndRecord runs in a discard of a run's copy
+	// after the worktree's directory is removed and before its directory in
+	// the gate is checked and git removes its record. It is nil in
+	// production and set only through BetweenWorktreeRemovalAndRecordForTest.
+	betweenWorktreeRemovalAndRecord func()
 	// betweenProofAndRemoval runs after the proof is recorded and before
 	// the copy is re-read and removed. It is nil in production and set only
 	// by this package's tests, which use it to change the copy inside the
@@ -382,6 +393,19 @@ func (c *Cleaner) InterruptBeforeMarkForTest(tb testing.TB, f func() error) erro
 		return errors.New("tasks: InterruptBeforeMarkForTest is a test's seam and takes the test")
 	}
 	c.betweenRemovalAndMark = f
+	return nil
+}
+
+// BetweenWorktreeRemovalAndRecordForTest makes every discard of a run's
+// copy this Cleaner makes run f once the worktree's directory is removed
+// and before its directory in the gate is checked and its record removed,
+// so a test can write into that moment. It takes the test and refuses a nil
+// one, on InterruptBeforeMarkForTest's terms.
+func (c *Cleaner) BetweenWorktreeRemovalAndRecordForTest(tb testing.TB, f func()) error {
+	if tb == nil {
+		return errors.New("tasks: BetweenWorktreeRemovalAndRecordForTest is a test's seam and takes the test")
+	}
+	c.betweenWorktreeRemovalAndRecord = f
 	return nil
 }
 

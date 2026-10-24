@@ -66,9 +66,12 @@ paths: ["internal/tasks/**"]
   reports changed, and the indicators; the header names what it does not
   cover), refusing an unestablished entry; `Discard` removes the copy only
   on that digest, with every commit lost now among those shown and every
-  one shown still in the copy or taken up upstream, the one use of
-  `vcs.RemoveWorktreeDiscardingChanges`, behind a person's answer and no
-  proof.
+  one shown still in the copy or taken up upstream, and only as the copy
+  was read (`kept_remove.go`: the state of everything the removal destroys
+  read before the loss read and again after the checks, objects that read
+  adds aside, and each entry removed only while it is as read), the one
+  use of `vcs.RemoveWorktreeDiscardingChanges`, for a run's record once its
+  worktree is gone, behind a person's answer and no proof.
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (an exclusively created partial of a fresh name, then a
   rename; a path standing as a link is `*InstructionsLinkError`), so a file
