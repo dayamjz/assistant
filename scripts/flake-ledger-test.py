@@ -14,8 +14,9 @@ in GO_PACKAGES, recorded once. After changing GO_PACKAGES, record it again:
     cd DIR && GOFLAGS=-trimpath GOWORK=off go test -v -count=1 -p 2 -timeout 5s ./... \\
         > scripts/testdata/flake-ledger/go-test-v.txt 2>&1
 
-write-go-module also writes go-test-v.sha256, which the tests compare with
-GO_PACKAGES, so a module changed without recording again fails them.
+write-go-module adds a test that logs the module's digest, so the recording
+carries the digest only when go test ran over that very module; the tests
+look for it, and a module changed without recording again fails them.
 """
 
 import contextlib
@@ -146,7 +147,7 @@ func TestNever(t *testing.T) { this is not go }
 }
 GO_COMMAND = "GOFLAGS=-trimpath GOWORK=off go test -v -count=1 -p 2 -timeout 5s ./..."
 GO_OUTPUT = DATA / "go-test-v.txt"
-GO_DIGEST = DATA / "go-test-v.sha256"
+PROVENANCE = "recorded from GO_PACKAGES "
 
 
 def go_module_digest():
@@ -154,12 +155,21 @@ def go_module_digest():
 
 
 def write_go_module(folder):
+    """Writes GO_PACKAGES, and a test logging their digest, into folder."""
     root = Path(folder)
-    for name, source in GO_PACKAGES.items():
+    files = {**GO_PACKAGES, "provenance/provenance_test.go": (
+        'package provenance\nimport "testing"\n'
+        f'func TestRecordedFrom(t *testing.T) {{ t.Log("{PROVENANCE}{go_module_digest()}") }}\n')}
+    for name, source in files.items():
         (root / name).parent.mkdir(parents=True, exist_ok=True)
         (root / name).write_text(source)
-    GO_DIGEST.write_text(go_module_digest() + "\n")
     print(f"wrote the module to {root}; now run, in it:\n  {GO_COMMAND} > {GO_OUTPUT} 2>&1")
+
+
+def recording_is_current():
+    """Whether go-test-v.txt is go test's output over GO_PACKAGES as they are:
+    only that run logs their digest (write_go_module)."""
+    return PROVENANCE + go_module_digest() in GO_OUTPUT.read_text(encoding="utf-8")
 
 
 class RecordedGoOutputTest(unittest.TestCase):
@@ -172,8 +182,18 @@ class RecordedGoOutputTest(unittest.TestCase):
         return {r.key: r for r in records}, printed_nothing
 
     def test_the_recording_is_of_the_module_as_it_now_is(self):
-        self.assertEqual(GO_DIGEST.read_text().strip(), go_module_digest(),
-                         "GO_PACKAGES or GO_COMMAND changed: record go-test-v.txt again (module docstring)")
+        self.assertTrue(recording_is_current(),
+                        "GO_PACKAGES or GO_COMMAND changed: record go-test-v.txt again (module docstring)")
+
+    def test_a_module_written_but_not_recorded_does_not_pass_for_recorded(self):
+        # write-go-module is the first half of recording; until go test has
+        # run over what it wrote, the recording is not of that module.
+        changed = {**GO_PACKAGES, "unrecorded/unrecorded_test.go":
+                   'package unrecorded\nimport "testing"\nfunc TestUnrecorded(t *testing.T) { t.Fail() }\n'}
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(GO_PACKAGES, changed), \
+                contextlib.redirect_stdout(io.StringIO()):
+            write_go_module(folder)
+            self.assertFalse(recording_is_current())
 
     def test_each_kind_of_go_failure_is_one_record(self):
         records, printed_nothing = self.records(framed(self.output))
@@ -284,6 +304,11 @@ class GitHubServer:
         # deadline fails a test instead of hanging it.
         self.stalled = set()
         self.trickled = set()
+        # job id -> "length" or "chunked": its log is cut off half way, after
+        # a Content-Length promising all of it, or with no closing chunk.
+        self.cut_logs = {}
+        self.cut_once = set()  # job ids in cut_logs cut only on their first read
+        self.cut_issues = False  # the issues answer promises 50 bytes and sends 2
         self.release = threading.Event()
         self.api = self._serve(self._answer_api)
         self.blobs = self._serve(self._answer_blob)
@@ -294,12 +319,16 @@ class GitHubServer:
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 status, headers, body = answer(self)
+                self.close_connection = True
+                if headers.get("Transfer-Encoding") == "chunked":
+                    self.protocol_version = "HTTP/1.1"
                 try:
                     self.send_response(status)
                     for name, value in headers.items():
                         self.send_header(name, value)
                     if isinstance(body, bytes):
-                        self.send_header("Content-Length", str(len(body)))
+                        if "Content-Length" not in headers:  # one given promises more than is sent
+                            self.send_header("Content-Length", str(len(body)))
                         self.end_headers()
                         self.wfile.write(body)
                         return
@@ -371,6 +400,8 @@ class GitHubServer:
         if path == f"{repo}/issues":
             if "issues" in self.broken:
                 return 503, {}, b"{}"
+            if self.cut_issues:
+                return 200, {"Content-Type": "application/json", "Content-Length": "50"}, b"[{"
             return self._paged(request, self.data["issues"])
         match = re.fullmatch(rf"{repo}/actions/jobs/(\d+)/logs", path)
         if match:
@@ -398,6 +429,17 @@ class GitHubServer:
         job_id = int(re.match(r"/logs/(\d+)", request.path)[1])
         if job_id in self.trickled:
             return 200, {"Content-Type": "text/plain"}, self._trickle()
+        if job_id in self.cut_logs:
+            framing = self.cut_logs[job_id]
+            if job_id in self.cut_once:
+                del self.cut_logs[job_id]
+            body = (Path(self.logs[job_id]) if Path(self.logs[job_id]).is_absolute()
+                    else DATA / self.logs[job_id]).read_bytes()
+            half = body[:len(body) // 2]
+            if framing == "length":
+                return 200, {"Content-Type": "text/plain", "Content-Length": str(len(body))}, half
+            return 200, {"Content-Type": "text/plain", "Transfer-Encoding": "chunked"}, \
+                iter([b"%x\r\n" % len(half) + half + b"\r\n"])  # and no closing 0-size chunk
         log = self.logs[job_id]
         return 200, {"Content-Type": "text/plain"}, (Path(log) if Path(log).is_absolute() else DATA / log).read_bytes()
 
@@ -518,6 +560,39 @@ class LedgerTest(ServerTest):
         status, data, _ = self.run_report(self.github(flaky={120265317855: 3}))
         self.assertEqual(status, 2)
         self.assertIn("HTTP 503", data["problems"][0])
+
+    def test_a_log_cut_off_part_way_is_a_read_that_failed(self):
+        # The cut comes after the log's first half, so what came before it
+        # names nothing wrong; only the missing rest says the read failed.
+        for framing in ("length", "chunked"):
+            with self.subTest(framing=framing):
+                github = self.github()
+                github.cut_logs[120265317855] = framing
+                status, data, _ = self.run_report(github)
+                self.assertEqual(status, 2)
+                self.assertEqual([u["job_id"] for u in data["unattributed"]], [120265317855])
+                self.assertRegex(data["unattributed"][0]["reason"], r"^not read: log of job 120265317855: incomplete read")
+
+    def test_a_log_cut_off_once_is_read_again(self):
+        github = self.github()
+        github.cut_logs[120265317855] = "length"
+        github.cut_once.add(120265317855)
+        status, data, _ = self.run_report(github)
+        self.assertEqual(status, 0)
+        self.assertEqual(github.read.count(120265317855), 2)
+        self.assertIn("test: internal/service TestConcurrentDispatchOfOneTaskClaimsOneAttempt",
+                      [f["key"] for f in data["failures"]])
+
+    def test_an_api_answer_cut_off_part_way_still_prints_and_writes_the_ledger(self):
+        github = self.github()
+        github.cut_issues = True
+        status, data, text = self.run_report(github)
+        self.assertEqual(status, 2)
+        self.assertIsNotNone(data, self.stderr)
+        self.assertTrue(any(p.startswith("issues: ") and "incomplete read" in p for p in data["problems"]),
+                        data["problems"])
+        self.assertTrue(all(f["issues"] is None for f in data["failures"]))
+        self.assertIn("unknown", text)
 
     def test_a_failed_test_step_that_names_nothing_fails_the_ledger(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -64,6 +64,7 @@ token, so an issue can be linked by writing it into the issue.
 import argparse
 import contextlib
 import datetime
+import http.client
 import json
 import os
 from pathlib import Path
@@ -108,6 +109,9 @@ READ_TIMEOUT = 30
 API_DEADLINE = 120
 LOG_DEADLINE = 300
 REDIRECTS = (301, 302, 303, 307, 308)
+# What reading a response can raise: the socket's errors, and http.client's
+# for a malformed or cut-off answer (IncompleteRead, which is not an OSError).
+READ_ERRORS = (OSError, http.client.HTTPException)
 
 
 def clean(line):
@@ -280,7 +284,7 @@ class GitHubError(Exception):
 
     @property
     def transient(self):
-        return bool(re.search(r"HTTP 5\d\d|HTTP 429|timed out|connection reset", str(self)))
+        return bool(re.search(r"HTTP 5\d\d|HTTP 429|timed out|connection reset|incomplete read", str(self)))
 
 
 def retried(read, tries=3):
@@ -318,6 +322,13 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def read_error(what, error):
+    """A GitHubError for an exception reading a response."""
+    if isinstance(error, http.client.IncompleteRead):
+        return GitHubError(f"{what}: incomplete read ({len(error.partial)} bytes, {error.expected} more expected)")
+    return GitHubError(f"{what}: {getattr(error, 'reason', error)}")
+
+
 def next_link(header):
     """The rel="next" address of a Link header, or None."""
     for part in (header or "").split(","):
@@ -353,8 +364,8 @@ class GitHub:
                 return error
             error.close()
             raise GitHubError(f"{what}: HTTP {error.code}") from None
-        except (urllib.error.URLError, OSError) as error:
-            raise GitHubError(f"{what}: {getattr(error, 'reason', error)}") from None
+        except (urllib.error.URLError, *READ_ERRORS) as error:
+            raise read_error(what, error) from None
 
     def _json(self, url):
         """(body, next page's address) of one API response, read again on a
@@ -368,9 +379,9 @@ class GitHub:
                     if response.status in REDIRECTS:
                         raise GitHubError(f"{what}: HTTP {response.status}")
                     try:
-                        body = response.read()
-                    except OSError as error:
-                        raise GitHubError(f"{what}: {error}") from None
+                        body = response.read()  # raises IncompleteRead on a body cut short
+                    except READ_ERRORS as error:
+                        raise read_error(what, error) from None
                     link = response.headers.get("Link")
                 finally:
                     response.close()
@@ -423,7 +434,11 @@ class GitHub:
     def job_log(self, job_id):
         """Yields the job's log lines as they arrive. GitHub answers with a
         redirect to the log's own signed address, which is read without the
-        token. The caller bounds the whole read (read_job)."""
+        token. A log cut off part way raises once its end is reached (a
+        chunked one when its closing chunk never comes, one with a
+        Content-Length when bytes it promised are missing), so the caller
+        never takes part of a log for all of it. The caller bounds the whole
+        read (read_job)."""
         what = f"log of job {job_id}"
         response = self._open(f"{self.api_url}/repos/{self.repo}/actions/jobs/{job_id}/logs", what, auth=True)
         try:
@@ -435,14 +450,24 @@ class GitHub:
                 response = self._open(urllib.parse.urljoin(self.api_url + "/", location), what, auth=False)
                 if response.status in REDIRECTS:
                     raise GitHubError(f"{what}: HTTP {response.status} from the log's own address")
+            pending = b""
             while True:
+                # read(), not readline(): readline ends quietly at a cut-off
+                # chunked body, where read() raises.
                 try:
-                    raw = response.readline()
-                except OSError as error:
-                    raise GitHubError(f"{what}: {error}") from None
-                if not raw:
-                    return
-                yield raw.decode("utf-8", "replace")
+                    chunk = response.read(65536)
+                except READ_ERRORS as error:
+                    raise read_error(what, error) from None
+                if not chunk:
+                    break
+                *lines, pending = (pending + chunk).split(b"\n")
+                for raw in lines:
+                    yield raw.decode("utf-8", "replace") + "\n"
+            if response.length:
+                # A Content-Length's remainder: read() ends quietly there.
+                raise GitHubError(f"{what}: incomplete read ({response.length} more bytes expected)")
+            if pending:
+                yield pending.decode("utf-8", "replace")
         finally:
             response.close()
 
