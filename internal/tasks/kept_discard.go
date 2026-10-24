@@ -267,11 +267,13 @@ var ErrLossUnestablished = errors.New("tasks: what the copy holds that the defau
 // ErrCopyGone is returned by Loss for an entry whose copy is not standing.
 var ErrCopyGone = errors.New("tasks: the kept copy is gone")
 
-// ErrRecordNotTheCopys is returned by Discard for a run's copy that the
-// gate's own registry does not tie to exactly one record, or whose own
-// files disagree with that record (copyRecord). The discard removes that
-// record itself, so it removes nothing of the copy then.
-var ErrRecordNotTheCopys = errors.New("tasks: the worktree's record is not this copy's in the gate, so the copy was not removed")
+// ErrRecordNotTheCopys is returned for a copy whose repository is not its
+// own, before anything of it is read or changed: by Discard for a run's
+// copy that the gate's own registry does not tie to exactly one record, or
+// whose own files disagree with that record (copyRecord), and by Loss,
+// Discard and PutBack for a task's clone that git does not read through a
+// repository directory of its own (cloneOwnRepository).
+var ErrRecordNotTheCopys = errors.New("tasks: the copy's repository is not its own, so nothing of it was read or removed")
 
 // ErrLossChanged is returned by Discard when the copy no longer holds
 // exactly what was shown, or still holds something once what was shown is
@@ -299,6 +301,11 @@ func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	}
 	if !standing {
 		return Loss{}, fmt.Errorf("%w: nothing stands at %s", ErrCopyGone, entry.CopyPath)
+	}
+	if entry.TaskID.IsKnown() {
+		if err := c.cloneOwnRepository(ctx, entry.CopyPath); err != nil {
+			return Loss{}, err
+		}
 	}
 	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, c.git...)
 	if err != nil {
@@ -860,11 +867,53 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 	return loss, nil
 }
 
+// cloneOwnRepository refuses, with ErrRecordNotTheCopys, a task's clone
+// that git does not read through a repository directory of its own: one
+// whose working tree or common directory git reads as anything but the
+// clone and the .git directory standing in it, so nothing a loss reads or
+// a discard changes is another repository's or another directory's. A
+// .git that is a symbolic link or a file pointing git elsewhere, and one
+// whose commondir names another repository, are refused so: git reports
+// the directory it reaches, with its links resolved, which is then not the
+// clone's .git, whose own name is not resolved, only the clone's; and a
+// core.worktree naming another directory moves the working tree git
+// reports (one naming a directory the clone is not inside, vcs.Observe
+// already refuses). The common directory being the clone's .git leaves
+// git's repository directory nowhere else: with .git a directory, git
+// reads it.
+func (c *Cleaner) cloneOwnRepository(ctx context.Context, copyPath string) error {
+	root, err := filepath.EvalSymlinks(copyPath)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrRecordNotTheCopys, copyPath, err)
+	}
+	obs, err := vcs.Observe(ctx, copyPath, c.git...)
+	if err != nil {
+		return fmt.Errorf("%w: %s could not be read: %w", ErrRecordNotTheCopys, copyPath, err)
+	}
+	own := filepath.Join(root, ".git")
+	for _, read := range []struct{ what, got, want string }{
+		{"working tree", obs.Toplevel, root},
+		{"repository directory", obs.CommonDir, own},
+	} {
+		got, err := filepath.EvalSymlinks(read.got)
+		if err != nil || got != read.want {
+			return fmt.Errorf("%w: git reads the clone's %s as %s, not %s", ErrRecordNotTheCopys, read.what, read.got, read.want)
+		}
+	}
+	return nil
+}
+
 // openForDiscard opens what a discard of the entry's copy works on: for a
 // run's copy the gate repository at gatePath, with the copy held to the
-// record the gate's registry keeps for it (copyRecord), and the copy.
+// record the gate's registry keeps for it (copyRecord), for a task's clone
+// nothing but the clone, held to a repository directory of its own
+// (cloneOwnRepository), and the copy.
 func (c *Cleaner) openForDiscard(ctx context.Context, entry store.KeptWork, gatePath string) (bare, copied *vcs.Repository, err error) {
-	if !entry.TaskID.IsKnown() {
+	if entry.TaskID.IsKnown() {
+		if err := c.cloneOwnRepository(ctx, entry.CopyPath); err != nil {
+			return nil, nil, err
+		}
+	} else {
 		if bare, err = vcs.OpenBare(ctx, gatePath, c.git...); err != nil {
 			return nil, nil, fmt.Errorf("tasks: opening the gate repository at %s: %w", gatePath, err)
 		}

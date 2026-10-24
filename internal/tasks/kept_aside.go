@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -38,10 +37,16 @@ import (
 //     tree's (HEAD's commit's when HEAD does not move), each path's
 //     entries recorded and replaced by the target's (vcs.ReplaceIndexEntries),
 //     after the whole index is held to what was read before the loss was,
-//     so content staged since refuses; then every file of the target's
-//     tree the working tree no longer holds as it is written from it
-//     without force (vcs.CheckoutMissing), so a file written there
-//     meanwhile refuses;
+//     so content staged since refuses; then every path git reports the
+//     working tree lacking of that index (vcs.IndexPathsMissing) is
+//     written from it without force (vcs.CheckoutMissing), one at a time,
+//     each journalled with the blob it is written from before it is
+//     written, so a file written there meanwhile refuses and a restore
+//     knows every file the discard may have written: only a path under
+//     one set aside, one the loss shows deleted, or, when HEAD moves, one
+//     HEAD's tree does not hold as the target's does, and never a
+//     submodule's; any other missing path is a deletion nobody was shown,
+//     which refuses;
 //   - for a task's clone only, which P12's proof reads by its HEAD and its
 //     branches, tags and stash: HEAD, when its commit is lost, detached
 //     onto the target anchored to the commit it was read at, touching no
@@ -131,13 +136,12 @@ type asideJournal struct {
 	// the copy; Emptied is every directory the moves left empty and the
 	// discard removed, deepest first, with its mode; Created is every
 	// directory writing the target's tree made, shallowest first; Written
-	// is every path written from the target's tree, with the state it was
-	// written in.
-	Moved   []string              `json:"moved,omitempty"`
-	Emptied []asideDirEntry       `json:"emptied,omitempty"`
-	Created []string              `json:"created,omitempty"`
-	Written map[string]stateEntry `json:"-"`
-	Wrote   []writtenPath         `json:"written,omitempty"`
+	// is every path the discard writes from the target's tree, with the
+	// entry it writes there, each journalled before it is written.
+	Moved   []string        `json:"moved,omitempty"`
+	Emptied []asideDirEntry `json:"emptied,omitempty"`
+	Created []string        `json:"created,omitempty"`
+	Written []writtenPath   `json:"written,omitempty"`
 	// Index is every path whose index entries the discard replaced, with
 	// the entries it held and those written.
 	Index []asideIndexPath `json:"index,omitempty"`
@@ -163,11 +167,12 @@ type asideLog struct {
 	Aside string `json:"aside"`
 }
 
-// writtenPath is one entry of asideJournal.Written as the journal holds it.
+// writtenPath is a path a discard writes from the target's tree and the
+// tree's entry there, git's mode and the blob.
 type writtenPath struct {
-	Path string      `json:"path"`
-	Mode fs.FileMode `json:"mode"`
-	Held string      `json:"held"`
+	Path   string `json:"path"`
+	Mode   string `json:"mode"`
+	Object string `json:"object"`
 }
 
 // asideDirEntry is a directory a discard removed once it was empty, by its
@@ -186,11 +191,6 @@ type asideRef struct {
 const journalName = "journal.json"
 
 func writeJournal(dir string, j asideJournal) error {
-	j.Wrote = j.Wrote[:0]
-	for p, s := range j.Written {
-		j.Wrote = append(j.Wrote, writtenPath{Path: p, Mode: s.mode, Held: s.held})
-	}
-	slices.SortFunc(j.Wrote, func(a, b writtenPath) int { return strings.Compare(a.Path, b.Path) })
 	raw, err := json.Marshal(j)
 	if err != nil {
 		return err
@@ -210,10 +210,6 @@ func readJournal(dir string) (asideJournal, error) {
 	var j asideJournal
 	if err := json.Unmarshal(raw, &j); err != nil {
 		return asideJournal{}, err
-	}
-	j.Written = map[string]stateEntry{}
-	for _, w := range j.Wrote {
-		j.Written[w.Path] = stateEntry{mode: w.Mode, held: w.Held}
 	}
 	return j, nil
 }
@@ -276,17 +272,17 @@ func workingState(copyPath string) (copyState, error) {
 	return state, nil
 }
 
-// asidePaths is what the discard moves aside and what it then writes from
-// the target's tree (target, HEAD's commit when it is not lost). Moved is
-// every path of the loss the working tree holds (a path lost whole once, as
-// the directory) and, when target is not HEAD's commit, every file of
-// HEAD's tree the target's does not hold as it is that the working tree
-// holds (before) under no path already moved. Written is every file of the
-// target's tree that HEAD's does not hold as it is, or that the loss shows
-// changed or deleted, a directory deleted whole by the files under it. A
+// asidePaths is what the discard moves aside, and the target's tree
+// (target, HEAD's commit when it is not lost), which the index is then
+// made to hold. Moved is every path of the loss the working tree holds (a
+// path lost whole once, as the directory) and, when target is not HEAD's
+// commit, every file of HEAD's tree the target's does not hold as it is
+// that the working tree holds (before) under no path already moved. A
 // submodule the two trees hold differently refuses with ErrLossChanged.
-func asidePaths(ctx context.Context, copied *vcs.Repository, copyPath string, loss Loss, target string, before copyState) (moved, written []string, targetTree map[string]vcs.TreeEntry, err error) {
-	head, err := copied.AllTreeEntries(ctx, loss.Head)
+// What is written back is not decided here but from what git reports
+// missing once the index is the target's (setAside).
+func asidePaths(ctx context.Context, copied *vcs.Repository, copyPath string, loss Loss, target string, before copyState) (moved []string, head, targetTree map[string]vcs.TreeEntry, err error) {
+	head, err = copied.AllTreeEntries(ctx, loss.Head)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -296,27 +292,13 @@ func asidePaths(ctx context.Context, copied *vcs.Repository, copyPath string, lo
 			return nil, nil, nil, err
 		}
 	}
-	changed := map[string]bool{}
-	var deleted []string
 	for _, f := range loss.Files {
-		path := strings.TrimSuffix(f.Path, "/")
-		switch f.Kind {
-		case LostNew, LostChanged:
-			moved = append(moved, path)
-			if f.Kind == LostChanged {
-				changed[path] = true
-			}
-		case LostDeleted:
-			deleted = append(deleted, f.Path)
+		if f.Kind == LostNew || f.Kind == LostChanged {
+			moved = append(moved, strings.TrimSuffix(f.Path, "/"))
 		}
 	}
-	under := func(p string, paths []string) bool {
-		for _, q := range paths {
-			if p == strings.TrimSuffix(q, "/") || strings.HasPrefix(p, strings.TrimSuffix(q, "/")+"/") {
-				return true
-			}
-		}
-		return false
+	submodule := func(p string) error {
+		return fmt.Errorf("%w: the submodule at %s is not set aside, and the default branch's tree does not hold it as HEAD's does", ErrLossChanged, p)
 	}
 	for _, p := range sortedPaths(head) {
 		e := head[p]
@@ -324,26 +306,29 @@ func asidePaths(ctx context.Context, copied *vcs.Repository, copyPath string, lo
 			continue
 		}
 		if e.Type == "commit" {
-			return nil, nil, nil, fmt.Errorf("%w: the submodule at %s is not set aside, and the default branch's tree does not hold it as HEAD's does", ErrLossChanged, p)
+			return nil, nil, nil, submodule(p)
 		}
-		if _, stands := before[filepath.Join(copyPath, p)]; stands && !under(p, moved) {
+		if _, stands := before[filepath.Join(copyPath, p)]; stands && !underAny(p, moved) {
 			moved = append(moved, p)
 		}
 	}
 	for _, p := range sortedPaths(targetTree) {
-		e := targetTree[p]
-		if e.Type == "tree" {
-			continue
+		if e := targetTree[p]; e.Type == "commit" && head[p] != e {
+			return nil, nil, nil, submodule(p)
 		}
-		if head[p] == e && !changed[p] && !under(p, deleted) {
-			continue
-		}
-		if e.Type == "commit" {
-			return nil, nil, nil, fmt.Errorf("%w: the submodule at %s is not set aside, and the default branch's tree does not hold it as HEAD's does", ErrLossChanged, p)
-		}
-		written = append(written, p)
 	}
-	return moved, written, targetTree, nil
+	return moved, head, targetTree, nil
+}
+
+// underAny reports whether p is one of paths, each relative to the copy
+// with no trailing slash, or lies under one.
+func underAny(p string, paths []string) bool {
+	for _, q := range paths {
+		if p == q || strings.HasPrefix(p, q+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // sortedPaths is a tree's paths in order, so what a discard does follows
@@ -384,13 +369,12 @@ func (c *Cleaner) setAside(ctx context.Context, entry store.KeptWork, copied *vc
 		lost[o.Object] = true
 	}
 	clone := entry.TaskID.IsKnown()
-	j := asideJournal{HeadCommit: loss.Head, HeadBranch: head, Detached: clone && lost[loss.Head], Against: loss.against,
-		Written: map[string]stateEntry{}}
+	j := asideJournal{HeadCommit: loss.Head, HeadBranch: head, Detached: clone && lost[loss.Head], Against: loss.against}
 	target := loss.Head
 	if j.Detached {
 		target = j.Against
 	}
-	moved, written, targetTree, err := asidePaths(ctx, copied, entry.CopyPath, loss, target, before.tree)
+	moved, headTree, targetTree, err := asidePaths(ctx, copied, entry.CopyPath, loss, target, before.tree)
 	if err != nil {
 		return refuse(err)
 	}
@@ -457,34 +441,50 @@ func (c *Cleaner) setAside(ctx context.Context, entry store.KeptWork, copied *vc
 	if err := replaceIndex(ctx, copied, j.Index, func(p asideIndexPath) []vcs.IndexEntry { return p.Wrote }); err != nil {
 		return refuse(err)
 	}
-	for _, p := range written {
-		var missing []string
-		for d := filepath.Dir(p); d != "."; d = filepath.Dir(d) {
-			if _, err := os.Lstat(filepath.Join(entry.CopyPath, d)); errors.Is(err, fs.ErrNotExist) {
-				missing = append(missing, d)
-			}
-		}
-		for i := len(missing) - 1; i >= 0; i-- {
-			if !slices.Contains(j.Created, missing[i]) {
-				j.Created = append(j.Created, missing[i])
-			}
+	// What git reports the working tree lacking of the index, now the
+	// target's tree, is written, each path journalled with the entry it is
+	// written from before it is written, so a restore knows every file the
+	// discard may have written however far it got. Only a path whose absence
+	// the discard made or the person was shown is written: one under a path
+	// set aside, one the loss shows deleted, and, when HEAD moves, one
+	// HEAD's tree does not hold as the target's does; any other missing
+	// path is a deletion nobody was shown, which refuses. A gitlink is
+	// never written: a submodule's directory missing stays missing, and the
+	// read once everything is set aside refuses it.
+	var deleted []string
+	for _, f := range loss.Files {
+		if f.Kind == LostDeleted {
+			deleted = append(deleted, strings.TrimSuffix(f.Path, "/"))
 		}
 	}
-	if err := writeJournal(dir, j); err != nil {
+	missing, err := copied.IndexPathsMissing(ctx)
+	if err != nil {
 		return refuse(err)
 	}
-	if err := copied.CheckoutMissing(ctx, written); err != nil {
-		return refuse(fmt.Errorf("%w: a path the discard writes from the default branch's or HEAD's tree stands again: %w", ErrLossChanged, err))
-	}
-	for _, p := range written {
-		s, err := stateOf(filepath.Join(entry.CopyPath, p))
-		if err != nil {
+	for _, p := range missing {
+		e, ok := targetTree[p]
+		if !ok || e.Type != "blob" {
+			continue
+		}
+		if !underAny(p, moved) && !underAny(p, deleted) && headTree[p] == e {
+			return refuse(fmt.Errorf("%w: %s is deleted from the working tree, which the discard was not shown", ErrLossChanged, p))
+		}
+		for d := filepath.Dir(p); d != "."; d = filepath.Dir(d) {
+			if _, err := os.Lstat(filepath.Join(entry.CopyPath, d)); errors.Is(err, fs.ErrNotExist) && !slices.Contains(j.Created, d) {
+				j.Created = append(j.Created, d)
+			}
+		}
+		slices.SortStableFunc(j.Created, func(a, b string) int { return strings.Count(a, "/") - strings.Count(b, "/") })
+		j.Written = append(j.Written, writtenPath{Path: p, Mode: e.Mode, Object: e.Object})
+		if err := writeJournal(dir, j); err != nil {
 			return refuse(err)
 		}
-		j.Written[p] = s
-	}
-	if err := writeJournal(dir, j); err != nil {
-		return refuse(err)
+		if c.beforeWrite != nil {
+			c.beforeWrite(p)
+		}
+		if err := copied.CheckoutMissing(ctx, []string{p}); err != nil {
+			return refuse(fmt.Errorf("%w: %s, which the discard writes from the default branch's or HEAD's tree, stands again: %w", ErrLossChanged, p, err))
+		}
 	}
 	// HEAD, when its commit is lost, onto the target, its reflog set aside
 	// first.
@@ -619,9 +619,10 @@ func moveAsRead(from, to string, before copyState, what string) (bool, error) {
 // restore that stopped takes up where it stopped: a reference is written
 // back where it is gone, HEAD is put back on its branch or, detached,
 // moved back anchored to the target, each reflog is moved back only where
-// none stands, every path written from the target's tree is taken out
-// again only while it is what was written and every directory that made
-// only while it is empty, each index path is put back only while it holds
+// none stands, every path journalled as written from the target's tree is
+// taken out again only while git would store it as the blob written there
+// with its mode (holdsBlob), whoever wrote it, since its content is the
+// tree's, and every directory that made only while it is empty, each index path is put back only while it holds
 // what the discard wrote, every directory emptied is made again with its
 // mode, and every path set aside is moved back only where nothing has
 // taken its place. What could not be put back stays in dir and the
@@ -692,25 +693,39 @@ func (c *Cleaner) restoreAside(ctx context.Context, entry store.KeptWork, copied
 			return err
 		}
 	}
-	for _, p := range slices.Sorted(maps.Keys(j.Written)) {
-		wrote := j.Written[p]
-		path := filepath.Join(entry.CopyPath, p)
-		now, err := stateOf(path)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-		case err != nil || now != wrote:
-			left = append(left, p+", which changed after the discard wrote it from HEAD's tree")
+	var written []writtenPath
+	var format string
+	for i := len(j.Written) - 1; i >= 0; i-- {
+		w := j.Written[i]
+		path := filepath.Join(entry.CopyPath, filepath.FromSlash(w.Path))
+		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
 			continue
-		default:
-			if err := os.Remove(path); err != nil {
-				left = append(left, p+": "+err.Error())
+		}
+		if format == "" {
+			if format, err = copied.ObjectFormat(ctx); err != nil {
+				left = append(left, w.Path+": "+err.Error())
+				written = append([]writtenPath{w}, written...)
 				continue
 			}
 		}
-		delete(j.Written, p)
-		if err := save(); err != nil {
-			return err
+		ours, err := holdsBlob(ctx, copied, format, entry.CopyPath, w)
+		switch {
+		case err != nil:
+			left = append(left, w.Path+": "+err.Error())
+		case !ours:
+			left = append(left, w.Path+", which does not hold what the discard writes there from HEAD's or the default branch's tree")
+		default:
+			if err := os.Remove(path); err != nil {
+				left = append(left, w.Path+": "+err.Error())
+			} else {
+				continue
+			}
 		}
+		written = append([]writtenPath{w}, written...)
+	}
+	j.Written = written
+	if err := save(); err != nil {
+		return err
 	}
 	var created []string
 	for i := len(j.Created) - 1; i >= 0; i-- {
@@ -800,6 +815,32 @@ func (c *Cleaner) restoreAside(ctx context.Context, entry store.KeptWork, copied
 		return fmt.Errorf("%w at %s: %s could not be put back", ErrAsideStands, dir, strings.Join(left, "; "))
 	}
 	return os.RemoveAll(dir)
+}
+
+// holdsBlob reports whether the working-tree entry at w.Path of the copy
+// is what the discard writes there: git's mode w.Mode and, by the blob git
+// would store for it (its bytes as they stand, or with its clean filters
+// and line-ending conversion applied, vcs.StoredObjects), w.Object. A file
+// that holds it is the discard's to take out, whoever wrote it: what it
+// holds is the tree's.
+func holdsBlob(ctx context.Context, copied *vcs.Repository, format, copyPath string, w writtenPath) (bool, error) {
+	path := filepath.Join(copyPath, filepath.FromSlash(w.Path))
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false, err
+	}
+	if gitMode(info) != w.Mode {
+		return false, nil
+	}
+	object, err := vcs.BlobObject(format, path)
+	if err != nil || object == w.Object || !info.Mode().IsRegular() {
+		return object == w.Object, err
+	}
+	stored, err := copied.StoredObjects(ctx, []string{w.Path})
+	if err != nil {
+		return false, err
+	}
+	return stored[0] == w.Object, nil
 }
 
 // restoreHEAD puts HEAD back where the journal j says it stood, only from

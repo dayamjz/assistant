@@ -347,6 +347,11 @@ type Cleaner struct {
 	// nil in production and set only by this package's tests and through
 	// BetweenAsideAndCheckForTest.
 	betweenAsideAndCheck func() error
+	// beforeWrite runs in a discard before each path it writes from the
+	// target's tree, once that path is journalled. It is nil in production
+	// and set only by this package's tests, which use it to write into the
+	// path first, as a process working in the copy might.
+	beforeWrite func(rel string)
 	// betweenProofAndRemoval runs after the proof is recorded and before
 	// the copy is re-read and removed. It is nil in production and set only
 	// by this package's tests, which use it to change the copy inside the

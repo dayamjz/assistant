@@ -351,6 +351,10 @@ var WriteExceptions = []WriteException{
 		Why: "Gives a tracked file's directory a mode the umask cannot make, so a restore must put it back; the mode is a directory's.",
 	},
 	{
+		File: "internal/tasks/kept_aside_test.go", Function: "TestARestoreKnowsWhatItWroteByTheBlobAndTheMode",
+		Why: "Gives a file a discard wrote an execute bit, the change its restore must not take out; nothing runs the file.",
+	},
+	{
 		File: "internal/tasks/kept_discard_test.go", Function: "TestADiscardRemovesTheCopyOnlyWhileItHoldsExactlyWhatWasShown",
 		Why: "Puts back a tracked file's committed mode after a checkout, because a discard's digest reads it; nothing runs the file.",
 	},

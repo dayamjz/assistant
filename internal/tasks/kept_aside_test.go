@@ -493,3 +493,380 @@ func TestAReflogGoesBackOnlyWithItsReference(t *testing.T) {
 		t.Fatalf("the branch made again has a reflog: %v; want the set-aside one kept aside", err)
 	}
 }
+
+// A task's clone is read and changed only through a repository directory
+// of its own, round 24's first finding: the clone's .git is replaced by a
+// symbolic link to another clone's .git, or by a file pointing git at it,
+// or keeps its own .git with a commondir file naming the other's or a
+// core.worktree naming the directory the clone stands in, and that other
+// clone holds a branch and reflogs nothing else holds. The
+// preview refuses with ErrRecordNotTheCopys, and so does a discard
+// confirmed on what the preview showed through the redirect, with the other
+// clone's references, HEAD, index and reflogs as they were and the task's
+// directory standing. Before, the discard set the other clone's items
+// aside through the link, moved its HEAD and deleted its branch, and
+// removed only the task's directory.
+func TestADiscardTouchesNoRepositoryButTheClonesOwn(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	for _, how := range []string{"a symbolic link", "a gitdir file", "a commondir file", "a core.worktree setting"} {
+		t.Run(how, func(t *testing.T) {
+			s, tk, entry, shown := keptWithWork(t)
+			other := filepath.Join(t.TempDir(), "other")
+			rawGit(t, filepath.Dir(other), "clone", "-q", tk.copy, other)
+			rawGit(t, other, "switch", "-q", "-c", "only-here")
+			commit(t, other, "only-here.txt", "the other clone's own work\n", "the other clone's own commit")
+			before := copySnapshot(t, other)
+			if how == "a core.worktree setting" {
+				// The clone's own .git directory stands, and names the
+				// directory the clone stands in as its working tree, which
+				// holds the clone and whatever stands beside it.
+				rawGit(t, tk.copy, "config", "core.worktree", filepath.Dir(tk.copy))
+			} else if how == "a commondir file" {
+				// The clone's own .git directory stands, and names the
+				// other's as the directory its references and objects are in.
+				if err := os.WriteFile(filepath.Join(tk.copy, ".git", "commondir"), []byte(filepath.Join(other, ".git")+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.RemoveAll(filepath.Join(tk.copy, ".git")); err != nil {
+				t.Fatal(err)
+			}
+			if how == "a commondir file" || how == "a core.worktree setting" {
+			} else if how == "a symbolic link" {
+				if err := os.Symlink(filepath.Join(other, ".git"), filepath.Join(tk.copy, ".git")); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(filepath.Join(tk.copy, ".git"), []byte("gitdir: "+filepath.Join(other, ".git")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// The reviewer's sequence: the discard shown through the
+			// redirect, and that digest confirmed.
+			digest, lacks := shown.Digest, shown.Lacks
+			if through, err := s.cleaner.Loss(ctx, entry); !errors.Is(err, ErrRecordNotTheCopys) {
+				t.Errorf("the preview of a clone whose .git is %s to another = %v; want ErrRecordNotTheCopys", how, err)
+				if err == nil {
+					digest, lacks = through.Digest, through.Lacks
+				}
+			}
+			if _, err := s.cleaner.Discard(ctx, entry, digest, lacks, "", nil); !errors.Is(err, ErrRecordNotTheCopys) {
+				t.Errorf("the discard of a clone whose .git is %s to another = %v; want ErrRecordNotTheCopys", how, err)
+			}
+			if now := copySnapshot(t, other); now != before {
+				t.Fatalf("the other clone reads\n%s\nafter the refusal; want it as it was\n%s", now, before)
+			}
+			if _, err := os.Lstat(tk.copy); err != nil {
+				t.Fatalf("the task's directory is gone: %v", err)
+			}
+		})
+	}
+}
+
+// keptLandedHolding is keptLanded for a landed branch that holds each of
+// names, committed with "on topic" in it, so change has tracked files to
+// work on.
+func keptLandedHolding(t *testing.T, names []string, change func(copyPath string)) (*cleanupSubject, task, store.KeptWork, Loss) {
+	t.Helper()
+	files := make([][2]string, len(names))
+	for i, name := range names {
+		files[i] = [2]string{name, "on topic\n"}
+	}
+	return keptLandedWithFiles(t, files, change)
+}
+
+// keptLandedWithFiles is keptLandedHolding for files given with their
+// content, each a name and what it holds, committed in order.
+func keptLandedWithFiles(t *testing.T, files [][2]string, change func(copyPath string)) (*cleanupSubject, task, store.KeptWork, Loss) {
+	t.Helper()
+	s := newCleanupSubject(t, nil)
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "topic")
+	for _, f := range files {
+		commit(t, tk.copy, f[0], f[1], "on topic: "+f[0])
+	}
+	s.push(t, tk.copy, "topic")
+	change(tk.copy)
+	_, err := s.cleanUp(t, tk.id)
+	var refusal *CleanupRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("the cleanup of the changed clone = %v; want it refused", err)
+	}
+	kept, ok := KeptOf(refusal)
+	if !ok {
+		t.Fatalf("the refusal %+v is not kept work", refusal)
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, tk, got.Entry, shown
+}
+
+// A discard writes back from the tree only the files git reports the
+// working tree lacking once the index is the tree's, round 24's fourth and
+// fifth findings: a landed clone holding a.txt and b.txt has b.txt's
+// deletion staged with the file left standing, or a.txt edited beside it
+// (the reviewer's sequence for the third finding), or b.txt deleted, which
+// is written back as the deletion shown, or a.txt replaced by a directory
+// holding a file. Each preview is confirmed and the discard
+// removes the clone. Before, the first two refused because the checkout
+// would not write over the b.txt standing as HEAD holds it, and the third
+// because a.txt, moved aside as the directory, was never written back, so
+// the discard's own read found it deleted.
+func TestADiscardWritesBackOnlyWhatTheWorkingTreeLacks(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	ctx := context.Background()
+	for _, c := range []struct {
+		name   string
+		change func(t *testing.T, copyPath string)
+	}{
+		{"a deletion staged with the file standing", func(t *testing.T, copyPath string) {
+			rawGit(t, copyPath, "rm", "--quiet", "--cached", "b.txt")
+		}},
+		{"that and a tracked file edited", func(t *testing.T, copyPath string) {
+			if err := os.WriteFile(filepath.Join(copyPath, "a.txt"), []byte("edited after the landing\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			rawGit(t, copyPath, "rm", "--quiet", "--cached", "b.txt")
+		}},
+		{"a tracked file deleted", func(t *testing.T, copyPath string) {
+			if err := os.Remove(filepath.Join(copyPath, "b.txt")); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a tracked file replaced by a directory", func(t *testing.T, copyPath string) {
+			if err := os.Remove(filepath.Join(copyPath, "a.txt")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(copyPath, "a.txt"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(copyPath, "a.txt", "new"), []byte("a file where a.txt was\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, tk, entry, shown := keptLandedHolding(t, []string{"a.txt", "b.txt"}, func(copyPath string) { c.change(t, copyPath) })
+			if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); err != nil {
+				t.Fatalf("Discard of the preview %+v: %v", shown.Files, err)
+			}
+			if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("the clone still stands: %v", err)
+			}
+			if _, err := os.Lstat(asideDir(tk.copy)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("something is still set aside: %v", err)
+			}
+		})
+	}
+}
+
+// Every path a discard writes from the tree is journalled before it is
+// written, and a restore takes out a file only while git would store it as
+// the blob written there, round 24's third finding: a landed clone holding
+// a.txt and b.txt has both edited, so the discard sets both edits aside and
+// writes both back from HEAD's tree, and a file is written at b.txt after
+// a.txt is written and before b.txt is. The discard refuses; the restore
+// takes out the a.txt it wrote and puts the edit back, and leaves b.txt,
+// which is not what it would have written, with the edit to it beside the
+// copy, refusing with ErrAsideStands. Once that file is removed, a
+// put-back finishes and the copy is as it was. Before, the paths were
+// journalled only once the whole checkout succeeded, so the restore took
+// the a.txt it had written for somebody's and could never put the edit
+// back.
+func TestARestoreTakesOutWhatAStoppedCheckoutWrote(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s, tk, entry, shown := keptLandedHolding(t, []string{"a.txt", "b.txt"}, func(copyPath string) {
+		for _, name := range []string{"a.txt", "b.txt"} {
+			if err := os.WriteFile(filepath.Join(copyPath, name), []byte("edited after the landing\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	before := copySnapshot(t, tk.copy)
+	b := filepath.Join(tk.copy, "b.txt")
+	s.cleaner.beforeWrite = func(rel string) {
+		if rel == "b.txt" {
+			if err := os.WriteFile(b, []byte("written before the discard wrote it\n"), 0o600); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	_, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil)
+	if !errors.Is(err, ErrLossChanged) || !errors.Is(err, ErrAsideStands) || !strings.Contains(err.Error(), "b.txt") {
+		t.Fatalf("the discard over a file written where it writes = %v; want ErrLossChanged and ErrAsideStands naming b.txt", err)
+	}
+	s.cleaner.beforeWrite = nil
+	if raw, err := os.ReadFile(filepath.Join(tk.copy, "a.txt")); err != nil || string(raw) != "edited after the landing\n" {
+		t.Fatalf("a.txt holds %q, %v after the refusal; want the edit put back", raw, err)
+	}
+	if err := os.Remove(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleaner.PutBack(ctx, entry, ""); err != nil {
+		t.Fatalf("PutBack once the file written meanwhile is removed: %v", err)
+	}
+	if now := copySnapshot(t, tk.copy); now != before {
+		t.Fatalf("the copy once put back reads\n%s\nwant it as it was\n%s", now, before)
+	}
+}
+
+// A restore takes out a file it wrote only while git would store it as the
+// blob it wrote, with git's mode for it: a landed clone holding a.txt and
+// b.txt, b.txt checked out with CRLF line endings by its attributes, has
+// both edited, so the discard writes both back from HEAD's tree. A discard
+// that stops once it has set the edits aside is put back by the next, on a
+// digest the copy does not hold, exactly, b.txt's converted bytes taken
+// for the blob written. Then a discard during which a.txt, once written,
+// is made executable refuses, and its restore leaves that a.txt, with the
+// edit beside the copy, refusing with ErrAsideStands naming a.txt. Without
+// the stored blob the converted b.txt reads as somebody's, and without
+// the mode the executable a.txt is taken out.
+func TestARestoreKnowsWhatItWroteByTheBlobAndTheMode(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	files := [][2]string{{".gitattributes", "b.txt text eol=crlf\n"}, {"a.txt", "on topic\n"}, {"b.txt", "on topic\n"}}
+	s, tk, entry, shown := keptLandedWithFiles(t, files, func(copyPath string) {
+		for _, name := range []string{"a.txt", "b.txt"} {
+			if err := os.WriteFile(filepath.Join(copyPath, name), []byte("edited after the landing\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	before := copySnapshot(t, tk.copy)
+	s.cleaner.betweenAsideAndCheck = func() error { return errStoppedAside }
+	if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, errStoppedAside) {
+		t.Fatalf("the stopped discard = %v; want it stopped", err)
+	}
+	s.cleaner.betweenAsideAndCheck = nil
+	if _, err := s.cleaner.Discard(ctx, entry, "not the digest", shown.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("a discard on another digest = %v; want ErrLossChanged", err)
+	}
+	if now := copySnapshot(t, tk.copy); now != before {
+		t.Fatalf("the copy once put back reads\n%s\nwant it as it was\n%s", now, before)
+	}
+	s.cleaner.betweenAsideAndCheck = func() error {
+		if raw, err := os.ReadFile(filepath.Join(tk.copy, "b.txt")); err != nil || string(raw) != "on topic\r\n" {
+			t.Errorf("b.txt as the discard wrote it reads %q, %v; want git's CRLF conversion, the case under test", raw, err)
+		}
+		return os.Chmod(filepath.Join(tk.copy, "a.txt"), 0o755)
+	}
+	_, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil)
+	if !errors.Is(err, ErrLossChanged) || !errors.Is(err, ErrAsideStands) || !strings.Contains(err.Error(), "a.txt") {
+		t.Fatalf("the discard over an a.txt made executable once written = %v; want ErrLossChanged and ErrAsideStands naming a.txt", err)
+	}
+	if info, err := os.Stat(filepath.Join(tk.copy, "a.txt")); err != nil || info.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("a.txt reads %v, %v after the refusal; want the executable one left standing", info, err)
+	}
+}
+
+// A directory the discard's checkout makes is taken out again by its
+// restore: a clone kept for a commit of its own, whose HEAD the discard
+// moves onto the default branch, which the upstream moved on past the
+// commit the task branched from to one holding mainonly/x.txt. The discard
+// writes mainonly/x.txt into a mainonly it makes; one that stops once it
+// has is put back by the next, on a digest the copy does not hold, with
+// mainonly gone again and the copy exactly as it was, and the discard on
+// the digest shown then removes the clone. Without the directory in the
+// journal the restore leaves it, empty, a directory no commit records.
+func TestARestoreTakesOutTheDirectoriesItsCheckoutMade(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s := newCleanupSubject(t, forgetest.Script{})
+	tk := s.deliveryTask(t, "task/dirs")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	seed := filepath.Join(t.TempDir(), "seed")
+	rawGit(t, filepath.Dir(seed), "clone", "-q", s.upstream, seed)
+	if err := os.MkdirAll(filepath.Join(seed, "mainonly"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	commit(t, seed, filepath.Join("mainonly", "x.txt"), "on main alone\n", "the upstream moved on")
+	rawGit(t, seed, "push", "-q", "origin", "main")
+	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := copySnapshot(t, tk.copy)
+	s.cleaner.betweenAsideAndCheck = func() error {
+		if _, err := os.Stat(filepath.Join(tk.copy, "mainonly", "x.txt")); err != nil {
+			t.Errorf("mainonly/x.txt is not written once set aside: %v; the case would test nothing", err)
+		}
+		return errStoppedAside
+	}
+	if _, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, errStoppedAside) {
+		t.Fatalf("the stopped discard = %v; want it stopped", err)
+	}
+	s.cleaner.betweenAsideAndCheck = nil
+	if _, err := s.cleaner.Discard(ctx, got.Entry, "not the digest", shown.Lacks, "", nil); !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("a discard on another digest = %v; want ErrLossChanged", err)
+	}
+	if now := copySnapshot(t, tk.copy); now != before {
+		t.Fatalf("the copy once put back reads\n%s\nwant it as it was\n%s", now, before)
+	}
+	if _, err := s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", nil); err != nil {
+		t.Fatalf("Discard on the digest shown: %v", err)
+	}
+	if _, err := os.Lstat(tk.copy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the clone still stands: %v", err)
+	}
+}
+
+// A submodule's directory the loss shows deleted is not written back: git
+// would make an empty directory there, which holds nothing of the
+// submodule. A landed clone whose branch records a submodule at sub has
+// its directory missing; the discard on the digest shown refuses, the
+// deletion standing once everything is set aside, and puts everything back
+// with nothing left aside. Without gitlinks left out of the checkout the
+// restore finds a directory where it wrote a submodule and leaves it,
+// refusing with ErrAsideStands.
+func TestADiscardWritesNoSubmoduleBack(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s := newCleanupSubject(t, nil)
+	tk := s.deliveryTask(t, "topic")
+	base := commit(t, tk.copy, "a.txt", "on topic\n", "on topic")
+	rawGit(t, tk.copy, "update-index", "--add", "--cacheinfo", "160000,"+strings.TrimSpace(base)+",sub")
+	rawGit(t, tk.copy, "commit", "--quiet", "-m", "a submodule at sub")
+	s.push(t, tk.copy, "topic")
+	if _, err := os.Lstat(filepath.Join(tk.copy, "sub")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("sub stands in the clone: %v; the case wants its directory missing", err)
+	}
+	_, err := s.cleanUp(t, tk.id)
+	var refusal *CleanupRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("the cleanup of the clone missing sub = %v; want it refused", err)
+	}
+	kept, ok := KeptOf(refusal)
+	if !ok {
+		t.Fatalf("the refusal %+v is not kept work", refusal)
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	if err != nil || !slices.Contains(shown.Files, LostPath{LostDeleted, "sub"}) {
+		t.Fatalf("Loss = %+v, %v; want sub deleted", shown, err)
+	}
+	before := copySnapshot(t, tk.copy)
+	_, err = s.cleaner.Discard(ctx, got.Entry, shown.Digest, shown.Lacks, "", nil)
+	if !errors.Is(err, ErrLossChanged) || errors.Is(err, ErrAsideStands) {
+		t.Fatalf("Discard of the clone missing its submodule's directory = %v; want ErrLossChanged with everything put back", err)
+	}
+	if now := copySnapshot(t, tk.copy); now != before {
+		t.Fatalf("the refused discard left the copy as\n%s\nwant it as it was\n%s", now, before)
+	}
+}

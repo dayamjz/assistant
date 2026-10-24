@@ -136,6 +136,28 @@ func (r *Repository) ReplaceIndexEntries(ctx context.Context, paths []string, en
 	return err
 }
 
+// IndexPathsMissing is every path the index holds an entry for that the
+// working tree holds nothing at, as git ls-files --deleted reports it,
+// each once and in git's order: what a checkout of the index would write.
+// A path holding something else, a directory where the index holds a
+// file among it, is not missing.
+func (r *Repository) IndexPathsMissing(ctx context.Context) ([]string, error) {
+	if r.kind != KindWorktree {
+		return nil, &openError{path: r.path, kind: KindWorktree}
+	}
+	out, err := r.run(ctx, "ls-files-deleted", "ls-files", "--deleted", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, p := range strings.Split(string(out), "\x00") {
+		if p != "" && (len(paths) == 0 || paths[len(paths)-1] != p) {
+			paths = append(paths, p)
+		}
+	}
+	return paths, nil
+}
+
 // checkIndexPath refuses a path git's -z input could not carry or that
 // names no path of the working tree.
 func checkIndexPath(p string) error {
