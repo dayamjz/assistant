@@ -884,13 +884,18 @@ class GoTestBoundTest(StandInProcess):
         start = ("import importlib.util as u; "
                  f"s = u.spec_from_file_location('flake_ledger_test', {str(Path(__file__).resolve())!r}); "
                  "m = u.module_from_spec(s); s.loader.exec_module(m); m.run_go_test()")
-        process = subprocess.Popen([sys.executable, "-c", start], env=self.env,
+        # A killed process removes nothing, so its temporary directory is
+        # one inside this test's own folder, which the test's cleanup removes.
+        scratch = self.pids.with_name("tmp")
+        scratch.mkdir()
+        process = subprocess.Popen([sys.executable, "-c", start], env={**self.env, "TMPDIR": str(scratch)},
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait()))
         pids = self.wait_for_start(process)
         process.kill()
         process.wait(timeout=10)
         self.assert_ended(pids)
+        self.assertEqual(len(list(scratch.glob("*/go.mod"))), 1, "the killed run's module is not under the test's folder")
 
 
 class RunListTest(StandInProcess):
