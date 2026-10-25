@@ -1558,3 +1558,152 @@ func TestACarryOnVerifiesTheCopyBeforeAdoptingIt(t *testing.T) {
 		}
 	})
 }
+
+// A carry on taken up after its copy was moved verifies the copy where it
+// stands, at the reserved task's path, before anything of it is read or
+// written, round 29's sequence: a failed delivery task's clone, its own
+// commit made on a detached HEAD, is kept, and the carry on is claimed and
+// stopped right after the move. The moved copy's .git/refs/heads is then a
+// link into another clone holding that commit. The next service's carry
+// on answer is refused naming the link, with the other clone's references
+// as they were (read as files: git skips a reference naming an object the
+// clone lacks), the entry owed and not marked. Before, the recovery took
+// the moved copy through verifyAdopted, the reshape and the assertion
+// without the verification, and the reshape wrote refs/heads/task/kept
+// into the other clone.
+func TestACarryOnTakenUpAfterTheMoveVerifiesTheCopyWhereItStands(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	const branch = "task/kept"
+	id, err := home.NewTaskID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath, err := h.TaskCopy(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.CreateTask(t.Context(), store.Task{
+		ID: id, Shape: store.TaskDelivery, Project: "the parser", Mode: "headless", WorktreePath: copyPath,
+		RepositoryID: store.Known(repository.ID), Branch: store.Known(branch),
+	}, store.Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.BeginFirstTaskAttempt(t.Context(), id, store.OnThisMachine()); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.SetAttemptSession(t.Context(), id, 1, "pane-gone", store.SessionHost{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.AppendTaskEvent(t.Context(), id, "failed", "the worker gave up"); err != nil {
+		t.Fatal(err)
+	}
+	_ = records.Close()
+	instructions, err := h.TaskInstructions(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(instructions, "Fix the parser.\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, filepath.Dir(copyPath), "clone", "--quiet", repository.UpstreamURL, copyPath)
+	git(t, copyPath, "remote", "remove", "origin")
+	git(t, copyPath, "remote", "add", "assistant", gateRepositoryOf(t, h, subject))
+	git(t, copyPath, "checkout", "--quiet", "--detach")
+	if err := writeFile(filepath.Join(copyPath, "own.txt"), "the task's own work\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, copyPath, "add", "-A")
+	git(t, copyPath, "commit", "--quiet", "-m", "the task's own commit")
+	own := git(t, copyPath, "rev-parse", "HEAD")
+	entry := keepTaskCopy(t, h, id)
+
+	stopped := errors.New("the service stopped between the copy's move and the entry's mark")
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, service.WithCarryOnInterruptForTest(t, o, func() error { return stopped }), func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(id, entry), &out); err == nil || !strings.Contains(err.Error(), "stopped between") {
+			t.Fatalf("the carry on past the stopped seam = %+v, %v; want the stop", out, err)
+		}
+	})
+	answered, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+	if err != nil || answered.CarriedOnAt.IsKnown() {
+		t.Fatalf("after the stop the entry reads %+v, %v; want it owed", answered, err)
+	}
+	newPath, err := h.TaskCopy(answered.CarriedOnTask.Or(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(newPath, "own.txt")); err != nil {
+		t.Fatalf("after the stop the copy is not at the reserved task's path: %v", err)
+	}
+	other := filepath.Join(t.TempDir(), "other")
+	git(t, filepath.Dir(other), "clone", "--quiet", "--no-local", repository.UpstreamURL, other)
+	git(t, other, "fetch", "--quiet", newPath, own)
+	heads := filepath.Join(newPath, ".git", "refs", "heads")
+	if err := os.RemoveAll(heads); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(other, ".git", "refs", "heads"), heads); err != nil {
+		t.Fatal(err)
+	}
+	// The other clone's references are read as files, so a reference git
+	// would skip, one naming an object the clone lacks, is seen too.
+	refsBefore := refFiles(t, other)
+
+	o, _ = workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(id, entry), &out)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "symbolic link") {
+			t.Fatalf("the carry on taken up over a copy with refs/heads linked into another clone = %+v, %v; want it refused naming the link", out, err)
+		}
+		if refs := refFiles(t, other); refs != refsBefore {
+			t.Fatalf("the other clone's references read\n%s\nafter the refusal; want them as they were\n%s", refs, refsBefore)
+		}
+		if got, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || got.CarriedOnAt.IsKnown() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it owed and not marked", got, err)
+		}
+	})
+}
+
+// refFiles is every file under a clone's .git/refs and its packed-refs,
+// each with what it holds, read from the file system.
+func refFiles(t *testing.T, clone string) string {
+	t.Helper()
+	var lines []string
+	root := filepath.Join(clone, ".git")
+	for _, start := range []string{filepath.Join(root, "refs"), filepath.Join(root, "packed-refs")} {
+		err := filepath.WalkDir(start, func(p string, d os.DirEntry, err error) error {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			if err != nil || d.IsDir() {
+				return err
+			}
+			raw, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			lines = append(lines, strings.TrimPrefix(p, root)+" "+strings.TrimSpace(string(raw)))
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	slices.Sort(lines)
+	return strings.Join(lines, "\n")
+}

@@ -183,7 +183,10 @@ func (c *Cleaner) supportedLayout(ctx context.Context, entry store.KeptWork, gat
 // record (copyRecord, which also holds the worktree's .git file to it).
 // Every path that reads or writes a kept copy asks it first: the loss a
 // discard shows and a land reads, the discard, its set-aside and its
-// put-back, and carry on. A refusal matches ErrLayoutUnsupported, and
+// put-back, and carry on, before its claim and, when a stopped carry on is
+// taken up, on the copy where it stands, at the reserved task's path once
+// moved (internal/service's verifyCarriedCopy, with the entry's copy path
+// set to where it stands). A refusal matches ErrLayoutUnsupported, and
 // safety.ErrCopyNotVerified or ErrRecordNotTheCopys as well.
 func (c *Cleaner) VerifyKeptCopy(ctx context.Context, entry store.KeptWork, gatePath string) error {
 	want := safety.KeptCopy{Worktree: entry.CopyPath, GitDir: filepath.Join(entry.CopyPath, ".git")}

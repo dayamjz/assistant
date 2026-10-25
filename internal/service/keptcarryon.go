@@ -158,6 +158,9 @@ func (s *Service) carryOnKeptWork(ctx context.Context, req ipc.Request, entry st
 		if err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
+		if err := s.verifyCarriedCopy(ctx, entry, entry.CopyPath, plan); err != nil {
+			return machine.KeptWorkAnswered{}, err
+		}
 		if err := s.assertKeptCopy(ctx, entry, plan); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
@@ -238,21 +241,33 @@ func (s *Service) carryOnOf(ctx context.Context, entry store.KeptWork) (carryOn,
 	return carryOn{old: old, repository: repository, gatePath: gatePath, branch: old.Branch.Or("")}, nil
 }
 
+// verifyCarriedCopy holds the kept copy standing at path, the kept path or
+// the reserved task's once moved, to the one it is recorded as
+// (tasks.Cleaner.VerifyKeptCopy, on internal/safety's terms), before
+// anything of it is read or written, and refuses with ipc.ErrRefused
+// naming why, so a carry on never reads or adopts a copy git reads through
+// another repository or a link. A path where nothing stands is left to the
+// caller, which refuses a copy that is gone.
+func (s *Service) verifyCarriedCopy(ctx context.Context, entry store.KeptWork, path string, plan carryOn) error {
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	at := entry
+	at.CopyPath = path
+	if err := s.cleaner.VerifyKeptCopy(ctx, at, plan.gatePath); err != nil {
+		return fmt.Errorf("%w: kept work entry %d was not carried on: %w", ipc.ErrRefused, entry.ID, err)
+	}
+	return nil
+}
+
 // assertKeptCopy asserts the kept copy where it stands against the
 // expectation of the task it outlived, on this file's terms, and refuses
 // with ipc.ErrRefused a copy that is gone or that fails any comparison but
-// the two the reshape writes. Before anything of the copy is read it is
-// held to the one it is recorded as (tasks.Cleaner.VerifyKeptCopy), so a
-// carry on never adopts a copy git reads through another repository or a
-// link.
+// the two the reshape writes. Its callers hold the copy to its record
+// first (verifyCarriedCopy).
 func (s *Service) assertKeptCopy(ctx context.Context, entry store.KeptWork, plan carryOn) error {
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: kept work entry %d was not carried on: %s", ipc.ErrRefused, entry.ID, why)
-	}
-	if _, err := os.Lstat(entry.CopyPath); err == nil {
-		if err := s.cleaner.VerifyKeptCopy(ctx, entry, plan.gatePath); err != nil {
-			return refuse(err.Error())
-		}
 	}
 	want, _, err := tasks.Expect(s.home, plan.old.ID, plan.old.Shape, plan.gatePath, plan.repository.WorkingPath, plan.branch)
 	if err != nil {
@@ -477,7 +492,22 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
-	if _, err := os.Lstat(newPath); errors.Is(err, os.ErrNotExist) {
+	_, moved := os.Lstat(newPath)
+	if moved != nil && !errors.Is(moved, os.ErrNotExist) {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("service: reading the copy of task %s at %s: %w", id, newPath, moved)
+	}
+	// The copy is held to its record where it stands, at the reserved
+	// task's path once an earlier call moved it and at the kept path
+	// before, before anything of it is read or written: the one
+	// verification every path asks.
+	standing := entry.CopyPath
+	if moved == nil {
+		standing = newPath
+	}
+	if err := s.verifyCarriedCopy(ctx, entry, standing, plan); err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	if moved != nil {
 		if err := s.assertKeptCopy(ctx, entry, plan); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
@@ -495,8 +525,6 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 				return machine.KeptWorkAnswered{}, err
 			}
 		}
-	} else if err != nil {
-		return machine.KeptWorkAnswered{}, fmt.Errorf("service: reading the copy of task %s at %s: %w", id, newPath, err)
 	} else if err := s.verifyAdopted(ctx, entry, newPath); err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
