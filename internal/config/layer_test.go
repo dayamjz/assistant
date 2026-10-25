@@ -98,6 +98,7 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"escalation_window": "15m",
 		"recheck_window": "3h",
 		"stall_inspection_count": 5,
+		"stall_hold_count": 4,
 		"relaunch_attempts": 3,
 		"stop_grace": "45s",
 		"command_timeout": "45m",
@@ -153,8 +154,8 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	if len(c.DocumentOwnership) != 1 || c.DocumentOwnership[0].Document != "docs/prd.md" {
 		t.Errorf("DocumentOwnership = %+v", c.DocumentOwnership)
 	}
-	if c.EscalationWindow != 15*time.Minute || c.RecheckWindow != 3*time.Hour || c.StallInspectionCount != 5 {
-		t.Errorf("supervision rows = %v, %v, %d", c.EscalationWindow, c.RecheckWindow, c.StallInspectionCount)
+	if c.EscalationWindow != 15*time.Minute || c.RecheckWindow != 3*time.Hour || c.StallInspectionCount != 5 || c.StallHoldCount != 4 {
+		t.Errorf("supervision rows = %v, %v, %d, %d", c.EscalationWindow, c.RecheckWindow, c.StallInspectionCount, c.StallHoldCount)
 	}
 	if !c.SuppressProjectInstructions || !c.NoCI || c.SessionReuse || !c.AllowPushedCommands {
 		t.Errorf("flags = %+v", c)
@@ -261,6 +262,10 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"stall inspection count fractional", `{"stall_inspection_count": 1.5}`, KeyStallInspectionCount, "1.5"},
 		{"stall inspection count under the floor", `{"stall_inspection_count": 0}`, KeyStallInspectionCount, "0"},
 		{"stall inspection count over the ceiling", `{"stall_inspection_count": 101}`, KeyStallInspectionCount, "101"},
+		{"stall hold count not a number", `{"stall_hold_count": "3"}`, KeyStallHoldCount, `"3"`},
+		{"stall hold count fractional", `{"stall_hold_count": 1.5}`, KeyStallHoldCount, "1.5"},
+		{"stall hold count under the floor", `{"stall_hold_count": 0}`, KeyStallHoldCount, "0"},
+		{"stall hold count over the ceiling", `{"stall_hold_count": 101}`, KeyStallHoldCount, "101"},
 		{"relaunch attempts negative", `{"relaunch_attempts": -1}`, KeyRelaunchAttempts, "-1"},
 		{"relaunch attempts fractional", `{"relaunch_attempts": 1.5}`, KeyRelaunchAttempts, "1.5"},
 		{"relaunch attempts over the ceiling", `{"relaunch_attempts": 21}`, KeyRelaunchAttempts, "21"},

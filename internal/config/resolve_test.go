@@ -71,6 +71,9 @@ func TestResolveWithNoConfigurationYieldsDefaults(t *testing.T) {
 	if c.StallInspectionCount != 3 {
 		t.Errorf("StallInspectionCount = %d, want 3", c.StallInspectionCount)
 	}
+	if c.StallHoldCount != 3 {
+		t.Errorf("StallHoldCount = %d, want 3", c.StallHoldCount)
+	}
 	if c.RelaunchAttempts != 2 {
 		t.Errorf("RelaunchAttempts = %d, want 2", c.RelaunchAttempts)
 	}
@@ -377,6 +380,7 @@ func TestParseRefusesGlobalOnlyKeysInARepositoryFile(t *testing.T) {
 		{KeyEscalationWindow, `{"escalation_window": "10m"}`},
 		{KeyRecheckWindow, `{"recheck_window": "1h"}`},
 		{KeyStallInspectionCount, `{"stall_inspection_count": 2}`},
+		{KeyStallHoldCount, `{"stall_hold_count": 2}`},
 		{KeyUsageCeilingWindow, `{"usage_ceiling": {"window": "1h"}}`},
 		{KeyUsageCeilingInputTokens, `{"usage_ceiling": {"input_tokens": 1000000}}`},
 		{KeyUsageCeilingOutputTokens, `{"usage_ceiling": {"output_tokens": 0}}`},
@@ -417,11 +421,12 @@ func TestParseRefusesGlobalOnlyKeysInARepositoryFile(t *testing.T) {
 func TestGlobalLayerSetsGlobalOnlyKeys(t *testing.T) {
 	global := mustParse(t, OriginGlobal, `{"checks_timeout": "30m", "session_reuse": false, "supervision_beacon_interval": "30s",
 		"escalation_window": "1m", "recheck_window": "168h", "stall_inspection_count": 1,
-		"relaunch_attempts": 0}`)
+		"stall_hold_count": 100, "relaunch_attempts": 0}`)
 	res := resolve(t, global, Absent(OriginPushed))
-	if res.Config.EscalationWindow != time.Minute || res.Config.RecheckWindow != 168*time.Hour || res.Config.StallInspectionCount != 1 {
-		t.Errorf("the supervision rows resolved to %v, %v and %d, want the global values at their floors and ceiling",
-			res.Config.EscalationWindow, res.Config.RecheckWindow, res.Config.StallInspectionCount)
+	if res.Config.EscalationWindow != time.Minute || res.Config.RecheckWindow != 168*time.Hour || res.Config.StallInspectionCount != 1 ||
+		res.Config.StallHoldCount != 100 {
+		t.Errorf("the supervision rows resolved to %v, %v, %d and %d, want the global values at their floors and ceilings",
+			res.Config.EscalationWindow, res.Config.RecheckWindow, res.Config.StallInspectionCount, res.Config.StallHoldCount)
 	}
 	if res.Config.ChecksTimeout != 30*time.Minute {
 		t.Errorf("ChecksTimeout = %v, want the global value", res.Config.ChecksTimeout)
@@ -445,7 +450,7 @@ func TestGlobalLayerSetsGlobalOnlyKeys(t *testing.T) {
 func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 	globalOnly := map[Key]bool{
 		KeyChecksTimeout: true, KeySessionReuse: true, KeyDecisionModel: true, KeySupervisionBeaconInterval: true,
-		KeyEscalationWindow: true, KeyRecheckWindow: true, KeyStallInspectionCount: true,
+		KeyEscalationWindow: true, KeyRecheckWindow: true, KeyStallInspectionCount: true, KeyStallHoldCount: true,
 		KeyRelaunchAttempts: true, KeyStopGrace: true, KeyCommandTimeout: true, KeyGitDeadline: true, KeyGHDeadline: true, KeyAutonomyMerge: true, KeySessionProvider: true,
 		KeyUsageCeilingWindow: true, KeyUsageCeilingInputTokens: true, KeyUsageCeilingOutputTokens: true,
 		KeyUsageCeilingCacheReadTokens: true, KeyUsageCeilingCacheCreationTokens: true,
@@ -483,6 +488,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyEscalationWindow:                `{"escalation_window": "10m"}`,
 		KeyRecheckWindow:                   `{"recheck_window": "1h"}`,
 		KeyStallInspectionCount:            `{"stall_inspection_count": 2}`,
+		KeyStallHoldCount:                  `{"stall_hold_count": 2}`,
 		KeyRelaunchAttempts:                `{"relaunch_attempts": 1}`,
 		KeyStopGrace:                       `{"stop_grace": "5s"}`,
 		KeyCommandTimeout:                  `{"command_timeout": "5m"}`,
@@ -539,7 +545,7 @@ func TestTrustGlobalIsAssignedToExactlyTheGlobalOnlyKeys(t *testing.T) {
 			global = append(global, k)
 		}
 	}
-	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count,relaunch_attempts,stop_grace,command_timeout,git_deadline,gh_deadline,autonomy.merge,session_provider,usage_ceiling.window,usage_ceiling.input_tokens,usage_ceiling.output_tokens,usage_ceiling.cache_read_tokens,usage_ceiling.cache_creation_tokens,notify.command,run_usage_budget.output_tokens,remote_hosts,placement.local,remote_disconnect_grace"
+	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count,stall_hold_count,relaunch_attempts,stop_grace,command_timeout,git_deadline,gh_deadline,autonomy.merge,session_provider,usage_ceiling.window,usage_ceiling.input_tokens,usage_ceiling.output_tokens,usage_ceiling.cache_read_tokens,usage_ceiling.cache_creation_tokens,notify.command,run_usage_budget.output_tokens,remote_hosts,placement.local,remote_disconnect_grace"
 	if got := strings.Join(keyStrings(global), ","); got != want {
 		t.Errorf("TrustGlobal keys = %q, want %s", got, want)
 	}
