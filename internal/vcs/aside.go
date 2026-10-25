@@ -111,10 +111,12 @@ func (r *Repository) HEADTarget(ctx context.Context) (string, error) {
 // path that is one of paths is replaced as asked, so an entry written at
 // a while a/child is among paths given nothing is not refused.
 //
-// It is not anchored: an entry staged between that read and git's write,
-// at one of paths or at a path an entry given is a file or a directory
-// of, is replaced or taken out unread. The caller reads the entries at
-// paths first and holds them to what it read before.
+// It is not anchored, and it reads nothing at paths: whatever stands at
+// one of them when git writes is replaced, whenever it was staged. The
+// caller reads the entries at paths first and holds them to what it read,
+// so an entry staged at one of paths after the caller's read is replaced
+// unread. An entry staged after this function's own read, at a path an
+// entry given is a file or a directory of, is taken out unread.
 func (r *Repository) ReplaceIndexEntries(ctx context.Context, paths []string, entries []IndexEntry) error {
 	if r.kind != KindWorktree {
 		return &openError{path: r.path, kind: KindWorktree}

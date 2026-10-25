@@ -38,7 +38,8 @@ import (
 //     tree's (HEAD's commit's when HEAD does not move), each path's
 //     entries recorded and replaced by the target's (vcs.ReplaceIndexEntries),
 //     after the whole index is held to what was read before the loss was,
-//     so content staged since refuses; then every path git reports the
+//     so content staged between that read and the hold refuses; then
+//     every path git reports the
 //     working tree lacking of that index (vcs.IndexPathsMissing) is
 //     written from it without force (vcs.CheckoutMissing), one at a time,
 //     each journalled with the blob it is written from before it is
@@ -86,12 +87,18 @@ import (
 //     force does not refuse; for a task's clone, a file git does not see
 //     written between removeOnProof's last inventory and the removal goes
 //     with the clone, P12 cleanup's own window.
-//   - An index entry is replaced without an anchor of git's: content
-//     staged at the same path, or at a path the entry written is a file
-//     or a directory of, between vcs.ReplaceIndexEntries' own read of the
-//     index and git's write is replaced or taken out unread. Content
-//     staged there before that read refuses, and a restore leaves it
-//     where it is (restoreIndex).
+//   - An index entry is replaced without an anchor of git's, and the
+//     window differs by where the content is staged (round 31):
+//     - at a path whose entries the discard replaces or a restore puts
+//       back, content staged after the discard's hold of the index, or
+//       after the restore's own read of it, is replaced unread, since
+//       vcs.ReplaceIndexEntries reads nothing at the paths it is given;
+//       staged before that read, the discard refuses and the restore
+//       leaves it where it is;
+//     - at a path an entry written is a file or a directory of, content
+//       staged after vcs.ReplaceIndexEntries' own read of the index is
+//       taken out unread; staged before it, the write refuses, and a
+//       restore leaves it where it is (restoreIndex).
 //   - A reflog moved aside is held to its content before the loss was
 //     read, so an entry written and taken out again in between, leaving
 //     the same bytes, is not seen.
@@ -649,9 +656,10 @@ type keptIndexPath struct {
 // aside, each named in kept, every path whose entries would take out an
 // entry the restore does not put back (vcs.IndexDisplaceError): content
 // staged beside it since the discard wrote the index, at a path it is a
-// file or a directory of (round 30), which the restore did not set aside
-// and so never takes out. An error is returned with failed, the paths it
-// did not put back besides kept.
+// file or a directory of (round 30), which the restore did not set aside.
+// That holds for what vcs.ReplaceIndexEntries reads there, not for content
+// staged after its read, which the header's gaps name. An error is
+// returned with failed, the paths it did not put back besides kept.
 func restoreIndex(ctx context.Context, copied *vcs.Repository, back []asideIndexPath) (kept []keptIndexPath, failed []asideIndexPath, err error) {
 	for len(back) > 0 {
 		err := replaceIndex(ctx, copied, back, func(p asideIndexPath) []vcs.IndexEntry { return p.Held })
@@ -765,8 +773,10 @@ func moveAsRead(from, to string, before copyState, what string) (bool, error) {
 // taken out again only while git would store it as the blob written there
 // with its mode (holdsBlob), whoever wrote it, since its content is the
 // tree's, and every directory that made only while it is empty, each
-// index path is put back only while it holds what the discard wrote and
-// only where that takes out no entry beside it (restoreIndex), every
+// index path is put back only while it holds what the discard wrote when
+// the restore reads the index, and only where that takes out no entry
+// beside it (restoreIndex), the windows after each read being the
+// header's, every
 // directory emptied is made again with its mode, and every path set aside
 // is moved back only where nothing has taken its place. What could not
 // be put back stays in dir and the journal, named in the ErrAsideStands it
