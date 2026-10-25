@@ -722,3 +722,59 @@ func TestAStallStopFindingTheHoldWrittenAfterItsEndKeepsOnlySection6sException(t
 		})
 	}
 }
+
+// The surface that reaches the count is never recorded without its hold,
+// whichever write of the pass records it: every surfaced wake of a pass is
+// written with the same marker advance, so the first of them to commit
+// commits the count. A pass that holds and also surfaces a decision the
+// worker raised writes that wake first; the incarnation is replaced right
+// after it commits, which refuses every later write of the pass as stale,
+// the way a watchdog replacing a wedged loop does. The count the first write
+// committed is past the threshold, and the hold must stand beside it.
+func TestAHoldingPassRegistersItsHoldWithItsFirstWrite(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	h, records := loopHomeConfigured(t, stallConfig)
+	ref := "pane-firstwrite"
+	task := plantRunning(t, records, "firstwritetk", ref).ID
+	terminals := newScriptedTerminals()
+	terminals.live(ref, "thinking\n")
+	var l *loopSubject
+	replace := false
+	l = openLoopHooked(t, h, records, terminals, &fakeClock{now: stallStart}, nil, func(hooks *supervisionHooks) {
+		hooks.afterWakeAppend = func(kind supervisor.Kind) {
+			if replace && kind == supervisor.KindDecisionEvent {
+				replace = false
+				if _, err := l.service.store.BeginIncarnation(t.Context()); err != nil {
+					t.Errorf("replacing the incarnation: %v", err)
+				}
+			}
+		}
+	})
+	t.Cleanup(func() { _ = l.service.Close() })
+	l.nextPass(t)
+	s := &stallSubject{loopSubject: l, terminals: terminals, task: task, ref: ref}
+	s.window(t)
+	s.window(t)
+	if _, err := l.records(t).AppendTaskEvent(t.Context(), task, "decision-open", "which parser to keep"); err != nil {
+		t.Fatalf("raising the decision: %v", err)
+	}
+	if got := s.observedTask(t, task); got.State != taskstate.Running {
+		t.Fatalf("with the decision raised the task resolves %s, want Running from its live terminal", got.State)
+	}
+	replace = true
+	s.clock.Advance(time.Minute)
+	reply := make(chan passReport, 1)
+	l.kick <- reply
+	r := <-reply
+	if !errors.Is(r.Tasks[task].Err, store.ErrStaleIncarnation) {
+		t.Fatalf("the holding pass's writes after the replacement = %v, want refused as stale", r.Tasks[task].Err)
+	}
+	m, _, err := l.records(t).WakeMarkers(t.Context(), task)
+	if err != nil || m.StallRepetitions != 3 {
+		t.Fatalf("the markers = %+v (%v), want the third surface committed by the first write", m, err)
+	}
+	if open := s.openStallHolds(t); len(open) != 1 {
+		t.Fatalf("the count is at the third surface with open stall holds %+v, want its hold beside it", open)
+	}
+}

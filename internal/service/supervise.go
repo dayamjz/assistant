@@ -344,6 +344,10 @@ type supervisionHooks struct {
 	// is positive, so a test can count the sender's attempts against a
 	// store that refuses its claims over several intervals.
 	notifyRecheck time.Duration
+	// afterWakeAppend is called by a pass after each wake write of a task
+	// that committed, with the wake's kind, so a test can make the pass's
+	// next write fail between two of them.
+	afterWakeAppend func(kind supervisor.Kind)
 }
 
 // incarnation is one incarnation of the loop: its fence, its context, when it
@@ -709,6 +713,8 @@ func (s *Service) readTerminal(c *incarnation, ref string, probed session.Observ
 // stream through publishWake; a replay that appended nothing does neither.
 func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 	out := taskReport{Watched: d.watched, Detections: d.detections}
+	hold, registers := d.registers.Get()
+	published := false
 	surfaced := 0
 	for i, det := range d.detections {
 		if !det.Verdict.Surfaces() {
@@ -722,12 +728,13 @@ func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 			// transaction, so no entry is raised and left unrecorded.
 			request.Surfaces = store.Known(entry)
 		}
-		hold, registers := d.registers[i]
 		if registers {
-			// The stall hold is registered in the transaction of the surface
-			// that reached the count, so no surface is recorded past the
-			// count without its hold, and the fence keeps a replaced
-			// incarnation from registering one.
+			// Every surfaced wake of the pass is written with the same
+			// marker advance, so the first of them to commit commits the
+			// count the stall hold was reached at. Each carries the hold, so
+			// no write records the count without it, and the fence keeps a
+			// replaced incarnation from registering one; registration is
+			// idempotent by key, so the later writes find it there.
 			request.Registers = store.Known(hold)
 		}
 		appended, err := s.store.AppendWakeWithMarkers(ctx, c.inc, request, d.advance)
@@ -737,13 +744,17 @@ func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 			return out
 		}
 		out.Detections[i].Disposition = appended.Disposition
+		if s.sup.hooks.afterWakeAppend != nil {
+			s.sup.hooks.afterWakeAppend(det.Kind)
+		}
 		if appended.Disposition == store.WakeAppended {
 			s.wakeBell.ring()
 			ctx, cancel := s.sup.bound(c.ctx)
 			s.publishWake(ctx, appended.Wake)
-			if registers {
+			if registers && !published {
+				published = true
 				s.publishHoldByKey(ctx, hold.Key)
-				s.log.Printf("task %s holds on %s: its worker's screen has not changed through %s", id, hold.Key, det.Marker)
+				s.log.Printf("task %s holds on %s: its worker's screen has not changed", id, hold.Key)
 			}
 			cancel()
 		}
@@ -811,10 +822,11 @@ type decision struct {
 	// keptWork is the kept work entry each kept-work detection's marker is
 	// about, so the write can record when that entry surfaced.
 	keptWork map[string]int64
-	// registers is the stall hold the detection at each index registers,
-	// PRD section 6's stalled worker: the terminal-unchanged surface at
-	// supervisor.SurfaceInspectAndHold.
-	registers map[int]store.Hold
+	// registers is the stall hold the pass registers, PRD section 6's
+	// stalled worker, when its terminal-unchanged surface is at
+	// supervisor.SurfaceInspectAndHold; every surfaced write of the pass
+	// carries it.
+	registers store.Optional[store.Hold]
 }
 
 func surfacedKey(kind supervisor.Kind, marker string) string { return string(kind) + "\x00" + marker }
@@ -1030,7 +1042,7 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 			hold := stallHold(o, supervisor.StallHold{
 				Task: o.observed.Snapshot.Task.ID, Attempt: attempt, Epoch: o.markers.ChangeEpoch, Surface: surface,
 			}, stall)
-			d.registers = map[int]store.Hold{len(d.detections) - 1: hold}
+			d.registers = store.Known(hold)
 			if marker := "hold:" + hold.Key; !seen(supervisor.KindHoldOpened, marker) {
 				opened, _ := supervisor.Of(supervisor.KindHoldOpened)
 				detect(opened, marker, supervisor.WindowOpen, false, supervisor.Stall{})
