@@ -22,6 +22,12 @@ New to Assistant? Start with [installation and prerequisites](#installation-and-
 | Push changes and then discover mistakes | Submit changes to a separate, multi-stage validation gate |
 | Wonder what an agent spent or left behind | Inspect recorded usage, budgets, holds, and kept work |
 
+## Why this architecture?
+
+Assistant combines a durable **agent coordinator** with a **separate code-delivery gate**. A coordinator can assign and supervise isolated workers, but a worker declaring its task complete does not by itself authorize publication or merging. The gate evaluates the submitted Git change under its own validation and approval rules.
+
+The Go service owns task/run state and decisions rather than treating an agent conversation as the sole record of progress. That separation makes recovery and auditability explicit, while adding configuration and operational overhead. It is intended for developers who want inspectable, controlled multi-agent delivery, not necessarily the fewest steps from prompt to PR.
+
 ## Installation and prerequisites
 
 Assistant targets **macOS and Linux** and requires Git, at least one installed and authenticated supported coding-agent CLI, and a compatible Go toolchain for installation from source. This repository declares `go 1.25.0` and `toolchain go1.26.9` in [go.mod](go.mod); use Go's toolchain selection/download mechanism or install the specified toolchain before building. For contributing, `make check` additionally requires **golangci-lint v2** (CI pins v2.12.2), alongside the tools required by the tests. Host-integrated PR/MR delivery also requires the relevant host CLI and authentication. See [multi-agent support](docs/multi-agent-support.md) for adapter-specific authentication and [the operator guide](docs/operators.md) for setup details.
@@ -103,12 +109,6 @@ Validation covers only committed changes pushed to the `assistant` remote; ordin
 | `assistant sync` | Reconcile a checkout with validated changes |
 | `assistant runs --usage=7d` | Review recorded **validation-stage** agent usage, not all worker turns |
 | `assistant --json status` | Consume structured status and find the repository identifier |
-
-## Why this architecture?
-
-Assistant combines a durable **agent coordinator** with a **separate code-delivery gate**. A coordinator can assign and supervise isolated workers, but a worker declaring its task complete does not by itself authorize publication or merging. The gate evaluates the submitted Git change under its own validation and approval rules.
-
-The Go service owns task/run state and decisions rather than treating an agent conversation as the sole record of progress. That separation makes recovery and auditability explicit, while adding configuration and operational overhead. It is intended for developers who want inspectable, controlled multi-agent delivery, not necessarily the fewest steps from prompt to PR.
 
 ## 1. Give each agent a job
 
