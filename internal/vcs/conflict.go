@@ -37,9 +37,17 @@ import (
 // context ends it and the wait it cannot end. Each stage's blob is read
 // through this package's output cap, and one over it fails the call rather
 // than going unread.
+//
+// It answers for the whole working copy, from its root, whichever directory
+// the handle was opened on, and every path it reads or takes is
+// repository-relative.
 func (r *Repository) ConflictMarkers(ctx context.Context) (map[string][]string, error) {
 	if r.kind != KindWorktree {
 		return nil, &openError{path: r.path, kind: KindWorktree}
+	}
+	r, err := r.atRoot(ctx)
+	if err != nil {
+		return nil, err
 	}
 	out, err := r.run(ctx, "unmerged-stages", "ls-files", "--unmerged", "-z")
 	if err != nil {
@@ -84,9 +92,17 @@ func (r *Repository) ConflictMarkers(ctx context.Context) (map[string][]string, 
 // whether or not the path is still unmerged in the index. A path whose
 // worktree entry is now missing or not a regular file holds none. The file
 // is read on ConflictMarkers' terms.
+//
+// It answers for the whole working copy, from its root, whichever directory
+// the handle was opened on, and every path it reads or takes is
+// repository-relative.
 func (r *Repository) MarkersLeft(ctx context.Context, markers map[string][]string) ([]string, error) {
 	if r.kind != KindWorktree {
 		return nil, &openError{path: r.path, kind: KindWorktree}
+	}
+	r, err := r.atRoot(ctx)
+	if err != nil {
+		return nil, err
 	}
 	var left []string
 	for path, recorded := range markers {
@@ -110,9 +126,17 @@ func (r *Repository) MarkersLeft(ctx context.Context, markers map[string][]strin
 // path it has no record for and still exits zero, so the read is what
 // establishes the result. Paths are passed literally and nothing else is
 // changed in the index.
+//
+// It answers for the whole working copy, from its root, whichever directory
+// the handle was opened on, and every path it reads or takes is
+// repository-relative.
 func (r *Repository) UnresolvePaths(ctx context.Context, paths []string) error {
 	if r.kind != KindWorktree {
 		return ErrNotARepository
+	}
+	r, err := r.atRoot(ctx)
+	if err != nil {
+		return err
 	}
 	if len(paths) == 0 {
 		return nil

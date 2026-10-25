@@ -195,6 +195,23 @@ func (r *Repository) WorkingRoot(ctx context.Context) (string, error) {
 	return absolutePath(root)
 }
 
+// atRoot returns a handle on the working copy's root with r's settings, or
+// r itself when r is opened there. git lists the index and untracked files
+// relative to, and only beneath, the directory it runs in, while diff-files
+// names paths from the root, so an operation that reads paths from git and
+// opens them in the worktree runs at the root: every path it reads, takes or
+// returns is then repository-relative, whichever directory r was opened on.
+func (r *Repository) atRoot(ctx context.Context) (*Repository, error) {
+	root, err := r.WorkingRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if root == r.path {
+		return r, nil
+	}
+	return &Repository{path: root, kind: r.kind, set: r.set}, nil
+}
+
 // isOccupiedByOtherThanABareRepo reports whether path already holds something
 // that InitBare must not write a bare repository over. A path that does not
 // exist, an empty directory, and an existing bare repository are all fine.

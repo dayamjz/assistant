@@ -112,9 +112,17 @@ func (r *Repository) CommitAllWithBody(ctx context.Context, subject, body string
 // deletion alike. A path that held an unresolved conflict no longer does.
 // Paths are matched literally, never as patterns, and nothing else is staged.
 // It commits nothing and moves no reference.
+//
+// It answers for the whole working copy, from its root, whichever directory
+// the handle was opened on, and every path it reads or takes is
+// repository-relative.
 func (r *Repository) StagePaths(ctx context.Context, paths []string) error {
 	if r.kind != KindWorktree {
 		return ErrNotARepository
+	}
+	r, err := r.atRoot(ctx)
+	if err != nil {
+		return err
 	}
 	const chunk = 256
 	for start := 0; start < len(paths); start += chunk {

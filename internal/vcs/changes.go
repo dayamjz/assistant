@@ -152,9 +152,17 @@ func parseChanges(out string) (Changes, error) {
 // or textconv does not run, and a large blob is not read through the
 // invocation output cap. A listing of paths that itself exceeds that cap
 // still fails.
+//
+// It answers for the whole working copy, from its root, whichever directory
+// the handle was opened on, and every path it reads or takes is
+// repository-relative.
 func (r *Repository) UncommittedDigest(ctx context.Context) (string, error) {
 	if r.kind != KindWorktree {
 		return "", &openError{path: r.path, kind: KindWorktree}
+	}
+	r, err := r.atRoot(ctx)
+	if err != nil {
+		return "", err
 	}
 	stage, err := r.run(ctx, "uncommitted-stage", "ls-files", "--stage", "-z")
 	if err != nil {
@@ -197,9 +205,17 @@ func (r *Repository) UncommittedDigest(ctx context.Context) (string, error) {
 //
 // It reads the worktree on UncommittedDigest's terms, including how the
 // context ends it and the wait it cannot end.
+//
+// It answers for the whole working copy, from its root, whichever directory
+// the handle was opened on, and every path it reads or takes is
+// repository-relative.
 func (r *Repository) ConflictRecords(ctx context.Context) (map[string]string, error) {
 	if r.kind != KindWorktree {
 		return nil, &openError{path: r.path, kind: KindWorktree}
+	}
+	r, err := r.atRoot(ctx)
+	if err != nil {
+		return nil, err
 	}
 	out, err := r.run(ctx, "unmerged-stages", "ls-files", "--unmerged", "-z")
 	if err != nil {

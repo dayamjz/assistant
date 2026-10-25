@@ -332,23 +332,25 @@ func TestUncommittedDigestIgnoresATextconvThatCollapsesBytes(t *testing.T) {
 // TestUncommittedDigestReadsALargeChangeWithoutThePatch is a blob whose
 // literal delta does not fit in the invocation output cap. The digest has to
 // come back anyway, and a further edit has to change it. Reading the patch
-// fails before a fix round can ask the fixer.
+// fails before a fix round can ask the fixer. The cap leaves room for the
+// working copy's absolute path, which the digest reads first, and the change
+// is 64 times the cap.
 func TestUncommittedDigestReadsALargeChangeWithoutThePatch(t *testing.T) {
 	gitEnvironment(t)
 	dir := t.TempDir()
 	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
-	body := strings.Repeat("a", 4096)
+	body := strings.Repeat("a", 64<<10)
 	commitFile(t, dir, "blob.bin", body, "blob")
-	repo, err := vcs.OpenWorktree(ctx(t), dir, vcs.WithMaxOutput(64))
+	repo, err := vcs.OpenWorktree(ctx(t), dir, vcs.WithMaxOutput(1<<10))
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(dir, "blob.bin"), strings.Repeat("b", 4096))
+	writeFile(t, filepath.Join(dir, "blob.bin"), strings.Repeat("b", 64<<10))
 	first, err := repo.UncommittedDigest(ctx(t))
 	if err != nil {
 		t.Fatalf("digest of a change larger than the output cap: %v", err)
 	}
-	writeFile(t, filepath.Join(dir, "blob.bin"), strings.Repeat("c", 4096))
+	writeFile(t, filepath.Join(dir, "blob.bin"), strings.Repeat("c", 64<<10))
 	second, err := repo.UncommittedDigest(ctx(t))
 	if err != nil || second == first {
 		t.Fatalf("digest after a further edit = %q, before %q, error %v", second, first, err)
