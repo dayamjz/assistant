@@ -23,7 +23,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// TestHang is the child a timeout test spawns under a real testing alarm.
+// TestHang is the child a timeout test spawns and ends once its build runs.
 // Without JOURNEY_HANG_BUILD it does nothing, so a normal suite run skips it.
 func TestHang(t *testing.T) {
 	if os.Getenv("JOURNEY_HANG_BUILD") != "1" {

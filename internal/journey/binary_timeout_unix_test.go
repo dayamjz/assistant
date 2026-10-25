@@ -5,6 +5,8 @@ package journey
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -160,11 +162,17 @@ func compileHoldEnv(hangDir, pidFile, root string) []string {
 }
 
 // TestATimedOutBuildDoesNotOutliveTheHarness is the review's reproduction:
-// journey.Binary under a real testing alarm, GOMAXPROCS=1, a one-second
-// timeout, and a go on PATH that never exits. The alarm can exit that
-// process before procgroup.Run handles cancellation. The build must not
-// stay alive, reparented, after the process is gone. P15: when the owner
-// ends, the process it started ends with it.
+// journey.Binary in a test process, GOMAXPROCS=1, with a go on PATH that
+// never exits, and the process then ended the way the testing alarm ends
+// one: the runtime exits it with status 2 and runs no deferred call, so
+// procgroup.Run never handles a cancellation. The build must not stay
+// alive, reparented, after the process is gone. P15: when the owner ends,
+// the process it started ends with it.
+//
+// The process is ended with SIGQUIT, which the Go runtime answers the same
+// way, and only once the build has written its pid. A real alarm with a
+// fixed timeout raced the harness's own setup: under load it fired before
+// the build started, and the test then checked nothing.
 func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	root, err := ModuleRoot()
@@ -173,7 +181,7 @@ func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 	}
 	helper := filepath.Join(t.TempDir(), "hang.test")
 	if out, err := RunHeld(root, nil, "go", "test", "-c", "-o", helper, "./internal/journey/hangbuild"); err != nil {
-		t.Fatalf("compiling the alarm harness: %v\n%s", err, out)
+		t.Fatalf("compiling the harness: %v\n%s", err, out)
 	}
 	hangDir := t.TempDir()
 	pidFile := filepath.Join(t.TempDir(), "pid")
@@ -182,32 +190,43 @@ func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The helper is not started under RunHeld. That wrapper would own the
-	// build's process group and kill it when the helper's alarm exits, so a
-	// build that leaked would still look dead.
-	cmd := exec.Command(helper, "-test.timeout=1s", "-test.run=^TestHang$", "-test.count=1", "-test.v")
+	// build's process group and kill it when the helper exits, so a build
+	// that leaked would still look dead.
+	cmd := exec.Command(helper, "-test.timeout=10m", "-test.run=^TestHang$", "-test.count=1", "-test.v")
 	cmd.Dir = root
 	cmd.Env = hangEnv(hangDir, pidFile)
-	out, runErr := cmd.CombinedOutput()
-	helperPID := 0
-	if cmd.Process != nil {
-		helperPID = cmd.Process.Pid
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
 	}
+	helperPID := cmd.Process.Pid
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
 	t.Cleanup(func() {
 		if pid, err := readPID(pidFile); err == nil {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
-		// The alarm kills the helper inside Binary, after TempDir and before
-		// Cleanup. The build directory is in the helper's namespace, and the
-		// helper is gone, so this process removes it.
-		if helperPID != 0 {
-			if err := standin.ReclaimProcess(helperPID); err != nil {
-				t.Error(err)
-			}
+		// The helper is ended inside Binary, after TempDir and before
+		// Cleanup. The build directory is in the helper's namespace, and
+		// the helper is gone, so this process removes it.
+		if err := standin.ReclaimProcess(helperPID); err != nil {
+			t.Error(err)
 		}
 	})
-	pid, err := readPID(pidFile)
+	pid, err := pidOnceStarted(pidFile, exited, time.Minute)
 	if err != nil {
-		t.Fatalf("the hanging build never started (harness: %v)\n%s", runErr, out)
+		_ = syscall.Kill(helperPID, syscall.SIGKILL)
+		<-exited
+		t.Fatalf("the hanging build never started: %v\n%s", err, out.String())
+	}
+	if err := syscall.Kill(helperPID, syscall.SIGQUIT); err != nil {
+		t.Fatalf("ending the harness: %v", err)
+	}
+	runErr := <-exited
+	var exit *exec.ExitError
+	if !errors.As(runErr, &exit) || exit.ExitCode() != 2 {
+		t.Fatalf("the harness ended with %v, want the runtime's exit status 2\n%s", runErr, out.String())
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -217,7 +236,28 @@ func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	ppid := parentOf(pid)
-	t.Fatalf("build pid %d still alive after the harness exited (parent %d); harness: %v\n%s", pid, ppid, runErr, out)
+	t.Fatalf("build pid %d still alive after the harness exited (parent %d); harness: %v\n%s", pid, ppid, runErr, out.String())
+}
+
+// pidOnceStarted waits for the pid the hanging build writes. A harness that
+// exits first, or a build that has not started within limit, is an error,
+// so a test cannot go on to check a build that never ran.
+func pidOnceStarted(path string, exited <-chan error, limit time.Duration) (int, error) {
+	deadline := time.Now().Add(limit)
+	for {
+		if pid, err := readPID(path); err == nil {
+			return pid, nil
+		}
+		select {
+		case err := <-exited:
+			return 0, fmt.Errorf("the harness exited first (%v)", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			return 0, fmt.Errorf("no pid within %s", limit)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func hangEnv(hangDir, pidFile string) []string {
