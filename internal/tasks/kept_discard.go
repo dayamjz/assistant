@@ -287,6 +287,15 @@ var ErrLossChanged = errors.New("tasks: the copy no longer holds exactly what wa
 // Loss reads what discarding the entry's copy would lose, on this file's
 // terms.
 func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) {
+	// A copy that stands is held to the layout first: what stands aside can
+	// be put back only into that layout.
+	if standing, err := c.standing(entry.CopyPath); err != nil {
+		return Loss{}, err
+	} else if standing {
+		if err := c.supportedLayout(ctx, entry); err != nil {
+			return Loss{}, err
+		}
+	}
 	if _, err := os.Lstat(asideDir(entry.CopyPath)); err == nil {
 		return Loss{}, fmt.Errorf("%w: it is at %s, and the next discard answer of the entry puts it back", ErrAsideStands, asideDir(entry.CopyPath))
 	} else if !errors.Is(err, fs.ErrNotExist) {

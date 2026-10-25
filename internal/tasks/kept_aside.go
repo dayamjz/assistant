@@ -125,12 +125,19 @@ var ErrAsideStands = errors.New("tasks: a discard that did not finish set part o
 //     the worktree;
 //   - no symbolic link anywhere in the repository directory git reads for
 //     the copy, its references, reflogs, objects and index among it;
-//   - core.symlinks not false, no core.worktree, no sparse checkout, and
-//     the references in files (no reftable).
+//   - core.symlinks not false, no sparse checkout, and the references in
+//     files (no reftable).
 //
-// The configuration is read as git reads it for the copy, the user's and
-// the system's included. The repository directory is walked through the
-// file system, so a link is refused wherever it stands.
+// Before any of that, git is asked which working tree and repository
+// directory it reads for the copy (vcs.Observe: rev-parse --show-toplevel
+// --absolute-git-dir), whose working tree must be the copy itself, so a
+// copy git reads as part of another checkout, through a .git it does not
+// take for a repository or a core.worktree naming another directory, is
+// refused rather than read or recovered into; with a clone's .git a
+// directory, that leaves git reading that .git. The configuration is read as git
+// reads it for the copy, the user's and the system's included. The
+// repository directory is walked through the file system, so a link is
+// refused wherever it stands.
 func (c *Cleaner) supportedLayout(ctx context.Context, entry store.KeptWork) error {
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: %s %s", ErrLayoutUnsupported, entry.CopyPath, why)
@@ -140,27 +147,44 @@ func (c *Cleaner) supportedLayout(ctx context.Context, entry store.KeptWork) err
 	if err != nil {
 		return refuse("has no .git that can be read: " + err.Error())
 	}
+	if entry.TaskID.IsKnown() && !info.IsDir() {
+		return refuse("has a .git that is not a directory of its own")
+	}
+	// Git itself is asked which working tree it reads for the copy, which
+	// must be the copy: a .git git does not take for a repository, one that
+	// lost its HEAD among them, leaves git reading whatever checkout the
+	// copy stands in, which is never recovered into.
+	root, err := filepath.EvalSymlinks(entry.CopyPath)
+	if err != nil {
+		return refuse("could not be read: " + err.Error())
+	}
+	obs, err := vcs.Observe(ctx, entry.CopyPath, c.git...)
+	if err != nil {
+		return refuse("is not a repository git reads: " + err.Error())
+	}
+	if top, err := filepath.EvalSymlinks(obs.Toplevel); err != nil || top != root {
+		return refuse("is read by git as part of the working tree at " + obs.Toplevel)
+	}
+	// With a clone's .git a directory and git's working tree the clone,
+	// the repository directory git reads is that .git.
+	gitDir := obs.GitDir
+	if entry.TaskID.IsKnown() {
+		gitDir = dotGit
+	}
 	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, c.git...)
 	if err != nil {
 		return refuse("could not be opened: " + err.Error())
 	}
-	gitDir := dotGit
 	if entry.TaskID.IsKnown() {
-		if !info.IsDir() {
-			return refuse("has a .git that is not a directory of its own")
-		}
 		if _, err := os.Lstat(filepath.Join(dotGit, "commondir")); !errors.Is(err, fs.ErrNotExist) {
 			return refuse("has a commondir file in its .git, naming another directory its references and objects are in")
 		}
 		if linked, err := os.ReadDir(filepath.Join(dotGit, "worktrees")); err == nil && len(linked) > 0 {
 			return refuse("has a linked worktree")
 		}
-	} else {
-		// A run's .git is held to the gate's record of it by copyRecord.
-		if gitDir, err = copied.GitDir(ctx); err != nil {
-			return refuse("has a repository directory that could not be read: " + err.Error())
-		}
 	}
+	// A run's .git is held to the gate's record of it by copyRecord, and
+	// gitDir is the record git reads.
 	var link string
 	err = filepath.WalkDir(gitDir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -182,9 +206,6 @@ func (c *Cleaner) supportedLayout(ctx context.Context, entry store.KeptWork) err
 		return refuse("has a core.symlinks that could not be read: " + err.Error())
 	} else if set && !symlinks {
 		return refuse("sets core.symlinks false, so git checks a link out as a file")
-	}
-	if _, set, err := copied.ConfigValue(ctx, "core.worktree"); err != nil || set {
-		return refuse("sets core.worktree, naming another directory its working tree")
 	}
 	if sparse, _, err := copied.ConfigBool(ctx, "core.sparseCheckout"); err != nil || sparse {
 		return refuse("is a sparse checkout, whose paths left out read as deleted")
