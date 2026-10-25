@@ -76,6 +76,32 @@ repository more than one round of review.
   under the leak check (`scripts/leak-check.py`), so a package that leaves a
   process or temp entry behind fails CI even when `make check` passes. The gate
   runs `make lint` and leaves the full suite to CI (`.no-mistakes.yaml`).
+  `.github/workflows/ci.yml` does not run `make check`. The release workflow
+  (`.github/workflows/release.yml`) does, on a job of its own.
+- Branch protection on `main` requires five checks: `check (ubuntu-latest)`,
+  `check (macos-latest)`, `lint`, `repeat`, and `re-runs`. That set is the
+  protection rule, which this tree does not store; the job names below are
+  what the workflows publish. `.github/workflows/ci.yml` runs `check` on
+  `ubuntu-latest` and `macos-latest` (`timeout-minutes: 40`). Its test step
+  is `bash scripts/ci-test.sh`. A step named `Unfinished packages` runs
+  `bash scripts/ci-test.sh unfinished`. The `lint` job in that file runs on
+  `ubuntu-latest` (`timeout-minutes: 15`) with golangci-lint v2.12.2, then
+  darwin and windows cross-checks that lint and do not run tests. The job
+  named `re-runs` (`timeout-minutes: 10`) needs `check` and `lint` and runs
+  when `github.run_attempt > 1`. The workflow comment says a first attempt
+  skips it, and that a required check reads that skip as passing.
+  `.github/workflows/repeat.yml` runs on pull requests. `REPEAT_COUNT` is 3.
+  The file names the job `repeat` as the check that can be required, and
+  says that job passes when the plan runs nothing. Its per-OS `run` jobs
+  are `timeout-minutes: 60`, and the file says those matrix jobs are not
+  required by name. `.github/workflows/stress.yml` is not one of the five.
+  It runs six jobs, on `ubuntu-latest` and `macos-latest`, runs 1 through 3,
+  `timeout-minutes: 60`, `max-parallel: 2`, on the schedule `0 14 * * *`, on
+  `workflow_dispatch`, and on a pull request that changes that workflow,
+  `.github/actions/test-env/**`, `scripts/ci-test.sh`, or
+  `scripts/leak-check.py`. Each stress job's test step is
+  `bash scripts/ci-test.sh`, and each has the same `Unfinished packages`
+  step. Each job fails on its own failures.
 - **Package rules live in `.claude/rules/<package>.md`** (`internal/service` is
   `.claude/rules/service.md`) and are part of this agreement. Read the one for
   the package you change, whatever tool you are: Claude Code loads it when it
