@@ -83,8 +83,13 @@ jobs:
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
           echo "Version: $version (prerelease: $prerelease, event: $EVENT)"
 
-  # make check is what CI and the gate run, so a commit that fails it cannot
-  # release. It runs on both platforms CI checks, on the tagged commit itself.
+  # Runs make check (lint, then the race suite, no leak check) on
+  # ubuntu-latest and macos-latest. The CI workflow does not run this
+  # target: its test step is scripts/ci-test.sh under scripts/leak-check.py.
+  # The gate config sets commands.test to empty and commands.lint to
+  # "make lint" (.no-mistakes.yaml). build needs this job and publish
+  # needs build, and publish runs only for a tag push, so a tag whose
+  # make check fails does not publish.
   check:
     name: make check (${{ matrix.os }})
     needs: version

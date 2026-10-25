@@ -6,6 +6,20 @@
 # a "full test output" group when the step fails, so the job's log holds
 # every failing test's output in one place.
 #
+# What it runs, each with the check job's value as its default:
+#   CI_TEST_PACKAGES  space-separated package patterns (./...)
+#   CI_TEST_COUNT     go test -count, a positive integer (1)
+#   CI_TEST_TIMEOUT   go test -timeout for each package binary (30m)
+# A value it cannot use is refused before anything runs.
+#
+# bash scripts/ci-test.sh unfinished, in a step after the one that ran the
+# suite (with the same CI_TEST_PACKAGES), names the packages test.log never
+# reported a result for when the run was cut off before it ended (a job
+# cancelled at timeout-minutes): those still running or not yet started.
+# A job cut off that way prints no full test output, so without this
+# nothing says what it was running. scripts/flake-ledger.py attaches the
+# list to the job's timeout. It prints nothing for a run that ended.
+#
 # The race detector is the point of this job, so it is not optional.
 # The timeout is explicit because internal/service has run past go
 # test's ten-minute default on a macOS runner, which fails the package
@@ -36,6 +50,47 @@
 # ASSISTANT_REQUIRE_TMUX makes them fail rather than skip without one.
 
 set -eo pipefail
+# The packages, checked once for both modes: the run and the unfinished list.
+read -r -a packages <<< "${CI_TEST_PACKAGES:-./...}"
+if [ "${#packages[@]}" -eq 0 ]; then
+  echo "::error::CI_TEST_PACKAGES names no package"
+  exit 2
+fi
+# Only package patterns under the module root: ./... or ./a/b, ./a/b/...,
+# each part starting with a letter, digit or underscore. Anything else, a
+# go test flag above all (-race=false, -run=^$), would reach go test after
+# the flags this script sets and could override them.
+segment='[A-Za-z0-9_][A-Za-z0-9_.-]*'
+pattern="^\./(${segment}/)*(${segment}|\.\.\.)$"
+for package in "${packages[@]}"; do
+  if ! [[ $package =~ $pattern ]]; then
+    echo "::error::CI_TEST_PACKAGES must be package patterns under the module root such as ./... or ./internal/agents, not '$package'"
+    exit 2
+  fi
+done
+if [ "$1" = unfinished ]; then
+  # leak-check.py run prints this line once the command it ran has exited.
+  if [ ! -f test.log ] || grep -qE '^leak-check: [0-9]+ leftover\(s\); command exit=' test.log; then
+    exit 0
+  fi
+  module=$(go list -m)
+  reported=$({ grep -oE '^(ok|FAIL|\?)[[:space:]]+[^[:space:]]+' test.log || true; } | awk '{print $2}' | sort -u)
+  unfinished=$(go list "${packages[@]}" | sort -u | comm -23 - <(printf '%s\n' "$reported") |
+    sed "s|^$module/||" | tr '\n' ' ')
+  echo "ci-test: cut off before these packages reported: ${unfinished% }"
+  exit 0
+fi
+count=${CI_TEST_COUNT:-1}
+timeout=${CI_TEST_TIMEOUT:-30m}
+if ! [[ $count =~ ^[1-9][0-9]*$ ]]; then
+  echo "::error::CI_TEST_COUNT must be a positive integer, not '$count'"
+  exit 2
+fi
+if ! [[ $timeout =~ ^[0-9]+[hms]$|^[0-9]+m[0-9]+s$|^[0-9]+h[0-9]+m$ ]]; then
+  echo "::error::CI_TEST_TIMEOUT must be a duration such as 30m, not '$timeout'"
+  exit 2
+fi
+echo "ci-test: go test -race -count=$count -timeout $timeout ${packages[*]}"
 export ASSISTANT_REQUIRE_TMUX=1
 run=()
 if [ "$RUNNER_OS" = "Linux" ]; then
@@ -84,7 +139,7 @@ export LEAK_CHECK_RECORD="$RUNNER_TEMP/per-package-checked.txt"
 "${run[@]}" python3 scripts/leak-check.py self-test
 : > "$LEAK_CHECK_RECORD"
 "${run[@]}" python3 scripts/leak-check.py run --per-package -- \
-  go test "${per_package[@]}" -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
+  go test "${per_package[@]}" -race -count="$count" -timeout "$timeout" -v "${packages[@]}" > test.log 2>&1 || status=$?
 passed=$(grep -cE '^ok[[:space:]]' test.log || true)
 checked=$(wc -l < "$LEAK_CHECK_RECORD")
 echo "leak-check: $checked package(s) ran through the per-package check; go test reported $passed ok"
