@@ -42,6 +42,7 @@ supervision_beacon_interval: 30s
 escalation_window: 15m
 recheck_window: 3h
 stall_inspection_count: 5
+stall_hold_count: 4
 relaunch_attempts: 3
 stop_grace: 45s
 command_timeout: 45m
@@ -100,6 +101,7 @@ const wholeSchemaJSON = `{
 	"escalation_window": "15m",
 	"recheck_window": "3h",
 	"stall_inspection_count": 5,
+	"stall_hold_count": 4,
 	"relaunch_attempts": 3,
 	"stop_grace": "45s",
 	"command_timeout": "45m",

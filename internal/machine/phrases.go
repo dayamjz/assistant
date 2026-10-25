@@ -9,6 +9,7 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
@@ -262,6 +263,16 @@ var phraseTaskHeld = Phrase{
 	Decision:    taskAnswerDecision,
 }
 
+// phraseTaskStallHeld is phraseTaskHeld for a task whose hold tier answered
+// from a stall hold, PRD section 6's: the decision is the same kind and is
+// answered the same way, but the hold ends nothing, so the work is not said
+// to stop.
+var phraseTaskStallHeld = Phrase{
+	Outcome:     "This work is waiting on an answer from you about a worker whose screen has not changed through repeated inspections.",
+	Consequence: "Nothing has been ended: its worker carries on and stays watched until you answer.",
+	Decision:    taskAnswerDecision,
+}
+
 // taskAnswerDecision is how a hold naming a task is answered, which the task
 // row above and HoldPhrase's open row for such a hold share, so the two
 // cannot name different commands. --hold and --note are optional: --hold
@@ -358,7 +369,8 @@ func WaitingPhrase(on string) Phrase {
 // program appended is NoWordYet. Running without Resolution.Progress is
 // phraseWorkerUnseen, so a worker no live terminal was observed for is
 // never read as a worker at its work. Held resolved from the hold tier is
-// phraseTaskHeld, which says how a hold naming the task is answered; Held
+// phraseTaskHeld, which says how a hold naming the task is answered, or
+// phraseTaskStallHeld when that hold is a stall hold, which stops nothing; Held
 // from a run or from the worker's own history keeps the table's row.
 // Reported points at assistant --json tasks for the stored report and never
 // carries its summary or findings, which Task.Report holds for the
@@ -372,6 +384,8 @@ func TaskPhrase(t Task) Phrase {
 		return WaitingPhrase(t.Waiting)
 	case unconfirmed(t):
 		return phraseWorkerUnseen
+	case state == taskstate.Held && t.State.Source == taskstate.SourceHold && isStallHold(t.State.Basis.Hold):
+		return phraseTaskStallHeld
 	case state == taskstate.Held && t.State.Source == taskstate.SourceHold:
 		return phraseTaskHeld
 	case state == taskstate.Landed && t.State.Source == taskstate.SourceRecord && t.State.Basis.LandedRun == "" &&
@@ -661,7 +675,9 @@ const holdPlaceholder = "a decision"
 // which internal/store refuses to register, is phrased with a placeholder so
 // the row never reads as waiting on nothing. An open hold naming a task and
 // no run, which internal/service answers given the task, says how: with
-// --task and --answer, as phraseTaskHeld does.
+// --task and --answer, as phraseTaskHeld does. An open stall hold, PRD
+// section 6's, holds no work still: its worker carries on and is watched, and
+// its row says so rather than that the work does not move.
 func HoldPhrase(h store.Hold) Phrase {
 	subject := strings.TrimSpace(h.Subject)
 	if subject == "" {
@@ -672,9 +688,13 @@ func HoldPhrase(h store.Hold) Phrase {
 		if h.TaskID.IsKnown() && !h.RunID.IsKnown() {
 			decision = taskAnswerDecision
 		}
+		consequence := "The work it holds does not move until you answer."
+		if isStallHold(h.Key) {
+			consequence = "Nothing has been ended: its worker carries on and stays watched until you answer."
+		}
 		return Phrase{
 			Outcome:     "A decision is waiting on you: " + subject + ".",
-			Consequence: "The work it holds does not move until you answer.",
+			Consequence: consequence,
 			Decision:    decision,
 		}
 	}
@@ -762,6 +782,8 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 		return phraseRetryUndispatchable
 	case AnswerStopped:
 		return phraseNotRetried
+	case AnswerWorkerStopped:
+		return phraseWorkerStopped
 	case AnswerLanded:
 		return phraseLandedLocallyNow
 	}
@@ -1949,7 +1971,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
-	out = append(out, phraseTaskHeld, NoWordYet, phraseWorkerUnseen, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
+	out = append(out, phraseTaskHeld, phraseTaskStallHeld, NoWordYet, phraseWorkerUnseen, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
 	out = append(out, UncertaintiesPhrase(2), FollowUpsPhrase(1))
 	for _, outcome := range Outcomes() {
 		if p, ok := phraseByOutcome[outcome]; ok {
@@ -2013,4 +2035,11 @@ func TablePhrases() []Phrase {
 	out = append(out, changeRows()...)
 	out = append(out, custodyRows()...)
 	return append(out, coordinatorRows()...)
+}
+
+// isStallHold reports whether key is a stall hold's, PRD section 6's, on
+// internal/supervisor's key space, the one owner of that composition.
+func isStallHold(key string) bool {
+	_, ok := supervisor.ParseStallHold(key)
+	return ok
 }

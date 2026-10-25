@@ -402,6 +402,12 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
+	// afterStallStopEnded runs in a stop or retry answered to a stall hold,
+	// after the stop ended the worker and proved it dead and before the
+	// answer is recorded on the stall hold. It is nil in production and set
+	// only by this package's tests, which use it to put a second answer to
+	// the same hold inside that window.
+	afterStallStopEnded func()
 	// betweenTrustedFetchAndResolve runs in fetchTrusted after the default
 	// branch has been fetched under ref and before ref is resolved. It is nil
 	// in production and set only by this package's tests, which use it to

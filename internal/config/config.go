@@ -68,6 +68,10 @@ type Config struct {
 	// precede the one that demands a deeper inspection, read by the loop into
 	// supervisor.Stall.InspectAt.
 	StallInspectionCount int
+	// StallHoldCount is how many surfaces of the same unchanged screen past
+	// StallInspectionCount precede the one that also holds the task for a
+	// person, read by the loop into supervisor.Stall.HoldAt.
+	StallHoldCount int
 	// RelaunchAttempts is how many times reconciliation at service start
 	// relaunches a task that resolves Failed with its terminal gone, counted
 	// from its attempt rows, before the task holds for a person instead.
@@ -274,6 +278,11 @@ const (
 	// measured: the third surface of the same screen is a stall the first
 	// two looks did not resolve.
 	DefaultStallInspectionCount = 3
+	// DefaultStallHoldCount is PRD section 10's default for how many
+	// inspection surfaces of one unchanged screen precede the one that holds
+	// the task for a person: with DefaultStallInspectionCount that is the
+	// seventh consecutive surface. Chosen, not measured.
+	DefaultStallHoldCount = 3
 	// DefaultRelaunchAttempts is how many relaunches of a Failed task
 	// reconciliation makes on its own when the operator's file says nothing.
 	// Chosen, not measured: two restarts of a worker whose run failed is
@@ -557,6 +566,15 @@ const (
 	// above it a stall surfaces more often than anyone would read before an
 	// inspection is demanded. Chosen, not measured.
 	MaxStallInspectionCount = 100
+	// MinStallHoldCount is PRD section 10's floor for stall_hold_count: at
+	// zero the hold would fall on the coordinator's first inspection
+	// surface, so a person would be asked at the same moment rather than
+	// after an inspection. Chosen, not measured.
+	MinStallHoldCount = 1
+	// MaxStallHoldCount is PRD section 10's ceiling for stall_hold_count:
+	// above it a stall the coordinator was told to inspect surfaces more than
+	// a hundred more times before a person is asked. Chosen, not measured.
+	MaxStallHoldCount = 100
 	// MaxAutonomyMerge is the number of repositories autonomy.merge may
 	// list. Chosen, not measured.
 	MaxAutonomyMerge = 64

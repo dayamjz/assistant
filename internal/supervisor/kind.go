@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
@@ -81,6 +82,17 @@ const (
 	// it is a decision owed to a person, so it reaches the first coordinator
 	// and never a subordinate.
 	KindKeptWork Kind = "kept-work"
+	// KindStallClosed is a stall hold the program closed itself because a
+	// supervision pass read the worker's screen changed, PRD section 6's "a
+	// stall that ends by itself closes the hold": the decision the hold
+	// asked for is no longer needed, so the closure surfaces once, keyed by
+	// the hold, for the coordinator to tell the person so. A closure on the
+	// worker read dead raises none of its own, because the dead terminal
+	// surfaces as KindTerminalGone, as any does. It is always actionable, and
+	// it reaches whoever the hold reached, which is the first coordinator,
+	// so it is never a subordinate's. PRD section 5's flowchart does not
+	// draw it; section 6 is where it is specified.
+	KindStallClosed Kind = "stall-closed"
 )
 
 // Class is how the flowchart decides a kind.
@@ -154,6 +166,7 @@ var kinds = []Row{
 	{Kind: KindSubordinateGone, Class: ClassResurface, Produced: true, Subordinate: false},
 	{Kind: KindSubordinateEscalated, Class: ClassActionable, Produced: true, Subordinate: false},
 	{Kind: KindKeptWork, Class: ClassActionable, Produced: true, Subordinate: false},
+	{Kind: KindStallClosed, Class: ClassActionable, Produced: true, Subordinate: false},
 }
 
 // Kinds returns every kind's row, in the flowchart's order. The result is a
@@ -259,3 +272,22 @@ func (w Wake) Unrecognized() bool { return w.unrecognized }
 // Routine reports whether the wake is an event whose kind taskstate marks
 // Routine.
 func (w Wake) Routine() bool { return w.routine }
+
+// holdOpenedPrefix begins the marker of a KindHoldOpened wake about a hold
+// record.
+const holdOpenedPrefix = "hold:"
+
+// HoldOpenedMarker composes the marker of a KindHoldOpened wake about the
+// hold record keyed key: the prefix and the key, so each hold surfaces once.
+// It is the one composition, read back by HoldOfMarker, so the loop that
+// writes the wake and a surface that phrases it agree on which hold a wake is
+// about (P14). A run moved to held with no hold record has a marker of its
+// own, which HoldOfMarker does not read.
+func HoldOpenedMarker(key string) string { return holdOpenedPrefix + key }
+
+// HoldOfMarker is the hold key a KindHoldOpened wake's marker names, and
+// false for a marker HoldOpenedMarker did not compose.
+func HoldOfMarker(marker string) (string, bool) {
+	key, ok := strings.CutPrefix(marker, holdOpenedPrefix)
+	return key, ok && key != ""
+}
