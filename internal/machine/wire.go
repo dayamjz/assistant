@@ -580,6 +580,12 @@ type Task struct {
 	// stored, and TaskPhrase renders a task carrying it as waiting on that
 	// decision rather than as a worker being launched.
 	KeptWork []store.KeptWork `json:"kept_work,omitempty"`
+	// KeptWorkUnread is true when the task resolves Dispatched from its
+	// history and whether kept work holds it could not be read for this
+	// answer: KeptWork is then absent and says nothing either way, and
+	// TaskPhrase renders the task as neither waiting on kept work nor a
+	// worker being launched. It is derived on every answer and never stored.
+	KeptWorkUnread bool `json:"kept_work_unread,omitempty"`
 }
 
 // InvestigationReport is what task.get (and every other answer that carries

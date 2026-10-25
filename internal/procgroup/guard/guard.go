@@ -47,12 +47,10 @@
 package guard
 
 import (
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -128,29 +126,12 @@ func Load(root string, patterns ...string) ([]Use, error) {
 		return nil, err
 	}
 	merged := map[useKey]*Use{}
-	for _, goos := range Platforms {
-		cfg := &packages.Config{
-			Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
-				packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
-			Dir: abs,
-			Env: append(os.Environ(), "GOOS="+goos, "GOWORK=off"),
-		}
-		pkgs, err := packages.Load(cfg, patterns...)
-		if err != nil {
-			return nil, fmt.Errorf("guard: loading for %s: %w", goos, err)
-		}
-		if len(pkgs) == 0 {
-			return nil, fmt.Errorf("guard: loading for %s matched no package", goos)
-		}
-		var errs []error
-		for _, p := range pkgs {
-			for _, e := range p.Errors {
-				errs = append(errs, fmt.Errorf("guard: %s for %s: %w", p.PkgPath, goos, e))
-			}
-		}
-		if len(errs) > 0 {
-			return nil, errors.Join(errs...)
-		}
+	loaded, err := typeCheckEach(abs, Platforms, false, patterns)
+	if err != nil {
+		return nil, err
+	}
+	for i, goos := range Platforms {
+		pkgs := loaded[i]
 		for _, p := range pkgs {
 			for _, u := range uses(p) {
 				rel, err := filepath.Rel(abs, u.File)

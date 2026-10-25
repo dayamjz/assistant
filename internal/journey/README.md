@@ -270,7 +270,7 @@ and a third is a finding to raise rather than a precedent.
 ## Running it
 
 ```
-make check                       # what CI runs; this package runs with everything else
+make check                       # local check: lint, then the race suite; this package runs with the rest
 go test ./internal/journey/      # this package alone
 ```
 

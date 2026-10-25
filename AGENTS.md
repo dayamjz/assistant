@@ -7,7 +7,7 @@ independently reviewed, tested, documented, and linted. Package rules are in
 
 ## The specification is checked in
 
-- `docs/prd.html` is the product requirements and the contract this code answers
+- `docs/prd.md` is the product requirements and the contract this code answers
   to. Read the section you are working in before you change behavior.
 - Its section 4 lists fifteen numbered principles, `P1` through `P15`. They are
   acceptance criteria, not aspirations: each exists because the failure it
@@ -71,8 +71,11 @@ repository more than one round of review.
 
 ## Code
 
-- Go, formatted with `gofmt`. `make check` is what CI runs and what the gate
-  runs; keep it green.
+- Go, formatted with `gofmt`. `make check` (lint and the race suite) is the
+  local check; keep it green. CI runs the suite through `scripts/ci-test.sh`
+  under the leak check (`scripts/leak-check.py`), so a package that leaves a
+  process or temp entry behind fails CI even when `make check` passes. The gate
+  runs `make lint` and leaves the full suite to CI (`.no-mistakes.yaml`).
 - **Package rules live in `.claude/rules/<package>.md`** (`internal/service` is
   `.claude/rules/service.md`) and are part of this agreement. Read the one for
   the package you change, whatever tool you are: Claude Code loads it when it
@@ -116,6 +119,10 @@ repository more than one round of review.
 - Configuration schema: the key table in `internal/config/key.go`. A key's
   default, trust class, decoding, and where it lands in a `Config` are one row;
   add a key by adding a row, never a second list of keys elsewhere.
+- The PRD's path and how it is read: `internal/principles` (`PRDPath`, and
+  `RenderPRD` with `PRD.Section`). A check that reads `docs/prd.md` reads
+  its declarations from the document as it renders, through them, never with
+  a reader of its own and never by matching the source.
 - Execution and every loop bound: `internal/graph`. Add a bound there, never
   beside the counter that reads it.
 - Git: only `internal/vcs` invokes it; add a typed operation there rather than

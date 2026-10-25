@@ -2,12 +2,12 @@
 
 This is a short guide for the person or agent that pushes work through the gate
 and for whoever owns the repository's CI and merge settings. It describes what
-this build does today. [`prd.html`](prd.html) is the specification, and where
+this build does today. [`prd.md`](prd.md) is the specification, and where
 this page and the code could disagree, the code and the PRD win.
 
 ## Start here
 
-This is the detailed **operator reference**, not a short tutorial. Use the [README](../README.md) for a product overview and quick start; use this page when commands, configuration trust, safety decisions or failure recovery matter. The [PRD](prd.html) remains the contract.
+This is the detailed **operator reference**, not a short tutorial. Use the [README](../README.md) for a product overview and quick start; use this page when commands, configuration trust, safety decisions or failure recovery matter. The [PRD](prd.md) remains the contract.
 
 | Your question | Read |
 | --- | --- |
@@ -563,7 +563,9 @@ reservation.
 While a project has an open kept-work entry, no new task in that project
 starts: the task is recorded, `assistant --json tasks` shows it waiting and
 names the entries under `kept_work`, and it starts on its own once every
-entry is answered or closed. Kept work in one project never holds another,
+entry is answered or closed. When whether kept work holds the task could not
+be read for an answer, the answer says so (`kept_work_unread`) and names no
+entry, rather than reading as a worker being launched. Kept work in one project never holds another,
 a task whose worker was already launched is not held (its relaunch goes
 ahead), and your own push always starts its run, whose answer names the
 project's open entries.

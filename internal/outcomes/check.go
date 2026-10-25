@@ -13,16 +13,16 @@ import (
 // PRDPath is where the PRD lives, relative to the module root, in slash form.
 // It is internal/principles' constant rather than a second copy of the path:
 // that package is the other document check in this repository and one of them
-// owns where the document is.
+// owns where the document is and where its sections begin and end.
 const PRDPath = principles.PRDPath
 
 // rowName is how a refusal points a reader at the row the set is stated in. It
-// names the row and the section by their anchors and not by the section's
-// number, because the anchors are what this package checks and the number is
-// not. A refusal that fires correctly and then sends its reader to a section
+// names the row by its anchor and the section by its heading, and not the
+// section by its number, because the anchor and the heading are what this
+// package checks and the number is not. A refusal that fires correctly and then sends its reader to a section
 // that has since been renumbered is worse than a terse one, and precision is
 // this check's whole claim.
-const rowName = `the PRD's outcome row (<tr id="outcome-set"> in <section id="surfaces">)`
+const rowName = `the PRD's outcome row (<a id="outcome-set"> under "## Surfaces")`
 
 // Agreement is the answer to one question: do the PRD's outcome row and
 // internal/machine's outcome set say the same thing.
@@ -173,11 +173,11 @@ func group(terminal bool) string {
 // Check reads the PRD under root and compares its declarations against the
 // build's. Root is the module root: the PRD is read from PRDPath under it.
 func Check(root string) (Agreement, error) {
-	html, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(PRDPath)))
+	doc, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(PRDPath)))
 	if err != nil {
 		return Agreement{}, fmt.Errorf("%w: %w", ErrPRD, err)
 	}
-	listed, err := FromPRD(html)
+	listed, err := FromPRD(doc)
 	if err != nil {
 		return Agreement{}, err
 	}
