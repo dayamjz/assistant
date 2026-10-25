@@ -66,13 +66,11 @@ import (
 // leaves any conflicted file as the conflict left it, or with a marker line
 // git wrote for the conflict still in it, commits nothing and leaves the
 // rebase stopped with that file conflicted, so the next execution reports
-// the conflict again. A round that
-// leaves the index and the worktree unchanged aborts the rebase when the
-// copy's HEAD is not the head the run already records, and the next
-// execution starts a new one. When HEAD is that recorded head, the round
-// leaves the rebase in progress so the commit stays on the working copy.
-// An execution that finds a rebase this
-// stage already started does not start a second one. The section below says
+// the conflict again. A round that leaves the index and the worktree
+// unchanged leaves the rebase stopped too, never aborting it, so neither a
+// step an earlier round committed nor a resolution it staged is discarded.
+// An execution that finds a rebase this stage already started does not
+// start a second one: it reports the conflict that rebase is stopped on. The section below says
 // what a conflict does after the push.
 //
 // # After the push: a second pass that rebases a branch the run pushed

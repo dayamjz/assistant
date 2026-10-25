@@ -21,9 +21,11 @@ import (
 // TestAConflictingRebaseLeavesTheCopyReadyForItsFixRound runs a submitted
 // change against a newer, conflicting base through the real rebase stage and
 // scripted fixer. The fixer is shown the conflict on the new base and edits
-// nothing, so the round aborts that rebase and the stage can retry. The run
-// stops on its convergence bound. P6 requires the submitted commit to remain
-// available when the replay cannot apply.
+// nothing. The round leaves the rebase stopped rather than aborting it, and
+// the stage's next execution meets the rebase it started and reports the
+// same conflict instead of failing on it. The run stops on its convergence
+// bound. P6 requires the submitted commit to remain what the branch names
+// when the replay cannot apply.
 func TestAConflictingRebaseLeavesTheCopyReadyForItsFixRound(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	s := newSubject(t)
@@ -79,8 +81,8 @@ func TestAConflictingRebaseLeavesTheCopyReadyForItsFixRound(t *testing.T) {
 				return out, err
 			}
 			inProgress, err = copy.RebaseStatus(ctx)
-			if err != nil || inProgress {
-				t.Fatalf("after the fix round, rebase in progress %v, error %v", inProgress, err)
+			if err != nil || !inProgress {
+				t.Fatalf("after the fix round, rebase in progress %v, error %v; want it still stopped", inProgress, err)
 			}
 			return out, nil
 		}
@@ -113,11 +115,11 @@ func TestAConflictingRebaseLeavesTheCopyReadyForItsFixRound(t *testing.T) {
 	if result.Status != graph.StatusConverged {
 		t.Fatalf("the run stopped with %s, want convergence after the scripted fixer changed nothing", result.Status)
 	}
-	if got := git(t, s.dir, "rev-parse", "HEAD"); got != s.head {
-		t.Fatalf("the copy stands at %s, want the submitted commit %s", got, s.head)
+	if got := git(t, s.dir, "rev-parse", "refs/heads/topic"); got != s.head {
+		t.Fatalf("the branch names %s, want the submitted commit %s", got, s.head)
 	}
-	if status := git(t, s.dir, "status", "--porcelain"); status != "" {
-		t.Fatalf("the copy is not clean after the run stopped:\n%s", status)
+	if unmerged := git(t, s.dir, "ls-files", "-u", "--", totalPath); unmerged == "" {
+		t.Fatalf("after the run stopped, %s is no longer the conflict the rebase stopped on", totalPath)
 	}
 	t.Logf("rebase stage ran %d times; the scripted fixer ran %d times", rebaseRuns, fixRuns)
 }
@@ -1183,4 +1185,51 @@ func expectMarkersNeverRecorded(t *testing.T, s *subject, result graph.Result) {
 		t.Fatalf("the submitted commit %s is gone", s.head)
 	}
 	t.Logf("the run stopped with %s at recorded head %s", result.Status, recorded)
+}
+
+// TestAPartialResolutionSurvivesALaterUnchangedRound is one commit that
+// conflicts on two files. The first round resolves the code and leaves the
+// README as the conflict left it, so it commits nothing and keeps the
+// resolution in the copy. Every later round edits nothing. Aborting the
+// rebase on such a round would restore the submitted files and discard the
+// first round's resolution, which P6 forbids. The run may stop, but the
+// copy has to still hold that resolution, and the submitted commit is kept.
+func TestAPartialResolutionSurvivesALaterUnchangedRound(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal, readmePath: upstreamReadme})
+	var calls int
+	result, err := runRebaseRounds(t, s, "resolved what it could",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				calls++
+				if calls == 1 {
+					write(t, s.dir, totalPath, resolvedTotal)
+				}
+			}}
+		},
+		func(round int, _ pipeline.FixOutput, err error) {
+			if err != nil {
+				t.Errorf("fix round %d: %v", round, err)
+			}
+		})
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	if calls < 2 {
+		t.Fatalf("the fixer ran %d time(s), want a later unchanged round", calls)
+	}
+	if result.Status == graph.StatusCompleted {
+		t.Fatalf("the run completed with %s never resolved", readmePath)
+	}
+	if got := read(t, s.dir, totalPath); got != resolvedTotal {
+		t.Fatalf("after %d round(s) and status %s, the copy's %s =\n%s\nwant the first round's resolution",
+			calls, result.Status, totalPath, got)
+	}
+	if staged := git(t, s.dir, "show", ":"+totalPath); staged != strings.TrimSpace(resolvedTotal) {
+		t.Fatalf("the index's %s =\n%s\nwant the first round's resolution staged", totalPath, staged)
+	}
+	if git(t, s.dir, "rev-parse", "refs/heads/topic") != s.head {
+		t.Fatalf("the branch no longer names the submitted commit %s", s.head)
+	}
 }
