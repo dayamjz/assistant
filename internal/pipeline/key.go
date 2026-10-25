@@ -96,6 +96,15 @@ const (
 	// KeySubmitted and moves when a rebase or a fix round rewrites it, so it
 	// carries a merge rule, which is what lets more than one node write it.
 	KeyHead Key = "head"
+	// KeyResolution records the resolution a rebase fix round left in the
+	// run's copy without committing it, as an opaque record of the copy's
+	// uncommitted state. A round that changes the copy and commits nothing,
+	// because a conflict is still unresolved, writes it, so that change is
+	// part of the run's state and the convergence bound does not take the
+	// round for one that changed nothing. A round that commits writes it
+	// empty. Its zero value, empty, is how a run without it behaved, so the
+	// key is late.
+	KeyResolution Key = "rebase.resolution"
 	// KeyIntent is what the change set out to do, in words.
 	KeyIntent Key = "intent"
 	// KeyIntentSupplied says whether the intent was supplied as authoritative
@@ -245,6 +254,9 @@ var sharedKeys = []keySpec{
 	{KeySkip, graph.KindList, graph.MergeNone, ownerRun, false},
 	{KeyNoCodeHost, graph.KindBool, graph.MergeNone, ownerRun, true},
 	{KeyHead, graph.KindText, graph.MergeLastWriteWins, ownerStage, false},
+	// A fix round writes it each time it changes the copy, so it carries
+	// the head's merge rule for the head's reason.
+	{KeyResolution, graph.KindText, graph.MergeLastWriteWins, ownerStage, true},
 	{KeyIntent, graph.KindText, graph.MergeNone, ownerStage, false},
 	{KeyIntentSupplied, graph.KindBool, graph.MergeNone, ownerRun, false},
 	{KeyDiffEmpty, graph.KindBool, graph.MergeNone, ownerStage, false},

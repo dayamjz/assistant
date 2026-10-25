@@ -109,8 +109,10 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 // is already committed, and this one was not. Skipping drops the patch and
 // keeps a step already replayed. Aborting would drop that step, and the next
 // replay would stop on the original commit. The round reports the head when
-// the rebase has finished or stopped on a later conflict. A stop with nothing
-// unmerged is an error, and the round does not report a head. A round that
+// the rebase has finished or stopped on a later conflict, including a later
+// one whose resolution a copy with rerere.autoupdate set has already staged.
+// A stop with nothing unmerged on the commit the round began on is an error,
+// and the round does not report a head. A round that
 // leaves the index and the worktree unchanged, while a path was unmerged
 // when it began, reports that nothing changed, writes no new head, and
 // leaves the rebase stopped. When nothing was unmerged, the index already
@@ -121,6 +123,11 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 // the run already records as its head, or staged resolutions it could not
 // commit yet, and an abort would discard both (P6). The stage's next
 // execution finds the rebase it started and reports the same conflict.
+//
+// A round that changes the copy and commits nothing records what the copy
+// now holds in pipeline.KeyResolution, and a round that commits clears it,
+// so a round that resolved part of a conflict is part of the run's state
+// and the convergence bound does not count it as one that changed nothing.
 //
 // A round that changed something but left a conflicted file as the conflict
 // left it, with the same conflict stages in the index and the same worktree
@@ -198,7 +205,7 @@ func Fix(deps FixDeps) pipeline.Fixer {
 			pipeline.KeyHead,
 			pipeline.KeyIntent,
 		},
-		Writes:   []pipeline.Key{pipeline.KeyHead},
+		Writes:   []pipeline.Key{pipeline.KeyHead, pipeline.KeyResolution},
 		Requires: deps.Requires,
 		NewBody: func() pipeline.FixBody {
 			return func(ctx context.Context, in pipeline.FixInput) (pipeline.FixOutput, error) {
@@ -250,6 +257,7 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 	var digest string
 	var conflicts map[string]string
 	var markers map[string][]string
+	var stoppedOn string
 	if rebasing {
 		digest, err = copied.UncommittedDigest(ctx)
 		if err != nil {
@@ -260,6 +268,11 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 		if err != nil {
 			return pipeline.FixOutput{}, fmt.Errorf(
 				"stages: reading the conflicted files before the %s fix round: %w", in.Stage, err)
+		}
+		stoppedOn, err = rebaseStep(ctx, copied)
+		if err != nil {
+			return pipeline.FixOutput{}, fmt.Errorf(
+				"stages: reading the commit the rebase stopped on before the %s fix round: %w", in.Stage, err)
 		}
 		markers, err = copied.ConflictMarkers(ctx)
 		if err != nil {
@@ -371,7 +384,19 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 				return pipeline.FixOutput{}, fmt.Errorf(
 					"stages: staging the conflicted files the %s fix round resolved: %w", in.Stage, err)
 			}
-			return pipeline.FixOutput{Summary: conflictsLeft(in.Stage, unresolved, summary)}, nil
+			// Nothing is committed, so no head moves, but the copy changed.
+			// Recording what it now holds is what tells the convergence
+			// bound this round was progress, so a file resolved one region
+			// per round is not parked while regions remain.
+			uncommitted, err := copied.UncommittedDigest(ctx)
+			if err != nil {
+				return pipeline.FixOutput{}, fmt.Errorf(
+					"stages: recording what the %s fix round left uncommitted: %w", in.Stage, err)
+			}
+			return pipeline.FixOutput{
+				Summary: conflictsLeft(in.Stage, unresolved, summary),
+				Writes:  map[pipeline.Key]graph.Value{pipeline.KeyResolution: graph.TextValue(uncommitted)},
+			}, nil
 		}
 	}
 
@@ -408,9 +433,9 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 	if rebasing {
 		// The head this round reports is where the copy stands now, including
 		// when a later commit stopped on a new conflict. A rebase still
-		// stopped with nothing unmerged has not moved past this step, so
-		// its HEAD is not a head this round may report.
-		now, err := rebaseAdvanced(ctx, copied, in.Stage)
+		// stopped on this round's commit with nothing unmerged has not moved
+		// past this step, so its HEAD is not a head this round may report.
+		now, err := rebaseAdvanced(ctx, copied, in.Stage, stoppedOn)
 		if err != nil {
 			return pipeline.FixOutput{}, err
 		}
@@ -423,15 +448,23 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 	}
 	return pipeline.FixOutput{
 		Summary: summary,
-		Writes:  map[pipeline.Key]graph.Value{pipeline.KeyHead: graph.TextValue(committed)},
-		Holds:   holds,
+		Writes: map[pipeline.Key]graph.Value{
+			pipeline.KeyHead:       graph.TextValue(committed),
+			pipeline.KeyResolution: graph.TextValue(""),
+		},
+		Holds: holds,
 	}, nil
 }
 
 // rebaseAdvanced reads HEAD after a skip or a continue. A rebase that is
-// still in progress is a later conflict only when a path is unmerged. One
-// that is stopped with a clean index is not a head this round may report.
-func rebaseAdvanced(ctx context.Context, copied *vcs.Repository, stage pipeline.Stage) (string, error) {
+// still in progress has moved to a later step when a path is unmerged, or
+// when it is stopped on another commit than startedOn, the commit it was
+// stopped on when the round began: a copy with rerere.autoupdate set stops
+// on a later conflict with a recorded resolution staged and nothing
+// unmerged, and the next round commits that resolution. A rebase still
+// stopped on startedOn with nothing unmerged has not moved past this
+// round's step, so its HEAD is not a head this round may report.
+func rebaseAdvanced(ctx context.Context, copied *vcs.Repository, stage pipeline.Stage, startedOn string) (string, error) {
 	active, err := copied.RebaseStatus(ctx)
 	if err != nil {
 		return "", fmt.Errorf(
@@ -444,8 +477,15 @@ func rebaseAdvanced(ctx context.Context, copied *vcs.Repository, stage pipeline.
 				"stages: reading the rebase after the %s fix round: %w", stage, err)
 		}
 		if !changes.Unmerged {
-			return "", fmt.Errorf(
-				"stages: the %s fix round left the rebase stopped with nothing unmerged", stage)
+			now, err := rebaseStep(ctx, copied)
+			if err != nil {
+				return "", fmt.Errorf(
+					"stages: reading the commit the rebase stopped on after the %s fix round: %w", stage, err)
+			}
+			if now == "" || now == startedOn {
+				return "", fmt.Errorf(
+					"stages: the %s fix round left the rebase stopped with nothing unmerged", stage)
+			}
 		}
 	}
 	now, err := copied.ResolveCommit(ctx, "HEAD")
@@ -455,6 +495,17 @@ func rebaseAdvanced(ctx context.Context, copied *vcs.Repository, stage pipeline.
 			stage, err)
 	}
 	return now, nil
+}
+
+// rebaseStep is the commit a stopped rebase is replaying, which git names
+// REBASE_HEAD. It is empty when there is none, as for a rebase paused before
+// any commit was picked.
+func rebaseStep(ctx context.Context, copied *vcs.Repository) (string, error) {
+	commit, err := copied.ResolveCommit(ctx, "REBASE_HEAD")
+	if errors.Is(err, vcs.ErrRefNotFound) {
+		return "", nil
+	}
+	return commit, err
 }
 
 // nothingChanged is the summary for a round that left the copy as it was. It

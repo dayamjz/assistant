@@ -1289,3 +1289,133 @@ func TestAResolutionGitStagedBeforeTheRoundIsCommitted(t *testing.T) {
 		t.Fatalf("HEAD's %s =\n%s\nwant the recorded resolution", totalPath, got)
 	}
 }
+
+// TestALaterConflictGitResolvedIsCommittedByTheNextRound runs two commits
+// that each conflict, with rerere.enabled and rerere.autoupdate, and a
+// recorded resolution of the second conflict only. The fixer resolves the
+// first; the continue then stops on the second with its recorded resolution
+// staged and nothing unmerged. That stop is a later step, not this round's
+// step failing to move, so the round reports it, and the next round commits
+// the staged resolution and finishes the rebase.
+func TestALaterConflictGitResolvedIsCommittedByTheNextRound(t *testing.T) {
+	s := newSubject(t)
+	git(t, s.dir, "checkout", "--quiet", "-B", "topic", s.base)
+	write(t, s.dir, totalPath, strings.Replace(baseTotal, "sum := 0", "sum := 0 // first edit", 1))
+	s.commit(t, "edit the function")
+	write(t, s.dir, readmePath, "Total sums every value it is given.\n")
+	s.head = s.commit(t, "edit the readme")
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal, readmePath: upstreamReadme})
+	const resolvedReadme = "Total sums every value it is given, on the newer base.\n"
+
+	// Record a resolution of the README conflict, and none of the code's.
+	git(t, s.dir, "config", "rerere.enabled", "true")
+	upstream := "refs/remotes/" + stages.UpstreamRemote + "/main"
+	git(t, s.dir, "fetch", "--quiet", stages.UpstreamRemote, "main:"+upstream)
+	if out, err := tryGit(s.dir, "rebase", "--merge", upstream); err == nil {
+		t.Fatalf("recording the resolution: the first commit did not conflict:\n%s", out)
+	}
+	git(t, s.dir, "rerere", "clear")
+	write(t, s.dir, totalPath, resolvedTotal)
+	git(t, s.dir, "add", "--", totalPath)
+	if out, err := tryGit(s.dir, "-c", "core.editor=true", "rebase", "--continue"); err == nil {
+		t.Fatalf("recording the resolution: the second commit did not conflict:\n%s", out)
+	}
+	write(t, s.dir, readmePath, resolvedReadme)
+	git(t, s.dir, "add", "--", readmePath)
+	git(t, s.dir, "rerere")
+	git(t, s.dir, "rebase", "--abort")
+	git(t, s.dir, "config", "rerere.autoupdate", "true")
+
+	var calls int
+	var firstConflicted bool
+	result, err := runRebaseRounds(t, s, "resolved the conflict",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				calls++
+				if calls == 1 {
+					firstConflicted = git(t, s.dir, "ls-files", "-u", "--", totalPath) != ""
+					write(t, s.dir, totalPath, resolvedTotal)
+				}
+			}}
+		},
+		func(round int, _ pipeline.FixOutput, err error) {
+			if err != nil {
+				t.Errorf("fix round %d: %v", round, err)
+			}
+		})
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	if !firstConflicted {
+		t.Fatal("the first commit's conflict was not left for the fixer, so this is not the case under test")
+	}
+	head := git(t, s.dir, "rev-parse", "HEAD")
+	base := git(t, s.dir, "rev-parse", upstream)
+	if result.Status != graph.StatusCompleted || !isAncestor(t, s.dir, base, head) {
+		t.Fatalf("status %s after %d round(s), head %s, upstream %s is ancestor %v; both resolutions have to land on the new base",
+			result.Status, calls, head, base, isAncestor(t, s.dir, base, head))
+	}
+	if got := git(t, s.dir, "show", "HEAD:"+totalPath); got != strings.TrimSpace(resolvedTotal) {
+		t.Fatalf("HEAD's %s =\n%s\nwant the fixer's resolution", totalPath, got)
+	}
+	if got := git(t, s.dir, "show", "HEAD:"+readmePath); got != strings.TrimSpace(resolvedReadme) {
+		t.Fatalf("HEAD's %s = %q, want the recorded resolution", readmePath, got)
+	}
+}
+
+// TestAFileResolvedOneConflictPerRoundIsCommitted is one file with three
+// conflicting regions, and a fixer that resolves one region per round and
+// says the same thing every time. Each round changes the copy, so none is
+// a round that changed nothing, and the convergence bound may not park the
+// run while regions remain: the third round resolves the last one, and the
+// run completes on the new base within the three rounds the stage has.
+func TestAFileResolvedOneConflictPerRoundIsCommitted(t *testing.T) {
+	s := newSubject(t)
+	const notesPath = "notes.txt"
+	// Eight unchanged lines between regions keep git from joining them
+	// into one conflict.
+	gap := "1\n2\n3\n4\n5\n6\n7\n8\n"
+	lines := func(a, c, e string) string {
+		return "top\n" + a + "\n" + gap + c + "\n" + gap + e + "\nbottom\n"
+	}
+	git(t, s.dir, "checkout", "--quiet", "-B", "main", s.base)
+	write(t, s.dir, notesPath, lines("a", "c", "e"))
+	s.base = s.commit(t, "add notes")
+	git(t, s.dir, "checkout", "--quiet", "-B", "topic", s.base)
+	write(t, s.dir, notesPath, lines("a topic", "c topic", "e topic"))
+	s.head = s.commit(t, "edit the notes")
+	conflictOnUpstream(t, s, map[string]string{notesPath: lines("a main", "c main", "e main")})
+
+	var calls int
+	result, err := runRebaseRounds(t, s, "resolved one conflicting region",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				calls++
+				text := read(t, s.dir, notesPath)
+				open := strings.Index(text, "<<<<<<<")
+				if open < 0 {
+					return
+				}
+				end := strings.Index(text[open:], ">>>>>>>")
+				eol := strings.Index(text[open+end:], "\n")
+				write(t, s.dir, notesPath, text[:open]+"resolved\n"+text[open+end+eol+1:])
+			}}
+		},
+		func(round int, _ pipeline.FixOutput, err error) {
+			if err != nil {
+				t.Errorf("fix round %d: %v", round, err)
+			}
+		})
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	head := git(t, s.dir, "rev-parse", "HEAD")
+	base := git(t, s.dir, "rev-parse", "refs/remotes/"+stages.UpstreamRemote+"/main")
+	if result.Status != graph.StatusCompleted || !isAncestor(t, s.dir, base, head) {
+		t.Fatalf("status %s after %d round(s), head %s, upstream %s is ancestor %v; the three regions' resolutions have to land on the new base",
+			result.Status, calls, head, base, isAncestor(t, s.dir, base, head))
+	}
+	if got, want := git(t, s.dir, "show", "HEAD:"+notesPath), strings.TrimSpace(lines("resolved", "resolved", "resolved")); got != want {
+		t.Fatalf("HEAD's %s =\n%s\nwant\n%s", notesPath, got, want)
+	}
+}
