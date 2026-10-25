@@ -598,6 +598,7 @@ func TestMarkersAreRewrittenInPlaceWithTheEpochDerived(t *testing.T) {
 		{MarkerAdvance{CaptureDigest: Known("A"), EventSequence: 2}, 1},
 		{MarkerAdvance{CaptureDigest: Known("A"), EventSequence: 3, Surfaced: true, WindowStart: Known(window)}, 1},
 		{MarkerAdvance{CaptureDigest: Known("A"), StallRepetitions: 2, UnobservedSince: Known(window.Add(time.Minute))}, 1},
+		{MarkerAdvance{CaptureDigest: Known("A"), StallRepetitions: 5, StallBase: 3}, 1},
 		{MarkerAdvance{CaptureDigest: Known("A"), UnobservedSince: Known(window), GoneSurfacedAt: Known(window.Add(time.Hour))}, 1},
 		{MarkerAdvance{EventSequence: 3}, 2},
 		{MarkerAdvance{CaptureDigest: Known("A")}, 3},
@@ -611,6 +612,7 @@ func TestMarkersAreRewrittenInPlaceWithTheEpochDerived(t *testing.T) {
 			TaskID: task, CaptureDigest: step.advance.CaptureDigest, ChangeEpoch: step.epoch,
 			EventSequence: step.advance.EventSequence, Surfaced: step.advance.Surfaced,
 			WindowStart: step.advance.WindowStart, StallRepetitions: step.advance.StallRepetitions,
+			StallBase:       step.advance.StallBase,
 			UnobservedSince: step.advance.UnobservedSince, GoneSurfacedAt: step.advance.GoneSurfacedAt,
 			UpdatedAt: m.UpdatedAt,
 		}
@@ -621,5 +623,114 @@ func TestMarkersAreRewrittenInPlaceWithTheEpochDerived(t *testing.T) {
 		if err != nil || !ok || read != m {
 			t.Fatalf("step %d: the read back = %+v, %v, %v", i, read, ok, err)
 		}
+	}
+}
+
+// The stall base is a marker within the repetition count it restarts: a base
+// below zero or above the count is refused before anything is written, and
+// the markers stand as they were, so a loop that composed a restart past its
+// own count is a refusal and not a count read back negative.
+func TestAStallBaseOutsideTheRepetitionCountIsRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	task := seedTask(t, s, "taskaaaaaaab").ID
+	before, err := s.AdvanceWakeMarkers(ctx, incarnationOf(t, s), task, MarkerAdvance{CaptureDigest: Known("A"), StallRepetitions: 2, StallBase: 2})
+	if err != nil {
+		t.Fatalf("a base equal to the count: %v", err)
+	}
+	for _, bad := range []MarkerAdvance{
+		{CaptureDigest: Known("A"), StallRepetitions: 2, StallBase: 3},
+		{CaptureDigest: Known("A"), StallRepetitions: 2, StallBase: -1},
+	} {
+		if _, err := s.AdvanceWakeMarkers(ctx, incarnationOf(t, s), task, bad); err == nil {
+			t.Errorf("a stall base of %d over a count of %d was written", bad.StallBase, bad.StallRepetitions)
+		}
+	}
+	after, _, err := s.WakeMarkers(ctx, task)
+	if err != nil || after != before {
+		t.Fatalf("the refused advances moved the markers to %+v from %+v (%v)", after, before, err)
+	}
+}
+
+// A wake that registers a hold registers it in its own transaction, fenced
+// by the incarnation like the wake and the markers: a replaced incarnation's
+// append registers nothing, the current one's registers the hold beside the
+// wake, a replay of the same surface finds the same hold and registers no
+// second one, and a hold that names another task or a run is refused before
+// anything is written. PRD section 6's stall hold is the one such hold.
+func TestAWakeRegistersItsHoldInItsOwnTransaction(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	task := seedTask(t, s, "taskaaaaaaab").ID
+	hold := Hold{Key: "task/" + task + "/stalled/1/1/3", TaskID: Known(task), Subject: "a stall"}
+	request := WakeRequest{TaskID: task, Kind: "terminal-unchanged", Marker: "terminal:A@1#3", Registers: Known(hold)}
+	advance := MarkerAdvance{CaptureDigest: Known("A"), Surfaced: true, StallRepetitions: 3}
+
+	old := incarnationOf(t, s)
+	current := incarnationOf(t, s)
+	if _, err := s.AppendWakeWithMarkers(ctx, old, request, advance); !errors.Is(err, ErrStaleIncarnation) {
+		t.Fatalf("the replaced incarnation's append = %v, want ErrStaleIncarnation", err)
+	}
+	if _, err := s.Hold(ctx, hold.Key); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a refused append registered its hold (%v)", err)
+	}
+	for i := 0; i < 2; i++ {
+		got, err := s.AppendWakeWithMarkers(ctx, current, request, advance)
+		if err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+		if want := []WakeDisposition{WakeAppended, WakeAlreadyQueued}[i]; got.Disposition != want {
+			t.Fatalf("append %d = %s, want %s", i, got.Disposition, want)
+		}
+	}
+	registered, err := s.Hold(ctx, hold.Key)
+	if err != nil || !registered.Open() || registered.TaskID != Known(task) {
+		t.Fatalf("the registered hold = %+v (%v), want it open naming the task", registered, err)
+	}
+	open, err := s.OpenHolds(ctx)
+	if err != nil || len(open) != 1 {
+		t.Fatalf("open holds after the replay = %+v (%v), want the one", open, err)
+	}
+	for name, bad := range map[string]Hold{
+		"another task's": {Key: "task/other/stalled/1/1/4", TaskID: Known("other"), Subject: "s"},
+		"a run's":        {Key: "task/" + task + "/stalled/1/1/4", TaskID: Known(task), RunID: Known("run"), Subject: "s"},
+		"no task's":      {Key: "task/" + task + "/stalled/1/1/4", Subject: "s"},
+	} {
+		r := request
+		r.Marker, r.Registers = "terminal:A@1#4", Known(bad)
+		if _, err := s.AppendWakeWithMarkers(ctx, current, r, MarkerAdvance{CaptureDigest: Known("A"), StallRepetitions: 4}); err == nil {
+			t.Errorf("a wake registering %s hold was appended", name)
+		}
+		if _, err := s.Hold(ctx, bad.Key); !errors.Is(err, ErrNotFound) && bad.Key != hold.Key {
+			t.Errorf("a refused wake registered %s hold (%v)", name, err)
+		}
+	}
+}
+
+// A resolution the loop makes is fenced like its other writes: a replaced
+// incarnation's is refused with ErrStaleIncarnation and leaves the hold
+// open, and the current one's lands, recorded as given.
+func TestAHoldResolvedUnderAReplacedIncarnationStaysOpen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	task := seedTask(t, s, "taskaaaaaaab").ID
+	key := "task/" + task + "/stalled/1/1/3"
+	if _, err := s.RegisterHold(ctx, Hold{Key: key, TaskID: Known(task), Subject: "a stall"}); err != nil {
+		t.Fatalf("registering the hold: %v", err)
+	}
+	old := incarnationOf(t, s)
+	current := incarnationOf(t, s)
+	if _, err := s.ResolveHoldUnder(ctx, old, key, "screen-changed", "read", ResolvedByProgram()); !errors.Is(err, ErrStaleIncarnation) {
+		t.Fatalf("the replaced incarnation's resolution = %v, want ErrStaleIncarnation", err)
+	}
+	if h, err := s.Hold(ctx, key); err != nil || !h.Open() {
+		t.Fatalf("a refused resolution closed the hold: %+v (%v)", h, err)
+	}
+	h, err := s.ResolveHoldUnder(ctx, current, key, "screen-changed", "read", ResolvedByProgram())
+	if err != nil || h.Resolution.Or("") != "screen-changed" || h.ResolutionNote.Or("") != "read" {
+		t.Fatalf("the current incarnation's resolution = %+v (%v)", h, err)
 	}
 }

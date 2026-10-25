@@ -486,9 +486,10 @@
 // speaks for, so a surface that derived ResolvedByMachineInterface and then
 // named ResolvedByPerson in source would be recorded as it asked. No caller
 // here does: the value has no producer in this repository outside the tests
-// that hold this rule. The production resolutions are internal/service's: one
-// recorded as ResolvedByProgram for the one hold PRD section 8 lets the
-// service close itself, which that resolver's own comment names, and the
+// that hold this rule. The production resolutions are internal/service's:
+// those recorded as ResolvedByProgram for the two holds the service closes
+// itself, the checks stage's hold PRD section 8 names and the stall hold PRD
+// section 6 names, which that resolver's own comment states, and the
 // answer to a hold a task raised, recorded as whatever internal/ipc's
 // Request.HoldResolver derives for the request it arrived on, which is
 // ResolvedByMachineInterface, and each answer the program gives a run's
