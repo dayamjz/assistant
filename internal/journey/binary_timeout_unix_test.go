@@ -214,10 +214,8 @@ func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	pid, err := pidOnceStarted(pidFile, exited, time.Minute)
+	pid, err := buildStarted(pidFile, helperPID, exited, time.Minute)
 	if err != nil {
-		_ = syscall.Kill(helperPID, syscall.SIGKILL)
-		<-exited
 		t.Fatalf("the hanging build never started: %v\n%s", err, out.String())
 	}
 	if err := syscall.Kill(helperPID, syscall.SIGQUIT); err != nil {
@@ -239,25 +237,43 @@ func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 	t.Fatalf("build pid %d still alive after the harness exited (parent %d); harness: %v\n%s", pid, ppid, runErr, out.String())
 }
 
+// buildStarted returns the pid the hanging build writes. When none comes,
+// the helper's exit has been received before the error is returned, so no
+// process outlives the call: a helper still running is ended first. exited
+// carries one exit, so it is received exactly once on every path.
+func buildStarted(path string, helperPID int, exited <-chan error, limit time.Duration) (int, error) {
+	pid, received, err := pidOnceStarted(path, exited, limit)
+	if err != nil {
+		if !received {
+			_ = syscall.Kill(helperPID, syscall.SIGKILL)
+			<-exited
+		}
+		return 0, err
+	}
+	return pid, nil
+}
+
 // pidOnceStarted waits for the pid the hanging build writes. A harness that
 // exits first, or a build that has not started within limit, is an error,
-// so a test cannot go on to check a build that never ran.
-func pidOnceStarted(path string, exited <-chan error, limit time.Duration) (int, error) {
+// so a test cannot go on to check a build that never ran. received reports
+// whether the harness's exit was taken from exited, which the caller then
+// must not wait for again.
+func pidOnceStarted(path string, exited <-chan error, limit time.Duration) (pid int, received bool, err error) {
 	deadline := time.Now().Add(limit)
 	for {
 		if pid, err := readPID(path); err == nil {
-			return pid, nil
+			return pid, false, nil
 		}
 		select {
 		case err := <-exited:
 			if err == nil {
-				return 0, errors.New("the harness exited first, with status 0")
+				return 0, true, errors.New("the harness exited first, with status 0")
 			}
-			return 0, fmt.Errorf("the harness exited first: %w", err)
+			return 0, true, fmt.Errorf("the harness exited first: %w", err)
 		default:
 		}
 		if time.Now().After(deadline) {
-			return 0, fmt.Errorf("no pid within %s", limit)
+			return 0, false, fmt.Errorf("no pid within %s", limit)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -316,4 +332,65 @@ func parentOf(pid int) int {
 		return -1
 	}
 	return n
+}
+
+// TestABuildThatNeverStartsIsReportedNotWaitedOn starts a helper that exits
+// at once with status 1 and writes no pid. Waiting for the build has to
+// return that as an error promptly, with the helper's exit received exactly
+// once, rather than block the test until the suite's timeout.
+func TestABuildThatNeverStartsIsReportedNotWaitedOn(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "exit 1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	type result struct {
+		pid int
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		pid, err := buildStarted(filepath.Join(t.TempDir(), "pid"), cmd.Process.Pid, exited, time.Minute)
+		done <- result{pid, err}
+	}()
+	select {
+	case r := <-done:
+		var exit *exec.ExitError
+		if !errors.As(r.err, &exit) || exit.ExitCode() != 1 {
+			t.Fatalf("pid %d, error %v; want the helper's exit status 1", r.pid, r.err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("waiting for a build whose helper had already exited did not return")
+	}
+}
+
+// TestABuildThatNeverStartsEndsItsHelper starts a helper that runs on and
+// writes no pid. Once the wait gives up, the helper has to be ended and its
+// exit received before the error is returned, so it does not outlive the
+// test.
+func TestABuildThatNeverStartsEndsItsHelper(t *testing.T) {
+	cmd := exec.Command("/bin/sleep", "300")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	done := make(chan error, 1)
+	go func() {
+		_, err := buildStarted(filepath.Join(t.TempDir(), "pid"), cmd.Process.Pid, exited, 200*time.Millisecond)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "no pid within") {
+			t.Fatalf("error %v, want the wait to give up", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("waiting for a build that never started did not return")
+	}
+	if cmd.ProcessState == nil || processAlive(cmd.Process.Pid) {
+		t.Fatalf("the helper %d is still running after the wait gave up", cmd.Process.Pid)
+	}
 }
