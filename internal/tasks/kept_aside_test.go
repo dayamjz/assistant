@@ -1185,6 +1185,63 @@ func TestAShallowCloneIsRefusedBeforeItsPreviewLeavesOutACommit(t *testing.T) {
 	}
 }
 
+// A discard stopped during its first journal write leaves nothing a
+// put-back cannot clear, round 32's second finding: the set-aside
+// directory holds only journal.json.tmp, the partial file writeJournal
+// writes before renaming it, because the discard stopped before the
+// rename, when nothing has yet been set aside. PutBack clears it, and the
+// copy is read again. The control: a set-aside directory holding anything
+// else beside it is not cleared, refused with ErrAsideStands naming it, and
+// stays as it was. Before, PutBack failed every time with "directory not
+// empty", so the entry could not be answered and its project's new tasks
+// stayed held.
+func TestAPutBackClearsAJournalItsFirstWriteLeftPartial(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s, tk, entry, _ := keptWithWork(t)
+	before := treeAndGitState(t, tk.copy)
+	dir := asideDir(tk.copy)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, journalName+".tmp"), []byte(`{"head_commit":"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.cleaner.Loss(ctx, entry, ""); !errors.Is(err, ErrAsideStands) {
+		t.Fatalf("Loss beside the stopped journal write = %v; want ErrAsideStands", err)
+	}
+	if err := s.cleaner.PutBack(ctx, entry, ""); err != nil {
+		t.Fatalf("PutBack of a discard stopped in its first journal write: %v", err)
+	}
+	if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the set-aside directory still stands: %v", err)
+	}
+	if _, err := s.cleaner.Loss(ctx, entry, ""); err != nil {
+		t.Fatalf("Loss once it was cleared: %v", err)
+	}
+	if now := treeAndGitState(t, tk.copy); now != before {
+		t.Fatalf("the clone reads\n%s\nonce cleared; want it as it was\n%s", now, before)
+	}
+
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{journalName + ".tmp", "not the discard's"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("kept\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := s.cleaner.PutBack(ctx, entry, "")
+	if !errors.Is(err, ErrAsideStands) || !strings.Contains(err.Error(), "not the discard's") {
+		t.Fatalf("PutBack beside something no journal names = %v; want ErrAsideStands naming it", err)
+	}
+	for _, name := range []string{journalName + ".tmp", "not the discard's"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s is gone after the refusal: %v", name, err)
+		}
+	}
+}
+
 // What a stopped discard set aside is never put back into a layout a
 // discard does not support: a discard of a kept clone stops once it has
 // set its items aside, and the clone's .git/refs/heads is then made a

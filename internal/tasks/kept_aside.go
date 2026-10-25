@@ -851,8 +851,7 @@ func moveAsRead(from, to string, before copyState, what string) (bool, error) {
 func (c *Cleaner) restoreAside(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, dir string) error {
 	j, err := readJournal(dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		// Nothing was set aside before the journal was written.
-		return os.Remove(dir)
+		return clearUnjournalled(dir)
 	}
 	if err != nil {
 		return fmt.Errorf("%w at %s: its journal could not be read: %w", ErrAsideStands, dir, err)
@@ -1041,6 +1040,33 @@ func (c *Cleaner) restoreAside(ctx context.Context, entry store.KeptWork, copied
 		return fmt.Errorf("%w at %s: %s could not be put back", ErrAsideStands, dir, strings.Join(left, "; "))
 	}
 	return os.RemoveAll(dir)
+}
+
+// clearUnjournalled removes dir, a set-aside directory with no journal,
+// in which nothing was set aside: setAside writes the first journal before
+// it moves anything. What it can hold is writeJournal's partial file,
+// journal.json.tmp, left by a discard that stopped during its first write
+// before the rename (round 32), which is the program's own and is
+// removed. Anything else in it is no file this program writes there
+// without a journal, so it is left, refused with ErrAsideStands naming it.
+func clearUnjournalled(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("%w at %s: it could not be read: %w", ErrAsideStands, dir, err)
+	}
+	var others []string
+	for _, e := range entries {
+		if e.Name() != journalName+".tmp" {
+			others = append(others, e.Name())
+		}
+	}
+	if len(others) > 0 {
+		return fmt.Errorf("%w at %s: it has no journal and holds %s, which no discard writes there without one", ErrAsideStands, dir, strings.Join(others, ", "))
+	}
+	if err := os.Remove(filepath.Join(dir, journalName+".tmp")); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w at %s: %w", ErrAsideStands, dir, err)
+	}
+	return os.Remove(dir)
 }
 
 // holdsBlob reports whether the working-tree entry at w.Path of the copy
