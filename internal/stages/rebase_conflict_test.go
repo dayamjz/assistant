@@ -1233,3 +1233,59 @@ func TestAPartialResolutionSurvivesALaterUnchangedRound(t *testing.T) {
 		t.Fatalf("the branch no longer names the submitted commit %s", s.head)
 	}
 }
+
+// TestAResolutionGitStagedBeforeTheRoundIsCommitted runs the conflict with
+// rerere.enabled and rerere.autoupdate, and a resolution of it already in
+// the copy's rerere cache. git stages that resolution when the rebase stops,
+// so nothing is unmerged when the fix round begins, and the fixer correctly
+// leaves it as it is. A round that read "unchanged" as "nothing to do" would
+// leave the rebase stopped with the resolution staged and never committed,
+// and the run would stop without it. The round has to commit it and finish
+// the rebase on the new base.
+func TestAResolutionGitStagedBeforeTheRoundIsCommitted(t *testing.T) {
+	s := newSubject(t)
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal})
+	git(t, s.dir, "config", "rerere.enabled", "true")
+	git(t, s.dir, "config", "rerere.autoupdate", "true")
+	upstream := "refs/remotes/" + stages.UpstreamRemote + "/main"
+	git(t, s.dir, "fetch", "--quiet", stages.UpstreamRemote, "main:"+upstream)
+	if out, err := tryGit(s.dir, "rebase", "--merge", upstream); err == nil {
+		t.Fatalf("recording the resolution: the rebase did not conflict:\n%s", out)
+	}
+	write(t, s.dir, totalPath, resolvedTotal)
+	git(t, s.dir, "add", "--", totalPath)
+	git(t, s.dir, "rerere")
+	git(t, s.dir, "rebase", "--abort")
+	if got := git(t, s.dir, "rev-parse", "HEAD"); got != s.head {
+		t.Fatalf("after recording the resolution the copy stands at %s, want %s", got, s.head)
+	}
+
+	var sawStaged bool
+	result, err := runRebaseRounds(t, s, "the conflict was already resolved",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				sawStaged = git(t, s.dir, "ls-files", "-u") == "" &&
+					git(t, s.dir, "show", ":"+totalPath) == strings.TrimSpace(resolvedTotal)
+			}}
+		},
+		func(round int, _ pipeline.FixOutput, err error) {
+			if err != nil {
+				t.Errorf("fix round %d: %v", round, err)
+			}
+		})
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	if !sawStaged {
+		t.Fatal("git did not stage the recorded resolution before the fixer ran, so this is not the case under test")
+	}
+	head := git(t, s.dir, "rev-parse", "HEAD")
+	base := git(t, s.dir, "rev-parse", upstream)
+	if result.Status != graph.StatusCompleted || !isAncestor(t, s.dir, base, head) {
+		t.Fatalf("status %s, head %s, upstream %s is ancestor %v; the staged resolution has to land on the new base",
+			result.Status, head, base, isAncestor(t, s.dir, base, head))
+	}
+	if got := git(t, s.dir, "show", "HEAD:"+totalPath); got != strings.TrimSpace(resolvedTotal) {
+		t.Fatalf("HEAD's %s =\n%s\nwant the recorded resolution", totalPath, got)
+	}
+}

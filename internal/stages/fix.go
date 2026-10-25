@@ -111,12 +111,16 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 // replay would stop on the original commit. The round reports the head when
 // the rebase has finished or stopped on a later conflict. A stop with nothing
 // unmerged is an error, and the round does not report a head. A round that
-// leaves the index and the worktree unchanged reports that nothing changed,
-// writes no new head, and leaves the rebase stopped. It never aborts: an
-// earlier round of this rebase may have committed a step, which the run
-// already records as its head, or staged resolutions it could not commit
-// yet, and an abort would discard both (P6). The stage's next execution
-// finds the rebase it started and reports the same conflict.
+// leaves the index and the worktree unchanged, while a path was unmerged
+// when it began, reports that nothing changed, writes no new head, and
+// leaves the rebase stopped. When nothing was unmerged, the index already
+// held the step's resolution, which is the state a copy with
+// rerere.autoupdate set is left in when a recorded resolution applies, so
+// an unchanged round commits and continues it like any other. A round never
+// aborts: an earlier round of this rebase may have committed a step, which
+// the run already records as its head, or staged resolutions it could not
+// commit yet, and an abort would discard both (P6). The stage's next
+// execution finds the rebase it started and reports the same conflict.
 //
 // A round that changed something but left a conflicted file as the conflict
 // left it, with the same conflict stages in the index and the same worktree
@@ -323,13 +327,20 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 			return pipeline.FixOutput{}, fmt.Errorf(
 				"stages: reading the conflicted copy after the %s fix round: %w", in.Stage, err)
 		}
-		if after == digest {
-			// The rebase stays stopped. An earlier round may have committed
-			// a step of it, or staged resolutions it could not yet commit,
-			// and aborting would discard both. The stage's next execution
-			// finds this rebase and reports the same conflict.
+		if after == digest && len(conflicts) > 0 {
+			// A conflict the fixer left as it was is still unmerged, so
+			// there is nothing to commit. The rebase stays stopped. An
+			// earlier round may have committed a step of it, or staged
+			// resolutions it could not yet commit, and aborting would
+			// discard both. The stage's next execution finds this rebase
+			// and reports the same conflict.
 			return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
 		}
+		// With nothing unmerged when the round began, the index already
+		// held this step's resolution, as a copy with rerere.autoupdate set
+		// holds a recorded one. A fixer that leaves it as it is
+		// has resolved the step, so it is committed and continued, or
+		// skipped when it matches the stopped commit, like any resolution.
 		// Committing stages every path, which marks a conflict resolved
 		// whatever the file holds. A conflicted file the fixer left as the
 		// conflict left it, or one that still holds a marker git wrote for
