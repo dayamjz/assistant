@@ -130,11 +130,13 @@ var ErrAsideStands = errors.New("tasks: a discard that did not finish set part o
 //
 // Before any of that, git is asked which working tree and repository
 // directory it reads for the copy (vcs.Observe: rev-parse --show-toplevel
-// --absolute-git-dir), whose working tree must be the copy itself, so a
-// copy git reads as part of another checkout, through a .git it does not
-// take for a repository or a core.worktree naming another directory, is
-// refused rather than read or recovered into; with a clone's .git a
-// directory, that leaves git reading that .git. The configuration is read as git
+// --absolute-git-dir), and both must be the copy's own: the working tree
+// the copy itself, and for a clone the repository directory its own .git,
+// each compared once links are resolved.
+// So a copy git reads as part of another checkout is refused rather than
+// read or recovered into, whether through a .git git does not take for a
+// repository, a core.worktree of the copy naming another directory, or
+// another repository's core.worktree naming the copy. The configuration is read as git
 // reads it for the copy, the user's and the system's included. The
 // repository directory is walked through the file system, so a link is
 // refused wherever it stands.
@@ -165,11 +167,19 @@ func (c *Cleaner) supportedLayout(ctx context.Context, entry store.KeptWork) err
 	if top, err := filepath.EvalSymlinks(obs.Toplevel); err != nil || top != root {
 		return refuse("is read by git as part of the working tree at " + obs.Toplevel)
 	}
-	// With a clone's .git a directory and git's working tree the clone,
-	// the repository directory git reads is that .git.
+	// And for a clone the repository directory git reads must be the
+	// clone's own .git. A working tree that matches proves nothing of it:
+	// another repository's core.worktree can name the clone, and git then
+	// reads that repository for it. A run's .git file is held to the gate's
+	// record by copyRecord, and the repository directory git reports for it
+	// is the one walked below.
 	gitDir := obs.GitDir
 	if entry.TaskID.IsKnown() {
-		gitDir = dotGit
+		own := filepath.Join(root, ".git")
+		if read, err := filepath.EvalSymlinks(obs.GitDir); err != nil || read != own {
+			return refuse("is read by git through the repository directory " + obs.GitDir + ", not its own " + own)
+		}
+		gitDir = own
 	}
 	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, c.git...)
 	if err != nil {

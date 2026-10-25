@@ -1007,55 +1007,73 @@ func TestAStoppedDiscardIsNotPutBackIntoALayoutItDoesNotSupport(t *testing.T) {
 }
 
 // Git must read a task's clone through the clone's own .git and working
-// tree, which git itself is asked, round 26's first finding: a discard of
-// a kept clone stops once it has set its items aside, the directory the
-// clone stands in is a checkout of its own, and the clone's .git loses its
-// HEAD, so git takes the clone for a directory of that parent checkout.
-// The next PutBack, Loss and Discard each refuse with ErrLayoutUnsupported,
-// with the parent's repository, the clone and what was set aside exactly
-// as they were. Before, the layout checks read the clone's .git through
-// the file system alone, passed, and the put-back wrote the clone's branch
-// and file into the parent's repository and index.
+// tree, which git itself is asked, rounds 26 and 27: a discard of a kept
+// clone stops once it has set its items aside, the directory the clone
+// stands in is a checkout of its own, and the clone's .git loses its HEAD,
+// so git takes the clone for part of that parent checkout. In the first
+// case git reads the parent's working tree; in the second, the parent's
+// core.worktree names the clone and the parent holds the clone's objects,
+// so git reports the clone as its working tree and reads the parent's
+// .git (round 27's sequence). The next PutBack, Loss and Discard each
+// refuse with ErrLayoutUnsupported, with the parent's repository, the
+// clone and what was set aside exactly as they were. Before, the layout
+// checks passed, in round 26 on the file system alone and in round 27 on
+// the working tree alone, and the put-back wrote the clone's branch and
+// file into the parent's repository and index.
 func TestAClonesRepositoryIsTheOneGitReadsForIt(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
-	s, tk, entry, shown := keptWithWork(t)
-	s.cleaner.betweenAsideAndCheck = func() error { return errStoppedAside }
-	if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, errStoppedAside) {
-		t.Fatalf("the stopped discard = %v; want it stopped", err)
-	}
-	s.cleaner.betweenAsideAndCheck = nil
-	parent := filepath.Dir(tk.copy)
-	rawGit(t, parent, "init", "--quiet", ".")
-	if err := os.WriteFile(filepath.Join(parent, "parent.txt"), []byte("the parent's own\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	rawGit(t, parent, "add", "parent.txt")
-	rawGit(t, parent, "commit", "--quiet", "-m", "the parent's own commit")
-	if err := os.Remove(filepath.Join(tk.copy, ".git", "HEAD")); err != nil {
-		t.Fatal(err)
-	}
-	if top := rawGit(t, tk.copy, "rev-parse", "--show-toplevel"); top == tk.copy {
-		t.Fatalf("git still reads the clone as its own working tree; the case would test nothing")
-	}
-	beforeParent := treeAndGitState(t, filepath.Join(parent, ".git"))
-	beforeCopy, beforeAside := treeAndGitState(t, tk.copy), treeAndGitState(t, asideDir(tk.copy))
-	if err := s.cleaner.PutBack(ctx, entry, ""); !errors.Is(err, ErrLayoutUnsupported) {
-		t.Errorf("PutBack of a clone git reads as part of another checkout = %v; want ErrLayoutUnsupported", err)
-	}
-	if _, err := s.cleaner.Loss(ctx, entry); !errors.Is(err, ErrLayoutUnsupported) {
-		t.Errorf("the preview of a clone git reads as part of another checkout = %v; want ErrLayoutUnsupported", err)
-	}
-	if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, ErrLayoutUnsupported) {
-		t.Errorf("the discard of a clone git reads as part of another checkout = %v; want ErrLayoutUnsupported", err)
-	}
-	if now := treeAndGitState(t, filepath.Join(parent, ".git")); now != beforeParent {
-		t.Errorf("the parent's repository reads\n%s\nwant it as it was\n%s", now, beforeParent)
-	}
-	if now := treeAndGitState(t, tk.copy); now != beforeCopy {
-		t.Errorf("the clone reads\n%s\nwant it as it was\n%s", now, beforeCopy)
-	}
-	if now := treeAndGitState(t, asideDir(tk.copy)); now != beforeAside {
-		t.Errorf("what was set aside reads\n%s\nwant it as it was\n%s", now, beforeAside)
+	for _, c := range []struct {
+		name    string
+		prepare func(t *testing.T, parent, copyPath string)
+	}{
+		{"the parent's working tree", func(t *testing.T, parent, copyPath string) {}},
+		{"the parent's core.worktree naming the clone", func(t *testing.T, parent, copyPath string) {
+			rawGit(t, parent, "fetch", "--quiet", copyPath, "+refs/*:refs/fetched/*")
+			rawGit(t, parent, "config", "core.worktree", copyPath)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, tk, entry, shown := keptWithWork(t)
+			s.cleaner.betweenAsideAndCheck = func() error { return errStoppedAside }
+			if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, errStoppedAside) {
+				t.Fatalf("the stopped discard = %v; want it stopped", err)
+			}
+			s.cleaner.betweenAsideAndCheck = nil
+			parent := filepath.Dir(tk.copy)
+			rawGit(t, parent, "init", "--quiet", ".")
+			if err := os.WriteFile(filepath.Join(parent, "parent.txt"), []byte("the parent's own\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			rawGit(t, parent, "add", "parent.txt")
+			rawGit(t, parent, "commit", "--quiet", "-m", "the parent's own commit")
+			c.prepare(t, parent, tk.copy)
+			if err := os.Remove(filepath.Join(tk.copy, ".git", "HEAD")); err != nil {
+				t.Fatal(err)
+			}
+			if dir := rawGit(t, tk.copy, "rev-parse", "--absolute-git-dir"); dir == filepath.Join(tk.copy, ".git") {
+				t.Fatalf("git still reads the clone's own .git; the case would test nothing")
+			}
+			beforeParent := treeAndGitState(t, filepath.Join(parent, ".git"))
+			beforeCopy, beforeAside := treeAndGitState(t, tk.copy), treeAndGitState(t, asideDir(tk.copy))
+			if err := s.cleaner.PutBack(ctx, entry, ""); !errors.Is(err, ErrLayoutUnsupported) {
+				t.Errorf("PutBack of a clone git reads through another checkout = %v; want ErrLayoutUnsupported", err)
+			}
+			if _, err := s.cleaner.Loss(ctx, entry); !errors.Is(err, ErrLayoutUnsupported) {
+				t.Errorf("the preview of a clone git reads through another checkout = %v; want ErrLayoutUnsupported", err)
+			}
+			if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, ErrLayoutUnsupported) {
+				t.Errorf("the discard of a clone git reads through another checkout = %v; want ErrLayoutUnsupported", err)
+			}
+			if now := treeAndGitState(t, filepath.Join(parent, ".git")); now != beforeParent {
+				t.Errorf("the parent's repository reads\n%s\nwant it as it was\n%s", now, beforeParent)
+			}
+			if now := treeAndGitState(t, tk.copy); now != beforeCopy {
+				t.Errorf("the clone reads\n%s\nwant it as it was\n%s", now, beforeCopy)
+			}
+			if now := treeAndGitState(t, asideDir(tk.copy)); now != beforeAside {
+				t.Errorf("what was set aside reads\n%s\nwant it as it was\n%s", now, beforeAside)
+			}
+		})
 	}
 }
