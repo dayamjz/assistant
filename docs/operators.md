@@ -965,10 +965,12 @@ if you want Cursor for runs and Claude for attachable workers. See
 
 `session_provider: herdr` and the keys for workers on another machine
 (`remote_hosts`, `placement.local`, `placement.arch` and
-`remote_disconnect_grace`, PRD section 8) are parsed and validated, but this
-build does not act on them yet. The service refuses to start on a
-`config.yaml` that sets any of them, naming the key, rather than running
-workers some other way. A repository whose default branch's `assistant.json`
+`remote_disconnect_grace`, PRD section 8) are parsed and validated. This
+build has no herdr provider and does not act on those keys. The service
+refuses to start on a `config.yaml` that sets any of them, naming the key.
+`sessionHost` starts every provider but tmux on pipes, so a home that named
+`herdr` would have its workers started on pipes; the refusal is what stops
+that. A repository whose default branch's `assistant.json`
 sets `placement.arch` is refused the same way, naming the key, wherever the
 service reads that copy: a run, a delivery task's intake or promotion, and
 standing consent. A task of such a repository that reaches dispatch, an
