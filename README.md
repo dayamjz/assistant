@@ -167,16 +167,14 @@ Each task gets an isolated repository copy. Workers can investigate a problem an
 
 Assistant also records **kept work** when a copy cannot safely be removed. It surfaces that retained state rather than silently deleting work. The full answer/dispatch-hold workflow is still being completed, so do not assume every recovery path is automated.
 
-**Where workers run:** Local pipe workers are available today, with terminal-backed workers where the selected adapter supports them. Multi-machine placement through a remote bridge and herdr sessions is **in active development** and not yet an end-to-end supported workflow.
+**Where workers run:** The default session provider is `pipe`: the worker is the service's own child. `session_provider: tmux` hosts each worker in a tmux server of its own when the adapter declares terminal workers. The schema also accepts `session_provider: herdr`, `remote_hosts`, `placement.local`, `placement.arch`, and `remote_disconnect_grace`. This build has no herdr provider and does not act on those keys. The service refuses to start when `config.yaml` sets one of them, naming the key. See [Watch a worker in a terminal](docs/operators.md#watch-a-worker-in-a-terminal).
 
 ```mermaid
 flowchart LR
     C["Coordinator"] --> P{"Place worker"}
-    P --> L["Local machine\nAvailable"]
-    P -. "In development" .-> M["Remote machine\nSSH bridge + herdr"]
-    M -. "Later" .-> X["Cloud-hosted capacity\nFuture direction"]
+    P --> L["This machine\npipe or tmux"]
+    P -. "Refused this build" .-> M["Another machine\nherdr bridge"]
     L --> I["Isolated repository copy"]
-    M -.-> I
     I --> S["Supervision + durable state"]
 ```
 
@@ -319,7 +317,7 @@ A **hold** is a stage or task waiting for a person's decision; a **parked run** 
 | Nine-stage validation and GitHub/GitLab delivery | **Available** |
 | Usage records, per-run budgets, home-wide ceilings | **Available** |
 | Kept-work visibility | **Available**; resolution flows are being expanded |
-| Cross-machine placement, bridge, herdr provider | **In development** ([GitHub #490](https://github.com/dayamjz/assistant/pull/490), [Linear AGE-310](https://linear.app/zolutions/issue/AGE-310/gap-12-remote-worker-execution)) |
+| Cross-machine placement, bridge, herdr provider | **Refused in this build.** The schema accepts the keys. The service does not start when `config.yaml` sets one. [Operator guide](docs/operators.md#watch-a-worker-in-a-terminal). |
 | Role-level configurable context windows | **Available** (a role names `context` as `standard` or `1m` beside a complete model triple; an undeclared window is refused before launch). See [multi-agent support](docs/multi-agent-support.md). |
 | Automatic cloud worker provisioning | **Future direction** |
 
