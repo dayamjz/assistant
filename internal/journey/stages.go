@@ -25,9 +25,11 @@ import (
 // construction itself fails.
 var ErrPRDStages = errors.New("journey: PRD section 5's stage table could not be read")
 
-// prdStageRow matches one row of that table: the number, then the stage's name
-// in bold. The table is the PRD's own rendering and this reads it as written.
-var prdStageRow = regexp.MustCompile(`<td class="prd-num">(\d+)</td>\s*<td><b>([^<]+)</b></td>`)
+// prdStageRow matches one row of that table: a Markdown table row whose first
+// cell is the number and whose second is the stage's name in bold, the bold
+// being the whole of the cell. The table is the PRD's own and this reads it as
+// written.
+var prdStageRow = regexp.MustCompile(`(?m)^\|[ \t]*(\d+)[ \t]*\|[ \t]*\*\*([^*|\n]+)\*\*[ \t]*\|`)
 
 // prdStagesHeading is where the read of section 5's stage table begins. It
 // fixes where reading starts and buys nothing else today: this document holds
@@ -57,12 +59,12 @@ const prdStagesHeading = "The nine stages"
 // a further row of this one, and what catches it is the numbering rather than
 // the position: such a row restarts at one where the sequence wants the next
 // number, so the document is refused rather than quietly read long.
-func StagesFromPRD(html []byte) ([]string, error) {
-	at := strings.Index(string(html), prdStagesHeading)
+func StagesFromPRD(doc []byte) ([]string, error) {
+	at := strings.Index(string(doc), prdStagesHeading)
 	if at < 0 {
 		return nil, fmt.Errorf("%w: no %q in the document", ErrPRDStages, prdStagesHeading)
 	}
-	rows := prdStageRow.FindAllStringSubmatch(string(html)[at:], -1)
+	rows := prdStageRow.FindAllStringSubmatch(string(doc)[at:], -1)
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("%w: the table under %q has no rows this reads", ErrPRDStages, prdStagesHeading)
 	}
@@ -91,11 +93,11 @@ func StagesFromPRD(html []byte) ([]string, error) {
 // PRDStages reads the stage list out of the PRD under a module root.
 func PRDStages(root string) ([]string, error) {
 	path := filepath.Join(root, filepath.FromSlash(principles.PRDPath))
-	html, err := os.ReadFile(path)
+	doc, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading %s: %w", ErrPRDStages, path, err)
 	}
-	return StagesFromPRD(html)
+	return StagesFromPRD(doc)
 }
 
 // spelling is one stage under both the name PRD section 5 gives it and the name

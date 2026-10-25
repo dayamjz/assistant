@@ -217,17 +217,17 @@ func TestTheStageListComesFromThePRDRatherThanFromTheBuild(t *testing.T) {
 	// refused for holding no rows and the empty-name branch had no control.
 	t.Run("an unreadable PRD refuses rather than yielding nothing", func(t *testing.T) {
 		for _, c := range []struct{ what, html, says string }{
-			{"no stage table at all", "<html><body><p>nothing here</p></body></html>",
+			{"no stage table at all", "# A PRD\n\nnothing here\n",
 				`no "The nine stages" in the document`},
-			{"a heading with no rows under it", "The nine stages<p>prose and no table</p>",
+			{"a heading with no rows under it", "### The nine stages\n\nprose and no table\n",
 				"has no rows this reads"},
 			{"a row numbered past what a number holds",
-				`The nine stages<td class="prd-num">99999999999999999999</td><td><b>Intent</b></td>`,
+				"### The nine stages\n\n| 99999999999999999999 | **Intent** | x |\n",
 				`row 1 is numbered "99999999999999999999"`},
-			{"a table whose numbering skips", `The nine stages<td class="prd-num">1</td><td><b>Intent</b></td>` +
-				`<td class="prd-num">3</td><td><b>Review</b></td>`,
+			{"a table whose numbering skips", "### The nine stages\n\n| 1 | **Intent** | x |\n" +
+				"| 3 | **Review** | x |\n",
 				"row 2 is numbered 3"},
-			{"a row naming no stage", `The nine stages<td class="prd-num">1</td><td><b> </b></td>`,
+			{"a row naming no stage", "### The nine stages\n\n| 1 | ** ** | x |\n",
 				"row 1 names no stage"},
 		} {
 			_, err := journey.StagesFromPRD([]byte(c.html))

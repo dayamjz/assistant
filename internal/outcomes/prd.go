@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // ErrPRD reports that the PRD's outcome set could not be read. Every refusal
@@ -14,31 +16,33 @@ import (
 // comparing against less than the document says.
 var ErrPRD = errors.New("the PRD's outcome set could not be read")
 
-// rowAnchor is the opening tag of the row that states the set. The row says
-// it is where the set is stated, so the row and not the section is what is
-// read: the section discusses these values in prose as well, and a rule that
-// took the section would let the set grow somewhere the document says the set
-// is not.
-const rowAnchor = `<tr id="outcome-set"`
+// rowAnchor is the anchor that opens the row that states the set. The row
+// says it is where the set is stated, so the row and not the section is what
+// is read: the section discusses these values in prose as well, and a rule
+// that took the section would let the set grow somewhere the document says
+// the set is not. A Markdown table row is one line, so the row is the line
+// that carries this anchor, and it has to be a table row.
+const rowAnchor = `<a id="outcome-set">`
 
-// sectionAnchor is the opening tag of the section the row has to sit inside.
-// The section is named by its id and never by its number, because a section
-// inserted earlier in the document renumbers it while leaving the id, the row
-// and the set exactly where they were.
+// sectionHeading names the section the row has to sit inside, by its heading
+// and never by its number, because a section inserted earlier in the document
+// renumbers it while leaving the heading, the row and the set exactly where
+// they were. internal/principles' PRDSection owns where that section begins
+// and ends.
 //
 // This is a different question from where the markers are read. The markers
 // are read from the row and refused everywhere else in the document; this is
 // only about where the row itself lives, so that a row moved into another
 // section is a refusal rather than a pin that stays green while the section
 // the mechanism is documented against no longer states the set.
-const sectionAnchor = `<section id="surfaces"`
+const sectionHeading = "Surfaces"
 
 // declaration matches the marker the PRD puts an outcome behind: a code
 // element carrying a data-outcome attribute, whose text is the value that
 // travels on the wire and whose attribute is the group the row puts it in.
 // That is the whole extraction rule, and it is meant to be one a reader can
-// apply by eye to the HTML. It is not tied to the classes on the element,
-// which are styling and change with the styling.
+// apply by eye to the Markdown. It is not tied to any other attribute on the
+// element, which would be styling.
 var declaration = regexp.MustCompile(`<code\b[^>]*\bdata-outcome="([^"]*)"[^>]*>([^<]*)</code>`)
 
 // marker matches every use of the attribute, whatever it is written on. Two
@@ -82,14 +86,14 @@ type Listed struct {
 // them.
 //
 // It refuses rather than returning what it could read. The row must sit inside
-// the document's one section that carries sectionAnchor, and the set must be
+// the document's one section headed sectionHeading, and the set must be
 // two contiguous groups, each non-empty, with no repeated value and no group
 // word this package does not know, and no marker anywhere in the document
 // outside the row, so a marker that is not an outcome and an outcome the PRD
 // stops declaring both fail loudly here instead of quietly changing what is
 // being compared.
-func FromPRD(html []byte) ([]Listed, error) {
-	row, err := outcomeRow(html)
+func FromPRD(doc []byte) ([]Listed, error) {
+	row, err := outcomeRow(doc)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +105,7 @@ func FromPRD(html []byte) ([]Listed, error) {
 	if len(found) == 0 {
 		return nil, fmt.Errorf("%w: the row declares none", ErrPRD)
 	}
-	if all, inRow := len(marker.FindAll(html, -1)), len(found); all != inRow {
+	if all, inRow := len(marker.FindAll(doc, -1)), len(found); all != inRow {
 		return nil, fmt.Errorf("%w: the document carries %d data-outcome markers and %d of them are in the row: the row is where the set is stated, so a marker outside it is not part of the set and is not read as one", ErrPRD, all, inRow)
 	}
 
@@ -131,58 +135,34 @@ func FromPRD(html []byte) ([]Listed, error) {
 	return out, nil
 }
 
-// outcomeRow returns the body of the row that states the set, refusing every
-// document where the boundaries of that row are not the ones a reader would
-// draw, and every document where the row does not sit inside the section that
-// owns it.
-func outcomeRow(html []byte) ([]byte, error) {
-	sectionFrom, sectionTo, err := ownerSection(html)
+// outcomeRow returns the row that states the set, refusing every document
+// where that row is not the one a reader would take, and every document where
+// the row does not sit inside the section that owns it.
+func outcomeRow(doc []byte) ([]byte, error) {
+	sectionFrom, sectionTo, err := principles.PRDSection(doc, sectionHeading)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrPRD, err)
 	}
-	start := bytes.Index(html, []byte(rowAnchor))
-	if start < 0 {
+	at := bytes.Index(doc, []byte(rowAnchor))
+	if at < 0 {
 		return nil, fmt.Errorf("%w: no %s in the document", ErrPRD, rowAnchor)
 	}
-	if bytes.Contains(html[start+len(rowAnchor):], []byte(rowAnchor)) {
+	if bytes.Contains(doc[at+len(rowAnchor):], []byte(rowAnchor)) {
 		return nil, fmt.Errorf("%w: %s appears more than once", ErrPRD, rowAnchor)
 	}
-	rest := html[start+len(rowAnchor):]
-	end := bytes.Index(rest, []byte("</tr>"))
-	if end < 0 {
-		return nil, fmt.Errorf("%w: the outcome row is never closed", ErrPRD)
+	start := bytes.LastIndexByte(doc[:at], '\n') + 1
+	end := len(doc)
+	if n := bytes.IndexByte(doc[at:], '\n'); n >= 0 {
+		end = at + n
 	}
-	row := rest[:end]
-	if bytes.Contains(row, []byte("<tr")) {
-		return nil, fmt.Errorf("%w: the outcome row has a row nested in it, so its end cannot be found by the first closing tag", ErrPRD)
+	row := doc[start:end]
+	if !bytes.HasPrefix(bytes.TrimLeft(row, " "), []byte("|")) {
+		return nil, fmt.Errorf("%w: %s is not on a table row, so the line it is on is not the row a reader takes it for", ErrPRD, rowAnchor)
 	}
-	if start < sectionFrom || start+len(rowAnchor)+end+len("</tr>") > sectionTo {
-		return nil, fmt.Errorf("%w: %s is not inside the %s section, which is where this rule and everything documented against it say the set is stated", ErrPRD, rowAnchor, sectionAnchor)
+	if start < sectionFrom || end > sectionTo {
+		return nil, fmt.Errorf("%w: %s is not inside the %q section, which is where this rule and everything documented against it say the set is stated", ErrPRD, rowAnchor, "## "+sectionHeading)
 	}
 	return row, nil
-}
-
-// ownerSection returns the bounds of the body of the section the row has to
-// sit inside, refusing every document where those bounds are not the ones a
-// reader would draw. A document whose section this rule cannot delimit is a
-// refusal and never a containment check quietly skipped.
-func ownerSection(html []byte) (from, to int, err error) {
-	start := bytes.Index(html, []byte(sectionAnchor))
-	if start < 0 {
-		return 0, 0, fmt.Errorf("%w: no %s in the document", ErrPRD, sectionAnchor)
-	}
-	rest := html[start+len(sectionAnchor):]
-	if bytes.Contains(rest, []byte(sectionAnchor)) {
-		return 0, 0, fmt.Errorf("%w: %s appears more than once", ErrPRD, sectionAnchor)
-	}
-	end := bytes.Index(rest, []byte("</section>"))
-	if end < 0 {
-		return 0, 0, fmt.Errorf("%w: the %s section is never closed", ErrPRD, sectionAnchor)
-	}
-	if bytes.Contains(rest[:end], []byte("<section")) {
-		return 0, 0, fmt.Errorf("%w: the %s section has a section nested in it, so its end cannot be found by the first closing tag", ErrPRD, sectionAnchor)
-	}
-	return start + len(sectionAnchor), start + len(sectionAnchor) + end, nil
 }
 
 // contiguous refuses a set that is not the two groups the row says it is. The

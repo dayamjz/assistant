@@ -13,7 +13,7 @@ import (
 // to a document shaped like the real one, including the badges outside the
 // section that read like principles.
 func TestFromPRDReadsTheBadgesInTheSectionAndNothingElse(t *testing.T) {
-	got, err := FromPRD([]byte(prdHTML(3)))
+	got, err := FromPRD([]byte(prdMarkdown(3)))
 	if err != nil {
 		t.Fatalf("FromPRD: %v", err)
 	}
@@ -26,28 +26,68 @@ func TestFromPRDReadsTheBadgesInTheSectionAndNothingElse(t *testing.T) {
 // each of these is a document the rule reads differently from a reader, and a
 // silent short list would quietly shrink what everything else here measures.
 func TestFromPRDRefusesAListItCannotTrust(t *testing.T) {
-	full := prdHTML(3)
+	full := prdMarkdown(3)
 	cases := []struct {
 		name string
-		html string
+		doc  string
 	}{
-		{"no principles section", strings.Replace(full, `<section id="principles"`, `<section id="other"`, 1)},
-		{"the section is never closed", strings.Replace(full, "</section>\n</body>", "\n</body>", 1)},
+		{"no principles section", strings.Replace(full, "## Principles\n", "## Other\n", 1)},
+		{"the heading one level down", strings.Replace(full, "## Principles\n", "### Principles\n", 1)},
+		{"the heading inside a fenced block", strings.Replace(full, "## Principles\n", "```\n## Principles\n```\n", 1)},
 		{"two principles sections", full + full},
-		{"a section nested in it", strings.Replace(full, `<span class="badge prd-num">P2</span>`, `<section><span class="badge prd-num">P2</span></section>`, 1)},
-		{"no badge in it", strings.Replace(full, `<span class="badge prd-num">P1</span>`, "", 1)},
-		{"a gap in the numbering", strings.Replace(full, `>P2<`, `>P4<`, 1)},
-		{"a repeated number", strings.Replace(full, `<span class="badge prd-num">P3</span>`, `<span class="badge prd-num">P2</span>`, 1)},
-		{"a step backwards", strings.Replace(full, `>P1<`, `>P3<`, 1)},
-		{"a number too large to hold", strings.Replace(full, `>P1<`, `>P9001<`, 1)},
+		{"a fenced block never closed", strings.Replace(full, "<details>", "```\n<details>", 1)},
+		{"no badge in it", strings.NewReplacer("<kbd>P1</kbd>", "", "<kbd>P2</kbd>", "", "<kbd>P3</kbd>", "").Replace(
+			full[strings.Index(full, "## Principles"):strings.Index(full, "## Decisions")])},
+		{"a gap in the numbering", strings.Replace(full, ">P2<", ">P4<", 1)},
+		{"a repeated number", strings.Replace(full, "<kbd>P3</kbd> a principle", "<kbd>P2</kbd> a principle", 1)},
+		{"a step backwards", strings.Replace(full, "<kbd>P1</kbd> a principle", "<kbd>P3</kbd> a principle", 1)},
+		{"a number too large to hold", strings.Replace(full, "<kbd>P1</kbd> a principle", "<kbd>P9001</kbd> a principle", 1)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := FromPRD([]byte(c.html))
+			if c.doc == full {
+				t.Fatal("this case did not change the fixture, so it would pass without the rule it is named for")
+			}
+			got, err := FromPRD([]byte(c.doc))
 			if !errors.Is(err, ErrPRD) {
 				t.Fatalf("FromPRD = %s, %v, want an ErrPRD", names(got), err)
 			}
 		})
+	}
+}
+
+// TestPRDSectionEndsWhereAReaderSeesTheNextSection pins where a section's
+// body begins and ends: after its own heading, at the next heading of level
+// one or two, never at a deeper heading or at a heading-shaped line inside a
+// fenced block, and at the end of the document when nothing follows.
+func TestPRDSectionEndsWhereAReaderSeesTheNextSection(t *testing.T) {
+	doc := "# Title\n\n## A\n\nfirst\n\n### A sub\n\n```text\n## not a heading\n```\n\n" +
+		"~~~~\n# nor this\n~~~\n~~~~\nlast of A\n\n## B\n\nb body\n\n# Another top\n\n## C\n\nc body\n"
+	for _, c := range []struct{ heading, want string }{
+		{"A", "\nfirst\n\n### A sub\n\n```text\n## not a heading\n```\n\n~~~~\n# nor this\n~~~\n~~~~\nlast of A\n\n"},
+		{"B", "\nb body\n\n"},
+		{"C", "\nc body\n"},
+	} {
+		from, to, err := PRDSection([]byte(doc), c.heading)
+		if err != nil {
+			t.Fatalf("PRDSection(%q): %v", c.heading, err)
+		}
+		if got := doc[from:to]; got != c.want {
+			t.Fatalf("PRDSection(%q) = %q, want %q", c.heading, got, c.want)
+		}
+	}
+	for _, c := range []struct{ what, doc, heading, says string }{
+		{"no such heading", doc, "D", `no "## D" heading`},
+		{"a deeper heading is not one", doc, "A sub", `no "## A sub" heading`},
+		{"a heading-shaped line in a fence is not one", doc, "not a heading", `no "## not a heading" heading`},
+		{"the heading twice", doc + "\n## B\n", "B", "appears more than once"},
+		{"the heading twice, once indented", doc + "\n   ## B\n", "B", "appears more than once"},
+		{"a fence never closed", doc + "\n```\n## D\n", "B", "never closed"},
+	} {
+		_, _, err := PRDSection([]byte(c.doc), c.heading)
+		if !errors.Is(err, ErrPRDSection) || !strings.Contains(err.Error(), c.says) {
+			t.Fatalf("%s: PRDSection(%q) = %v, want an ErrPRDSection saying %q", c.what, c.heading, err, c.says)
+		}
 	}
 }
 

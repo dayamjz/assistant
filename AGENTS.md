@@ -119,6 +119,10 @@ repository more than one round of review.
 - Configuration schema: the key table in `internal/config/key.go`. A key's
   default, trust class, decoding, and where it lands in a `Config` are one row;
   add a key by adding a row, never a second list of keys elsewhere.
+- The PRD's path and where one of its sections begins and ends:
+  `internal/principles` (`PRDPath`, `PRDSection`). A check that delimits a
+  section of `docs/prd.md` does it through `PRDSection`, never with a reader
+  of its own.
 - Execution and every loop bound: `internal/graph`. Add a bound there, never
   beside the counter that reads it.
 - Git: only `internal/vcs` invokes it; add a typed operation there rather than
