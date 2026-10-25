@@ -10,7 +10,7 @@ Assistant is a **local-first orchestration and delivery system** for AI coding a
 
 ## Start here
 
-New to Assistant? Follow [installation and prerequisites](#installation-and-prerequisites), then choose one of two paths: [coordinate coding workers](#quick-start-coordinate-two-tasks) to delegate work, or [validate a committed branch](#quick-start-validate-a-branch) to use the Git gate. The two workflows are related but independent; configuring a gate does not automatically create coordinator tasks.
+New to Assistant? Start with [installation and prerequisites](#installation-and-prerequisites), then choose one of two paths: [coordinate coding workers](#quick-start-coordinate-two-tasks) to delegate work, or [validate a committed branch](#quick-start-validate-a-branch) to use the Git gate. The two workflows are related but independent; configuring a gate does not automatically create coordinator tasks.
 
 ## Why Assistant?
 
@@ -21,6 +21,94 @@ New to Assistant? Follow [installation and prerequisites](#installation-and-prer
 | Lose context when a session ends | Track durable task and run state, resuming what can be recovered |
 | Push changes and then discover mistakes | Submit changes to a separate, multi-stage validation gate |
 | Wonder what an agent spent or left behind | Inspect recorded usage, budgets, holds, and kept work |
+
+## Why this architecture?
+
+Assistant combines a durable **agent coordinator** with a **separate code-delivery gate**. A coordinator can assign and supervise isolated workers, but a worker declaring its task complete does not by itself authorize publication or merging. The gate evaluates the submitted Git change under its own validation and approval rules.
+
+The Go service owns task/run state and decisions rather than treating an agent conversation as the sole record of progress. That separation makes recovery and auditability explicit, while adding configuration and operational overhead. It is intended for developers who want inspectable, controlled multi-agent delivery, not necessarily the fewest steps from prompt to PR.
+
+## Installation and prerequisites
+
+Assistant targets **macOS and Linux** and requires Git, at least one installed and authenticated supported coding-agent CLI, and a compatible Go toolchain for installation from source. This repository declares `go 1.25.0` and `toolchain go1.26.9` in [go.mod](go.mod); use Go's toolchain selection/download mechanism or install the specified toolchain before building. For contributing, `make check` additionally requires **golangci-lint v2** (CI pins v2.12.2), alongside the tools required by the tests. Host-integrated PR/MR delivery also requires the relevant host CLI and authentication. See [multi-agent support](docs/multi-agent-support.md) for adapter-specific authentication and [the operator guide](docs/operators.md) for setup details.
+
+```sh
+go install github.com/dayamjz/assistant/cmd/assistant@latest
+assistant --help
+```
+
+The installation command uses the latest published module version; check the project's documented toolchain and installed CLI dependencies if a build fails.
+
+## Quick start: coordinate two tasks
+
+Use this path to have a coordinator direct **two independent delivery workers**, each in its own repository copy and on its own branch. The example assumes you have initialized the repository, started the service, and have a working supported agent. Replace the sample project name, branches and instructions with real work. Only create genuinely independent tasks in parallel.
+
+```sh
+# In the repository you want Assistant to work on
+assistant init
+assistant doctor
+assistant service start
+
+# Ensure the supervisor is running before assigning work
+assistant coordinator supervision
+
+# Read the repository identifier from repository.id in this JSON response
+assistant --json status
+```
+
+Use that identifier as `REPO_ID` below:
+
+```sh
+assistant coordinator create --shape delivery --project demo \
+  --repository REPO_ID --branch task/backend \
+  --instructions "Implement the backend change and its tests"
+
+assistant coordinator create --shape delivery --project demo \
+  --repository REPO_ID --branch task/frontend \
+  --instructions "Implement the independent frontend change and its tests"
+
+assistant tasks
+assistant watch --once
+```
+
+The create command records a task; **it is not proof that its worker has launched**. Inspect individual task state and supervision, and respond to holds as needed:
+
+```sh
+assistant --json tasks TASK_ID
+assistant --json coordinator peek TASK_ID
+assistant coordinator message TASK_ID --text "Clarification for this task"
+```
+
+A worker can be held, stopped, or require a person's decision; work is not automatically merged simply because tasks were created. Investigation tasks use `--shape investigation` without a delivery branch, and can later be promoted. For promotion, worker recovery, decision commands, and coordinator domain delegation, follow the [coordinator skill](skills/coordinator/SKILL.md) and [operator guide](docs/operators.md). The coordinator manages tasks; the Git gate separately determines what may be delivered.
+
+## Quick start: validate a branch
+
+Use this path when you already have a **committed feature branch** to validate. `assistant init` registers the current checkout and creates a Git remote named `assistant`. It needs a known upstream and default branch. `assistant doctor` identifies missing setup and the next safe step.
+
+```sh
+# From the checkout of your repository
+assistant init
+assistant doctor
+assistant service start
+
+# After committing the feature branch
+git push assistant YOUR_BRANCH
+assistant watch
+```
+
+Validation covers only committed changes pushed to the `assistant` remote; ordinary pushes to `origin` are **not gated** by Assistant. By default, test, document, and lint commands come from the trusted `assistant.json` on the default branch; without commands, those stages may hold. An operator can explicitly opt out of that default using the trusted-only `allow_pushed_commands` setting, which permits commands from a pushed branch. `init` can suggest commands but does not make an unmerged local config trusted. Assistant does not replace code-host CI or branch protection.
+
+| Command | What it helps you do |
+| --- | --- |
+| `assistant doctor` | Diagnose setup and learn the next safe step |
+| `assistant coordinator supervision` | Check that task supervision is live |
+| `assistant coordinator create` | Register a delivery or investigation task |
+| `assistant tasks` | Inspect task work |
+| `assistant watch` | Follow validation and pending decisions |
+| `assistant status` | See repository and gate state |
+| `assistant sync` | Reconcile a checkout with validated changes |
+| `assistant runs --usage=7d` | Review recorded **validation-stage** agent usage, not all worker turns |
+| `assistant --json status` | Consume structured status and find the repository identifier |
 
 ## 1. Give each agent a job
 
@@ -122,6 +210,21 @@ The gate runs **nine stages in order**. Each can hold for a decision when it lac
 
 The gate's pipeline also accounts for rebase, safety, scope, and host checks. It will refuse uncertain operations rather than treat missing evidence as a pass. GitHub and GitLab integrations support the code-host portion of delivery; optional autonomous merging is restricted by configuration and live checks. See [operating the gate](docs/operators.md) for the exact behavior.
 
+## Failure handling and boundaries
+
+A validation gate is useful only if its failure behavior is clear. Assistant's documented policies include:
+
+| Situation | Behavior / boundary |
+| --- | --- |
+| The upstream branch moves during delivery | Delivery is anchored to an observed commit; an unexpected move is refused rather than overwritten blindly. |
+| Hosted CI fails after a push | `fix_rounds.checks` defaults to 3. A check still failing after the last round parks the run. An explicit 0 holds for a person and makes no repair. [Operating the gate](docs/operators.md#keep-your-ci-required) says when a repair is reviewed and pushed, and when that path holds instead. |
+| A worker dies or the service restarts | Durable state and supervision support reconciliation, but uncertainty is surfaced; not every recovery path is automated. |
+| A requested agent/model/window is unsupported | Adapter capability checks refuse unsupported combinations rather than silently substituting them. |
+| Task work cannot safely be discarded | The isolated copy is kept; new work in the project waits for a person's kept-work decision. |
+| A stage cannot establish enough evidence | It holds for a person rather than converting missing evidence into success. Not every non-zero command exit is a hold: the Document stage records it as a non-blocking note. |
+
+See [operating the gate](docs/operators.md), [multi-agent support](docs/multi-agent-support.md), and [end-to-end verification](internal/journey/README.md) for details and evidence. These are documented behaviors and implementation contracts, **not comparative benchmark results** or a guarantee that every failure has been exercised on every supported host.
+
 ## 4. Understand agent usage and control budgets
 
 Assistant exposes human-readable and structured status, active task and run views, and recorded agent usage broken down by agent, role, model, provider, and effort. Run-level output-token budgets and home-wide usage ceilings provide distinct controls: a run budget can park an individual run, while a home ceiling can hold further agent starts.
@@ -202,88 +305,6 @@ A coordinator could delegate backend and frontend work to separate workers, then
 
 For the recorded view, run `assistant runs --usage=24h` or `assistant --json runs --usage=24h`. These limits only apply to the recorded scope, not all coordinator or worker turns. See [usage budgets and ceilings in the operator guide](docs/operators.md) for interpretation and configuration.
 
-## Installation and prerequisites
-
-Assistant targets **macOS and Linux** and requires Git, at least one installed and authenticated supported coding-agent CLI, and a compatible Go toolchain for installation from source. This repository declares `go 1.25.0` and `toolchain go1.26.9` in [go.mod](go.mod); use Go's toolchain selection/download mechanism or install the specified toolchain before building. For contributing, `make check` additionally requires **golangci-lint v2** (CI pins v2.12.2), alongside the tools required by the tests. Host-integrated PR/MR delivery also requires the relevant host CLI and authentication. See [multi-agent support](docs/multi-agent-support.md) for adapter-specific authentication and [the operator guide](docs/operators.md) for setup details.
-
-```sh
-go install github.com/dayamjz/assistant/cmd/assistant@latest
-assistant --help
-```
-
-The installation command uses the latest published module version; check the project's documented toolchain and installed CLI dependencies if a build fails.
-
-## Quick start: coordinate two tasks
-
-Use this path to have a coordinator direct **two independent delivery workers**, each in its own repository copy and on its own branch. The example assumes you have initialized the repository, started the service, and have a working supported agent. Replace the sample project name, branches and instructions with real work. Only create genuinely independent tasks in parallel.
-
-```sh
-# In the repository you want Assistant to work on
-assistant init
-assistant doctor
-assistant service start
-
-# Ensure the supervisor is running before assigning work
-assistant coordinator supervision
-
-# Read the repository identifier from repository.id in this JSON response
-assistant --json status
-```
-
-Use that identifier as `REPO_ID` below:
-
-```sh
-assistant coordinator create --shape delivery --project demo \
-  --repository REPO_ID --branch task/backend \
-  --instructions "Implement the backend change and its tests"
-
-assistant coordinator create --shape delivery --project demo \
-  --repository REPO_ID --branch task/frontend \
-  --instructions "Implement the independent frontend change and its tests"
-
-assistant tasks
-assistant watch --once
-```
-
-The create command records a task; **it is not proof that its worker has launched**. Inspect individual task state and supervision, and respond to holds as needed:
-
-```sh
-assistant --json tasks TASK_ID
-assistant --json coordinator peek TASK_ID
-assistant coordinator message TASK_ID --text "Clarification for this task"
-```
-
-A worker can be held, stopped, or require a person's decision; work is not automatically merged simply because tasks were created. Investigation tasks use `--shape investigation` without a delivery branch, and can later be promoted. For promotion, worker recovery, decision commands, and coordinator domain delegation, follow the [coordinator skill](skills/coordinator/SKILL.md) and [operator guide](docs/operators.md). The coordinator manages tasks; the Git gate separately determines what may be delivered.
-
-## Quick start: validate a branch
-
-Use this path when you already have a **committed feature branch** to validate. `assistant init` registers the current checkout and creates a Git remote named `assistant`. It needs a known upstream and default branch. `assistant doctor` identifies missing setup and the next safe step.
-
-```sh
-# From the checkout of your repository
-assistant init
-assistant doctor
-assistant service start
-
-# After committing the feature branch
-git push assistant YOUR_BRANCH
-assistant watch
-```
-
-Validation covers only committed changes pushed to the `assistant` remote; ordinary pushes to `origin` are **not gated** by Assistant. By default, test, document, and lint commands come from the trusted `assistant.json` on the default branch; without commands, those stages may hold. An operator can explicitly opt out of that default using the trusted-only `allow_pushed_commands` setting, which permits commands from a pushed branch. `init` can suggest commands but does not make an unmerged local config trusted. Assistant does not replace code-host CI or branch protection.
-
-| Command | What it helps you do |
-| --- | --- |
-| `assistant doctor` | Diagnose setup and learn the next safe step |
-| `assistant coordinator supervision` | Check that task supervision is live |
-| `assistant coordinator create` | Register a delivery or investigation task |
-| `assistant tasks` | Inspect task work |
-| `assistant watch` | Follow validation and pending decisions |
-| `assistant status` | See repository and gate state |
-| `assistant sync` | Reconcile a checkout with validated changes |
-| `assistant runs --usage=7d` | Review recorded **validation-stage** agent usage, not all worker turns |
-| `assistant --json status` | Consume structured status and find the repository identifier |
-
 ## Operations and recovery
 
 A **hold** is a stage or task waiting for a person's decision; a **parked run** has stopped at a configured bound. An **investigation** can report findings without shipping code; **promotion** turns that investigation into a delivery task. **Kept work** is an isolated copy containing work not proven to have landed, so it is retained rather than removed. New tasks in that project wait until a person answers the kept-work decision. Use `assistant watch`, `assistant tasks`, and the operator guide to inspect those states; do not assume that every hold or kept-work recovery is automatic.
@@ -303,6 +324,13 @@ A **hold** is a stage or task waiting for a person's decision; a **parked run** 
 | Automatic cloud worker provisioning | **Future direction** |
 
 The roadmap shows intent, not a shipping commitment. The implementation and [operator guide](docs/operators.md) are authoritative for actual behavior.
+
+## Related projects and tradeoffs
+
+- **[No-Mistakes](https://github.com/kunchenguid/no-mistakes)**, related work.
+- **[Firstmate](https://github.com/kunchenguid/firstmate)**, related work.
+
+A Go service owns Assistant's state, and the gate is first-class. No controlled head-to-head performance or defect-detection benchmark is claimed here.
 
 ## Learn more
 
