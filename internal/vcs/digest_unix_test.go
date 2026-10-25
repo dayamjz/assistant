@@ -3,7 +3,6 @@
 package vcs_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -41,15 +40,17 @@ func TestUncommittedDigestDoesNotBlockOnAFifo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deadline, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	// The call has no deadline of its own: one would also bound the git
+	// invocations the digest makes, and a loaded machine fails those for
+	// reasons that have nothing to do with the FIFO. A digest that opened
+	// the FIFO would wait for a writer forever, which hangLimit catches.
 	type result struct {
 		digest string
 		err    error
 	}
 	done := make(chan result, 1)
 	go func() {
-		digest, err := repo.UncommittedDigest(deadline)
+		digest, err := repo.UncommittedDigest(ctx(t))
 		done <- result{digest, err}
 	}()
 	select {
@@ -64,7 +65,18 @@ func TestUncommittedDigestDoesNotBlockOnAFifo(t *testing.T) {
 		if err != nil || again != got.digest {
 			t.Fatalf("second digest %q, error %v; want the same %q", again, err, got.digest)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("UncommittedDigest did not return after its context expired")
+	case <-time.After(hangLimit):
+		releaseFifo(full)
+		<-done
+		t.Fatalf("UncommittedDigest did not return within %s: it waited on the FIFO", hangLimit)
+	}
+}
+
+// releaseFifo opens path for writing, which ends a read open that is
+// waiting there for a writer, so a digest a failing test caught waiting
+// does not outlive it.
+func releaseFifo(path string) {
+	if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		_ = f.Close()
 	}
 }

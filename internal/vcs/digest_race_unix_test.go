@@ -3,7 +3,6 @@
 package vcs
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,12 @@ import (
 
 	"github.com/dayamjz/assistant/internal/principles"
 )
+
+// fifoHangLimit is how long the FIFO test waits for a digest before calling
+// it stuck. It is the bound vcs_test's hangLimit sets for a git that never
+// exits; a digest that does not wait on the FIFO returns well inside it on
+// a loaded machine.
+const fifoHangLimit = 20 * time.Second
 
 // TestUncommittedDigestOpenDoesNotBlockWhenAFifoReplacesTheFile classifies a
 // changed regular file, then replaces it with a FIFO that has no writer
@@ -76,22 +81,29 @@ func TestUncommittedDigestOpenDoesNotBlockWhenAFifoReplacesTheFile(t *testing.T)
 	}
 	t.Cleanup(func() { digestBeforeRegularOpen = nil })
 
-	deadline, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	// The call has no deadline of its own: one would also bound the git
+	// invocations the digest makes, and a loaded machine fails those for
+	// reasons that have nothing to do with the FIFO. A digest that waited
+	// in the open would wait for a writer forever, which fifoHangLimit
+	// catches.
 	type result struct {
 		digest string
 		err    error
 	}
 	done := make(chan result, 1)
 	go func() {
-		digest, err := repo.UncommittedDigest(deadline)
+		digest, err := repo.UncommittedDigest(t.Context())
 		done <- result{digest, err}
 	}()
 	var got result
 	select {
 	case got = <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("UncommittedDigest did not return after its context expired")
+	case <-time.After(fifoHangLimit):
+		if f, err := os.OpenFile(note, os.O_WRONLY, 0); err == nil {
+			_ = f.Close()
+		}
+		<-done
+		t.Fatalf("UncommittedDigest did not return within %s: it waited in the open", fifoHangLimit)
 	}
 	if swapErr != nil {
 		t.Fatalf("replacing the file with a FIFO: %v", swapErr)
