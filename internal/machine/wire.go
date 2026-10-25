@@ -615,6 +615,10 @@ type TaskAnswered struct {
 	// and only AnswerRetryDeferred leaves it to a later start to read. For
 	// AnswerRetryUndispatchable it names what in the record was refused.
 	NotRelaunched string `json:"not_relaunched,omitempty"`
+	// Stopped is the hold the stop of a stop or retry on a stall hold
+	// registered, as it stands after the answer: open after a stop, and
+	// answered retry after a retry. It is nil for every other answer.
+	Stopped *store.Hold `json:"stopped,omitempty"`
 	// Task is the task as it stands after the answer, and the zero Task for
 	// an answer to a domain's hold, which names no task.
 	Task Task `json:"task"`
@@ -634,7 +638,10 @@ type AnswerEffect string
 
 const (
 	// AnswerRecorded is a hold whose answer is recorded and acts on nothing
-	// further: a decision an investigation's report registered.
+	// further: a decision an investigation's report registered, or an
+	// approve on a stall hold, which leaves the worker running; the
+	// supervisor loop reads that approve off the record at its next pass
+	// and starts the count of the screen again from there.
 	AnswerRecorded AnswerEffect = "recorded"
 	// AnswerRelaunched is a retry on a relaunch hold, the one past
 	// relaunch_attempts or the one a relaunch with no process sweep raised,
@@ -689,6 +696,13 @@ const (
 	// AnswerStopped is a stop: the task is left where it stopped and
 	// nothing relaunches it.
 	AnswerStopped AnswerEffect = "stopped"
+	// AnswerWorkerStopped is a stop or a retry on a stall hold whose stop
+	// was proven: the worker was ended, its copy was left as it was, and the
+	// stop registered its own hold, which carries whether the work is begun
+	// again, so nothing begins it until that hold is answered. Hold is the
+	// stall hold the answer closed and Stopped the stop's hold. A retry
+	// whose relaunch then began or was refused reports that effect instead.
+	AnswerWorkerStopped AnswerEffect = "worker-stopped"
 	// AnswerLanded is an approve on a local task's approval hold whose
 	// fast-forward of the local default branch was made and recorded: the
 	// local landing record exists and the task resolves Landed from it.
@@ -703,7 +717,7 @@ const (
 func AnswerEffects() []AnswerEffect {
 	return []AnswerEffect{
 		AnswerRecorded, AnswerRelaunched, AnswerRedispatched,
-		AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryAtBound, AnswerRetryRefused, AnswerRetryUndispatchable, AnswerStopped, AnswerLanded,
+		AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryAtBound, AnswerRetryRefused, AnswerRetryUndispatchable, AnswerStopped, AnswerWorkerStopped, AnswerLanded,
 	}
 }
 

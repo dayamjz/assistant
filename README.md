@@ -337,4 +337,4 @@ A Go service owns Assistant's state, and the gate is first-class. No controlled 
 - [Product requirements](docs/prd.md): principles, contracts, limitations, and deferred features
 - [End-to-end verification](internal/journey/README.md): what the tests establish
 
-Assistant is developed in Go. For repository checks, use `make check` with the toolchain and lint dependencies specified by the project.
+Assistant is developed in Go. For repository checks, use `make check` with the toolchain and lint dependencies specified by the project. Which checks `main` requires, and which file owns each workflow's settings, is in [AGENTS.md](AGENTS.md).

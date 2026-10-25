@@ -45,8 +45,9 @@ import (
 // incarnation returns.
 //
 // Which tasks a pass watches is supervisor.StateInFlight's table plus the
-// tasks with a queued wake, which is the set PRD section 5's "work is in
-// flight" names. One detection is made for every task, watched or not, in
+// tasks with a queued wake or an open stall hold, which is the set PRD
+// section 5's "work is in flight" names with section 6's "a held stall stays
+// watched". One detection is made for every task, watched or not, in
 // two halves: an open hold record naming it or one of its runs, and an
 // attributed run whose record stands held. A run's own hold is not a hold
 // record: a run halted at a stage moves to held through internal/runs and
@@ -103,6 +104,17 @@ import (
 // ask the cleanup decision. What the table removes is this loop's own reading
 // of the terminal, the capture and the gone case, and every wake made from
 // them.
+//
+// # A stall that holds
+//
+// The count of consecutive surfaces of one unchanged screen raises its
+// surface to an inspection at stall_inspection_count and, for a task that
+// resolves Running with its terminal captured, to a hold at that plus
+// stall_hold_count, PRD section 6's stalled worker. That surface registers
+// the hold in its own transaction, and an approve answered to it restarts
+// the count through the stall base marker. Before deciding, a pass closes a
+// stall hold whose stall ended by itself, and surfaces that closure once.
+// stallhold.go owns all of it, the answers and the residual gaps.
 //
 // # Terminal gone is three facts
 //
@@ -332,6 +344,10 @@ type supervisionHooks struct {
 	// is positive, so a test can count the sender's attempts against a
 	// store that refuses its claims over several intervals.
 	notifyRecheck time.Duration
+	// afterWakeAppend is called by a pass after each wake write of a task
+	// that committed, with the wake's kind, so a test can make the pass's
+	// next write fail between two of them.
+	afterWakeAppend func(kind supervisor.Kind)
 }
 
 // incarnation is one incarnation of the loop: its fence, its context, when it
@@ -615,7 +631,8 @@ func (s *Service) superviseTask(c *incarnation, o taskstate.Observed, probes map
 	queued bool, unread []store.Message, kept []store.KeptWork, now time.Time, providerWideSurfaced *bool) taskReport {
 	id := o.Snapshot.Task.ID
 	inFlight, decided := supervisor.StateInFlight(o.State.State)
-	obs := observation{observed: o, watched: inFlight || !decided || queued, unread: unread, kept: kept}
+	stalls := supervisor.OpenStallHolds(o)
+	obs := observation{observed: o, watched: inFlight || !decided || queued || len(stalls) > 0, unread: unread, kept: kept}
 	var err error
 	ctx, cancel := s.sup.bound(c.ctx)
 	obs.markers, obs.has, err = s.store.WakeMarkers(ctx, id)
@@ -650,6 +667,13 @@ func (s *Service) superviseTask(c *incarnation, o taskstate.Observed, probes map
 	obs.terminal, _ = supervisor.TerminalWatched(o.State.State)
 	if obs.watched && obs.terminal && obs.ref != "" {
 		obs.screen, obs.gone = s.readTerminal(c, obs.ref, probes[obs.ref])
+	}
+	if len(stalls) > 0 {
+		// A stall hold whose question no longer stands is closed before
+		// the decision, on stallhold.go's terms, under the task's slot so
+		// an answer to the same hold is wholly before the closure or
+		// wholly after it.
+		obs.closed = s.closeEndedStalls(c, obs, stalls, probes)
 	}
 	d := decide(obs, s.cfg, now, providerWideSurfaced)
 	for i := range d.detections {
@@ -689,6 +713,8 @@ func (s *Service) readTerminal(c *incarnation, ref string, probed session.Observ
 // stream through publishWake; a replay that appended nothing does neither.
 func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 	out := taskReport{Watched: d.watched, Detections: d.detections}
+	hold, registers := d.registers.Get()
+	published := false
 	surfaced := 0
 	for i, det := range d.detections {
 		if !det.Verdict.Surfaces() {
@@ -702,6 +728,15 @@ func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 			// transaction, so no entry is raised and left unrecorded.
 			request.Surfaces = store.Known(entry)
 		}
+		if registers {
+			// Every surfaced wake of the pass is written with the same
+			// marker advance, so the first of them to commit commits the
+			// count the stall hold was reached at. Each carries the hold, so
+			// no write records the count without it, and the fence keeps a
+			// replaced incarnation from registering one; registration is
+			// idempotent by key, so the later writes find it there.
+			request.Registers = store.Known(hold)
+		}
 		appended, err := s.store.AppendWakeWithMarkers(ctx, c.inc, request, d.advance)
 		cancel()
 		if err != nil {
@@ -709,10 +744,18 @@ func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 			return out
 		}
 		out.Detections[i].Disposition = appended.Disposition
+		if s.sup.hooks.afterWakeAppend != nil {
+			s.sup.hooks.afterWakeAppend(det.Kind)
+		}
 		if appended.Disposition == store.WakeAppended {
 			s.wakeBell.ring()
 			ctx, cancel := s.sup.bound(c.ctx)
 			s.publishWake(ctx, appended.Wake)
+			if registers && !published {
+				published = true
+				s.publishHoldByKey(ctx, hold.Key)
+				s.log.Printf("task %s holds on %s: its worker's screen has not changed", id, hold.Key)
+			}
 			cancel()
 		}
 	}
@@ -763,6 +806,10 @@ type observation struct {
 	// kept is every open kept work entry whose owner is the task or a
 	// run attributed to it, oldest first, read from the kept work record.
 	kept []store.KeptWork
+	// closed is every stall hold of the task this pass closed itself, as
+	// the record holds it after the closure, which the snapshot the pass
+	// resolved from was read before.
+	closed []store.Hold
 }
 
 // decision is what decide composed for one task: the detections with their
@@ -775,6 +822,11 @@ type decision struct {
 	// keptWork is the kept work entry each kept-work detection's marker is
 	// about, so the write can record when that entry surfaced.
 	keptWork map[string]int64
+	// registers is the stall hold the pass registers, PRD section 6's
+	// stalled worker, when its terminal-unchanged surface is at
+	// supervisor.SurfaceInspectAndHold; every surfaced write of the pass
+	// carries it.
+	registers store.Optional[store.Hold]
 }
 
 func surfacedKey(kind supervisor.Kind, marker string) string { return string(kind) + "\x00" + marker }
@@ -800,8 +852,9 @@ func surfacedKey(kind supervisor.Kind, marker string) string { return string(kin
 // instant in the marker, surfaced once per reference and case and then
 // once per escalation window measured from the GoneSurfacedAt marker, with
 // that surface's instant added to the marker; a screen
-// that changed, which resets the surfaced flag, the window and the stall
-// count and makes no wake; a declared wait, when the task resolves Paused,
+// that changed, by its digest or by the session it was read from, which
+// resets the surfaced flag, the window and the stall count and makes no
+// wake; a declared wait, when the task resolves Paused,
 // measured against the recheck window; no change, when the screen is empty,
 // nothing changed and there is evidence of progress; and otherwise terminal
 // unchanged, measured against the escalation window with the marker's
@@ -831,7 +884,7 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 		if run, ok := h.RunID.Get(); ok {
 			recorded[run] = true
 		}
-		marker := "hold:" + h.Key
+		marker := supervisor.HoldOpenedMarker(h.Key)
 		if seen(supervisor.KindHoldOpened, marker) {
 			continue
 		}
@@ -874,6 +927,14 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 		}
 		d.keptWork[marker] = k.ID
 		wake, _ := supervisor.Of(supervisor.KindKeptWork)
+		detect(wake, marker, supervisor.WindowOpen, false, supervisor.Stall{})
+	}
+	for _, h := range stallClosuresOf(o) {
+		marker := stallClosedMarker(h.Key)
+		if seen(supervisor.KindStallClosed, marker) {
+			continue
+		}
+		wake, _ := supervisor.Of(supervisor.KindStallClosed)
 		detect(wake, marker, supervisor.WindowOpen, false, supervisor.Stall{})
 	}
 	if !o.watched {
@@ -928,11 +989,20 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 
 	d.advance.UnobservedSince = store.Optional[time.Time]{}
 	d.advance.GoneSurfacedAt = store.Optional[time.Time]{}
-	if !o.has || o.markers.CaptureDigest != o.screen {
+	// A screen is its digest and the session it was read from: a relaunched
+	// worker's new session is a new screen whatever it shows, so its count
+	// starts on its own, PRD section 6.
+	session := store.Optional[string]{}
+	if o.screen.IsKnown() {
+		session = store.Known(o.ref)
+	}
+	if !o.has || o.markers.CaptureDigest != o.screen || o.markers.CaptureSession != session {
 		d.advance.CaptureDigest = o.screen
+		d.advance.CaptureSession = session
 		d.advance.Surfaced = false
 		d.advance.WindowStart = store.Known(now)
 		d.advance.StallRepetitions = 0
+		d.advance.StallBase = 0
 		return d
 	}
 	start, ok := o.markers.WindowStart.Get()
@@ -956,12 +1026,36 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 		detect(wake, "no-change", supervisor.WindowOpen, false, supervisor.Stall{})
 	default:
 		wake, _ := supervisor.Of(supervisor.KindTerminalUnchanged)
-		marker := fmt.Sprintf("terminal:%s@%d#%d", screen, o.markers.ChangeEpoch, o.markers.StallRepetitions+1)
-		stall := supervisor.Stall{Repetitions: int(o.markers.StallRepetitions), InspectAt: cfg.StallInspectionCount}
-		if v := detect(wake, marker, elapsed(start, cfg.EscalationWindow, now), o.markers.Surfaced, stall); v.Surfaces() {
+		surface := o.markers.StallRepetitions + 1
+		marker := fmt.Sprintf("terminal:%s@%d#%d", screen, o.markers.ChangeEpoch, surface)
+		attempt, launched := latestAttemptOf(o)
+		base := o.markers.StallBase
+		if approvedStallSurface(o, attempt) > base {
+			// An approve answered to a stall hold on this screen since the
+			// count last restarted: the count starts again from zero, on
+			// stallhold.go's terms.
+			base = o.markers.StallRepetitions
+			d.advance.StallBase = base
+		}
+		stall := supervisor.Stall{
+			Repetitions: int(o.markers.StallRepetitions - base), InspectAt: cfg.StallInspectionCount,
+			HoldAt: cfg.StallHoldCount, State: o.observed.State.State, Captured: o.screen.IsKnown() && launched,
+		}
+		v := detect(wake, marker, elapsed(start, cfg.EscalationWindow, now), o.markers.Surfaced, stall)
+		if v.Surfaces() {
 			d.advance.Surfaced = true
-			d.advance.StallRepetitions = o.markers.StallRepetitions + 1
+			d.advance.StallRepetitions = surface
 			d.advance.WindowStart = store.Known(now)
+		}
+		if v.Level == supervisor.SurfaceInspectAndHold {
+			hold := stallHold(o, supervisor.StallHold{
+				Task: o.observed.Snapshot.Task.ID, Attempt: attempt, Epoch: o.markers.ChangeEpoch, Surface: surface,
+			}, stall)
+			d.registers = store.Known(hold)
+			if marker := supervisor.HoldOpenedMarker(hold.Key); !seen(supervisor.KindHoldOpened, marker) {
+				opened, _ := supervisor.Of(supervisor.KindHoldOpened)
+				detect(opened, marker, supervisor.WindowOpen, false, supervisor.Stall{})
+			}
 		}
 	}
 	return d
@@ -1065,8 +1159,8 @@ func terminalGoneAbout(marker, ref string) bool {
 // carry is the markers as they stand, as the advance a pass starts from.
 func carry(m store.WakeMarkers) store.MarkerAdvance {
 	return store.MarkerAdvance{
-		CaptureDigest: m.CaptureDigest, EventSequence: m.EventSequence, Surfaced: m.Surfaced,
-		WindowStart: m.WindowStart, StallRepetitions: m.StallRepetitions, UnobservedSince: m.UnobservedSince,
+		CaptureDigest: m.CaptureDigest, CaptureSession: m.CaptureSession, EventSequence: m.EventSequence, Surfaced: m.Surfaced,
+		WindowStart: m.WindowStart, StallRepetitions: m.StallRepetitions, StallBase: m.StallBase, UnobservedSince: m.UnobservedSince,
 		GoneSurfacedAt: m.GoneSurfacedAt,
 	}
 }

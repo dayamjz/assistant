@@ -103,7 +103,7 @@ func (s *Service) catchUp(ctx context.Context) (machine.CatchUp, error) {
 	for _, o := range observed {
 		task := s.taskView(ctx, o)
 		byTask[task.Record.ID] = task
-		inFlight, decided := supervisor.TaskInFlight(o.State.State, unacknowledged[task.Record.ID])
+		inFlight, decided := supervisor.TaskInFlight(o.State.State, unacknowledged[task.Record.ID], supervisor.StallHeld(o))
 		if inFlight || !decided {
 			out.UnderWay.Tasks = append(out.UnderWay.Tasks, task)
 		}
