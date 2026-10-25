@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // RebaseSpec describes a rebase operation.
@@ -144,7 +143,7 @@ func (r *Repository) rebaseInProgress(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		path := strings.TrimSpace(string(out))
+		path := gitPath(out)
 		if path == "" {
 			return false, errors.New("vcs: git reported no path for " + name)
 		}
