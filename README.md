@@ -217,7 +217,7 @@ A validation gate is useful only if its failure behavior is clear. Assistant's d
 | Situation | Behavior / boundary |
 | --- | --- |
 | The upstream branch moves during delivery | Delivery is anchored to an observed commit; an unexpected move is refused rather than overwritten blindly. |
-| Hosted CI fails after a push | The checks stage may run bounded repairs and publish them through an anchored push when permitted; otherwise it holds for a person. This is not a promise every CI error can be fixed automatically. |
+| Hosted CI fails after a push | The checks stage can commit a bounded number of repairs; each goes back through review and a second anchored push. When the repair rounds are used up, the run parks; with no repair rounds configured, it holds for a person. Not every CI failure can be repaired automatically. |
 | A worker dies or the service restarts | Durable state and supervision support reconciliation, but uncertainty is surfaced; not every recovery path is automated. |
 | A requested agent/model/window is unsupported | Adapter capability checks refuse unsupported combinations rather than silently substituting them. |
 | Task work cannot safely be discarded | The isolated copy is kept; new work in the project waits for a person's kept-work decision. |
