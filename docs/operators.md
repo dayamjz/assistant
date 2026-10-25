@@ -1396,3 +1396,10 @@ Nothing in this build reads or answers those bots' comments, so treat them as
 input for the human who reviews the pull request. The tests for P4, P7 and the
 judge-path rule show the machinery behaves as specified, not that every review
 is good; `internal/journey/README.md` says what a green run there establishes.
+
+## This repository's own checks
+
+The checks in [Keep your CI required](#keep-your-ci-required) are the ones on
+a repository this gate validates. The checks on this repository are a
+different set. [AGENTS.md](../AGENTS.md) names the ones branch protection
+requires on `main` and points at the workflows that own their settings.

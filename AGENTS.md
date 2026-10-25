@@ -76,6 +76,13 @@ repository more than one round of review.
   under the leak check (`scripts/leak-check.py`), so a package that leaves a
   process or temp entry behind fails CI even when `make check` passes. The gate
   runs `make lint` and leaves the full suite to CI (`.no-mistakes.yaml`).
+- Branch protection on `main` requires five checks: `check (ubuntu-latest)`,
+  `check (macos-latest)`, `lint`, `repeat`, and `re-runs`. That set is the
+  protection rule, which this tree does not store. `.github/workflows/ci.yml`
+  and `.github/workflows/repeat.yml` own what those jobs run.
+  `.github/workflows/stress.yml` is not one of the five, and it owns what
+  the stress workflow runs. The comment on `check` in the `Makefile` owns
+  which workflow runs `make check`.
 - **Package rules live in `.claude/rules/<package>.md`** (`internal/service` is
   `.claude/rules/service.md`) and are part of this agreement. Read the one for
   the package you change, whatever tool you are: Claude Code loads it when it
