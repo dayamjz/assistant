@@ -241,10 +241,18 @@ func (s *Service) carryOnOf(ctx context.Context, entry store.KeptWork) (carryOn,
 // assertKeptCopy asserts the kept copy where it stands against the
 // expectation of the task it outlived, on this file's terms, and refuses
 // with ipc.ErrRefused a copy that is gone or that fails any comparison but
-// the two the reshape writes.
+// the two the reshape writes. Before anything of the copy is read it is
+// held to the one it is recorded as (tasks.Cleaner.VerifyKeptCopy), so a
+// carry on never adopts a copy git reads through another repository or a
+// link.
 func (s *Service) assertKeptCopy(ctx context.Context, entry store.KeptWork, plan carryOn) error {
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: kept work entry %d was not carried on: %s", ipc.ErrRefused, entry.ID, why)
+	}
+	if _, err := os.Lstat(entry.CopyPath); err == nil {
+		if err := s.cleaner.VerifyKeptCopy(ctx, entry, plan.gatePath); err != nil {
+			return refuse(err.Error())
+		}
 	}
 	want, _, err := tasks.Expect(s.home, plan.old.ID, plan.old.Shape, plan.gatePath, plan.repository.WorkingPath, plan.branch)
 	if err != nil {

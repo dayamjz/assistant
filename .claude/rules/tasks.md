@@ -87,6 +87,9 @@ paths: ["internal/tasks/**"]
   `Loss`, `Discard` and `PutBack` support one repository layout and refuse
   every other before reading anything (`supportedLayout`,
   `ErrLayoutUnsupported`): an unusual layout is refused, never handled.
+  Its first step is `Cleaner.VerifyKeptCopy`, the one call into
+  `internal/safety`'s verification that a kept copy is the one its registry
+  recorded, which carry on in `internal/service` asks too.
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (an exclusively created partial of a fresh name, then a
   rename; a path standing as a link is `*InstructionsLinkError`), so a file

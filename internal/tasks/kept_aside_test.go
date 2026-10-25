@@ -40,7 +40,7 @@ func keptLanded(t *testing.T, change func(copyPath string)) (*cleanupSubject, ta
 	if err != nil || !got.Entry.Established() {
 		t.Fatalf("Keep = %+v, %v", got, err)
 	}
-	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	shown, err := s.cleaner.Loss(ctx, got.Entry, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestADiscardRemovesWhatItShowedAndThenTheCopy(t *testing.T) {
 		if err := os.Remove(filepath.Join(tk.copy, "notes.txt")); err != nil {
 			t.Fatal(err)
 		}
-		shown, err := s.cleaner.Loss(ctx, entry)
+		shown, err := s.cleaner.Loss(ctx, entry, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -169,7 +169,7 @@ func keptWithWork(t *testing.T) (*cleanupSubject, task, store.KeptWork, Loss) {
 	if err := os.WriteFile(filepath.Join(tk.copy, "scratch.txt"), []byte("not committed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	shown, err := s.cleaner.Loss(ctx, got.Entry, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestADiscardStoppedPartWayIsPutBackBeforeTheCopyIsRead(t *testing.T) {
 	if raw, err := os.ReadFile(filepath.Join(asideDir(tk.copy), "tree", "scratch.txt")); err != nil || string(raw) != "not committed\n" {
 		t.Fatalf("what was set aside holds %q, %v; want scratch.txt as it was", raw, err)
 	}
-	if _, err := s.cleaner.Loss(ctx, entry); !errors.Is(err, ErrAsideStands) {
+	if _, err := s.cleaner.Loss(ctx, entry, ""); !errors.Is(err, ErrAsideStands) {
 		t.Fatalf("Loss with what was set aside standing = %v; want ErrAsideStands", err)
 	}
 	s.cleaner.betweenAsideAndCheck = nil
@@ -241,7 +241,7 @@ func TestARestoreLeavesWhatItSetAsideWhereItsPathWasTaken(t *testing.T) {
 	if raw, err := os.ReadFile(filepath.Join(asideDir(tk.copy), "tree", "scratch.txt")); err != nil || string(raw) != "not committed\n" {
 		t.Fatalf("what was set aside holds %q, %v; want scratch.txt as it was", raw, err)
 	}
-	if _, err := s.cleaner.Loss(ctx, entry); !errors.Is(err, ErrAsideStands) {
+	if _, err := s.cleaner.Loss(ctx, entry, ""); !errors.Is(err, ErrAsideStands) {
 		t.Fatalf("Loss = %v; want ErrAsideStands", err)
 	}
 }
@@ -309,7 +309,7 @@ func TestARestoreTakesOutOnlyWhatItWroteAndMakesItsDirectoriesAgain(t *testing.T
 	if err != nil || !got.Entry.Established() {
 		t.Fatalf("Keep = %+v, %v", got, err)
 	}
-	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	shown, err := s.cleaner.Loss(ctx, got.Entry, "")
 	if err != nil || !slices.Contains(shown.Files, LostPath{LostChanged, "sub/x.txt"}) {
 		t.Fatalf("Loss = %+v, %v; want sub/x.txt changed", shown, err)
 	}
@@ -391,7 +391,7 @@ func TestARestoreThatStoppedTakesUpWhereItStopped(t *testing.T) {
 	if err != nil || !got.Entry.Established() {
 		t.Fatalf("Keep = %+v, %v", got, err)
 	}
-	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	shown, err := s.cleaner.Loss(ctx, got.Entry, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ func TestARestoreThatStoppedTakesUpWhereItStopped(t *testing.T) {
 	if now := copySnapshot(t, tk.copy); withoutLines(now, index) != withoutLines(before, index) {
 		t.Fatalf("the copy once put back reads\n%s\nwant it as it was but sub/x.txt's index entry\n%s", now, before)
 	}
-	if _, err := s.cleaner.Loss(ctx, got.Entry); err != nil {
+	if _, err := s.cleaner.Loss(ctx, got.Entry, ""); err != nil {
 		t.Fatalf("Loss once put back: %v", err)
 	}
 }
@@ -509,7 +509,8 @@ func TestAReflogGoesBackOnlyWithItsReference(t *testing.T) {
 // 25's first finding, which deleted the other clone's branch); a changed
 // tracked symbolic link under core.symlinks=false (round 25's second,
 // whose restore could not tell git's checkout from somebody's file); a
-// sparse checkout; a linked worktree; and references in a reftable. Each
+// directory of the working tree a link to another checkout (round 28,
+// refused before anything is set aside); a sparse checkout; a linked worktree; and references in a reftable. Each
 // preview refuses with ErrLayoutUnsupported naming why, and so does a
 // discard on the digest shown before, with the clone and the other clone
 // exactly as they were and nothing set aside. The positive control is the
@@ -522,7 +523,7 @@ func TestADiscardRefusesALayoutItDoesNotSupport(t *testing.T) {
 		make         func(t *testing.T, copyPath, other string)
 	}{
 		{"the ordinary layout, the positive control", "", nil},
-		{".git a symbolic link", "has a .git that is not a directory", func(t *testing.T, copyPath, other string) {
+		{".git a symbolic link", "has no repository directory of its own", func(t *testing.T, copyPath, other string) {
 			if err := os.RemoveAll(filepath.Join(copyPath, ".git")); err != nil {
 				t.Fatal(err)
 			}
@@ -530,7 +531,7 @@ func TestADiscardRefusesALayoutItDoesNotSupport(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{".git a gitdir file", "has a .git that is not a directory", func(t *testing.T, copyPath, other string) {
+		{".git a gitdir file", "has no repository directory of its own", func(t *testing.T, copyPath, other string) {
 			if err := os.RemoveAll(filepath.Join(copyPath, ".git")); err != nil {
 				t.Fatal(err)
 			}
@@ -570,6 +571,11 @@ func TestADiscardRefusesALayoutItDoesNotSupport(t *testing.T) {
 			}
 			rawGit(t, copyPath, "config", "core.symlinks", "false")
 		}},
+		{"a directory of the working tree a link to another checkout", "has a symbolic link a path inside it could pass through", func(t *testing.T, copyPath, other string) {
+			if err := os.Symlink(other, filepath.Join(copyPath, "linked")); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{"a sparse checkout", "is a sparse checkout", func(t *testing.T, copyPath, _ string) {
 			rawGit(t, copyPath, "sparse-checkout", "set", "--no-cone", "/own.txt")
 		}},
@@ -602,7 +608,7 @@ func TestADiscardRefusesALayoutItDoesNotSupport(t *testing.T) {
 			// The reviewer's sequence: the discard shown in the layout, and
 			// that digest confirmed.
 			digest, lacks := shown.Digest, shown.Lacks
-			if through, err := s.cleaner.Loss(ctx, entry); !errors.Is(err, ErrLayoutUnsupported) || !refusedFor(err, tk.copy, c.reason) {
+			if through, err := s.cleaner.Loss(ctx, entry, ""); !errors.Is(err, ErrLayoutUnsupported) || !refusedFor(err, tk.copy, c.reason) {
 				t.Errorf("the preview of a clone with %s = %v; want ErrLayoutUnsupported saying it %s", c.name, err, c.reason)
 				if err == nil {
 					digest, lacks = through.Digest, through.Lacks
@@ -672,6 +678,9 @@ func keptLandedWithFiles(t *testing.T, files [][2]string, change func(copyPath s
 	ctx := context.Background()
 	tk := s.deliveryTask(t, "topic")
 	for _, f := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(tk.copy, f[0])), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		commit(t, tk.copy, f[0], f[1], "on topic: "+f[0])
 	}
 	s.push(t, tk.copy, "topic")
@@ -689,7 +698,7 @@ func keptLandedWithFiles(t *testing.T, files [][2]string, change func(copyPath s
 	if err != nil || !got.Entry.Established() {
 		t.Fatalf("Keep = %+v, %v", got, err)
 	}
-	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	shown, err := s.cleaner.Loss(ctx, got.Entry, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -886,7 +895,7 @@ func TestARestoreTakesOutTheDirectoriesItsCheckoutMade(t *testing.T) {
 	}
 	commit(t, seed, filepath.Join("mainonly", "x.txt"), "on main alone\n", "the upstream moved on")
 	rawGit(t, seed, "push", "-q", "origin", "main")
-	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	shown, err := s.cleaner.Loss(ctx, got.Entry, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -948,7 +957,7 @@ func TestADiscardWritesNoSubmoduleBack(t *testing.T) {
 	if err != nil || !got.Entry.Established() {
 		t.Fatalf("Keep = %+v, %v", got, err)
 	}
-	shown, err := s.cleaner.Loss(ctx, got.Entry)
+	shown, err := s.cleaner.Loss(ctx, got.Entry, "")
 	if err != nil || !slices.Contains(shown.Files, LostPath{LostDeleted, "sub"}) {
 		t.Fatalf("Loss = %+v, %v; want sub deleted", shown, err)
 	}
@@ -1059,7 +1068,7 @@ func TestAClonesRepositoryIsTheOneGitReadsForIt(t *testing.T) {
 			if err := s.cleaner.PutBack(ctx, entry, ""); !errors.Is(err, ErrLayoutUnsupported) {
 				t.Errorf("PutBack of a clone git reads through another checkout = %v; want ErrLayoutUnsupported", err)
 			}
-			if _, err := s.cleaner.Loss(ctx, entry); !errors.Is(err, ErrLayoutUnsupported) {
+			if _, err := s.cleaner.Loss(ctx, entry, ""); !errors.Is(err, ErrLayoutUnsupported) {
 				t.Errorf("the preview of a clone git reads through another checkout = %v; want ErrLayoutUnsupported", err)
 			}
 			if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, ErrLayoutUnsupported) {
@@ -1075,5 +1084,56 @@ func TestAClonesRepositoryIsTheOneGitReadsForIt(t *testing.T) {
 				t.Errorf("what was set aside reads\n%s\nwant it as it was\n%s", now, beforeAside)
 			}
 		})
+	}
+}
+
+// A put-back never writes through a directory of the copy replaced by a
+// symbolic link, round 28's second finding: a discard of a landed clone
+// whose d/f is edited, with d/g unchanged keeping d standing, stops once
+// it has set the edit aside and written HEAD's d/f back. d is then moved
+// away and replaced by a symbolic link to another checkout holding HEAD's
+// f and g. PutBack refuses, with the other checkout, the clone and what was
+// set aside exactly as they were. Before, it took the other checkout's f
+// for the file it wrote, deleted it, and moved the edit into its place.
+func TestAPutBackNeverWritesThroughALinkedDirectory(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s, tk, entry, shown := keptLandedWithFiles(t, [][2]string{{"d/f", "on topic\n"}, {"d/g", "on topic\n"}}, func(copyPath string) {
+		if err := os.WriteFile(filepath.Join(copyPath, "d", "f"), []byte("edited after the landing\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	s.cleaner.betweenAsideAndCheck = func() error { return errStoppedAside }
+	if _, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil); !errors.Is(err, errStoppedAside) {
+		t.Fatalf("the stopped discard = %v; want it stopped", err)
+	}
+	s.cleaner.betweenAsideAndCheck = nil
+	other := filepath.Join(t.TempDir(), "other")
+	if err := os.MkdirAll(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"f", "g"} {
+		if err := os.WriteFile(filepath.Join(other, name), []byte("on topic\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Rename(filepath.Join(tk.copy, "d"), filepath.Join(t.TempDir(), "d")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, filepath.Join(tk.copy, "d")); err != nil {
+		t.Fatal(err)
+	}
+	beforeOther, beforeCopy, beforeAside := treeAndGitState(t, other), treeAndGitState(t, tk.copy), treeAndGitState(t, asideDir(tk.copy))
+	if err := s.cleaner.PutBack(ctx, entry, ""); !errors.Is(err, ErrLayoutUnsupported) {
+		t.Errorf("PutBack with d a link to another checkout = %v; want ErrLayoutUnsupported", err)
+	}
+	if now := treeAndGitState(t, other); now != beforeOther {
+		t.Errorf("the other checkout reads\n%s\nwant it as it was\n%s", now, beforeOther)
+	}
+	if now := treeAndGitState(t, tk.copy); now != beforeCopy {
+		t.Errorf("the clone reads\n%s\nwant it as it was\n%s", now, beforeCopy)
+	}
+	if now := treeAndGitState(t, asideDir(tk.copy)); now != beforeAside {
+		t.Errorf("what was set aside reads\n%s\nwant it as it was\n%s", now, beforeAside)
 	}
 }

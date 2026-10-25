@@ -1368,3 +1368,47 @@ func TestALandAnswerDuringAnothersStartIsRefused(t *testing.T) {
 		}
 	})
 }
+
+// A land answer reads a run's copy only once it is the worktree the gate's
+// registry records for it, round 28's first finding: a run's kept worktree
+// A, and a second worktree B of the same gate holding the same tree on a
+// history of its own, and A's .git then pointed at B's record. Landing A is
+// refused naming the record, with A's entry open, no run started and no
+// landing claimed. Before, the landing read B's HEAD through A's .git,
+// found nothing left behind, and started a run of B while A's entry closed
+// without A's commits.
+func TestALandingReadsOnlyTheWorktreeTheGateRecorded(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	entry := keptEntryOf(t, h, subject)
+	gate := git(t, entry.CopyPath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	a := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	// B is made at its own commit, so nothing of B's names A's.
+	b := git(t, gate, "commit-tree", a+"^{tree}", "-p", a+"^", "-m", "B, the same tree on a history of its own")
+	other := filepath.Join(t.TempDir(), "b")
+	git(t, gate, "worktree", "add", "--quiet", "--detach", other, b)
+	theirs := git(t, other, "rev-parse", "--absolute-git-dir")
+	if err := writeFile(filepath.Join(entry.CopyPath, ".git"), "gitdir: "+theirs+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if read := git(t, entry.CopyPath, "rev-parse", "HEAD"); read != b {
+		t.Fatalf("git reads A's HEAD as %s; want B's %s, the case under test", read, b)
+	}
+	withService(t, h, func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+			Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptLand)}, &out)
+		if !errors.Is(err, ipc.ErrRefused) {
+			t.Fatalf("landing A through B's record = %+v, %v; want it refused", out, err)
+		}
+		still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+		if err != nil || !still.Open() || still.LandingClaimedAt.IsKnown() || still.LandedRun.IsKnown() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open with no landing claimed", still, err)
+		}
+	})
+}

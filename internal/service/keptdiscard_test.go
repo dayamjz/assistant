@@ -928,8 +928,32 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 				release := sync.OnceFunc(func() { close(resume) })
 				defer release()
 				var shown machine.KeptWorkAnswered
-				if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &shown); err != nil || shown.Loss == nil {
-					t.Fatalf("the discard shown = %+v, %v", shown, err)
+				shownErr := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &shown)
+				if c == outsideGate || c == siblingRecord || c == siblingLink {
+					// A worktree that is not the one the gate's registry
+					// records is refused before anything of it is read, so
+					// the discard is never shown (round 28).
+					if !errors.Is(shownErr, ipc.ErrRefused) {
+						t.Fatalf("the discard shown for a worktree whose record is %s = %+v, %v; want it refused", c, shown, shownErr)
+					}
+					if c == siblingRecord || c == siblingLink {
+						if status := git(t, sibling, "status", "--porcelain"); status != "A  staged.txt" {
+							t.Fatalf("the other worktree's status reads %q after the refusal; want its staged work, A  staged.txt", status)
+						}
+					}
+					if _, err := os.Stat(filepath.Join(record, "HEAD")); err != nil {
+						t.Fatalf("the record outside the gate lost its HEAD: %v; want it standing", err)
+					}
+					if _, err := os.Lstat(filepath.Join(entry.CopyPath, ".git")); err != nil {
+						t.Fatalf("the worktree lost its .git file: %v; want it standing", err)
+					}
+					if got, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !got.Open() || got.DiscardDigest.IsKnown() {
+						t.Fatalf("the entry reads %+v, %v after the refusal; want it open and unconfirmed", got, err)
+					}
+					return
+				}
+				if shownErr != nil || shown.Loss == nil {
+					t.Fatalf("the discard shown = %+v, %v", shown, shownErr)
 				}
 				var done machine.KeptWorkAnswered
 				answered := make(chan error, 1)
@@ -938,7 +962,7 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 				}()
 				var committed, headBefore string
 				headBefore = git(t, entry.CopyPath, "rev-parse", "HEAD")
-				if c != control && c != outsideGate && c != siblingRecord && c != siblingLink {
+				if c != control {
 					select {
 					case <-paused:
 					case err := <-answered:
@@ -990,24 +1014,6 @@ func TestARunsDiscardRemovesItsWorktreeOnlyAsTheCopyWasRead(t *testing.T) {
 					}
 					if aside, err := filepath.Glob(filepath.Join(filepath.Dir(entry.CopyPath), ".*.discarding")); err != nil || len(aside) != 0 {
 						t.Fatalf("set aside after the refusal: %v, %v; want nothing (the service log reads:\n%s)", aside, err, readServiceLog(t, h))
-					}
-					if got, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !got.Open() || got.DiscardDigest.IsKnown() {
-						t.Fatalf("the entry reads %+v, %v after the refusal; want it open with its confirmation withdrawn", got, err)
-					}
-				case outsideGate, siblingRecord, siblingLink:
-					if !errors.Is(err, ipc.ErrRefused) {
-						t.Fatalf("the confirmed discard of a worktree whose record is %s = %+v, %v; want it refused", c, done, err)
-					}
-					if c == siblingRecord || c == siblingLink {
-						if status := git(t, sibling, "status", "--porcelain"); status != "A  staged.txt" {
-							t.Fatalf("the other worktree's status reads %q after the refusal; want its staged work, A  staged.txt", status)
-						}
-					}
-					if _, err := os.Stat(filepath.Join(record, "HEAD")); err != nil {
-						t.Fatalf("the record outside the gate lost its HEAD: %v; want it standing", err)
-					}
-					if _, err := os.Lstat(filepath.Join(entry.CopyPath, ".git")); err != nil {
-						t.Fatalf("the worktree lost its .git file: %v; want it standing", err)
 					}
 					if got, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !got.Open() || got.DiscardDigest.IsKnown() {
 						t.Fatalf("the entry reads %+v, %v after the refusal; want it open with its confirmation withdrawn", got, err)

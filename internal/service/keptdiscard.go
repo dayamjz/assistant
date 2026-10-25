@@ -169,7 +169,11 @@ func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry st
 	if err := s.putBackDiscard(ctx, entry); err != nil {
 		return machine.KeptWorkAnswered{}, refusedLoss(entry, err)
 	}
-	loss, err := s.cleaner.Loss(ctx, entry)
+	gatePath, err := s.discardGatePath(ctx, entry)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
+	loss, err := s.cleaner.Loss(ctx, entry, gatePath)
 	if err != nil {
 		return machine.KeptWorkAnswered{}, refusedLoss(entry, err)
 	}

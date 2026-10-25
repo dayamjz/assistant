@@ -285,14 +285,17 @@ var ErrRecordNotTheCopys = errors.New("tasks: the worktree's record is not this 
 var ErrLossChanged = errors.New("tasks: the copy no longer holds exactly what was shown, so it was not removed")
 
 // Loss reads what discarding the entry's copy would lose, on this file's
-// terms.
-func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) {
+// terms, once the copy is verified to be the one its registry recorded
+// (VerifyKeptCopy) and laid out as supported (supportedLayout). gatePath
+// is the gate repository a run's copy is a worktree of, and is not read
+// for a task's clone.
+func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork, gatePath string) (Loss, error) {
 	// A copy that stands is held to the layout first: what stands aside can
 	// be put back only into that layout.
 	if standing, err := c.standing(entry.CopyPath); err != nil {
 		return Loss{}, err
 	} else if standing {
-		if err := c.supportedLayout(ctx, entry); err != nil {
+		if err := c.supportedLayout(ctx, entry, gatePath); err != nil {
 			return Loss{}, err
 		}
 	}
@@ -301,12 +304,12 @@ func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return Loss{}, err
 	}
-	return c.loss(ctx, entry)
+	return c.loss(ctx, entry, gatePath)
 }
 
 // loss is Loss without the check for what a discard set aside, which
 // Discard makes itself.
-func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork) (Loss, error) {
+func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, gatePath string) (Loss, error) {
 	standing, err := c.standing(entry.CopyPath)
 	if err != nil {
 		return Loss{}, err
@@ -314,7 +317,7 @@ func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork) (Loss, error) 
 	if !standing {
 		return Loss{}, fmt.Errorf("%w: nothing stands at %s", ErrCopyGone, entry.CopyPath)
 	}
-	if err := c.supportedLayout(ctx, entry); err != nil {
+	if err := c.supportedLayout(ctx, entry, gatePath); err != nil {
 		return Loss{}, err
 	}
 	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, c.git...)
@@ -812,7 +815,7 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 	if err != nil {
 		return Loss{}, fmt.Errorf("tasks: reading the copy at %s: %w", entry.CopyPath, err)
 	}
-	loss, err := c.loss(ctx, entry)
+	loss, err := c.loss(ctx, entry, gatePath)
 	if errors.Is(err, ErrCopyGone) {
 		return Loss{}, nil
 	}
@@ -848,7 +851,7 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest stri
 			return Loss{}, err
 		}
 	}
-	after, err := c.loss(ctx, entry)
+	after, err := c.loss(ctx, entry, gatePath)
 	if err != nil {
 		return refuse(fmt.Errorf("%w: the copy could not be read once what was shown was set aside: %w", ErrLossChanged, err))
 	}
@@ -887,11 +890,8 @@ func (c *Cleaner) openForDiscard(ctx context.Context, entry store.KeptWork, gate
 		if bare, err = vcs.OpenBare(ctx, gatePath, c.git...); err != nil {
 			return nil, nil, fmt.Errorf("tasks: opening the gate repository at %s: %w", gatePath, err)
 		}
-		if _, err := copyRecord(ctx, bare, entry.CopyPath); err != nil {
-			return nil, nil, fmt.Errorf("tasks: the worktree at %s: %w", entry.CopyPath, err)
-		}
 	}
-	if err := c.supportedLayout(ctx, entry); err != nil {
+	if err := c.supportedLayout(ctx, entry, gatePath); err != nil {
 		return nil, nil, err
 	}
 	if copied, err = vcs.OpenWorktree(ctx, entry.CopyPath, c.git...); err != nil {

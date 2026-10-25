@@ -290,7 +290,11 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 		}
 		return landing{}, err
 	}
-	loss, err := s.cleaner.Loss(ctx, entry)
+	gatePath, err := s.discardGatePath(ctx, entry)
+	if err != nil {
+		return landing{}, err
+	}
+	loss, err := s.cleaner.Loss(ctx, entry, gatePath)
 	switch {
 	case errors.Is(err, tasks.ErrCopyGone):
 		return refuse("its copy at " + entry.CopyPath + " is gone")

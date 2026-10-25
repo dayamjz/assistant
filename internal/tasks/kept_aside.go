@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dayamjz/assistant/internal/safety"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -140,77 +141,25 @@ var ErrAsideStands = errors.New("tasks: a discard that did not finish set part o
 // reads it for the copy, the user's and the system's included. The
 // repository directory is walked through the file system, so a link is
 // refused wherever it stands.
-func (c *Cleaner) supportedLayout(ctx context.Context, entry store.KeptWork) error {
+func (c *Cleaner) supportedLayout(ctx context.Context, entry store.KeptWork, gatePath string) error {
+	if err := c.VerifyKeptCopy(ctx, entry, gatePath); err != nil {
+		return err
+	}
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: %s %s", ErrLayoutUnsupported, entry.CopyPath, why)
-	}
-	dotGit := filepath.Join(entry.CopyPath, ".git")
-	info, err := os.Lstat(dotGit)
-	if err != nil {
-		return refuse("has no .git that can be read: " + err.Error())
-	}
-	if entry.TaskID.IsKnown() && !info.IsDir() {
-		return refuse("has a .git that is not a directory of its own")
-	}
-	// Git itself is asked which working tree it reads for the copy, which
-	// must be the copy: a .git git does not take for a repository, one that
-	// lost its HEAD among them, leaves git reading whatever checkout the
-	// copy stands in, which is never recovered into.
-	root, err := filepath.EvalSymlinks(entry.CopyPath)
-	if err != nil {
-		return refuse("could not be read: " + err.Error())
-	}
-	obs, err := vcs.Observe(ctx, entry.CopyPath, c.git...)
-	if err != nil {
-		return refuse("is not a repository git reads: " + err.Error())
-	}
-	if top, err := filepath.EvalSymlinks(obs.Toplevel); err != nil || top != root {
-		return refuse("is read by git as part of the working tree at " + obs.Toplevel)
-	}
-	// And for a clone the repository directory git reads must be the
-	// clone's own .git. A working tree that matches proves nothing of it:
-	// another repository's core.worktree can name the clone, and git then
-	// reads that repository for it. A run's .git file is held to the gate's
-	// record by copyRecord, and the repository directory git reports for it
-	// is the one walked below.
-	gitDir := obs.GitDir
-	if entry.TaskID.IsKnown() {
-		own := filepath.Join(root, ".git")
-		if read, err := filepath.EvalSymlinks(obs.GitDir); err != nil || read != own {
-			return refuse("is read by git through the repository directory " + obs.GitDir + ", not its own " + own)
-		}
-		gitDir = own
 	}
 	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, c.git...)
 	if err != nil {
 		return refuse("could not be opened: " + err.Error())
 	}
 	if entry.TaskID.IsKnown() {
+		dotGit := filepath.Join(entry.CopyPath, ".git")
 		if _, err := os.Lstat(filepath.Join(dotGit, "commondir")); !errors.Is(err, fs.ErrNotExist) {
 			return refuse("has a commondir file in its .git, naming another directory its references and objects are in")
 		}
 		if linked, err := os.ReadDir(filepath.Join(dotGit, "worktrees")); err == nil && len(linked) > 0 {
 			return refuse("has a linked worktree")
 		}
-	}
-	// A run's .git is held to the gate's record of it by copyRecord, and
-	// gitDir is the record git reads.
-	var link string
-	err = filepath.WalkDir(gitDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.Type()&fs.ModeSymlink != 0 {
-			link = p
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	if err != nil {
-		return refuse("has a repository directory that could not be read: " + err.Error())
-	}
-	if link != "" {
-		return refuse("has a symbolic link in its repository directory, at " + link)
 	}
 	if symlinks, set, err := copied.ConfigBool(ctx, "core.symlinks"); err != nil {
 		return refuse("has a core.symlinks that could not be read: " + err.Error())
@@ -222,6 +171,33 @@ func (c *Cleaner) supportedLayout(ctx context.Context, entry store.KeptWork) err
 	}
 	if format, set, err := copied.ConfigValue(ctx, "extensions.refStorage"); err != nil || set && format != "files" {
 		return refuse("keeps its references in a " + format + " store rather than in files")
+	}
+	return nil
+}
+
+// VerifyKeptCopy refuses, before anything of the entry's copy is read or
+// written, a copy that is not the one its registry recorded, on
+// internal/safety's terms (safety.VerifyKeptCopy): the registry is the
+// entry's copy path and its own .git for a task's clone, and for a run's
+// worktree the gate at gatePath, whose registry names the worktree's
+// record (copyRecord, which also holds the worktree's .git file to it).
+// Every path that reads or writes a kept copy asks it first: the loss a
+// discard shows and a land reads, the discard, its set-aside and its
+// put-back, and carry on. A refusal matches ErrLayoutUnsupported, and
+// safety.ErrCopyNotVerified or ErrRecordNotTheCopys as well.
+func (c *Cleaner) VerifyKeptCopy(ctx context.Context, entry store.KeptWork, gatePath string) error {
+	want := safety.KeptCopy{Worktree: entry.CopyPath, GitDir: filepath.Join(entry.CopyPath, ".git")}
+	if !entry.TaskID.IsKnown() {
+		bare, err := vcs.OpenBare(ctx, gatePath, c.git...)
+		if err != nil {
+			return fmt.Errorf("tasks: opening the gate repository at %s: %w", gatePath, err)
+		}
+		if want.GitDir, err = copyRecord(ctx, bare, entry.CopyPath); err != nil {
+			return fmt.Errorf("%w: %w", ErrLayoutUnsupported, err)
+		}
+	}
+	if err := safety.VerifyKeptCopy(ctx, want, c.git...); err != nil {
+		return fmt.Errorf("%w: %w", ErrLayoutUnsupported, err)
 	}
 	return nil
 }

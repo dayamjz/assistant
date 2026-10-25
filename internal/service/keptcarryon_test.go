@@ -289,16 +289,20 @@ func TestCarryingOnAPromotedTaskTransfersItsDeliveryIntent(t *testing.T) {
 	})
 }
 
-// A kept copy that fails the assertion is not carried on: the copy is
-// replaced by a linked worktree of the gate, which is not a clone a task's
-// worker may be started in, so the answer is refused naming the comparison,
-// records nothing, creates no task and moves nothing. Without the
-// assertion before the answer a task is created over it.
+// A kept copy that is not the clone its task recorded is not carried on:
+// the copy is replaced by a linked worktree of the gate, which is not a
+// clone a task's worker may be started in, and whose repository directory
+// is not the clone's own .git, so the answer is refused by the
+// verification every path asks before it reads a kept copy (round 28,
+// tasks.Cleaner.VerifyKeptCopy), ahead of the isolation assertion that
+// refused it before, records nothing, creates no task and moves nothing.
+// The assertion's own refusals are TestAKeptCopyWithARemoteTheReshapeKeepsIsNotCarriedOn's
+// and the HEAD ones below. Without either before the answer a task is
+// created over it.
 func TestAKeptCopyThatFailsTheAssertionIsNotCarriedOn(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P15)
-	principles.Cite(t, principles.P11)
 
 	h := newHome(t)
 	subject := newSubject(t)
@@ -321,8 +325,8 @@ func TestAKeptCopyThatFailsTheAssertionIsNotCarriedOn(t *testing.T) {
 	withService(t, h, func(under serviceUnderTest) {
 		var out machine.KeptWorkAnswered
 		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), string(tasks.ComparisonCommonDir)) {
-			t.Fatalf("carrying a worktree on = %v; want it refused naming %s", err, tasks.ComparisonCommonDir)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "has no repository directory of its own") {
+			t.Fatalf("carrying a worktree on = %v; want it refused as no repository directory of its own", err)
 		}
 	})
 	if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() {
@@ -1515,5 +1519,42 @@ func TestACarryOnTakesTheCopyOnlyWithWhatADiscardSetAsidePutBack(t *testing.T) {
 			t.Fatalf("something is still set aside beside the old copy: %v", err)
 		}
 		waitLaunched(t, h, out.Task)
+	})
+}
+
+// A carry on adopts a kept copy only once it is verified to be the one its
+// task recorded (tasks.Cleaner.VerifyKeptCopy, on internal/safety's
+// terms), round 28: a reported investigation's kept copy holds a symbolic
+// link to a directory outside it, which a path inside the copy could pass
+// through. The carry on is refused naming the link, with the entry open
+// and unclaimed, the copy where it was, and no task created. The positive
+// control is TestCarryingKeptWorkOnCreatesATaskWhoseWorkerStartsInTheKeptCopy.
+func TestACarryOnVerifiesTheCopyBeforeAdoptingIt(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	if err := os.Symlink(t.TempDir(), filepath.Join(entry.CopyPath, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	withService(t, h, func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "symbolic link") {
+			t.Fatalf("the carry on of a copy holding a link to a directory = %+v, %v; want it refused naming the link", out, err)
+		}
+		if got, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !got.Open() || got.CarryOnClaimed() {
+			t.Fatalf("the entry reads %+v, %v after the refusal; want it open and unclaimed", got, err)
+		}
+		if _, err := os.Lstat(filepath.Join(entry.CopyPath, "finding.txt")); err != nil {
+			t.Fatalf("the kept copy is not where it was: %v", err)
+		}
+		if n := taskCount(t, h); n != 1 {
+			t.Fatalf("the home records %d tasks after the refusal; want the outlived one alone", n)
+		}
 	})
 }
