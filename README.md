@@ -327,10 +327,10 @@ The roadmap shows intent, not a shipping commitment. The implementation and [ope
 
 ## Related projects and tradeoffs
 
-- **[No-Mistakes](https://github.com/kunchenguid/no-mistakes)** is a standalone Git-proxy validation and delivery gate. Assistant uses a closely related nine-stage validation design but integrates its own gate with durable agent coordination. Similarity of workflow is not, on its own, evidence of shared source code or project ancestry.
-- **[Firstmate](https://github.com/kunchenguid/firstmate)** is centered on conversational management of agent crews, interactive sessions, and multiple delivery modes. Its `no-mistakes` project mode can delegate gated delivery to No-Mistakes.
+- **[No-Mistakes](https://github.com/kunchenguid/no-mistakes)**, related work.
+- **[Firstmate](https://github.com/kunchenguid/firstmate)**, related work.
 
-Assistant prioritizes enforcement in a Go service and a first-class gate over maximizing conversational or terminal-backend flexibility. Firstmate currently documents a wider selection of interactive session backends and optional remote secondmate homes. Assistant's individual remote-worker placement remains under development. No controlled head-to-head performance or defect-detection benchmark is claimed here.
+A Go service owns Assistant's state, and the gate is first-class. No controlled head-to-head performance or defect-detection benchmark is claimed here.
 
 ## Learn more
 
