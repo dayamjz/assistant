@@ -10,6 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // PRD section 6's stall hold ends nothing: its worker carries on and is
@@ -53,5 +54,32 @@ func TestAStallHoldIsNeverPhrasedAsWorkThatDoesNotMove(t *testing.T) {
 	}
 	if !slices.Contains(machine.TablePhrases(), stalled[0]) {
 		t.Errorf("the stall notice %q is not in TablePhrases", stalled[0])
+	}
+}
+
+// The plain task listing, TaskPhrase, says the same of a task held on a
+// stall hold: its worker carries on and is watched, so the row never says
+// nothing more is done with the work. The control is a task held on a
+// stop's hold, which keeps the row that says so.
+func TestAStallHeldTaskIsNeverListedAsWorkNothingMoves(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P13)
+	held := func(key string) machine.Phrase {
+		return machine.TaskPhrase(machine.Task{State: taskstate.Resolution{
+			State: taskstate.Held, Source: taskstate.SourceHold, Basis: taskstate.Basis{Hold: key},
+		}})
+	}
+	stall := held(supervisor.StallHold{Task: "abcdefghijkl", Attempt: 1, Epoch: 2, Surface: 3}.Key())
+	stopped := held("task/abcdefghijkl/stopped/1")
+	if !strings.Contains(stopped.String(), "Nothing more is done") {
+		t.Fatalf("the stop-held row %q no longer says nothing more is done, so this test compares nothing", stopped)
+	}
+	vocabtest.Control(t)
+	vocabtest.Assert(t, stall.String())
+	if strings.Contains(stall.String(), "Nothing more is done") || !strings.Contains(stall.String(), "Nothing has been ended") {
+		t.Fatalf("a stall-held task lists as %q, want a row saying nothing has been ended", stall)
+	}
+	if !slices.Contains(machine.TablePhrases(), stall) {
+		t.Errorf("the stall-held row %q is not in TablePhrases", stall)
 	}
 }
