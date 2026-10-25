@@ -1399,38 +1399,5 @@ is good; `internal/journey/README.md` says what a green run there establishes.
 
 The checks in [Keep your CI required](#keep-your-ci-required) are the ones on
 a repository this gate validates. The checks on this repository are a
-different set.
-
-Branch protection on `main` requires `check (ubuntu-latest)`,
-`check (macos-latest)`, `lint`, `repeat`, and `re-runs`. That required set
-is the protection rule, which this tree does not store. The workflows name
-the jobs.
-
-`.github/workflows/ci.yml` runs `check` on `ubuntu-latest` and
-`macos-latest` with `timeout-minutes: 40`. Its test step is
-`bash scripts/ci-test.sh`. A step named `Unfinished packages` runs
-`bash scripts/ci-test.sh unfinished`. The `lint` job runs on `ubuntu-latest`
-with `timeout-minutes: 15` and golangci-lint v2.12.2, plus darwin and
-windows cross-checks that lint and do not run tests. The job named
-`re-runs` needs `check` and `lint`, runs when `github.run_attempt > 1`, and
-has `timeout-minutes: 10`. The workflow comment says a first attempt skips
-it, and that a required check reads that skip as passing.
-
-`.github/workflows/repeat.yml` runs on pull requests. `REPEAT_COUNT` is 3.
-The file names the job `repeat` as the check that can be required, and says
-that job passes when the plan runs nothing. The per-OS `run` jobs have
-`timeout-minutes: 60`. The file says those matrix jobs are not required by
-name.
-
-`.github/workflows/stress.yml` is not one of the five required checks. It
-runs six jobs, on `ubuntu-latest` and `macos-latest`, runs 1 through 3,
-with `timeout-minutes: 60` and `max-parallel: 2`. It runs on the schedule
-`0 14 * * *`, on `workflow_dispatch`, and on a pull request that changes
-that workflow, `.github/actions/test-env/**`, `scripts/ci-test.sh`, or
-`scripts/leak-check.py`. Each job's test step is `bash scripts/ci-test.sh`,
-and each has a step named `Unfinished packages` that runs
-`bash scripts/ci-test.sh unfinished`. Each job fails on its own failures.
-
-`make check` is the local check (lint, then the race suite). The CI
-workflow does not run it. `.github/workflows/release.yml` runs it on a job
-of its own.
+different set. [AGENTS.md](../AGENTS.md) names the ones branch protection
+requires on `main` and points at the workflows that own their settings.

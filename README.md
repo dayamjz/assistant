@@ -339,8 +339,4 @@ A Go service owns Assistant's state, and the gate is first-class. No controlled 
 - [Product requirements](docs/prd.md): principles, contracts, limitations, and deferred features
 - [End-to-end verification](internal/journey/README.md): what the tests establish
 
-Assistant is developed in Go. `make check` is the local check: lint, then the race suite. `.github/workflows/ci.yml` does not run that target. Its test step is `bash scripts/ci-test.sh`, and its `check` job is `timeout-minutes: 40`. `.github/workflows/release.yml` is the workflow that runs `make check`.
-
-Branch protection on `main` requires `check (ubuntu-latest)`, `check (macos-latest)`, `lint`, `repeat`, and `re-runs`. `.github/workflows/repeat.yml` runs on pull requests, with `REPEAT_COUNT` set to 3. The job named `repeat` passes when its plan runs nothing, and the file says the per-OS `run` jobs (`timeout-minutes: 60`) are not required by name. The job named `re-runs` runs from the second attempt of the CI workflow (`timeout-minutes: 10`). The workflow comment says a first attempt skips it, and that a required check reads that skip as passing.
-
-The `check` job and each job in `.github/workflows/stress.yml` (`timeout-minutes: 60`) have a step named `Unfinished packages` that runs `bash scripts/ci-test.sh unfinished`. Stress is not a required check. It runs six jobs, on `ubuntu-latest` and `macos-latest`, runs 1 through 3, `max-parallel: 2`, on the schedule `0 14 * * *`, on `workflow_dispatch`, and on a pull request that changes that workflow, `.github/actions/test-env/**`, `scripts/ci-test.sh`, or `scripts/leak-check.py`.
+Assistant is developed in Go. For repository checks, use `make check` with the toolchain and lint dependencies specified by the project. Which checks `main` requires, and which file owns each workflow's settings, is in [AGENTS.md](AGENTS.md).
