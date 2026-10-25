@@ -883,7 +883,7 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 		if run, ok := h.RunID.Get(); ok {
 			recorded[run] = true
 		}
-		marker := "hold:" + h.Key
+		marker := supervisor.HoldOpenedMarker(h.Key)
 		if seen(supervisor.KindHoldOpened, marker) {
 			continue
 		}
@@ -1043,7 +1043,7 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 				Task: o.observed.Snapshot.Task.ID, Attempt: attempt, Epoch: o.markers.ChangeEpoch, Surface: surface,
 			}, stall)
 			d.registers = store.Known(hold)
-			if marker := "hold:" + hold.Key; !seen(supervisor.KindHoldOpened, marker) {
+			if marker := supervisor.HoldOpenedMarker(hold.Key); !seen(supervisor.KindHoldOpened, marker) {
 				opened, _ := supervisor.Of(supervisor.KindHoldOpened)
 				detect(opened, marker, supervisor.WindowOpen, false, supervisor.Stall{})
 			}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
@@ -110,7 +111,7 @@ func (s *stallSubject) toHold(t *testing.T) store.Hold {
 		t.Fatalf("the third surface left %d open stall holds, want exactly one: %+v", len(open), open)
 	}
 	opened := detectionsOf(r, s.task, supervisor.KindHoldOpened)
-	if len(opened) != 1 || opened[0].Marker != "hold:"+open[0].Key || opened[0].Disposition != store.WakeAppended {
+	if len(opened) != 1 || opened[0].Marker != supervisor.HoldOpenedMarker(open[0].Key) || opened[0].Disposition != store.WakeAppended {
 		t.Fatalf("the hold's wake in the same pass = %+v, want one appended for %s", opened, open[0].Key)
 	}
 	return open[0]
@@ -197,6 +198,10 @@ func TestAStalledWorkerHoldsOnTheThirdSurfaceAndStaysWatched(t *testing.T) {
 	if hold.Key != want || hold.TaskID.Or("") != s.task || hold.RunID.IsKnown() {
 		t.Fatalf("the hold = %+v, want %s naming the task and no run", hold, want)
 	}
+	// The line a person reads about the hold as registered, subject
+	// included, carries none of the owners' words (P13).
+	vocabtest.Control(t)
+	vocabtest.Assert(t, machine.HoldPhrase(hold).String())
 	if got := s.observedTask(t, s.task); got.State != taskstate.Held || got.Basis.Hold != hold.Key {
 		t.Fatalf("the held task resolves %+v, want Held on %s", got, hold.Key)
 	}

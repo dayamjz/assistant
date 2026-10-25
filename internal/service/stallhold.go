@@ -138,7 +138,7 @@ func stallHold(o observation, sh supervisor.StallHold, stall supervisor.Stall) s
 	return store.Hold{
 		Key:     sh.Key(),
 		TaskID:  store.Known(sh.Task),
-		Subject: "whether to end a running worker whose screen has not changed through repeated inspections",
+		Subject: "whether to end a worker whose screen has not changed through repeated inspections",
 		Detail: fmt.Sprintf("task %s: attempt %d's worker is still running, and its screen has now surfaced unchanged %d times in a row, "+
 			"the last %d of them asking the coordinator for a deeper inspection. Nothing has been ended and its copy is untouched. "+
 			"Answer %q to let it keep running and start the count again, %q to end it and keep its copy, after which its stop asks "+

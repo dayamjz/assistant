@@ -9,6 +9,7 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
@@ -661,7 +662,9 @@ const holdPlaceholder = "a decision"
 // which internal/store refuses to register, is phrased with a placeholder so
 // the row never reads as waiting on nothing. An open hold naming a task and
 // no run, which internal/service answers given the task, says how: with
-// --task and --answer, as phraseTaskHeld does.
+// --task and --answer, as phraseTaskHeld does. An open stall hold, PRD
+// section 6's, holds no work still: its worker carries on and is watched, and
+// its row says so rather than that the work does not move.
 func HoldPhrase(h store.Hold) Phrase {
 	subject := strings.TrimSpace(h.Subject)
 	if subject == "" {
@@ -672,9 +675,13 @@ func HoldPhrase(h store.Hold) Phrase {
 		if h.TaskID.IsKnown() && !h.RunID.IsKnown() {
 			decision = taskAnswerDecision
 		}
+		consequence := "The work it holds does not move until you answer."
+		if _, stall := supervisor.ParseStallHold(h.Key); stall {
+			consequence = "Nothing has been ended: its worker carries on and stays watched until you answer."
+		}
 		return Phrase{
 			Outcome:     "A decision is waiting on you: " + subject + ".",
-			Consequence: "The work it holds does not move until you answer.",
+			Consequence: consequence,
 			Decision:    decision,
 		}
 	}

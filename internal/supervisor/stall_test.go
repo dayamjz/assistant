@@ -140,3 +140,19 @@ func TestOpenStallHoldsReadsOnlyTheTasksOpenStallHolds(t *testing.T) {
 		t.Error("a task with no open stall hold of its own is stall held")
 	}
 }
+
+// A hold-opened wake's marker is the one composition: it names the hold's
+// key and reads back to it, and a marker of anything else, a run moved to
+// held among them, names no hold.
+func TestAHoldOpenedMarkerNamesItsHold(t *testing.T) {
+	t.Parallel()
+	key := supervisor.StallHold{Task: "abcdefghijkl", Attempt: 1, Epoch: 2, Surface: 3}.Key()
+	if got, ok := supervisor.HoldOfMarker(supervisor.HoldOpenedMarker(key)); !ok || got != key {
+		t.Fatalf("HoldOfMarker(HoldOpenedMarker(%q)) = %q, %v", key, got, ok)
+	}
+	for _, marker := range []string{"run-held:run:1", "hold:", "kept-work:3", "terminal:abc@1#2"} {
+		if got, ok := supervisor.HoldOfMarker(marker); ok {
+			t.Errorf("HoldOfMarker(%q) = %q, want no hold", marker, got)
+		}
+	}
+}

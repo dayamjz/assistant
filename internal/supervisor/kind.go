@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
@@ -271,3 +272,22 @@ func (w Wake) Unrecognized() bool { return w.unrecognized }
 // Routine reports whether the wake is an event whose kind taskstate marks
 // Routine.
 func (w Wake) Routine() bool { return w.routine }
+
+// holdOpenedPrefix begins the marker of a KindHoldOpened wake about a hold
+// record.
+const holdOpenedPrefix = "hold:"
+
+// HoldOpenedMarker composes the marker of a KindHoldOpened wake about the
+// hold record keyed key: the prefix and the key, so each hold surfaces once.
+// It is the one composition, read back by HoldOfMarker, so the loop that
+// writes the wake and a surface that phrases it agree on which hold a wake is
+// about (P14). A run moved to held with no hold record has a marker of its
+// own, which HoldOfMarker does not read.
+func HoldOpenedMarker(key string) string { return holdOpenedPrefix + key }
+
+// HoldOfMarker is the hold key a KindHoldOpened wake's marker names, and
+// false for a marker HoldOpenedMarker did not compose.
+func HoldOfMarker(marker string) (string, bool) {
+	key, ok := strings.CutPrefix(marker, holdOpenedPrefix)
+	return key, ok && key != ""
+}
