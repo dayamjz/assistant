@@ -614,3 +614,111 @@ func TestATaskStopWithAStallHoldOpenClosesItOnItsDeadReading(t *testing.T) {
 	}
 	assertClosedByProgram(t, s, hold.Key, supervisor.StallClosedWorkerDead, "a stop's probe")
 }
+
+// PRD section 6: an answer and the program's closure are each one write to
+// the hold and the first to land stands, so a later answer is refused, and
+// a stop or retry ends nothing it may not record. An approve that arrives
+// while a stop or retry is ending the worker, after that answer read the
+// hold open, is refused, and the hold reads the answer that ended the worker.
+// The window is held open by the seam between the stop's proven end and its
+// write, which is where an approve that skipped the task's slot committed and
+// left the hold reading approve over a worker the stop had ended.
+func TestAnApproveDuringAStallStopIsRefused(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	for _, word := range []string{machine.AnswerStop, machine.AnswerRetry} {
+		t.Run(word, func(t *testing.T) {
+			t.Parallel()
+			h, records := loopHomeConfigured(t, stallConfig)
+			task := "racestall" + map[string]string{machine.AnswerStop: "stp", machine.AnswerRetry: "rty"}[word]
+			ref := session.Reference{Home: session.HomeMarker(h), Task: task, PID: 1 << 22, Start: 7}.String()
+			plantRunning(t, records, task, ref)
+			terminals := newScriptedTerminals()
+			terminals.live(ref, "thinking\n")
+			l := openLoop(t, h, records, terminals, &fakeClock{now: stallStart})
+			t.Cleanup(func() { _ = l.service.Close() })
+			l.nextPass(t)
+			s := &stallSubject{loopSubject: l, terminals: terminals, task: task, ref: ref}
+			hold := s.toHold(t)
+			terminals.dead(ref)
+
+			var approveErr error
+			approved := false
+			l.service.afterStallStopEnded = func() {
+				approved = true
+				_, approveErr = l.service.respondTask(t.Context(), ipc.Request{},
+					machine.TaskRespondRequest{Task: task, Hold: hold.Key, Answer: machine.AnswerApprove})
+			}
+			answered, err := answerStallHold(t, l.service, task, word, "")
+			if !approved {
+				t.Fatalf("the %s never reached the window between its end and its write (%v)", word, err)
+			}
+			if !errors.Is(approveErr, ipc.ErrRefused) {
+				t.Fatalf("an approve while the %s ended the worker = %v, want refused", word, approveErr)
+			}
+			if err != nil {
+				t.Fatalf("the %s = %v", word, err)
+			}
+			got, rerr := l.records(t).Hold(t.Context(), hold.Key)
+			if rerr != nil || got.Resolution.Or("") != word || answered.Hold.Resolution.Or("") != word {
+				t.Fatalf("the stall hold reads %+v (%v) and the answer %+v, want both %q", got, rerr, answered.Hold, word)
+			}
+		})
+	}
+}
+
+// The guard behind the slot: a stop or retry that ended the worker and then
+// finds the stall hold already written is refused, the end standing on the
+// stop's own hold, and a retry relaunches nothing, unless what landed first
+// is the program's closure on the death that stop made, PRD section 6's one
+// exception, which reports the end it made. The first write is put into the
+// window straight through the store, as a writer that skipped the slot
+// would, since no writer in this service can reach it.
+func TestAStallStopFindingTheHoldWrittenAfterItsEndKeepsOnlySection6sException(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	cases := []struct {
+		name, word, first, task string
+		by                      store.Resolver
+		refused                 bool
+	}{
+		{"an approve before a stop's write", machine.AnswerStop, machine.AnswerApprove, "lateapprstop", store.ResolvedByMachineInterface(), true},
+		{"an approve before a retry's write", machine.AnswerRetry, machine.AnswerApprove, "lateapprrtry", store.ResolvedByMachineInterface(), true},
+		{"the program's closure on the death", machine.AnswerStop, supervisor.StallClosedWorkerDead, "latedeadstop", store.ResolvedByProgram(), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h, records := loopHomeConfigured(t, stallConfig)
+			ref := session.Reference{Home: session.HomeMarker(h), Task: c.task, PID: 1 << 22, Start: 7}.String()
+			plantRunning(t, records, c.task, ref)
+			terminals := newScriptedTerminals()
+			terminals.live(ref, "thinking\n")
+			l := openLoop(t, h, records, terminals, &fakeClock{now: stallStart})
+			t.Cleanup(func() { _ = l.service.Close() })
+			l.nextPass(t)
+			s := &stallSubject{loopSubject: l, terminals: terminals, task: c.task, ref: ref}
+			hold := s.toHold(t)
+			terminals.dead(ref)
+			l.service.afterStallStopEnded = func() {
+				if _, err := l.records(t).ResolveHoldNoted(t.Context(), hold.Key, c.first, "", c.by); err != nil {
+					t.Errorf("writing the hold first: %v", err)
+				}
+			}
+			answered, err := answerStallHold(t, l.service, c.task, c.word, "")
+			if c.refused {
+				if !errors.Is(err, ipc.ErrRefused) || !errors.Is(err, store.ErrHoldResolved) {
+					t.Fatalf("the %s after the hold was answered %q = %+v, %v, want refused", c.word, c.first, answered, err)
+				}
+			} else if err != nil || answered.Effect != machine.AnswerWorkerStopped || answered.Hold.Resolution.Or("") != c.first {
+				t.Fatalf("the %s after the program's closure = %+v, %v, want the end reported over the closure", c.word, answered, err)
+			}
+			if got, rerr := l.records(t).Hold(t.Context(), stoppedKey(c.task, 1)); rerr != nil || !got.Open() {
+				t.Fatalf("the stop's hold = %+v (%v), want it open: the end stands on it", got, rerr)
+			}
+			if attempts, rerr := l.records(t).TaskAttempts(t.Context(), c.task); rerr != nil || len(attempts) != 1 {
+				t.Fatalf("attempts = %+v (%v), want the one: nothing relaunched", attempts, rerr)
+			}
+		})
+	}
+}

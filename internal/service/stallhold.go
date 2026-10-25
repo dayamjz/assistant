@@ -58,11 +58,17 @@ import (
 // worker dead.
 //
 // The closure and an answer are each one write to the hold, and the first
-// to land stands: the pass closes only while it holds the task's slot,
-// claimSteer's, and an answer that ends a worker reads the hold again under
-// the same slot before it ends anything, so an answer is wholly before a
-// closure or wholly after it, and one after it is refused before it ends
-// anything. A pass that cannot take the slot closes nothing that pass.
+// to land stands: every writer of a stall hold takes the task's slot,
+// claimSteer's, for its whole write, the pass's closure, an approve, and a
+// stop or retry from its read of the hold through its end of the worker to
+// its write, so any two are wholly ordered. A stop or retry that finds the
+// hold already written when it reads it is refused before it ends anything;
+// one that finds it written after its end, which the slot leaves no writer
+// in this service to do, is refused too, the end standing on the stop's own
+// hold and nothing relaunched, unless what landed first is the program's
+// closure on the death the stop made, PRD section 6's one exception. A pass
+// that cannot take the slot closes nothing that pass; an answer that cannot
+// is refused with nothing recorded.
 //
 // # The answers
 //
@@ -297,6 +303,14 @@ func (s *Service) answerStall(ctx context.Context, req ipc.Request, p placedPeer
 	hold store.Hold, sh supervisor.StallHold) (machine.TaskAnswered, error) {
 	switch r.Answer {
 	case machine.AnswerApprove:
+		// Under the task's slot like every other write to the hold, so an
+		// approve cannot land inside a stop's window between its proven end
+		// and its write.
+		release, err := s.claimSteer(r.Task)
+		if err != nil {
+			return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+		}
+		defer release()
 		resolved, err := s.store.ResolveHoldNoted(ctx, hold.Key, r.Answer, r.Note, req.HoldResolver())
 		if errors.Is(err, store.ErrHoldResolved) {
 			return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
@@ -362,6 +376,9 @@ func (s *Service) stopStalled(ctx context.Context, req ipc.Request, p placedPeer
 			ipc.ErrRefused, hold.Key, sh.Attempt)
 	}
 	stopped, err := s.stopClaimed(ctx, req, p, r.Task, latest, hold.Key)
+	if err == nil && s.afterStallStopEnded != nil {
+		s.afterStallStopEnded()
+	}
 	if err != nil {
 		var unverified *stopUnverified
 		var refused *stopRefused
@@ -374,15 +391,25 @@ func (s *Service) stopStalled(ctx context.Context, req ipc.Request, p placedPeer
 	resolved, err := s.store.ResolveHoldNoted(ctx, hold.Key, r.Answer, r.Note, req.HoldResolver())
 	switch {
 	case errors.Is(err, store.ErrHoldResolved):
-		// PRD section 6's one exception: the hold was closed between the
-		// read above and here, which the slot leaves no writer for in this
-		// service, and the answer still reports the end it made.
+		// Every writer of a stall hold in this service holds the task's
+		// slot, which this answer holds, so nothing should have written the
+		// hold since the read above. PRD section 6 admits one write that may
+		// still land first, the program's closure on the death this stop
+		// itself made, and only then does the answer report the end it made
+		// and a retry relaunch; any other first write is refused, the end
+		// stands on the stop's own hold, and nothing is relaunched.
 		resolved, err = s.store.Hold(ctx, hold.Key)
 		if err != nil {
 			return machine.TaskAnswered{}, nil, err
 		}
-		s.log.Printf("task %s's stall hold %s was closed as %q before the answer %q could be recorded; the stop it made stands",
-			r.Task, hold.Key, resolved.Resolution.Or(""), r.Answer)
+		by, known := resolved.ResolvedBy.Get()
+		if resolved.Resolution.Or("") != supervisor.StallClosedWorkerDead || !known || by != store.ResolvedByProgram() {
+			return machine.TaskAnswered{}, nil, fmt.Errorf("%w: %w: hold %s was answered %q before the answer %q could be recorded; "+
+				"attempt %d's worker was ended and holds on %s, and nothing was relaunched",
+				ipc.ErrRefused, store.ErrHoldResolved, hold.Key, resolved.Resolution.Or(""), r.Answer, stopped.Attempt, stopped.Hold.Key)
+		}
+		s.log.Printf("task %s's stall hold %s was closed on the worker read dead before the answer %q could be recorded; the stop it made stands",
+			r.Task, hold.Key, r.Answer)
 	case err != nil:
 		return machine.TaskAnswered{}, nil, fmt.Errorf("service: the worker of task %s was stopped on the answer %q and it could not be recorded on %s: %w",
 			r.Task, r.Answer, hold.Key, err)
