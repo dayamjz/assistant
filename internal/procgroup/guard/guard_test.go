@@ -184,6 +184,11 @@ func TestForkExecIsListedWhenThePackageHasIt(t *testing.T) {
 	for _, e := range pkgs[0].Errors {
 		t.Fatal(e)
 	}
+	// The package's own Exec is the positive control: a load that yielded
+	// an empty scope and no errors would otherwise pass as "no ForkExec".
+	if pkgs[0].Types.Scope().Lookup("Exec") == nil {
+		t.Fatalf("golang.org/x/sys/unix loaded with no Exec in its scope, so the lookup below checks nothing")
+	}
 	obj := pkgs[0].Types.Scope().Lookup("ForkExec")
 	if obj == nil {
 		return
