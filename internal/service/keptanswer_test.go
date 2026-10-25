@@ -550,15 +550,18 @@ func landTask(under serviceUnderTest, t *testing.T, task string, entry store.Kep
 	return out, err
 }
 
-// A land answer reads what HEAD carries from the copy's objects as they
-// record them, as the discard's loss does, the final full review of
-// 221c3b1: a delivery task's clone holds its own commit U on its branch,
-// HEAD on it, and unique work on a side commit B on another branch, and a
-// graft file or a replacement reference makes B U's parent. The loss lists
-// B as lost, and the land is refused naming B, as it is with no graft.
-// Read through the graft, U carried B and the land went ahead, the entry
-// answered without B ever reaching validation.
-func TestALandingReadsWhatHEADCarriesThroughNoGraft(t *testing.T) {
+// A land answer is refused for a copy whose history a graft file or a
+// replacement reference rewrites, the final full review of 221c3b1 as
+// round 32 narrowed it: a delivery task's clone holds its own commit U on
+// its branch, HEAD on it, and unique work on a side commit B on another
+// branch, and a graft file or a replacement reference makes B U's parent.
+// The entry is kept lacking B as well as U, read through no graft, and the
+// land is refused naming the graft or the replacement, the layout a land
+// reads the copy in, with the entry left open. Read through the graft, U
+// carried B and the land went ahead, the entry answered without B ever
+// reaching validation; until round 32 the land read through no graft and
+// was refused naming B, which HEAD does not carry.
+func TestALandingIsRefusedForAGraftedCopy(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P15)
@@ -626,13 +629,12 @@ func TestALandingReadsWhatHEADCarriesThroughNoGraft(t *testing.T) {
 			}
 			withService(t, h, func(under serviceUnderTest) {
 				_, err := landTask(under, t, id, entry)
-				var behind string
-				if err != nil {
-					_, rest, _ := strings.Cut(err.Error(), "and its copy holds ")
-					behind, _, _ = strings.Cut(rest, ", which HEAD does not carry")
+				why := map[string]string{"a graft file": "has a graft file", "a replacement reference": "has replacement references"}[how]
+				if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), " "+why) {
+					t.Fatalf("landing U with B grafted under it by %s = %v; want it refused saying the copy %s", how, err, why)
 				}
-				if !errors.Is(err, ipc.ErrRefused) || !slices.Contains(strings.Split(behind, ", "), b) {
-					t.Fatalf("landing U with B grafted under it by %s = %v; want it refused naming B %s among what HEAD leaves behind", how, err, b)
+				if kind := git(t, copyPath, "cat-file", "-t", b); kind != "commit" {
+					t.Fatalf("B reads as %q after the refusal; want it still in the copy", kind)
 				}
 				if still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() {
 					t.Fatalf("after the refusal the entry reads %+v, %v; want it open", still, err)

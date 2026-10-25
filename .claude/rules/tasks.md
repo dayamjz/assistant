@@ -30,7 +30,9 @@ paths: ["internal/tasks/**"]
 - Every repository the `Cleaner` opens is read without replacement
   references or a graft file (`vcs.WithoutReplaceObjects`, set in
   `NewCleaner`), so neither a cleanup proof nor a discard's loss reads a
-  commit's parents as anything but what its object records.
+  commit's parents as anything but what its object records; a copy that
+  has either, or is shallow or a partial clone, is refused by
+  `supportedLayout` before any loss, discard, land or put-back reads it.
 - It is also the one writer of the kept work record: `Keep` reads what a
   kept copy holds from the copy (the entry's identity), reads what of it
   the default branch, fresh and fetched by identifier, lacks (`lacking` in

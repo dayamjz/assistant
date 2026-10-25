@@ -137,7 +137,14 @@ var ErrAsideStands = errors.New("tasks: a discard that did not finish set part o
 //   - no symbolic link anywhere in the repository directory git reads for
 //     the copy, its references, reflogs, objects and index among it;
 //   - core.symlinks not false, no sparse checkout, and the references in
-//     files (no reftable).
+//     files (no reftable);
+//   - the whole history (partialHistory, round 32): not shallow (git
+//     rev-parse --is-shallow-repository), no graft file (info/grafts),
+//     no replacement references (refs/replace/), and not a partial clone
+//     (extensions.partialClone unset, no remote.<name>.promisor true, and
+//     no promisor pack), since in each git reads the commits and objects a
+//     preview is built from as other than the copy holds, and a discard
+//     removes what the preview never showed.
 //
 // Before any of that, git is asked which working tree and repository
 // directory it reads for the copy (vcs.Observe: rev-parse --show-toplevel
@@ -181,6 +188,66 @@ func (c *Cleaner) supportedLayout(ctx context.Context, entry store.KeptWork, gat
 	}
 	if format, set, err := copied.ConfigValue(ctx, "extensions.refStorage"); err != nil || set && format != "files" {
 		return refuse("keeps its references in a " + format + " store rather than in files")
+	}
+	return partialHistory(ctx, copied, refuse)
+}
+
+// partialHistory refuses, through refuse, a copy whose history git reads
+// as other than every commit its objects record, or whose objects may name
+// what it does not hold: shallow, a graft file, replacement references, or
+// a partial clone. Each is read the way git reads it for the copy, through
+// internal/vcs, and one that cannot be read refuses as well (round 32).
+func partialHistory(ctx context.Context, copied *vcs.Repository, refuse func(string) error) error {
+	unread := func(what string, err error) error {
+		return refuse("could not be read for " + what + ": " + err.Error())
+	}
+	if shallow, err := copied.IsShallow(ctx); err != nil {
+		return unread("whether its history is shallow", err)
+	} else if shallow {
+		return refuse("is shallow, so the commits its history leaves out are read as not there and no preview shows them")
+	}
+	// The graft file is found through its directory: the Cleaner reads
+	// with GIT_GRAFT_FILE set to the null device (vcs.WithoutReplaceObjects),
+	// which git's --git-path info/grafts answers with.
+	info, err := copied.GitPath(ctx, "info")
+	if err != nil {
+		return unread("a graft file", err)
+	}
+	grafts := filepath.Join(info, "grafts")
+	if _, err := os.Lstat(grafts); !errors.Is(err, fs.ErrNotExist) {
+		return refuse("has a graft file at " + grafts + ", which git reads a commit's parents through")
+	}
+	if replace, err := copied.ListRefs(ctx, "refs/replace/"); err != nil {
+		return unread("replacement references", err)
+	} else if len(replace) > 0 {
+		return refuse("has replacement references, " + replace[0].Name + " among them, which git reads an object through as another")
+	}
+	if remote, set, err := copied.ConfigValue(ctx, "extensions.partialClone"); err != nil {
+		return unread("extensions.partialClone", err)
+	} else if set {
+		return refuse("is a partial clone: extensions.partialClone names " + remote + ", so its objects may name what it does not hold")
+	}
+	promisors, err := copied.ConfigNames(ctx, `^remote\..*\.promisor$`)
+	if err != nil {
+		return unread("promisor remotes", err)
+	}
+	for _, key := range promisors {
+		if promisor, _, err := copied.ConfigBool(ctx, key); err != nil {
+			return unread(key, err)
+		} else if promisor {
+			return refuse("is a partial clone: " + key + " is true, so its objects may name what it does not hold")
+		}
+	}
+	packs, err := copied.GitPath(ctx, "objects/pack")
+	if err != nil {
+		return unread("promisor packs", err)
+	}
+	marked, err := filepath.Glob(filepath.Join(packs, "*.promisor"))
+	if err != nil {
+		return unread("promisor packs", err)
+	}
+	if len(marked) > 0 {
+		return refuse("is a partial clone: it holds the promisor pack " + marked[0] + ", whose objects may name what it does not hold")
 	}
 	return nil
 }

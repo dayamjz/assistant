@@ -694,6 +694,50 @@ func TestADiscardRefusesALayoutItDoesNotSupport(t *testing.T) {
 		{"a linked worktree", "has a linked worktree", func(t *testing.T, copyPath, _ string) {
 			rawGit(t, copyPath, "worktree", "add", "--quiet", "--detach", filepath.Join(t.TempDir(), "linked"))
 		}},
+		{"a shallow history", "is shallow", func(t *testing.T, copyPath, _ string) {
+			rawGit(t, copyPath, "fetch", "-q", "--depth=1", ".", "HEAD")
+		}},
+		{"a graft file", "has a graft file", func(t *testing.T, copyPath, _ string) {
+			head := rawGit(t, copyPath, "rev-parse", "HEAD")
+			if err := os.MkdirAll(filepath.Join(copyPath, ".git", "info"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(copyPath, ".git", "info", "grafts"), []byte(head+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a replacement reference", "has replacement references", func(t *testing.T, copyPath, _ string) {
+			rawGit(t, copyPath, "replace", rawGit(t, copyPath, "rev-parse", "HEAD"), rawGit(t, copyPath, "rev-parse", "HEAD~1"))
+		}},
+		{"a promisor remote, as a partial clone records it", "is a partial clone", func(t *testing.T, copyPath, _ string) {
+			remote := strings.Fields(rawGit(t, copyPath, "remote"))[0]
+			rawGit(t, copyPath, "config", "remote."+remote+".promisor", "true")
+			rawGit(t, copyPath, "config", "remote."+remote+".partialclonefilter", "blob:none")
+		}},
+		{"extensions.partialClone, as an older git records a partial clone", "is a partial clone", func(t *testing.T, copyPath, _ string) {
+			rawGit(t, copyPath, "config", "extensions.partialClone", strings.Fields(rawGit(t, copyPath, "remote"))[0])
+		}},
+		{"a promisor pack", "is a partial clone", func(t *testing.T, copyPath, other string) {
+			// A real partial clone of the other clone, whose promisor packs
+			// are then the copy's: the objects such a pack holds may lack
+			// what they name.
+			rawGit(t, other, "config", "uploadpack.allowFilter", "true")
+			partial := filepath.Join(t.TempDir(), "partial")
+			rawGit(t, filepath.Dir(partial), "clone", "-q", "--filter=blob:none", "file://"+other, partial)
+			packs, err := filepath.Glob(filepath.Join(partial, ".git", "objects", "pack", "pack-*"))
+			if err != nil || len(packs) == 0 {
+				t.Fatalf("the partial clone has packs %v, %v", packs, err)
+			}
+			for _, pack := range packs {
+				raw, err := os.ReadFile(pack)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(copyPath, ".git", "objects", "pack", filepath.Base(pack)), raw, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}},
 		{"references in a reftable", "keeps its references in a reftable", func(t *testing.T, copyPath, _ string) {
 			if out, err := rawGitErr(copyPath, "refs", "migrate", "--ref-format=reftable"); err != nil {
 				t.Skipf("this git cannot move references into a reftable: %v\n%s", err, out)
@@ -1080,6 +1124,64 @@ func TestADiscardWritesNoSubmoduleBack(t *testing.T) {
 	}
 	if now := copySnapshot(t, tk.copy); now != before {
 		t.Fatalf("the refused discard left the copy as\n%s\nwant it as it was\n%s", now, before)
+	}
+}
+
+// A discard never takes a commit its preview left out of a shallow
+// history, round 32's blocker, the reviewer's sequence: a kept clone's
+// branch holds B, which adds work, and U, which takes it out again and
+// adds a file of its own, so the loss read with the full history lacks
+// both. The clone is then made
+// shallow at U (a fetch of its own HEAD at depth 1, its reflogs expired),
+// so git reads U as a root while B stands in its objects, still U's
+// recorded parent. Its preview is refused, and so is a discard confirmed
+// on what a shallow read would show, which lacks U alone; the clone stands
+// as it was, B in it. Before, the preview lacked U alone and the discard
+// on it removed the clone, B with it, which nobody was shown.
+func TestAShallowCloneIsRefusedBeforeItsPreviewLeavesOutACommit(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s := newCleanupSubject(t, forgetest.Script{})
+	tk := s.deliveryTask(t, "task/shallow")
+	b := commit(t, tk.copy, "work.txt", "work only B holds\n", "B adds work")
+	rawGit(t, tk.copy, "rm", "-q", "work.txt")
+	if err := os.WriteFile(filepath.Join(tk.copy, "u.txt"), []byte("U's own\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "add", "u.txt")
+	rawGit(t, tk.copy, "commit", "-q", "-m", "U takes it out again, adding its own")
+	u := rawGit(t, tk.copy, "rev-parse", "HEAD")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+	full, err := s.cleaner.Loss(ctx, got.Entry, "")
+	if err != nil || !slices.Contains(full.Lacks, b) || !slices.Contains(full.Lacks, u) {
+		t.Fatalf("the loss of the full history = %+v, %v; want B %s and U %s, the positive control", full.Lacks, err, b, u)
+	}
+
+	rawGit(t, tk.copy, "fetch", "-q", "--depth=1", ".", "HEAD")
+	rawGit(t, tk.copy, "reflog", "expire", "--expire=now", "--all")
+	if parent := rawGit(t, tk.copy, "cat-file", "-p", u); !strings.Contains(parent, "parent "+b) {
+		t.Fatalf("U no longer records B as its parent:\n%s", parent)
+	}
+	before := treeAndGitState(t, tk.copy)
+	if shallow, err := s.cleaner.Loss(ctx, got.Entry, ""); !errors.Is(err, ErrLayoutUnsupported) || !refusedFor(err, tk.copy, "is shallow") {
+		t.Fatalf("the preview of the shallow clone = %+v, %v; want ErrLayoutUnsupported saying it is shallow", shallow.Lacks, err)
+	}
+	if _, err := s.cleaner.Discard(ctx, got.Entry, full.Digest, []string{u}, "", nil); !errors.Is(err, ErrLayoutUnsupported) {
+		t.Fatalf("the discard of the shallow clone confirmed on U alone = %v; want ErrLayoutUnsupported", err)
+	}
+	if now := treeAndGitState(t, tk.copy); now != before {
+		t.Fatalf("the shallow clone reads\n%s\nafter the refusal; want it as it was\n%s", now, before)
+	}
+	if kind := rawGit(t, tk.copy, "cat-file", "-t", b); kind != "commit" {
+		t.Fatalf("B reads as %q in the clone after the refusal; want it still there", kind)
 	}
 }
 

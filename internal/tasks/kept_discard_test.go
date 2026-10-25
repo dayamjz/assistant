@@ -1192,20 +1192,23 @@ func TestADiscardTakesTheObjectsItsOwnReadFetches(t *testing.T) {
 	}
 }
 
-// Loss reads the copy's object graph as the objects record it, never
-// through a replacement reference, the final full review of c5c581c: in a
-// kept clone the task commits B, which holds work nothing else does, and
+// A copy with a replacement reference or a graft file is refused rather
+// than read, the final full review of c5c581c as round 32 narrowed it: in
+// a kept clone the task commits B, which holds work nothing else does, and
 // then U, which takes that work out of the tree and adds work of its own,
-// so the copy is kept; a replacement reference
-// or the clone's graft file grafts U onto the commit B was made on, and
-// the reflogs are expired, so
-// nothing but U's own parent names B. Loss lists B as lost as well as U,
-// and a discard on that digest is the one that removes the clone. Read
-// through the replacement, B was hidden: the loss listed U alone and a
-// discard on its digest destroyed B's work unshown.
-// internal/vcs's TestAHandleWithoutReplaceObjectsReadsTheGraphAsRecorded is
-// the positive control, the replacement hiding B from a walk that honours it.
-func TestALossReadsThroughNoReplacementReference(t *testing.T) {
+// so the copy is kept; a replacement reference or the clone's graft file
+// grafts U onto the commit B was made on, and the reflogs are expired, so
+// nothing but U's own parent names B. The entry is kept lacking B as well
+// as U, read through no replacement (vcs.WithoutReplaceObjects, which the
+// cleanup decision still relies on). The preview and a discard on what was
+// kept are each refused naming the replacement, and the clone stands as it
+// was, B in it. Read through the replacement, B was hidden: the loss
+// listed U alone and a discard on its digest destroyed B's work unshown;
+// from c5c581c to round 32 it was read through no replacement and the
+// discard went ahead on the whole history. internal/vcs's
+// TestAHandleWithoutReplaceObjectsReadsTheGraphAsRecorded is the positive
+// control, the replacement hiding B from a walk that honours it.
+func TestACopyWithAReplacementIsRefusedRatherThanReadThrough(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	for _, how := range []string{"a replacement reference", "a graft file"} {
 		t.Run(how, func(t *testing.T) {
@@ -1230,15 +1233,22 @@ func TestALossReadsThroughNoReplacementReference(t *testing.T) {
 			if err != nil || !got.Entry.Established() {
 				t.Fatalf("Keep = %+v, %v", got, err)
 			}
-			l, err := s.cleaner.Loss(ctx, got.Entry, "")
-			if err != nil {
-				t.Fatal(err)
+			if !slices.Contains(got.Entry.Lacks, b) || !slices.Contains(got.Entry.Lacks, u) {
+				t.Fatalf("the entry lacks %v; want B %s and U %s, B read through U's own parent", got.Entry.Lacks, b, u)
 			}
-			if !slices.Contains(l.Lacks, b) || !slices.Contains(l.Lacks, u) {
-				t.Fatalf("Loss lacks %v; want B %s and U %s, B read through U's own parent", l.Lacks, b, u)
+			why := map[string]string{"a replacement reference": "has replacement references", "a graft file": "has a graft file"}[how]
+			before := treeAndGitState(t, tk.copy)
+			if _, err := s.cleaner.Loss(ctx, got.Entry, ""); !errors.Is(err, ErrLayoutUnsupported) || !refusedFor(err, tk.copy, why) {
+				t.Fatalf("the preview of a clone with %s = %v; want ErrLayoutUnsupported saying it %s", how, err, why)
 			}
-			if _, err := s.cleaner.Discard(ctx, got.Entry, l.Digest, l.Lacks, "", nil); err != nil {
-				t.Fatalf("Discard on the digest shown: %v", err)
+			if _, err := s.cleaner.Discard(ctx, got.Entry, "", got.Entry.Lacks, "", nil); !errors.Is(err, ErrLayoutUnsupported) {
+				t.Fatalf("the discard of a clone with %s = %v; want ErrLayoutUnsupported", how, err)
+			}
+			if now := treeAndGitState(t, tk.copy); now != before {
+				t.Fatalf("the clone reads\n%s\nafter the refusal; want it as it was\n%s", now, before)
+			}
+			if kind := rawGit(t, tk.copy, "cat-file", "-t", b); kind != "commit" {
+				t.Fatalf("B reads as %q after the refusal; want it still in the clone", kind)
 			}
 		})
 	}

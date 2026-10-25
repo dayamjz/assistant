@@ -353,6 +353,29 @@ func (r *Repository) ConfigBool(ctx context.Context, key string) (value, set boo
 	return strings.TrimSpace(string(out)) == "true", true, nil
 }
 
+// ConfigNames is every configuration key git reads for this repository
+// whose name matches pattern, an extended regular expression git matches
+// against each key as git config --get-regexp does (its section and name
+// lowercase, a subsection as written), each once and in git's order, as
+// git config -z --name-only --get-regexp puts them on the wire: each name
+// ended by a NUL, or exit status 1 when none matches.
+func (r *Repository) ConfigNames(ctx context.Context, pattern string) ([]string, error) {
+	if err := checkArg("pattern", pattern); err != nil {
+		return nil, err
+	}
+	out, code, err := r.runExpecting(ctx, "config-get-regexp", []int{1}, "config", "-z", "--name-only", "--get-regexp", pattern)
+	if err != nil || code == 1 {
+		return nil, err
+	}
+	var names []string
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name != "" && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
 // checkFullRefName refuses a reference name that is neither under refs/
 // nor a root reference by git's rule (isRootRefName), so a short name git
 // would disambiguate is never acted on.

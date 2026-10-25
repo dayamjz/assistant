@@ -677,8 +677,12 @@ a task's copy needs a `.git` directory of its own (not a link or a file
 pointing elsewhere) with no `commondir` file and no linked worktree, a
 run's copy the `.git` file git writes for a worktree, and either needs no
 symbolic link anywhere in its repository directory, `core.symlinks` not
-false, no `core.worktree`, no sparse checkout, and its references in files
-rather than a reftable. Land reads the copy the same way and is refused
+false, no `core.worktree`, no sparse checkout, its references in files
+rather than a reftable, and its whole history: not shallow, no graft file
+(`info/grafts`), no replacement references (`refs/replace/`), and not a
+partial clone (no `extensions.partialClone`, no remote with `promisor`
+set, no promisor pack), since in each the commits a preview is read from
+are not all the copy holds. Land reads the copy the same way and is refused
 the same; put the copy back in that layout to discard or land it. Your
 confirmation is recorded first, with what it was shown and who gave it,
 and the entry stays open and listed until the copy is gone; only then is

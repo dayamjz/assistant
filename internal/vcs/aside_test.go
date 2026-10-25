@@ -313,6 +313,26 @@ func TestAnIndexReplacementDisplacesNoEntryItWasNotGiven(t *testing.T) {
 	}
 }
 
+// ConfigNames lists the keys git reads whose name matches a pattern, as
+// git puts them on the wire: two remotes marked promisor are each named
+// once, a key set twice is named once, a key that does not match is not
+// named, and a pattern nothing matches is no names and no error.
+func TestConfigNamesAreTheKeysGitReadsForAPattern(t *testing.T) {
+	repo, dir, _, _, _ := asideSubject(t)
+	c := ctx(t)
+	rawGit(t, dir, "config", "remote.one.promisor", "true")
+	rawGit(t, dir, "config", "remote.Two.promisor", "false")
+	rawGit(t, dir, "config", "--add", "remote.Two.promisor", "true")
+	rawGit(t, dir, "config", "remote.one.partialclonefilter", "blob:none")
+	got, err := repo.ConfigNames(c, `^remote\..*\.promisor$`)
+	if err != nil || !slices.Equal(got, []string{"remote.one.promisor", "remote.Two.promisor"}) {
+		t.Fatalf("ConfigNames = %q, %v; want remote.one.promisor and remote.Two.promisor", got, err)
+	}
+	if got, err := repo.ConfigNames(c, `^nothing\.matches$`); err != nil || len(got) != 0 {
+		t.Fatalf("ConfigNames of a pattern nothing matches = %q, %v; want none", got, err)
+	}
+}
+
 // GitPath names where git keeps what a working copy keeps of its own: in a
 // linked worktree, its index and HEAD's reflog in its own directory in the
 // main repository's worktrees directory, and its references in the common
