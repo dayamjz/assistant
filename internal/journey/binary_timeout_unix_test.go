@@ -95,15 +95,19 @@ func TestTheBuildGroupEndsWhenThePipeCloses(t *testing.T) {
 	}
 }
 
-// TestTheHarnessCompileDoesNotOutliveTheProcess is the compile the alarm
+// TestTheHarnessCompileDoesNotOutliveTheProcess is the compile the hang
 // harness starts. An unbounded exec.Command of go survives the testing
 // alarm: with the package's owner watch running, a hanging go that becomes
 // /bin/sleep was still alive under PID 1 twelve seconds later, because the
 // sweep cannot read that program's environment. The helper is not started
 // under RunHeld. That wrapper would own the compiler's process group and
-// kill it when the helper's alarm exits, so a compiler that leaked would
-// still look dead. P15: when the owner ends, the process it started ends
-// with it.
+// kill it when the helper exits, so a compiler that leaked would still look
+// dead. P15: when the owner ends, the process it started ends with it.
+//
+// The helper is ended with SIGQUIT once the compile has written its pid,
+// which the Go runtime answers as the alarm does: exit status 2 and no
+// deferred call. A one-second alarm raced the helper's own setup and, under
+// load, fired before the compile started, so the test checked nothing.
 func TestTheHarnessCompileDoesNotOutliveTheProcess(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	root, err := ModuleRoot()
@@ -120,18 +124,33 @@ func TestTheHarnessCompileDoesNotOutliveTheProcess(t *testing.T) {
 	if err := procgroup.WriteProgram(filepath.Join(hangDir, "go"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(bin, "-test.timeout=1s", "-test.run=^TestCompile$", "-test.count=1", "-test.v")
+	cmd := exec.Command(bin, "-test.timeout=10m", "-test.run=^TestCompile$", "-test.count=1", "-test.v")
 	cmd.Dir = root
 	cmd.Env = compileHoldEnv(hangDir, pidFile, root)
-	out, runErr := cmd.CombinedOutput()
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	helperPID := cmd.Process.Pid
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
 	t.Cleanup(func() {
 		if pid, err := readPID(pidFile); err == nil {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	})
-	pid, err := readPID(pidFile)
+	pid, err := buildStarted(pidFile, helperPID, exited, time.Minute)
 	if err != nil {
-		t.Fatalf("the hanging compile never started (harness: %v)\n%s", runErr, out)
+		t.Fatalf("the hanging compile never started: %v\n%s", err, out.String())
+	}
+	if err := syscall.Kill(helperPID, syscall.SIGQUIT); err != nil {
+		t.Fatalf("ending the harness: %v", err)
+	}
+	runErr := <-exited
+	var exit *exec.ExitError
+	if !errors.As(runErr, &exit) || exit.ExitCode() != 2 {
+		t.Fatalf("the harness ended with %v, want the runtime's exit status 2\n%s", runErr, out.String())
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -140,7 +159,7 @@ func TestTheHarnessCompileDoesNotOutliveTheProcess(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("compile pid %d still alive after the harness exited (parent %d); harness: %v\n%s", pid, parentOf(pid), runErr, out)
+	t.Fatalf("compile pid %d still alive after the harness exited (parent %d); harness: %v\n%s", pid, parentOf(pid), runErr, out.String())
 }
 
 func compileHoldEnv(hangDir, pidFile, root string) []string {
@@ -237,7 +256,7 @@ func TestATimedOutBuildDoesNotOutliveTheHarness(t *testing.T) {
 	t.Fatalf("build pid %d still alive after the harness exited (parent %d); harness: %v\n%s", pid, ppid, runErr, out.String())
 }
 
-// buildStarted returns the pid the hanging build writes. When none comes,
+// buildStarted returns the pid the hanging build or compile writes. When none comes,
 // the helper's exit has been received before the error is returned, so no
 // process outlives the call: a helper still running is ended first. exited
 // carries one exit, so it is received exactly once on every path.
