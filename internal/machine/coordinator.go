@@ -265,6 +265,11 @@ var (
 		Consequence: "Nothing in that domain is watched by it until it is begun again or the domain is taken back.",
 		Decision:    "Run assistant tasks to see how the domain's work stands.",
 	}
+	phraseNoticeStallEnded = Phrase{
+		Outcome:     "This work's worker, which had shown the same screen for so long that you were asked about it, has moved on by itself.",
+		Consequence: "That decision is no longer needed, and the program closed it.",
+		Decision:    "Nothing to decide; run assistant tasks to see how the work stands.",
+	}
 	phraseNoticeHandedUp = Phrase{
 		Outcome:     "The coordinator of this work's domain handed a decision about it up to you.",
 		Consequence: "It asked for something it is not allowed to do itself, and nothing was done.",
@@ -287,6 +292,7 @@ var noticeRows = map[supervisor.Kind]Phrase{
 	supervisor.KindSubordinateGone:       phraseNoticeDomainCoordinatorGone,
 	supervisor.KindSubordinateEscalated:  phraseNoticeHandedUp,
 	supervisor.KindKeptWork:              phraseNoticeKeptWork,
+	supervisor.KindStallClosed:           phraseNoticeStallEnded,
 }
 
 // QueuedWakePhrase is the row one listed notice reads as, chosen by its
@@ -376,7 +382,7 @@ func coordinatorRows() []Phrase {
 		QueuedWakesPhrase(QueuedWakes{Wakes: make([]QueuedWake, 1)}),
 		phraseNoticeHold, phraseNoticeWorkerGone, phraseNoticeMessage, phraseNoticeDecisionRaised,
 		phraseNoticeUnproven, phraseNoticeIdle, phraseNoticeOutsideWait, phraseNoticeCheckResult, phraseNoticeUnfamiliar,
-		phraseNoticeDomainCoordinatorGone, phraseNoticeHandedUp,
+		phraseNoticeDomainCoordinatorGone, phraseNoticeHandedUp, phraseNoticeStallEnded,
 		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched, phraseWorkerRecorded,
 		phrasePeekAttachable, phrasePeekUnattached, phraseDomainDelegated, phraseDelegationEnded,
 		phraseDomainRetried, phraseDelegationEndedByAnswer,

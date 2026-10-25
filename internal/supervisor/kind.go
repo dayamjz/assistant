@@ -81,6 +81,17 @@ const (
 	// it is a decision owed to a person, so it reaches the first coordinator
 	// and never a subordinate.
 	KindKeptWork Kind = "kept-work"
+	// KindStallClosed is a stall hold the program closed itself because a
+	// supervision pass read the worker's screen changed, PRD section 6's "a
+	// stall that ends by itself closes the hold": the decision the hold
+	// asked for is no longer needed, so the closure surfaces once, keyed by
+	// the hold, for the coordinator to tell the person so. A closure on the
+	// worker read dead raises none of its own, because the dead terminal
+	// surfaces as KindTerminalGone, as any does. It is always actionable, and
+	// it reaches whoever the hold reached, which is the first coordinator,
+	// so it is never a subordinate's. PRD section 5's flowchart does not
+	// draw it; section 6 is where it is specified.
+	KindStallClosed Kind = "stall-closed"
 )
 
 // Class is how the flowchart decides a kind.
@@ -154,6 +165,7 @@ var kinds = []Row{
 	{Kind: KindSubordinateGone, Class: ClassResurface, Produced: true, Subordinate: false},
 	{Kind: KindSubordinateEscalated, Class: ClassActionable, Produced: true, Subordinate: false},
 	{Kind: KindKeptWork, Class: ClassActionable, Produced: true, Subordinate: false},
+	{Kind: KindStallClosed, Class: ClassActionable, Produced: true, Subordinate: false},
 }
 
 // Kinds returns every kind's row, in the flowchart's order. The result is a

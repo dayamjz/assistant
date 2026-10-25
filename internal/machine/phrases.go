@@ -762,6 +762,8 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 		return phraseRetryUndispatchable
 	case AnswerStopped:
 		return phraseNotRetried
+	case AnswerWorkerStopped:
+		return phraseWorkerStopped
 	case AnswerLanded:
 		return phraseLandedLocallyNow
 	}
