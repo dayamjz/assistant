@@ -11,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/config"
 
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -119,6 +120,128 @@ func TestAnEntryClosedWhileAHeldDispatchHasTheSlotStillDispatchesTheTask(t *test
 	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
 	if err != nil || len(attempts) != 1 {
 		t.Fatalf("after the entry closed the task has attempts %+v, %v; want the pass its release asked for to have dispatched it", attempts, err)
+	}
+}
+
+// A held dispatch whose hold could not be read again keeps no slot that a
+// later closure's pass would be refused by, the first finding of #468's
+// fresh review. The task is held; in the window between the refusal and
+// the slot's release the dispatch's context ends, so the release's read of
+// the hold fails and it asks for a pass. That pass reads the task's
+// resolution and then fails to read the hold, its own context ended at
+// that read. The entry is then answered, and the pass its closure asks for
+// dispatches the task. Before, the failed pass settled the slot for the
+// service's lifetime, as a dispatch that failed after its claim does, so
+// the closing pass passed the task over: no attempt, no open entry, and
+// nothing asking again until the next start.
+func TestAHoldThatCouldNotBeReadKeepsNoSlotFromTheClosingPass(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	ctx := t.Context()
+	subject := newDispatchSubject(t)
+	s := subject.service
+	entry := keepWorkIn(t, subject.records)
+	pass, endPass := context.WithCancel(ctx)
+	defer endPass()
+	s.stopCtx = pass
+	dispatching, endDispatch := context.WithCancel(ctx)
+	defer endDispatch()
+	// The first read of the task's hold is the held dispatch's own; the
+	// second is the pass the failed release asks for. The kept copy's owner
+	// is a task of the project too, and its reads are not counted.
+	reads := 0
+	s.beforeHoldRead = func(id string) {
+		if id != subject.task {
+			return
+		}
+		if reads++; reads == 2 {
+			endPass()
+		}
+	}
+	s.betweenHeldAndRelease = func() {
+		s.betweenHeldAndRelease = nil
+		endDispatch()
+	}
+	if _, err := s.dispatchTask(dispatching, subject.task); !errors.Is(err, store.ErrDispatchHeld) {
+		t.Fatalf("the first dispatch = %v; want it held", err)
+	}
+	s.work.Wait()
+	if reads != 2 {
+		t.Fatalf("the hold was read %d times by dispatches; want the held one's and the failed pass's", reads)
+	}
+	if attempts, err := subject.records.TaskAttempts(ctx, subject.task); err != nil || len(attempts) != 0 {
+		t.Fatalf("with the entry open the task has attempts %+v, %v; want none", attempts, err)
+	}
+
+	s.beforeHoldRead = nil
+	s.stopCtx = ctx
+	if _, err := subject.records.AnswerKeptWork(ctx, entry.ID, store.KeptLand, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	s.dispatchDue(ctx)
+	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
+	if err != nil || len(attempts) != 1 {
+		t.Fatalf("after the entry closed the task has attempts %+v, %v; want the closing pass to have dispatched it", attempts, err)
+	}
+}
+
+// A dispatch that cannot read the task's resolution, and so has not read
+// whether kept work holds it, gives its slot back as one that could not
+// read the hold does (holdUnread): its context ended before it began, it
+// claims nothing, and the next pass finds the slot free and dispatches the
+// task. Before, the slot was settled for the service's lifetime.
+func TestADispatchThatCouldNotReadTheTaskKeepsNoSlot(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	ctx := t.Context()
+	subject := newDispatchSubject(t)
+	s := subject.service
+	ended, end := context.WithCancel(ctx)
+	end()
+	if _, err := s.dispatchTask(ended, subject.task); err == nil {
+		t.Fatal("a dispatch whose context had ended dispatched")
+	}
+	if _, slot := s.isolationOf(subject.task); slot {
+		t.Fatal("a dispatch that could not read the task's resolution kept the task's slot")
+	}
+	if _, err := s.dispatchTask(ctx, subject.task); err != nil {
+		t.Fatalf("the next dispatch = %v; want the task dispatched", err)
+	}
+}
+
+// A task whose hold could not be read for its answer is not read as a
+// worker being launched, the third finding of #468's fresh review. A task
+// kept work holds is answered with the entry and the waiting row, the
+// positive control; the same task answered when the read of its hold fails
+// (its context has ended) names no entry, says the read failed, and reads
+// as neither the waiting row nor the Dispatched row, "A worker is being
+// launched on this work", which is what it read as before while it was
+// held.
+func TestAHoldThatCouldNotBeReadIsNotAnsweredAsALaunch(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	ctx := t.Context()
+	subject := newDispatchSubject(t)
+	entry := keepWorkIn(t, subject.records)
+	o, err := subject.service.tasks().ObserveTask(ctx, subject.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launching := machine.TaskPhrase(machine.Task{State: o.State})
+	held := subject.service.taskView(ctx, o)
+	waiting := machine.TaskPhrase(held)
+	if len(held.KeptWork) != 1 || held.KeptWork[0].ID != entry.ID || waiting == launching {
+		t.Fatalf("the held task is answered with kept work %+v and %q; want entry %d and the waiting row", held.KeptWork, waiting, entry.ID)
+	}
+	ended, end := context.WithCancel(ctx)
+	end()
+	unread := subject.service.taskView(ended, o)
+	if got := machine.TaskPhrase(unread); len(unread.KeptWork) != 0 || !unread.KeptWorkUnread || got == launching || got == waiting {
+		t.Fatalf("the task whose hold could not be read is answered with kept work %+v, unread %v and %q; want none, the read named as failed, and neither a launch nor a wait",
+			unread.KeptWork, unread.KeptWorkUnread, got)
+	}
+	if held.KeptWorkUnread {
+		t.Fatal("the held task's answer, whose hold was read, says the read failed")
 	}
 }
 

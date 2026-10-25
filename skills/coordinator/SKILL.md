@@ -287,7 +287,9 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   project has an open entry, a task you create in it is recorded and not
   started: it reads `dispatched` and its answer (`task.get`) names the
   entries holding it under `kept_work`; it starts on its own once they are
-  answered or closed. Tasks in other projects, work already running and a
+  answered or closed. An answer carrying `kept_work_unread` could not read
+  whether kept work holds the task, so it names no entry either way: ask
+  again rather than telling the person it is starting. Tasks in other projects, work already running and a
   person's own push are not held. A kept entry no task names, such as the
   run of the person's own push, reaches you as a `kept-work` wake about the
   entry instead, listed under `kept_work_wakes` with the entry's id in

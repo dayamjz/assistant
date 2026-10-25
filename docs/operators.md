@@ -563,7 +563,9 @@ reservation.
 While a project has an open kept-work entry, no new task in that project
 starts: the task is recorded, `assistant --json tasks` shows it waiting and
 names the entries under `kept_work`, and it starts on its own once every
-entry is answered or closed. Kept work in one project never holds another,
+entry is answered or closed. When whether kept work holds the task could not
+be read for an answer, the answer says so (`kept_work_unread`) and names no
+entry, rather than reading as a worker being launched. Kept work in one project never holds another,
 a task whose worker was already launched is not held (its relaunch goes
 ahead), and your own push always starts its run, whose answer names the
 project's open entries. In this build the only way an entry closes is its

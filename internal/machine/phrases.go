@@ -263,6 +263,17 @@ var phraseTaskWaitsOnKeptWork = Phrase{
 	Decision:    "Read which copy with assistant --json tasks and the work's identifier; its answers are land, carry on or discard, which this build does not yet take from you.",
 }
 
+// phraseTaskKeptWorkUnread is the row for a task the program dispatched
+// whose answer could not read whether kept work holds it
+// (Task.KeptWorkUnread). It claims neither that a worker is being launched
+// nor that the task waits, since either may be true, and says what each
+// would mean.
+var phraseTaskKeptWorkUnread = Phrase{
+	Outcome:     "This work has not been seen to begin, and whether work kept in a local copy of its project is holding it could not be read just now.",
+	Consequence: "If nothing holds it, a worker is launched on its own; if work kept in a local copy holds it, it begins once that work is decided or turns up somewhere safe.",
+	Decision:    "Nothing to decide yet; ask again for a current answer.",
+}
+
 // phraseTaskHeld is the row for a task internal/taskstate resolved Held from
 // its hold tier: an open hold names the task itself, so it is answered given
 // the task, with --task and --answer, rather than from a branch as a run's
@@ -374,7 +385,9 @@ func WaitingPhrase(on string) Phrase {
 // phraseTaskHeld, which says how a hold naming the task is answered; Held
 // from a run or from the worker's own history keeps the table's row.
 // Dispatched carrying Task.KeptWork is phraseTaskWaitsOnKeptWork, because
-// that task is waiting on kept work and no worker is being launched.
+// that task is waiting on kept work and no worker is being launched, and
+// Dispatched with Task.KeptWorkUnread is phraseTaskKeptWorkUnread, because
+// which of the two holds could not be read.
 // Reported points at assistant --json tasks for the stored report and never
 // carries its summary or findings, which Task.Report holds for the
 // structured answer (P13). A state outside the table, which the
@@ -391,6 +404,8 @@ func TaskPhrase(t Task) Phrase {
 		return phraseTaskHeld
 	case state == taskstate.Dispatched && len(t.KeptWork) > 0:
 		return phraseTaskWaitsOnKeptWork
+	case state == taskstate.Dispatched && t.KeptWorkUnread:
+		return phraseTaskKeptWorkUnread
 	case state == taskstate.Landed && t.State.Source == taskstate.SourceRecord && t.State.Basis.LandedRun == "" &&
 		t.State.Basis.LandedLocally != "":
 		return phraseTaskLandedLocally
@@ -1966,7 +1981,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
-	out = append(out, phraseTaskHeld, phraseTaskWaitsOnKeptWork, NoWordYet, phraseWorkerUnseen, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
+	out = append(out, phraseTaskHeld, phraseTaskWaitsOnKeptWork, phraseTaskKeptWorkUnread, NoWordYet, phraseWorkerUnseen, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
 	out = append(out, UncertaintiesPhrase(2), FollowUpsPhrase(1))
 	for _, outcome := range Outcomes() {
 		if p, ok := phraseByOutcome[outcome]; ok {

@@ -181,6 +181,19 @@ import (
 // slot is gone and asks for another pass when it no longer holds: an entry
 // closed before that read is seen by it, and one closed after it is closed
 // after the slot was free, so the pass its closure asks for finds the task.
+// A read that fails asks for that pass too, since it cannot tell which.
+//
+// A dispatch that ends before it has read the hold, because the task's
+// resolution or the hold could not be read (holdUnread), gives its slot
+// back as well and asks for nothing: it claimed nothing, so the rule that
+// keeps a slot after a failed claim has nothing to keep from repeating,
+// and a slot kept here would pass the task over at the pass a closure asks
+// for. It asks for no pass of its own because a read that keeps failing
+// would then ask without end. What remains is the case where every read
+// fails: an entry closed while the slot was taken, whose release's read
+// and whose following pass's read both fail, is dispatched at the next
+// pass anything asks for (a release, a removal, or the next open), and not
+// before.
 // A relaunch is not new work and claims through store.BeginTaskAttempt, so
 // it is never held.
 //
@@ -288,9 +301,11 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // assertion, is retried at the next open and not at the next release, which
 // is what keeps a failure that repeats from adding an attempt per run that
 // settles. A task refused resolves Failed from the entry the refusal appended
-// and is kept out by the resolver as well as by the slot. The one exception
-// is a task placeable left queued: it claimed nothing, so its slot is given
-// back and the next pass reads its repository's trusted copy again.
+// and is kept out by the resolver as well as by the slot. The exceptions
+// are dispatches that claimed nothing, whose slot is given back: a task
+// placeable left queued, so the next pass reads its repository's trusted
+// copy again, and one kept work held or whose hold could not be read, on
+// this file's opening terms.
 //
 // The tasks are read under the read side of the intake exclusion
 // createTask holds across an intake, so a pass never reads a task whose
@@ -424,13 +439,19 @@ func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, erro
 // with the proof, or none, for the service's lifetime.
 func (s *Service) settleOrRelease(id string, settle func(tasks.Isolation), proof tasks.Isolation, err error) {
 	if errors.Is(err, errTaskUnplaced) {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		delete(s.isolated, id)
-		delete(s.claiming, id)
+		s.giveBackSlot(id)
 		return
 	}
 	settle(proof)
+}
+
+// giveBackSlot frees the task's slot, so the next pass dispatches it, for a
+// dispatch that claimed nothing.
+func (s *Service) giveBackSlot(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.isolated, id)
+	delete(s.claiming, id)
 }
 
 // redispatchTask is dispatchTask for a retry answered on the hold a dispatch
@@ -452,30 +473,46 @@ func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, er
 }
 
 // settleDispatch ends a dispatch's hold on its slot: for a dispatch kept
-// work held it gives the slot back through releaseHeldSlot, this file's
-// opening comment says why, and every other outcome is settleOrRelease's.
+// work held it gives the slot back through releaseHeldSlot, for one that
+// ended before it could read the hold (*holdUnread) it gives the slot back
+// and asks nothing, this file's opening comment says why for both, and
+// every other outcome is settleOrRelease's.
 func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tasks.Isolation), d dispatched, err error) {
-	if !errors.Is(err, store.ErrDispatchHeld) {
+	var unread *holdUnread
+	switch {
+	case errors.Is(err, store.ErrDispatchHeld):
+		if s.betweenHeldAndRelease != nil {
+			s.betweenHeldAndRelease()
+		}
+		s.releaseHeldSlot(ctx, id)
+	case errors.As(err, &unread):
+		s.giveBackSlot(id)
+	default:
 		s.settleOrRelease(id, settle, d.proof, err)
-		return
 	}
-	if s.betweenHeldAndRelease != nil {
-		s.betweenHeldAndRelease()
-	}
-	s.releaseHeldSlot(ctx, id)
 }
+
+// holdUnread is a dispatch's failure before it read whether kept work holds
+// the task: the task's resolution or the hold itself could not be read.
+// Nothing was claimed, so the slot is given back rather than kept for the
+// service's lifetime (settleDispatch). It unwraps to the read's own error.
+type holdUnread struct{ err error }
+
+// Error is the read's own error.
+func (e *holdUnread) Error() string { return e.err.Error() }
+
+// Unwrap is the read's own error.
+func (e *holdUnread) Unwrap() error { return e.err }
 
 // releaseHeldSlot gives back the slot of a task kept work held at its
 // dispatch or its launch, and then reads the hold again: when nothing holds
 // the task any more, or the read fails, it asks dispatchDue again through
 // dispatchInBackground, so an entry that closed while the slot was taken is
-// never a dispatch nobody asks for. This file's opening comment says why
-// that order loses no closure.
+// never a dispatch nobody asks for. A pass that cannot read the hold either
+// gives the slot back again (holdUnread). This file's opening comment says
+// why that order loses no closure, and what remains.
 func (s *Service) releaseHeldSlot(ctx context.Context, id string) {
-	s.mu.Lock()
-	delete(s.isolated, id)
-	delete(s.claiming, id)
-	s.mu.Unlock()
+	s.giveBackSlot(id)
 	holding, err := s.store.KeptWorkHolding(ctx, id)
 	if err != nil || len(holding) == 0 {
 		s.dispatchInBackground()
@@ -564,7 +601,7 @@ func (s *Service) isolationOf(id string) (tasks.Isolation, bool) {
 func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, error) {
 	resolved, err := s.tasks().Resolved(ctx, id)
 	if err != nil {
-		return dispatched{}, err
+		return dispatched{}, &holdUnread{err: err}
 	}
 	if resolved.State.State != taskstate.Dispatched || resolved.State.Source != taskstate.SourceEvent {
 		return dispatched{}, fmt.Errorf("%w: task %s resolves %s from %s", errTaskNotDispatched, id,
@@ -573,9 +610,12 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	record := resolved.Record
 	// Kept work in the task's project holds it before anything is swept,
 	// cut or claimed; the claim below asks again in its own transaction.
+	if s.beforeHoldRead != nil {
+		s.beforeHoldRead(id)
+	}
 	holding, err := s.store.KeptWorkHolding(ctx, id)
 	if err != nil {
-		return dispatched{}, err
+		return dispatched{}, &holdUnread{err: err}
 	}
 	if len(holding) > 0 {
 		return dispatched{}, &store.DispatchHeldError{Task: id, Repository: record.RepositoryID.Or(""), Entries: holding}

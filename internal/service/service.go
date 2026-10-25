@@ -407,6 +407,12 @@ type Service struct {
 	// production and set only by this package's tests, which use it to
 	// close the entry and run another dispatch pass inside that window.
 	betweenHeldAndRelease func()
+	// beforeHoldRead runs in a dispatch of the task it is given once the
+	// task's resolution is read and before the dispatch reads whether kept
+	// work holds it. It is nil in production and set only by this package's
+	// tests, which use it to end a pass's context at that read so the read
+	// alone fails.
+	beforeHoldRead func(id string)
 	// betweenTrustedFetchAndResolve runs in fetchTrusted after the default
 	// branch has been fetched under ref and before ref is resolved. It is nil
 	// in production and set only by this package's tests, which use it to
