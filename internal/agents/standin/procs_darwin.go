@@ -99,3 +99,9 @@ func foreignProcess(pid int) (bool, error) {
 	}
 	return int(k.Eproc.Ucred.Uid) != os.Geteuid(), nil
 }
+
+// exitingProcess reports whether pid has begun to exit. This platform's
+// process table reads an exited process as a zombie (agents.Identify), and
+// a read of a running one that fails keeps a listing unsettled; a process
+// still exiting is not told apart here, so it reports false.
+func exitingProcess(int) (bool, error) { return false, nil }

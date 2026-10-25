@@ -121,6 +121,7 @@ type processTable interface {
 	commandLine(pid int) (string, []string, error)
 	environment(pid int) ([]string, error)
 	foreign(pid int) (bool, error)
+	isExiting(pid int) (bool, error)
 }
 
 // kernel is the processTable the kernel answers.
@@ -133,6 +134,7 @@ func (kernel) identify(pid int) (agents.Identity, bool, error) {
 func (kernel) commandLine(pid int) (string, []string, error) { return commandLine(pid) }
 func (kernel) environment(pid int) ([]string, error)         { return startEnvironment(pid) }
 func (kernel) foreign(pid int) (bool, error)                 { return foreignProcess(pid) }
+func (kernel) isExiting(pid int) (bool, error)               { return exitingProcess(pid) }
 
 // settleReadings bounds how many times processesWhere reads the process
 // table looking for a settled reading (processesWhere), so a listing ends
@@ -155,7 +157,10 @@ const settleReadings = 64
 // did is not settled. Nor is one in which a read of this user's running
 // process failed: that process was not read whole, and passing it over
 // would settle a list without it, as a shell read just after it was started
-// once was (#549). Whether a process whose read failed is another user's is
+// once was (#549). The one exception is a process whose read failed that
+// the table reads as having begun to exit (isExiting: on Linux the kernel's
+// exiting flag in /proc/<pid>/stat; on Darwin it reports false), which
+// starts nothing either and so counts as one read as not running. Whether a process whose read failed is another user's is
 // read from the process table (foreignProcess), never assumed from the
 // failure. In each
 // case processesWhere reads the table again, reusing what it read of a
@@ -274,6 +279,20 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			if presence, err := id.Presence(); err != nil || presence != agents.PresencePresent {
 				unsettle(pid, fmt.Errorf("%v exited before it had been read whole", id))
 				continue
+			}
+			if failed != nil && ferr == nil && !foreign {
+				// A process of this user's that has begun to exit starts
+				// nothing, as one that has exited does, so it is read as
+				// not running: CI's ubuntu runner met one whose exe link,
+				// gone with its address space, could not be read in any of
+				// the readings (run 40211320712).
+				if exiting, err := table.isExiting(pid); err == nil && exiting {
+					nowStopped[pid] = true
+					if !stopped[pid] && !wasRefused[pid] {
+						unsettle(pid, fmt.Errorf("process %d read as exiting for the first time, its read failing: %w", pid, failed))
+					}
+					continue
+				}
 			}
 			switch {
 			case failed != nil && ferr != nil:

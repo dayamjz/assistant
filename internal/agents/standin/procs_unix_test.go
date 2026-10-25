@@ -4,6 +4,7 @@ package standin
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -349,5 +350,88 @@ func TestAListingPassesOverAnotherUsersUnreadableProcess(t *testing.T) {
 		if slices.Contains(table.refused, p.PID) {
 			t.Errorf("%v is another user's and could not be read, and was listed", p)
 		}
+	}
+}
+
+// unreadableAsExiting is a processTable that names one real running
+// process, pid, and passes every read of it through to the kernel but two:
+// its command line
+// fails to read as Linux's /proc does for a process that has begun to exit
+// and released its address space (readlink of /proc/<pid>/exe: ENOENT,
+// the read CI's ubuntu runner reported, run 40211320712), and it reads as
+// exiting when exiting says so.
+type unreadableAsExiting struct {
+	kernel
+	pid      int
+	exiting  bool
+	readings int
+}
+
+// ids names pid alone, so how many readings the listing takes is decided
+// by that process and nothing else running beside the test.
+func (u *unreadableAsExiting) ids() ([]int, error) {
+	u.readings++
+	return []int{u.pid}, nil
+}
+
+func (u *unreadableAsExiting) commandLine(pid int) (string, []string, error) {
+	if pid == u.pid {
+		return "", nil, &os.PathError{Op: "readlink", Path: "/proc/" + strconv.Itoa(pid) + "/exe", Err: syscall.ENOENT}
+	}
+	return u.kernel.commandLine(pid)
+}
+
+func (u *unreadableAsExiting) isExiting(pid int) (bool, error) {
+	if pid == u.pid {
+		return u.exiting, nil
+	}
+	return u.kernel.isExiting(pid)
+}
+
+// A process of this user's that has begun to exit starts nothing, as one
+// that has exited does, so a read of it that fails does not keep a
+// listing from settling (P15): a real running process whose command line
+// fails to read as CI's ubuntu runner reported, readlink of its exe
+// ENOENT, and that reads as exiting, is passed over and the listing
+// settles without it, from the second reading: the first that meets it
+// exiting is unsettled, as the first that meets an exited process is,
+// since it may have started a process that reading does not name. The
+// control is the same process not reading as
+// exiting, which still fails the listing, naming it and the read's
+// ENOENT, as TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker
+// did on that runner: a running process of this user's that cannot be read
+// and is not exiting is never passed over (#549).
+func TestAListingSettlesBesideAnUnreadableProcessThatIsExiting(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	sleeper := exec.Command("sleep", "60")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() })
+	refuseAll := func(table processTable, pid int) (bool, error) {
+		_, _, err := table.commandLine(pid)
+		return false, err
+	}
+
+	exiting := &unreadableAsExiting{pid: sleeper.Process.Pid, exiting: true}
+	listed, err := processesWhere(exiting, refuseAll)
+	if err != nil {
+		t.Fatalf("a listing beside process %d, unreadable and exiting: %v", sleeper.Process.Pid, err)
+	}
+	if exiting.readings < 2 {
+		t.Fatalf("the listing read the table %d time(s); want the reading that first met the exiting process unsettled, as one that first meets an exited process is", exiting.readings)
+	}
+	if slices.ContainsFunc(listed, func(p Process) bool { return p.PID == sleeper.Process.Pid }) {
+		t.Fatalf("the listing %v names process %d, which it could not read", listed, sleeper.Process.Pid)
+	}
+
+	_, err = processesWhere(&unreadableAsExiting{pid: sleeper.Process.Pid}, refuseAll)
+	var unsettled *unsettledError
+	if !errors.As(err, &unsettled) || unsettled.PID != sleeper.Process.Pid || !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("a listing beside process %d, unreadable and not exiting = %v; want it unsettled naming the process and its ENOENT", sleeper.Process.Pid, err)
+	}
+	if err := sleeper.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("process %d was not running once the listings returned (%v), so this shows nothing", sleeper.Process.Pid, err)
 	}
 }
