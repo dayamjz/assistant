@@ -92,8 +92,17 @@ type Listed struct {
 // outside the row, so a marker that is not an outcome and an outcome the PRD
 // stops declaring both fail loudly here instead of quietly changing what is
 // being compared.
+//
+// Everything here is read from internal/principles' PRDProse copy, so a row or
+// a marker inside a fenced code block, which renders as code, is neither the
+// row nor a marker: a row moved into a fence leaves the document with no row,
+// which is a refusal, and a fenced example of a marker declares nothing.
 func FromPRD(doc []byte) ([]Listed, error) {
-	row, err := outcomeRow(doc)
+	prose, err := principles.PRDProse(doc)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPRD, err)
+	}
+	row, err := outcomeRow(doc, prose)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +114,7 @@ func FromPRD(doc []byte) ([]Listed, error) {
 	if len(found) == 0 {
 		return nil, fmt.Errorf("%w: the row declares none", ErrPRD)
 	}
-	if all, inRow := len(marker.FindAll(doc, -1)), len(found); all != inRow {
+	if all, inRow := len(marker.FindAll(prose, -1)), len(found); all != inRow {
 		return nil, fmt.Errorf("%w: the document carries %d data-outcome markers and %d of them are in the row: the row is where the set is stated, so a marker outside it is not part of the set and is not read as one", ErrPRD, all, inRow)
 	}
 
@@ -135,27 +144,27 @@ func FromPRD(doc []byte) ([]Listed, error) {
 	return out, nil
 }
 
-// outcomeRow returns the row that states the set, refusing every document
-// where that row is not the one a reader would take, and every document where
-// the row does not sit inside the section that owns it.
-func outcomeRow(doc []byte) ([]byte, error) {
-	sectionFrom, sectionTo, err := principles.PRDSection(doc, sectionHeading)
+// outcomeRow returns the row that states the set, read from prose, refusing
+// every document where that row is not the one a reader would take, and every
+// document where the row does not sit inside the section that owns it.
+func outcomeRow(doc, prose []byte) ([]byte, error) {
+	sectionFrom, sectionTo, err := principles.PRDSection(doc, 2, sectionHeading)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrPRD, err)
 	}
-	at := bytes.Index(doc, []byte(rowAnchor))
+	at := bytes.Index(prose, []byte(rowAnchor))
 	if at < 0 {
 		return nil, fmt.Errorf("%w: no %s in the document", ErrPRD, rowAnchor)
 	}
-	if bytes.Contains(doc[at+len(rowAnchor):], []byte(rowAnchor)) {
+	if bytes.Contains(prose[at+len(rowAnchor):], []byte(rowAnchor)) {
 		return nil, fmt.Errorf("%w: %s appears more than once", ErrPRD, rowAnchor)
 	}
-	start := bytes.LastIndexByte(doc[:at], '\n') + 1
-	end := len(doc)
-	if n := bytes.IndexByte(doc[at:], '\n'); n >= 0 {
+	start := bytes.LastIndexByte(prose[:at], '\n') + 1
+	end := len(prose)
+	if n := bytes.IndexByte(prose[at:], '\n'); n >= 0 {
 		end = at + n
 	}
-	row := doc[start:end]
+	row := prose[start:end]
 	if !bytes.HasPrefix(bytes.TrimLeft(row, " "), []byte("|")) {
 		return nil, fmt.Errorf("%w: %s is not on a table row, so the line it is on is not the row a reader takes it for", ErrPRD, rowAnchor)
 	}

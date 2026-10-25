@@ -29,18 +29,19 @@ var ErrPRDStages = errors.New("journey: PRD section 5's stage table could not be
 // cell is the number and whose second is the stage's name in bold, the bold
 // being the whole of the cell. The table is the PRD's own and this reads it as
 // written.
-var prdStageRow = regexp.MustCompile(`(?m)^\|[ \t]*(\d+)[ \t]*\|[ \t]*\*\*([^*|\n]+)\*\*[ \t]*\|`)
+var prdStageRow = regexp.MustCompile(`^ {0,3}\|[ \t]*(\d+)[ \t]*\|[ \t]*\*\*([^*|\n]+)\*\*[ \t]*\|`)
 
-// prdStagesHeading is where the read of section 5's stage table begins. It
-// fixes where reading starts and buys nothing else today: this document holds
-// no numbered row before it, so slicing there excludes nothing, and the offset
-// could only ever exclude a table that came earlier.
-//
-// What tells a stage row from any other numbered row is the shape prdStageRow
-// requires, where the bold name is the whole of its cell. The PRD's other
-// numbered table writes prose around its bold runs, so none of its rows
-// matches. That is how that table happens to be written rather than anything
-// enforced here, and StagesFromPRD names what it leaves open.
+// prdTableLine matches any line a Markdown table is made of: one that starts
+// with a pipe, indented at most three spaces.
+var prdTableLine = regexp.MustCompile(`^ {0,3}\|`)
+
+// prdDelimiterRow matches the line under a table's header that makes it a
+// table: cells of dashes, each optionally colon-aligned.
+var prdDelimiterRow = regexp.MustCompile(`^ {0,3}\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?$`)
+
+// prdStagesHeading is the heading of the subsection of PRD section 5 that
+// holds the stage table, read at level three through internal/principles'
+// PRDSection, which owns where a section of the PRD begins and ends.
 const prdStagesHeading = "The nine stages"
 
 // StagesFromPRD returns the stages PRD section 5's table names, in the order it
@@ -51,25 +52,62 @@ const prdStagesHeading = "The nine stages"
 // one it silently agrees with, which is the difference between measuring the
 // product and following it.
 //
-// It refuses a document whose table it cannot find, whose numbering is not one
-// through however many rows it holds, or which holds no rows at all.
+// The table is the one table in the subsection headed "### The nine stages",
+// read from internal/principles' PRDProse copy, so a table or a row inside a
+// fenced code block, which renders as code, is not read. Every row of that
+// table is read, and every one has to be a stage row: a number, then the
+// stage's name in bold as the whole of the cell. A row this cannot read as
+// one is a refusal, never a row left out, because a list one row short of the
+// table is a list that agrees with a build the table no longer describes.
 //
-// The residual gap is that nothing here bounds the read to one table. A row
-// elsewhere in the document that matched prdStageRow's shape would be read as
-// a further row of this one, and what catches it is the numbering rather than
-// the position: such a row restarts at one where the sequence wants the next
-// number, so the document is refused rather than quietly read long.
+// It refuses a document whose subsection it cannot delimit, one with no table
+// or more than one table-shaped run of lines in that subsection, a table with
+// no rows under its header, a row it cannot read, and numbering that is not
+// one through however many rows the table holds.
+//
+// What it leaves open is what those two rules leave open, which their own
+// comments state, and the names themselves: a name is taken as written, and
+// what holds it to the build is AgreesWithPRD and its mapping table.
 func StagesFromPRD(doc []byte) ([]string, error) {
-	at := strings.Index(string(doc), prdStagesHeading)
-	if at < 0 {
-		return nil, fmt.Errorf("%w: no %q in the document", ErrPRDStages, prdStagesHeading)
+	prose, err := principles.PRDProse(doc)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPRDStages, err)
 	}
-	rows := prdStageRow.FindAllStringSubmatch(string(doc)[at:], -1)
-	if len(rows) == 0 {
+	from, to, err := principles.PRDSection(doc, 3, prdStagesHeading)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPRDStages, err)
+	}
+	var table []string
+	runs := 0
+	inRun := false
+	for _, line := range strings.Split(string(prose[from:to]), "\n") {
+		line = strings.TrimRight(line, " \t\r")
+		isRow := prdTableLine.MatchString(line)
+		if isRow && !inRun {
+			runs++
+		}
+		inRun = isRow
+		if isRow && runs == 1 {
+			table = append(table, line)
+		}
+	}
+	switch {
+	case runs == 0:
+		return nil, fmt.Errorf("%w: the %q subsection holds no table", ErrPRDStages, prdStagesHeading)
+	case runs > 1:
+		return nil, fmt.Errorf("%w: the %q subsection holds %d runs of table lines, and this reads one table", ErrPRDStages, prdStagesHeading, runs)
+	case len(table) < 2 || !prdDelimiterRow.MatchString(table[1]):
+		return nil, fmt.Errorf("%w: the table under %q has no header and delimiter row, so it is not a table", ErrPRDStages, prdStagesHeading)
+	case len(table) == 2:
 		return nil, fmt.Errorf("%w: the table under %q has no rows this reads", ErrPRDStages, prdStagesHeading)
 	}
-	named := make([]string, 0, len(rows))
-	for i, row := range rows {
+	named := make([]string, 0, len(table)-2)
+	for i, line := range table[2:] {
+		row := prdStageRow.FindStringSubmatch(line)
+		if row == nil {
+			return nil, fmt.Errorf("%w: row %d is not a stage row, a number then the stage's name in bold as the whole cell: %s",
+				ErrPRDStages, i+1, line)
+		}
 		number, err := strconv.Atoi(row[1])
 		if err != nil {
 			return nil, fmt.Errorf("%w: row %d is numbered %q", ErrPRDStages, i+1, row[1])

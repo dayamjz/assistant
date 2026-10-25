@@ -216,19 +216,30 @@ func TestTheStageListComesFromThePRDRatherThanFromTheBuild(t *testing.T) {
 	// because the row pattern needs a character between the tags, so it was
 	// refused for holding no rows and the empty-name branch had no control.
 	t.Run("an unreadable PRD refuses rather than yielding nothing", func(t *testing.T) {
+		const head = "### The nine stages\n\n| # | Stage | What |\n|---|---|---|\n"
 		for _, c := range []struct{ what, html, says string }{
 			{"no stage table at all", "# A PRD\n\nnothing here\n",
-				`no "The nine stages" in the document`},
-			{"a heading with no rows under it", "### The nine stages\n\nprose and no table\n",
+				`no "### The nine stages" heading`},
+			{"a heading with no table under it", "### The nine stages\n\nprose and no table\n",
+				"holds no table"},
+			{"a table with no rows under its header", head,
 				"has no rows this reads"},
+			{"a table with no delimiter row", "### The nine stages\n\n| 1 | **Intent** | x |\n",
+				"no header and delimiter row"},
 			{"a row numbered past what a number holds",
-				"### The nine stages\n\n| 99999999999999999999 | **Intent** | x |\n",
+				head + "| 99999999999999999999 | **Intent** | x |\n",
 				`row 1 is numbered "99999999999999999999"`},
-			{"a table whose numbering skips", "### The nine stages\n\n| 1 | **Intent** | x |\n" +
+			{"a table whose numbering skips", head + "| 1 | **Intent** | x |\n" +
 				"| 3 | **Review** | x |\n",
 				"row 2 is numbered 3"},
-			{"a row naming no stage", "### The nine stages\n\n| 1 | ** ** | x |\n",
+			{"a row naming no stage", head + "| 1 | ** ** | x |\n",
 				"row 1 names no stage"},
+			{"a row in another bold syntax", head + "| 1 | **Intent** | x |\n| 2 | __Extra__ | x |\n",
+				"row 2 is not a stage row"},
+			{"a second table in the subsection", head + "| 1 | **Intent** | x |\n\n| 2 | **Rebase** | x |\n",
+				"2 runs of table lines"},
+			{"the rows in a closed fence", head + "```text\n| 1 | **Intent** | x |\n```\n",
+				"has no rows this reads"},
 		} {
 			_, err := journey.StagesFromPRD([]byte(c.html))
 			if err == nil {
@@ -249,6 +260,28 @@ func TestTheStageListComesFromThePRDRatherThanFromTheBuild(t *testing.T) {
 		}
 		if _, err := journey.StagesFromPRD(body); err != nil {
 			t.Fatalf("the real PRD was refused: %v", err)
+		}
+
+		// The same refusals, derived from the real table rather than a
+		// fixture: its rows fenced as code, and a tenth row whose name is
+		// bold in the other syntax, which a row pattern alone would drop.
+		real := string(body)
+		first, last := strings.Index(real, "| 1 | **Intent** |"), strings.Index(real, "| 9 | **Checks** |")
+		if first < 0 || last < first {
+			t.Fatal("the real PRD's stage table does not have the first and last rows these controls are built from")
+		}
+		end := last + strings.Index(real[last:], "\n")
+		for _, c := range []struct{ what, doc, says string }{
+			{"the real rows fenced as code", real[:first] + "```text\n" + real[first:end] + "\n```" + real[end:],
+				"has no rows this reads"},
+			{"a tenth real row in the other bold syntax", real[:end] + "\n| 10 | __Extra stage__ | x | 3 |" + real[end:],
+				"row 10 is not a stage row"},
+		} {
+			_, err := journey.StagesFromPRD([]byte(c.doc))
+			if !errors.Is(err, journey.ErrPRDStages) || !strings.Contains(err.Error(), c.says) {
+				t.Fatalf("%s: StagesFromPRD = %v, want an ErrPRDStages saying %q", c.what, err, c.says)
+			}
+			t.Logf("%s refused as required: %v", c.what, err)
 		}
 	})
 }

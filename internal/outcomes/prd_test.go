@@ -3,6 +3,8 @@ package outcomes
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -116,6 +118,48 @@ func assertReads(t *testing.T, doc string) {
 	}
 }
 
+// fenceLine returns doc with the one line that starts with prefix set in a
+// closed fenced code block of its own, so it renders as code.
+func fenceLine(t *testing.T, doc, prefix string) string {
+	t.Helper()
+	at := strings.Index(doc, prefix)
+	if at < 0 || strings.Count(doc, prefix) != 1 {
+		t.Fatalf("the document does not hold exactly one line starting %q to fence", prefix)
+	}
+	end := at + strings.Index(doc[at:], "\n")
+	if end < at {
+		t.Fatalf("the line starting %q is the last line, with no newline to close the fence after", prefix)
+	}
+	return doc[:at] + "\n```text\n" + doc[at:end] + "\n```\n" + doc[end:]
+}
+
+// TestFromPRDReadsNoMarkerInAFence is the other half of the fence rule: a
+// fenced marker is not refused, it is not read. An example of a declaration
+// set in code elsewhere in the section leaves the set what the row declares.
+func TestFromPRDReadsNoMarkerInAFence(t *testing.T) {
+	assertReads(t, strings.Replace(prdMarkdown(), "## Configuration",
+		"```html\n<code data-outcome=\"finished\">merged</code>\n```\n\n## Configuration", 1))
+}
+
+// TestFromPRDRefusesTheRealRowFenced derives its control from the real
+// docs/prd.md: the outcome row, fenced as code, is no row at all, so the
+// document is refused rather than read. The unmodified document is the
+// positive control, and it has to read.
+func TestFromPRDRefusesTheRealRowFenced(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(PRDPath)))
+	if err != nil {
+		t.Fatalf("reading the PRD: %v", err)
+	}
+	if got, err := FromPRD(body); err != nil || len(got) == 0 {
+		t.Fatalf("the real PRD reads as %s, %v, want its outcome set", names(got), err)
+	}
+	fenced := fenceLine(t, string(body), "| "+rowAnchor)
+	got, err := FromPRD([]byte(fenced))
+	if !errors.Is(err, ErrPRD) || !strings.Contains(err.Error(), "no "+rowAnchor) {
+		t.Fatalf("the real PRD with its outcome row fenced reads as %s, %v, want an ErrPRD saying there is no row", names(got), err)
+	}
+}
+
 // TestFromPRDPinsTheRowToTheSectionThatOwnsIt is the pair the containment rule
 // rests on. The two documents differ in nothing but which section the row is
 // inside: the one where it sits outside is refused, and the one where the same
@@ -165,6 +209,7 @@ func TestFromPRDRefusesASetItCannotTrust(t *testing.T) {
 		{"a value the wire does not carry", strings.Replace(full, `>cancelled<`, `>Cancelled Run<`, 1)},
 		{"an empty value", strings.Replace(full, `>cancelled<`, `><`, 1)},
 		{"one group", strings.ReplaceAll(full, `data-outcome="unfinished"`, `data-outcome="finished"`)},
+		{"the row in a closed fence", fenceLine(t, full, "| "+rowAnchor)},
 		{"the groups interleaved", strings.Replace(full, `data-outcome="finished">passed`, `data-outcome="unfinished">passed`, 1)},
 	}
 	for _, c := range cases {

@@ -35,8 +35,11 @@
 // outcome once. The row and not the section is what is read for the same
 // reason one step further out, and because that row says it is where the set
 // is stated: a marker anywhere else in the document is a refusal rather than a
-// further outcome, so the sentence in the row stays true of the mechanism. The
-// rule is one a reader can apply by eye, and it is not tied to any other
+// further outcome, so the sentence in the row stays true of the mechanism. A
+// fenced code block renders as code, so the rule reads only outside one, by
+// internal/principles' PRDProse: a fenced example of the row or a marker
+// declares nothing, and a row moved into a fence is a document with no row.
+// The rule is one a reader can apply by eye, and it is not tied to any other
 // attribute on the element, which would be styling.
 //
 // Where the row itself lives is the other half, and it is a separate question
