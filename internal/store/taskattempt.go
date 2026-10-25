@@ -122,8 +122,9 @@ func scanTaskAttempt(sc scanner) (TaskAttempt, error) {
 // cannot both begin the next: one is accepted and assigned expectedLatest+1,
 // and the other is refused with a *TaskMovedError wrapping ErrTaskMoved that
 // names where the attempts actually stand. That is the relaunch claim, and
-// the claim of a dispatch retried after an attempt that never launched:
-// whichever caller wins is the one the attempt belongs to.
+// it is never held by kept work: whichever caller wins is the one the
+// attempt belongs to. A dispatch retried after an attempt that never
+// launched claims through BeginDispatchAttempt, the same claim held.
 //
 // It returns ErrNotFound, wrapped, for a task that does not exist. It records
 // no state and launches nothing: the record precedes the process, and the
@@ -133,8 +134,9 @@ func (s *Store) BeginTaskAttempt(ctx context.Context, taskID string, expectedLat
 }
 
 // beginTaskAttempt is BeginTaskAttempt, and BeginDispatchAttempt when
-// dispatch is true, which refuses a task kept work holds before the anchor
-// is read, in the same transaction.
+// dispatch is true, which also refuses a task kept work holds, in the same
+// transaction once the anchor holds: a claim whose anchor is stale is
+// refused with ErrTaskMoved whether or not kept work holds the task.
 func (s *Store) beginTaskAttempt(ctx context.Context, taskID string, expectedLatest int64, dispatch bool) (TaskAttempt, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return TaskAttempt{}, fmt.Errorf("store: no task named")

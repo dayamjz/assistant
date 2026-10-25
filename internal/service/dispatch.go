@@ -61,9 +61,10 @@ import (
 //
 // Two dispatchers of one task cannot both cut: the dispatch is claimed by
 // store.BeginFirstTaskAttempt for a task with no attempt, and by
-// store.BeginDispatchAttempt, store.BeginTaskAttempt held by kept work, for a
-// retry, each anchored to the highest attempt
-// this dispatcher read, and the loser is refused with ErrTaskMoved before it
+// store.BeginDispatchAttempt for a retry, which is store.BeginTaskAttempt's
+// anchored claim with the kept work hold asked in the same write (the
+// unheld BeginTaskAttempt is the relaunch's), each anchored to the highest
+// attempt this dispatcher read, and the loser is refused with ErrTaskMoved before it
 // reads the primary. Before a first claim nothing touches the path either:
 // no attempt has cut a copy, so a dispatch sweeps nothing then (#562), and
 // whatever it finds standing after it wins is refused rather than swept or
