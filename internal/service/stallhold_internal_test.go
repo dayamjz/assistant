@@ -783,3 +783,51 @@ func TestAHoldingPassRegistersItsHoldWithItsFirstWrite(t *testing.T) {
 		t.Fatalf("the count is at the third surface with open stall holds %+v, want its hold beside it", open)
 	}
 }
+
+// PRD section 6: "a relaunched worker's new terminal starts a count of its
+// own". Attempt 1 reaches its hold, the hold is answered, and attempt 2
+// begins with a session of its own that shows the very screen attempt 1
+// showed, which is what two runs of one agent at the same point look like.
+// The new session's first surface is a plain one and the hold comes only on
+// its third, under attempt 2's key, rather than at once on the count
+// attempt 1 left in the markers.
+func TestARelaunchedWorkerStartsAStallCountOfItsOwn(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	s := openStall(t, "relaunchedct", nil)
+	hold := s.toHold(t)
+	if _, err := s.records(t).ResolveHoldNoted(t.Context(), hold.Key, machine.AnswerRetry, "", store.ResolvedByMachineInterface()); err != nil {
+		t.Fatalf("answering the hold: %v", err)
+	}
+	if _, err := s.records(t).BeginTaskAttempt(t.Context(), s.task, 1); err != nil {
+		t.Fatalf("beginning attempt 2: %v", err)
+	}
+	next := "pane-relaunchedct-2"
+	if err := s.records(t).SetAttemptSession(t.Context(), s.task, 2, next, store.SessionHost{}); err != nil {
+		t.Fatalf("recording attempt 2's session: %v", err)
+	}
+	s.terminals.dead(s.ref)
+	s.terminals.live(next, "thinking\n")
+	s.ref = next
+	if got := s.observedTask(t, s.task); got.State != taskstate.Running {
+		t.Fatalf("the relaunched task resolves %s, want Running from its new terminal", got.State)
+	}
+	if got := detectionsOf(s.pass(t), s.task, supervisor.KindTerminalUnchanged); len(got) != 0 {
+		t.Fatalf("the new session's first reading made a terminal-unchanged detection %+v, want it read as a new screen", got)
+	}
+	for i, want := range []supervisor.Level{supervisor.Surface, supervisor.SurfaceAndInspect} {
+		if got := s.unchanged(t, s.window(t)); got.Level != want {
+			t.Fatalf("surface %d of attempt 2 = %+v, want %s", i+1, got, want)
+		}
+		if open := s.openStallHolds(t); len(open) != 0 {
+			t.Fatalf("surface %d of attempt 2 held at once: %+v", i+1, open)
+		}
+	}
+	if got := s.unchanged(t, s.window(t)); got.Level != supervisor.SurfaceInspectAndHold {
+		t.Fatalf("the third surface of attempt 2 = %+v, want the hold", got)
+	}
+	open := s.openStallHolds(t)
+	if sh, ok := supervisor.ParseStallHold(open[0].Key); len(open) != 1 || !ok || sh.Attempt != 2 {
+		t.Fatalf("attempt 2's holds = %+v, want one keyed by attempt 2", open)
+	}
+}

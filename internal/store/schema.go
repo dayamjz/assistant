@@ -195,6 +195,11 @@ const taskMachineMigration = "task machine and remote session host"
 // sealCheckpointTableMigration is a constant.
 const stallBaseMigration = "stall base marker"
 
+// captureSessionMigration names the migration that adds the session a
+// marker row's capture digest was read from, for the reason
+// sealCheckpointTableMigration is a constant.
+const captureSessionMigration = "capture session marker"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2470,6 +2475,25 @@ var schema = []migration{
 			// default, so a row written before the column existed reads
 			// back zero, which is no restart.
 			`ALTER TABLE wake_marker ADD COLUMN stall_base INTEGER`,
+		},
+	},
+	{
+		version: 58,
+		name:    captureSessionMigration,
+		statements: []string{
+			// PRD section 6: "a relaunched worker's new terminal starts a
+			// count of its own". The capture digest alone cannot tell a new
+			// session that shows the same screen from the old one, so the
+			// count a relaunch should restart carried on. This column is
+			// the session reference the digest was read from; the store
+			// derives the change epoch from the two together, so a new
+			// session is a change whatever it shows. It is a marker like
+			// capture_digest, and like every marker the comparison base for
+			// the next pass and not the task's state. Nullable and without
+			// a default, so a row written before the column existed reads
+			// back unknown, which the next capture of a live session reads
+			// as one change.
+			`ALTER TABLE wake_marker ADD COLUMN capture_session TEXT`,
 		},
 	},
 }

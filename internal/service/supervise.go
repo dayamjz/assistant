@@ -852,8 +852,9 @@ func surfacedKey(kind supervisor.Kind, marker string) string { return string(kin
 // instant in the marker, surfaced once per reference and case and then
 // once per escalation window measured from the GoneSurfacedAt marker, with
 // that surface's instant added to the marker; a screen
-// that changed, which resets the surfaced flag, the window and the stall
-// count and makes no wake; a declared wait, when the task resolves Paused,
+// that changed, by its digest or by the session it was read from, which
+// resets the surfaced flag, the window and the stall count and makes no
+// wake; a declared wait, when the task resolves Paused,
 // measured against the recheck window; no change, when the screen is empty,
 // nothing changed and there is evidence of progress; and otherwise terminal
 // unchanged, measured against the escalation window with the marker's
@@ -988,8 +989,16 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 
 	d.advance.UnobservedSince = store.Optional[time.Time]{}
 	d.advance.GoneSurfacedAt = store.Optional[time.Time]{}
-	if !o.has || o.markers.CaptureDigest != o.screen {
+	// A screen is its digest and the session it was read from: a relaunched
+	// worker's new session is a new screen whatever it shows, so its count
+	// starts on its own, PRD section 6.
+	session := store.Optional[string]{}
+	if o.screen.IsKnown() {
+		session = store.Known(o.ref)
+	}
+	if !o.has || o.markers.CaptureDigest != o.screen || o.markers.CaptureSession != session {
 		d.advance.CaptureDigest = o.screen
+		d.advance.CaptureSession = session
 		d.advance.Surfaced = false
 		d.advance.WindowStart = store.Known(now)
 		d.advance.StallRepetitions = 0
@@ -1150,7 +1159,7 @@ func terminalGoneAbout(marker, ref string) bool {
 // carry is the markers as they stand, as the advance a pass starts from.
 func carry(m store.WakeMarkers) store.MarkerAdvance {
 	return store.MarkerAdvance{
-		CaptureDigest: m.CaptureDigest, EventSequence: m.EventSequence, Surfaced: m.Surfaced,
+		CaptureDigest: m.CaptureDigest, CaptureSession: m.CaptureSession, EventSequence: m.EventSequence, Surfaced: m.Surfaced,
 		WindowStart: m.WindowStart, StallRepetitions: m.StallRepetitions, StallBase: m.StallBase, UnobservedSince: m.UnobservedSince,
 		GoneSurfacedAt: m.GoneSurfacedAt,
 	}

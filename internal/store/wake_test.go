@@ -602,6 +602,10 @@ func TestMarkersAreRewrittenInPlaceWithTheEpochDerived(t *testing.T) {
 		{MarkerAdvance{CaptureDigest: Known("A"), UnobservedSince: Known(window), GoneSurfacedAt: Known(window.Add(time.Hour))}, 1},
 		{MarkerAdvance{EventSequence: 3}, 2},
 		{MarkerAdvance{CaptureDigest: Known("A")}, 3},
+		// The same digest read from another session is a change of screen,
+		// and the same session again is not.
+		{MarkerAdvance{CaptureDigest: Known("A"), CaptureSession: Known("pane-2")}, 4},
+		{MarkerAdvance{CaptureDigest: Known("A"), CaptureSession: Known("pane-2"), StallRepetitions: 1}, 4},
 	}
 	for i, step := range steps {
 		m, err := s.AdvanceWakeMarkers(ctx, incarnationOf(t, s), task, step.advance)
@@ -609,7 +613,7 @@ func TestMarkersAreRewrittenInPlaceWithTheEpochDerived(t *testing.T) {
 			t.Fatalf("step %d: %v", i, err)
 		}
 		want := WakeMarkers{
-			TaskID: task, CaptureDigest: step.advance.CaptureDigest, ChangeEpoch: step.epoch,
+			TaskID: task, CaptureDigest: step.advance.CaptureDigest, CaptureSession: step.advance.CaptureSession, ChangeEpoch: step.epoch,
 			EventSequence: step.advance.EventSequence, Surfaced: step.advance.Surfaced,
 			WindowStart: step.advance.WindowStart, StallRepetitions: step.advance.StallRepetitions,
 			StallBase:       step.advance.StallBase,

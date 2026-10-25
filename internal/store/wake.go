@@ -155,12 +155,19 @@ type WakeMarkers struct {
 	// CaptureDigest is the digest of the terminal's normalized screen at the
 	// last capture, and unknown when the last pass could not capture it.
 	CaptureDigest Optional[string] `json:"capture_digest"`
-	// ChangeEpoch counts the passes whose capture digest differed from the
-	// one recorded before, with no row and an unknown digest counting as one
-	// absence. The store derives it in the transaction that records the new
-	// digest, so it is never handed over: a loop composing a terminal kind's
-	// marker reads it from here, and a terminal that returns to a screen it
-	// showed before carries a higher epoch than it did then.
+	// CaptureSession is the session reference CaptureDigest was read from,
+	// and unknown when no session was captured or the row was written before
+	// the column existed. A capture of another session is a change of
+	// screen whatever its digest, PRD section 6's "a relaunched worker's new
+	// terminal starts a count of its own".
+	CaptureSession Optional[string] `json:"capture_session"`
+	// ChangeEpoch counts the passes whose capture digest or capture session
+	// differed from the one recorded before, with no row and an unknown
+	// digest counting as one absence. The store derives it in the
+	// transaction that records the new capture, so it is never handed over:
+	// a loop composing a terminal kind's marker reads it from here, and a
+	// terminal that returns to a screen it showed before carries a higher
+	// epoch than it did then.
 	ChangeEpoch int64 `json:"change_epoch"`
 	// EventSequence is the highest task event sequence the loop had seen.
 	EventSequence int64 `json:"event_sequence"`
@@ -198,10 +205,11 @@ type WakeMarkers struct {
 
 // MarkerAdvance is what a pass of the loop hands over to become the task's
 // markers: every column of WakeMarkers the loop decides. ChangeEpoch is not
-// among them, because the store derives it from the digest, and UpdatedAt is
-// assigned at the write.
+// among them, because the store derives it from the digest and the session,
+// and UpdatedAt is assigned at the write.
 type MarkerAdvance struct {
 	CaptureDigest    Optional[string]
+	CaptureSession   Optional[string]
 	EventSequence    int64
 	Surfaced         bool
 	WindowStart      Optional[time.Time]
@@ -389,7 +397,7 @@ func advanceMarkers(ctx context.Context, tx *sql.Tx, taskID string, a MarkerAdva
 	switch {
 	case err == nil:
 		epoch = before.ChangeEpoch
-		if before.CaptureDigest != a.CaptureDigest {
+		if before.CaptureDigest != a.CaptureDigest || before.CaptureSession != a.CaptureSession {
 			epoch++
 		}
 	case isNoRows(err):
@@ -405,11 +413,12 @@ func advanceMarkers(ctx context.Context, tx *sql.Tx, taskID string, a MarkerAdva
 	}
 	now := nowUTC()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO wake_marker (task_id, capture_digest, change_epoch, event_sequence, surfaced,
+		INSERT INTO wake_marker (task_id, capture_digest, capture_session, change_epoch, event_sequence, surfaced,
 			window_start, stall_repetitions, stall_base, unobserved_since, gone_surfaced_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(task_id) DO UPDATE SET
 			capture_digest = excluded.capture_digest,
+			capture_session = excluded.capture_session,
 			change_epoch = excluded.change_epoch,
 			event_sequence = excluded.event_sequence,
 			surfaced = excluded.surfaced,
@@ -419,7 +428,7 @@ func advanceMarkers(ctx context.Context, tx *sql.Tx, taskID string, a MarkerAdva
 			unobserved_since = excluded.unobserved_since,
 			gone_surfaced_at = excluded.gone_surfaced_at,
 			updated_at = excluded.updated_at`,
-		taskID, a.CaptureDigest, epoch, a.EventSequence, surfaced,
+		taskID, a.CaptureDigest, a.CaptureSession, epoch, a.EventSequence, surfaced,
 		optionalTimeText(a.WindowStart), a.StallRepetitions, a.StallBase, optionalTimeText(a.UnobservedSince),
 		optionalTimeText(a.GoneSurfacedAt), encodeTime(now),
 	); err != nil {
@@ -428,7 +437,7 @@ func advanceMarkers(ctx context.Context, tx *sql.Tx, taskID string, a MarkerAdva
 	return wakeMarkersOf(ctx, tx, taskID)
 }
 
-const wakeMarkerColumns = `SELECT task_id, capture_digest, change_epoch, event_sequence, surfaced,
+const wakeMarkerColumns = `SELECT task_id, capture_digest, capture_session, change_epoch, event_sequence, surfaced,
 	window_start, stall_repetitions, coalesce(stall_base, 0), unobserved_since, gone_surfaced_at, updated_at`
 
 func wakeMarkersOf(ctx context.Context, q querier, taskID string) (WakeMarkers, error) {
@@ -437,7 +446,7 @@ func wakeMarkersOf(ctx context.Context, q querier, taskID string) (WakeMarkers, 
 	var window, unobserved, goneSurfaced Optional[string]
 	var updated string
 	if err := q.QueryRowContext(ctx, wakeMarkerColumns+` FROM wake_marker WHERE task_id = ?`, taskID).Scan(
-		&m.TaskID, &m.CaptureDigest, &m.ChangeEpoch, &m.EventSequence, &surfaced,
+		&m.TaskID, &m.CaptureDigest, &m.CaptureSession, &m.ChangeEpoch, &m.EventSequence, &surfaced,
 		&window, &m.StallRepetitions, &m.StallBase, &unobserved, &goneSurfaced, &updated,
 	); err != nil {
 		return WakeMarkers{}, err
