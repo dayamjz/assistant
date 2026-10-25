@@ -32,7 +32,7 @@ judge_paths: [spec/**]
 document:
   ownership:
     - subject: the schema
-      document: docs/prd.html
+      document: docs/prd.md
 suppress_project_instructions: true
 no_ci: true
 checks_timeout: 30m
@@ -90,7 +90,7 @@ const wholeSchemaJSON = `{
 	"ignore_patterns": ["docs/**", "*.md"],
 	"review": {"path_rules": [{"paths": ["internal/**"], "guidance": "check the contracts"}]},
 	"judge_paths": ["spec/**"],
-	"document": {"ownership": [{"subject": "the schema", "document": "docs/prd.html"}]},
+	"document": {"ownership": [{"subject": "the schema", "document": "docs/prd.md"}]},
 	"suppress_project_instructions": true,
 	"no_ci": true,
 	"checks_timeout": "30m",

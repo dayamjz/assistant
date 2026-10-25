@@ -2,7 +2,7 @@ package principles
 
 import "strconv"
 
-// Principle is one of the numbered principles in section 4 of docs/prd.html.
+// Principle is one of the numbered principles in section 4 of docs/prd.md.
 // The PRD owns the list; the constants below are how a test names one in code,
 // and Check pins them to the PRD in both directions, so a principle the PRD
 // gains and this block does not is a failure rather than a silent omission.

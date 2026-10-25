@@ -9,7 +9,7 @@ import (
 )
 
 // PRDPath is where the PRD lives, relative to the module root, in slash form.
-const PRDPath = "docs/prd.html"
+const PRDPath = "docs/prd.md"
 
 // ErrPRD reports that the PRD's principle list could not be read. Every
 // refusal below wraps it. A list this package cannot read is a refusal and

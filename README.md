@@ -232,7 +232,7 @@ The roadmap shows intent, not a shipping commitment. The implementation and [ope
 
 - [Operator guide](docs/operators.md): setup, pushes, decisions, and recovery
 - [Multi-agent support](docs/multi-agent-support.md): adapters, roles, model pins, and fallback behavior
-- [Product requirements](docs/prd.html): principles, contracts, limitations, and deferred features
+- [Product requirements](docs/prd.md): principles, contracts, limitations, and deferred features
 - [End-to-end verification](internal/journey/README.md): what the tests establish
 
 Assistant is developed in Go. For repository checks, use `make check` with the toolchain and lint dependencies specified by the project.

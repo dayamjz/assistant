@@ -7,7 +7,7 @@ independently reviewed, tested, documented, and linted. Package rules are in
 
 ## The specification is checked in
 
-- `docs/prd.html` is the product requirements and the contract this code answers
+- `docs/prd.md` is the product requirements and the contract this code answers
   to. Read the section you are working in before you change behavior.
 - Its section 4 lists fifteen numbered principles, `P1` through `P15`. They are
   acceptance criteria, not aspirations: each exists because the failure it
