@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -43,7 +42,8 @@ func TestUncommittedDigestDoesNotBlockOnAFifo(t *testing.T) {
 	// The call has no deadline of its own: one would also bound the git
 	// invocations the digest makes, and a loaded machine fails those for
 	// reasons that have nothing to do with the FIFO. A digest that opened
-	// the FIFO would wait for a writer forever, which hangLimit catches.
+	// the FIFO would wait for a writer forever, which hangLimit catches,
+	// and AwaitFifoDigest bounds every step after that too.
 	type result struct {
 		digest string
 		err    error
@@ -53,30 +53,18 @@ func TestUncommittedDigestDoesNotBlockOnAFifo(t *testing.T) {
 		digest, err := repo.UncommittedDigest(ctx(t))
 		done <- result{digest, err}
 	}()
-	select {
-	case got := <-done:
-		if got.err != nil {
-			t.Fatalf("digest of a FIFO: %v", got.err)
-		}
-		if got.digest == before {
-			t.Fatal("replacing a tracked file with a FIFO left the digest unchanged")
-		}
-		again, err := repo.UncommittedDigest(ctx(t))
-		if err != nil || again != got.digest {
-			t.Fatalf("second digest %q, error %v; want the same %q", again, err, got.digest)
-		}
-	case <-time.After(hangLimit):
-		releaseFifo(full)
-		<-done
-		t.Fatalf("UncommittedDigest did not return within %s: it waited on the FIFO", hangLimit)
+	got, err := vcs.AwaitFifoDigest(done, full, hangLimit, vcs.FifoGrace)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-// releaseFifo opens path for writing, which ends a read open that is
-// waiting there for a writer, so a digest a failing test caught waiting
-// does not outlive it.
-func releaseFifo(path string) {
-	if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
-		_ = f.Close()
+	if got.err != nil {
+		t.Fatalf("digest of a FIFO: %v", got.err)
+	}
+	if got.digest == before {
+		t.Fatal("replacing a tracked file with a FIFO left the digest unchanged")
+	}
+	again, err := repo.UncommittedDigest(ctx(t))
+	if err != nil || again != got.digest {
+		t.Fatalf("second digest %q, error %v; want the same %q", again, err, got.digest)
 	}
 }

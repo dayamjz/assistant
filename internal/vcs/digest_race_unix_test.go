@@ -85,7 +85,7 @@ func TestUncommittedDigestOpenDoesNotBlockWhenAFifoReplacesTheFile(t *testing.T)
 	// invocations the digest makes, and a loaded machine fails those for
 	// reasons that have nothing to do with the FIFO. A digest that waited
 	// in the open would wait for a writer forever, which fifoHangLimit
-	// catches.
+	// catches, and AwaitFifoDigest bounds every step after that too.
 	type result struct {
 		digest string
 		err    error
@@ -95,15 +95,9 @@ func TestUncommittedDigestOpenDoesNotBlockWhenAFifoReplacesTheFile(t *testing.T)
 		digest, err := repo.UncommittedDigest(t.Context())
 		done <- result{digest, err}
 	}()
-	var got result
-	select {
-	case got = <-done:
-	case <-time.After(fifoHangLimit):
-		if f, err := os.OpenFile(note, os.O_WRONLY, 0); err == nil {
-			_ = f.Close()
-		}
-		<-done
-		t.Fatalf("UncommittedDigest did not return within %s: it waited in the open", fifoHangLimit)
+	got, err := AwaitFifoDigest(done, note, fifoHangLimit, FifoGrace)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if swapErr != nil {
 		t.Fatalf("replacing the file with a FIFO: %v", swapErr)
