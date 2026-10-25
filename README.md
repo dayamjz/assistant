@@ -113,9 +113,9 @@ The gate runs **nine stages in order**. Each can hold for a decision when it lac
 | Intent | Records the supplied change intent; automatic transcript-based inference is not yet implemented |
 | Rebase | Checks and reconciles the change against the target history where safe |
 | Review | Requests an independent agent review |
-| Test | Executes trusted test commands or holds when none are configured |
-| Document | Runs the configured documentation check or holds for a decision |
-| Lint | Executes trusted lint commands or holds when none are configured |
+| Test | Executes configured test commands (trusted by default) or holds when none are configured |
+| Document | Updates stale documentation with the configured command; a non-zero exit produces a non-blocking note, while a missing command or exit status holds for a person |
+| Lint | Executes configured lint commands (trusted by default) or holds when none are configured |
 | Push | Publishes the validated commit according to the gate's safety rules |
 | Pull request | Opens or updates the code-host PR/MR where supported |
 | Checks | Observes required code-host checks before completion |
@@ -126,7 +126,7 @@ The gate's pipeline also accounts for rebase, safety, scope, and host checks. It
 
 Assistant exposes human-readable and structured status, active task and run views, and recorded agent usage broken down by agent, role, model, provider, and effort. Run-level output-token budgets and home-wide usage ceilings provide distinct controls: a run budget can park an individual run, while a home ceiling can hold further agent starts.
 
-### Recorded example: one validated change
+### Recorded run: one validated change
 
 This is a real execution, not a mock-up. A small Go repository with a local upstream pushed one branch through the gate. The operator's `~/.assistant/config.yaml` pinned the review role and set both controls:
 
@@ -270,7 +270,7 @@ git push assistant YOUR_BRANCH
 assistant watch
 ```
 
-Validation covers only committed changes pushed to the `assistant` remote; ordinary pushes to `origin` are **not gated** by Assistant. Test, document, and lint commands must be configured in the trusted `assistant.json` on the default branch, otherwise their stages may hold. `init` can suggest commands but does not make an unmerged local config trusted. Assistant does not replace code-host CI or branch protection.
+Validation covers only committed changes pushed to the `assistant` remote; ordinary pushes to `origin` are **not gated** by Assistant. By default, test, document, and lint commands come from the trusted `assistant.json` on the default branch; without commands, those stages may hold. An operator can explicitly opt out of that default using the trusted-only `allow_pushed_commands` setting, which permits commands from a pushed branch. `init` can suggest commands but does not make an unmerged local config trusted. Assistant does not replace code-host CI or branch protection.
 
 | Command | What it helps you do |
 | --- | --- |
@@ -286,7 +286,7 @@ Validation covers only committed changes pushed to the `assistant` remote; ordin
 
 ## Operations and recovery
 
-A **hold** is a stage or task waiting for a decision; a **parked run** has stopped at a configured bound. An **investigation** can report findings without shipping code; **promotion** turns that investigation into a delivery task. **Kept work** is an isolated copy retained because the service cannot yet prove it is safe to remove. Use `assistant watch`, `assistant tasks`, and the operator guide to inspect those states; do not assume that every hold or kept-work recovery is automatic.
+A **hold** is a stage or task waiting for a person's decision; a **parked run** has stopped at a configured bound. An **investigation** can report findings without shipping code; **promotion** turns that investigation into a delivery task. **Kept work** is an isolated copy containing work not proven to have landed, so it is retained rather than removed. New tasks in that project wait until a person answers the kept-work decision. Use `assistant watch`, `assistant tasks`, and the operator guide to inspect those states; do not assume that every hold or kept-work recovery is automatic.
 
 ## Available now vs. on the roadmap
 
