@@ -607,3 +607,74 @@ func TestReclaimProcessRemovesAReplacedOwner(t *testing.T) {
 		t.Fatalf("replaced identity left %s: %v", gone, err)
 	}
 }
+
+// TestReclaimProcessLeavesANamespaceTempDirCannotMake plants directories
+// recorded as a departed owner, a replaced identity of this process, under
+// namespaces TempDir cannot produce: a character the encoding never emits,
+// an underscore that is not an escape, an empty namespace, and escapes that
+// decode to an empty path segment. ReclaimProcess leaves every one, as it
+// leaves any name that does not parse. The positive control is the same
+// owner under this process's own namespace, which it removes.
+func TestReclaimProcessLeavesANamespaceTempDirCannotMake(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	self, found, err := agents.Identify(os.Getpid())
+	if err != nil || !found {
+		t.Fatalf("identifying this process: %+v, %v, %v", self, found, err)
+	}
+	departed := agents.Identity{PID: self.PID, Start: self.Start + 1}
+	tag, err := RegisteredTempTag()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, namespace := range []string{"!", "A", "_", "_2", "a_", "", "_1a", "a_1", "a_1_1b"} {
+		path, err := replacedTempDir(namespace, departed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept = append(kept, path)
+	}
+	defer func() {
+		for _, path := range kept {
+			_ = os.RemoveAll(path)
+		}
+	}()
+	gone, err := replacedTempDir(tag, departed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(gone) }()
+	if err := ReclaimProcess(self.PID); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range kept {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("a namespace TempDir cannot make was removed: %s: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(gone); !os.IsNotExist(err) {
+		t.Fatalf("the departed owner's directory under this namespace was left: %s: %v", gone, err)
+	}
+}
+
+// TestAProducibleNamespaceIsExactlyOneEncodeNamespaceReturns checks the
+// namespace parse against encodeNamespace itself: every namespace it returns
+// for a module directory is accepted, and a namespace it cannot return is
+// not, so ReclaimProcess neither skips a directory TempDir made nor removes
+// one it could not have made.
+func TestAProducibleNamespaceIsExactlyOneEncodeNamespaceReturns(t *testing.T) {
+	for _, rel := range []string{"a", "internal/agents/standin", "a_b", "a/_b", "x/y_z/9"} {
+		tag, err := encodeNamespace(rel)
+		if err != nil {
+			t.Fatalf("encoding %q: %v", rel, err)
+		}
+		if !producibleTempTag(tag) {
+			t.Errorf("%q, encoded from %q, is refused", tag, rel)
+		}
+	}
+	for _, tag := range []string{"", "!", "A", "a-b", "_", "_2", "a_", "_1a", "a_1", "a_1_1b", "a__0"} {
+		if producibleTempTag(tag) {
+			t.Errorf("%q is accepted, and encodeNamespace returns it for no directory", tag)
+		}
+	}
+}

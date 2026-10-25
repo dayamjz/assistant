@@ -92,13 +92,12 @@ func SweepTempDirs() error {
 	if err != nil {
 		return fmt.Errorf("standin: listing test temp directories: %w", err)
 	}
-	prefix := tempPrefix(tag)
 	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+		if !entry.IsDir() {
 			continue
 		}
-		owner, ok := parseTempOwner(strings.TrimPrefix(entry.Name(), prefix))
-		if !ok {
+		namespace, owner, ok := parseTempName(entry.Name())
+		if !ok || namespace != tag {
 			continue
 		}
 		presence, err := owner.Presence()
@@ -117,9 +116,10 @@ func SweepTempDirs() error {
 }
 
 // ReclaimProcess removes temp directories whose recorded owner is pid when
-// that process is not still present. A live owner is left, and a name that
-// does not parse is left. A failed identity read is returned and that
-// directory is not removed.
+// that process is not still present, under any namespace TempDir can make.
+// A live owner is left, and so is a name that does not parse, including one
+// whose namespace TempDir cannot produce. A failed identity read is returned
+// and that directory is not removed.
 func ReclaimProcess(pid int) error {
 	if pid <= 0 {
 		return fmt.Errorf("standin: reclaiming temp directories of pid %d", pid)
@@ -129,15 +129,10 @@ func ReclaimProcess(pid int) error {
 		return fmt.Errorf("standin: listing test temp directories: %w", err)
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "at") {
+		if !entry.IsDir() {
 			continue
 		}
-		rest := strings.TrimPrefix(entry.Name(), "at")
-		_, ownerPart, ok := strings.Cut(rest, "-")
-		if !ok {
-			continue
-		}
-		owner, ok := parseTempOwner(ownerPart)
+		_, owner, ok := parseTempName(entry.Name())
 		if !ok || owner.PID != pid {
 			continue
 		}
@@ -278,6 +273,58 @@ func tempRoot() string {
 		return "/tmp"
 	}
 	return os.TempDir()
+}
+
+// parseTempName reads a name tempName made: the namespace and the recorded
+// owner. ok is false for any name tempName could not have made from a
+// namespace encodeNamespace produces, so a sweep never removes a directory
+// on the strength of a name this package did not write.
+func parseTempName(name string) (namespace string, owner agents.Identity, ok bool) {
+	rest, found := strings.CutPrefix(name, "at")
+	if !found {
+		return "", agents.Identity{}, false
+	}
+	// The encoding emits no hyphen, so the first one ends the namespace.
+	namespace, ownerPart, found := strings.Cut(rest, "-")
+	if !found || !producibleTempTag(namespace) {
+		return "", agents.Identity{}, false
+	}
+	owner, ok = parseTempOwner(ownerPart)
+	if !ok {
+		return "", agents.Identity{}, false
+	}
+	return namespace, owner, true
+}
+
+// producibleTempTag reports whether encodeNamespace returns tag for some
+// module directory: tag decodes, "_0" to '_' and "_1" to '/', with every
+// other byte a lowercase letter or a digit, to a path with no empty
+// segment, and that path encodes back to tag.
+func producibleTempTag(tag string) bool {
+	var rel strings.Builder
+	for i := 0; i < len(tag); i++ {
+		c := tag[i]
+		switch {
+		case c == '_' && i+1 < len(tag) && tag[i+1] == '0':
+			rel.WriteByte('_')
+			i++
+		case c == '_' && i+1 < len(tag) && tag[i+1] == '1':
+			rel.WriteByte('/')
+			i++
+		case (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'):
+			rel.WriteByte(c)
+		default:
+			return false
+		}
+	}
+	decoded := rel.String()
+	for segment := range strings.SplitSeq(decoded, "/") {
+		if segment == "" {
+			return false
+		}
+	}
+	encoded, err := encodeNamespace(decoded)
+	return err == nil && encoded == tag
 }
 
 func parseTempOwner(name string) (agents.Identity, bool) {
