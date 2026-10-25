@@ -41,7 +41,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(plan["packages"], "./internal/procgroup/guard")
 
     def test_prose_and_other_packages_run_nothing(self):
-        plan = run("internal/service/README.md", "internal/vcs/git.go", "docs/prd.html", "")
+        plan = run("internal/service/README.md", "internal/vcs/git.go", "docs/prd.md", "")
         self.assertEqual((plan["run"], plan["packages"], plan["leak_check_tests"]), (False, "", False))
 
     def test_the_leak_check_repeats_its_own_tests(self):

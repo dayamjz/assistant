@@ -2,12 +2,12 @@
 
 This is a short guide for the person or agent that pushes work through the gate
 and for whoever owns the repository's CI and merge settings. It describes what
-this build does today. [`prd.html`](prd.html) is the specification, and where
+this build does today. [`prd.md`](prd.md) is the specification, and where
 this page and the code could disagree, the code and the PRD win.
 
 ## Start here
 
-This is the detailed **operator reference**, not a short tutorial. Use the [README](../README.md) for a product overview and quick start; use this page when commands, configuration trust, safety decisions or failure recovery matter. The [PRD](prd.html) remains the contract.
+This is the detailed **operator reference**, not a short tutorial. Use the [README](../README.md) for a product overview and quick start; use this page when commands, configuration trust, safety decisions or failure recovery matter. The [PRD](prd.md) remains the contract.
 
 | Your question | Read |
 | --- | --- |

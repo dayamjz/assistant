@@ -150,7 +150,7 @@ func TestPathRuleScopeAndMatching(t *testing.T) {
 	if c.ReviewPathRules[1].Matches("internal/config/key.go") {
 		t.Error("the docs rule must not match a file under internal")
 	}
-	if !c.ReviewPathRules[1].Matches("docs/prd.html") {
+	if !c.ReviewPathRules[1].Matches("docs/prd.md") {
 		t.Error("the docs rule must match a file under docs")
 	}
 }

@@ -22,8 +22,8 @@
 // # What counts as a declaration
 //
 // The PRD declares an outcome by marking it inside one row of the contract
-// table in its Surfaces section: the section anchored <section id="surfaces">,
-// and inside it the row anchored <tr id="outcome-set">:
+// table in its Surfaces section: the section headed "## Surfaces", and inside
+// it the table row that carries the anchor <a id="outcome-set">:
 //
 //	<code data-outcome="finished">checks-passed</code>
 //	<code data-outcome="unfinished">executing</code>
@@ -36,20 +36,26 @@
 // reason one step further out, and because that row says it is where the set
 // is stated: a marker anywhere else in the document is a refusal rather than a
 // further outcome, so the sentence in the row stays true of the mechanism. The
-// rule is one a reader can apply by eye, and it is not tied to the classes on
-// the element, which are styling.
+// document is read as it renders, through internal/principles' RenderPRD, so
+// the row is the rendered table row however its source is spelled, and a row
+// or a marker that does not render as one, in a code block or an HTML comment,
+// declares nothing: a row moved into one is a document with no row.
+// The rule is one a reader can apply by eye, and it is not tied to any other
+// attribute on the element, which would be styling.
 //
 // Where the row itself lives is the other half, and it is a separate question
 // from where the markers are read. The row has to sit inside that one section,
 // so a row moved elsewhere is a refusal rather than a pin that stays green
 // while the section this package is documented against no longer states the
-// set. What that establishes is that the row is inside <section id="surfaces">,
-// by that section's id, and nothing about that section's number. Every claim
-// here about where the row lives names the section and the row by their
-// anchors. No refusal Report writes names the section by its number, so none
-// of them can send a reader to a section that has since been renumbered, and
-// the three that point a reader at the row name the row and the section by
-// their anchors: what those words name is then what the mechanism checks.
+// set. What that establishes is that the row is inside the section headed
+// "## Surfaces", by that heading, and nothing about that section's number.
+// internal/principles' PRD.Section owns where that section begins and ends.
+// Every claim here about where the row lives names the row by its anchor and
+// the section by its heading. No refusal Report writes names the section by
+// its number, so none of them can send a reader to a section that has since
+// been renumbered, and the three that point a reader at the row name the row
+// by its anchor and the section by its heading: what those words name is then
+// what the mechanism checks.
 //
 // That is as far as it goes, and the rest is a gap rather than a closure. This
 // repository cites the PRD by section number throughout, this package included,
@@ -73,7 +79,7 @@
 // match. Comparing membership alone would let the two drift into different
 // orders, where reading them side by side stops being how a reader checks
 // them. The two groups are compared for the same reason: the row states them
-// as two groups of four and two, and a set that alternates between the groups
+// as two groups, and a set that alternates between the groups
 // is one where that prose has come apart from the markers.
 //
 // # How it runs
