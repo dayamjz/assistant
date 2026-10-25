@@ -90,9 +90,6 @@ import (
 //     which PRD section 8's hold row gives the service for the checks
 //     stage's hold alone; section 6's stalled worker gives it this one too,
 //     and section 8 was not amended to say so.
-//   - A pass reads the screen of the latest attempt only. A stall hold whose
-//     attempt is no longer the latest is closed only when a probe of that
-//     attempt's own session reads it dead, which the pass takes for it.
 //   - Detection is at a pass, so a closure lands up to one interval after
 //     the screen changed or the worker died, and a pass that cannot take the
 //     task's slot defers it one interval more.

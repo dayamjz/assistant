@@ -40,8 +40,9 @@ func TestAStallHoldsOnlyARunningCapturedWorkerPastBothCounts(t *testing.T) {
 	if got := supervisor.Classify(unchanged, proof, elapsed, true, stallAt(6, 3, 3)); got.Level != supervisor.SurfaceInspectAndHold {
 		t.Errorf("the seventh surface at the defaults: got %+v, want the hold", got)
 	}
-	// A held task reads no evidence and surfaces on its window like any
-	// other; it still never holds again.
+	// A Running worker with no evidence of progress still holds past both
+	// counts; a task already held, which reads no evidence either, is the
+	// loop over the states below, and never holds again.
 	if got := supervisor.Classify(unchanged, absent, elapsed, true, stallAt(9, 1, 1)); got.Level != supervisor.SurfaceInspectAndHold {
 		t.Errorf("a Running worker with no evidence past both counts: got %+v, want the hold", got)
 	}
