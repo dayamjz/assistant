@@ -11,11 +11,11 @@ commands:
   format: "gofmt -w ."
 
 ignore_patterns:
-  - "docs/prd.html"
+  - "docs/prd.md"
 
 document:
   instructions: |
-    docs/prd.html is the specification and changes only by an explicit decision.
+    docs/prd.md is the specification and changes only by an explicit decision.
     Do not edit it to match the code; if the code and the PRD disagree, that is a
     finding, not a documentation gap.
     README.md owns the introduction and the development commands.

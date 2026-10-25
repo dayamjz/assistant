@@ -88,7 +88,7 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"ignore_patterns": ["docs/**", "*.md"],
 		"review": {"path_rules": [{"paths": ["internal/**"], "guidance": "check the contracts"}]},
 		"judge_paths": ["spec/**"],
-		"document": {"ownership": [{"subject": "the schema", "document": "docs/prd.html"}]},
+		"document": {"ownership": [{"subject": "the schema", "document": "docs/prd.md"}]},
 		"suppress_project_instructions": true,
 		"no_ci": true,
 		"checks_timeout": "30m",
@@ -150,7 +150,7 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	if got := strings.Join(c.JudgePaths.Strings(), ","); got != "spec/**" {
 		t.Errorf("JudgePaths = %q, want the document's list replacing the default", got)
 	}
-	if len(c.DocumentOwnership) != 1 || c.DocumentOwnership[0].Document != "docs/prd.html" {
+	if len(c.DocumentOwnership) != 1 || c.DocumentOwnership[0].Document != "docs/prd.md" {
 		t.Errorf("DocumentOwnership = %+v", c.DocumentOwnership)
 	}
 	if c.EscalationWindow != 15*time.Minute || c.RecheckWindow != 3*time.Hour || c.StallInspectionCount != 5 {

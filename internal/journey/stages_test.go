@@ -216,19 +216,40 @@ func TestTheStageListComesFromThePRDRatherThanFromTheBuild(t *testing.T) {
 	// because the row pattern needs a character between the tags, so it was
 	// refused for holding no rows and the empty-name branch had no control.
 	t.Run("an unreadable PRD refuses rather than yielding nothing", func(t *testing.T) {
+		const head = "### The nine stages\n\n| # | Stage | What |\n|---|---|---|\n"
 		for _, c := range []struct{ what, html, says string }{
-			{"no stage table at all", "<html><body><p>nothing here</p></body></html>",
-				`no "The nine stages" in the document`},
-			{"a heading with no rows under it", "The nine stages<p>prose and no table</p>",
+			{"no stage table at all", "# A PRD\n\nnothing here\n",
+				`no heading reading "The nine stages"`},
+			{"a heading with no table under it", "### The nine stages\n\nprose and no table\n",
+				"holds no table"},
+			{"a table with no rows under its header", head,
 				"has no rows this reads"},
+			{"rows with no header or delimiter, which render as text", "### The nine stages\n\n| 1 | **Intent** | x |\n",
+				"holds no table"},
+			{"a delimiter row narrower than the header, which renders no table",
+				"### The nine stages\n\n| # | Stage | What |\n|---|\n| 1 | **Intent** | x |\n",
+				"holds no table"},
+			{"a one-column header, which drops every other cell",
+				"### The nine stages\n\n| # |\n|---|\n| 1 | **Intent** | x |\n",
+				"row 1 renders 1 cell(s)"},
 			{"a row numbered past what a number holds",
-				`The nine stages<td class="prd-num">99999999999999999999</td><td><b>Intent</b></td>`,
+				head + "| 99999999999999999999 | **Intent** | x |\n",
 				`row 1 is numbered "99999999999999999999"`},
-			{"a table whose numbering skips", `The nine stages<td class="prd-num">1</td><td><b>Intent</b></td>` +
-				`<td class="prd-num">3</td><td><b>Review</b></td>`,
+			{"a table whose numbering skips", head + "| 1 | **Intent** | x |\n" +
+				"| 3 | **Review** | x |\n",
 				"row 2 is numbered 3"},
-			{"a row naming no stage", `The nine stages<td class="prd-num">1</td><td><b> </b></td>`,
+			{"a row naming no stage", head + "| 1 | <strong> </strong> | x |\n",
 				"row 1 names no stage"},
+			{"a row whose name is not bold", head + "| 1 | **Intent** | x |\n| 2 | Extra | x |\n",
+				"row 2 is not a stage row"},
+			{"a row whose bold is not the whole cell", head + "| 1 | **Intent** and more | x |\n",
+				"row 1 is not a stage row"},
+			{"a row without a leading pipe that is not a stage row", head + "| 1 | **Intent** | x |\nnot a stage | x | x |\n",
+				"row 2 is not a stage row"},
+			{"a second table in the subsection", head + "| 1 | **Intent** | x |\n\n| a | b |\n|---|---|\n| 2 | **Rebase** |\n",
+				"holds 2 tables"},
+			{"the rows in a closed fence", head + "```text\n| 1 | **Intent** | x |\n```\n",
+				"has no rows this reads"},
 		} {
 			_, err := journey.StagesFromPRD([]byte(c.html))
 			if err == nil {
@@ -243,12 +264,60 @@ func TestTheStageListComesFromThePRDRatherThanFromTheBuild(t *testing.T) {
 			}
 			t.Logf("%s refused as required: %v", c.what, err)
 		}
+
+		// Every row that renders is read, however it is spelled: a row
+		// without its leading pipe and a name bold in the other syntax are
+		// rows like any other, so neither is dropped.
+		got, err := journey.StagesFromPRD([]byte(head + "| 1 | **Intent** | x |\n2 | __Rebase__ | x |\n"))
+		if err != nil || strings.Join(got, ",") != "Intent,Rebase" {
+			t.Fatalf("a pipeless row with a __bold__ name read as %v, %v, want [Intent Rebase]", got, err)
+		}
+
 		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(principles.PRDPath)))
 		if err != nil {
 			t.Fatalf("reading the PRD: %v", err)
 		}
-		if _, err := journey.StagesFromPRD(body); err != nil {
+		prd, err := journey.StagesFromPRD(body)
+		if err != nil {
 			t.Fatalf("the real PRD was refused: %v", err)
+		}
+
+		// The same, derived from the real table rather than a fixture.
+		real := string(body)
+		const header = "| # | Stage | What it does and why it sits here | Fix rounds |\n|---|---|---|---|\n"
+		first, last := strings.Index(real, "| 1 | **Intent** |"), strings.Index(real, "| 9 | **Checks** |")
+		if first < 0 || last < first || strings.Count(real, header) != 1 {
+			t.Fatal("the real PRD's stage table does not have the header and the first and last rows these controls are built from")
+		}
+		end := last + strings.Index(real[last:], "\n")
+		for _, c := range []struct{ what, doc, says string }{
+			{"the real rows fenced as code", real[:first] + "```text\n" + real[first:end] + "\n```" + real[end:],
+				"has no rows this reads"},
+			{"the real delimiter row cut to one column", strings.Replace(real, header,
+				"| # | Stage | What it does and why it sits here | Fix rounds |\n|---|\n", 1),
+				"holds no table"},
+			{"the real header and delimiter cut to one column", strings.Replace(real, header, "| # |\n|---|\n", 1),
+				"row 1 renders 1 cell(s)"},
+		} {
+			_, err := journey.StagesFromPRD([]byte(c.doc))
+			if !errors.Is(err, journey.ErrPRDStages) || !strings.Contains(err.Error(), c.says) {
+				t.Fatalf("%s: StagesFromPRD = %v, want an ErrPRDStages saying %q", c.what, err, c.says)
+			}
+			t.Logf("%s refused as required: %v", c.what, err)
+		}
+
+		// A tenth real row, spelled without its leading pipe: it is read,
+		// so the list is ten long and disagrees with the build, rather than
+		// nine long and agreeing with it.
+		for _, extra := range []string{"10 | **Extra stage** | x | 3 |", "| 10 | __Extra stage__ | x | 3 |"} {
+			got, err := journey.StagesFromPRD([]byte(real[:end] + "\n" + extra + real[end:]))
+			if err != nil || len(got) != len(prd)+1 || got[len(got)-1] != "Extra stage" {
+				t.Fatalf("a tenth real row %q read as %v, %v, want the real %d stages and Extra stage", extra, got, err, len(prd))
+			}
+			if err := journey.AgreesWithPRD(got, pipeline.Order()); err == nil {
+				t.Fatalf("a tenth real row %q agreed with the build", extra)
+			}
+			t.Logf("a tenth real row %q is read, and disagrees with the build as required", extra)
 		}
 	})
 }

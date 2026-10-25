@@ -2,7 +2,7 @@
 // test claiming it.
 //
 // What that proves is narrow, and the narrowness is the first thing to say
-// about it. It proves that no principle in docs/prd.html is silently
+// about it. It proves that no principle in docs/prd.md is silently
 // unclaimed. It does not prove that a principle holds, that a test citing one
 // exercises it, or that the tests citing it are enough. A citation is a claim
 // a test makes about itself; this package checks that the claim was made and

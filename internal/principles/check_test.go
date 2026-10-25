@@ -15,19 +15,18 @@ import (
 // fail is worse than none, because it turns an area nobody examined into a
 // green tick.
 
-// prdHTML writes a document shaped the way FromPRD reads one: a principles
-// section with n badges in it. It also puts a badge that reads like a
-// principle outside that section, because the real PRD does the same in its
-// stage table and its configuration table.
-func prdHTML(n int) string {
+// prdMarkdown writes a document shaped the way FromPRD reads one: a
+// principles section with n badges in it, between two other sections. Each of
+// those others carries a badge that reads like a principle, which the rule
+// must not read, and the section after it is what ends the one before.
+func prdMarkdown(n int) string {
 	var b strings.Builder
-	b.WriteString("<html><body>\n")
-	b.WriteString(`<section id="stages"><span class="prd-num">P3</span></section>` + "\n")
-	b.WriteString(`<section id="principles" class="prd-anchor">` + "\n")
+	b.WriteString("# A PRD\n\n## Stages\n\n<kbd>P3</kbd> a stage that names a principle\n\n")
+	b.WriteString("## Principles\n\n")
 	for i := 1; i <= n; i++ {
-		b.WriteString(`  <div class="collapse-title"><span class="badge prd-num">P` + strconv.Itoa(i) + `</span> a principle</div>` + "\n")
+		b.WriteString("<details>\n<summary><kbd>P" + strconv.Itoa(i) + "</kbd> a principle</summary>\n\nWhat it says.\n\n</details>\n\n")
 	}
-	b.WriteString("</section>\n</body></html>\n")
+	b.WriteString("## Decisions\n\n| 1 | <kbd>P1</kbd> is cited here |\n")
 	return b.String()
 }
 
@@ -36,7 +35,7 @@ func prdHTML(n int) string {
 func tree(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
-	write(t, root, filepath.FromSlash(PRDPath), prdHTML(len(All())))
+	write(t, root, filepath.FromSlash(PRDPath), prdMarkdown(len(All())))
 	for name, body := range files {
 		write(t, root, filepath.FromSlash(name), body)
 	}
@@ -275,7 +274,7 @@ func TestSomething(t *testing.T) {
 // that is a failure rather than a principle nobody has to account for.
 func TestAPrincipleWithNoConstantHereIsReported(t *testing.T) {
 	root := t.TempDir()
-	write(t, root, filepath.FromSlash(PRDPath), prdHTML(len(All())+1))
+	write(t, root, filepath.FromSlash(PRDPath), prdMarkdown(len(All())+1))
 	write(t, root, "a_test.go", source(`
 func TestSomething(t *testing.T) {
 	principles.Cite(t, principles.P1)
@@ -297,7 +296,7 @@ func TestSomething(t *testing.T) {
 // list is a finding rather than an extra.
 func TestAPrincipleTheDocumentNoLongerListsIsReported(t *testing.T) {
 	root := t.TempDir()
-	write(t, root, filepath.FromSlash(PRDPath), prdHTML(1))
+	write(t, root, filepath.FromSlash(PRDPath), prdMarkdown(1))
 	write(t, root, "a_test.go", source(`
 func TestSomething(t *testing.T) {
 	principles.Cite(t, principles.P1)
@@ -338,7 +337,7 @@ func TestSomething(t *testing.T) {
 // must not read as reporting no problem.
 func TestAScanThatCouldNotHaveFoundACitationIsRefused(t *testing.T) {
 	root := t.TempDir()
-	write(t, root, filepath.FromSlash(PRDPath), prdHTML(len(All())))
+	write(t, root, filepath.FromSlash(PRDPath), prdMarkdown(len(All())))
 	if _, err := check(root, declaredExcept()); !errors.Is(err, ErrScan) {
 		t.Fatalf("check of a root with no test file = %v, want an ErrScan", err)
 	}

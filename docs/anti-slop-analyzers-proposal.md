@@ -1,7 +1,7 @@
 # Anti-slop analyzers: proposal
 
 Status: proposal, with decisions D1-D3 taken by the owner on 2026-10-14
-(section 6). Nothing here is implemented, and nothing in `docs/prd.html`
+(section 6). Nothing here is implemented, and nothing in `docs/prd.md`
 changes because of it.
 
 ## 1. Problem
