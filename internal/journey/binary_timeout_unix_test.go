@@ -250,7 +250,10 @@ func pidOnceStarted(path string, exited <-chan error, limit time.Duration) (int,
 		}
 		select {
 		case err := <-exited:
-			return 0, fmt.Errorf("the harness exited first (%v)", err)
+			if err == nil {
+				return 0, errors.New("the harness exited first, with status 0")
+			}
+			return 0, fmt.Errorf("the harness exited first: %w", err)
 		default:
 		}
 		if time.Now().After(deadline) {
