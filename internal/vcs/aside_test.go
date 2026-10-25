@@ -297,14 +297,12 @@ func TestGitPathNamesWhatAWorktreeKeepsOfItsOwn(t *testing.T) {
 	}
 }
 
-// Configuration is read as git reads it, and the repository directory as
-// git names it: ConfigBool reports a key unset as unset, reads git's
+// Configuration is read as git reads it: ConfigBool reports a key unset as unset, reads git's
 // spellings of a boolean ("yes", "off") as git does, and refuses a value
 // git does not read as one; ConfigValue reports the last of several values
-// set, as git uses; GitDir names a main working copy's .git and a linked
-// worktree's own directory in its repository.
-func TestConfigAndTheRepositoryDirectoryAreReadAsGitReadsThem(t *testing.T) {
-	repo, dir, linked, _, _ := asideSubject(t)
+// set, as git uses.
+func TestConfigIsReadAsGitReadsIt(t *testing.T) {
+	repo, dir, _, _, _ := asideSubject(t)
 	c := ctx(t)
 	if value, set, err := repo.ConfigBool(c, "core.sparseCheckout"); err != nil || set || value {
 		t.Fatalf("ConfigBool of an unset key = %v, %v, %v; want unset", value, set, err)
@@ -331,24 +329,50 @@ func TestConfigAndTheRepositoryDirectoryAreReadAsGitReadsThem(t *testing.T) {
 	if _, set, err := repo.ConfigValue(c, "x.unset"); err != nil || set {
 		t.Fatalf("ConfigValue of an unset key = %v, %v; want unset", set, err)
 	}
-	wt, err := vcs.OpenWorktree(c, linked)
+}
+
+// ConfigValue answers as git puts the value on the wire, round 26's
+// second finding: git config -z --get ends the last value set with a NUL,
+// and exits 1 for a key not set, so an explicitly empty value is a value.
+// Each case's want is derived from git's own bytes for the key, read
+// directly: a key set to first and then to nothing, a key set only to
+// nothing, a key with no value at all, and a key not set. Before,
+// ConfigValue split git's lines and dropped an empty one, answering first
+// for the first case and unset for the second.
+func TestConfigValueIsWhatGitPutsOnTheWire(t *testing.T) {
+	repo, dir, _, _, _ := asideSubject(t)
+	c := ctx(t)
+	config := filepath.Join(dir, ".git", "config")
+	raw, err := os.ReadFile(config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	common, err := filepath.EvalSymlinks(filepath.Join(dir, ".git"))
-	if err != nil {
+	for _, k := range []struct{ name, section, key string }{
+		{"first and then nothing", "[a]\n\ty = first\n\ty = \"\"\n", "a.y"},
+		{"nothing alone", "[b]\n\ty =\n", "b.y"},
+		{"no value at all", "[c]\n\ty\n", "c.y"},
+		{"not set", "", "d.y"},
+	} {
+		t.Run(k.name, func(t *testing.T) {
+			if err := os.WriteFile(config, append(append([]byte{}, raw...), k.section...), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out, err := tryRawGit(dir, "config", "-z", "--get", k.key)
+			wantSet := err == nil
+			want := strings.TrimSuffix(out, "\x00")
+			if !wantSet {
+				want = ""
+			}
+			got, set, err := repo.ConfigValue(c, k.key)
+			if err != nil || got != want || set != wantSet {
+				t.Fatalf("ConfigValue(%s) = %q, %v, %v; want %q, %v as git puts it on the wire (%q)", k.key, got, set, err, want, wantSet, out)
+			}
+		})
+	}
+	if err := os.WriteFile(config, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, w := range []struct {
-		repo *vcs.Repository
-		want string
-	}{{repo, common}, {wt, filepath.Join(common, "worktrees", "linked")}} {
-		got, err := w.repo.GitDir(c)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if resolved, err := filepath.EvalSymlinks(got); err != nil || resolved != w.want {
-			t.Fatalf("GitDir = %s (%s, %v); want %s", got, resolved, err, w.want)
-		}
+	if got, set, err := repo.ConfigValue(c, "a.y"); err != nil || set || got != "" {
+		t.Fatalf("ConfigValue once the key is gone = %q, %v, %v; want unset", got, set, err)
 	}
 }

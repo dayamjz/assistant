@@ -225,29 +225,24 @@ func (r *Repository) GitPath(ctx context.Context, name string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// GitDir is the absolute path of this working copy's own repository
-// directory as git reads it, git rev-parse --absolute-git-dir: a main
-// working copy's .git, or a linked worktree's directory in its
-// repository.
-func (r *Repository) GitDir(ctx context.Context) (string, error) {
-	out, err := r.run(ctx, "git-dir", "rev-parse", "--absolute-git-dir")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
 // ConfigValue is the value git reads for the configuration key, the last
-// one set when several are, and whether it is set at all.
+// one set when several are, and whether it is set at all, as git config
+// -z --get puts it on the wire: the value ended by a NUL, or exit status 1
+// for a key not set. An explicitly empty value, and a key given with no
+// value, are set and empty.
 func (r *Repository) ConfigValue(ctx context.Context, key string) (string, bool, error) {
 	if err := checkArg("key", key); err != nil {
 		return "", false, err
 	}
-	values, err := r.configValues(ctx, key)
-	if err != nil || len(values) == 0 {
+	out, code, err := r.runExpecting(ctx, "config-get", []int{1}, "config", "-z", "--get", key)
+	if err != nil || code == 1 {
 		return "", false, err
 	}
-	return values[len(values)-1], true, nil
+	value, ok := strings.CutSuffix(string(out), "\x00")
+	if !ok {
+		return "", false, &outputError{op: "config-get", detail: "the value of " + key + " is not ended by a NUL"}
+	}
+	return value, true, nil
 }
 
 // ConfigBool is the boolean git reads for the configuration key, by git's
