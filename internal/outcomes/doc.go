@@ -35,10 +35,11 @@
 // outcome once. The row and not the section is what is read for the same
 // reason one step further out, and because that row says it is where the set
 // is stated: a marker anywhere else in the document is a refusal rather than a
-// further outcome, so the sentence in the row stays true of the mechanism. A
-// fenced code block renders as code, so the rule reads only outside one, by
-// internal/principles' PRDProse: a fenced example of the row or a marker
-// declares nothing, and a row moved into a fence is a document with no row.
+// further outcome, so the sentence in the row stays true of the mechanism. The
+// document is read as it renders, through internal/principles' RenderPRD, so
+// the row is the rendered table row however its source is spelled, and a row
+// or a marker that does not render as one, in a code block or an HTML comment,
+// declares nothing: a row moved into one is a document with no row.
 // The rule is one a reader can apply by eye, and it is not tied to any other
 // attribute on the element, which would be styling.
 //
@@ -48,7 +49,7 @@
 // while the section this package is documented against no longer states the
 // set. What that establishes is that the row is inside the section headed
 // "## Surfaces", by that heading, and nothing about that section's number.
-// internal/principles' PRDSection owns where that section begins and ends.
+// internal/principles' PRD.Section owns where that section begins and ends.
 // Every claim here about where the row lives names the row by its anchor and
 // the section by its heading. No refusal Report writes names the section by
 // its number, so none of them can send a reader to a section that has since

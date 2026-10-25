@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	xhtml "golang.org/x/net/html"
+
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/stages"
@@ -25,23 +27,12 @@ import (
 // construction itself fails.
 var ErrPRDStages = errors.New("journey: PRD section 5's stage table could not be read")
 
-// prdStageRow matches one row of that table: a Markdown table row whose first
-// cell is the number and whose second is the stage's name in bold, the bold
-// being the whole of the cell. The table is the PRD's own and this reads it as
-// written.
-var prdStageRow = regexp.MustCompile(`^ {0,3}\|[ \t]*(\d+)[ \t]*\|[ \t]*\*\*([^*|\n]+)\*\*[ \t]*\|`)
-
-// prdTableLine matches any line a Markdown table is made of: one that starts
-// with a pipe, indented at most three spaces.
-var prdTableLine = regexp.MustCompile(`^ {0,3}\|`)
-
-// prdDelimiterRow matches the line under a table's header that makes it a
-// table: cells of dashes, each optionally colon-aligned.
-var prdDelimiterRow = regexp.MustCompile(`^ {0,3}\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?$`)
+// prdStageNumber is the shape of a stage row's first cell.
+var prdStageNumber = regexp.MustCompile(`^[0-9]+$`)
 
 // prdStagesHeading is the heading of the subsection of PRD section 5 that
 // holds the stage table, read at level three through internal/principles'
-// PRDSection, which owns where a section of the PRD begins and ends.
+// PRD.Section, which owns where a section of the PRD begins and ends.
 const prdStagesHeading = "The nine stages"
 
 // StagesFromPRD returns the stages PRD section 5's table names, in the order it
@@ -52,65 +43,67 @@ const prdStagesHeading = "The nine stages"
 // one it silently agrees with, which is the difference between measuring the
 // product and following it.
 //
-// The table is the one table in the subsection headed "### The nine stages",
-// read from internal/principles' PRDProse copy, so a table or a row inside a
-// fenced code block, which renders as code, is not read. Every row of that
-// table is read, and every one has to be a stage row: a number, then the
-// stage's name in bold as the whole of the cell. A row this cannot read as
-// one is a refusal, never a row left out, because a list one row short of the
-// table is a list that agrees with a build the table no longer describes.
+// The table is read as it renders, through internal/principles' RenderPRD: the
+// one table the subsection headed "The nine stages" holds, every body row of
+// it, and each row's cells as the renderer built them. So whatever Markdown
+// allows a row to be spelled as, a row is read exactly when it renders as one,
+// and a table that does not render, as one whose delimiter row does not match
+// its header, is no table. Every body row has to be a stage row: its first
+// cell a number, and its second cell holding the stage's name in bold and
+// nothing else. A row that is not one is a refusal, never a row left out,
+// because a list one row short of the table is a list that agrees with a build
+// the table no longer describes.
 //
 // It refuses a document whose subsection it cannot delimit, one with no table
-// or more than one table-shaped run of lines in that subsection, a table with
-// no rows under its header, a row it cannot read, and numbering that is not
-// one through however many rows the table holds.
+// or more than one in that subsection, a table with no body rows, a row it
+// cannot read, and numbering that is not one through however many rows the
+// table holds.
 //
-// What it leaves open is what those two rules leave open, which their own
-// comments state, and the names themselves: a name is taken as written, and
-// what holds it to the build is AgreesWithPRD and its mapping table.
+// What it leaves open is what RenderPRD leaves open, which its comment states,
+// and the names themselves: a name is taken as written, and what holds it to
+// the build is AgreesWithPRD and its mapping table.
 func StagesFromPRD(doc []byte) ([]string, error) {
-	prose, err := principles.PRDProse(doc)
+	prd, err := principles.RenderPRD(doc)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrPRDStages, err)
 	}
-	from, to, err := principles.PRDSection(doc, 3, prdStagesHeading)
+	section, err := prd.Section(3, prdStagesHeading)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrPRDStages, err)
 	}
-	var table []string
-	runs := 0
-	inRun := false
-	for _, line := range strings.Split(string(prose[from:to]), "\n") {
-		line = strings.TrimRight(line, " \t\r")
-		isRow := prdTableLine.MatchString(line)
-		if isRow && !inRun {
-			runs++
-		}
-		inRun = isRow
-		if isRow && runs == 1 {
-			table = append(table, line)
-		}
-	}
-	switch {
-	case runs == 0:
+	tables := section.Elements("table")
+	switch len(tables) {
+	case 0:
 		return nil, fmt.Errorf("%w: the %q subsection holds no table", ErrPRDStages, prdStagesHeading)
-	case runs > 1:
-		return nil, fmt.Errorf("%w: the %q subsection holds %d runs of table lines, and this reads one table", ErrPRDStages, prdStagesHeading, runs)
-	case len(table) < 2 || !prdDelimiterRow.MatchString(table[1]):
-		return nil, fmt.Errorf("%w: the table under %q has no header and delimiter row, so it is not a table", ErrPRDStages, prdStagesHeading)
-	case len(table) == 2:
+	case 1:
+	default:
+		return nil, fmt.Errorf("%w: the %q subsection holds %d tables, and this reads one", ErrPRDStages, prdStagesHeading, len(tables))
+	}
+	var rows []*xhtml.Node
+	for _, tr := range section.Elements("tr") {
+		if inHead(tr) {
+			continue
+		}
+		rows = append(rows, tr)
+	}
+	if len(rows) == 0 {
 		return nil, fmt.Errorf("%w: the table under %q has no rows this reads", ErrPRDStages, prdStagesHeading)
 	}
-	named := make([]string, 0, len(table)-2)
-	for i, line := range table[2:] {
-		row := prdStageRow.FindStringSubmatch(line)
-		if row == nil {
-			return nil, fmt.Errorf("%w: row %d is not a stage row, a number then the stage's name in bold as the whole cell: %s",
-				ErrPRDStages, i+1, line)
+	named := make([]string, 0, len(rows))
+	for i, tr := range rows {
+		cells := children(tr, "td")
+		if len(cells) < 2 {
+			return nil, fmt.Errorf("%w: row %d renders %d cell(s), so it has no stage name to read: %s",
+				ErrPRDStages, i+1, len(cells), principles.Text(tr))
 		}
-		number, err := strconv.Atoi(row[1])
+		numberText := principles.Text(cells[0])
+		if !prdStageNumber.MatchString(numberText) {
+			return nil, fmt.Errorf("%w: row %d is not a stage row, a number then the stage's name in bold as the whole cell: %s",
+				ErrPRDStages, i+1, principles.Text(tr))
+		}
+		number, err := strconv.Atoi(numberText)
 		if err != nil {
-			return nil, fmt.Errorf("%w: row %d is numbered %q", ErrPRDStages, i+1, row[1])
+			return nil, fmt.Errorf("%w: row %d is numbered %q", ErrPRDStages, i+1, numberText)
 		}
 		if number != i+1 {
 			// A gap or a repeat means the rows this read are not the whole
@@ -119,13 +112,61 @@ func StagesFromPRD(doc []byte) ([]string, error) {
 			return nil, fmt.Errorf("%w: row %d is numbered %d, so the rows read are not the table in order",
 				ErrPRDStages, i+1, number)
 		}
-		name := strings.TrimSpace(row[2])
+		bold, ok := soleStrong(cells[1])
+		if !ok {
+			return nil, fmt.Errorf("%w: row %d is not a stage row, a number then the stage's name in bold as the whole cell: %s",
+				ErrPRDStages, i+1, principles.Text(tr))
+		}
+		name := principles.Text(bold)
 		if name == "" {
 			return nil, fmt.Errorf("%w: row %d names no stage", ErrPRDStages, i+1)
 		}
 		named = append(named, name)
 	}
 	return named, nil
+}
+
+// inHead reports whether a table row is in its table's header.
+func inHead(tr *xhtml.Node) bool {
+	for n := tr.Parent; n != nil; n = n.Parent {
+		if n.Type == xhtml.ElementNode {
+			switch n.Data {
+			case "thead":
+				return true
+			case "table":
+				return false
+			}
+		}
+	}
+	return false
+}
+
+// children returns n's element children named tag.
+func children(n *xhtml.Node, tag string) []*xhtml.Node {
+	var out []*xhtml.Node
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == xhtml.ElementNode && c.Data == tag {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// soleStrong returns the one strong element a cell holds when it holds that
+// and nothing else but whitespace, which is what bold as the whole cell
+// renders to.
+func soleStrong(cell *xhtml.Node) (*xhtml.Node, bool) {
+	var bold *xhtml.Node
+	for c := cell.FirstChild; c != nil; c = c.NextSibling {
+		switch {
+		case c.Type == xhtml.TextNode && strings.TrimSpace(c.Data) == "":
+		case c.Type == xhtml.ElementNode && c.Data == "strong" && bold == nil:
+			bold = c
+		default:
+			return nil, false
+		}
+	}
+	return bold, bold != nil
 }
 
 // PRDStages reads the stage list out of the PRD under a module root.

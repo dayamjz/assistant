@@ -10,12 +10,12 @@ paths: ["internal/outcomes/**"]
 - The row is the owner in the mechanism and not only in the prose: the whole
   extraction rule is a `data-outcome` attribute on a `<code>` in the table
   row carrying `<a id="outcome-set">`, and a marker anywhere else in the
-  document is a refusal rather than a further outcome. Only prose is read:
-  `principles.PRDProse` owns which bytes are fenced code, and nothing in a
-  fence is a row or a marker.
+  document is a refusal rather than a further outcome. The document is read
+  as it renders (`principles.RenderPRD`), so nothing in a code block or an
+  HTML comment is a row or a marker, and a row is a row however it is spelled.
 - The row has to sit inside the section headed `## Surfaces`, named by that
   heading because a section inserted earlier renumbers the section and not
-  the heading; `principles.PRDSection` owns where a section begins and ends.
+  the heading; `principles.PRD.Section` owns where a section begins and ends.
 - A set the rule cannot read is a refusal too, never a short list.
 - Agreement is not correctness.
 

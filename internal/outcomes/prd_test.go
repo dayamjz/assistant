@@ -133,6 +133,18 @@ func fenceLine(t *testing.T, doc, prefix string) string {
 	return doc[:at] + "\n```text\n" + doc[at:end] + "\n```\n" + doc[end:]
 }
 
+// TestFromPRDReadsARowSpelledWithoutItsLeadingPipe shows the row is read as it
+// renders: GFM makes a table row's leading pipe optional, and the same row
+// without it is the same row, read the same.
+func TestFromPRDReadsARowSpelledWithoutItsLeadingPipe(t *testing.T) {
+	full := prdMarkdown()
+	pipeless := strings.Replace(full, "| "+rowAnchor, rowAnchor, 1)
+	if pipeless == full {
+		t.Fatal("the fixture's row does not open with a pipe to remove")
+	}
+	assertReads(t, pipeless)
+}
+
 // TestFromPRDReadsNoMarkerInAFence is the other half of the fence rule: a
 // fenced marker is not refused, it is not read. An example of a declaration
 // set in code elsewhere in the section leaves the set what the row declares.
@@ -141,10 +153,11 @@ func TestFromPRDReadsNoMarkerInAFence(t *testing.T) {
 		"```html\n<code data-outcome=\"finished\">merged</code>\n```\n\n## Configuration", 1))
 }
 
-// TestFromPRDRefusesTheRealRowFenced derives its control from the real
-// docs/prd.md: the outcome row, fenced as code, is no row at all, so the
-// document is refused rather than read. The unmodified document is the
-// positive control, and it has to read.
+// TestFromPRDRefusesTheRealRowFenced derives its controls from the real
+// docs/prd.md: the outcome row fenced as code is no row at all, and its
+// declarations hidden in an HTML comment are none, so each document is
+// refused rather than read. The unmodified document is the positive control,
+// and it has to read.
 func TestFromPRDRefusesTheRealRowFenced(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(PRDPath)))
 	if err != nil {
@@ -157,6 +170,22 @@ func TestFromPRDRefusesTheRealRowFenced(t *testing.T) {
 	got, err := FromPRD([]byte(fenced))
 	if !errors.Is(err, ErrPRD) || !strings.Contains(err.Error(), "no "+rowAnchor) {
 		t.Fatalf("the real PRD with its outcome row fenced reads as %s, %v, want an ErrPRD saying there is no row", names(got), err)
+	}
+
+	// The real row's declarations hidden in an HTML comment: the row still
+	// renders, and declares nothing.
+	real := string(body)
+	at := strings.Index(real, "| "+rowAnchor)
+	end := at + strings.Index(real[at:], "\n")
+	row := real[at:end]
+	cell := strings.Index(row[2:], "| ") + 2
+	if at < 0 || cell < 2 || !strings.HasSuffix(row, " |") {
+		t.Fatal("the real outcome row is not shaped as these controls expect: a first cell, a second, and a closing pipe")
+	}
+	hidden := real[:at] + row[:cell] + "| <!-- " + row[cell+2:len(row)-2] + " --> |" + real[end:]
+	got, err = FromPRD([]byte(hidden))
+	if !errors.Is(err, ErrPRD) || !strings.Contains(err.Error(), "declares none") {
+		t.Fatalf("the real PRD with its row's declarations commented out reads as %s, %v, want an ErrPRD saying the row declares none", names(got), err)
 	}
 }
 
@@ -191,7 +220,11 @@ func TestFromPRDRefusesASetItCannotTrust(t *testing.T) {
 		{"a fenced block never closed", strings.Replace(full, owner, owner+"\n```\n", 1)},
 		{"no outcome row", strings.Replace(full, rowAnchor, `<a id="other">`, 1)},
 		{"two outcome rows", strings.Replace(full, rowAnchor, rowAnchor+rowAnchor, 1)},
-		{"the anchor not on a table row", strings.Replace(full, "| "+rowAnchor, rowAnchor, 1)},
+		{"the anchor not in a table row", strings.Replace(strings.Replace(full, rowAnchor+"</a>", "", 1),
+			"## Surfaces\n\n", "## Surfaces\n\n"+rowAnchor+"</a>The outcomes are below.\n\n", 1)},
+		{"the row's markers hidden in an HTML comment", strings.Replace(strings.Replace(full,
+			"Four say a run is finished with: ", "<!-- Four say a run is finished with: ", 1),
+			"</code>. |", "</code>. --> |", 1)},
 		{"no marker in it", strings.NewReplacer(
 			`data-outcome="finished"`, "", `data-outcome="unfinished"`, "").Replace(full)},
 		{"a marker outside the row, in the same section", strings.Replace(full,

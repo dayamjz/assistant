@@ -50,6 +50,10 @@ func TestFromPRDRefusesAListItCannotTrust(t *testing.T) {
 		{"a second heading with closing hashes", full + "\n## Principles ##\n\n<kbd>P4</kbd> a principle\n"},
 		{"a second heading at another level", full + "\n### Principles\n\n<kbd>P4</kbd> a principle\n"},
 		{"a second heading underlined", full + "\nPrinciples\n----------\n\n<kbd>P4</kbd> a principle\n"},
+		{"a second heading in bold", full + "\n## **Principles**\n\n<kbd>P4</kbd> a principle\n"},
+		{"a second heading spelled with a character reference", full + "\n## Princip&#108;es\n\n<kbd>P4</kbd> a principle\n"},
+		{"every badge indented as code", strings.ReplaceAll(full, "<details>\n<summary>", "    <details>\n    <summary>")},
+		{"a principle hidden in an HTML comment", hide(t, full, "<kbd>P2</kbd>")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -82,9 +86,10 @@ func TestFromPRDReadsNoBadgeInAFence(t *testing.T) {
 // TestFromPRDRefusesTheRealDocumentMisread derives each control from the real
 // docs/prd.md rather than from a fixture, so what is shown to refuse is a
 // misreading of the document this package actually reads: its principles
-// fenced as code, and a second principles section in each heading syntax the
-// section rule could otherwise miss. The unmodified document is the positive
-// control, and it has to read as every principle this package names.
+// rendered as code or hidden in a comment, and a second principles section
+// spelled each way a heading can be spelled to read the same. The unmodified
+// document is the positive control, and it has to read as every principle
+// this package names.
 func TestFromPRDRefusesTheRealDocumentMisread(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(PRDPath)))
 	if err != nil {
@@ -111,7 +116,11 @@ func TestFromPRDRefusesTheRealDocumentMisread(t *testing.T) {
 		{"the principles fenced as code", real[:start] + "\n```text\n" + real[start:end] + "\n```\n" + real[end:],
 			"lists none"},
 		{"a second section, closing hashes", real + "\n## Principles ##\n\n" + extra, "appears more than once"},
-		{"a second section, underlined", real + "\nPrinciples\n----------\n\n" + extra, "underlines the line before it"},
+		{"a second section, underlined", real + "\nPrinciples\n----------\n\n" + extra, "appears more than once"},
+		{"a second section, in bold", real + "\n## **Principles**\n\n" + extra, "appears more than once"},
+		{"a second section, a character reference", real + "\n## Princip&#108;es\n\n" + extra, "appears more than once"},
+		{"the principles indented as code", real[:start] + indent(real[start:end]) + real[end:], "lists none"},
+		{"P7 hidden in an HTML comment", hide(t, real, "<kbd>P7</kbd>"), "is P8, want P7"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := FromPRD([]byte(c.doc))
@@ -122,59 +131,86 @@ func TestFromPRDRefusesTheRealDocumentMisread(t *testing.T) {
 	}
 }
 
-// TestPRDProseBlanksFencedBlocksAndNothingElse pins what counts as code: the
-// fence lines and everything between them, in both fence characters, with the
-// document's length and every newline kept so offsets still line up.
-func TestPRDProseBlanksFencedBlocksAndNothingElse(t *testing.T) {
-	doc := "a\n```go\nx := 1\n```\nb\n~~~~\n```\nnot a close\n~~~~~\nc ```inline``` d\n"
-	got, err := PRDProse([]byte(doc))
-	if err != nil {
-		t.Fatalf("PRDProse: %v", err)
+// indent sets every non-empty line of s four spaces in, which renders it as
+// an indented code block.
+func indent(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if l != "" {
+			lines[i] = "    " + l
+		}
 	}
-	want := "a\n     \n      \n   \nb\n    \n   \n           \n     \nc ```inline``` d\n"
-	if string(got) != want {
-		t.Fatalf("PRDProse = %q, want %q", got, want)
+	return strings.Join(lines, "\n")
+}
+
+// hide wraps the one <details> block whose summary carries badge in an HTML
+// comment, so the principle no longer renders at all.
+func hide(t *testing.T, doc, badge string) string {
+	t.Helper()
+	at := strings.Index(doc, "<summary>"+badge)
+	open := strings.LastIndex(doc[:at], "<details")
+	end := strings.Index(doc[at:], "</details>")
+	if at < 0 || open < 0 || end < 0 {
+		t.Fatalf("the document has no <details> block for %s to hide", badge)
 	}
-	if _, err := PRDProse([]byte("a\n```\nnever closed\n")); !errors.Is(err, ErrPRDProse) {
-		t.Fatalf("PRDProse of an unclosed fence = %v, want an ErrPRDProse", err)
-	}
+	end += at + len("</details>")
+	return doc[:open] + "<!--\n" + doc[open:end] + "\n-->" + doc[end:]
 }
 
 // TestPRDSectionEndsWhereAReaderSeesTheNextSection pins where a section's
-// body begins and ends: after its own heading, at the next heading of level
-// one or two, never at a deeper heading or at a heading-shaped line inside a
-// fenced block, and at the end of the document when nothing follows.
+// body begins and ends in the rendered document: after its own heading, at the
+// next heading of its level or a higher one, never at a deeper heading or at a
+// heading-shaped line a code block holds, and at the end of the document when
+// nothing follows.
 func TestPRDSectionEndsWhereAReaderSeesTheNextSection(t *testing.T) {
 	doc := "# Title\n\n## A\n\nfirst\n\n### A sub\n\n```text\n## not a heading\n```\n\n" +
-		"~~~~\n# nor this\n~~~\n~~~~\nlast of A\n\n## B\n\nb body\n\n# Another top\n\n## C\n\nc body\n"
-	for _, c := range []struct{ heading, want string }{
-		{"A", "\nfirst\n\n### A sub\n\n```text\n## not a heading\n```\n\n~~~~\n# nor this\n~~~\n~~~~\nlast of A\n\n"},
-		{"B", "\nb body\n\n"},
-		{"C", "\nc body\n"},
+		"    # nor this\n\nlast of A\n\n## B\n\nb body\n\n# Another top\n\n## C\n\nc body\n"
+	prd, err := RenderPRD([]byte(doc))
+	if err != nil {
+		t.Fatalf("RenderPRD: %v", err)
+	}
+	for _, c := range []struct {
+		heading string
+		want    []string
+	}{
+		{"A", []string{"first", "last of A"}},
+		{"B", []string{"b body"}},
+		{"C", []string{"c body"}},
 	} {
-		from, to, err := PRDSection([]byte(doc), 2, c.heading)
+		section, err := prd.Section(2, c.heading)
 		if err != nil {
-			t.Fatalf("PRDSection(%q): %v", c.heading, err)
+			t.Fatalf("Section(%q): %v", c.heading, err)
 		}
-		if got := doc[from:to]; got != c.want {
-			t.Fatalf("PRDSection(%q) = %q, want %q", c.heading, got, c.want)
+		var got []string
+		for _, p := range section.Elements("p") {
+			got = append(got, Text(p))
+		}
+		if strings.Join(got, "|") != strings.Join(c.want, "|") {
+			t.Fatalf("Section(%q) holds paragraphs %q, want %q", c.heading, got, c.want)
 		}
 	}
 	for _, c := range []struct{ what, doc, heading, says string }{
-		{"no such heading", doc, "D", `no "## D" heading`},
+		{"no such heading", doc, "D", `no heading reading "D"`},
 		{"a deeper heading is not one", doc, "A sub", "is at level 3, not 2"},
+		{"a heading-shaped line in a fence is not one", doc, "not a heading", `no heading reading "not a heading"`},
+		{"a heading-shaped line indented as code is not one", doc, "nor this", `no heading reading "nor this"`},
+		{"the heading twice", doc + "\n## B\n", "B", "appears more than once"},
+		{"the heading again, indented", doc + "\n   ## B\n", "B", "appears more than once"},
 		{"the heading again with closing hashes", doc + "\n## B ##\n", "B", "appears more than once"},
 		{"the heading again at another level", doc + "\n#### B\n", "B", "appears more than once"},
-		{"an underlined heading anywhere", doc + "\nB\n===\n", "A", "underlines the line before it"},
-		{"an underline under a dash rule", doc + "\nB\n-\n", "A", "underlines the line before it"},
-		{"a heading-shaped line in a fence is not one", doc, "not a heading", `no "## not a heading" heading`},
-		{"the heading twice", doc + "\n## B\n", "B", "appears more than once"},
-		{"the heading twice, once indented", doc + "\n   ## B\n", "B", "appears more than once"},
-		{"a fence never closed", doc + "\n```\n## D\n", "B", "never closed"},
+		{"the heading again, underlined", doc + "\nB\n===\n", "B", "appears more than once"},
+		{"the heading again in emphasis", doc + "\n## *B*\n", "B", "appears more than once"},
+		{"the heading again as a character reference", doc + "\n## &#66;\n", "B", "appears more than once"},
+		{"the heading again with an inline anchor", doc + "\n## <a id=\"b\"></a>B\n", "B", "appears more than once"},
+		{"a fence never closed hides what follows", strings.Replace(doc, "## B", "```\n## B", 1), "B", `no heading reading "B"`},
 	} {
-		_, _, err := PRDSection([]byte(c.doc), 2, c.heading)
+		prd, err := RenderPRD([]byte(c.doc))
+		if err != nil {
+			t.Fatalf("%s: RenderPRD: %v", c.what, err)
+		}
+		_, err = prd.Section(2, c.heading)
 		if !errors.Is(err, ErrPRDSection) || !strings.Contains(err.Error(), c.says) {
-			t.Fatalf("%s: PRDSection(%q) = %v, want an ErrPRDSection saying %q", c.what, c.heading, err, c.says)
+			t.Fatalf("%s: Section(%q) = %v, want an ErrPRDSection saying %q", c.what, c.heading, err, c.says)
 		}
 	}
 }

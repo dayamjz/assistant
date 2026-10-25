@@ -119,10 +119,10 @@ repository more than one round of review.
 - Configuration schema: the key table in `internal/config/key.go`. A key's
   default, trust class, decoding, and where it lands in a `Config` are one row;
   add a key by adding a row, never a second list of keys elsewhere.
-- The PRD's path, which of its bytes are prose rather than fenced code, and
-  where one of its sections begins and ends: `internal/principles`
-  (`PRDPath`, `PRDProse`, `PRDSection`). A check that reads `docs/prd.md`
-  reads its declarations through them, never with a reader of its own.
+- The PRD's path and how it is read: `internal/principles` (`PRDPath`, and
+  `RenderPRD` with `PRD.Section`). A check that reads `docs/prd.md` reads
+  its declarations from the document as it renders, through them, never with
+  a reader of its own and never by matching the source.
 - Execution and every loop bound: `internal/graph`. Add a bound there, never
   beside the counter that reads it.
 - Git: only `internal/vcs` invokes it; add a typed operation there rather than
