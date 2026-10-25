@@ -2,7 +2,9 @@ package vcs
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -93,11 +95,26 @@ func (r *Repository) HEADTarget(ctx context.Context) (string, error) {
 
 // ReplaceIndexEntries makes the index hold, at each of paths, exactly the
 // entries given for it and no others, every stage included, through git's
-// update-index --index-info, and touches no other path and no file of the
-// working tree: a path given no entry is taken out of the index, and one
-// given entries of stages 1 to 3 is put back conflicted. Every entry's
-// path is one of paths. It is not anchored: the caller reads the entries
-// at those paths first and holds them to what it read before.
+// update-index --index-info, and touches no file of the working tree: a
+// path given no entry is taken out of the index, and one given entries of
+// stages 1 to 3 is put back conflicted. Every entry's path is one of
+// paths.
+//
+// It takes out no entry at a path it was not given. --index-info takes
+// out every entry a path it writes is a file or a directory of (an entry
+// written at a takes out a/child, one at b/x takes out b; round 30), so
+// the index is read first and every entry given is held against what
+// would stand beside it: the entries read at the paths not given, and the
+// other entries given. One whose path is a file or a directory of any of
+// theirs, at any stage, refuses with an *IndexDisplaceError naming each,
+// before git runs. A
+// path that is one of paths is replaced as asked, so an entry written at
+// a while a/child is among paths given nothing is not refused.
+//
+// It is not anchored: an entry staged between that read and git's write,
+// at one of paths or at a path an entry given is a file or a directory
+// of, is replaced or taken out unread. The caller reads the entries at
+// paths first and holds them to what it read before.
 func (r *Repository) ReplaceIndexEntries(ctx context.Context, paths []string, entries []IndexEntry) error {
 	if r.kind != KindWorktree {
 		return &openError{path: r.path, kind: KindWorktree}
@@ -106,6 +123,10 @@ func (r *Repository) ReplaceIndexEntries(ctx context.Context, paths []string, en
 		return nil
 	}
 	format, err := r.ObjectFormat(ctx)
+	if err != nil {
+		return err
+	}
+	now, err := r.IndexEntries(ctx)
 	if err != nil {
 		return err
 	}
@@ -132,8 +153,79 @@ func (r *Repository) ReplaceIndexEntries(ctx context.Context, paths []string, en
 		}
 		in.WriteString(e.Mode + " " + e.Object + " " + strconv.Itoa(e.Stage) + "\t" + e.Path + "\x00")
 	}
+	if displacing := displacements(now, named, entries); len(displacing) > 0 {
+		return &IndexDisplaceError{Displacing: displacing}
+	}
 	_, err = r.runInput(ctx, "update-index-info", in.Bytes(), "update-index", "-z", "--index-info")
 	return err
+}
+
+// IndexDisplaceError is ReplaceIndexEntries' refusal of entries that would
+// take out an entry it was not given to replace, or another entry given:
+// each path written and a path it would take out. Nothing was written.
+type IndexDisplaceError struct {
+	Displacing []IndexDisplacement
+}
+
+// IndexDisplacement is an entry's path written (Path) that is a file or a
+// directory of an entry's path that would stand beside it (Displaced).
+type IndexDisplacement struct {
+	Path      string
+	Displaced string
+}
+
+// Error names every path written and what it would take out.
+func (e *IndexDisplaceError) Error() string {
+	var each []string
+	for _, d := range e.Displacing {
+		each = append(each, d.Path+" would take out "+d.Displaced)
+	}
+	return "vcs: the index entries were not replaced, since git takes out an entry a path it writes is a file or a directory of: " + strings.Join(each, ", ")
+}
+
+// displacements is every entry of entries whose path is a file or a
+// directory of the path of an entry that would stand beside it: one of now
+// at a path not named, or another of entries. Stages are not told apart,
+// so an entry beside one at another stage is named too, whether or not
+// git would take it out.
+func displacements(now []IndexEntry, named map[string]bool, entries []IndexEntry) []IndexDisplacement {
+	beside := map[string]bool{}
+	for _, e := range now {
+		if !named[e.Path] {
+			beside[e.Path] = true
+		}
+	}
+	written := map[string]bool{}
+	for _, e := range entries {
+		written[e.Path] = true
+		beside[e.Path] = true
+	}
+	// under is, for every directory of a path standing, one path under it.
+	under := map[string]string{}
+	for p := range beside {
+		for d := p; strings.Contains(d, "/"); {
+			d = d[:strings.LastIndexByte(d, '/')]
+			if q, ok := under[d]; !ok || p < q {
+				under[d] = p
+			}
+		}
+	}
+	var out []IndexDisplacement
+	for p := range written {
+		if q, ok := under[p]; ok {
+			out = append(out, IndexDisplacement{Path: p, Displaced: q})
+		}
+		for d := p; strings.Contains(d, "/"); {
+			d = d[:strings.LastIndexByte(d, '/')]
+			if beside[d] {
+				out = append(out, IndexDisplacement{Path: p, Displaced: d})
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b IndexDisplacement) int {
+		return cmp.Or(strings.Compare(a.Path, b.Path), strings.Compare(a.Displaced, b.Displaced))
+	})
+	return out
 }
 
 // IndexPathsMissing is every path the index holds an entry for that the

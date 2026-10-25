@@ -87,8 +87,11 @@ import (
 //     written between removeOnProof's last inventory and the removal goes
 //     with the clone, P12 cleanup's own window.
 //   - An index entry is replaced without an anchor of git's: content
-//     staged at the same path between the read that holds the index to
-//     what it was and the replacement is replaced unread.
+//     staged at the same path, or at a path the entry written is a file
+//     or a directory of, between vcs.ReplaceIndexEntries' own read of the
+//     index and git's write is replaced or taken out unread. Content
+//     staged there before that read refuses, and a restore leaves it
+//     where it is (restoreIndex).
 //   - A reflog moved aside is held to its content before the loss was
 //     read, so an entry written and taken out again in between, leaving
 //     the same bytes, is not seen.
@@ -636,6 +639,52 @@ func indexPlan(now []vcs.IndexEntry, targetTree map[string]vcs.TreeEntry) []asid
 	return plan
 }
 
+// keptIndexPath is an index path a restore leaves aside, and why.
+type keptIndexPath struct {
+	path asideIndexPath
+	why  string
+}
+
+// restoreIndex puts back the entries each path of back held, leaving
+// aside, each named in kept, every path whose entries would take out an
+// entry the restore does not put back (vcs.IndexDisplaceError): content
+// staged beside it since the discard wrote the index, at a path it is a
+// file or a directory of (round 30), which the restore did not set aside
+// and so never takes out. An error is returned with failed, the paths it
+// did not put back besides kept.
+func restoreIndex(ctx context.Context, copied *vcs.Repository, back []asideIndexPath) (kept []keptIndexPath, failed []asideIndexPath, err error) {
+	for len(back) > 0 {
+		err := replaceIndex(ctx, copied, back, func(p asideIndexPath) []vcs.IndexEntry { return p.Held })
+		var displace *vcs.IndexDisplaceError
+		if err == nil {
+			return kept, nil, nil
+		}
+		if !errors.As(err, &displace) {
+			return kept, back, err
+		}
+		displacing := map[string][]string{}
+		for _, d := range displace.Displacing {
+			displacing[d.Path] = append(displacing[d.Path], d.Displaced)
+		}
+		var rest []asideIndexPath
+		for _, p := range back {
+			if what, ok := displacing[p.Path]; ok {
+				kept = append(kept, keptIndexPath{path: p, why: "the index entries of " + p.Path +
+					", since putting them back would take out what is staged at " + strings.Join(what, ", ")})
+			} else {
+				rest = append(rest, p)
+			}
+		}
+		if len(rest) == len(back) {
+			// The refusal names no path being put back, so leaving some
+			// aside cannot answer it: all of back stays.
+			return kept, back, err
+		}
+		back = rest
+	}
+	return kept, nil, nil
+}
+
 // replaceIndex writes, at every path of plan, the entries entriesOf gives.
 func replaceIndex(ctx context.Context, copied *vcs.Repository, plan []asideIndexPath, entriesOf func(asideIndexPath) []vcs.IndexEntry) error {
 	var paths []string
@@ -715,12 +764,13 @@ func moveAsRead(from, to string, before copyState, what string) (bool, error) {
 // none stands, every path journalled as written from the target's tree is
 // taken out again only while git would store it as the blob written there
 // with its mode (holdsBlob), whoever wrote it, since its content is the
-// tree's, and every directory that made only while it is empty, each index path is put back only while it holds
-// what the discard wrote, every directory emptied is made again with its
-// mode, and every path set aside is moved back only where nothing has
-// taken its place. What could not be put back stays in dir and the
-// journal, named in the ErrAsideStands it returns; once all of it is back,
-// dir is removed.
+// tree's, and every directory that made only while it is empty, each
+// index path is put back only while it holds what the discard wrote and
+// only where that takes out no entry beside it (restoreIndex), every
+// directory emptied is made again with its mode, and every path set aside
+// is moved back only where nothing has taken its place. What could not
+// be put back stays in dir and the journal, named in the ErrAsideStands it
+// returns; once all of it is back, dir is removed.
 func (c *Cleaner) restoreAside(ctx context.Context, entry store.KeptWork, copied *vcs.Repository, dir string) error {
 	j, err := readJournal(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -851,10 +901,16 @@ func (c *Cleaner) restoreAside(ctx context.Context, entry store.KeptWork, copied
 					stays = append(stays, p)
 				}
 			}
-			if err := replaceIndex(ctx, copied, back, func(p asideIndexPath) []vcs.IndexEntry { return p.Held }); err != nil {
-				left = append(left, "the index: "+err.Error())
-				stays = append(stays, back...)
+			kept, failed, err := restoreIndex(ctx, copied, back)
+			for _, k := range kept {
+				left = append(left, k.why)
+				stays = append(stays, k.path)
 			}
+			if err != nil {
+				left = append(left, "the index: "+err.Error())
+				stays = append(stays, failed...)
+			}
+			slices.SortFunc(stays, func(a, b asideIndexPath) int { return strings.Compare(a.Path, b.Path) })
 			j.Index = stays
 			if err := save(); err != nil {
 				return err

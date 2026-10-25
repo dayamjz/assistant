@@ -264,6 +264,55 @@ func TestTheIndexIsReplacedByPathAndOnlyMissingPathsAreWritten(t *testing.T) {
 	}
 }
 
+// ReplaceIndexEntries takes out no entry at a path it was not given, round
+// 30's finding: git's update-index --index-info takes out every entry a
+// path it writes is a file or a directory of. With d/child staged, an
+// entry written at d, and with f staged, one written at f/x, each refuse
+// with an *IndexDisplaceError naming the path written and the one it would
+// take out, leaving the index as it was, as do entries given at d and at
+// d/x together, one of which git would take the other out for. The
+// positive control: d written while d/child is among the paths replaced,
+// given nothing, takes d/child out as asked and writes d. Before, each
+// refused write went through and dropped the staged entry.
+func TestAnIndexReplacementDisplacesNoEntryItWasNotGiven(t *testing.T) {
+	repo, dir, _, first, _ := asideSubject(t)
+	c := ctx(t)
+	a := strings.TrimSpace(rawGit(t, dir, "rev-parse", first+":a.txt"))
+	if err := os.MkdirAll(filepath.Join(dir, "d"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "d", "child"), "staged under d\n")
+	writeFile(t, filepath.Join(dir, "f"), "staged as f\n")
+	rawGit(t, dir, "add", "d/child", "f")
+	before := rawGit(t, dir, "ls-files", "--stage")
+	at := func(p string) vcs.IndexEntry { return vcs.IndexEntry{Mode: "100644", Object: a, Path: p} }
+	for _, r := range []struct {
+		name                string
+		paths               []string
+		entries             []vcs.IndexEntry
+		written, displacing string
+	}{
+		{"a file over a staged directory", []string{"d"}, []vcs.IndexEntry{at("d")}, "d", "d/child"},
+		{"a file under a staged file", []string{"f/x"}, []vcs.IndexEntry{at("f/x")}, "f/x", "f"},
+		{"two given entries, one a directory of the other", []string{"e", "e/x"}, []vcs.IndexEntry{at("e"), at("e/x")}, "e", "e/x"},
+	} {
+		err := repo.ReplaceIndexEntries(c, r.paths, r.entries)
+		var displace *vcs.IndexDisplaceError
+		if !errors.As(err, &displace) || !slices.Contains(displace.Displacing, vcs.IndexDisplacement{Path: r.written, Displaced: r.displacing}) {
+			t.Fatalf("ReplaceIndexEntries with %s = %v; want an *IndexDisplaceError naming %s displacing %s", r.name, err, r.written, r.displacing)
+		}
+		if now := rawGit(t, dir, "ls-files", "--stage"); now != before {
+			t.Fatalf("the index once %s was refused reads\n%s\nwant it as it was\n%s", r.name, now, before)
+		}
+	}
+	if err := repo.ReplaceIndexEntries(c, []string{"d", "d/child"}, []vcs.IndexEntry{at("d")}); err != nil {
+		t.Fatalf("ReplaceIndexEntries of d over d/child, both given: %v", err)
+	}
+	if got := rawGit(t, dir, "ls-files", "--stage", "--", "d", "f"); !strings.Contains(got, a+" 0\td\n") || strings.Contains(got, "d/child") || !strings.Contains(got, "\tf") {
+		t.Fatalf("the index reads %q once d is written over d/child; want d at %s, no d/child and f untouched", got, a)
+	}
+}
+
 // GitPath names where git keeps what a working copy keeps of its own: in a
 // linked worktree, its index and HEAD's reflog in its own directory in the
 // main repository's worktrees directory, and its references in the common

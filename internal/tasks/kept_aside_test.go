@@ -468,6 +468,118 @@ func TestARestoreLeavesContentStagedWhereTheDiscardWroteTheIndex(t *testing.T) {
 	}
 }
 
+// A restore never takes out an index entry it did not set aside, round
+// 30's finding: a landed clone is kept for a file staged and then deleted
+// from the working tree, so the index alone holds it and the discard takes
+// its entry out, and for an edit to g.txt, staged. Once the discard has
+// taken them out, content is staged where putting the first entry back
+// would displace it, the reviewer's sequence at a path under the staged
+// file (a/child, staged for a file a) and the same at a path above it (b,
+// staged for a file b/x). The discard refuses, and the restore leaves the
+// new staging where it is, refusing with ErrAsideStands naming the entry
+// it could not put back, and puts g.txt's staged edit back; once the
+// person unstages what they staged, a put-back puts the entry back and
+// leaves nothing aside. Before,
+// the restore wrote the entry back through git's update-index
+// --index-info, which takes out every entry a path it writes is a file or
+// directory of, so the new staging was dropped while the discard refused.
+func TestARestoreNeverDisplacesContentStagedBesideWhatItPutsBack(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	for _, c := range []struct{ name, lost, staged string }{
+		{"staged under it", "a", "a/child"},
+		{"staged above it", "b/x", "b"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			lost := filepath.FromSlash(c.lost)
+			s, tk, entry, shown := keptLanded(t, func(copyPath string) {
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(copyPath, lost)), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(copyPath, lost), []byte("staged only\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				rawGit(t, copyPath, "add", "--", c.lost)
+				if err := os.RemoveAll(filepath.Join(copyPath, strings.Split(lost, string(filepath.Separator))[0])); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(copyPath, "g.txt"), []byte("edited and staged\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				rawGit(t, copyPath, "add", "g.txt")
+			})
+			held, edit := indexAt(t, tk.copy, c.lost), indexAt(t, tk.copy, "g.txt")
+			if held == "" {
+				t.Fatalf("%s is not staged before the discard", c.lost)
+			}
+			var staged string
+			s.cleaner.betweenAsideAndCheck = func() error {
+				if now := indexAt(t, tk.copy, c.lost); now != "" {
+					return fmt.Errorf("the discard left %s staged as %q; want its entry taken out", c.lost, now)
+				}
+				if now := indexAt(t, tk.copy, "g.txt"); now == edit {
+					return fmt.Errorf("the discard left g.txt's edit staged, %q; want HEAD's entry written", now)
+				}
+				path := filepath.Join(tk.copy, filepath.FromSlash(c.staged))
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					return err
+				}
+				if err := os.WriteFile(path, []byte("staged once the discard took the entry out\n"), 0o600); err != nil {
+					return err
+				}
+				rawGit(t, tk.copy, "add", "--", c.staged)
+				if err := os.RemoveAll(filepath.Join(tk.copy, strings.Split(filepath.FromSlash(c.staged), string(filepath.Separator))[0])); err != nil {
+					return err
+				}
+				staged = indexAt(t, tk.copy, c.staged)
+				return nil
+			}
+			_, err := s.cleaner.Discard(ctx, entry, shown.Digest, shown.Lacks, "", nil)
+			s.cleaner.betweenAsideAndCheck = nil
+			if !errors.Is(err, ErrLossChanged) || !errors.Is(err, ErrAsideStands) || !strings.Contains(err.Error(), "index entries of "+c.lost) {
+				t.Fatalf("the discard over %s staged once the discard took %s out = %v; want ErrLossChanged and ErrAsideStands naming %s's index entries", c.staged, c.lost, err, c.lost)
+			}
+			if staged == "" {
+				t.Fatalf("%s was not staged", c.staged)
+			}
+			if now := indexAt(t, tk.copy, c.staged); now != staged {
+				t.Fatalf("%s's index entry reads %q after the refusal; want what was staged, %q", c.staged, now, staged)
+			}
+			if now := indexAt(t, tk.copy, c.lost); now != "" {
+				t.Fatalf("%s reads %q in the index after the refusal; want it still aside", c.lost, now)
+			}
+			if now := indexAt(t, tk.copy, "g.txt"); now != edit {
+				t.Fatalf("g.txt reads %q in the index after the refusal; want its staged edit put back, %q", now, edit)
+			}
+
+			rawGit(t, tk.copy, "rm", "--cached", "--quiet", "--", c.staged)
+			if err := s.cleaner.PutBack(ctx, entry, ""); err != nil {
+				t.Fatalf("PutBack once %s is unstaged: %v", c.staged, err)
+			}
+			if _, err := os.Lstat(asideDir(tk.copy)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("something is still set aside: %v", err)
+			}
+			if now := indexAt(t, tk.copy, c.lost); now != held {
+				t.Fatalf("%s reads %q in the index once put back; want %q", c.lost, now, held)
+			}
+		})
+	}
+}
+
+// indexAt is the index's entries at exactly path, as ls-files --stage
+// prints them, and none under it, which a pathspec naming a directory
+// would match.
+func indexAt(t *testing.T, copyPath, path string) string {
+	t.Helper()
+	var at []string
+	for _, line := range strings.Split(rawGit(t, copyPath, "ls-files", "--stage", "-z"), "\x00") {
+		if _, p, ok := strings.Cut(line, "\t"); ok && p == path {
+			at = append(at, line)
+		}
+	}
+	return strings.Join(at, "\n")
+}
+
 // A reflog goes back only once its reference does: a clone kept for a
 // commit of its own has its branch deleted and the branch's reflog set
 // aside, and once it has, the branch is made again, without a reflog, at a
