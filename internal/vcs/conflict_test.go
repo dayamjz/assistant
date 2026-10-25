@@ -43,37 +43,36 @@ func stoppedOnConflict(t *testing.T, eol string, config ...string) (*vcs.Reposit
 	return repo, dir, topic[:7]
 }
 
-// TestConflictMarkersAreTheLinesGitWrote reads the markers of a real
-// conflict. The closing marker names the replayed commit and is one. The
-// opening marker is the line "<<<<<<< HEAD", which the upstream side also
-// holds as content, so it is left out, and so is that side's other
-// marker-shaped line and every separator. Under the diff3 style the common
-// ancestor's marker is one too, and CRLF line endings are not part of a
-// line.
-func TestConflictMarkersAreTheLinesGitWrote(t *testing.T) {
+// TestMarkerBaselineIsWhatTheSidesHold reads a real conflict whose upstream
+// side documents conflict markers. The baseline is that side's two
+// marker-shaped lines, "<<<<<<< HEAD" and ">>>>>>> example", which are
+// content; the separator is never one. The file as git left it still holds
+// a marker no side holds, the closing marker naming the replayed commit, so
+// MarkersLeft names it. Under the diff3 style the common ancestor's marker is
+// another, and CRLF line endings are not part of a line.
+func TestMarkerBaselineIsWhatTheSidesHold(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		eol    string
 		config []string
-		extra  string
 	}{
 		{name: "merge style", eol: "\n"},
-		{name: "diff3 style", eol: "\n", config: []string{"merge.conflictStyle=diff3"}, extra: "||||||| parent of "},
+		{name: "diff3 style", eol: "\n", config: []string{"merge.conflictStyle=diff3"}},
 		{name: "crlf", eol: "\r\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			repo, _, topic := stoppedOnConflict(t, c.eol, c.config...)
-			markers, err := repo.ConflictMarkers(ctx(t))
+			repo, _, _ := stoppedOnConflict(t, c.eol, c.config...)
+			baseline, err := repo.MarkerBaseline(ctx(t))
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := markers["clash.txt"]
-			want := []string{">>>>>>> " + topic + " (topic edit)"}
-			if c.extra != "" {
-				want = []string{c.extra + topic + " (topic edit)", want[0]}
+			want := []string{"<<<<<<< HEAD", ">>>>>>> example"}
+			if got := baseline["clash.txt"]; !slices.Equal(got, want) || len(baseline) != 1 {
+				t.Fatalf("baseline = %q, want clash.txt with %q", baseline, want)
 			}
-			if !slices.Equal(got, want) || len(markers) != 1 {
-				t.Fatalf("markers = %q, want clash.txt with %q", markers, want)
+			left, err := repo.MarkersLeft(ctx(t), baseline)
+			if err != nil || !slices.Equal(left, []string{"clash.txt"}) {
+				t.Fatalf("markers left in the file as git left it: %q, %v; want clash.txt", left, err)
 			}
 		})
 	}
@@ -86,7 +85,7 @@ func TestConflictMarkersAreTheLinesGitWrote(t *testing.T) {
 // none.
 func TestMarkersLeftReadsTheWorktreeFile(t *testing.T) {
 	repo, dir, _ := stoppedOnConflict(t, "\n")
-	markers, err := repo.ConflictMarkers(ctx(t))
+	markers, err := repo.MarkerBaseline(ctx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,4 +166,26 @@ func readText(t *testing.T, path string) string {
 		t.Fatalf("reading %s: %v", path, err)
 	}
 	return string(content)
+}
+
+// TestARelabeledMarkerIsStillLeft rewrites the label of the closing marker
+// git wrote, so the exact line git wrote is gone while a
+// line shaped like a marker that neither side holds remains. That file
+// still holds a conflict marker, and MarkersLeft names it.
+func TestARelabeledMarkerIsStillLeft(t *testing.T) {
+	repo, dir, topic := stoppedOnConflict(t, "\n")
+	markers, err := repo.MarkerBaseline(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "clash.txt")
+	relabeled := strings.ReplaceAll(readText(t, path), ">>>>>>> "+topic+" (topic edit)", ">>>>>>> theirs")
+	writeFile(t, path, "edited\n"+relabeled)
+	left, err := repo.MarkersLeft(ctx(t), markers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(left, []string{"clash.txt"}) {
+		t.Fatalf("markers left in %q after relabeling, want clash.txt:\n%s", left, readText(t, path))
+	}
 }

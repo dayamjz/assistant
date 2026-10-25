@@ -98,12 +98,12 @@ func TestConflictReadsFromAnUnrelatedSubdirectoryHandle(t *testing.T) {
 	if len(want) != 1 || len(got) != len(want) || got["clash.txt"] != want["clash.txt"] {
 		t.Fatalf("conflict records from the subdirectory %v, from the root %v", got, want)
 	}
-	markers, err := sub.ConflictMarkers(ctx(t))
+	markers, err := sub.MarkerBaseline(ctx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(markers["clash.txt"]) == 0 {
-		t.Fatalf("conflict markers from the subdirectory: %v, want clash.txt's", markers)
+	if _, ok := markers["clash.txt"]; !ok || len(markers) != 1 {
+		t.Fatalf("marker baseline from the subdirectory: %v, want clash.txt", markers)
 	}
 	left, err := sub.MarkersLeft(ctx(t), markers)
 	if err != nil || !slices.Equal(left, []string{"clash.txt"}) {

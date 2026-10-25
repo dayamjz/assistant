@@ -101,9 +101,17 @@ func (r *Repository) RebaseContinue(ctx context.Context) error {
 // When nothing remains, the rebase is finished. The editor every invocation
 // runs exits non-zero, so a skip that still has to ask for a commit message
 // fails rather than waits.
+//
+// Like RebaseContinue, it is stated for the merge backend, which Rebase
+// starts: a rebase-apply directory is refused with ErrRebaseBackend before
+// git runs, so no patch is dropped under a backend this package does not
+// continue, and the copy is left as it was.
 func (r *Repository) RebaseSkip(ctx context.Context) error {
 	if r.kind != KindWorktree {
 		return errors.New("vcs: rebase requires a working copy")
+	}
+	if _, err := r.rebaseInProgress(ctx); err != nil {
+		return err
 	}
 	_, code, err := r.runExpecting(ctx, "rebase-skip", []int{1}, "rebase", "--skip")
 	if err != nil {

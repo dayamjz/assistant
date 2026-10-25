@@ -12,26 +12,26 @@ import (
 	"strings"
 )
 
-// ConflictMarkers maps each path the index holds an unresolved conflict for
-// to the marker lines in its worktree file that none of the path's conflict
-// stages holds, each once and in order.
+// MarkerBaseline maps each path the index holds an unresolved conflict for
+// to the marker-shaped lines that path's own conflict stages hold, each once
+// and in order: lines that are content of one of the conflict's sides and
+// not markers the merge wrote. Every such path is in the map, with no lines
+// when its sides hold none.
 //
-// A marker line is one that starts with seven '<', seven '|', or seven '>'
-// characters: the lines git writes to open a conflict, to open the common
-// ancestor's section, and to close a conflict, which carry a label after the
-// run of characters. A line one of the conflict's own sides holds is part of
-// that side's content and is left out, so what remains is a line the merge
-// added. The separator line of seven '=' is never one: it carries no label,
-// and the same line is a Markdown heading underline. A path whose worktree
-// entry is missing or not a regular file has no markers, and neither does
-// one whose remaining set is empty; neither is in the map.
+// A marker-shaped line is one that starts with seven '<', seven '|', or seven
+// '>' characters, the shapes of the lines git writes to open a conflict, to
+// open the common ancestor's section, and to close a conflict, with whatever
+// label follows. The separator line of seven '=' is never one: it carries no
+// label, and the same line is a Markdown heading underline.
 //
 // It is a reading of the conflict as it stands, so a caller takes it before
-// anything edits the file and compares it with MarkersLeft afterwards. What
-// it does not recognize: a marker run shorter than seven characters, which a
-// conflict-marker-size attribute can ask git for; a marker line identical to
-// a line one of the sides holds; and a conflict git wrote no marker lines
-// for, such as a deleted or a binary file.
+// anything edits or stages the file and passes it to MarkersLeft afterwards:
+// once a path is staged its conflict stages are gone. A stage's blob is read
+// only for a path whose worktree file holds a marker-shaped line now, as a
+// file git wrote markers into does. What it does not tell apart from
+// content: a marker run shorter than seven characters, which a
+// conflict-marker-size attribute can ask git for, and a marker line
+// identical to a line one of the sides holds.
 //
 // The worktree file is read on UncommittedDigest's terms, including how the
 // context ends it and the wait it cannot end. Each stage's blob is read
@@ -41,7 +41,7 @@ import (
 // It answers for the whole working copy, from its root, whichever directory
 // the handle was opened on, and every path it reads or takes is
 // repository-relative.
-func (r *Repository) ConflictMarkers(ctx context.Context) (map[string][]string, error) {
+func (r *Repository) MarkerBaseline(ctx context.Context) (map[string][]string, error) {
 	if r.kind != KindWorktree {
 		return nil, &openError{path: r.path, kind: KindWorktree}
 	}
@@ -57,8 +57,9 @@ func (r *Repository) ConflictMarkers(ctx context.Context) (map[string][]string, 
 	if err != nil {
 		return nil, err
 	}
-	markers := make(map[string][]string)
+	baseline := make(map[string][]string, len(stages))
 	for path, entries := range stages {
+		baseline[path] = nil
 		lines, err := worktreeMarkerLines(ctx, r.path, path)
 		if err != nil {
 			return nil, err
@@ -66,6 +67,7 @@ func (r *Repository) ConflictMarkers(ctx context.Context) (map[string][]string, 
 		if len(lines) == 0 {
 			continue
 		}
+		var held []string
 		for _, entry := range entries {
 			if !entry.regularBlob() {
 				continue
@@ -74,29 +76,33 @@ func (r *Repository) ConflictMarkers(ctx context.Context) (map[string][]string, 
 			if err != nil {
 				return nil, err
 			}
-			held, err := markerLines(ctx, bytes.NewReader(blob))
+			side, err := markerLines(ctx, bytes.NewReader(blob))
 			if err != nil {
 				return nil, err
 			}
-			lines = slices.DeleteFunc(lines, func(line string) bool { return slices.Contains(held, line) })
+			for _, line := range side {
+				if !slices.Contains(held, line) {
+					held = append(held, line)
+				}
+			}
 		}
-		if len(lines) > 0 {
-			markers[path] = lines
-		}
+		baseline[path] = held
 	}
-	return markers, nil
+	return baseline, nil
 }
 
-// MarkersLeft reports, in order, each path of markers whose worktree file
-// still holds one of the marker lines ConflictMarkers recorded for it,
-// whether or not the path is still unmerged in the index. A path whose
-// worktree entry is now missing or not a regular file holds none. The file
-// is read on ConflictMarkers' terms.
+// MarkersLeft reports, in order, each path of baseline whose worktree file
+// holds a marker-shaped line that is not one of the lines baseline records
+// for it, whether or not the path is still unmerged in the index. A marker
+// git wrote is such a line, and so is one whose label was rewritten. A path
+// whose worktree entry is now missing or not a regular file holds none. The
+// file is read on MarkerBaseline's terms, and what that cannot tell apart
+// from content this cannot either.
 //
 // It answers for the whole working copy, from its root, whichever directory
 // the handle was opened on, and every path it reads or takes is
 // repository-relative.
-func (r *Repository) MarkersLeft(ctx context.Context, markers map[string][]string) ([]string, error) {
+func (r *Repository) MarkersLeft(ctx context.Context, baseline map[string][]string) ([]string, error) {
 	if r.kind != KindWorktree {
 		return nil, &openError{path: r.path, kind: KindWorktree}
 	}
@@ -105,12 +111,12 @@ func (r *Repository) MarkersLeft(ctx context.Context, markers map[string][]strin
 		return nil, err
 	}
 	var left []string
-	for path, recorded := range markers {
+	for path, held := range baseline {
 		lines, err := worktreeMarkerLines(ctx, r.path, path)
 		if err != nil {
 			return nil, err
 		}
-		if slices.ContainsFunc(lines, func(line string) bool { return slices.Contains(recorded, line) }) {
+		if slices.ContainsFunc(lines, func(line string) bool { return !slices.Contains(held, line) }) {
 			left = append(left, path)
 		}
 	}

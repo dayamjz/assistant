@@ -54,6 +54,13 @@ func TestARebaseStoppedOnTheSameCommitIsNotAdvanced(t *testing.T) {
 	commit("main\n", "main")
 	run(true, "checkout", "--quiet", "topic")
 	run(false, "rebase", "--merge", "main")
+	conflicted, err := vcs.OpenWorktree(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rebaseAdvanced(t.Context(), conflicted, pipeline.StageRebase, topic); err == nil {
+		t.Fatal("a rebase still conflicted on the round's own commit was reported as advanced")
+	}
 	if err := os.WriteFile(filepath.Join(dir, "clash.txt"), []byte("topic and main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +77,7 @@ func TestARebaseStoppedOnTheSameCommitIsNotAdvanced(t *testing.T) {
 		t.Fatalf("the rebase is stopped on %q, %v; want %s", on, err, topic)
 	}
 	if _, err := rebaseAdvanced(t.Context(), copied, pipeline.StageRebase, topic); err == nil ||
-		!strings.Contains(err.Error(), "nothing unmerged") {
+		!strings.Contains(err.Error(), "the commit it began on") {
 		t.Fatalf("a stop on the round's own commit with nothing unmerged: %v, want a refusal", err)
 	}
 	if _, err := rebaseAdvanced(t.Context(), copied, pipeline.StageRebase, base); err != nil {

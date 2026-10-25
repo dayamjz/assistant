@@ -1419,3 +1419,36 @@ func TestAFileResolvedOneConflictPerRoundIsCommitted(t *testing.T) {
 		t.Fatalf("HEAD's %s =\n%s\nwant\n%s", notesPath, got, want)
 	}
 }
+
+// TestAConflictWithItsMarkersRelabeledIsNotCommitted is the two conflicted
+// files again. The fixer resolves the code, and in the README rewrites the
+// label of every opening and closing marker git wrote and adds a line, so the README's
+// conflict record changes and none of git's exact marker lines remain. The
+// README still holds conflict markers, so the round may not commit it.
+func TestAConflictWithItsMarkersRelabeledIsNotCommitted(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal, readmePath: upstreamReadme})
+	result, err := runRebaseRounds(t, s, "resolved the code and tidied the README",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				write(t, s.dir, totalPath, resolvedTotal)
+				var out []string
+				for _, line := range strings.Split(read(t, s.dir, readmePath), "\n") {
+					if strings.HasPrefix(line, ">>>>>>> ") {
+						line = ">>>>>>> theirs"
+					}
+					if strings.HasPrefix(line, "<<<<<<< ") {
+						line = "<<<<<<< ours"
+					}
+					out = append(out, line)
+				}
+				write(t, s.dir, readmePath, "Edited above the conflict.\n"+strings.Join(out, "\n"))
+			}}
+		},
+		expectReadmeStillConflicted(t, s))
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	expectMarkersNeverRecorded(t, s, result)
+}

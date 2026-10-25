@@ -201,8 +201,9 @@ func TestRebaseContinueFinishesUnderTheApplyBackendSetting(t *testing.T) {
 // TestAnApplyBackendRebaseIsRefusedBeforeItIsContinued is a rebase this
 // package did not start, stopped in the apply backend with its resolution
 // committed. RebaseContinue's contract is not stated for that backend, so
-// status and continue refuse it with ErrRebaseBackend, and the rebase and
-// HEAD are left as they were.
+// status, continue and skip refuse it with ErrRebaseBackend, and the rebase
+// and HEAD are left as they were: a skip would otherwise drop the current
+// patch under the backend the package refuses to continue.
 func TestAnApplyBackendRebaseIsRefusedBeforeItIsContinued(t *testing.T) {
 	gitEnvironment(t)
 	dir := t.TempDir()
@@ -236,6 +237,9 @@ func TestAnApplyBackendRebaseIsRefusedBeforeItIsContinued(t *testing.T) {
 	}
 	if err := repo.RebaseContinue(ctx(t)); !errors.Is(err, vcs.ErrRebaseBackend) {
 		t.Fatalf("continuing an apply-backend rebase: %v, want ErrRebaseBackend", err)
+	}
+	if err := repo.RebaseSkip(ctx(t)); !errors.Is(err, vcs.ErrRebaseBackend) {
+		t.Fatalf("skipping in an apply-backend rebase: %v, want ErrRebaseBackend", err)
 	}
 	if info, err := os.Stat(applying); err != nil || !info.IsDir() {
 		t.Fatalf("the refused rebase is no longer in progress: %v", err)
