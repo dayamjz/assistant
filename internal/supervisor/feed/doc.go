@@ -29,7 +29,13 @@
 // and a run the service is driving is resolved as if nothing drives it. Both
 // lean toward in flight or unknown, which is the safe direction, and a
 // service reading its own fleet supplies its own reading through InFlightFrom
-// rather than this one.
+// rather than this one. The one exception is a retired housekeeping pass,
+// whose unread terminal supervisor.PassMoves does not read as moving,
+// because its retirement read that terminal dead or before it had a
+// session: a worker a launch begun before the retirement brought up after
+// it is in flight to the service's reading while its probe reads it live,
+// and not to this one, the residual gap internal/service's housekeeping
+// names.
 //
 // # The writer
 //

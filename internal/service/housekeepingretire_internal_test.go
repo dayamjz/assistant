@@ -18,6 +18,7 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
+	"github.com/dayamjz/assistant/internal/supervisor/feed"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
@@ -886,5 +887,203 @@ func TestARetiredPassIsNeverLeftWithItsRetirementHoldOpen(t *testing.T) {
 	}
 	if !retired && open != 1 {
 		t.Fatalf("the pass was not retired and carries %d open retirement hold(s), want the one a person answers", open)
+	}
+}
+
+// retireOnAnswer passes an interval, so the pass, which nothing moves, is
+// offered its retirement hold, and answers it retire, as the coordinator
+// relaying a person's answer does.
+func (s *hkSubject) retireOnAnswer(t *testing.T, pass string) {
+	t.Helper()
+	s.clock.Advance(time.Hour)
+	s.pass(t)
+	holds := s.retireHolds(t, pass)
+	if len(holds) != 1 || !holds[0].Open() {
+		t.Fatalf("after an interval pass %s carries %+v, want one open retirement hold", pass, holds)
+	}
+	if answered, err := s.answer(t, pass, holds[0].Key, machine.AnswerRetire); err != nil || answered.Effect != machine.AnswerRetired {
+		t.Fatalf("retire answered %+v, %v", answered, err)
+	}
+}
+
+// settleQueue takes a pass, waits for the due check it starts, and then
+// hands out and acknowledges every queued wake of every shape, as a
+// coordinator that acted on all of them does, so that what keeps the home in
+// flight afterwards is the tasks and nothing the queue holds.
+func (s *hkSubject) settleQueue(t *testing.T) {
+	t.Helper()
+	s.checkStarted(t, s.pass(t), false)
+	ctx := t.Context()
+	records := s.records(t)
+	for {
+		drained, err := records.DrainAll(ctx, 100, store.WakeHandout{To: store.AcknowledgedByCoordinator(), Under: "settle"})
+		if err != nil {
+			t.Fatalf("draining the queue: %v", err)
+		}
+		var wakes, domain, kept, housekeeping []int64
+		for _, w := range drained.Wakes {
+			wakes = append(wakes, w.ID)
+		}
+		for _, w := range drained.DomainWakes {
+			domain = append(domain, w.ID)
+		}
+		for _, w := range drained.KeptWorkWakes {
+			kept = append(kept, w.ID)
+		}
+		for _, w := range drained.HousekeepingWakes {
+			housekeeping = append(housekeeping, w.ID)
+		}
+		if len(wakes)+len(domain)+len(kept)+len(housekeeping) == 0 {
+			return
+		}
+		if err := records.AcknowledgeAll(ctx, wakes, domain, kept, housekeeping, store.AcknowledgedByCoordinator()); err != nil {
+			t.Fatalf("acknowledging the queue: %v", err)
+		}
+	}
+}
+
+// underWay reports whether the catch-up read lists the task under way.
+func (s *hkSubject) underWay(t *testing.T, id string) bool {
+	t.Helper()
+	read, err := s.service.catchUp(t.Context())
+	if err != nil {
+		t.Fatalf("reading the catch-up: %v", err)
+	}
+	for _, task := range read.UnderWay.Tasks {
+		if task.Record.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// stopGuardWithTheServiceStopped stops the service and reads the stop guard
+// as the coordinator's host hook reads it with no service holding the home:
+// the instance file, the beacon, the lock and the record, read only, through
+// feed.Guard.
+func (s *hkSubject) stopGuardWithTheServiceStopped(t *testing.T) supervisor.StopVerdict {
+	t.Helper()
+	if err := s.service.Close(); err != nil {
+		t.Fatalf("stopping the service: %v", err)
+	}
+	return feed.Guard(t.Context(), s.h, supervisor.FreshnessFor(time.Second), time.Now())
+}
+
+// PRD section 13's housekeeping row and principle P10, for a retired pass
+// nothing moves: an investigation pass whose worker ended before it reported
+// resolves Unknown, which is in flight on its state alone, and once retired
+// on an answer, with every wake acknowledged, it is not in flight. Across
+// four escalation windows it is not watched and raises no terminal-gone
+// wake, the catch-up read does not list it under way, and with the service
+// stopped the stop guard reads nothing in flight, so a turn may end.
+// TestARetiredPassWithARunNotEndedIsInFlight is the positive control.
+func TestARetiredPassNothingMovesIsNotInFlight(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P10)
+	const pass = "taskhkflyaaa"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		unreportedPassCopy(t, records, sub, pass, "pane-flight")
+	})
+	sub.retireOnAnswer(t, pass)
+	sub.awaitKeptOf(t, pass)
+	sub.settleQueue(t)
+	if got := sub.observedTask(t, pass); got.State != taskstate.Unknown {
+		t.Fatalf("the retired pass resolves %+v, want Unknown, which is in flight on its state alone", got)
+	}
+	for window := 1; window <= 4; window++ {
+		sub.clock.Advance(2 * time.Minute)
+		r := sub.pass(t)
+		if r.Tasks[pass].Watched {
+			t.Errorf("window %d: the retired pass nothing moves was watched", window)
+		}
+		if gone := detectionsOf(r, pass, supervisor.KindTerminalGone); len(gone) != 0 {
+			t.Errorf("window %d: the retired pass nothing moves had its terminal read: %+v", window, gone)
+		}
+	}
+	if sub.underWay(t, pass) {
+		t.Error("the catch-up read lists the retired pass nothing moves under way")
+	}
+	if verdict := sub.stopGuardWithTheServiceStopped(t); verdict.Reason != supervisor.StopNothingInFlight {
+		t.Fatalf("with the service stopped the stop guard reads %s, want %s", verdict.Reason, supervisor.StopNothingInFlight)
+	}
+}
+
+// The reviewer's case of PRD section 13's housekeeping row: a pass retired
+// on an answer while its attempt never had a session resolves Dispatched,
+// which is in flight on its state alone, though dispatch and every relaunch
+// refuse it; it is not in flight, so it is not watched, the catch-up read
+// does not list it under way, and with the service stopped the stop guard
+// reads nothing in flight. A worker that attempt's launch brings up after
+// the retirement, the residual gap internal/service's housekeeping names,
+// is in flight while the probe reads it live, which is the positive control
+// on the probe's half, and leaves flight once it reads dead.
+func TestAPassRetiredBeforeItsWorkerHadASessionIsNotInFlight(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P10)
+	const pass = "taskhkflybbb"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		passTask(t, records, pass)
+		launched(t, records, pass, "", "")
+	})
+	sub.retireOnAnswer(t, pass)
+	sub.settleQueue(t)
+	if got, err := sub.service.tasks().Task(t.Context(), pass); err != nil || got.State != taskstate.Dispatched {
+		t.Fatalf("the retired pass resolves %+v (%v), want Dispatched, which is in flight on its state alone", got, err)
+	}
+	if r := sub.pass(t); r.Tasks[pass].Watched {
+		t.Error("the pass retired before its worker had a session was watched")
+	}
+	if sub.underWay(t, pass) {
+		t.Error("the catch-up read lists the pass retired before its worker had a session under way")
+	}
+
+	if err := sub.records(t).SetAttemptSession(t.Context(), pass, 1, "pane-late", store.SessionHost{}); err != nil {
+		t.Fatalf("recording the late launch's session: %v", err)
+	}
+	sub.terminals.live("pane-late", "working\n")
+	if r := sub.pass(t); !r.Tasks[pass].Watched {
+		t.Error("the retired pass whose late worker the probe reads live was not watched")
+	}
+	if !sub.underWay(t, pass) {
+		t.Error("the catch-up read does not list the retired pass whose late worker reads live under way")
+	}
+	sub.terminals.dead("pane-late")
+	sub.settleQueue(t)
+	if r := sub.pass(t); r.Tasks[pass].Watched {
+		t.Error("the retired pass whose late worker reads dead was watched")
+	}
+	if verdict := sub.stopGuardWithTheServiceStopped(t); verdict.Reason != supervisor.StopNothingInFlight {
+		t.Fatalf("with the service stopped the stop guard reads %s, want %s", verdict.Reason, supervisor.StopNothingInFlight)
+	}
+}
+
+// The positive control on PRD section 13's housekeeping row for a retired
+// pass: a run of the pass's branch started after its retirement, as a push
+// the gate admitted while the retirement held the branch does, keeps the
+// retired pass in flight while the run has not ended. It is watched, the catch-up
+// read lists it under way, and with the service stopped the stop guard
+// blocks, which shows the reading TestARetiredPassNothingMovesIsNotInFlight
+// takes can fail.
+func TestARetiredPassWithARunNotEndedIsInFlight(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P10)
+	const pass = "taskhkflyccc"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		promotedPass(t, records, pass, "pane-flightc")
+		sub.terminals.dead("pane-flightc")
+		passRun(t, records, "run-flightc", store.RunTerminated, false)
+	})
+	sub.retireOnAnswer(t, pass)
+	passRun(t, sub.records(t), "run-flightc-after", store.RunRunning, false)
+	sub.settleQueue(t)
+	if r := sub.pass(t); !r.Tasks[pass].Watched {
+		t.Error("the retired pass with a run not ended was not watched")
+	}
+	if !sub.underWay(t, pass) {
+		t.Error("the catch-up read does not list the retired pass with a run not ended under way")
+	}
+	sub.settleQueue(t)
+	if verdict := sub.stopGuardWithTheServiceStopped(t); verdict.Reason != supervisor.StopLockFree {
+		t.Fatalf("with the service stopped the stop guard reads %s, want %s", verdict.Reason, supervisor.StopLockFree)
 	}
 }

@@ -20,6 +20,10 @@ import "github.com/dayamjz/assistant/internal/taskstate"
 // Landed and Complete, resolved from the merge record and the cleanup
 // record, are not in flight on state alone for Ready's reason: the work has
 // landed, and what waits, if anything, is a person.
+//
+// The table decides a state; whether a task's state counts at all is its
+// Regard's, which keeps a few tasks in flight whatever they resolve and
+// takes the say from a retired housekeeping pass.
 var inFlightByState = map[taskstate.State]bool{
 	taskstate.Queued:     true,
 	taskstate.Dispatched: true,
@@ -44,35 +48,81 @@ func StateInFlight(s taskstate.State) (inFlight, decided bool) {
 	return inFlight, decided
 }
 
-// TaskInFlight reports whether one task is in flight: its state is, on
-// inFlightByState's terms, or it has a queued wake, or it is in flight
-// regardless of both, whatever its state: an open stall hold, PRD section
-// 6's "a held stall stays watched", where a task resolves Held, which on its
-// state alone waits only on a person, but its worker is still running; or a
-// housekeeping pass something moves, which section 6's housekeeping counts
-// in flight whatever it resolves. InFlightRegardless is how a caller reads
-// it. The second
-// result is false for a state the table does not decide, which a caller
+// Regard is how one task's resolved state counts toward its being in
+// flight, beside the queue, which counts for every task: PRD section 6's
+// "work is in flight" decides most tasks on their state, keeps a few in
+// flight whatever they resolve, and takes the state's say from one kind of
+// task altogether. RegardOf is the one statement of which task has which.
+type Regard uint8
+
+const (
+	// ByState is every task but the two below: inFlightByState decides it
+	// on its resolved state.
+	ByState Regard = iota
+	// Regardless is a task in flight whatever it resolves: one with an
+	// open stall hold, PRD section 6's "a held stall stays watched", whose
+	// worker is still running though the task resolves Held, or a
+	// housekeeping pass something moves (PassMoves), which section 6's
+	// housekeeping counts in flight whatever it resolves.
+	Regardless
+	// QueueOnly is a task whose resolved state never puts it in flight, so
+	// only a queued wake does: a retired housekeeping pass nothing moves.
+	// Its retirement was written only once nothing moved it, and every
+	// attempt claim refuses it after, so a state such as Unknown, Queued
+	// or Dispatched that it can go on resolving names nothing that will
+	// move it, which is section 6's "a retired pass is not in flight by its
+	// state alone".
+	QueueOnly
+)
+
+// RegardOf is the observed task's Regard: Regardless for an open stall hold
+// or a housekeeping pass something moves, retired or not, QueueOnly for a
+// retired pass nothing moves, and ByState for every other task. It is the
+// one statement of that set, which the supervisor loop's watched set, the
+// stop guard and the catch-up read all count.
+func RegardOf(o taskstate.Observed) Regard {
+	switch {
+	case StallHeld(o) || PassMoves(o):
+		return Regardless
+	case o.Snapshot.Task.Housekeeping && o.Snapshot.Retirement.IsKnown():
+		return QueueOnly
+	}
+	return ByState
+}
+
+// TaskInFlight reports whether one task is in flight: it has a queued wake,
+// or its state is in flight on inFlightByState's terms as regard says it
+// counts: ByState as the table decides, Regardless always, and QueueOnly
+// never. The second result is false for a state the table does not decide,
+// whatever the regard, and for a regard outside the three, which a caller
 // reads as a reading it cannot take and never as not in flight. InFlightOf
 // is this rule over a fleet, and PRD section 9's catch-up lists the tasks it
 // holds true for, so the two cannot count different work.
-func TaskInFlight(s taskstate.State, unacknowledged int, regardless bool) (inFlight, decided bool) {
+func TaskInFlight(s taskstate.State, unacknowledged int, regard Regard) (inFlight, decided bool) {
 	inFlight, decided = StateInFlight(s)
-	return inFlight || unacknowledged > 0 || regardless, decided
+	switch regard {
+	case ByState:
+	case Regardless:
+		inFlight = true
+	case QueueOnly:
+		inFlight = false
+	default:
+		decided = false
+	}
+	return inFlight || unacknowledged > 0, decided
 }
 
 // InFlightOf is the in-flight reading over a fleet: states is each task's
 // resolved state keyed by task identifier; unacknowledged is how many
 // queued wakes each task has, keyed the same way, which
-// store.UnacknowledgedWakes returns; regardless is the tasks in flight
-// whatever they resolve, keyed the same way, which InFlightRegardless reads
-// off each task's observation; and untasked is how many queued wakes about no task there are:
-// about a domain, which store.UnacknowledgedDomainWakes returns, and about
-// a kept work entry no task names, which store.UnacknowledgedKeptWorkWakes
-// returns, and about a repository's housekeeping, which
-// store.UnacknowledgedHousekeepingWakes returns. A task is in flight when its
-// state is, on inFlightByState's terms, or when it has a queued wake or is
-// in flight regardless, whatever its state: a hold nobody has
+// store.UnacknowledgedWakes returns; regard is how each task's state counts,
+// keyed the same way, which RegardOf reads off each task's observation, a
+// task it does not name counting ByState; and untasked is how many queued
+// wakes about no task there are: about a domain, which
+// store.UnacknowledgedDomainWakes returns, and about a kept work entry no
+// task names, which store.UnacknowledgedKeptWorkWakes returns, and about a
+// repository's housekeeping, which store.UnacknowledgedHousekeepingWakes
+// returns. A task is in flight on TaskInFlight's terms: a hold nobody has
 // been told about keeps the guard, and acknowledging the wake is what
 // releases it: a drain hands a row out and releases nothing, so a wake keeps
 // its task in flight until the coordinator acknowledges it acted. A task
@@ -83,14 +133,14 @@ func TaskInFlight(s taskstate.State, unacknowledged int, regardless bool) (inFli
 //
 // The answer is InFlightSome when any task is in flight, InFlightNone when
 // none is, including over an empty fleet, and InFlightUnknown when any task's
-// state is one the table does not decide, because a reading that guessed
-// about one task would be a reading, and the safe direction is to block.
-// It is pure, and the three inputs are the caller's reads, taken as of
+// reading is one TaskInFlight does not decide, because a reading that
+// guessed about one task would be a reading, and the safe direction is to
+// block. It is pure, and the four inputs are the caller's reads, taken as of
 // whatever consistency the caller arranged.
-func InFlightOf(states map[string]taskstate.State, unacknowledged map[string]int, regardless map[string]bool, untasked int) InFlight {
+func InFlightOf(states map[string]taskstate.State, unacknowledged map[string]int, regard map[string]Regard, untasked int) InFlight {
 	some := untasked > 0
 	for task, state := range states {
-		inFlight, decided := TaskInFlight(state, unacknowledged[task], regardless[task])
+		inFlight, decided := TaskInFlight(state, unacknowledged[task], regard[task])
 		if !decided {
 			return InFlightUnknown
 		}

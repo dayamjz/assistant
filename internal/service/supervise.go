@@ -44,13 +44,17 @@ import (
 // one failure the loop acts on is ErrStaleIncarnation, on which the
 // incarnation returns.
 //
-// Which tasks a pass watches is supervisor.StateInFlight's table plus the
-// tasks with a queued wake, an open stall hold, or a housekeeping pass that
-// something moves (supervisor.PassMoves), which is the set PRD section 5's
-// "work is in flight" names with section 6's "a held stall stays watched" and
-// its housekeeping's "a pass therefore counts as in flight while something
-// moves it, whatever it resolves". Such a pass's terminal is read whatever
-// it resolves too, a Reported one included. One detection is made for every task, watched or not, in
+// Which tasks a pass watches is supervisor.TaskInFlight's rule with each
+// task's supervisor.RegardOf, plus the tasks with a queued wake: a task
+// whose state is in flight on supervisor.StateInFlight's table, a task with
+// an open stall hold or a housekeeping pass that something moves
+// (supervisor.PassMoves) whatever it resolves, and a retired pass nothing
+// moves only for a queued wake. That is the set PRD section 5's "work is in
+// flight" names with section 6's "a held stall stays watched", its
+// housekeeping's "a pass therefore counts as in flight while something
+// moves it, whatever it resolves", and its "a retired pass is not in flight
+// by its state alone". A pass something moves has its terminal read
+// whatever it resolves too, a Reported one included. One detection is made for every task, watched or not, in
 // two halves: an open hold record naming it or one of its runs, and an
 // attributed run whose record stands held. A run's own hold is not a hold
 // record: a run halted at a stage moves to held through internal/runs and
@@ -661,13 +665,13 @@ func (s *Service) pass(c *incarnation) passReport {
 func (s *Service) superviseTask(c *incarnation, o taskstate.Observed, probes map[string]session.Observation,
 	queued bool, unread []store.Message, kept []store.KeptWork, now time.Time, providerWideSurfaced *bool) taskReport {
 	id := o.Snapshot.Task.ID
-	inFlight, decided := supervisor.StateInFlight(o.State.State)
+	inFlight, decided := supervisor.TaskInFlight(o.State.State, 0, supervisor.RegardOf(o))
 	stalls := supervisor.OpenStallHolds(o)
 	// A housekeeping pass something moves is in flight whatever it
 	// resolves, and its terminal is read whatever it resolves too, PRD
 	// section 6's housekeeping; housekeeping.go owns the rest of it.
 	moving := supervisor.PassMoves(o)
-	obs := observation{observed: o, watched: inFlight || !decided || queued || len(stalls) > 0 || moving, unread: unread, kept: kept}
+	obs := observation{observed: o, watched: inFlight || !decided || queued, unread: unread, kept: kept}
 	var err error
 	ctx, cancel := s.sup.bound(c.ctx)
 	obs.markers, obs.has, err = s.store.WakeMarkers(ctx, id)

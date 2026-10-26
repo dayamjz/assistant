@@ -27,9 +27,10 @@ paths: ["internal/supervisor/**"]
   a subordinate's, carried on `internal/store`'s housekeeping wake about a
   repository, whose queued rows `InFlightOf` counts with the other untasked
   shapes. `PassMoves` is the one statement of "something moves the pass",
-  and `InFlightRegardless` of the tasks in flight whatever they resolve (an
-  open stall hold or a pass something moves), which the loop, the stop
-  guard and the catch-up read all count.
+  open or retired, and `RegardOf` of how a task's state counts toward in
+  flight (`Regardless` for an open stall hold or a pass something moves,
+  `QueueOnly` for a retired pass nothing moves), which the loop, the stop
+  guard and the catch-up read all count through `TaskInFlight`.
 
 Read both `doc.go` files (`doc.go` and `feed/doc.go`) before changing any of
 that, and for the residual gaps; `kind.go` is the one owner of what a wake kind

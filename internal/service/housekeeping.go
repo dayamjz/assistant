@@ -129,7 +129,12 @@ import (
 // a pass already retired, so the two are never both left standing. A retired
 // pass is never begun again: every attempt claim refuses it in the store
 // (store.ErrPassRetired), and relaunch.go refuses it before it sweeps
-// anything.
+// anything. Nor is it in flight by its state alone (supervisor.RegardOf):
+// the loop watches it, the stop guard counts it and the catch-up read lists
+// it under way only while a run of its branch has not ended, the probe
+// reads its worker live, or a wake about it is queued, so once its wakes
+// are acknowledged a pass retired with its worker dead or never launched
+// has its terminal read no more and raises no further terminal-gone wake.
 //
 // # Residual gaps
 //
@@ -152,7 +157,12 @@ import (
 //     runs in the retired pass's copy with the pass's claim on the
 //     repository released, so a next pass can be created while it runs, and
 //     a cleanup asked before its session is recorded reads its terminal
-//     Dead (retiredTerminal), as the retirement did.
+//     Dead (retiredTerminal), as the retirement did. That worker is in
+//     flight while this service's probe reads it live
+//     (supervisor.PassMoves), so the loop watches it as it does any running
+//     worker; one the probe cannot read is not, nor is it under a hook's
+//     reading, which takes no probe, and once it reads dead the pass is out
+//     of flight again and no terminal-gone wake is made for it.
 //   - The on-proof retirement is tried once per run whose position read
 //     nothing left; one refused because something moved the pass is tried
 //     again only when a later run of the pass passes, and is otherwise left
