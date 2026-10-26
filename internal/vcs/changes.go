@@ -125,7 +125,11 @@ func parseChanges(out string) (Changes, error) {
 // in for the next path's record. A symlink contributes its target text. A
 // directory that holds a submodule checkout
 // contributes the commit that checkout has checked out, which is what
-// rev-parse HEAD prints there. A symbolic reference is followed to that
+// rev-parse HEAD prints there, and that checkout's own uncommitted state as
+// this digest records it there, so an edit inside a submodule that does not
+// move its commit still changes the result. The name listing passes
+// --ignore-submodules=none, so a submodule whose checkout is dirty is listed
+// even when its .gitmodules entry sets ignore. A symbolic reference is followed to that
 // commit, and the reference's own text is not recorded. The invocation
 // reads whatever ref storage the checkout uses. A directory that does not
 // hold one is recorded as a directory and its mode, not the files inside
@@ -169,7 +173,7 @@ func (r *Repository) UncommittedDigest(ctx context.Context) (string, error) {
 		return "", err
 	}
 	names, err := r.run(ctx, "uncommitted-names",
-		"diff-files", "-z", "--name-only", "--no-ext-diff", "--no-textconv")
+		"diff-files", "-z", "--name-only", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none")
 	if err != nil {
 		return "", err
 	}
@@ -184,13 +188,13 @@ func (r *Repository) UncommittedDigest(ctx context.Context) (string, error) {
 	if err := digestWrite(sum, []byte{0}); err != nil {
 		return "", err
 	}
-	if err := hashWorktreeList(ctx, r, sum, r.path, string(names)); err != nil {
+	if err := hashWorktreeList(ctx, r, sum, r.path, string(names), true); err != nil {
 		return "", err
 	}
 	if err := digestWrite(sum, []byte{0}); err != nil {
 		return "", err
 	}
-	if err := hashWorktreeList(ctx, r, sum, r.path, string(others)); err != nil {
+	if err := hashWorktreeList(ctx, r, sum, r.path, string(others), true); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(sum.Sum(nil)), nil
@@ -198,8 +202,11 @@ func (r *Repository) UncommittedDigest(ctx context.Context) (string, error) {
 
 // ConflictRecords maps each path the index holds an unresolved conflict for
 // to a record of that path: its conflict stages in the index, and its
-// worktree state as UncommittedDigest records a path. Equal records for one
-// path mean neither changed. A path whose conflict was resolved in the index
+// worktree state as UncommittedDigest records a path, except that a
+// submodule checkout is recorded by the commit it has checked out alone:
+// that commit is what resolves a conflicted gitlink, so an edit inside the
+// checkout leaves the path's record as it was. Equal records for one path
+// mean neither changed. A path whose conflict was resolved in the index
 // is not in the map, and neither is a path with no conflict. An empty map is
 // an index with no unresolved conflict. A record is not a git object name.
 //
@@ -236,7 +243,7 @@ func (r *Repository) ConflictRecords(ctx context.Context) (map[string]string, er
 				return nil, err
 			}
 		}
-		if err := hashWorktreeList(ctx, r, sum, r.path, path); err != nil {
+		if err := hashWorktreeList(ctx, r, sum, r.path, path, false); err != nil {
 			return nil, err
 		}
 		records[path] = hex.EncodeToString(sum.Sum(nil))
@@ -255,7 +262,11 @@ func digestWrite(sum io.Writer, b []byte) error {
 // sum. A missing path is recorded as absent. A symlink contributes its mode
 // and target text. A regular file contributes its mode, the length of its
 // bytes, and those bytes. A
-// submodule directory contributes its mode and the commit it has checked out.
+// submodule directory contributes its mode and the commit it has checked out,
+// and, when inner is set, its own UncommittedDigest. The whole-copy digest
+// sets it; a conflict record does not, because only the commit a checkout
+// stands on resolves a conflicted gitlink, so an edit inside it changes the
+// copy without changing that path's record.
 // Any other file type contributes its mode and its type bits and is not
 // opened. A path classified as a regular file is opened without waiting for
 // a writer where the platform can ask for that, and the descriptor is
@@ -265,7 +276,7 @@ func digestWrite(sum io.Writer, b []byte) error {
 // wait, that replacement can still block, and the context does not end the
 // wait. ctx is checked before each path and before each read of a regular
 // file's bytes, and an ended context returns its error.
-func hashWorktreeList(ctx context.Context, r *Repository, sum io.Writer, root, listed string) error {
+func hashWorktreeList(ctx context.Context, r *Repository, sum io.Writer, root, listed string, inner bool) error {
 	for path := range strings.SplitSeq(listed, "\x00") {
 		if path == "" {
 			continue
@@ -318,6 +329,19 @@ func hashWorktreeList(ctx context.Context, r *Repository, sum io.Writer, root, l
 			}
 			if ok {
 				if err := digestWrite(sum, []byte(commit)); err != nil {
+					return err
+				}
+			}
+			if ok && inner {
+				// The checkout's own uncommitted state is part of the copy
+				// too: an edit inside it that does not move its commit is
+				// still a change. It is digested the same way, there.
+				inner := &Repository{path: full, kind: KindWorktree, set: r.set}
+				state, err := inner.UncommittedDigest(ctx)
+				if err != nil {
+					return err
+				}
+				if err := digestWrite(sum, []byte(state)); err != nil {
 					return err
 				}
 			}

@@ -1452,3 +1452,79 @@ func TestAConflictWithItsMarkersRelabeledIsNotCommitted(t *testing.T) {
 	}
 	expectMarkersNeverRecorded(t, s, result)
 }
+
+// TestAnEditInsideAConflictedSubmoduleIsAChange is the conflicted gitlink.
+// The first round edits a file inside the submodule's checkout without
+// moving that checkout's commit, which changes the copy but resolves
+// nothing. It is a round that changed something, not one that changed
+// nothing: it records what the copy holds in rebase.resolution, says the
+// gitlink is still conflicted, and leaves the rebase stopped on it.
+func TestAnEditInsideAConflictedSubmoduleIsAChange(t *testing.T) {
+	c := prepareSubmoduleConflict(t, func(*testing.T, string) {})
+	s := c.s
+	_, err := runRebaseRounds(t, s, "edited a file in the submodule",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				write(t, s.dir, "lib/f.txt", "edited inside the submodule\n")
+			}}
+		},
+		func(round int, out pipeline.FixOutput, err error) {
+			if err != nil {
+				t.Errorf("fix round %d: %v", round, err)
+				return
+			}
+			if round != 1 {
+				return
+			}
+			if _, ok := out.Writes[pipeline.KeyResolution]; !ok || strings.Contains(out.Summary, "changed no file") {
+				t.Errorf("the first round was taken for one that changed nothing: writes %v, summary %q", out.Writes, out.Summary)
+			}
+			if _, ok := out.Writes[pipeline.KeyHead]; ok {
+				t.Errorf("the first round reported a head with the gitlink still conflicted")
+			}
+			if unmerged := git(t, s.dir, "ls-files", "-u", "--", "lib"); unmerged == "" {
+				t.Errorf("after the first round the gitlink is no longer conflicted")
+			}
+		})
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+}
+
+// TestAConflictLeftWithOnlyAHeldMarkerIsNotCommitted is the README whose
+// newer base documents conflict markers, so "<<<<<<< HEAD" is content of one
+// side and also the opening marker git writes. The fixer resolves the code,
+// deletes the closing marker git wrote in the README, which no side held,
+// and adds a line, so the README's conflict record changes. It still holds
+// git's opening marker as a second copy of the documented line, so the
+// round may not commit it.
+func TestAConflictLeftWithOnlyAHeldMarkerIsNotCommitted(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newSubject(t)
+	conflictOnUpstream(t, s, map[string]string{totalPath: upstreamTotal, readmePath: markerReadme})
+	result, err := runRebaseRounds(t, s, "resolved the code and trimmed the README",
+		func(inner agents.Fixer) agents.Fixer {
+			return editingFixer{inner: inner, edit: func() {
+				write(t, s.dir, totalPath, resolvedTotal)
+				var kept []string
+				for _, line := range strings.SplitAfter(read(t, s.dir, readmePath), "\n") {
+					if !strings.HasPrefix(line, ">>>>>>> "+s.head[:7]) {
+						kept = append(kept, line)
+					}
+				}
+				write(t, s.dir, readmePath, "Edited above the conflict.\n"+strings.Join(kept, ""))
+			}}
+		},
+		expectReadmeStillConflicted(t, s))
+	if err != nil {
+		t.Fatalf("running the rebase and fix loop: %v", err)
+	}
+	if result.Status == graph.StatusCompleted {
+		t.Fatalf("the run completed with %s never resolved", readmePath)
+	}
+	for _, commit := range []string{textAt(t, result.State, pipeline.KeyHead), git(t, s.dir, "rev-parse", "HEAD")} {
+		if readme := git(t, s.dir, "show", commit+":"+readmePath); strings.Count(readme, "<<<<<<< HEAD") > 1 {
+			t.Fatalf("commit %s records git's opening marker in %s:\n%s", commit, readmePath, readme)
+		}
+	}
+}

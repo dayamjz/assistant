@@ -200,12 +200,13 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 //     only the separator line, without marker-shaped lines is committed as
 //     it is. vcs.MarkerBaseline names what else it does not tell apart from
 //     content.
-//   - A round is unchanged when vcs.UncommittedDigest is, and the digest
-//     records a submodule checkout by the commit it has checked out, not by
-//     the files inside it. A fixer that edits files inside a conflicted
-//     submodule without moving its HEAD has changed nothing the round can
-//     commit, so that round counts toward the convergence bound, and the
-//     edit stays in the submodule's working tree.
+//   - A round is unchanged when vcs.UncommittedDigest is. The digest
+//     includes a submodule checkout's own uncommitted state, so a fixer that
+//     edits files inside a conflicted submodule without moving its HEAD has
+//     changed the copy: the round records that in pipeline.KeyResolution and
+//     leaves the gitlink conflicted, because only the commit the checkout
+//     stands on resolves it. A round that changed only what the digest does
+//     not record, such as ignored files, counts as unchanged.
 func Fix(deps FixDeps) pipeline.Fixer {
 	return pipeline.Fixer{
 		Reads: []pipeline.Key{
@@ -266,7 +267,7 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 	}
 	var digest string
 	var conflicts map[string]string
-	var markers map[string][]string
+	var markers map[string]map[string]int
 	var stoppedOn string
 	if rebasing {
 		digest, err = copied.UncommittedDigest(ctx)
@@ -352,11 +353,7 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 		}
 		if after == digest && len(conflicts) > 0 {
 			// A conflict the fixer left as it was is still unmerged, so
-			// there is nothing to commit. "Unchanged" is the digest's: a
-			// submodule checkout counts by the commit it has checked out,
-			// so an edit inside it that does not move that commit counts as
-			// no change, and it does not resolve a conflicted gitlink
-			// either. The rebase stays stopped. An
+			// there is nothing to commit. The rebase stays stopped. An
 			// earlier round may have committed a step of it, or staged
 			// resolutions it could not yet commit, and aborting would
 			// discard both. The stage's next execution finds this rebase

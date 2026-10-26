@@ -13,10 +13,10 @@ import (
 )
 
 // MarkerBaseline maps each path the index holds an unresolved conflict for
-// to the marker-shaped lines that path's own conflict stages hold, each once
-// and in order: lines that are content of one of the conflict's sides and
-// not markers the merge wrote. Every such path is in the map, with no lines
-// when its sides hold none.
+// to the marker-shaped lines that path's own conflict stages hold, each with
+// the most copies any one stage holds: lines that are content of one of the
+// conflict's sides and not markers the merge wrote. Every such path is in
+// the map, with no lines when its sides hold none.
 //
 // A marker-shaped line is one that starts with seven '<', seven '|', or seven
 // '>' characters, the shapes of the lines git writes to open a conflict, to
@@ -30,8 +30,13 @@ import (
 // only for a path whose worktree file holds a marker-shaped line now, as a
 // file git wrote markers into does. What it does not tell apart from
 // content: a marker run shorter than seven characters, which a
-// conflict-marker-size attribute can ask git for, and a marker line
-// identical to a line one of the sides holds.
+// conflict-marker-size attribute can ask git for, and a marker git wrote
+// whose text one of the sides also holds, when the file keeps no more
+// copies of that text than the side does. A resolution that keeps more
+// copies of such a line than any one side holds, as one combining two
+// sides that each hold it can, is taken for one that kept a marker: that
+// errs toward leaving the conflict for a person rather than committing a
+// marker.
 //
 // The worktree file is read on UncommittedDigest's terms, including how the
 // context ends it and the wait it cannot end. Each stage's blob is read
@@ -41,7 +46,7 @@ import (
 // It answers for the whole working copy, from its root, whichever directory
 // the handle was opened on, and every path it reads or takes is
 // repository-relative.
-func (r *Repository) MarkerBaseline(ctx context.Context) (map[string][]string, error) {
+func (r *Repository) MarkerBaseline(ctx context.Context) (map[string]map[string]int, error) {
 	if r.kind != KindWorktree {
 		return nil, &openError{path: r.path, kind: KindWorktree}
 	}
@@ -57,7 +62,7 @@ func (r *Repository) MarkerBaseline(ctx context.Context) (map[string][]string, e
 	if err != nil {
 		return nil, err
 	}
-	baseline := make(map[string][]string, len(stages))
+	baseline := make(map[string]map[string]int, len(stages))
 	for path, entries := range stages {
 		baseline[path] = nil
 		lines, err := worktreeMarkerLines(ctx, r.path, path)
@@ -67,7 +72,7 @@ func (r *Repository) MarkerBaseline(ctx context.Context) (map[string][]string, e
 		if len(lines) == 0 {
 			continue
 		}
-		var held []string
+		held := make(map[string]int)
 		for _, entry := range entries {
 			if !entry.regularBlob() {
 				continue
@@ -80,10 +85,8 @@ func (r *Repository) MarkerBaseline(ctx context.Context) (map[string][]string, e
 			if err != nil {
 				return nil, err
 			}
-			for _, line := range side {
-				if !slices.Contains(held, line) {
-					held = append(held, line)
-				}
+			for line, n := range side {
+				held[line] = max(held[line], n)
 			}
 		}
 		baseline[path] = held
@@ -92,9 +95,11 @@ func (r *Repository) MarkerBaseline(ctx context.Context) (map[string][]string, e
 }
 
 // MarkersLeft reports, in order, each path of baseline whose worktree file
-// holds a marker-shaped line that is not one of the lines baseline records
-// for it, whether or not the path is still unmerged in the index. A marker
-// git wrote is such a line, and so is one whose label was rewritten. A path
+// holds more copies of a marker-shaped line than baseline records for it,
+// whether or not the path is still unmerged in the index. A marker git wrote
+// is such a line, so is one whose label was rewritten, and so is a second
+// copy of a line one side holds once, as git's opening marker is when a
+// side documents it. A path
 // whose worktree entry is now missing or not a regular file holds none. The
 // file is read on MarkerBaseline's terms, and what that cannot tell apart
 // from content this cannot either.
@@ -102,7 +107,7 @@ func (r *Repository) MarkerBaseline(ctx context.Context) (map[string][]string, e
 // It answers for the whole working copy, from its root, whichever directory
 // the handle was opened on, and every path it reads or takes is
 // repository-relative.
-func (r *Repository) MarkersLeft(ctx context.Context, baseline map[string][]string) ([]string, error) {
+func (r *Repository) MarkersLeft(ctx context.Context, baseline map[string]map[string]int) ([]string, error) {
 	if r.kind != KindWorktree {
 		return nil, &openError{path: r.path, kind: KindWorktree}
 	}
@@ -116,8 +121,11 @@ func (r *Repository) MarkersLeft(ctx context.Context, baseline map[string][]stri
 		if err != nil {
 			return nil, err
 		}
-		if slices.ContainsFunc(lines, func(line string) bool { return !slices.Contains(held, line) }) {
-			left = append(left, path)
+		for line, n := range lines {
+			if n > held[line] {
+				left = append(left, path)
+				break
+			}
 		}
 	}
 	slices.Sort(left)
@@ -210,7 +218,7 @@ func parseUnmerged(out []byte) (map[string][]unmergedEntry, error) {
 // worktreeMarkerLines is markerLines of the worktree file at path. A path
 // that is missing or not a regular file has none, and a descriptor that is
 // not a regular file is not read, as in the digest.
-func worktreeMarkerLines(ctx context.Context, root, path string) ([]string, error) {
+func worktreeMarkerLines(ctx context.Context, root, path string) (map[string]int, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -245,14 +253,14 @@ func worktreeMarkerLines(ctx context.Context, root, path string) ([]string, erro
 	return lines, closeErr
 }
 
-// markerLines returns each distinct marker line in content, in order of
-// first appearance, without its line ending. A line ends at '\n', and a
+// markerLines counts each marker-shaped line in content, keyed by its text
+// without its line ending. A line ends at '\n', and a
 // '\r' before it is not part of the line. Only a marker line is kept in
 // memory, so a long line that is not one is passed over. The context is
 // checked before each read, and an ended context returns its error.
-func markerLines(ctx context.Context, content io.Reader) ([]string, error) {
+func markerLines(ctx context.Context, content io.Reader) (map[string]int, error) {
 	br := bufio.NewReaderSize(contextReader{ctx: ctx, r: content}, 64<<10)
-	var lines []string
+	lines := make(map[string]int)
 	var line []byte
 	start, keep := true, false
 	for {
@@ -273,9 +281,7 @@ func markerLines(ctx context.Context, content io.Reader) ([]string, error) {
 		}
 		if keep {
 			text := strings.TrimSuffix(strings.TrimSuffix(string(line), "\n"), "\r")
-			if !slices.Contains(lines, text) {
-				lines = append(lines, text)
-			}
+			lines[text]++
 		}
 		if err != nil {
 			return lines, nil

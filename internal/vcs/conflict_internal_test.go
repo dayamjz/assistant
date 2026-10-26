@@ -3,7 +3,7 @@ package vcs
 import (
 	"context"
 	"errors"
-	"slices"
+	"maps"
 	"strings"
 	"testing"
 )
@@ -12,7 +12,8 @@ import (
 // buffer. A long line that is not a marker is passed over and the marker
 // after it is still found; a long marker line is kept whole; a marker on a
 // last line with no newline counts; a marker run shorter than seven, or one
-// that does not start the line, does not.
+// that does not start the line, does not. Each line is counted, so the two
+// copies of the opening marker, one with a '\r' before its newline, are two.
 func TestMarkerLinesReadsPastItsBuffer(t *testing.T) {
 	long := strings.Repeat("x", 200<<10)
 	longMarker := ">>>>>>> " + long
@@ -28,9 +29,13 @@ func TestMarkerLinesReadsPastItsBuffer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"<<<<<<< HEAD", longMarker, "||||||| base"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("got %d lines starting %q, want %d", len(got), firstBytes(got), len(want))
+	want := map[string]int{"<<<<<<< HEAD": 2, longMarker: 1, "||||||| base": 1}
+	if !maps.Equal(got, want) {
+		var keys []string
+		for k := range got {
+			keys = append(keys, k)
+		}
+		t.Fatalf("got %d distinct lines starting %q, want %d", len(got), firstBytes(keys), len(want))
 	}
 }
 

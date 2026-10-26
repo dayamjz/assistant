@@ -552,3 +552,45 @@ func TestUncommittedDigestReadsAReftableSubmoduleHead(t *testing.T) {
 		t.Fatalf("digest after moving the reftable branch to %s = %q, before %q, error %v", fix, after, before, err)
 	}
 }
+
+// TestUncommittedDigestSeesAnEditInsideASubmoduleCheckout edits a file in a
+// submodule's working tree without moving the checkout's commit. That is an
+// uncommitted change in the copy, so each edit changes the digest even
+// though the commit the checkout stands on does not.
+func TestUncommittedDigestSeesAnEditInsideASubmoduleCheckout(t *testing.T) {
+	gitEnvironment(t)
+	sub := t.TempDir()
+	rawGit(t, sub, "init", "--quiet", "-b", "main", ".")
+	commitFile(t, sub, "f.txt", "one\n", "one")
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", "-b", "main", ".")
+	rawGit(t, dir, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", sub, "lib")
+	rawGit(t, dir, "commit", "--quiet", "-m", "base")
+	// A .gitmodules entry that hides this submodule's dirty checkout from
+	// diffs does not hide it from the digest.
+	rawGit(t, dir, "config", "-f", ".gitmodules", "submodule.lib.ignore", "dirty")
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := func() string {
+		t.Helper()
+		d, err := repo.UncommittedDigest(ctx(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	head := strings.TrimSpace(rawGit(t, filepath.Join(dir, "lib"), "rev-parse", "HEAD"))
+	clean := digest()
+	writeFile(t, filepath.Join(dir, "lib", "f.txt"), "two\n")
+	first := digest()
+	writeFile(t, filepath.Join(dir, "lib", "f.txt"), "three\n")
+	second := digest()
+	if now := strings.TrimSpace(rawGit(t, filepath.Join(dir, "lib"), "rev-parse", "HEAD")); now != head {
+		t.Fatalf("the submodule moved from %s to %s, so this is not the case under test", head, now)
+	}
+	if first == clean || second == first {
+		t.Fatalf("edits inside the submodule left the digest unchanged: %s, %s, %s", clean, first, second)
+	}
+}

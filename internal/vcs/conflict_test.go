@@ -2,6 +2,7 @@ package vcs_test
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -66,8 +67,8 @@ func TestMarkerBaselineIsWhatTheSidesHold(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"<<<<<<< HEAD", ">>>>>>> example"}
-			if got := baseline["clash.txt"]; !slices.Equal(got, want) || len(baseline) != 1 {
+			want := map[string]int{"<<<<<<< HEAD": 1, ">>>>>>> example": 1}
+			if got := baseline["clash.txt"]; !maps.Equal(got, want) || len(baseline) != 1 {
 				t.Fatalf("baseline = %q, want clash.txt with %q", baseline, want)
 			}
 			left, err := repo.MarkersLeft(ctx(t), baseline)
@@ -187,5 +188,37 @@ func TestARelabeledMarkerIsStillLeft(t *testing.T) {
 	}
 	if !slices.Equal(left, []string{"clash.txt"}) {
 		t.Fatalf("markers left in %q after relabeling, want clash.txt:\n%s", left, readText(t, path))
+	}
+}
+
+// TestASecondCopyOfAHeldMarkerLineIsStillLeft is a conflict whose upstream
+// side holds "<<<<<<< HEAD" as content, and git's opening marker is the
+// same text. The fixer deletes the closing marker git wrote, the one line no
+// side held, and keeps the rest, so the file holds "<<<<<<< HEAD" twice
+// where the side held it once. The second copy is git's marker, and
+// MarkersLeft names the file.
+func TestASecondCopyOfAHeldMarkerLineIsStillLeft(t *testing.T) {
+	repo, dir, topic := stoppedOnConflict(t, "\n")
+	baseline, err := repo.MarkerBaseline(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "clash.txt")
+	var kept []string
+	for _, line := range strings.SplitAfter(readText(t, path), "\n") {
+		if !strings.HasPrefix(line, ">>>>>>> "+topic) {
+			kept = append(kept, line)
+		}
+	}
+	writeFile(t, path, "edited\n"+strings.Join(kept, ""))
+	if n := strings.Count(readText(t, path), "<<<<<<< HEAD\n"); n != 2 {
+		t.Fatalf("the file holds %d copies of the opening marker, want 2:\n%s", n, readText(t, path))
+	}
+	left, err := repo.MarkersLeft(ctx(t), baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(left, []string{"clash.txt"}) {
+		t.Fatalf("markers left in %q with git's opening marker kept, want clash.txt:\n%s", left, readText(t, path))
 	}
 }
