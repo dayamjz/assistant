@@ -437,9 +437,12 @@ func dispatchReadRefs(t *testing.T, subject *dispatchSubject) []vcs.Ref {
 	return refs
 }
 
-// A dispatch that reaches proven ends with the proof in the service's slot
-// for the task and nowhere else, and the dispatch itself launches nothing:
-// the launch is dispatchDue's next step over what the dispatch returned, and
+// A dispatch that reaches proven ends with the service's slot for the task
+// taken and still unsettled, and the proof in that slot and nowhere else
+// once the launch settles it (dispatched.settle), so the slot is held
+// against a stop, a relaunch or a retirement from the claim until the
+// launch's record is settled; the dispatch itself launches nothing: the
+// launch is dispatchDue's next step over what the dispatch returned, and
 // launch_internal_test.go drives it. A second dispatch of the same task
 // through the slot is refused there, so one service begins one attempt per
 // task it proved, and the slot is this service's memory: a service that
@@ -461,9 +464,24 @@ func TestADispatchEndsWithTheProofInTheServicesSlot(t *testing.T) {
 	if d.id != subject.task || d.attempt != 1 || d.anchor == 0 || d.instructions == "" {
 		t.Fatalf("the dispatch returned %+v, want the task, attempt 1, the anchor and the instructions file", d)
 	}
+	if held, ok := subject.service.isolationOf(subject.task); !ok || held.Proven() {
+		t.Fatalf("after the dispatch the slot holds %+v, %v; want it taken and not yet settled with the proof", held, ok)
+	}
+	if _, err := subject.service.claimSteer(subject.task); !errors.Is(err, errSteerInFlight) {
+		t.Fatalf("a stop's claim on the slot before the launch settled it = %v, want %v", err, errSteerInFlight)
+	}
+	if d.settle == nil {
+		t.Fatal("the dispatch returned no way for the launch to settle the slot")
+	}
+	d.settleSlot()
 	held, ok := subject.service.isolationOf(subject.task)
 	if !ok || !held.Proven() || held.Copy != d.proof.Copy || held.Branch != "task/one" {
-		t.Fatalf("the slot holds %+v, %v; want the proof the dispatch returned", held, ok)
+		t.Fatalf("the settled slot holds %+v, %v; want the proof the dispatch returned", held, ok)
+	}
+	if release, err := subject.service.claimSteer(subject.task); err != nil {
+		t.Fatalf("a stop's claim on the settled slot = %v, want it taken", err)
+	} else {
+		release()
 	}
 	if _, err := subject.service.dispatchTask(ctx, subject.task); err == nil {
 		t.Fatal("a second dispatch of a task this service proved began another attempt")

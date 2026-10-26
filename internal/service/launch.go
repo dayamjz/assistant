@@ -109,8 +109,17 @@ import (
 // service started stands behind an attempt whose row does not name it.
 // A reference refused because the task is a housekeeping pass retired
 // since its attempt was claimed (store.ErrPassRetired) is the same path:
-// the worker is ended and the attempt keeps no session, which is what
-// leaves no attempt of a retired pass with one (housekeeping.go).
+// the worker is ended and the attempt keeps no session, so no session is
+// recorded for an attempt of a retired pass after its retirement
+// (housekeeping.go). Within this service that path is not reached: the
+// task's slot, which the dispatch or relaunch took, stays unsettled from
+// its claim until the record here is settled (dispatched.settle), so a
+// retire answered meanwhile is refused (errSteerInFlight) rather than
+// written, the retirement hold is not offered meanwhile either, and a pass
+// retired before the claim is refused here before any worker is created
+// (errLaunchRetired). The record's refusal stands for a retirement the
+// slot does not order: one written by another incarnation, or past a
+// crash.
 // Between Create returning and the row being written, a crash
 // leaves the process internal/session's doc describes: one no record names.
 // The dispatch that retries the task sweeps the standing copy before its
@@ -190,6 +199,10 @@ func (s *Service) settleRecording(id string, launched *session.Session, recorded
 // reference could not be recorded is no longer held and is ended before the
 // error is reported.
 func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Session, error) {
+	// The slot the dispatch or relaunch took is settled here, at every
+	// return and before a worker fallback, which takes it for itself; a
+	// caller that settles it itself, as switchWorker does, passes none.
+	defer d.settleSlot()
 	instructions, err := os.ReadFile(d.instructions)
 	if err != nil {
 		return nil, fmt.Errorf("service: reading the instructions of task %s: %w", d.id, err)
@@ -201,6 +214,19 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	task, err := s.store.Task(ctx, d.id)
 	if err != nil {
 		return nil, fmt.Errorf("service: reading task %s to route its worker: %w", d.id, err)
+	}
+	if task.Housekeeping {
+		// Under the slot: a retirement is written under the same slot, so
+		// one recorded now was written before the claim, as one another
+		// incarnation wrote may be, and none can be written until the
+		// record is settled.
+		_, retired, err := s.store.RetirementOf(ctx, d.id)
+		if err != nil {
+			return nil, fmt.Errorf("service: reading whether housekeeping pass %s is retired before launching it: %w", d.id, err)
+		}
+		if retired {
+			return nil, fmt.Errorf("task %s attempt %d: %w", d.id, d.attempt, errLaunchRetired)
+		}
 	}
 	project, err := s.launchKnowledge(ctx, task, d)
 	if err != nil {
@@ -250,6 +276,7 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 			if errors.As(err, &protocol) {
 				failure = protocol.Failure
 			}
+			d.settleSlot()
 			return s.switchWorker(ctx, task, d.attempt, nil, nil, selection.Resolution.Name, role, failure)
 		}
 		var undeclared *agents.CapabilityError
@@ -302,6 +329,11 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	s.watchWorkerFallback(task, d.attempt, host, launched, selection.Resolution.Name)
 	return launched, nil
 }
+
+// errLaunchRetired reports a launch of a housekeeping pass whose retirement
+// is recorded when the launch reads the pass under its slot: no worker is
+// created, and nothing is recorded. It wraps store.ErrPassRetired.
+var errLaunchRetired = fmt.Errorf("service: the housekeeping pass was retired before its worker was created: %w", store.ErrPassRetired)
 
 // routeWorker selects the adapter a task worker launches with, on
 // agents.Route's terms, and the role that selection was asked for. A task

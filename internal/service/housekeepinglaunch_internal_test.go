@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
@@ -124,4 +126,114 @@ func latestRefOf(attempts []store.TaskAttempt) store.Optional[string] {
 		return attempts[n-1].SessionRef
 	}
 	return store.Optional[string]{}
+}
+
+// retirementHoldOf registers the pass's retirement hold for its first
+// interval, keyed as the loop keys one, against the attempts as recorded.
+func retirementHoldOf(t *testing.T, records *store.Store, task string) (store.Hold, retireHold) {
+	t.Helper()
+	rh := retireHold{Task: task, Epoch: 1, Attempt: latestSequence(recordedAttempts(t, records, task))}
+	hold, err := records.RegisterHold(t.Context(), store.Hold{Key: rh.key(), TaskID: store.Known(task), Subject: "retire?", Detail: "d"})
+	if err != nil {
+		t.Fatalf("registering the retirement hold: %v", err)
+	}
+	return hold, rh
+}
+
+// PRD section 6's "a retire ... is refused, naming what moves it, while the
+// hold stays open" and P10, for the one thing that moves a pass without a
+// record of its own: a launch under way. The dispatch's slot stays
+// unsettled from its claim until the launch has recorded the worker's
+// session, so meanwhile the pass stays open and resolves Dispatched, which
+// is in flight, and the stop hook's reading, taken with no probe, blocks a
+// turn from ending while the worker is being created; no retirement hold is
+// offered meanwhile (TestTheRetirementHoldIsNotOfferedWhileThePassesSlotIsHeld),
+// and a retire answered on a hold planted past that offer is refused as a
+// stop would be, writing nothing. Once the launch has recorded its session,
+// the same answer is refused on the probe reading the worker live. Before
+// the slot covered the launch, the answer at that point read the attempt as
+// never launched and was written, and the hook read nothing in flight while
+// the worker ran on until the launch's record was refused, the P10 window
+// the review at 3674920 reproduced with host stop.
+func TestARetireAnsweredWhileItsPassIsLaunchingIsRefusedAndThePassStaysInFlight(t *testing.T) {
+	principles.Cite(t, principles.P10)
+	ctx := t.Context()
+	w := passRecordWindow(t)
+	s := w.service
+	reached := make(chan string, 1)
+	s.beforeSessionRecord = func(_, ref string) {
+		reached <- ref
+		<-w.release
+	}
+	w.launch(ctx, t)
+	ref := w.atSeam(t, reached)
+	if guard := feed.Guard(ctx, s.home, supervisor.FreshnessFor(time.Second), time.Now()); guard.Allowed() || guard.Reason == supervisor.StopNothingInFlight {
+		t.Fatalf("with the pass's launch under way the stop hook reads %+v, want a turn blocked from ending", guard)
+	}
+	hold, rh := retirementHoldOf(t, w.records, w.task)
+	retire := machine.TaskRespondRequest{Task: w.task, Answer: machine.AnswerRetire}
+
+	answered, err := s.answerRetirement(ctx, ipc.Request{}, retire, hold, rh)
+	if !errors.Is(err, ipc.ErrRefused) || !errors.Is(err, errSteerInFlight) {
+		t.Fatalf("retire answered while the pass's launch was under way = %+v, %v, with the stop hook reading %s; "+
+			"want it refused while the launch holds the pass's slot",
+			answered.Effect, err, feed.Guard(ctx, s.home, supervisor.FreshnessFor(time.Second), time.Now()).Reason)
+	}
+	if _, retired, err := w.records.RetirementOf(ctx, w.task); err != nil || retired {
+		t.Fatalf("the refused answer left the pass retired %v (%v)", retired, err)
+	}
+	if h, err := w.records.Hold(ctx, hold.Key); err != nil || !h.Open() {
+		t.Fatalf("the refused answer left the retirement hold %+v, %v; want it open", h, err)
+	}
+
+	w.letGo()
+	out := <-w.launched
+	w.launched <- out
+	if out.err != nil {
+		t.Fatalf("the launch, with the answer refused, returned %v; want the worker recorded", out.err)
+	}
+	if got := latestRef(recordedAttempts(t, w.records, w.task)); got != ref {
+		t.Fatalf("the launch recorded session %q, want %q", got, ref)
+	}
+	if _, err := s.answerRetirement(ctx, ipc.Request{}, retire, hold, rh); !errors.Is(err, store.ErrPassMoves) {
+		t.Fatalf("retire answered with the worker recorded and live = %v, want ErrPassMoves on the probe", err)
+	}
+}
+
+// The other order under the slot: a pass retired before its launch takes
+// the slot is refused there, before any worker is created, so the attempt
+// has no session, nothing was started, and the stop hook's reading of
+// nothing in flight is true. The control is the pass not retired, whose
+// launch under the same subject records its worker.
+func TestALaunchOfAPassRetiredBeforeItTookTheSlotCreatesNoWorker(t *testing.T) {
+	principles.Cite(t, principles.P10)
+	ctx := t.Context()
+	w := passRecordWindow(t)
+	s := w.service
+	d, err := s.dispatchTask(ctx, w.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	retireAtSeam(t, w.records, w.task)
+	before := len(w.agent.Calls())
+	launched, err := s.launchTask(ctx, d)
+	if !errors.Is(err, errLaunchRetired) || !errors.Is(err, store.ErrPassRetired) || launched != nil {
+		t.Fatalf("launching the retired pass = %v, %v; want it refused before a worker is created", launched, err)
+	}
+	if after := len(w.agent.Calls()); after != before {
+		t.Fatalf("the refused launch started a worker: the stand-in records %d call(s) where it recorded %d", after, before)
+	}
+	if _, held, ok := s.sessionOf(w.task); ok {
+		t.Fatalf("the refused launch holds session %s", held.Reference())
+	}
+	if got := latestRef(recordedAttempts(t, w.records, w.task)); got != "" {
+		t.Fatalf("the refused launch recorded session %q", got)
+	}
+	if guard := feed.Guard(ctx, s.home, supervisor.FreshnessFor(time.Second), time.Now()); guard.Reason != supervisor.StopNothingInFlight {
+		t.Fatalf("with no worker created the stop hook reads %s, want %s", guard.Reason, supervisor.StopNothingInFlight)
+	}
+	w.letGo()
+	close(w.launched)
+	w.launched = make(chan launchOutcome, 1)
+	w.launched <- launchOutcome{}
 }

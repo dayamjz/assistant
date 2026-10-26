@@ -21,9 +21,9 @@ import "github.com/dayamjz/assistant/internal/taskstate"
 // afterwards every attempt claim refuses it and so does the record of a
 // session for the attempt claimed before it (internal/store's
 // ErrPassRetired, with the retirement's own session anchor), so its latest
-// attempt's terminal is the one the retirement read dead, or none, and the
-// worker never moves a retired pass again, whatever a probe reads or
-// cannot read. Only a run of the pass's branch started after its
+// attempt's session, when it has one, is the one the retirement read dead,
+// and the worker never moves a retired pass again, whatever a probe reads
+// or cannot read. Only a run of the pass's branch started after its
 // retirement moves it, on the same terms as an open pass's. That is why a
 // reading with no probe, as a hook's, reads a retired pass exactly as the
 // service does, where it reads an open pass toward in flight.

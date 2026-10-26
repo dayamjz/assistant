@@ -81,9 +81,13 @@ paths: ["internal/service/**"]
   `ensureCopy` reads that reference and never the working copy, and
   `copy.go`'s header says why the fetch moved there.
 - Dispatch and launch: `dispatch.go` dispatches (the attempt row is the
-  claim) and `launch.go` follows a proven dispatch in the same pass. A path
-  already standing at the copy's path is asserted and never removed, and
-  `Close` ends only the sessions this service created.
+  claim) and `launch.go` follows a proven dispatch in the same pass, under
+  the slot the dispatch or relaunch took, which stays unsettled until the
+  launch's record of its session is settled (`dispatched.settle`), so a
+  stop, a relaunch, a retirement or a retirement hold's offer never
+  interleaves with a worker created and not yet recorded. A path already
+  standing at the copy's path is asserted and never removed, and `Close`
+  ends only the sessions this service created.
 - Terminals: every task reader is built through `reader`, probing through
   the service's `Terminals`, the one seam a terminal is observed through;
   liveness has one producer, the provider's probe, and nothing writes an

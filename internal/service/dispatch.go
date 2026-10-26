@@ -268,11 +268,18 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // residual gap.
 //
 // A dispatch that reaches proven is launched in the same pass, through
-// launch.go, and the slot covers the launch as well: a launch that failed is
+// launch.go, and the slot covers the launch as well, in both senses: the
+// slot stays taken for the service's lifetime, so a launch that failed is
 // not retried until the next open either, because the attempt it would be
 // launching was dispatch's and a second launch of one attempt would be a
-// second process against one record. What came of the launch is logged, and
-// a refusal of the launch's own assertion is recorded the way dispatch's is.
+// second process against one record; and it stays unsettled, which is what
+// claimSteer and claimRelaunch refuse on, from the claim until the launch
+// has settled the record of its session (dispatched.settle), so nothing
+// that takes the task's slot, a stop, a relaunch, a housekeeping pass's
+// retirement or the offer of its retirement hold, interleaves with a
+// worker being created and not yet recorded. What came of the launch is
+// logged, and a refusal of the launch's own assertion is recorded the way
+// dispatch's is.
 func (s *Service) dispatchDue(ctx context.Context) {
 	if !s.intake.TryRLock() {
 		s.log.Printf("dispatching was left to the task intake in flight, which dispatches once it has returned")
@@ -361,6 +368,22 @@ type dispatched struct {
 	// section 11's note about what already happened; relaunch.go owns the
 	// text.
 	note string
+	// settle settles the task's slot the dispatch or relaunch took, with
+	// the proof, once; nil when the caller settles it itself. launchTask
+	// calls it at every return, and before a worker fallback, which takes
+	// the slot for itself, so the slot is unsettled from the claim until
+	// the launch's record is settled.
+	settle func()
+}
+
+// settleSlot settles the slot once, on settle's terms, and is safe to call
+// again or on a dispatch that carries none.
+func (d *dispatched) settleSlot() {
+	if d.settle != nil {
+		settle := d.settle
+		d.settle = nil
+		settle()
+	}
 }
 
 // dispatchTask dispatches one task, on the terms this file's opening comment
@@ -382,23 +405,30 @@ func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, erro
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	s.settleOrRelease(id, settle, d.proof, err)
-	return d, err
+	return s.settleOrRelease(id, settle, d, err)
 }
 
-// settleOrRelease ends a dispatch's hold on its slot: a dispatch left queued
-// by placeable claimed nothing, so its slot is given back and the next pass
-// reads the trusted copy again, and every other outcome settles the slot
-// with the proof, or none, for the service's lifetime.
-func (s *Service) settleOrRelease(id string, settle func(tasks.Isolation), proof tasks.Isolation, err error) {
-	if errors.Is(err, errTaskUnplaced) {
+// settleOrRelease ends a dispatch's hold on its slot, or hands it to the
+// launch: a dispatch left queued by placeable claimed nothing, so its slot
+// is given back and the next pass reads the trusted copy again; a dispatch
+// that failed settles the slot now, with no proof, for the service's
+// lifetime; and a dispatch that proved its copy keeps the slot unsettled
+// and returns it with d.settle set, for launchTask to settle with the proof
+// once the launch's record is settled, on the file comment's terms.
+func (s *Service) settleOrRelease(id string, settle func(tasks.Isolation), d dispatched, err error) (dispatched, error) {
+	switch {
+	case errors.Is(err, errTaskUnplaced):
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		delete(s.isolated, id)
 		delete(s.claiming, id)
-		return
+	case err != nil:
+		settle(d.proof)
+	default:
+		proof := d.proof
+		d.settle = func() { settle(proof) }
 	}
-	settle(proof)
+	return d, err
 }
 
 // redispatchTask is dispatchTask for a retry answered on the hold a dispatch
@@ -415,8 +445,7 @@ func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, er
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	s.settleOrRelease(id, settle, d.proof, err)
-	return d, err
+	return s.settleOrRelease(id, settle, d, err)
 }
 
 // claimDispatch takes the task's slot, so a second pass over the tasks does

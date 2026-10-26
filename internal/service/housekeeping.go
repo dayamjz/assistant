@@ -65,12 +65,12 @@ import (
 // once per interval while the pass stays open, whether or not the default
 // branch moved, and whether or not something moves it: that is the long-run
 // escalation the coordinator relays. When nothing moves it
-// (supervisor.PassMoves), it is also offered the retirement hold, keyed by
-// the interval, the latest attempt and the newest run it was decided
-// against, so at most one is registered per interval, none while an earlier
-// one is unanswered, and a retire answer given after a run started or the
-// worker was begun again is refused by store.RetireHousekeepingPass's
-// anchors. The registration reads the pass again in its own transaction
+// (supervisor.PassMoves), it is also offered the retirement hold, under the
+// task's slot so no launch is under way, keyed by the interval, the latest
+// attempt and the newest run it was decided against, so at most one is
+// registered per interval, none while an earlier one is unanswered, and a
+// retire answer given after a run started or the worker was begun again is
+// refused by store.RetireHousekeepingPass's anchors. The registration reads the pass again in its own transaction
 // (store.OfferRetirementHold), so a pass completed, retired, begun again or
 // given a run since the loop read it is offered none. A pass something
 // moves is never offered one, and is in flight
@@ -130,7 +130,8 @@ import (
 // pass is never begun again: every attempt claim refuses it in the store
 // (store.ErrPassRetired), and relaunch.go refuses it before it sweeps
 // anything, and the record of an attempt's session refuses it, so no
-// attempt of a retired pass has a session. Nor is it in flight by its state
+// session is recorded for an attempt of a retired pass after its
+// retirement. Nor is it in flight by its state
 // alone (supervisor.RegardOf): the loop watches it, the stop guard counts it
 // and the catch-up read lists it under way only while a run of its branch
 // has not ended or a wake about it is queued, so once its wakes are
@@ -150,20 +151,28 @@ import (
 //     validates as any run does. Nothing is lost; the pass's claim on the
 //     repository is already released.
 //   - A launch records its attempt's session only once the worker's
-//     process has started, and dispatch.go settles the task's slot before
-//     the launch, so a retire answered while an attempt claimed before it
-//     is still launching reads that attempt as never having had a session,
-//     which section 6's "or its latest attempt never had a session" counts
-//     as nothing moving the pass. The retirement and the session's record
-//     are decided in the store with exactly one loser: a retirement
-//     anchored to no session refuses once the session is recorded
-//     (store.ErrPassMoves), and the record refuses once the pass is retired
-//     (store.ErrPassRetired), on which launch.go ends the worker it started
-//     and records nothing, so no attempt of a retired pass has a session.
-//     What that worker did between its start and its end stays in the
-//     pass's copy, which the cleanup decision is asked about as for any
-//     retired pass (P6). The window costs a worker started and ended at
-//     once, not a worker running unwatched.
+//     process has started, and until then the attempt reads as never
+//     launched, which section 6's "or its latest attempt never had a
+//     session" counts as nothing moving the pass. Within this service the
+//     dispatch or relaunch holds the task's slot unsettled from its claim
+//     until the launch has settled its record (dispatch.go, launch.go),
+//     the slot every retirement and the retirement hold's offer are
+//     written under, so a retire answered meanwhile is refused with the
+//     hold open (errSteerInFlight), the offer and the on-proof retirement
+//     are skipped until the next pass, and a launch that reads a pass
+//     already retired under the slot creates no worker (errLaunchRetired);
+//     the pass stays open and resolves Dispatched, in flight, until its
+//     worker is recorded. For a retirement
+//     the slot does not order, written by another incarnation or past a
+//     crash, the store decides the two writes with exactly one loser: a
+//     retirement anchored to no session refuses once the session is
+//     recorded (store.ErrPassMoves), and the record refuses once the pass
+//     is retired (store.ErrPassRetired), on which launch.go ends the worker
+//     it started and records nothing. What such a worker did between its
+//     start and its end stays in the pass's copy, which the cleanup
+//     decision is asked about as for any retired pass (P6), and between
+//     its start and its end it is a worker no record names, the gap
+//     dispatch.go's crash paragraph states.
 //   - The on-proof retirement is tried once per run whose position read
 //     nothing left; one refused because something moved the pass is tried
 //     again only when a later run of the pass passes, and is otherwise left
@@ -299,6 +308,16 @@ func (s *Service) superviseOpenPass(c *incarnation, r store.Repository, o taskst
 	if s.sup.hooks.beforeRetirementOffer != nil {
 		s.sup.hooks.beforeRetirementOffer(id)
 	}
+	// Under the task's slot: a launch under way holds it unsettled from
+	// its claim until its record is settled, and reads as nothing moving
+	// the pass until then, so the offer waits for the next pass rather
+	// than registering a hold that would take a launching pass out of
+	// flight.
+	release, err := s.claimSteer(id)
+	if err != nil {
+		return out
+	}
+	defer release()
 	ctx, cancel := s.sup.bound(c.ctx)
 	h, err := s.store.OfferRetirementHold(ctx, c.inc, store.RetirementOffer{
 		Hold: store.Hold{Key: rh.key(), TaskID: store.Known(id),

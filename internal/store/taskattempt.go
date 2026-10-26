@@ -205,8 +205,10 @@ func insertTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, sequenc
 // the retirement is of an attempt claimed before it, and its retirement was
 // written on a reading of that attempt as having no session; this refusal
 // and RetireHousekeepingPass's Session anchor give the two writes exactly
-// one loser in either order, so no attempt of a retired pass has a session
-// (PRD section 6's housekeeping). The caller ends the worker it started.
+// one loser in either order, so no session is recorded for an attempt of a
+// retired pass after its retirement; a session recorded before it is the
+// one the retirement was decided against (PRD section 6's housekeeping).
+// The caller ends the worker it started.
 func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence int64, sessionRef string, host SessionHost) error {
 	if strings.TrimSpace(sessionRef) == "" {
 		return fmt.Errorf("store: task %s attempt %d: the session reference is empty", taskID, sequence)

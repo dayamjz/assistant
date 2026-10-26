@@ -728,6 +728,39 @@ func TestARetirementHoldIsOfferedOnlyToAPassStillOpenAndStillWhenItIsRegistered(
 	}
 }
 
+// The retirement hold is offered under the pass's slot, which a dispatch or
+// relaunch holds unsettled through the launch that follows it: while it is
+// held, a pass that reads as nothing moving (its attempt claimed and no
+// session yet, which is how a launch under way reads) is offered no hold,
+// since the hold would resolve it Held and take it out of flight while its
+// worker is being created (P10); once the slot is released the next pass
+// offers the hold, which is the control that the read looks at the slot.
+func TestTheRetirementHoldIsNotOfferedWhileThePassesSlotIsHeld(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P10)
+	const pass = "taskhkslotaa"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		passTask(t, records, pass)
+		launched(t, records, pass, "", "")
+	})
+	release, err := sub.service.claimSteer(pass)
+	if err != nil {
+		t.Fatalf("taking the pass's slot as a launch does: %v", err)
+	}
+	sub.clock.Advance(time.Hour)
+	if r := sub.pass(t); r.Housekeeping[hkRepository].Err != nil {
+		t.Fatalf("the pass reported a failure over the repository: %v", r.Housekeeping[hkRepository].Err)
+	}
+	if holds := sub.retireHolds(t, pass); len(holds) != 0 {
+		t.Fatalf("with its slot held the pass was offered %+v, want no retirement hold", holds)
+	}
+	release()
+	sub.pass(t)
+	if holds := sub.retireHolds(t, pass); len(holds) != 1 || !holds[0].Open() {
+		t.Fatalf("with its slot released the pass carries %+v, want one open retirement hold", holds)
+	}
+}
+
 // unreportedPassCopy records an investigation pass of the repository whose
 // copy, a clone of the upstream, holds a commit its worker made and never
 // reported, launches its first attempt on session ref and reads that

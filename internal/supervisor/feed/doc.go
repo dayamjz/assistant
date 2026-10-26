@@ -33,8 +33,8 @@
 // there: supervisor.PassMoves reads its terminal as moving under no probe's
 // reading, because its retirement read that terminal dead or before it had a
 // session and internal/store records no session for an attempt of a retired
-// pass after that, so only a run of its branch not yet ended, or a queued
-// wake, keeps one in flight, both of which are the record's.
+// pass after its retirement, so only a run of its branch not yet ended, or a
+// queued wake, keeps one in flight, both of which are the record's.
 //
 // # The writer
 //

@@ -516,9 +516,10 @@ decisions that would begin its worker again, and its copy is asked the
 cleanup decision, so work not yet landed is kept for you (see Kept work). A
 pass whose run rebased to nothing, because the default branch already holds
 the correction, is retired by the program on that proof, with no decision
-asked. A retired pass is never begun again, and a launch of it already under
-way when you retire it ends the worker it started rather than recording it.
-It stops counting as work in flight: the stop guard and the catch-up read
+asked. A retired pass is never begun again, and `retire` answered while a
+launch of the pass is under way is refused, with the decision left open,
+until that worker is recorded, which the next answer then reads live. It
+stops counting as work in flight: the stop guard and the catch-up read
 wait on it only while a run of its branch has not ended or a wake about it
 is not yet acknowledged. With the interval zero, no wake and no retirement
 decision is raised about any pass.

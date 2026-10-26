@@ -31,7 +31,8 @@ paths: ["internal/store/**"]
   `housekeeping_retirement` record (`RetireHousekeepingPass`, written once,
   refused by every attempt claim and by `SetAttemptSession` with
   `ErrPassRetired`, and anchored to the latest attempt's session so the two
-  writes have exactly one loser), the queue's fourth
+  writes have exactly one loser and no session is recorded for an attempt
+  of a retired pass after its retirement), the queue's fourth
   shape `housekeeping_wake` about a repository with its notification twin,
   and `housekeeping_marker`, the due check's comparison base. `CreateTask`
   decides one open pass per repository in its own transaction with the

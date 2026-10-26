@@ -644,9 +644,9 @@ func (e *PassOpenError) Unwrap() error { return ErrPassOpen }
 // recorded: PRD section 11's one anchored relaunch refuses a retired pass,
 // whoever asks, so no worker starts in its copy once its claim on its
 // repository is released. SetAttemptSession returns it for the launch of an
-// attempt claimed before the retirement, so no attempt of a retired pass
-// has a session, and OfferRetirementHold for a pass whose claim is already
-// released.
+// attempt claimed before the retirement, so no session is recorded for an
+// attempt of a retired pass after its retirement, and OfferRetirementHold
+// for a pass whose claim is already released.
 var ErrPassRetired = errors.New("store: the housekeeping pass is retired and is never begun again")
 
 // ErrPassMoves is returned, wrapped, by RetireHousekeepingPass when something

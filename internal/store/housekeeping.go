@@ -252,8 +252,10 @@ type Retired struct {
 // session anchor what keeps a launch under way at the caller's reading from
 // doing so: a session recorded since the caller read none refuses here, and
 // SetAttemptSession refuses once the record is written, so the two writes
-// have exactly one loser in either order and no attempt of a retired pass
-// has a session.
+// have exactly one loser in either order: no session is recorded for an
+// attempt of a retired pass after its retirement, and a retired pass's
+// latest attempt either has no session or has the one its retirement was
+// decided against, which the caller had read dead.
 func (s *Store) RetireHousekeepingPass(ctx context.Context, r Retirement) (Retired, error) {
 	if err := r.validate(); err != nil {
 		return Retired{}, err
