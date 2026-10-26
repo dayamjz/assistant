@@ -107,6 +107,33 @@ func (r *Repository) CommitAllWithBody(ctx context.Context, subject, body string
 	return r.ResolveCommit(ctx, "HEAD")
 }
 
+// StagePaths records each of paths in the index as the working tree holds
+// it, as CommitAll's staging does for every path: an edit, a new file, and a
+// deletion alike. A path that held an unresolved conflict no longer does.
+// Paths are matched literally, never as patterns, and nothing else is staged.
+// It commits nothing and moves no reference.
+//
+// It answers for the whole working copy, from its root, whichever directory
+// the handle was opened on, and every path it reads or takes is
+// repository-relative.
+func (r *Repository) StagePaths(ctx context.Context, paths []string) error {
+	if r.kind != KindWorktree {
+		return ErrNotARepository
+	}
+	r, err := r.atRoot(ctx)
+	if err != nil {
+		return err
+	}
+	const chunk = 256
+	for start := 0; start < len(paths); start += chunk {
+		args := append([]string{"--literal-pathspecs", "add", "--all", "--"}, paths[start:min(start+chunk, len(paths))]...)
+		if _, err := r.run(ctx, "add-paths", args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // stagedChange reports whether the index holds anything the next commit would
 // record.
 //
