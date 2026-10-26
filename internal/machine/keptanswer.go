@@ -168,7 +168,7 @@ var phraseKeptWorkCarriedOn = Phrase{
 var phraseKeptWorkDiscardShown = Phrase{
 	Outcome:     "Nothing was removed: this is what discarding that local copy would lose.",
 	Consequence: "The copy stays, with everything it holds; removing it on your confirmation is not in this build.",
-	Decision:    "Read exactly what would be lost with --json; to let new work go ahead, answer land or carry-on instead, or send the copy's work somewhere safe yourself, after which the program removes the copy itself the next time it looks at it.",
+	Decision:    "Read exactly what would be lost with --json; to let new work go ahead, answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself, and the program removes the copy only once it finds everything in it there.",
 }
 
 // PhraseDiscardRemovalDeferred is the row for a discard given --confirm:
@@ -178,7 +178,7 @@ var phraseKeptWorkDiscardShown = Phrase{
 var PhraseDiscardRemovalDeferred = Phrase{
 	Outcome:     "Nothing was removed, because removing a local copy on a confirmed discard is not in this build.",
 	Consequence: "The copy stays, with everything it holds, and new work in the same project still waits on it.",
-	Decision:    "Answer land or carry-on instead, or send the copy's work somewhere safe yourself, after which the program removes the copy itself the next time it looks at it.",
+	Decision:    "Answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself, and the program removes the copy only once it finds everything in it there.",
 }
 
 // KeptWorkAnsweredPhrase is the line a person reads for an answered kept

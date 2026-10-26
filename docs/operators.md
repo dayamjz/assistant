@@ -648,11 +648,15 @@ shown, each file by what it holds. It records and removes nothing.
 Removing the copy on that answer is not in this build: given again with
 `--confirm DIGEST` it is refused, with nothing read or changed, the copy
 and its entry exactly as they were, and new tasks in the project still
-wait on it. To let them go ahead, answer land or carry-on, or push the
-copy's work somewhere safe: the program then removes the copy on that
-proof the next time it examines it, at the latest when the service next
-starts, and that closes the entry. Removing it by hand does not: an entry
-whose copy is gone with no proof that its work landed stays open. A copy is shown
+wait on it. To let them go ahead, answer land or carry-on, or make
+everything the copy holds safe elsewhere: commit or remove what is
+uncommitted, untracked or stashed, and push its commits where one of the
+cleanup proofs above finds them. The program removes the copy on that
+proof, which closes the entry, only when it next asks the cleanup decision
+of the copy (when the run finishes or a landed task's worker is observed
+gone, and again at each start for a finished run's copy), so it is not
+immediate. Removing the copy by hand does not close the entry: one whose
+copy is gone with no proof that its work landed stays open. A copy is shown
 or landed only in the one repository layout this supports, and
 anything else is refused naming why, with nothing of it read or changed:
 a task's copy needs a `.git` directory of its own (not a link or a file

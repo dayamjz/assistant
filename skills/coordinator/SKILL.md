@@ -293,9 +293,10 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   digest, which you may read, and removes nothing: removing the copy on a
   confirmation is not in this build, and `--confirm` is refused. To let
   the project's new tasks go ahead, tell the person their answers are land
-  and carry-on, or pushing the copy's work somewhere safe, after which the
-  program removes the copy itself; removing it by hand leaves the entry
-  open. Promoting an investigation
+  and carry-on, or making everything the copy holds safe elsewhere (its
+  uncommitted work committed or removed, its commits pushed), after which
+  the program removes the copy on that proof when it next looks at it,
+  which is not immediate; removing it by hand leaves the entry open. Promoting an investigation
   whose copy has an entry answers that entry carry on by itself. While the
   project has an open entry, a task you create in it is recorded and not
   started: it reads `dispatched` and its answer (`task.get`) names the

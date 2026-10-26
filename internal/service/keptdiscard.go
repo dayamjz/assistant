@@ -27,11 +27,12 @@ import (
 // A discard answer given a confirmation is refused with discardDeferred
 // before anything is read or written, so the copy, its entry and the store
 // are exactly as they were. What closes the entry instead, besides a land
-// or a carry on, is the copy's work turning up somewhere safe: the cleanup
-// decision then removes the copy on that P12 proof the next time it
-// examines it, at the latest when the service next starts (cleanup.go),
-// and the removal closes the entry. The refusal's row says so
-// (machine.PhraseDiscardRemovalDeferred).
+// or a carry on, is P12 cleanup removing the copy on a proof, which needs
+// everything the copy holds to be safe elsewhere, anything uncommitted,
+// untracked or stashed included, and happens only when the cleanup
+// decision is next asked of the copy at one of cleanup.go's sites; the
+// removal closes the entry. The refusal's row says what that needs of the
+// person (machine.PhraseDiscardRemovalDeferred).
 
 // discardKeptWork is the discard answer, on this file's terms.
 func (s *Service) discardKeptWork(ctx context.Context, entry store.KeptWork, confirm string) (machine.KeptWorkAnswered, error) {
