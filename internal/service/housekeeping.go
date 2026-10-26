@@ -129,12 +129,13 @@ import (
 // a pass already retired, so the two are never both left standing. A retired
 // pass is never begun again: every attempt claim refuses it in the store
 // (store.ErrPassRetired), and relaunch.go refuses it before it sweeps
-// anything. Nor is it in flight by its state alone (supervisor.RegardOf):
-// the loop watches it, the stop guard counts it and the catch-up read lists
-// it under way only while a run of its branch has not ended, the probe
-// reads its worker live, or a wake about it is queued, so once its wakes
-// are acknowledged a pass retired with its worker dead or never launched
-// has its terminal read no more and raises no further terminal-gone wake.
+// anything, and the record of an attempt's session refuses it, so no
+// attempt of a retired pass has a session. Nor is it in flight by its state
+// alone (supervisor.RegardOf): the loop watches it, the stop guard counts it
+// and the catch-up read lists it under way only while a run of its branch
+// has not ended or a wake about it is queued, so once its wakes are
+// acknowledged a pass retired with its worker dead or never launched has its
+// terminal read no more and raises no further terminal-gone wake.
 //
 // # Residual gaps
 //
@@ -153,16 +154,16 @@ import (
 //     the launch, so a retire answered while an attempt claimed before it
 //     is still launching reads that attempt as never having had a session,
 //     which section 6's "or its latest attempt never had a session" counts
-//     as nothing moving the pass, and is written. That launch's worker then
-//     runs in the retired pass's copy with the pass's claim on the
-//     repository released, so a next pass can be created while it runs, and
-//     a cleanup asked before its session is recorded reads its terminal
-//     Dead (retiredTerminal), as the retirement did. That worker is in
-//     flight while this service's probe reads it live
-//     (supervisor.PassMoves), so the loop watches it as it does any running
-//     worker; one the probe cannot read is not, nor is it under a hook's
-//     reading, which takes no probe, and once it reads dead the pass is out
-//     of flight again and no terminal-gone wake is made for it.
+//     as nothing moving the pass. The retirement and the session's record
+//     are decided in the store with exactly one loser: a retirement
+//     anchored to no session refuses once the session is recorded
+//     (store.ErrPassMoves), and the record refuses once the pass is retired
+//     (store.ErrPassRetired), on which launch.go ends the worker it started
+//     and records nothing, so no attempt of a retired pass has a session.
+//     What that worker did between its start and its end stays in the
+//     pass's copy, which the cleanup decision is asked about as for any
+//     retired pass (P6). The window costs a worker started and ended at
+//     once, not a worker running unwatched.
 //   - The on-proof retirement is tried once per run whose position read
 //     nothing left; one refused because something moved the pass is tried
 //     again only when a later run of the pass passes, and is otherwise left
@@ -303,7 +304,7 @@ func (s *Service) superviseOpenPass(c *incarnation, r store.Repository, o taskst
 		Hold: store.Hold{Key: rh.key(), TaskID: store.Known(id),
 			Subject: "whether to retire a housekeeping pass that has been open for a whole interval and that nothing moves",
 			Detail:  retireDetail(r, o, interval)},
-		Attempt: rh.Attempt, Run: rh.Run, Ended: runs.Finished, Delivered: taskstate.Delivered,
+		Attempt: rh.Attempt, Session: latestRef(o.Snapshot.Attempts), Run: rh.Run, Ended: runs.Finished, Delivered: taskstate.Delivered,
 	})
 	cancel()
 	var moved *store.TaskMovedError
@@ -592,11 +593,12 @@ func passWaits(task string) func(string) bool {
 	}
 }
 
-// retirementOf is the store request for a retirement of o, with the
-// owners' predicates.
-func retirementOf(task string, attempt int64, run string) store.Retirement {
-	return store.Retirement{Task: task, Attempt: attempt, Run: run, Relaunches: passRelaunches(task),
-		Ended: runs.Finished, Delivered: taskstate.Delivered}
+// retirementOf is the store request for a retirement of task, anchored to
+// its latest attempt and that attempt's session as the caller read them in
+// attempts, and to run, with the owners' predicates.
+func retirementOf(task string, attempts []store.TaskAttempt, run string) store.Retirement {
+	return store.Retirement{Task: task, Attempt: latestSequence(attempts), Session: latestRef(attempts), Run: run,
+		Relaunches: passRelaunches(task), Ended: runs.Finished, Delivered: taskstate.Delivered}
 }
 
 // retireOnProofFromPass starts the on-proof retirement of an open pass the
@@ -675,7 +677,7 @@ func (s *Service) retireOnProof(ctx context.Context, id, run string) error {
 		return err
 	}
 	attempt := latestSequence(o.Snapshot.Attempts)
-	r := retirementOf(id, attempt, run)
+	r := retirementOf(id, o.Snapshot.Attempts, run)
 	r.OnProof, r.Relaunches = true, passWaits(id)
 	branch, ok := o.Snapshot.Task.Branch.Get()
 	repository, hasRepository := o.Snapshot.Task.RepositoryID.Get()
@@ -740,11 +742,10 @@ func retiredCleanupOwed(o taskstate.Observed) bool {
 // the liveness its resolution read when its latest attempt has a session,
 // and Dead when it never had one. The second is PRD section 6's other half
 // of nothing moving a pass, "or its latest attempt never had a session",
-// the reading its retirement was decided on, and no attempt begins after
-// it, because every attempt claim refuses a retired pass
-// (store.ErrPassRetired). An attempt claimed before the retirement whose
-// launch records a session after it is read by the probe from then on; the
-// file comment's residual gaps say how that launch can follow a retirement.
+// the reading its retirement was decided on, and it stays that way: no
+// attempt begins after the retirement and no session is recorded for one
+// claimed before it, because every attempt claim and the session's record
+// refuse a retired pass (store.ErrPassRetired).
 func retiredTerminal(o taskstate.Observed) taskstate.Liveness {
 	if latestRef(o.Snapshot.Attempts) == "" {
 		return taskstate.Dead
@@ -809,7 +810,8 @@ func (s *Service) answerRetirement(ctx context.Context, req ipc.Request, r machi
 		}
 		s.closeStallsOnDead(ctx, r.Task, rh.Attempt, ref, "", probed)
 	}
-	req2 := retirementOf(r.Task, rh.Attempt, rh.Run)
+	req2 := retirementOf(r.Task, o.Snapshot.Attempts, rh.Run)
+	req2.Attempt = rh.Attempt
 	req2.Hold, req2.Note, req2.By = hold.Key, r.Note, req.HoldResolver()
 	retired, err := s.store.RetireHousekeepingPass(ctx, req2)
 	switch {

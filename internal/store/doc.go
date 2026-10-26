@@ -388,7 +388,9 @@
 // task: the task row's housekeeping mark, written once at intake, and the
 // housekeeping retirement record, written once by RetireHousekeepingPass in
 // the transaction that reads the pass again, and refused at every attempt
-// claim (ErrPassRetired). CreateTask decides the one-open-pass rule in its
+// claim and at the record of an attempt's session (ErrPassRetired), which
+// with the retirement's session anchor leaves no attempt of a retired pass
+// with a session. CreateTask decides the one-open-pass rule in its
 // own transaction from every earlier pass's snapshot and the record tier
 // internal/taskstate passes in (Disposition.Delivered), so this package
 // states no tier of its own.

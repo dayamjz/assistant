@@ -109,7 +109,7 @@ func TestARetiredPassIsNeverRelaunched(t *testing.T) {
 	if _, err := sub.records.RegisterHold(ctx, retire); err != nil {
 		t.Fatal(err)
 	}
-	r := retirementOf(sub.task, 1, "")
+	r := retirementOf(sub.task, recordedAttempts(t, sub.records, sub.task), "")
 	r.Hold, r.By = retire.Key, (ipc.Request{}).HoldResolver()
 	if _, err := sub.records.RetireHousekeepingPass(ctx, r); err != nil {
 		t.Fatalf("retiring the pass: %v", err)

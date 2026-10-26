@@ -136,10 +136,10 @@ assistant coordinator create --housekeeping --project NAME \
   open, if a run started or the worker was begun again since. `keep` leaves
   it open. A pass whose run rebased to nothing, because the default branch
   already holds the correction, is retired by the program on that proof. A
-  retired pass is never relaunched, and it no longer counts as work in
-  flight unless a run of its branch has not ended, a worker whose launch
-  began before the retirement reads live, or a wake about it is not yet
-  acknowledged.
+  retired pass is never relaunched, a launch of it under way when it is
+  retired ends its worker rather than recording it, and it no longer counts
+  as work in flight unless a run of its branch has not ended or a wake about
+  it is not yet acknowledged.
 
 ## Read the fleet
 

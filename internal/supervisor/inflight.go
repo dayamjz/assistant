@@ -68,10 +68,10 @@ const (
 	// QueueOnly is a task whose resolved state never puts it in flight, so
 	// only a queued wake does: a retired housekeeping pass nothing moves.
 	// Its retirement was written only once nothing moved it, and every
-	// attempt claim refuses it after, so a state such as Unknown, Queued
-	// or Dispatched that it can go on resolving names nothing that will
-	// move it, which is section 6's "a retired pass is not in flight by its
-	// state alone".
+	// attempt claim and the record of an attempt's session refuse it
+	// after, so a state such as Unknown, Queued or Dispatched that it can
+	// go on resolving names nothing that will move it, which is section 6's
+	// "a retired pass is not in flight by its state alone".
 	QueueOnly
 )
 

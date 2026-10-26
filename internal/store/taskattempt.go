@@ -198,6 +198,15 @@ func insertTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, sequenc
 // names no process, and a task on this machine with
 // ErrSessionHostOnThisMachine when it names one. The reference itself names
 // no machine.
+//
+// A housekeeping pass whose retirement is recorded is refused with
+// ErrPassRetired, wrapped, read in the same transaction. Every attempt claim
+// refuses a retired pass, so the one launch that can reach this write after
+// the retirement is of an attempt claimed before it, and its retirement was
+// written on a reading of that attempt as having no session; this refusal
+// and RetireHousekeepingPass's Session anchor give the two writes exactly
+// one loser in either order, so no attempt of a retired pass has a session
+// (PRD section 6's housekeeping). The caller ends the worker it started.
 func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence int64, sessionRef string, host SessionHost) error {
 	if strings.TrimSpace(sessionRef) == "" {
 		return fmt.Errorf("store: task %s attempt %d: the session reference is empty", taskID, sequence)
@@ -213,6 +222,9 @@ func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence i
 		}
 		if recorded.IsKnown() {
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrAttemptSessionRecorded)
+		}
+		if err := refuseRetiredTx(ctx, tx, taskID); err != nil {
+			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, err)
 		}
 		var hostPID, hostStart any
 		switch name, remote := machine.Get(); {

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -43,14 +44,18 @@ func retire(o taskstate.Observed) taskstate.Observed {
 // probe and never from the resolved state: a run not ended moves an open
 // pass, a worker read live or unobservable moves it, and a pass whose every
 // run ended and whose worker reads dead, or that never had a session, does
-// not. A retired pass is moved by a run not ended and by a worker the probe
-// reads live, and an unobservable worker does not move it, since its
-// retirement read that worker dead or before it had a session. A pass in the
-// terminal tier, and a task that is no pass, are never moving on these
-// terms. A pass something moves is in flight whatever it resolves
-// (Regardless); a retired pass nothing moves is in flight on its queue only.
+// not. A retired pass is moved by a run not ended and by nothing else: its
+// retirement read its worker dead or before it had a session, and no
+// session is recorded for an attempt of a retired pass after that, so a
+// probe's reading of its terminal, live or unobservable, moves it no more
+// than a reading taken with no probe does, which is what lets the stop
+// hook's reading agree with the service's (P10). A pass in the terminal
+// tier, and a task that is no pass, are never moving on these terms. A pass
+// something moves is in flight whatever it resolves (Regardless); a retired
+// pass nothing moves is in flight on its queue only.
 func TestPassMovesIsReadFromTheRecordsAndTheProbe(t *testing.T) {
 	t.Parallel()
+	principles.Cite(t, principles.P10)
 	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	run := func(status store.RunStatus) []store.Run { return []store.Run{{ID: "r", Status: status, CreatedAt: at}} }
 	for name, c := range map[string]struct {
@@ -59,7 +64,7 @@ func TestPassMovesIsReadFromTheRecordsAndTheProbe(t *testing.T) {
 	}{
 		"a running run":        {passObserved(run(store.RunRunning), "", taskstate.Unobserved), true, true},
 		"a held run":           {passObserved(run(store.RunHeld), "", taskstate.Unobserved), true, true},
-		"a live worker":        {passObserved(run(store.RunFailed), "pane", taskstate.Live), true, true},
+		"a live worker":        {passObserved(run(store.RunFailed), "pane", taskstate.Live), true, false},
 		"an unobserved worker": {passObserved(run(store.RunFailed), "pane", taskstate.Unobserved), true, false},
 		"a dead worker":        {passObserved(run(store.RunTerminated), "pane", taskstate.Dead), false, false},
 		"no session":           {passObserved(nil, "", taskstate.Unobserved), false, false},

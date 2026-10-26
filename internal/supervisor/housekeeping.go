@@ -18,15 +18,15 @@ import "github.com/dayamjz/assistant/internal/taskstate"
 //
 // A retired pass's retirement was written only on a reading of its latest
 // attempt's terminal as dead, or of that attempt as having no session, and
-// every attempt claim refuses it afterwards, so for one the worker moves it
-// only while the probe reads it live: a session recorded after that reading
-// by a launch the attempt began before it, the residual gap
-// internal/service's housekeeping names. An unobservable terminal of a
-// retired pass is not read as moving: it is the one the retirement read
-// dead, or that launch's, which the probe cannot read, a gap inside that
-// gap, and reading it as moving would keep every retired pass in flight
-// forever under a hook's reading. A run of the pass's branch started after
-// its retirement moves it on the same terms as an open pass's.
+// afterwards every attempt claim refuses it and so does the record of a
+// session for the attempt claimed before it (internal/store's
+// ErrPassRetired, with the retirement's own session anchor), so its latest
+// attempt's terminal is the one the retirement read dead, or none, and the
+// worker never moves a retired pass again, whatever a probe reads or
+// cannot read. Only a run of the pass's branch started after its
+// retirement moves it, on the same terms as an open pass's. That is why a
+// reading with no probe, as a hook's, reads a retired pass exactly as the
+// service does, where it reads an open pass toward in flight.
 //
 // A pass something moves is in flight whatever it resolves (RegardOf), so
 // its terminal is read on every supervision pass and the stop guard counts
@@ -46,7 +46,7 @@ func PassMoves(o taskstate.Observed) bool {
 		return false
 	}
 	if snap.Retirement.IsKnown() {
-		return o.State.Basis.Process == taskstate.Live
+		return false
 	}
 	return o.State.Basis.Process != taskstate.Dead
 }

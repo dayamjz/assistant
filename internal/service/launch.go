@@ -107,6 +107,10 @@ import (
 // be written. A reference that cannot be recorded leaves the session no
 // longer held and ended before the failure is reported, so no process this
 // service started stands behind an attempt whose row does not name it.
+// A reference refused because the task is a housekeeping pass retired
+// since its attempt was claimed (store.ErrPassRetired) is the same path:
+// the worker is ended and the attempt keeps no session, which is what
+// leaves no attempt of a retired pass with one (housekeeping.go).
 // Between Create returning and the row being written, a crash
 // leaves the process internal/session's doc describes: one no record names.
 // The dispatch that retries the task sweeps the standing copy before its
@@ -282,6 +286,15 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		if closeErr := host.Close(launched); closeErr != nil && !errors.Is(closeErr, session.ErrNotHeld) {
 			s.log.Printf("the worker of task %s, whose session could not be recorded, was not ended either: %v",
 				d.id, closeErr)
+		}
+		if errors.Is(recordErr, store.ErrPassRetired) {
+			// The pass was retired between the worker's creation and the
+			// record, the one window every attempt claim leaves, and the
+			// store decided the two writes with this one the loser: the
+			// worker was ended above and nothing names it, on
+			// housekeeping.go's terms.
+			return nil, fmt.Errorf("service: housekeeping pass %s was retired while attempt %d was launching, so its worker was ended and nothing records it: %w",
+				d.id, d.attempt, recordErr)
 		}
 		return nil, fmt.Errorf("service: recording the session of task %s attempt %d: %w", d.id, d.attempt, recordErr)
 	}

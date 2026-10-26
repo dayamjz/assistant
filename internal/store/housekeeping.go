@@ -158,6 +158,12 @@ type Retirement struct {
 	// and zero for a pass never dispatched. A pass whose latest attempt has
 	// moved since was relaunched, which moves it.
 	Attempt int64
+	// Session is that attempt's session reference as the caller read it,
+	// and empty for an attempt with none or a pass never dispatched. An
+	// attempt's session is recorded once, by its launch after the worker's
+	// process has started, so a session recorded since the caller read none
+	// is a launch under way at that reading, which moves the pass.
+	Session string
 	// Run is the newest run attributed to the pass as the caller read it,
 	// and empty for none. A newer one has started since, which moves it.
 	Run string
@@ -229,11 +235,11 @@ type Retired struct {
 //
 //   - with ErrPassClosed, wrapped, a pass already retired or in the terminal
 //     tier, and an error for a task that is not a pass;
-//   - with ErrPassMoves, wrapped, a pass whose latest attempt or newest
-//     attributed run is not the one the caller read, or with a run
-//     attributed to it that has not ended, or, on proof, whose newest run
-//     did not pass or which has an open hold that offers to relaunch its
-//     worker;
+//   - with ErrPassMoves, wrapped, a pass whose latest attempt, that
+//     attempt's session, or newest attributed run is not the one the caller
+//     read, or with a run attributed to it that has not ended, or, on
+//     proof, whose newest run did not pass or which has an open hold that
+//     offers to relaunch its worker;
 //   - with ErrHoldResolved, wrapped, an answered retirement whose hold is no
 //     longer open, and ErrNotFound for one that does not exist.
 //
@@ -242,7 +248,12 @@ type Retired struct {
 // writes the record naming the hold. An on-proof retirement writes the
 // record naming the run and closes nothing. Whether the worker is dead is
 // the probe's, which no transaction can take; the attempt anchor is what
-// keeps a relaunch since the caller's probe from slipping past.
+// keeps a relaunch since the caller's probe from slipping past, and the
+// session anchor what keeps a launch under way at the caller's reading from
+// doing so: a session recorded since the caller read none refuses here, and
+// SetAttemptSession refuses once the record is written, so the two writes
+// have exactly one loser in either order and no attempt of a retired pass
+// has a session.
 func (s *Store) RetireHousekeepingPass(ctx context.Context, r Retirement) (Retired, error) {
 	if err := r.validate(); err != nil {
 		return Retired{}, err
@@ -367,6 +378,12 @@ func passStillTx(snap TaskSnapshot, r Retirement) error {
 		return fmt.Errorf("%w: its latest attempt is %d where the retirement was decided against %d, so its worker was begun again since",
 			ErrPassMoves, latest, r.Attempt)
 	}
+	if n := len(snap.Attempts); n > 0 {
+		if session := snap.Attempts[n-1].SessionRef.Or(""); session != r.Session {
+			return fmt.Errorf("%w: its latest attempt %d runs in session %q where the retirement was decided against %q, so a launch of it was under way",
+				ErrPassMoves, latest, session, r.Session)
+		}
+	}
 	newest := ""
 	if len(snap.Runs) > 0 {
 		newest = snap.Runs[0].ID
@@ -448,6 +465,9 @@ type RetirementOffer struct {
 	// Attempt is the pass's latest attempt sequence as the loop read it,
 	// and zero for a pass never dispatched.
 	Attempt int64
+	// Session is that attempt's session reference as the loop read it, on
+	// Retirement's terms: empty for none.
+	Session string
 	// Run is the newest run attributed to the pass as the loop read it,
 	// and empty for none.
 	Run string
@@ -472,14 +492,14 @@ type RetirementOffer struct {
 //     terminal tier by Delivered, a findings relayed record or a merge
 //     among them;
 //   - ErrPassMoves, wrapped, for a pass with a run attributed to it newer
-//     than Run or one that has not ended, on RetireHousekeepingPass's
-//     terms;
+//     than Run or one that has not ended, or whose latest attempt's session
+//     is not Session, on RetireHousekeepingPass's terms;
 //
 // and an error for a task that is not a pass. A retire answer to a hold
 // registered past any of those could only be refused. Whether the worker is
-// dead is the probe's, which no transaction can take; the attempt anchor is
-// what keeps a relaunch since the loop's probe from slipping past, as it is
-// for the retirement itself.
+// dead is the probe's, which no transaction can take; the attempt and
+// session anchors are what keep a relaunch, or a launch under way, since the
+// loop's probe from slipping past, as they are for the retirement itself.
 func (s *Store) OfferRetirementHold(ctx context.Context, inc Incarnation, o RetirementOffer) (Hold, error) {
 	h := o.Hold
 	if err := validateHold(h); err != nil {
@@ -524,7 +544,7 @@ func (s *Store) OfferRetirementHold(ctx context.Context, inc Incarnation, o Reti
 		if !PassOpen(snap, o.Delivered) {
 			return fmt.Errorf("%w: task %s is in the terminal tier", ErrPassClosed, task)
 		}
-		if err := passStillTx(snap, Retirement{Task: task, Attempt: o.Attempt, Run: o.Run, Ended: o.Ended}); err != nil {
+		if err := passStillTx(snap, Retirement{Task: task, Attempt: o.Attempt, Session: o.Session, Run: o.Run, Ended: o.Ended}); err != nil {
 			return err
 		}
 		return insertHold(ctx, tx, h)

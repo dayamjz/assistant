@@ -631,7 +631,10 @@ func TestRetiringAnUnreportedPassWithCommittedWorkKeepsItAsKeptWork(t *testing.T
 // could only be refused, and the loop reports no failure. A run of the pass
 // started in between moves it, and is refused the same way. The positive
 // control is the same pass with nothing done in between, which is offered
-// the hold.
+// the hold. A pass the loop read with its attempt not yet launched, whose
+// launch records that attempt's session in between, is moved by that
+// launch and refused the same way: the offer is anchored to the session
+// the loop read, none, as the retirement is.
 func TestARetirementHoldIsOfferedOnlyToAPassStillOpenAndStillWhenItIsRegistered(t *testing.T) {
 	t.Parallel()
 	reported := func(id, ref string) hkPlant {
@@ -645,8 +648,19 @@ func TestARetirementHoldIsOfferedOnlyToAPassStillOpenAndStillWhenItIsRegistered(
 			}
 		}
 	}
-	for name, between := range map[string]func(t *testing.T, sub *hkSubject, id string){
-		"relayed": func(t *testing.T, sub *hkSubject, id string) {
+	// unlaunched is a pass whose first attempt is claimed and has no
+	// session, as one reads while its launch is under way.
+	unlaunched := func(id string) hkPlant {
+		return func(t *testing.T, records *store.Store, sub *hkSubject) {
+			passTask(t, records, id)
+			launched(t, records, id, "", "")
+		}
+	}
+	for name, c := range map[string]struct {
+		plant   func(id string) hkPlant
+		between func(t *testing.T, sub *hkSubject, id string)
+	}{
+		"relayed": {func(id string) hkPlant { return reported(id, "pane-offer") }, func(t *testing.T, sub *hkSubject, id string) {
 			ctx := context.Background()
 			events, err := sub.records(t).TaskEvents(ctx, id, 0, 0)
 			if err == nil {
@@ -655,8 +669,14 @@ func TestARetirementHoldIsOfferedOnlyToAPassStillOpenAndStillWhenItIsRegistered(
 			if err != nil {
 				t.Errorf("relaying pass %s: %v", id, err)
 			}
-		},
-		"a run started": func(t *testing.T, sub *hkSubject, id string) {
+		}},
+		"a session recorded": {unlaunched, func(t *testing.T, sub *hkSubject, id string) {
+			if err := sub.records(t).SetAttemptSession(context.Background(), id, 1, "pane-launched", store.SessionHost{}); err != nil {
+				t.Errorf("recording the session of pass %s's launch: %v", id, err)
+			}
+			sub.terminals.live("pane-launched", "working\n")
+		}},
+		"a run started": {func(id string) hkPlant { return reported(id, "pane-offer") }, func(t *testing.T, sub *hkSubject, id string) {
 			// The loop's goroutine runs this, so a failure is reported
 			// with Errorf and the assertions after the pass fail too.
 			ctx := context.Background()
@@ -677,15 +697,15 @@ func TestARetirementHoldIsOfferedOnlyToAPassStillOpenAndStillWhenItIsRegistered(
 			if err != nil {
 				t.Errorf("promoting pass %s and starting its run: %v", id, err)
 			}
-		},
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			const pass = "taskhkoffera"
-			sub := openHousekeeping(t, housekeepingConfig, reported(pass, "pane-offer"))
+			sub := openHousekeeping(t, housekeepingConfig, c.plant(pass))
 			sub.beforeOffer(func(task string) {
 				if task == pass {
-					between(t, sub, task)
+					c.between(t, sub, task)
 				}
 			})
 			sub.clock.Advance(time.Hour)
@@ -757,7 +777,7 @@ func TestARetiredPassWhoseCleanupWasNeverAskedIsKeptOnceTheServiceOpensAgain(t *
 			Subject: "whether to retire a housekeeping pass", Detail: "d"}); err != nil {
 			t.Fatal(err)
 		}
-		r := retirementOf(pass, 1, "")
+		r := retirementOf(pass, recordedAttempts(t, records, pass), "")
 		r.Hold, r.By = hold, store.ResolvedByMachineInterface()
 		if _, err := records.RetireHousekeepingPass(ctx, r); err != nil {
 			t.Fatalf("retiring the pass: %v", err)
@@ -1013,10 +1033,11 @@ func TestARetiredPassNothingMovesIsNotInFlight(t *testing.T) {
 // which is in flight on its state alone, though dispatch and every relaunch
 // refuse it; it is not in flight, so it is not watched, the catch-up read
 // does not list it under way, and with the service stopped the stop guard
-// reads nothing in flight. A worker that attempt's launch brings up after
-// the retirement, the residual gap internal/service's housekeeping names,
-// is in flight while the probe reads it live, which is the positive control
-// on the probe's half, and leaves flight once it reads dead.
+// reads nothing in flight. A session that attempt's launch would record
+// after the retirement is refused, so the pass stays one no worker moves;
+// TestALaunchUnderWayWhenItsPassIsRetiredRecordsNoSessionAndEndsItsWorker
+// is that launch through the real one, and
+// TestARetiredPassWithARunNotEndedIsInFlight the positive control.
 func TestAPassRetiredBeforeItsWorkerHadASessionIsNotInFlight(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P10)
@@ -1037,20 +1058,11 @@ func TestAPassRetiredBeforeItsWorkerHadASessionIsNotInFlight(t *testing.T) {
 		t.Error("the catch-up read lists the pass retired before its worker had a session under way")
 	}
 
-	if err := sub.records(t).SetAttemptSession(t.Context(), pass, 1, "pane-late", store.SessionHost{}); err != nil {
-		t.Fatalf("recording the late launch's session: %v", err)
+	if err := sub.records(t).SetAttemptSession(t.Context(), pass, 1, "pane-late", store.SessionHost{}); !errors.Is(err, store.ErrPassRetired) {
+		t.Fatalf("recording the late launch's session = %v, want ErrPassRetired", err)
 	}
-	sub.terminals.live("pane-late", "working\n")
-	if r := sub.pass(t); !r.Tasks[pass].Watched {
-		t.Error("the retired pass whose late worker the probe reads live was not watched")
-	}
-	if !sub.underWay(t, pass) {
-		t.Error("the catch-up read does not list the retired pass whose late worker reads live under way")
-	}
-	sub.terminals.dead("pane-late")
-	sub.settleQueue(t)
 	if r := sub.pass(t); r.Tasks[pass].Watched {
-		t.Error("the retired pass whose late worker reads dead was watched")
+		t.Error("the retired pass whose late launch was refused its record was watched")
 	}
 	if verdict := sub.stopGuardWithTheServiceStopped(t); verdict.Reason != supervisor.StopNothingInFlight {
 		t.Fatalf("with the service stopped the stop guard reads %s, want %s", verdict.Reason, supervisor.StopNothingInFlight)
