@@ -64,7 +64,7 @@ func TestAKeptWorkWakeIsAppendedOncePerOpenEntryUnderTheFence(t *testing.T) {
 	if _, err := s.AppendKeptWorkWake(ctx, stale, request); !errors.Is(err, ErrStaleIncarnation) {
 		t.Fatalf("a write by a replaced incarnation = %v, want ErrStaleIncarnation", err)
 	}
-	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{first.Wake.ID}, AcknowledgedByCoordinator()); err != nil {
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{first.Wake.ID}, nil, AcknowledgedByCoordinator()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AppendKeptWorkWake(ctx, inc, request); !errors.Is(err, ErrWakeHandled) {
@@ -133,13 +133,13 @@ func TestAKeptWorkWakeReachesTheFirstCoordinatorAloneAndClosesOnce(t *testing.T)
 	if queued, err := s.QueuedKeptWorkWakes(ctx, 10); err != nil || len(queued) != 1 || !queued[0].HandedOut() {
 		t.Fatalf("QueuedKeptWorkWakes = %+v, %v; want the handed-out row still queued", queued, err)
 	}
-	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{id, 99}, AcknowledgedByCoordinator()); !errors.Is(err, ErrWakeUnknown) {
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{id, 99}, nil, AcknowledgedByCoordinator()); !errors.Is(err, ErrWakeUnknown) {
 		t.Fatalf("a batch naming an unknown kept-work wake = %v, want ErrWakeUnknown", err)
 	}
-	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{id}, AcknowledgedByCoordinator()); err != nil {
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{id}, nil, AcknowledgedByCoordinator()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{id}, AcknowledgedByCoordinator()); !errors.Is(err, ErrWakeAcknowledged) {
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{id}, nil, AcknowledgedByCoordinator()); !errors.Is(err, ErrWakeAcknowledged) {
 		t.Fatalf("acknowledging the row again = %v, want ErrWakeAcknowledged", err)
 	}
 	if n, err := s.UnacknowledgedKeptWorkWakes(ctx); err != nil || n != 0 {
@@ -191,7 +191,7 @@ func TestAKeptWorkWakesIdentifierIsNotReusedAfterItsRepositoryIsForgotten(t *tes
 	if _, err := s.TransitionRun(ctx, run, []RunStatus{RunRunning}, RunFailed); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{old.Wake.ID}, AcknowledgedByCoordinator()); err != nil {
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{old.Wake.ID}, nil, AcknowledgedByCoordinator()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ForgetRepository(ctx, first.RepositoryID.Or("")); err != nil {
@@ -205,7 +205,7 @@ func TestAKeptWorkWakesIdentifierIsNotReusedAfterItsRepositoryIsForgotten(t *tes
 	if again.Wake.ID == old.Wake.ID {
 		t.Fatalf("the new entry's wake took identifier %d, which the forgotten wake held", again.Wake.ID)
 	}
-	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{old.Wake.ID}, AcknowledgedByCoordinator()); !errors.Is(err, ErrWakeUnknown) {
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{old.Wake.ID}, nil, AcknowledgedByCoordinator()); !errors.Is(err, ErrWakeUnknown) {
 		t.Fatalf("acknowledging the forgotten wake's identifier = %v, want ErrWakeUnknown", err)
 	}
 	if queued, err := s.QueuedKeptWorkWakes(ctx, 10); err != nil || len(queued) != 1 || queued[0].ID != again.Wake.ID {
@@ -262,7 +262,7 @@ func TestARepositoryIsNotForgottenWhileAKeptWorkWakeIsQueued(t *testing.T) {
 	if n := tableRows(t, s, "kept_work_notification"); n != 1 {
 		t.Fatalf("the refused removal left %d notification rows, want 1", n)
 	}
-	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{wake}, AcknowledgedByCoordinator()); err != nil {
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{wake}, nil, AcknowledgedByCoordinator()); err != nil {
 		t.Fatalf("acknowledging the wake after the refusal: %v", err)
 	}
 	if _, err := s.ForgetRepository(ctx, repository); err != nil {

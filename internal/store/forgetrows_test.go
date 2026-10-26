@@ -183,7 +183,7 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 	// both go with it: a queued one would refuse the forgetting, which
 	// TestARepositoryIsNotForgottenWhileAKeptWorkWakeIsQueued holds.
 	wake := keptWorkWakeAndNotification(t, s, entry.ID)
-	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{wake}, AcknowledgedByCoordinator()); err != nil {
+	if err := s.AcknowledgeAll(ctx, nil, nil, []int64{wake}, nil, AcknowledgedByCoordinator()); err != nil {
 		t.Fatalf("acknowledging the kept-work wake: %v", err)
 	}
 	if err := s.MarkRunCleanupRemoved(ctx, run.ID, now); err != nil {

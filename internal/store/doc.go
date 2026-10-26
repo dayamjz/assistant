@@ -367,12 +367,31 @@
 // shape raised it; TaskWakeKeyed is the read of a task's wake by kind and
 // marker, for a database an earlier build left with a task's wake and no
 // instant.
+// A wake about a repository's housekeeping is the queue's fourth shape,
+// migration 59's housekeeping_wake, PRD section 8's housekeeping-due wake:
+// kept_work_wake's columns with the entry replaced by the repository and the
+// pass it follows, plus the detail it names, stored redacted, under the
+// same seals, once per marker within the repository, which its unique key
+// holds. AppendHousekeepingWake is its one append and advances the
+// repository's due-check marker, housekeeping_marker, in the same
+// transaction when asked. ForgetRepository refuses a repository with one
+// queued (ErrHousekeepingWakeQueued) and takes the acknowledged rows, their
+// notifications and the marker after the repository row.
 // untaskedShape is the one implementation of the offer, the handout, the
-// count and the acknowledgement for the two shapes about no task, and
-// DrainAll and AcknowledgeAll take all three shapes in one transaction. A
+// count and the acknowledgement for the three shapes about no task, and
+// DrainAll and AcknowledgeAll take all four shapes in one transaction. A
 // kept-work wake and its notification go only with a closed run entry
 // whose run is gone, which only ForgetRepository removes, and it refuses
 // while the wake is unacknowledged (ErrKeptWorkWakeQueued).
+//
+// Migration 59 also adds PRD section 8's two housekeeping records about a
+// task: the task row's housekeeping mark, written once at intake, and the
+// housekeeping retirement record, written once by RetireHousekeepingPass in
+// the transaction that reads the pass again, and refused at every attempt
+// claim (ErrPassRetired). CreateTask decides the one-open-pass rule in its
+// own transaction from every earlier pass's snapshot and the record tier
+// internal/taskstate passes in (Disposition.Delivered), so this package
+// states no tier of its own.
 //
 // A wake's recipient is decided at the drain and stored on no row (P14):
 // DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain

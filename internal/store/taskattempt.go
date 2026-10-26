@@ -154,10 +154,15 @@ func (s *Store) BeginTaskAttempt(ctx context.Context, taskID string, expectedLat
 }
 
 // anchorTaskAttemptTx refuses, with a *TaskMovedError, a task whose highest
-// attempt is not expectedLatest, and with ErrNotFound one that does not
-// exist.
+// attempt is not expectedLatest, with ErrNotFound one that does not exist,
+// and with ErrPassRetired a housekeeping pass whose retirement is recorded,
+// which is every attempt's claim: dispatch, a retried dispatch, and the one
+// anchored relaunch.
 func anchorTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, expectedLatest int64) error {
 	if err := taskExists(ctx, tx, taskID); err != nil {
+		return err
+	}
+	if err := refuseRetiredTx(ctx, tx, taskID); err != nil {
 		return err
 	}
 	var stands int64

@@ -615,3 +615,51 @@ func (e *SeenRecordError) Error() string {
 
 // Unwrap makes the error match its Reason.
 func (e *SeenRecordError) Unwrap() error { return e.Reason }
+
+// ErrPassOpen is the class every *PassOpenError belongs to: PRD section 6's
+// "a repository has at most one open pass", refused by CreateTask for a
+// housekeeping pass of a repository that already has one open.
+var ErrPassOpen = errors.New("store: the repository already has an open housekeeping pass")
+
+// PassOpenError is CreateTask's refusal of a second open housekeeping pass,
+// decided in the transaction that would have inserted it, and it names the
+// pass that is open.
+type PassOpenError struct {
+	// Repository is the repository both passes are of.
+	Repository string
+	// Pass is the open pass.
+	Pass string
+}
+
+// Error names the repository and its open pass.
+func (e *PassOpenError) Error() string {
+	return fmt.Sprintf("store: housekeeping pass %s of repository %s is still open, so no second pass is created", e.Pass, e.Repository)
+}
+
+// Unwrap makes every *PassOpenError match ErrPassOpen.
+func (e *PassOpenError) Unwrap() error { return ErrPassOpen }
+
+// ErrPassRetired is returned, wrapped, by BeginTaskAttempt and
+// BeginFirstTaskAttempt for a housekeeping pass whose retirement is
+// recorded: PRD section 11's one anchored relaunch refuses a retired pass,
+// whoever asks, so no worker starts in its copy once its claim on its
+// repository is released.
+var ErrPassRetired = errors.New("store: the housekeeping pass is retired and is never begun again")
+
+// ErrPassMoves is returned, wrapped, by RetireHousekeepingPass when something
+// still moves the pass as its transaction reads it: a run attributed to it
+// that has not ended, a run or an attempt newer than the retirement was
+// decided against, or, for an on-proof retirement, an open hold that offers
+// to relaunch its worker. Nothing is written.
+var ErrPassMoves = errors.New("store: something still moves the housekeeping pass")
+
+// ErrPassClosed is returned, wrapped, by RetireHousekeepingPass for a pass
+// already retired or whose records put it in the terminal tier: its claim
+// on its repository is already released, and a second retirement would be a
+// second record of one end.
+var ErrPassClosed = errors.New("store: the housekeeping pass is no longer open")
+
+// ErrHousekeepingWakeQueued is returned by ForgetRepository and
+// RepositoryRemovable for a repository with an unacknowledged housekeeping
+// wake about it.
+var ErrHousekeepingWakeQueued = errors.New("store: a housekeeping wake about the repository is unacknowledged")

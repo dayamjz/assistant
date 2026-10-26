@@ -164,13 +164,14 @@ func (s *Store) PendingKeptWorkNotifications(ctx context.Context, limit int) ([]
 		ORDER BY kept_work_wake.id LIMIT ?`, limit)
 }
 
-// notificationShape is which of the three notification records an accessor
+// notificationShape is which of the notification records an accessor
 // writes: the task wake's, migration 46's notification keyed by wake_id,
 // the domain wake's, migration 50's domain_notification keyed by
 // domain_wake_id, or the kept-work wake's, migration 55's
-// kept_work_notification keyed by kept_work_wake_id. The three are the same
-// record over the queue's three shapes, so one implementation serves all
-// and none can drift from the others.
+// kept_work_notification keyed by kept_work_wake_id, or the housekeeping
+// wake's, migration 59's housekeeping_notification keyed by
+// housekeeping_wake_id. They are the same record over the queue's shapes,
+// so one implementation serves all and none can drift from the others.
 type notificationShape struct {
 	table, key, wakes, noun string
 }
@@ -180,6 +181,8 @@ var (
 	domainNotifications   = notificationShape{table: "domain_notification", key: "domain_wake_id", wakes: "domain_wake", noun: "domain wake"}
 	keptWorkNotifications = notificationShape{table: "kept_work_notification", key: "kept_work_wake_id", wakes: "kept_work_wake",
 		noun: "kept work wake"}
+	housekeepingNotifications = notificationShape{table: "housekeeping_notification", key: "housekeeping_wake_id",
+		wakes: "housekeeping_wake", noun: "housekeeping wake"}
 )
 
 // ClaimNotification writes the claim for a wake and returns the record as
