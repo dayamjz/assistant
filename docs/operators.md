@@ -281,8 +281,13 @@ The round commits a resolution that differs from the commit the rebase
 stopped on and continues, so that commit is not replayed again ahead of the
 fix. A resolution that matches the stopped commit skips the step and keeps a
 step already replayed. A round that leaves a conflicted file as the conflict
-left it, or still holding a marker line git wrote for that conflict, commits
-nothing and leaves the rebase stopped. It does not abort: an abort would
+left it commits nothing and leaves the rebase stopped. So does a round that
+leaves the file holding a line which starts with seven `<`, seven `|`, or
+seven `>` and which none of that conflict's sides held. A shorter run is not
+that line. A `conflict-marker-size` attribute can ask git to write one, and a
+round that changes the file while leaving that shorter marker in it can
+commit the file. `MarkerBaseline` names the other lines that reading does
+not tell apart from content. The round does not abort: an abort would
 discard a step an earlier round of this rebase had already committed. The
 stage's next execution reports that same conflict and does not start another
 rebase. A conflict the code host reports after the push is the other path,
