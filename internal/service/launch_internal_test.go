@@ -49,6 +49,7 @@ func launchSubjectOver(t *testing.T, agent *standin.Agent, sub *dispatchSubject)
 	sub.service.catalog = agents.NewCatalog(fixedRunner{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
 	sub.service.cfg = config.Defaults()
 	sub.service.registry = newRegistry()
+	sub.service.starting = make(map[branchKey]*branchGate)
 	t.Cleanup(func() {
 		for _, err := range sub.service.closeSessions() {
 			t.Errorf("closing the sessions: %v", err)

@@ -83,12 +83,13 @@ import (
 // relaunch its worker, whatever the interval. Off the loop's goroutine and
 // under the task's slot, it reads that run's latest checkpoint and goes on
 // only when its recorded position says the rebase stage found nothing left
-// to change (pipeline.NothingLeft). It then reads the pass again and asks
+// to change (pipeline.NothingLeft). It then takes the pass's branch's
+// exclusion, which every run creation takes, reads the pass again and asks
 // the store whether the retirement would be refused as the records stand
 // (store.CheckRetirement), so a run started, a relaunch, or a hold offering
 // to relaunch the worker since the loop chose the pass ends nothing (P6).
-// Only then does it end the worker as a landed task's is ended, through the
-// session this service holds and with no hold,
+// Only then, still holding the branch, does it end the worker as a landed
+// task's is ended, through the session this service holds and with no hold,
 // verifies the end by a probe reading the terminal dead, closes the pass's
 // stall holds on that reading as stallhold.go's closure does, and writes the
 // retirement record through store.RetireHousekeepingPass, which refuses it
@@ -120,10 +121,13 @@ import (
 //   - The due check runs off the loop's goroutine, so a pass report does not
 //     carry it, and a check that is slower than the interval is not begun a
 //     second time until it returns.
-//   - A run that starts between the on-proof retirement's check and its end
-//     of the worker finds the worker ended, and the retirement's own
-//     transaction then refuses, writing nothing; the check narrows that
-//     window to the end itself and does not close it.
+//   - The branch's exclusion orders an on-proof retirement against a run of
+//     the pass within this service, which PRD section 8 gives a home alone.
+//     A push the gate admitted while the retirement held the branch creates
+//     its run once the record is written, so that run is of a retired pass:
+//     its worker was ended by the retirement and its work is the push, which
+//     validates as any run does. Nothing is lost; the pass's claim on the
+//     repository is already released.
 //   - The on-proof retirement is tried once per run whose position read
 //     nothing left; one refused because something moved the pass is tried
 //     again only when a later run of the pass passes, and is otherwise left
@@ -619,12 +623,28 @@ func (s *Service) retireOnProof(ctx context.Context, id, run string) error {
 	attempt := latestSequence(o.Snapshot.Attempts)
 	r := retirementOf(id, attempt, run)
 	r.OnProof = true
-	// The proof is checked as current before anything is ended: a newer
-	// run, a relaunch, or a hold that offers to relaunch the worker since
-	// the loop chose the pass refuses here, and the worker keeps running
-	// (P6). The retirement's own transaction reads the pass again below.
+	branch, ok := o.Snapshot.Task.Branch.Get()
+	repository, hasRepository := o.Snapshot.Task.RepositoryID.Get()
+	if !ok || !hasRepository {
+		return fmt.Errorf("%w: pass %s works on no branch, so no run of it can be the proof", store.ErrPassMoves, id)
+	}
+	// The check, the end of the worker and the record are one act against
+	// a new run of the pass: every way a run is created (a push, a start, a
+	// rerun) takes its branch's exclusion, which this holds from the check
+	// to the write, so no run of the pass starts in between. The slot this
+	// runs under keeps a relaunch out the same way. A newer run, a relaunch,
+	// or a hold that offers to relaunch the worker since the loop chose the
+	// pass refuses at the check, and the worker keeps running (P6).
+	release, err := s.holdBranch(ctx, branchKey{repository: repository, branch: branch})
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := s.store.CheckRetirement(ctx, r); err != nil {
 		return err
+	}
+	if s.betweenRetirementCheckAndEnd != nil {
+		s.betweenRetirementCheckAndEnd()
 	}
 	if ref := latestRef(o.Snapshot.Attempts); ref != "" {
 		if _, err := s.endHeldWorker(id, ref); err != nil {

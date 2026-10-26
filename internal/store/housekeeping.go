@@ -303,7 +303,10 @@ func (s *Store) RetireHousekeepingPass(ctx context.Context, r Retirement) (Retir
 
 // CheckRetirement answers, writing nothing, what RetireHousekeepingPass
 // would refuse r for as the records stand now, read in one snapshot: nil, or
-// the same ErrPassClosed, ErrPassMoves and not-a-pass refusals, wrapped. It
+// the same refusals, wrapped: r malformed, a task that is not a pass,
+// ErrPassClosed, ErrPassMoves, and, for an answered retirement, ErrNotFound
+// for a hold that does not exist and ErrHoldResolved for one already
+// answered. It
 // is the check an on-proof retirement makes before it ends the pass's worker,
 // so a proof that is no longer current ends nothing (P6); it decides
 // nothing by itself, because a write may land between it and the
@@ -327,7 +330,22 @@ func (s *Store) CheckRetirement(ctx context.Context, r Retirement) error {
 		if !PassOpen(snap, r.Delivered) {
 			return ErrPassClosed
 		}
-		return passStillTx(snap, r)
+		if err := passStillTx(snap, r); err != nil {
+			return err
+		}
+		if r.OnProof {
+			return nil
+		}
+		var resolution Optional[string]
+		switch err := q.QueryRowContext(ctx, `SELECT resolution FROM hold WHERE key = ?`, r.Hold).Scan(&resolution); {
+		case isNoRows(err):
+			return fmt.Errorf("hold %s: %w", r.Hold, ErrNotFound)
+		case err != nil:
+			return err
+		case resolution.IsKnown():
+			return fmt.Errorf("hold %s: %w with %s", r.Hold, ErrHoldResolved, resolution.Or(""))
+		}
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("store: checking the retirement of housekeeping pass %s: %w", r.Task, err)

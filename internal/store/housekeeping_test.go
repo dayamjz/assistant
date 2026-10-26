@@ -468,3 +468,29 @@ func TestCheckRetirementAnswersTheRefusalAndWritesNothing(t *testing.T) {
 		t.Fatalf("a check wrote %+v (%v)", snap.Retirement, err)
 	}
 }
+
+// CheckRetirement's answer is RetireHousekeepingPass's for an answered
+// retirement too: a retirement hold already answered keep is refused by
+// both, with ErrHoldResolved, before anything is written.
+func TestCheckRetirementRefusesAnAnsweredHold(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	attempt, run := promotedPassWithRun(t, s, "taskhkaaaaga", "housekeeping/one", RunTerminated)
+	hold := registerRetireHold(t, s, "taskhkaaaaga")
+	r := Retirement{Task: "taskhkaaaaga", Attempt: attempt.Sequence, Run: run.ID, Hold: hold, By: ResolvedByMachineInterface(),
+		Relaunches: func(string) bool { return false }, Ended: ended, Delivered: relayed}
+	if err := s.CheckRetirement(ctx, r); err != nil {
+		t.Fatalf("checking an open hold's retirement = %v, want nil", err)
+	}
+	if _, err := s.ResolveHold(ctx, hold, "keep", ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CheckRetirement(ctx, r); !errors.Is(err, ErrHoldResolved) {
+		t.Fatalf("checking a retirement whose hold was answered keep = %v, want ErrHoldResolved", err)
+	}
+	if _, err := s.RetireHousekeepingPass(ctx, r); !errors.Is(err, ErrHoldResolved) {
+		t.Fatalf("the retirement itself = %v, want ErrHoldResolved", err)
+	}
+}
