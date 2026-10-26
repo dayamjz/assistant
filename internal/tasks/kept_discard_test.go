@@ -15,6 +15,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // What a discard would lose is read from the entry's basis and the copy as
@@ -1445,7 +1446,9 @@ func TestALossNamesARepositoryFileWhoseModeDiffersFromTheTemplate(t *testing.T) 
 	if err != nil || named(as) {
 		t.Fatalf("Loss with the template's hook as it is = %+v, %v; want hooks/pre-push not named", as.Files, err)
 	}
-	if err := os.Chmod(inCopy, 0o755); err != nil {
+	// The same bytes again, executable: a program git would run, written as
+	// every program is (procgroup.WriteProgram).
+	if err := procgroup.WriteProgram(inCopy, []byte(hook), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	enabled, err := s.cleaner.Loss(ctx, got.Entry, "")
