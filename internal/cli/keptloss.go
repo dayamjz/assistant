@@ -62,9 +62,10 @@ func readOutKeptWorkAnswer(w io.Writer, a machine.KeptWorkAnswered) {
 // keptLossLines is what a discard shown prints of its loss, in order: one
 // line per lost commit, then per other object with the names the removal
 // destroys of it, then per lost file, and the digest last, each value
-// written by exactText, so two distinct paths or names never print the
-// same. The digest's line is always present, so a loss naming nothing is
-// the digest's line alone.
+// written by exactText from its exact bytes (ExactNames, ExactPath), so two
+// distinct paths or names never print the same, the answer having come
+// through JSON or not. The digest's line is always present, so a loss
+// naming nothing is the digest's line alone.
 func keptLossLines(l machine.KeptWorkLoss) []string {
 	lines := make([]string, 0, len(l.Lacks)+len(l.Objects)+len(l.Files)+1)
 	for _, commit := range l.Lacks {
@@ -72,9 +73,9 @@ func keptLossLines(l machine.KeptWorkLoss) []string {
 	}
 	for _, o := range l.Objects {
 		line := keptLostObjectLabel + " " + exactText(o.Object) + " (" + exactText(o.Type) + ")"
-		if len(o.Names) > 0 {
-			names := make([]string, len(o.Names))
-			for i, n := range o.Names {
+		if exact := o.ExactNames(); len(exact) > 0 {
+			names := make([]string, len(exact))
+			for i, n := range exact {
 				names[i] = exactText(n)
 			}
 			line += " " + strings.Join(names, ", ")
@@ -82,7 +83,7 @@ func keptLossLines(l machine.KeptWorkLoss) []string {
 		lines = append(lines, line)
 	}
 	for _, f := range l.Files {
-		lines = append(lines, keptLostFileLabel(f.Kind)+" "+exactText(f.Path))
+		lines = append(lines, keptLostFileLabel(f.Kind)+" "+exactText(f.ExactPath()))
 	}
 	return append(lines, keptLostDigestLabel+" "+exactText(l.Digest))
 }

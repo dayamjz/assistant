@@ -199,7 +199,7 @@ func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
 	var answered machine.KeptWorkAnswered
 	if shown.code != machine.ExitOK || json.Unmarshal([]byte(shown.stdout), &answered) != nil ||
 		answered.Effect != machine.KeptWorkDiscardShown || answered.Loss == nil || answered.Loss.Digest == "" ||
-		len(answered.Loss.Lacks) == 0 || !slices.Contains(answered.Loss.Files, machine.KeptWorkLostPath{Kind: "new", Path: "notes.txt"}) {
+		len(answered.Loss.Lacks) == 0 || !slices.ContainsFunc(answered.Loss.Files, func(f machine.KeptWorkLostPath) bool { return f.Kind == "new" && f.ExactPath() == "notes.txt" }) {
 		t.Fatalf("the discard shown exited %s with %+v:\n%s%s", shown.code, answered, shown.stdout, shown.stderr)
 	}
 	// What a person reads, without --json, is the row and then exactly what

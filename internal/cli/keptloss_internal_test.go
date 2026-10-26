@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
@@ -95,5 +96,43 @@ func TestExactTextNeverPrintsTwoValuesTheSame(t *testing.T) {
 			t.Errorf("%q and %q both print as %s", other, v, got)
 		}
 		seen[got] = v
+	}
+}
+
+// What a person reads of a discard shown that came over the socket tells
+// apart two names, and two paths, that differ only in a byte that is not
+// UTF-8: the answer goes through the encoder the service answers with and
+// back, which carries the display forms with that byte replaced, and the
+// readout prints each from its exact bytes.
+func TestADiscardShownThroughJSONPrintsNamesThatAreNotUTF8Apart(t *testing.T) {
+	t.Parallel()
+	sent := machine.KeptWorkAnswered{Effect: machine.KeptWorkDiscardShown, Loss: &machine.KeptWorkLoss{
+		Objects: []machine.KeptWorkLostObject{machine.LostObject("o1", "blob", []string{"refs/tags/invalid-\xfe", "refs/tags/invalid-\xff"})},
+		Files:   []machine.KeptWorkLostPath{machine.LostPath("new", "a-\xfe.txt"), machine.LostPath("new", "a-\xff.txt")},
+		Digest:  "0a1b2c3d4e5f",
+	}}
+	var wire bytes.Buffer
+	if err := machine.NewEncoder(&wire).Encode(sent); err != nil {
+		t.Fatal(err)
+	}
+	var received machine.KeptWorkAnswered
+	if err := json.Unmarshal(wire.Bytes(), &received); err != nil {
+		t.Fatal(err)
+	}
+	if received.Loss.Objects[0].Names[0] != received.Loss.Objects[0].Names[1] {
+		t.Fatalf("JSON carried the display names apart (%q), so this test shows nothing", received.Loss.Objects[0].Names)
+	}
+	var out bytes.Buffer
+	if err := readOut(&out, received); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		`Other object: o1 (blob) "refs/tags/invalid-\xfe", "refs/tags/invalid-\xff"`,
+		`New file: "a-\xfe.txt"`,
+		`New file: "a-\xff.txt"`,
+	} {
+		if !strings.Contains(out.String(), line+"\n") {
+			t.Errorf("the readout does not print %s:\n%s", line, out.String())
+		}
 	}
 }

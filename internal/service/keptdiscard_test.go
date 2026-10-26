@@ -343,7 +343,7 @@ func TestADiscardShowsAnIgnoredFileItDestroys(t *testing.T) {
 		}
 		files := shown.Loss.Files
 		for _, want := range []machine.KeptWorkLostPath{{Kind: "new", Path: "secret.txt"}, {Kind: "repository", Path: "info/exclude"}} {
-			if !slices.Contains(files, want) {
+			if !hasLostPath(files, want) {
 				t.Fatalf("the discard shown names %+v; want %+v, which the removal destroys and nothing else holds, among them", files, want)
 			}
 		}
@@ -394,7 +394,7 @@ func TestADiscardShowsTheDeletionsItDestroys(t *testing.T) {
 			t.Fatalf("the discard shown = %+v, %v", shown, err)
 		}
 		for _, want := range []machine.KeptWorkLostPath{{Kind: "deleted", Path: "finding.txt"}, {Kind: "deleted", Path: staged}} {
-			if !slices.Contains(shown.Loss.Files, want) {
+			if !hasLostPath(shown.Loss.Files, want) {
 				t.Fatalf("the discard shown = %+v; want %+v, a deletion the removal destroys, among its files", *shown.Loss, want)
 			}
 		}
@@ -743,4 +743,78 @@ func TestARunsDiscardRefusesALayoutItDoesNotSupport(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A discard shown carries every name it lists exactly, byte for byte, over
+// the socket: two tags of a task's clone whose names differ only in a byte
+// that is not UTF-8 point at a blob only the clone holds, and the answer
+// names both, distinct, as the bytes git stores (NameBytes, read through
+// ExactNames). JSON alone carries a name with such a byte replaced, so both
+// would arrive as the same text.
+func TestADiscardShownCarriesNamesThatAreNotUTF8Exactly(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	if err := writeFile(entry.CopyPath+"/blob.txt", "only in the clone\n"); err != nil {
+		t.Fatal(err)
+	}
+	blob := git(t, entry.CopyPath, "hash-object", "-w", "blob.txt")
+	if err := os.Remove(entry.CopyPath + "/blob.txt"); err != nil {
+		t.Fatal(err)
+	}
+	// A file system may refuse a loose reference's file of such a name, so
+	// both are written packed, where git keeps a name's bytes as they are.
+	names := []string{"refs/tags/invalid-\xfe", "refs/tags/invalid-\xff"}
+	git(t, entry.CopyPath, "pack-refs", "--all")
+	packed := filepath.Join(entry.CopyPath, ".git", "packed-refs")
+	held, err := os.ReadFile(packed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(held), "\n"), "\n")
+	for _, name := range names {
+		lines = append(lines, blob+" "+name)
+	}
+	slices.SortFunc(lines[1:], func(a, b string) int {
+		return strings.Compare(a[strings.IndexByte(a, ' '):], b[strings.IndexByte(b, ' '):])
+	})
+	if err := os.WriteFile(packed, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if listed := git(t, entry.CopyPath, "for-each-ref", "--format=%(refname)", "refs/tags/"); listed != strings.Join(names, "\n") {
+		t.Fatalf("git lists the tags as %q, want %q", listed, names)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, request, &out); err != nil || out.Loss == nil {
+			t.Fatalf("the discard shown = %+v, %v", out, err)
+		}
+		var got []string
+		for _, o := range out.Loss.Objects {
+			if o.Object == blob {
+				if len(o.NameBytes) != len(names) {
+					t.Fatalf("the blob arrived with %d names' bytes beside %q, want %d", len(o.NameBytes), o.Names, len(names))
+				}
+				got = o.ExactNames()
+			}
+		}
+		if !reflect.DeepEqual(got, names) {
+			t.Fatalf("the blob's names arrived as %q, want %q exactly", got, names)
+		}
+	})
+}
+
+// hasLostPath is whether files names want's path, by its exact bytes, as
+// lost for want's reason.
+func hasLostPath(files []machine.KeptWorkLostPath, want machine.KeptWorkLostPath) bool {
+	return slices.ContainsFunc(files, func(f machine.KeptWorkLostPath) bool {
+		return f.Kind == want.Kind && f.ExactPath() == want.ExactPath()
+	})
 }

@@ -80,15 +80,17 @@ func refusedLoss(entry store.KeptWork, err error) error {
 	return err
 }
 
-// lossOf is tasks.Loss as the answer carries it.
+// lossOf is tasks.Loss as the answer carries it, each path and name with
+// its exact bytes beside it (machine.LostPath, machine.LostObject), since
+// the JSON the answer travels as does not carry a byte that is not UTF-8.
 func lossOf(l tasks.Loss) machine.KeptWorkLoss {
 	files := make([]machine.KeptWorkLostPath, len(l.Files))
 	for i, f := range l.Files {
-		files[i] = machine.KeptWorkLostPath{Kind: string(f.Kind), Path: f.Path}
+		files[i] = machine.LostPath(string(f.Kind), f.Path)
 	}
 	objects := make([]machine.KeptWorkLostObject, len(l.Objects))
 	for i, o := range l.Objects {
-		objects[i] = machine.KeptWorkLostObject{Object: o.Object, Type: o.Type, Names: o.Names}
+		objects[i] = machine.LostObject(o.Object, o.Type, o.Names)
 	}
 	return machine.KeptWorkLoss{Head: l.Head, Lacks: l.Lacks, Objects: objects, Files: files, Dirty: l.Dirty, Untracked: l.Untracked,
 		Stash: l.Stash, Digest: l.Digest}

@@ -95,17 +95,70 @@ type KeptWorkLoss struct {
 // reflog entry as ref@{n}; none for an object only a reflog entry's
 // previous value records
 // (KeptWorkLoss.Objects).
+//
+// A name is the bytes git stores, which need not be UTF-8, and JSON carries
+// a string with every byte that is not UTF-8 replaced, so two names that
+// differ only there arrive alike. NameBytes is therefore each of Names as
+// its exact bytes, in the same order, base64 in JSON, and Names its display
+// form: exact in a Go value, and as JSON carries it in an encoded one.
+// LostObject builds both from one name list, so they cannot disagree.
 type KeptWorkLostObject struct {
-	Object string   `json:"object"`
-	Type   string   `json:"type"`
-	Names  []string `json:"names"`
+	Object    string   `json:"object"`
+	Type      string   `json:"type"`
+	Names     []string `json:"names"`
+	NameBytes [][]byte `json:"name_bytes"`
 }
 
 // KeptWorkLostPath is one path a discard destroys whose content or
-// deletion nothing else holds, and why (KeptWorkLoss.Files).
+// deletion nothing else holds, and why (KeptWorkLoss.Files). PathBytes is
+// Path's exact bytes, base64 in JSON, on KeptWorkLostObject's terms: a
+// path is bytes too, and JSON carries Path with every byte that is not
+// UTF-8 replaced.
 type KeptWorkLostPath struct {
-	Kind string `json:"kind"`
-	Path string `json:"path"`
+	Kind      string `json:"kind"`
+	Path      string `json:"path"`
+	PathBytes []byte `json:"path_bytes"`
+}
+
+// LostObject is a KeptWorkLostObject of the object, its type and its
+// names, NameBytes filled from the same names.
+func LostObject(object, typ string, names []string) KeptWorkLostObject {
+	raw := make([][]byte, len(names))
+	for i, n := range names {
+		raw[i] = []byte(n)
+	}
+	return KeptWorkLostObject{Object: object, Type: typ, Names: names, NameBytes: raw}
+}
+
+// LostPath is a KeptWorkLostPath of the kind and the path, PathBytes filled
+// from the same path.
+func LostPath(kind, path string) KeptWorkLostPath {
+	return KeptWorkLostPath{Kind: kind, Path: path, PathBytes: []byte(path)}
+}
+
+// ExactNames is the object's names as their exact bytes say, read from
+// NameBytes when it holds one per name, as every value LostObject builds
+// does, before and after JSON, and otherwise from Names, which is exact in
+// a Go value no JSON carried.
+func (o KeptWorkLostObject) ExactNames() []string {
+	if len(o.NameBytes) != len(o.Names) {
+		return o.Names
+	}
+	out := make([]string, len(o.NameBytes))
+	for i, b := range o.NameBytes {
+		out[i] = string(b)
+	}
+	return out
+}
+
+// ExactPath is the path as its exact bytes say, read from PathBytes when it
+// is there, as in every value LostPath builds, before and after JSON, and
+// otherwise from Path, which is exact in a Go value no JSON carried.
+func (p KeptWorkLostPath) ExactPath() string {
+	if p.PathBytes == nil {
+		return p.Path
+	}
+	return string(p.PathBytes)
 }
 
 // KeptWorkEffect is what an answer to a kept work entry did. The set is
