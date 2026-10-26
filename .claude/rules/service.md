@@ -105,7 +105,9 @@ paths: ["internal/service/**"]
   retirement hold, the on-proof retirement of a pass whose run rebased to
   nothing (to be removed once AGE-487 lands), the retirement hold's
   answers, and `passBranch`, which marks every run of a pass's branch for
-  the review's scope ask. Its header owns the residual gaps.
+  the review's scope ask. A retired pass's copy is asked the cleanup
+  decision through `landed.go`'s one recurring trigger, not a one-shot ask
+  of its own. Its header owns the residual gaps.
 - Supervisor loop: PRD section 5's supervisor loop lives in `supervise.go`;
   read its header before changing it, and for the residual gaps.
 

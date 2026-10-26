@@ -308,6 +308,11 @@ type supervisionHooks struct {
 	// started has written its record or found why it wrote none, with that
 	// reason or nil (housekeeping.go).
 	afterRetireOnProof func(task, run string, err error)
+	// beforeRetirementOffer is called with a pass the loop read open and
+	// decided to offer the retirement hold, after that read and before the
+	// registration, so a test can move the pass in between
+	// (housekeeping.go).
+	beforeRetirementOffer func(task string)
 	// afterPass is called, after its writes, with the report of every pass
 	// the loop makes on its own: an incarnation's first pass and each
 	// pass at the interval. A kicked pass's report goes to its kick

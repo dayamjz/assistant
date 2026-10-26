@@ -438,20 +438,59 @@ func closeRetirementHoldsTx(ctx context.Context, tx *sql.Tx, snap TaskSnapshot, 
 	return closed, nil
 }
 
-// RegisterHoldUnder registers a hold naming a task, on RegisterHold's terms,
-// fenced by the supervisor loop's incarnation and anchored to the task's
-// latest attempt, attempt, which is zero for a task never dispatched: a loop
-// the watchdog replaced registers nothing, and a hold decided against an
-// attempt the task has moved past is refused with a *TaskMovedError, nothing
-// written, and so is a retired housekeeping pass, with ErrPassRetired. It is
-// how the loop offers a housekeeping pass's retirement hold.
-func (s *Store) RegisterHoldUnder(ctx context.Context, inc Incarnation, attempt int64, h Hold) (Hold, error) {
+// RetirementOffer is the retirement hold the supervisor loop offers a
+// housekeeping pass, with what the loop read when it decided the pass open
+// and that nothing moves it: the pass's latest attempt and newest
+// attributed run, as RetireHousekeepingPass's Retirement carries them.
+type RetirementOffer struct {
+	// Hold is the hold to register. It names the pass and no run.
+	Hold Hold
+	// Attempt is the pass's latest attempt sequence as the loop read it,
+	// and zero for a pass never dispatched.
+	Attempt int64
+	// Run is the newest run attributed to the pass as the loop read it,
+	// and empty for none.
+	Run string
+	// Ended and Delivered are Retirement's.
+	Ended     func(RunStatus) bool
+	Delivered func(TaskSnapshot) bool
+}
+
+// OfferRetirementHold registers a housekeeping pass's retirement hold, on
+// RegisterHold's terms, fenced by the supervisor loop's incarnation, in one
+// transaction that reads the pass again first, so the hold is registered
+// only while what the loop decided it on still holds: PRD section 6's "an
+// open pass ... that nothing moves gets a hold". It refuses, writing
+// nothing:
+//
+//   - ErrStaleIncarnation, wrapped, for a loop the watchdog replaced;
+//   - a *TaskMovedError for a pass whose latest attempt is not Attempt,
+//     begun again since the loop read it;
+//   - ErrPassRetired, wrapped, for a pass already retired, whose claim is
+//     released;
+//   - ErrPassClosed, wrapped, for a pass whose records put it in the
+//     terminal tier by Delivered, a findings relayed record or a merge
+//     among them;
+//   - ErrPassMoves, wrapped, for a pass with a run attributed to it newer
+//     than Run or one that has not ended, on RetireHousekeepingPass's
+//     terms;
+//
+// and an error for a task that is not a pass. A retire answer to a hold
+// registered past any of those could only be refused. Whether the worker is
+// dead is the probe's, which no transaction can take; the attempt anchor is
+// what keeps a relaunch since the loop's probe from slipping past, as it is
+// for the retirement itself.
+func (s *Store) OfferRetirementHold(ctx context.Context, inc Incarnation, o RetirementOffer) (Hold, error) {
+	h := o.Hold
 	if err := validateHold(h); err != nil {
 		return Hold{}, err
 	}
 	task, ok := h.TaskID.Get()
 	if !ok || h.RunID.IsKnown() {
-		return Hold{}, fmt.Errorf("store: hold %s: a hold the loop registers names a task and no run", h.Key)
+		return Hold{}, fmt.Errorf("store: hold %s: a retirement hold names a pass and no run", h.Key)
+	}
+	if o.Ended == nil || o.Delivered == nil {
+		return Hold{}, fmt.Errorf("store: offering hold %s: what ends a run and what delivers a task are decided outside this package, and one was not passed", h.Key)
 	}
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		if err := fenceIncarnation(ctx, tx, inc); err != nil {
@@ -462,14 +501,30 @@ func (s *Store) RegisterHoldUnder(ctx context.Context, inc Incarnation, attempt 
 			Scan(&stands); err != nil {
 			return err
 		}
-		if stands != attempt {
-			return &TaskMovedError{Task: task, Anchor: AnchoredAttempt, Expected: attempt, Stands: stands}
+		if stands != o.Attempt {
+			return &TaskMovedError{Task: task, Anchor: AnchoredAttempt, Expected: o.Attempt, Stands: stands}
 		}
-		// A retired pass's claim is released, so a hold offering to retire
-		// it could only be refused; the read is in the registering
-		// transaction, so a retirement and a registration are wholly
-		// ordered.
-		if err := refuseRetiredTx(ctx, tx, task); err != nil {
+		record, err := scanTask(tx.QueryRowContext(ctx, taskColumns+` FROM task WHERE id = ?`, task))
+		if err != nil {
+			return errNoRows(err)
+		}
+		if !record.Housekeeping {
+			return fmt.Errorf("task %s is not a housekeeping pass, so it has no retirement hold", task)
+		}
+		// The pass is read in the registering transaction, so a retirement,
+		// a terminal record and a run's creation are each wholly ordered
+		// with the registration.
+		snap, err := snapshotOf(ctx, tx, record)
+		if err != nil {
+			return err
+		}
+		if snap.Retirement.IsKnown() {
+			return fmt.Errorf("%w: task %s", ErrPassRetired, task)
+		}
+		if !PassOpen(snap, o.Delivered) {
+			return fmt.Errorf("%w: task %s is in the terminal tier", ErrPassClosed, task)
+		}
+		if err := passStillTx(snap, Retirement{Task: task, Attempt: o.Attempt, Run: o.Run, Ended: o.Ended}); err != nil {
 			return err
 		}
 		return insertHold(ctx, tx, h)
@@ -479,7 +534,7 @@ func (s *Store) RegisterHoldUnder(ctx context.Context, inc Incarnation, attempt 
 		if errors.As(err, &moved) {
 			return Hold{}, err
 		}
-		return Hold{}, fmt.Errorf("store: registering hold %s: %w", h.Key, err)
+		return Hold{}, fmt.Errorf("store: offering retirement hold %s: %w", h.Key, err)
 	}
 	return s.Hold(ctx, h.Key)
 }

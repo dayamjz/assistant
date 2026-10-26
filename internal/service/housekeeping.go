@@ -70,7 +70,10 @@ import (
 // against, so at most one is registered per interval, none while an earlier
 // one is unanswered, and a retire answer given after a run started or the
 // worker was begun again is refused by store.RetireHousekeepingPass's
-// anchors. A pass something moves is never offered one, and is in flight
+// anchors. The registration reads the pass again in its own transaction
+// (store.OfferRetirementHold), so a pass completed, retired, begun again or
+// given a run since the loop read it is offered none. A pass something
+// moves is never offered one, and is in flight
 // whatever it resolves (supervise.go's watched set, the stop guard through
 // feed, the catch-up read), so its terminal is read on every pass. With
 // housekeeping.interval zero, no wake and no hold is ever raised about a
@@ -109,12 +112,19 @@ import (
 // resolver; any other answer is refused with the hold open. Standing consent
 // answers no task hold, so it never answers this one.
 //
-// After either retirement the pass's copy is asked the cleanup decision with
-// the terminal read dead, so a copy holding work that has not landed becomes
-// a kept work entry (P15) and nothing is removed without a proof; a copy
-// refused for a report never stored or a decision never registered is kept
-// the same way (tasks.KeptOnRetirement), since no later cleanup is asked for
-// a retired pass. An on-proof retirement gives way to an open retirement
+// After either retirement the pass's copy is asked the cleanup decision, so
+// a copy holding work that has not landed becomes a kept work entry (P15)
+// and nothing is removed without a proof; a copy refused for a report never
+// stored or a decision never registered is kept the same way
+// (tasks.KeptOnRetirement), since nothing will store that report or
+// register those holds now. The retirement record is written before that
+// ask and in another transaction, so the ask is not the retirement's alone:
+// landed.go's pass asks it again, on its cadence, for every retired pass
+// whose copy carries no removal (retiredCleanupOwed), so a service that
+// stopped between the two asks it once it opens again and reads the worker
+// dead, and a refusal that changes with the world is asked about again. The
+// terminal it is asked with is retiredTerminal's. An on-proof retirement
+// gives way to an open retirement
 // hold, which waits on a person, and the store refuses a retirement hold for
 // a pass already retired, so the two are never both left standing. A retired
 // pass is never begun again: every attempt claim refuses it in the store
@@ -133,6 +143,16 @@ import (
 //     its worker was ended by the retirement and its work is the push, which
 //     validates as any run does. Nothing is lost; the pass's claim on the
 //     repository is already released.
+//   - A launch records its attempt's session only once the worker's
+//     process has started, and dispatch.go settles the task's slot before
+//     the launch, so a retire answered while an attempt claimed before it
+//     is still launching reads that attempt as never having had a session,
+//     which section 6's "or its latest attempt never had a session" counts
+//     as nothing moving the pass, and is written. That launch's worker then
+//     runs in the retired pass's copy with the pass's claim on the
+//     repository released, so a next pass can be created while it runs, and
+//     a cleanup asked before its session is recorded reads its terminal
+//     Dead (retiredTerminal), as the retirement did.
 //   - The on-proof retirement is tried once per run whose position read
 //     nothing left; one refused because something moved the pass is tried
 //     again only when a later run of the pass passes, and is otherwise left
@@ -265,16 +285,23 @@ func (s *Service) superviseOpenPass(c *incarnation, r store.Repository, o taskst
 	if len(o.Snapshot.Runs) > 0 {
 		rh.Run = o.Snapshot.Runs[0].ID
 	}
+	if s.sup.hooks.beforeRetirementOffer != nil {
+		s.sup.hooks.beforeRetirementOffer(id)
+	}
 	ctx, cancel := s.sup.bound(c.ctx)
-	h, err := s.store.RegisterHoldUnder(ctx, c.inc, rh.Attempt, store.Hold{Key: rh.key(), TaskID: store.Known(id),
-		Subject: "whether to retire a housekeeping pass that has been open for a whole interval and that nothing moves",
-		Detail:  retireDetail(r, o, interval)})
+	h, err := s.store.OfferRetirementHold(ctx, c.inc, store.RetirementOffer{
+		Hold: store.Hold{Key: rh.key(), TaskID: store.Known(id),
+			Subject: "whether to retire a housekeeping pass that has been open for a whole interval and that nothing moves",
+			Detail:  retireDetail(r, o, interval)},
+		Attempt: rh.Attempt, Run: rh.Run, Ended: runs.Finished, Delivered: taskstate.Delivered,
+	})
 	cancel()
 	var moved *store.TaskMovedError
 	switch {
-	case errors.As(err, &moved), errors.Is(err, store.ErrPassRetired):
-		// Begun again since the pass read it, so it moves, or retired on
-		// proof since, so its claim is released: either way it is owed none.
+	case errors.As(err, &moved), errors.Is(err, store.ErrPassMoves), errors.Is(err, store.ErrPassRetired), errors.Is(err, store.ErrPassClosed):
+		// Begun again or given a run since the pass read it, so it moves,
+		// or retired on proof or completed since, so its claim is
+		// released: either way it is owed none.
 	case err != nil:
 		out.Err = errors.Join(out.Err, err)
 	default:
@@ -682,21 +709,44 @@ func (s *Service) retireOnProof(ctx context.Context, id, run string) error {
 		return err
 	}
 	s.log.Printf("housekeeping pass %s was retired on the proof of run %s, whose rebase found nothing left to change", id, run)
-	s.askRetiredCleanup(ctx, retired.Record.Task)
+	s.cleanUpLandedTask(ctx, retired.Record.Task)
 	return nil
 }
 
-// askRetiredCleanup asks the cleanup decision for a retired pass's copy,
-// whose worker a retirement has read dead, and logs what it answered. A copy
-// kept for its work becomes a kept work entry through logCleanup, and so
-// does a copy tasks.KeptOnRetirement keeps for a report or hold its
-// retirement means will never come (P15).
-func (s *Service) askRetiredCleanup(ctx context.Context, id string) {
-	if s.cleaner == nil {
-		s.log.Printf("the isolated copy of retired housekeeping pass %s was not cleaned up: this service was built without a cleanup decision", id)
-		return
+// retiredCleanupOwed reports whether o is a retired housekeeping pass whose
+// copy the cleanup decision is still owed for, on the file comment's terms:
+// retired, not in the terminal tier, whose own rule a pass that landed after
+// all is held to instead, its copy not recorded removed, and dispatched at
+// least once, since a dispatch cuts the copy after its claim, so a pass
+// never dispatched has none. landed.go asks it, at the retirement and again
+// from the pass, on that file's cadence.
+func retiredCleanupOwed(o taskstate.Observed) bool {
+	snap := o.Snapshot
+	return snap.Task.Housekeeping && snap.Retirement.IsKnown() && !landedEnds(o.State) &&
+		!o.State.Basis.CleanupRemoved && len(snap.Attempts) > 0
+}
+
+// retiredTerminal is the terminal a retired pass's cleanup is asked with:
+// the liveness its resolution read when its latest attempt has a session,
+// and Dead when it never had one. The second is PRD section 6's other half
+// of nothing moving a pass, "or its latest attempt never had a session",
+// the reading its retirement was decided on, and no attempt begins after
+// it, because every attempt claim refuses a retired pass
+// (store.ErrPassRetired). An attempt claimed before the retirement whose
+// launch records a session after it is read by the probe from then on; the
+// file comment's residual gaps say how that launch can follow a retirement.
+func retiredTerminal(o taskstate.Observed) taskstate.Liveness {
+	if latestRef(o.Snapshot.Attempts) == "" {
+		return taskstate.Dead
 	}
-	done, err := s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: id, Terminal: taskstate.Dead})
+	return o.State.Basis.Process
+}
+
+// logRetiredCleanup is logCleanup for a retired pass's copy: a copy
+// tasks.KeptOnRetirement keeps for a report or hold its retirement means will
+// never come becomes a kept work entry (P15), as a copy kept for its work
+// does through logCleanup.
+func (s *Service) logRetiredCleanup(ctx context.Context, id string, done tasks.Cleanup, err error) {
 	var refused *tasks.CleanupRefusal
 	if errors.As(err, &refused) && !refused.Unlanded() {
 		if kept, ok := tasks.KeptOnRetirement(refused); ok {
@@ -762,7 +812,7 @@ func (s *Service) answerRetirement(ctx context.Context, req ipc.Request, r machi
 		s.publishHoldState(h)
 	}
 	s.log.Printf("housekeeping pass %s was retired on the answer %q to hold %s, closing %d hold(s)", r.Task, r.Answer, hold.Key, len(retired.Closed))
-	s.askRetiredCleanup(ctx, r.Task)
+	s.cleanUpLandedTask(ctx, r.Task)
 	return machine.TaskAnswered{Hold: retired.Closed[0], Effect: machine.AnswerRetired}, nil
 }
 

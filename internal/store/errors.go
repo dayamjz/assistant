@@ -643,20 +643,23 @@ func (e *PassOpenError) Unwrap() error { return ErrPassOpen }
 // BeginFirstTaskAttempt for a housekeeping pass whose retirement is
 // recorded: PRD section 11's one anchored relaunch refuses a retired pass,
 // whoever asks, so no worker starts in its copy once its claim on its
-// repository is released.
+// repository is released. OfferRetirementHold returns it too, for a pass
+// whose claim is already released.
 var ErrPassRetired = errors.New("store: the housekeeping pass is retired and is never begun again")
 
 // ErrPassMoves is returned, wrapped, by RetireHousekeepingPass when something
 // still moves the pass as its transaction reads it: a run attributed to it
 // that has not ended, a run or an attempt newer than the retirement was
 // decided against, or, for an on-proof retirement, an open hold that offers
-// to relaunch its worker. Nothing is written.
+// to relaunch its worker. OfferRetirementHold returns it for a run on the
+// same terms. Nothing is written.
 var ErrPassMoves = errors.New("store: something still moves the housekeeping pass")
 
 // ErrPassClosed is returned, wrapped, by RetireHousekeepingPass for a pass
 // already retired or whose records put it in the terminal tier: its claim
 // on its repository is already released, and a second retirement would be a
-// second record of one end.
+// second record of one end. OfferRetirementHold returns it for a pass in the
+// terminal tier, whose retire answer could only be refused.
 var ErrPassClosed = errors.New("store: the housekeeping pass is no longer open")
 
 // ErrHousekeepingWakeQueued is returned by ForgetRepository and

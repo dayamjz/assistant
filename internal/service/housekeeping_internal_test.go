@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,6 +52,18 @@ type hkSubject struct {
 	checks    chan hkCheck
 	retired   chan hkRetired
 	first     passReport
+	// offerMu guards onOffer, which the loop's beforeRetirementOffer hook
+	// calls when a test set it.
+	offerMu sync.Mutex
+	onOffer func(task string)
+}
+
+// beforeOffer sets what the loop does between its read of a pass and its
+// registration of that pass's retirement hold.
+func (s *hkSubject) beforeOffer(f func(task string)) {
+	s.offerMu.Lock()
+	defer s.offerMu.Unlock()
+	s.onOffer = f
 }
 
 // hkPlant is what a test records before the service opens.
@@ -70,6 +83,14 @@ func openHousekeeping(t *testing.T, document string, plant hkPlant) *hkSubject {
 	sub.loopSubject = openLoopHooked(t, h, records, sub.terminals, clock, nil, func(hooks *supervisionHooks) {
 		hooks.afterHousekeepingCheck = func(repository string, r taskReport) { sub.checks <- hkCheck{repository, r} }
 		hooks.afterRetireOnProof = func(task, run string, err error) { sub.retired <- hkRetired{task, run, err} }
+		hooks.beforeRetirementOffer = func(task string) {
+			sub.offerMu.Lock()
+			f := sub.onOffer
+			sub.offerMu.Unlock()
+			if f != nil {
+				f(task)
+			}
+		}
 	})
 	t.Cleanup(func() { _ = sub.service.Close() })
 	sub.first = sub.nextPass(t)

@@ -88,13 +88,13 @@ func KeptOf(r *CleanupRefusal) (Kept, bool) {
 // pass's copy on P12's terms" with P15's "kept work is never silent". An
 // unlanded refusal is kept as KeptOf keeps it. A refusal for a report not
 // stored or a decision of it not registered is kept too: Unlanded leaves
-// those to the next cleanup, which a retired pass never asks, because
-// retirement means nothing will store its report or register its holds, so
-// the copy stands for whatever work it holds. Keep then records the entry,
-// or nothing when the copy holds nothing the default branch lacks. Every
-// other reason, a terminal not read dead, a copy that changed or is
-// missing, a shape that moved, is no fact about the copy's work and answers
-// false.
+// those to a later cleanup, which for a retired pass only answers the same,
+// because retirement means nothing will store its report or register its
+// holds, so the copy stands for whatever work it holds. Keep then records
+// the entry, or nothing when the copy holds nothing the default branch
+// lacks. Every other reason, a terminal not read dead, a copy that changed
+// or is missing, a shape that moved, is no fact about the copy's work and
+// answers false.
 func KeptOnRetirement(r *CleanupRefusal) (Kept, bool) {
 	if r == nil {
 		return Kept{}, false

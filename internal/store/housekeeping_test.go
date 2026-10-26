@@ -417,10 +417,11 @@ func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
 	}
 }
 
-// RegisterHoldUnder, the loop's registration of a retirement hold, is fenced
-// by the incarnation and anchored to the attempt it was decided against: a
-// replaced incarnation and a task begun again since each register nothing,
-// and the current incarnation at the latest attempt registers the hold.
+// OfferRetirementHold, the loop's registration of a retirement hold, is
+// fenced by the incarnation and anchored to the attempt it was decided
+// against: a replaced incarnation and a task begun again since each register
+// nothing, and the current incarnation at the latest attempt registers the
+// hold.
 func TestALoopRegisteredHoldIsFencedAndAnchored(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -429,19 +430,80 @@ func TestALoopRegisteredHoldIsFencedAndAnchored(t *testing.T) {
 	mustPass(t, s, "taskhkaaaaea")
 	stale := incarnationOf(t, s)
 	inc := incarnationOf(t, s)
-	h := Hold{Key: "task/taskhkaaaaea/housekeeping-retire/1/0/-", TaskID: Known("taskhkaaaaea"), Subject: "retire?", Detail: "d"}
-	if _, err := s.RegisterHoldUnder(ctx, stale, 0, h); !errors.Is(err, ErrStaleIncarnation) {
+	offer := RetirementOffer{Hold: Hold{Key: "task/taskhkaaaaea/housekeeping-retire/1/0/-", TaskID: Known("taskhkaaaaea"),
+		Subject: "retire?", Detail: "d"}, Ended: ended, Delivered: relayed}
+	if _, err := s.OfferRetirementHold(ctx, stale, offer); !errors.Is(err, ErrStaleIncarnation) {
 		t.Fatalf("a replaced incarnation's registration = %v, want ErrStaleIncarnation", err)
 	}
 	beginAttempt(t, s, "taskhkaaaaea", 0)
-	if _, err := s.RegisterHoldUnder(ctx, inc, 0, h); !errors.Is(err, ErrTaskMoved) {
+	if _, err := s.OfferRetirementHold(ctx, inc, offer); !errors.Is(err, ErrTaskMoved) {
 		t.Fatalf("a registration decided before the pass was begun = %v, want ErrTaskMoved", err)
 	}
-	if _, err := s.Hold(ctx, h.Key); !errors.Is(err, ErrNotFound) {
+	if _, err := s.Hold(ctx, offer.Hold.Key); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a refused registration wrote the hold: %v", err)
 	}
-	if got, err := s.RegisterHoldUnder(ctx, inc, 1, h); err != nil || !got.Open() {
+	offer.Attempt = 1
+	if got, err := s.OfferRetirementHold(ctx, inc, offer); err != nil || !got.Open() {
 		t.Fatalf("the current registration = %+v, %v, want the hold open", got, err)
+	}
+}
+
+// PRD section 6: the retirement hold is offered to an open pass that
+// nothing moves, decided in the registering transaction from the pass as it
+// stands then rather than as the loop read it. A pass the loop read open,
+// at its latest attempt and with no run, whose findings were relayed since
+// is refused with ErrPassClosed, and one whose run started since with
+// ErrPassMoves, each writing nothing; a run that ended is no refusal when it
+// is the one the loop read. The positive control is a pass nothing happened
+// to, which is offered the hold.
+func TestARetirementHoldIsOfferedOnlyToAPassThatIsStillOpenAndStill(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	// One store per pass, since a repository has one open pass at a time.
+	fresh := func() (*Store, Incarnation) {
+		s := openStore(t)
+		seedRepository(t, s)
+		return s, incarnationOf(t, s)
+	}
+	offerOf := func(id string, attempt int64, run string) RetirementOffer {
+		return RetirementOffer{Hold: Hold{Key: "task/" + id + "/housekeeping-retire/1/1/-", TaskID: Known(id), Subject: "retire?", Detail: "d"},
+			Attempt: attempt, Run: run, Ended: ended, Delivered: relayed}
+	}
+
+	s, inc := fresh()
+	mustPass(t, s, "taskhkaaaaia")
+	attempt := beginAttempt(t, s, "taskhkaaaaia", 0)
+	relay(t, s, "taskhkaaaaia")
+	closed := offerOf("taskhkaaaaia", attempt.Sequence, "")
+	if _, err := s.OfferRetirementHold(ctx, inc, closed); !errors.Is(err, ErrPassClosed) {
+		t.Fatalf("a retirement hold for a pass relayed since the read = %v, want ErrPassClosed", err)
+	}
+	if _, err := s.Hold(ctx, closed.Hold.Key); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the refused offer wrote the hold: %v", err)
+	}
+
+	s, inc = fresh()
+	attempt, run := promotedPassWithRun(t, s, "taskhkaaaaib", "housekeeping/one", RunRunning)
+	moving := offerOf("taskhkaaaaib", attempt.Sequence, "")
+	if _, err := s.OfferRetirementHold(ctx, inc, moving); !errors.Is(err, ErrPassMoves) {
+		t.Fatalf("a retirement hold for a pass whose run started since the read = %v, want ErrPassMoves", err)
+	}
+	moving.Run = run.ID
+	if _, err := s.OfferRetirementHold(ctx, inc, moving); !errors.Is(err, ErrPassMoves) {
+		t.Fatalf("a retirement hold for a pass whose run has not ended = %v, want ErrPassMoves", err)
+	}
+	if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunRunning}, RunTerminated); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.OfferRetirementHold(ctx, inc, moving); err != nil || !got.Open() {
+		t.Fatalf("a retirement hold for a pass whose read run ended = %+v, %v, want the hold open", got, err)
+	}
+
+	s, inc = fresh()
+	mustPass(t, s, "taskhkaaaaic")
+	attempt = beginAttempt(t, s, "taskhkaaaaic", 0)
+	if got, err := s.OfferRetirementHold(ctx, inc, offerOf("taskhkaaaaic", attempt.Sequence, "")); err != nil || !got.Open() {
+		t.Fatalf("a retirement hold for a pass nothing happened to = %+v, %v, want the hold open", got, err)
 	}
 }
 
@@ -512,8 +574,9 @@ func TestARetirementHoldAndAnOnProofRetirementExcludeEachOther(t *testing.T) {
 			Subject: "retire?", Detail: "d"}
 		onProof := Retirement{Task: "taskhkaaaaha", Attempt: attempt.Sequence, Run: run.ID, OnProof: true,
 			Relaunches: isRetireHold, Ended: ended, Delivered: relayed}
+		offer := RetirementOffer{Hold: h, Attempt: attempt.Sequence, Run: run.ID, Ended: ended, Delivered: relayed}
 		if holdFirst {
-			if _, err := s.RegisterHoldUnder(ctx, inc, attempt.Sequence, h); err != nil {
+			if _, err := s.OfferRetirementHold(ctx, inc, offer); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := s.RetireHousekeepingPass(ctx, onProof); !errors.Is(err, ErrPassMoves) {
@@ -524,7 +587,7 @@ func TestARetirementHoldAndAnOnProofRetirementExcludeEachOther(t *testing.T) {
 		if _, err := s.RetireHousekeepingPass(ctx, onProof); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.RegisterHoldUnder(ctx, inc, attempt.Sequence, h); !errors.Is(err, ErrPassRetired) {
+		if _, err := s.OfferRetirementHold(ctx, inc, offer); !errors.Is(err, ErrPassRetired) {
 			t.Fatalf("a retirement hold for a retired pass = %v, want ErrPassRetired", err)
 		}
 	}

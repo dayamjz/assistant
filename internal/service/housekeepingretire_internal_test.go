@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -598,25 +599,7 @@ func TestRetiringAnUnreportedPassWithCommittedWorkKeepsItAsKeptWork(t *testing.T
 	const pass = "taskhkunrepa"
 	var copyPath string
 	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
-		var err error
-		if copyPath, err = sub.h.TaskCopy(pass); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		heldGit(t, filepath.Dir(copyPath), "clone", "--quiet", sub.upstream, copyPath)
-		writeDocument(t, copyPath, "AGENTS.md", "a correction never reported\n")
-		heldGit(t, copyPath, "add", "-A")
-		heldGit(t, copyPath, "commit", "--quiet", "-m", "correct the drift")
-		if _, err := records.CreateTask(t.Context(), store.Task{
-			ID: pass, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: copyPath,
-			RepositoryID: store.Known(hkRepository), Role: config.RoleHousekeeping, Housekeeping: true,
-		}, store.Disposition{Delivered: taskstate.Delivered}); err != nil {
-			t.Fatal(err)
-		}
-		launched(t, records, pass, "", "pane-unreported")
-		sub.terminals.dead("pane-unreported")
+		copyPath = unreportedPassCopy(t, records, sub, pass, "pane-unreported")
 	})
 	sub.clock.Advance(time.Hour)
 	sub.pass(t)
@@ -636,6 +619,230 @@ func TestRetiringAnUnreportedPassWithCommittedWorkKeepsItAsKeptWork(t *testing.T
 	}
 	if len(kept) != 1 || kept[0].TaskID != store.Known(pass) {
 		t.Fatalf("the open kept work is %+v, want one entry about pass %s", kept, pass)
+	}
+}
+
+// PRD section 6: the retirement hold is offered to an open pass that
+// nothing moves, decided where the hold is registered. A reported
+// investigation pass the loop read open, whose findings the coordinator
+// records relayed between that read and the registration, is in the
+// terminal tier by then, so it is offered nothing, since a retire answer
+// could only be refused, and the loop reports no failure. A run of the pass
+// started in between moves it, and is refused the same way. The positive
+// control is the same pass with nothing done in between, which is offered
+// the hold.
+func TestARetirementHoldIsOfferedOnlyToAPassStillOpenAndStillWhenItIsRegistered(t *testing.T) {
+	t.Parallel()
+	reported := func(id, ref string) hkPlant {
+		return func(t *testing.T, records *store.Store, sub *hkSubject) {
+			passTask(t, records, id)
+			launched(t, records, id, "", ref)
+			sub.terminals.dead(ref)
+			if _, _, err := records.StoreTaskReport(t.Context(), store.TaskReport{TaskID: id, Body: "nothing drifted",
+				Report: []byte(`{"summary":"nothing drifted"}`)}, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for name, between := range map[string]func(t *testing.T, sub *hkSubject, id string){
+		"relayed": func(t *testing.T, sub *hkSubject, id string) {
+			ctx := context.Background()
+			events, err := sub.records(t).TaskEvents(ctx, id, 0, 0)
+			if err == nil {
+				_, _, err = sub.records(t).RecordTaskRelay(ctx, id, events[len(events)-1].Sequence)
+			}
+			if err != nil {
+				t.Errorf("relaying pass %s: %v", id, err)
+			}
+		},
+		"a run started": func(t *testing.T, sub *hkSubject, id string) {
+			// The loop's goroutine runs this, so a failure is reported
+			// with Errorf and the assertions after the pass fail too.
+			ctx := context.Background()
+			records := sub.records(t)
+			events, err := records.TaskEvents(ctx, id, 0, 0)
+			if err == nil {
+				_, _, err = records.TransitionTaskShape(ctx, id, store.TaskInvestigation, store.TaskDelivery, hkRepository, hkBranch,
+					config.DeliveryGated, "Correct the drift the report found.", events[len(events)-1].Sequence, "promoted")
+			}
+			var build store.Build
+			if err == nil {
+				build, err = store.CurrentBuild()
+			}
+			if err == nil {
+				_, err = records.CreateRun(ctx, store.Run{ID: "run-" + id, RepositoryID: hkRepository, Branch: hkBranch,
+					SubmittedHead: "aaaa", Base: "main", Intent: "correct the drift", IntentSource: "task", ConfigDigest: "cfg", Build: build})
+			}
+			if err != nil {
+				t.Errorf("promoting pass %s and starting its run: %v", id, err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			const pass = "taskhkoffera"
+			sub := openHousekeeping(t, housekeepingConfig, reported(pass, "pane-offer"))
+			sub.beforeOffer(func(task string) {
+				if task == pass {
+					between(t, sub, task)
+				}
+			})
+			sub.clock.Advance(time.Hour)
+			r := sub.pass(t)
+			if err := r.Housekeeping[hkRepository].Err; err != nil {
+				t.Fatalf("the pass reported a failure over the repository: %v", err)
+			}
+			if holds := sub.retireHolds(t, pass); len(holds) != 0 {
+				_, answered := sub.answer(t, pass, holds[0].Key, machine.AnswerRetire)
+				t.Fatalf("the pass carries %+v, want no retirement hold; answering it retire = %v", holds, answered)
+			}
+		})
+	}
+
+	control := openHousekeeping(t, housekeepingConfig, reported("taskhkofferb", "pane-offer-control"))
+	control.clock.Advance(time.Hour)
+	control.pass(t)
+	if holds := control.retireHolds(t, "taskhkofferb"); len(holds) != 1 || !holds[0].Open() {
+		t.Fatalf("with nothing done between the read and the registration the pass carries %+v, want one open retirement hold", holds)
+	}
+}
+
+// unreportedPassCopy records an investigation pass of the repository whose
+// copy, a clone of the upstream, holds a commit its worker made and never
+// reported, launches its first attempt on session ref and reads that
+// worker dead, and returns the copy's path.
+func unreportedPassCopy(t *testing.T, records *store.Store, sub *hkSubject, pass, ref string) string {
+	t.Helper()
+	copyPath, err := sub.h.TaskCopy(pass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	heldGit(t, filepath.Dir(copyPath), "clone", "--quiet", sub.upstream, copyPath)
+	writeDocument(t, copyPath, "AGENTS.md", "a correction never reported\n")
+	heldGit(t, copyPath, "add", "-A")
+	heldGit(t, copyPath, "commit", "--quiet", "-m", "correct the drift")
+	if _, err := records.CreateTask(t.Context(), store.Task{
+		ID: pass, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: copyPath,
+		RepositoryID: store.Known(hkRepository), Role: config.RoleHousekeeping, Housekeeping: true,
+	}, store.Disposition{Delivered: taskstate.Delivered}); err != nil {
+		t.Fatal(err)
+	}
+	launched(t, records, pass, "", ref)
+	sub.terminals.dead(ref)
+	return copyPath
+}
+
+// PRD principle P15 across a stop: a service that stopped after it wrote a
+// pass's retirement record and before it asked the cleanup decision for the
+// pass's copy leaves a retired pass, a commit nobody reported in its copy,
+// and no kept work entry. The service that opens on that home next asks the
+// decision again from its loop, so the copy becomes a kept work entry and
+// is not work nothing surfaces. The records are planted as that stop leaves
+// them: the retirement is written with the request an answered retire
+// writes, and nothing after it.
+func TestARetiredPassWhoseCleanupWasNeverAskedIsKeptOnceTheServiceOpensAgain(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	const pass = "taskhkstopaa"
+	var copyPath string
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		ctx := t.Context()
+		copyPath = unreportedPassCopy(t, records, sub, pass, "pane-stopped")
+		hold := retireHold{Task: pass, Epoch: 1, Attempt: 1}.key()
+		if _, err := records.RegisterHold(ctx, store.Hold{Key: hold, TaskID: store.Known(pass),
+			Subject: "whether to retire a housekeeping pass", Detail: "d"}); err != nil {
+			t.Fatal(err)
+		}
+		r := retirementOf(pass, 1, "")
+		r.Hold, r.By = hold, store.ResolvedByMachineInterface()
+		if _, err := records.RetireHousekeepingPass(ctx, r); err != nil {
+			t.Fatalf("retiring the pass: %v", err)
+		}
+		if kept, err := records.OpenKeptWork(ctx); err != nil || len(kept) != 0 {
+			t.Fatalf("before the service opens the open kept work is %+v (%v), want none", kept, err)
+		}
+	})
+	sub.awaitKeptOf(t, pass)
+	if _, err := os.Stat(filepath.Join(copyPath, "AGENTS.md")); err != nil {
+		t.Fatalf("the cleanup asked again removed the pass's copy: %v", err)
+	}
+}
+
+// A retired pass is owed the cleanup decision for its copy while it is not
+// in the terminal tier, its copy carries no removal and it was dispatched,
+// since a dispatch cuts the copy after its claim; and the terminal it is
+// asked with is its resolution's when its latest attempt has a session and
+// Dead when it never had one. Every other task's terminal is its
+// resolution's.
+func TestARetiredPassIsOwedItsCleanupOnRetiredCleanupOwedsTerms(t *testing.T) {
+	t.Parallel()
+	retired := func(edit func(o *taskstate.Observed)) taskstate.Observed {
+		o := taskstate.Observed{
+			Snapshot: store.TaskSnapshot{
+				Task:       store.Task{ID: "taskhkownaaa", Shape: store.TaskInvestigation, Housekeeping: true},
+				Retirement: store.Known(store.HousekeepingRetirement{Task: "taskhkownaaa", Hold: store.Known("k")}),
+				Attempts:   []store.TaskAttempt{{Sequence: 1, SessionRef: store.Known("pane-own")}},
+			},
+			State: taskstate.Resolution{State: taskstate.Unknown, Source: taskstate.SourceProcess,
+				Basis: taskstate.Basis{Process: taskstate.Dead}},
+		}
+		if edit != nil {
+			edit(&o)
+		}
+		return o
+	}
+	for name, c := range map[string]struct {
+		o        taskstate.Observed
+		owed     bool
+		terminal taskstate.Liveness
+	}{
+		"retired, dead": {retired(nil), true, taskstate.Dead},
+		"retired, live": {retired(func(o *taskstate.Observed) { o.State.Basis.Process = taskstate.Live }), true, taskstate.Live},
+		"no session yet": {retired(func(o *taskstate.Observed) {
+			o.Snapshot.Attempts[0].SessionRef = store.Optional[string]{}
+			o.State.Basis.Process = taskstate.Unobserved
+		}), true, taskstate.Dead},
+		"never dispatched": {retired(func(o *taskstate.Observed) {
+			o.Snapshot.Attempts, o.State.Basis.Process = nil, taskstate.Unobserved
+		}), false, taskstate.Unobserved},
+		"not retired":  {retired(func(o *taskstate.Observed) { o.Snapshot.Retirement = store.Optional[store.HousekeepingRetirement]{} }), false, taskstate.Dead},
+		"copy removed": {retired(func(o *taskstate.Observed) { o.State.Basis.CleanupRemoved = true }), false, taskstate.Dead},
+		"landed since": {retired(func(o *taskstate.Observed) {
+			o.State.State, o.State.Source, o.State.Basis.Process = taskstate.Landed, taskstate.SourceRecord, taskstate.Unobserved
+		}), false, taskstate.Unobserved},
+	} {
+		if got := retiredCleanupOwed(c.o); got != c.owed {
+			t.Errorf("%s: retiredCleanupOwed = %v, want %v", name, got, c.owed)
+		}
+		if got := cleanupTerminal(c.o); got != c.terminal {
+			t.Errorf("%s: cleanupTerminal = %s, want %s", name, got, c.terminal)
+		}
+	}
+}
+
+// awaitKeptOf waits for the open kept work to be one entry, about task,
+// which a cleanup the loop asks off its goroutine writes.
+func (s *hkSubject) awaitKeptOf(t *testing.T, task string) {
+	t.Helper()
+	deadline := time.Now().Add(loopWait)
+	for {
+		kept, err := s.records(t).OpenKeptWork(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(kept) > 0 {
+			if len(kept) != 1 || kept[0].TaskID != store.Known(task) {
+				t.Fatalf("the open kept work is %+v, want one entry about task %s", kept, task)
+			}
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("no kept work entry was written for task %s; the log reads:\n%s", task, serviceLogOf(t, s.h))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
