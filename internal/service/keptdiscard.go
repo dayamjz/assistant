@@ -27,12 +27,20 @@ import (
 // A discard answer given a confirmation is refused with discardDeferred
 // before anything is read or written, so the copy, its entry and the store
 // are exactly as they were. What closes the entry instead, besides a land
-// or a carry on, is P12 cleanup removing the copy on a proof, which needs
-// everything the copy holds to be safe elsewhere, anything uncommitted,
-// untracked or stashed included, and happens only when the cleanup
-// decision is next asked of the copy at one of cleanup.go's sites; the
-// removal closes the entry. The refusal's row says what that needs of the
-// person (machine.PhraseDiscardRemovalDeferred).
+// or a carry on, is P12 cleanup removing the copy on a proof, which
+// happens only when the cleanup decision is next asked of the copy at one
+// of cleanup.go's sites; the removal closes the entry. That decision
+// (internal/tasks' cleanup.go) proves landed the commits HEAD and, for a
+// task's clone, its references under refs/heads/, refs/tags/ and
+// refs/stash reach, and refuses while git reports a tracked change, a file
+// it does not ignore that no commit records, or a stash; a run's worktree
+// is removed by git, which refuses a modified or untracked file there too.
+// It reads nothing else, so the removal destroys, unchecked, what Loss
+// lists beyond that: a file git ignores, a commit or object only a reflog,
+// a root reference such as ORIG_HEAD or another reference reaches, and a
+// file of the copy's repository directory, a hook or its configuration.
+// The refusal's row says what to do and names that gap
+// (machine.PhraseDiscardRemovalDeferred).
 
 // discardKeptWork is the discard answer, on this file's terms.
 func (s *Service) discardKeptWork(ctx context.Context, entry store.KeptWork, confirm string) (machine.KeptWorkAnswered, error) {

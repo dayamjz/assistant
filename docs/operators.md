@@ -624,7 +624,10 @@ removing the copy would lose, read out after its line with each commit,
 object and file on a line of its own after a label and the digest last
 (a value holding a backslash, a quote, a space at either end, or anything
 that does not print is written quoted and escaped, as a Go string literal,
-so no two values read the same), and in the structured answer (`--json`): what neither the default branch nor the upstream holds,
+so no two values read the same), and in the structured answer (`--json`,
+where each path and name also carries its exact bytes, base64, in
+`path_bytes` and `name_bytes`, since a JSON string cannot carry a byte that
+is not UTF-8): what neither the default branch nor the upstream holds,
 the only two places counted as keeping work. That is the
 commits anything in the copy names that neither the default branch nor
 the upstream holds, a commit reset away, one only `ORIG_HEAD` or an old
@@ -651,11 +654,16 @@ shown, each file by what it holds. It records and removes nothing.
 Removing the copy on that answer is not in this build: given again with
 `--confirm DIGEST` it is refused, with nothing read or changed, the copy
 and its entry exactly as they were, and new tasks in the project still
-wait on it. To let them go ahead, answer land or carry-on, or make
-everything the copy holds safe elsewhere: commit or remove what is
-uncommitted, untracked or stashed, and push its commits where one of the
-cleanup proofs above finds them. The program removes the copy on that
-proof, which closes the entry, only when it next asks the cleanup decision
+wait on it. To let them go ahead, answer land or carry-on, or commit or
+remove what is uncommitted, untracked or stashed, and push its commits
+where one of the cleanup proofs above finds them. That proof reads only
+the commits the copy's HEAD and its branches, tags and stash reach, and
+what git reports uncommitted, untracked (and not ignored) or stashed: a
+file git ignores, a commit or object only a reflog or another reference
+reaches, and the copy's repository directory (its hooks and
+configuration) are removed with the copy unchecked, though the discard's
+preview lists them, so copy out anything of those you want first. The
+program removes the copy on that proof, which closes the entry, only when it next asks the cleanup decision
 of the copy (when the run finishes or a landed task's worker is observed
 gone, and again at each start for a finished run's copy), so it is not
 immediate. Removing the copy by hand does not close the entry: one whose

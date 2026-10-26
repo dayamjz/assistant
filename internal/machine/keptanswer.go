@@ -227,7 +227,7 @@ var phraseKeptWorkCarriedOn = Phrase{
 var phraseKeptWorkDiscardShown = Phrase{
 	Outcome:     "Nothing was removed: discarding that local copy would lose what is listed below, and the digest under it seals exactly that list.",
 	Consequence: "The copy stays, with everything it holds; removing it on your confirmation is not in this build.",
-	Decision:    "To let new work go ahead, answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself, and the program removes the copy only once it finds everything in it there.",
+	Decision:    "To let new work go ahead, answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself; the program then removes the copy once it finds those commits there, and what it does not check goes with it, files git ignores among them, so first copy out anything listed below that you want to keep.",
 }
 
 // PhraseKeptWorkLosesNothing is the row a discard shown prints in place
@@ -246,7 +246,7 @@ var PhraseKeptWorkLosesNothing = Phrase{
 var PhraseDiscardRemovalDeferred = Phrase{
 	Outcome:     "Nothing was removed, because removing a local copy on a confirmed discard is not in this build.",
 	Consequence: "The copy stays, with everything it holds, and new work in the same project still waits on it.",
-	Decision:    "Answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself, and the program removes the copy only once it finds everything in it there.",
+	Decision:    "Answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself; the program then removes the copy once it finds those commits there, and what it does not check goes with it, files git ignores among them, so first copy out anything a discard would show as lost that you want to keep.",
 }
 
 // KeptWorkAnsweredPhrase is the line a person reads for an answered kept

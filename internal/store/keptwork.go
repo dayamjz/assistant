@@ -46,8 +46,11 @@ func (a KeptAnswer) Recognized() bool {
 type KeptClosure string
 
 // KeptRemovedOnProof is the entry's copy removed by the cleanup decision on
-// one of P12's proofs: its work was shown safe elsewhere after it was kept,
-// a commit pushed to the upstream branch since among them. Only
+// one of P12's proofs: what that proof reads of the copy (internal/tasks'
+// cleanup.go: the commits its HEAD and references reach, and nothing git
+// reports uncommitted, untracked or stashed) was shown landed after it was
+// kept, a commit pushed to the upstream branch since among them. What the
+// proof does not read, a file git ignores among it, went with the copy. Only
 // MarkCleanupRemoved and MarkRunCleanupRemoved write it, in the transaction
 // that marks the removal, so nothing but a proven removal closes an entry
 // this way.

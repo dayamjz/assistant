@@ -290,13 +290,17 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   the same project and branch in the kept copy, with a note, and names it
   in the answer (`task`), so the old task stays as it ended; a run's copy
   cannot be carried on; `--answer discard` shows what would be lost with a
-  digest, which you may read, and removes nothing: removing the copy on a
+  digest, which you may read (each path and name also in `path_bytes` or
+  `name_bytes`, its exact bytes in base64, since a JSON string loses a byte
+  that is not UTF-8), and removes nothing: removing the copy on a
   confirmation is not in this build, and `--confirm` is refused. To let
   the project's new tasks go ahead, tell the person their answers are land
-  and carry-on, or making everything the copy holds safe elsewhere (its
-  uncommitted work committed or removed, its commits pushed), after which
-  the program removes the copy on that proof when it next looks at it,
-  which is not immediate; removing it by hand leaves the entry open. Promoting an investigation
+  and carry-on, or committing or removing its uncommitted work and pushing
+  its commits, after which the program removes the copy on that proof when
+  it next looks at it, which is not immediate, and with it, unchecked,
+  files git ignores, commits only a reflog reaches and the copy's hooks,
+  which the discard preview lists, so they should copy out what they want
+  first; removing it by hand leaves the entry open. Promoting an investigation
   whose copy has an entry answers that entry carry on by itself. While the
   project has an open entry, a task you create in it is recorded and not
   started: it reads `dispatched` and its answer (`task.get`) names the
