@@ -45,10 +45,11 @@ import (
 // comparison alone takes it for the copy's own while every write git makes
 // through it lands in the other repository. So .git under the copy must
 // also be a directory and not a link, read without following one. What
-// that does not cover is a link inside the repository directory, a refs or
-// objects directory pointing into another repository, which the assertion
-// does not walk; internal/safety's kept-copy verification does, for a copy
-// a person answers.
+// that does not cover is a link inside the repository directory, a refs
+// directory or a config file pointing into another repository, which the
+// assertion does not walk, so a write under or to it lands there;
+// internal/safety's kept-copy verification does walk it, for a copy a
+// person answers.
 //
 // # Why the remote set is exact
 //

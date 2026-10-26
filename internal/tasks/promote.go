@@ -50,10 +50,11 @@ import (
 // before shaping, which refuses a .git under the copy that is a symbolic
 // link (ComparisonGitDir, round 37) before anything is written through it,
 // and which does not walk the inside of the repository directory, so a
-// refs or objects directory that is itself a link into another repository
-// has the branch or the remote written there; the verification walks it,
-// so a copy with an open entry is refused for that and one with none is
-// not.
+// refs directory or a config file in it that is itself a link into another
+// repository has what the shaping writes through it, the branch or the
+// remote, written there (round 38, each shown through Promote); the
+// verification walks it, so a copy with an open entry is refused for that
+// and one with none is not.
 //
 // store.TransitionTaskShape writes the shape, the repository, the branch,
 // the delivery posture and the delivery intent on the task row together with
