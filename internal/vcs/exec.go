@@ -402,12 +402,6 @@ func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte
 	return r.runWith(ctx, op, nil, args...)
 }
 
-// runInput is run with stdin as git's standard input, for the one
-// operation that hands git its entries that way (ReplaceIndexEntries).
-func (r *Repository) runInput(ctx context.Context, op string, stdin []byte, args ...string) ([]byte, error) {
-	return r.runFull(ctx, op, nil, stdin, args...)
-}
-
 // runWith is run with extra environment entries set after the environment is
 // stripped, for the one operation that points git at a scratch index of its
 // own (TreeWithEntries). Nothing a caller's environment carries can reach git

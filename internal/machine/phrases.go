@@ -255,12 +255,13 @@ var phraseLandedLocallyNow = Phrase{
 // work and the three answers": Task.KeptWork names the entries, which the
 // structured rendering carries and this row points at, and the row names
 // the three answers. It says what this build does: the task starts once
-// every entry is decided or its work turns up somewhere safe, and the
-// three answers are given on section 9's hold answer.
+// every entry is decided or its work turns up somewhere safe; the answers
+// are given on section 9's hold answer, and discard shows what removing
+// the copy would lose and removes nothing (its removal is deferred).
 var phraseTaskWaitsOnKeptWork = Phrase{
 	Outcome:     "This work has not begun, because work kept in a local copy of the same project is waiting on your decision first.",
 	Consequence: "It begins on its own once that copy's work is decided or turns up somewhere safe; your own pushes and work already under way go ahead regardless.",
-	Decision:    "Read which copy with assistant --json tasks and the work's identifier; its answers are land, carry on or discard, given with --answer and --hold naming the entry's key.",
+	Decision:    "Read which copy with assistant --json tasks and the work's identifier; its answers are land, carry on or discard, given with --answer and --hold naming the entry's key, and in this build discard shows what removing it would lose without removing it.",
 }
 
 // phraseTaskKeptWorkUnread is the row for a task the program dispatched

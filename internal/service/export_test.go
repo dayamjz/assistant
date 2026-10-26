@@ -72,36 +72,6 @@ func WithCarryOnClaimInterruptForTest(tb testing.TB, o Options, f func() error) 
 	return o
 }
 
-// WithDiscardInterruptForTest returns o with a discard's seam between the
-// record of the person's confirmation and the copy's removal set to f, for
-// this package's external tests: a discard whose f returns an error ends
-// with the confirmation recorded and the copy standing, as a service that
-// stopped there leaves it.
-func WithDiscardInterruptForTest(tb testing.TB, o Options, f func() error) Options {
-	o.discardTest, o.interruptDiscard = tb, f
-	return o
-}
-
-// WithDiscardRemovalSeamsForTest returns o with a discard's seams set, for
-// this package's external tests: inWindow runs after the removal's last
-// read of the copy and before the removal, and beforeMark after the
-// removal and before the entry is marked, a discard whose beforeMark
-// returns an error ending with the copy gone and the entry unmarked, as a
-// service that stopped there leaves it. Either may be nil.
-func WithDiscardRemovalSeamsForTest(tb testing.TB, o Options, inWindow func(), beforeMark func() error) Options {
-	o.discardRemovalTest, o.inDiscardWindow, o.interruptDiscardMark = tb, inWindow, beforeMark
-	return o
-}
-
-// WithDiscardAsideSeamForTest returns o with a discard running f once
-// what it showed is set aside and before the copy is read again, for this
-// package's external tests; an error f returns ends the discard there, as
-// a service that stopped there leaves it.
-func WithDiscardAsideSeamForTest(tb testing.TB, o Options, f func() error) Options {
-	o.discardRemovalTest, o.afterDiscardAside = tb, f
-	return o
-}
-
 // WithCleanupAskSpacingForTest returns o with the spacing the supervisor
 // pass leaves between two asks of one landed task's cleanup set to d, for
 // this package's external tests, which cannot wait landedAskSpacing.

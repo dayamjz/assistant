@@ -17,18 +17,18 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // Discarding kept work: PRD section 6's "you name the copy, the program
 // shows exactly what will be lost, and it removes the copy only on that
-// answer". This file is the two halves of that the copy itself decides:
-// what would be lost, read from the copy and the entry now, and the removal,
-// made only when the copy still holds exactly what was shown. Who may answer
-// discard, and the record of who did, are internal/service's and
-// internal/store's; nothing here records anything.
+// answer". This file is the half of that the copy itself decides: what
+// would be lost, read from the copy and the entry now. The removal on a
+// confirmed discard is deferred to AGE-486 (docs/prd.md, sections 6 and
+// 9): nothing in this build removes a copy on a discard answer, and
+// internal/service refuses the confirmation. Loss is also what a land
+// decides from. Nothing here records or removes anything.
 //
 // # What would be lost
 //
@@ -79,9 +79,8 @@ import (
 // and the three indicators. Each record is framed (digest), so no name,
 // target or content can stand for a boundary. What is shown and what is
 // sealed are one set by construction: a change to anything shown moves
-// the digest, which lets Discard refuse a copy that no longer holds exactly
-// what was shown (ErrLossChanged), and a change to nothing shown leaves it
-// as it was, since the removal destroys nothing more for it: a branch made
+// the digest, and a change to nothing shown leaves it as it was, since a
+// removal would destroy nothing more for it: a branch made
 // at a commit already shown or held upstream, references packed, the
 // object database repacked, a file rewritten with the bytes it held, or an
 // edit staged whose content the working tree holds as shown. Every path is
@@ -89,12 +88,9 @@ import (
 // so neither git's ignore rules nor its configuration can keep one off the
 // list or out of the digest. It is a confirmation and not a secret.
 //
-// The default branch's tip is not in it: it is not the copy's, and a
-// discard answered and stopped before its removal would otherwise be
-// refused for good by an unrelated commit landing upstream. Discard holds
-// the commits lost to the ones shown instead: none lost now that was not
-// shown, and none shown that the copy no longer holds, unless the default
-// branch has taken it up.
+// The default branch's tip is not in it: it is not the copy's, and an
+// unrelated commit landing upstream would otherwise change the digest of a
+// copy that changed in nothing.
 //
 // What it does not cover, and what that costs. An object nothing names, no
 // reference, reflog entry or index entry, is not shown: one written since
@@ -116,8 +112,8 @@ import (
 // the system lets a command line carry refuses the preview as unestablished
 // rather than showing less. And git's own
 // maintenance, which a fetch may start, can expire the one reflog entry
-// that keeps a commit shown in the copy, which refuses the confirmation the
-// same way: each of these fails toward keeping. The upstream is the one
+// that keeps a commit shown in the copy, after which a later preview no
+// longer names it. The upstream is the one
 // repository read as holding anything beyond the default branch: a commit
 // the person's checkout or the gate holds and the upstream does not is
 // shown as lost though the removal leaves it there, which fails toward
@@ -127,8 +123,7 @@ import (
 // or remote-tracking reference of the copy's ends in is shown as lost,
 // which fails toward showing too. A commit shown as lost that the
 // default branch or the upstream takes up afterwards is not lost then,
-// which refuses the confirmation, since Discard holds the commits lost to
-// those shown exactly. A stash entry
+// and a later preview no longer shows it. A stash entry
 // records no worktree, so a run's own entries are the ones made on a
 // commit its own names or either value of an entry of its own reflogs
 // record (ownStash), a commit the gate's reflogs record too among them:
@@ -136,25 +131,14 @@ import (
 // one this worktree made on a commit none of them records any more is not
 // shown, nor destroyed, since the gate's stash stands.
 //
-// # The removal
+// # The removal is deferred
 //
-// Discard deletes what was shown and confirmed and nothing else, and
-// removes the copy only once that leaves it empty of work (the owner's
-// decision of 2026-10-24, which replaced removing the copy as it was read):
-// it sets the confirmed items aside recoverably beside the copy, reads the
-// loss again, and removes the directory only when that read holds nothing
-// but what this file already showed of the repository directory, by a
-// removal that refuses when anything is left, a run's worktree by git's
-// own removal without force and a task's clone on P12's proof; any
-// refusal puts everything back. kept_aside.go owns how and what it does not
-// cover. Which record is a run's copy's is read from the gate's own
-// registry and never by following the copy's .git, and a copy whose files
-// disagree with it is refused before anything is read (copyRecord). What
-// stands behind the deletion is the digest match against the person's
-// answer; a task's clone is removed on P12's proof as well, so one whose
-// remaining commits no proof covers is refused and stays. A copy already
-// gone is not refused: the answer and the digest it carried say the
-// removal was wanted, and nothing stands to lose.
+// PRD section 6's removal on a confirmed discard, the set-aside that held
+// what was shown recoverably beside the copy, its journal and its
+// recovery, are deferred to AGE-486 with the rest of the discard, and are
+// on the branch feat/age-407-discard. In this build a copy kept for its
+// work is removed only by P12 cleanup on a proof (cleanup.go), which is
+// what closes its entry once its work is pushed somewhere safe.
 
 // Loss is what discarding a kept copy would lose, as read now.
 type Loss struct {
@@ -194,8 +178,9 @@ type Loss struct {
 	// is not a commit, an annotated tag, a tree or a blob, with the names
 	// that point at it, in the order they are named (lostFrom).
 	Objects []LostObject
-	// Digest is the confirmation of exactly this, everything above as
-	// shown, each path by what it is lost holding (seal).
+	// Digest seals exactly this, everything above as shown, each path by
+	// what it is lost holding (seal): the value a confirmation names, which
+	// this build refuses.
 	Digest string
 	// files is Files with what each path is lost holding, which the digest
 	// seals.
@@ -259,7 +244,7 @@ const (
 // lostKinds is the kinds in Files' order.
 var lostKinds = []LostKind{LostChanged, LostNew, LostStaged, LostDeleted, LostRepository}
 
-// ErrLossUnestablished is returned by Loss and Discard when what the
+// ErrLossUnestablished is returned by Loss when what the
 // default branch lacks cannot be read now: what would be lost cannot be
 // shown exactly.
 var ErrLossUnestablished = errors.New("tasks: what the copy holds that the default branch lacks is not established, so what a discard would lose cannot be shown")
@@ -267,49 +252,24 @@ var ErrLossUnestablished = errors.New("tasks: what the copy holds that the defau
 // ErrCopyGone is returned by Loss for an entry whose copy is not standing.
 var ErrCopyGone = errors.New("tasks: the kept copy is gone")
 
-// ErrLayoutUnsupported is returned by Loss, Discard and PutBack for a copy
+// ErrLayoutUnsupported is returned by Loss and VerifyKeptCopy for a copy
 // whose repository is laid out in a way they do not support, naming the
 // layout, before anything of it is read or changed.
 var ErrLayoutUnsupported = errors.New("tasks: the copy's repository is laid out in a way a discard does not support, so nothing of it was read or changed")
 
-// ErrRecordNotTheCopys is returned by Discard and PutBack for a run's copy
+// ErrRecordNotTheCopys is returned by Loss and VerifyKeptCopy for a run's copy
 // that the gate's own registry does not tie to exactly one record, or
 // whose own files disagree with that record (copyRecord), before anything
 // of it is read or changed.
 var ErrRecordNotTheCopys = errors.New("tasks: the worktree's record is not this copy's in the gate, so nothing of it was read or removed")
 
-// ErrLossChanged is returned by Discard when the copy no longer holds
-// exactly what was shown, or still holds something once what was shown is
-// set aside, so nothing of it was deleted: what was set aside was put
-// back, or, where it could not be, the error is ErrAsideStands too.
-var ErrLossChanged = errors.New("tasks: the copy no longer holds exactly what was shown, so it was not removed")
-
 // Loss reads what discarding the entry's copy would lose, on this file's
 // terms, once the copy is verified to be the one its registry recorded
 // (VerifyKeptCopy) and laid out as supported (supportedLayout). gatePath
 // is the gate repository a run's copy is a worktree of, and is not read
-// for a task's clone.
+// for a task's clone. It removes nothing: it is the discard's preview and
+// what a land decides from.
 func (c *Cleaner) Loss(ctx context.Context, entry store.KeptWork, gatePath string) (Loss, error) {
-	// A copy that stands is held to the layout first: what stands aside can
-	// be put back only into that layout.
-	if standing, err := c.standing(entry.CopyPath); err != nil {
-		return Loss{}, err
-	} else if standing {
-		if err := c.supportedLayout(ctx, entry, gatePath); err != nil {
-			return Loss{}, err
-		}
-	}
-	if _, err := os.Lstat(asideDir(entry.CopyPath)); err == nil {
-		return Loss{}, fmt.Errorf("%w: it is at %s, and the next discard answer of the entry puts it back", ErrAsideStands, asideDir(entry.CopyPath))
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return Loss{}, err
-	}
-	return c.loss(ctx, entry, gatePath)
-}
-
-// loss is Loss without the check for what a discard set aside, which
-// Discard makes itself.
-func (c *Cleaner) loss(ctx context.Context, entry store.KeptWork, gatePath string) (Loss, error) {
 	standing, err := c.standing(entry.CopyPath)
 	if err != nil {
 		return Loss{}, err
@@ -644,7 +604,7 @@ func discardNamespace(entry store.KeptWork) (string, error) {
 	return "refs/assistant/discard/" + owner + "/" + hex.EncodeToString(suffix[:]), nil
 }
 
-// seal is the digest a discard is shown and confirmed with: everything
+// seal is the digest a discard is shown with: everything
 // loss shows and nothing else. HEAD; the commits lost; every object lost by identifier with its type and names;
 // every path lost by kind and path with what it is lost holding
 // (lostFile); and the three indicators. Each set is sealed in an order of
@@ -755,277 +715,6 @@ func hashFile(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// Discard deletes what digest was shown for and confirmed, on
-// kept_aside.go's terms, and removes the entry's copy only once that leaves
-// it empty of work, and returns the loss it checked the digest on. shown is
-// the commits the discard was shown as lost, which digest seals: the copy
-// read now must lose exactly those commits, none more and none fewer, and
-// must seal to digest, so everything shown is as it was. gate is the gate
-// repository a run's copy is a worktree of; a run's copy is held to the
-// record the gate's registry keeps for it (copyRecord) before anything
-// else is read.
-//
-// Every refusal leaves the copy as it was and is ErrLossChanged, naming
-// what differs: commits lost now that were not shown or shown that are not
-// lost now; a digest that no longer matches; a path shown as lost that is
-// gone or holds something else when it is set aside; an index or a
-// reflog changed since the loss was read; a path written where the
-// discard writes one; a reference that moved; HEAD that moved; anything
-// the copy would still lose once what was shown is set aside that the
-// loss did not show (beyondShown); and a removal git or P12's proof
-// refuses. What was set aside is put back first, and what could not be is
-// ErrAsideStands as well, naming where it is. beforeRemoval, when not nil, runs once the digest is
-// checked and before anything is set aside, and an error it returns is
-// returned with nothing touched. A copy already gone returns the zero Loss
-// and no error, and runs nothing but the removal of what a discard that
-// stopped once it had removed the copy left set aside, all of it confirmed.
-//
-// The Loss returned is the one read to check the digest, before anything
-// was set aside, so its commits are the ones shown and its Digest is
-// digest.
-//
-// What the commit check does not cover: a default branch that moved only
-// forward over commits the copy does not hold changes nothing here and
-// proceeds; one that took up a commit shown, or was rewound past one it
-// had, changes the commits lost, which is refused.
-func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, digest string, shown []string, gatePath string, beforeRemoval func() error) (Loss, error) {
-	if _, err := os.Lstat(entry.CopyPath); errors.Is(err, os.ErrNotExist) {
-		// A discard that stopped once the copy was removed leaves what it
-		// set aside, every item of it confirmed, which goes now.
-		if err := os.RemoveAll(asideDir(entry.CopyPath)); err != nil {
-			return Loss{}, fmt.Errorf("tasks: the copy at %s is gone, and what a discard set aside beside it could not be removed: %w", entry.CopyPath, err)
-		}
-		return Loss{}, nil
-	} else if err != nil {
-		return Loss{}, fmt.Errorf("tasks: reading the copy at %s: %w", entry.CopyPath, err)
-	}
-	bare, copied, err := c.openForDiscard(ctx, entry, gatePath)
-	if err != nil {
-		return Loss{}, err
-	}
-	// What a discard that did not finish set aside is put back before
-	// anything is read.
-	dir := asideDir(entry.CopyPath)
-	if err := c.putBack(ctx, entry, copied); err != nil {
-		return Loss{}, err
-	}
-	before, err := readAsideBefore(ctx, entry, copied)
-	if err != nil {
-		return Loss{}, fmt.Errorf("tasks: reading the copy at %s: %w", entry.CopyPath, err)
-	}
-	loss, err := c.loss(ctx, entry, gatePath)
-	if errors.Is(err, ErrCopyGone) {
-		return Loss{}, nil
-	}
-	if err != nil {
-		return Loss{}, err
-	}
-	if unshown, held := setDifference(loss.Lacks, shown), setDifference(shown, loss.Lacks); len(unshown) > 0 || len(held) > 0 {
-		return Loss{}, fmt.Errorf("%w: the commits lost are not the ones the discard was shown as lost: %s",
-			ErrLossChanged, describeCommits(unshown, held))
-	}
-	if loss.Digest != digest {
-		return Loss{}, fmt.Errorf("%w: it was shown as %s and holds what digests as %s now: %s", ErrLossChanged, digest, loss.Digest, describeLoss(loss))
-	}
-	if beforeRemoval != nil {
-		if err := beforeRemoval(); err != nil {
-			return Loss{}, err
-		}
-	}
-	if c.betweenDiscardReadAndCheck != nil {
-		c.betweenDiscardReadAndCheck()
-	}
-	if err := c.setAside(ctx, entry, copied, loss, before, dir); err != nil {
-		return Loss{}, err
-	}
-	refuse := func(why error) (Loss, error) {
-		if err := c.restoreAside(ctx, entry, copied, dir); err != nil {
-			return Loss{}, fmt.Errorf("%w; %w", why, err)
-		}
-		return Loss{}, why
-	}
-	if c.betweenAsideAndCheck != nil {
-		if err := c.betweenAsideAndCheck(); err != nil {
-			return Loss{}, err
-		}
-	}
-	after, err := c.loss(ctx, entry, gatePath)
-	if err != nil {
-		return refuse(fmt.Errorf("%w: the copy could not be read once what was shown was set aside: %w", ErrLossChanged, err))
-	}
-	if err := beyondShown(loss, after); err != nil {
-		return refuse(err)
-	}
-	if entry.TaskID.IsKnown() {
-		if err := c.removeOnProof(ctx, entry.TaskID.Or(""), copied); err != nil {
-			return refuse(err)
-		}
-	} else {
-		lock, err := gate.LockCopies(ctx, bare.Path())
-		if err != nil {
-			return refuse(fmt.Errorf("tasks: waiting to remove the worktree at %s: %w", entry.CopyPath, err))
-		}
-		err = bare.RemoveWorktree(ctx, entry.CopyPath)
-		_ = lock.Release()
-		if err != nil {
-			return refuse(fmt.Errorf("%w: git refused to remove the worktree at %s, so something is left in it: %w", ErrLossChanged, entry.CopyPath, err))
-		}
-	}
-	// The copy is gone, so what was set aside, every item of it what the
-	// loss showed and the person confirmed, goes too.
-	if err := os.RemoveAll(dir); err != nil {
-		return loss, fmt.Errorf("tasks: the copy at %s was discarded, and what was set aside at %s could not be removed: %w", entry.CopyPath, dir, err)
-	}
-	return loss, nil
-}
-
-// openForDiscard opens what a discard of the entry's copy works on: for a
-// run's copy the gate repository at gatePath, with the copy held to the
-// record the gate's registry keeps for it (copyRecord), and the copy, held
-// to the one layout a discard supports (supportedLayout).
-func (c *Cleaner) openForDiscard(ctx context.Context, entry store.KeptWork, gatePath string) (bare, copied *vcs.Repository, err error) {
-	if !entry.TaskID.IsKnown() {
-		if bare, err = vcs.OpenBare(ctx, gatePath, c.git...); err != nil {
-			return nil, nil, fmt.Errorf("tasks: opening the gate repository at %s: %w", gatePath, err)
-		}
-	}
-	if err := c.supportedLayout(ctx, entry, gatePath); err != nil {
-		return nil, nil, err
-	}
-	if copied, err = vcs.OpenWorktree(ctx, entry.CopyPath, c.git...); err != nil {
-		return nil, nil, fmt.Errorf("tasks: opening the kept copy at %s: %w", entry.CopyPath, err)
-	}
-	return bare, copied, nil
-}
-
-// PutBack puts back what a discard of the entry's copy that did not finish
-// left set aside beside it, on kept_aside.go's terms, so Loss reads the
-// copy again; it does nothing when nothing stands aside or the copy is
-// gone. gatePath is Discard's. What could not be put back is
-// ErrAsideStands, naming it, and stays. The caller keeps a discard of the
-// same copy from running meanwhile, as it does for Discard.
-func (c *Cleaner) PutBack(ctx context.Context, entry store.KeptWork, gatePath string) error {
-	if _, err := os.Lstat(asideDir(entry.CopyPath)); errors.Is(err, fs.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	if _, err := os.Lstat(entry.CopyPath); errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	_, copied, err := c.openForDiscard(ctx, entry, gatePath)
-	if err != nil {
-		return err
-	}
-	return c.putBack(ctx, entry, copied)
-}
-
-// putBack is PutBack on the copy opened.
-func (c *Cleaner) putBack(ctx context.Context, entry store.KeptWork, copied *vcs.Repository) error {
-	dir := asideDir(entry.CopyPath)
-	if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	return c.restoreAside(ctx, entry, copied, dir)
-}
-
-// removeOnProof removes a task's clone a discard emptied of its work, on
-// P12's proof as CleanUp decides one: a tree git reports clean, the commits
-// its references and HEAD stand on proven landed (prove), the inventory
-// unchanged across the proof, and the clone removed on that proof
-// (removeTaskCopy). The cleanup record is not written: the removal is the
-// discard's, recorded on the entry. Anything short of the proof is
-// ErrLossChanged.
-func (c *Cleaner) removeOnProof(ctx context.Context, taskID string, copied *vcs.Repository) error {
-	task, err := c.store.Task(ctx, taskID)
-	if err != nil {
-		return err
-	}
-	inv, err := copied.Inventory(ctx)
-	if err != nil {
-		return err
-	}
-	if _, detail, refused := treeRefusal(inv); refused {
-		return fmt.Errorf("%w: once what was shown was set aside, %s", ErrLossChanged, detail)
-	}
-	work := inventoryCommits(inv)
-	l, err := c.taskLanding(ctx, task, copied, work)
-	if err != nil {
-		return err
-	}
-	removal, attempts := c.prove(ctx, l)
-	if !removal.proven {
-		var why []string
-		for _, a := range attempts {
-			why = append(why, string(a.Proof)+": "+a.Detail)
-		}
-		return fmt.Errorf("%w: once what was shown was set aside, none of P12's proofs holds for the clone: %s", ErrLossChanged, strings.Join(why, "; "))
-	}
-	again, err := copied.Inventory(ctx)
-	if err != nil {
-		return err
-	}
-	if !inventoryEqual(inv, again) {
-		return fmt.Errorf("%w: the clone's references, HEAD, tree or stash changed while its proof was read", ErrLossChanged)
-	}
-	return removeTaskCopy(copied.Path(), removal)
-}
-
-// setDifference is every element of a that b does not hold, in a's order.
-func setDifference(a, b []string) []string {
-	var out []string
-	for _, x := range a {
-		if !slices.Contains(b, x) {
-			out = append(out, x)
-		}
-	}
-	return out
-}
-
-// describeCommits names the commits lost now that the discard was not
-// shown (unshown) and those it was shown as lost that are not lost now
-// (held), a commit the upstream took up since or the copy no longer holds.
-func describeCommits(unshown, held []string) string {
-	var parts []string
-	if len(unshown) > 0 {
-		parts = append(parts, "lost now and not shown: "+strings.Join(unshown, ", "))
-	}
-	if len(held) > 0 {
-		parts = append(parts, "shown and not lost now: "+strings.Join(held, ", "))
-	}
-	return strings.Join(parts, "; ")
-}
-
-// describeLoss names what a loss read holds, for a refusal to say what the
-// copy holds now beside what was shown.
-func describeLoss(l Loss) string {
-	var parts []string
-	if len(l.Lacks) > 0 {
-		parts = append(parts, "commits "+strings.Join(l.Lacks, ", "))
-	}
-	for _, o := range l.Objects {
-		parts = append(parts, o.Type+" "+o.Object)
-	}
-	for _, f := range l.Files {
-		parts = append(parts, string(f.Kind)+" "+f.Path)
-	}
-	if l.Dirty {
-		parts = append(parts, "a tracked change")
-	}
-	if l.Untracked {
-		parts = append(parts, "a file no commit records")
-	}
-	if l.Stash {
-		parts = append(parts, "a stash")
-	}
-	if len(parts) == 0 {
-		return "nothing lost"
-	}
-	return strings.Join(parts, "; ")
 }
 
 // LeftBehind is what of loss, as Loss read it, a landing of HEAD does not

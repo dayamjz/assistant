@@ -186,7 +186,7 @@ import (
 // service's lifetime and a held task has to dispatch as soon as its
 // project's entries are answered or closed. What asks again is every call of
 // dispatchDue: at open, after every release, after every answer that closes
-// an entry (keptanswer.go, keptcarryon.go, keptdiscard.go), and after a
+// an entry (keptanswer.go, keptcarryon.go), and after a
 // cleanup that removed a copy, which is the one way an entry closes without
 // an answer (cleanup.go). A pass that runs while the slot is still taken
 // passes the task over, so releaseHeldSlot reads the hold again after the

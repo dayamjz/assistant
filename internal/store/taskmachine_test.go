@@ -383,7 +383,7 @@ func TestKeptWorkReadsItsMachineOffItsOwner(t *testing.T) {
 	if err != nil || len(open) != 2 || open[0].Machine != "mini" || open[1].Machine != "" {
 		t.Fatalf("OpenKeptWork = %+v, %v; want the task's entry on mini and the run's here", open, err)
 	}
-	if answered := discardKept(t, s, ofTask.ID); answered.Machine != "mini" {
+	if answered := landKept(t, s, ofTask.ID); answered.Machine != "mini" {
 		t.Fatalf("the answered entry = %+v; want mini", answered)
 	}
 }
@@ -506,7 +506,7 @@ func TestCarryOnGivesTheNewTaskTheKeptCopysMachine(t *testing.T) {
 	if got := attemptsOf(t, s, newTask.ID); len(got) != 0 || machineOf(t, s, newTask.ID) != "" {
 		t.Fatalf("the held dispatch left attempts %+v and machine %q", got, machineOf(t, s, newTask.ID))
 	}
-	discardKept(t, s, open.ID)
+	landKept(t, s, open.ID)
 	if _, err := s.BeginFirstTaskAttempt(ctx, newTask.ID, CarriedOnFrom(carried.ID)); err != nil {
 		t.Fatalf("BeginFirstTaskAttempt carrying on: %v", err)
 	}

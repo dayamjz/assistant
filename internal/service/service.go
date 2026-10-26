@@ -221,25 +221,6 @@ type Options struct {
 	// WithCarryOnClaimInterruptForTest sets, with carryOnTest, and the
 	// product never does.
 	interruptCarryOnClaim func() error
-	// discardTest and interruptDiscard are a discard's seam between the
-	// record of the person's confirmation and the copy's removal, which
-	// export_test.go's WithDiscardInterruptForTest sets and the product
-	// never does.
-	discardTest      testing.TB
-	interruptDiscard func() error
-	// discardRemovalTest, inDiscardWindow and interruptDiscardMark are a
-	// discard's seams inside the removal's window, after its last read of
-	// the copy and before the removal, and between the removal and the
-	// mark, which export_test.go's WithDiscardRemovalSeamsForTest sets and
-	// the product never does.
-	discardRemovalTest   testing.TB
-	inDiscardWindow      func()
-	interruptDiscardMark func() error
-	// afterDiscardAside is the cleaner's seam inside a discard, once what
-	// it showed is set aside and before the copy is read again, which
-	// export_test.go's WithDiscardAsideSeamForTest sets with
-	// discardRemovalTest and the product never does.
-	afterDiscardAside func() error
 	// cleanupAskSpacing replaces landedAskSpacing for this service, which
 	// export_test.go's WithCleanupAskSpacingForTest sets and the product
 	// never does; zero is landedAskSpacing.
@@ -470,30 +451,11 @@ type Service struct {
 	// entry, and an error it returns ends the answer there. It is nil in
 	// production and set only through WithCarryOnClaimInterruptForTest.
 	betweenCarryOnClaimAndCompletion func() error
-	// betweenDiscardRecordAndRemoval runs in a discard after the person's
-	// confirmation was recorded, once the call carrying it out holds the
-	// copy's discard slot, and before the copy is read for its removal;
-	// an error it returns ends the discard there, as a service that
-	// stopped there leaves it. It is nil in production and set only
-	// through WithDiscardInterruptForTest.
-	betweenDiscardRecordAndRemoval func() error
-	// inDiscardWindow runs in a discard after its last read of the copy and
-	// before the removal, and betweenDiscardRemovalAndMark after the
-	// removal and before the mark, an error it returns ending the discard
-	// there, as a service that stopped there leaves it. Both are nil in
-	// production and set only through WithDiscardRemovalSeamsForTest.
-	inDiscardWindow              func()
-	betweenDiscardRemovalAndMark func() error
 	// landings is the kept work entries a landing is carrying out in this
 	// service now, keyed by entry: the in-process half of the landing's
 	// exactly-once, on keptanswer.go's terms. It is read and written under
 	// mu.
 	landings map[int64]bool
-	// discards is the copies a discard confirmation is being carried out or
-	// withdrawn for in this service now, keyed by copy path: the in-process
-	// half of keptdiscard.go's one carrier of a confirmation. It is read
-	// and written under mu.
-	discards map[string]bool
 	// beforeHoldRead runs in a dispatch of the task it is given once the
 	// task's resolution is read and before the dispatch reads whether kept
 	// work holds it. It is nil in production and set only by this package's
@@ -906,18 +868,6 @@ func (s *Service) openParts(ctx context.Context, o Options, lookup func(string) 
 		}
 		s.betweenCarryOnClaimAndCompletion = o.interruptCarryOnClaim
 	}
-	if o.interruptDiscard != nil {
-		if o.discardTest == nil {
-			return errors.New("service: the discard interrupt is a test's seam and takes the test")
-		}
-		s.betweenDiscardRecordAndRemoval = o.interruptDiscard
-	}
-	if o.inDiscardWindow != nil || o.interruptDiscardMark != nil {
-		if o.discardRemovalTest == nil {
-			return errors.New("service: the discard removal seams are a test's and take the test")
-		}
-		s.inDiscardWindow, s.betweenDiscardRemovalAndMark = o.inDiscardWindow, o.interruptDiscardMark
-	}
 	if o.interruptIntake != nil {
 		if err := s.queue.InterruptAfterRecordForTest(o.intakeTest, o.interruptIntake); err != nil {
 			return err
@@ -926,9 +876,6 @@ func (s *Service) openParts(ctx context.Context, o Options, lookup func(string) 
 	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge,
 		GitDeadline: s.cfg.GitDeadline}); err == nil && o.interruptCleanupMark != nil {
 		err = s.cleaner.InterruptBeforeMarkForTest(o.cleanupTest, o.interruptCleanupMark)
-	}
-	if err == nil && o.afterDiscardAside != nil {
-		err = s.cleaner.BetweenAsideAndCheckForTest(o.discardRemovalTest, o.afterDiscardAside)
 	}
 	if err != nil {
 		return err

@@ -7,12 +7,9 @@ import (
 	"path/filepath"
 )
 
-// The state of a copy's entries, which a discard holds what it sets aside
-// to (kept_aside.go): an entry set aside must hold what the copy held when
-// the loss was read, and a path the discard wrote is taken out again only
-// while it holds what was written. The state is the bytes: a file
-// rewritten with the bytes it held, or its mode set to what it was, is not
-// a change.
+// The state of a copy's entries, which a test compares before and after
+// what it says changes nothing. The state is the bytes: a file rewritten
+// with the bytes it held, or its mode set to what it was, is not a change.
 
 // copyState is the state of every entry under some directories, by
 // absolute path: its type and permission bits, and a regular

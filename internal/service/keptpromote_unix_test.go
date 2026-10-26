@@ -4,10 +4,6 @@ package service_test
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
@@ -15,7 +11,6 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
-	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 )
@@ -155,73 +150,6 @@ func TestAPromotionTouchesNoKeptWorkButItsCopys(t *testing.T) {
 		}
 		if _, err := recordsOf(t, w.home).KeptWorkEntry(ctx, max(own.ID, other.ID)+1); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("the promotion wrote an entry of its own: %v", err)
-		}
-	})
-}
-
-// A promotion's worker continues in the task's copy only with everything a
-// discard that did not finish set aside put back, round 24's second
-// finding as it reaches a promotion: a running investigation's copy has an
-// open entry and holds a file no commit records, notes.txt, and a discard
-// of it is confirmed while a file is written where notes.txt was, so its
-// restore leaves notes.txt beside the copy and withdraws the confirmation.
-// The promotion is then refused naming notes.txt, with the task still an
-// investigation and the entry open; once the file written meanwhile is
-// removed, the promotion puts notes.txt back into the copy and closes the
-// entry carry on. Before, the promotion closed the entry over a copy
-// without it.
-func TestAPromotionTakesItsCopyOnlyWithWhatADiscardSetAsidePutBack(t *testing.T) {
-	t.Parallel()
-	principles.Cite(t, principles.P15)
-	var notes string
-	var once sync.Once
-	collide := func() error {
-		var err error
-		once.Do(func() { err = writeFile(notes, "written meanwhile\n") })
-		return err
-	}
-	with := func(o service.Options) service.Options { return service.WithDiscardAsideSeamForTest(t, o, collide) }
-	streamWorkerOfWith(t, store.TaskInvestigation, "", nil, with, func(w launched, _ *standin.Agent) {
-		ctx := t.Context()
-		entry := keptOnCopyOf(t, w)
-		notes = filepath.Join(entry.CopyPath, "notes.txt")
-		if err := writeFile(notes, "not committed\n"); err != nil {
-			t.Fatal(err)
-		}
-		discard := machine.KeptWorkAnswerRequest{Task: w.task, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
-		var shown machine.KeptWorkAnswered
-		if err := w.running.client.Call(ctx, ipc.MethodKeptWorkAnswer, discard, &shown); err != nil || shown.Loss == nil {
-			t.Fatalf("the discard shown = %+v, %v", shown, err)
-		}
-		discard.Confirm = shown.Loss.Digest
-		var refused machine.KeptWorkAnswered
-		if err := w.running.client.Call(ctx, ipc.MethodKeptWorkAnswer, discard, &refused); !errors.Is(err, ipc.ErrRefused) {
-			t.Fatalf("the discard over a file written where one was set aside = %+v, %v; want it refused", refused, err)
-		}
-		aside := filepath.Join(filepath.Dir(entry.CopyPath), "."+filepath.Base(entry.CopyPath)+".discarding", "tree", "notes.txt")
-		if raw, err := os.ReadFile(aside); err != nil || string(raw) != "not committed\n" {
-			t.Fatalf("notes.txt beside the copy holds %q, %v; want it set aside as shown, the case under test", raw, err)
-		}
-
-		if _, err := promoteRunningInvestigation(t, w, "task/promoted", ""); !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "notes.txt") {
-			t.Fatalf("the promotion with notes.txt beside its copy = %v; want it refused naming notes.txt", err)
-		}
-		stillAnInvestigation(t, w, "the refused promotion")
-		if got, err := recordsOf(t, w.home).KeptWorkEntry(ctx, entry.ID); err != nil || !got.Open() {
-			t.Fatalf("the entry reads %+v, %v after the refused promotion; want it open", got, err)
-		}
-
-		if err := os.Remove(notes); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := promoteRunningInvestigation(t, w, "task/promoted", ""); err != nil {
-			t.Fatalf("the promotion once the file written meanwhile is removed: %v", err)
-		}
-		if raw, err := os.ReadFile(notes); err != nil || string(raw) != "not committed\n" {
-			t.Fatalf("the promoted task's copy holds notes.txt as %q, %v; want it as shown", raw, err)
-		}
-		if got, err := recordsOf(t, w.home).KeptWorkEntry(ctx, entry.ID); err != nil || got.Open() || got.Answer.Or("") != store.KeptCarryOn {
-			t.Fatalf("the entry reads %+v, %v after the promotion; want it answered carry on", got, err)
 		}
 	})
 }

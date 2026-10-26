@@ -49,11 +49,9 @@ type Environment struct {
 	// Interactive says a person is at a terminal: standard input and
 	// standard error are both one. init reads it, to decide whether it may
 	// ask about each command it offers, reading the answers from Stdin and
-	// writing the questions to Stderr; and a discard of kept work reads
-	// it, to take --confirm only there, which keeps that answer the
-	// person's. It is false unless the process boundary established it, so
-	// a caller that does not set it is never prompted, consents only
-	// through --accept-commands, and cannot confirm a discard.
+	// writing the questions to Stderr. It is false unless the process
+	// boundary established it, so a caller that does not set it is never
+	// prompted and consents only through --accept-commands.
 	Interactive bool
 }
 

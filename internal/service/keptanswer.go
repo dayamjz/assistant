@@ -162,7 +162,7 @@ func (s *Service) answerKeptWork(ctx context.Context, req ipc.Request, r machine
 	case store.KeptCarryOn:
 		return s.carryOnKeptWork(ctx, req, entry)
 	case store.KeptDiscard:
-		return s.discardKeptWork(ctx, req, entry, r.Confirm)
+		return s.discardKeptWork(ctx, entry, r.Confirm)
 	default:
 		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: %q is not an answer to kept work; the answers are land, carry-on and discard",
 			ipc.ErrInvalidRequest, r.Answer)
@@ -227,8 +227,8 @@ func (s *Service) landKeptWork(ctx context.Context, req ipc.Request, entry store
 // refusedOwed is the refusal of an answer to an entry of a copy that holds
 // an answer not yet carried out, store.ErrKeptWorkCopyOwed.
 func refusedOwed(k store.KeptWork, err error) error {
-	return fmt.Errorf("%w: kept work entry %d was not answered: %w; that answer is carried out, or a discard confirmed on a "+
-		"copy that changed or a carry on whose task cannot be created is withdrawn, by its own next call or the next start, "+
+	return fmt.Errorf("%w: kept work entry %d was not answered: %w; that answer is carried out, or a carry on whose task "+
+		"cannot be created is withdrawn, by its own next call or the next start, "+
 		"and this entry can be answered after",
 		ipc.ErrRefused, k.ID, err)
 }
@@ -282,15 +282,7 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 	// What the copy holds is read as it stands now, by the one computation
 	// a discard shows (tasks.Loss), never from the entry's record of the
 	// copy when it was kept.
-	// What a discard that did not finish set aside is put back first, so
-	// the copy is read whole.
-	if err := s.putBackDiscard(ctx, entry); err != nil {
-		if errors.Is(err, tasks.ErrAsideStands) || errors.Is(err, tasks.ErrRecordNotTheCopys) || errors.Is(err, tasks.ErrLayoutUnsupported) {
-			return refuse(err.Error())
-		}
-		return landing{}, err
-	}
-	gatePath, err := s.discardGatePath(ctx, entry)
+	gatePath, err := s.keptGatePath(ctx, entry)
 	if err != nil {
 		return landing{}, err
 	}

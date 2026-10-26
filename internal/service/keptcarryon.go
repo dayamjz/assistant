@@ -82,7 +82,7 @@ import (
 // would be answered with the copy too; nothing in this build puts one
 // there, since the task that path belongs to has ended. A claim is refused while another
 // entry of the copy holds an answer not yet carried out, as every answer
-// is (keptdiscard.go's "Every entry of the copy").
+// is (store.ErrKeptWorkCopyOwed).
 //
 // # The order, and what a stop leaves
 //
@@ -146,14 +146,6 @@ func (s *Service) carryOnKeptWork(ctx context.Context, req ipc.Request, entry st
 	// A claim this answer finds standing, one a stopped service or a failed
 	// adoption left, is completed rather than claimed again.
 	if entry.Open() && !entry.CarryOnClaimed() {
-		// What a discard that did not finish set aside is put back first,
-		// so the copy carried on is the whole copy.
-		if err := s.putBackDiscard(ctx, entry); err != nil {
-			if errors.Is(err, tasks.ErrAsideStands) || errors.Is(err, tasks.ErrRecordNotTheCopys) || errors.Is(err, tasks.ErrLayoutUnsupported) {
-				return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d was not carried on: %w", ipc.ErrRefused, entry.ID, err)
-			}
-			return machine.KeptWorkAnswered{}, err
-		}
 		plan, err := s.carryOnOf(ctx, entry)
 		if err != nil {
 			return machine.KeptWorkAnswered{}, err
@@ -325,7 +317,7 @@ func unreshapeableRemotes(obs vcs.Observation, plan carryOn) string {
 		names[i] = r.Name
 	}
 	remove := "; carrying on removes no remote, since that deletes its remote-tracking references, so remove it from the copy " +
-		"yourself and answer again, or land or discard the copy"
+		"yourself and answer again, or land the copy"
 	if plan.old.Shape == store.TaskInvestigation {
 		return "an investigation's copy has no remote, and this one has " + strings.Join(names, ", ") + remove
 	}
@@ -363,11 +355,11 @@ func (s *Service) unreshapeableHead(ctx context.Context, path string, obs vcs.Ob
 		switch {
 		case ref.Name == name:
 			return "HEAD is not on the task's branch " + plan.branch + ", which stands at " + ref.Commit + ", and carrying on " +
-				"moves no branch; put HEAD on it yourself and answer again, or land or discard the copy", nil
+				"moves no branch; put HEAD on it yourself and answer again, or land the copy", nil
 		case strings.HasPrefix(ref.Name, name+"/") || strings.HasPrefix(name, ref.Name+"/"):
 			return "HEAD is not on the task's branch " + plan.branch + ", which carrying on creates at HEAD, and the copy's " +
 				ref.Name + " stands in the way of that name, and carrying on renames no branch; rename it yourself and answer " +
-				"again, or land or discard the copy", nil
+				"again, or land the copy", nil
 		}
 	}
 	return "", nil

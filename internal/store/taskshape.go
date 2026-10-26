@@ -81,9 +81,9 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // answer as carry on, which closes it"), naming the promoted task as the
 // task carrying them on, in this same transaction; a zero Resolver is
 // ErrNoResolver and nothing is written. A copy one of whose entries holds a
-// discard confirmation not yet carried out is refused with
-// ErrKeptWorkCopyOwed, wrapped, and nothing is written: that discard is
-// removing the copy, and is carried out or withdrawn first.
+// carry on claimed and not yet carried out is refused with
+// ErrKeptWorkCopyOwed, wrapped, and nothing is written: that carry on is
+// moving the copy to another task, and is carried out or withdrawn first.
 func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to TaskShape, repository, branch string,
 	delivery config.Delivery, intent string, anchor int64, detail string, by Resolver) (Task, TaskEvent, error) {
 	if strings.TrimSpace(id) == "" {
@@ -134,17 +134,16 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 		if tip != anchor {
 			return &TaskMovedError{Task: id, Anchor: AnchoredEvent, Expected: anchor, Stands: tip}
 		}
-		// A discard confirmed on the copy's entry and not yet carried out
-		// is removing the copy the promotion would continue in, and a carry
-		// on claimed is moving it to another task.
-		var confirmed int64
+		// A carry on claimed on the copy's entry and not yet carried out
+		// is moving the copy the promotion would continue in to another
+		// task.
+		var claimed int64
 		var what string
-		switch err := tx.QueryRowContext(ctx, `SELECT id, CASE WHEN discard_digest IS NOT NULL THEN 'confirmed discard'
-				ELSE 'claimed carry on by task ' || carried_on_task END FROM kept_work
-			WHERE task_id = ? AND answer IS NULL AND closure IS NULL AND (discard_digest IS NOT NULL OR carried_on_task IS NOT NULL)
-			ORDER BY id LIMIT 1`, id).Scan(&confirmed, &what); {
+		switch err := tx.QueryRowContext(ctx, `SELECT id, 'claimed carry on by task ' || carried_on_task FROM kept_work
+			WHERE task_id = ? AND answer IS NULL AND closure IS NULL AND carried_on_task IS NOT NULL
+			ORDER BY id LIMIT 1`, id).Scan(&claimed, &what); {
 		case err == nil:
-			return fmt.Errorf("%w: entry %d of its copy is %s", ErrKeptWorkCopyOwed, confirmed, what)
+			return fmt.Errorf("%w: entry %d of its copy is %s", ErrKeptWorkCopyOwed, claimed, what)
 		case !errors.Is(err, sql.ErrNoRows):
 			return err
 		}

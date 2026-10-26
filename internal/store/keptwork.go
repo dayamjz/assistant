@@ -58,8 +58,8 @@ const KeptRemovedOnProof KeptClosure = "removed-on-proof"
 // never silent". It is written once, by RecordKeptWork, when the copy is
 // kept. Its one revision closes it, once and only while it is open: a
 // person's answer, written only with its outcome (RecordKeptWorkLanding,
-// MarkKeptWorkCarriedOn, MarkKeptWorkDiscarded) after it was claimed or
-// confirmed on the open entry, or the program's closure,
+// MarkKeptWorkCarriedOn) after it was claimed on the open entry, or the
+// program's closure,
 // KeptRemovedOnProof, when the copy is removed on a proof. SurfacedAt, the
 // PRD row's "when it last surfaced", is the one other field that moves,
 // only forward, through MarkKeptWorkSurfaced. The schema's seals hold all of
@@ -194,22 +194,6 @@ type KeptWork struct {
 	CarryOnBy        Optional[Resolver]  `json:"-"`
 	CarryOnClaimedAt Optional[time.Time] `json:"carry_on_claimed_at"`
 	CarriedOnAt      Optional[time.Time] `json:"carried_on_at"`
-	// DiscardDigest is a person's confirmation of a discard, the digest of
-	// what they were shown, with DiscardLacks the commits it was shown as
-	// lost (nil for an entry with no confirmation), DiscardBy who confirmed
-	// and DiscardConfirmedAt when: written together on an open entry by
-	// ConfirmKeptWorkDiscard, which leaves it open, and withdrawn together
-	// by WithdrawKeptWorkDiscard while it is unanswered. DiscardedAt is
-	// when the copy went, written by MarkKeptWorkDiscarded in the one
-	// write that answers the entry discard from its confirmation, so an
-	// entry answered discard is one whose copy is gone, and an open entry
-	// with a confirmation is a discard under way or one a stopped service
-	// left (DiscardConfirmed).
-	DiscardDigest      Optional[string]    `json:"discard_digest"`
-	DiscardLacks       []string            `json:"discard_lacks"`
-	DiscardBy          Optional[Resolver]  `json:"-"`
-	DiscardConfirmedAt Optional[time.Time] `json:"discard_confirmed_at"`
-	DiscardedAt        Optional[time.Time] `json:"discarded_at"`
 }
 
 // Key is the name a person gives --hold to answer this entry, PRD section
@@ -245,11 +229,6 @@ func (k KeptWork) Answered() bool { return k.Answer.IsKnown() }
 // Open reports whether the entry is still owed a decision: neither answered
 // nor closed by the program.
 func (k KeptWork) Open() bool { return !k.Answer.IsKnown() && !k.Closure.IsKnown() }
-
-// DiscardConfirmed reports whether the entry is open with a person's
-// discard confirmation on it: a discard recorded and not yet carried out,
-// which is carried out or withdrawn, and until then holds the entry open.
-func (k KeptWork) DiscardConfirmed() bool { return k.Open() && k.DiscardDigest.IsKnown() }
 
 // LandingClaimed reports whether the entry is open with a land answer's
 // claim on it: a landing recorded and not yet carried out, which is carried
@@ -296,24 +275,17 @@ var ErrKeptWorkAnswered = errors.New("store: the kept work entry is already answ
 var ErrKeptWorkClosed = errors.New("store: the kept work entry was closed when its copy was removed on a proof")
 
 // ErrKeptWorkCopyOwed is returned by ClaimKeptWorkLanding,
-// ClaimKeptWorkCarryOn, ConfirmKeptWorkDiscard and TransitionTaskShape for
-// an entry of a copy that holds an answer not yet carried out: a landing or
-// a carry on claimed or a discard confirmed on any entry of the copy, this
-// one included. Each of those still needs the copy
+// ClaimKeptWorkCarryOn and TransitionTaskShape for an entry of a copy that
+// holds an answer not yet carried out: a landing or a carry on claimed on
+// any entry of the copy, this one included. Each of those still needs the copy
 // where it stands, and a second answer could move it, remove it, or land
 // it twice. Nothing is written; the owed answer is completed or withdrawn
 // by its own next call or the next start, and the entry can be answered
 // after.
 var ErrKeptWorkCopyOwed = errors.New("store: another kept work entry of the same copy holds an answer not yet carried out")
 
-// ErrKeptWorkDiscardConfirmed is returned, matching ErrKeptWorkCopyOwed
-// too, by every answer and by ConfirmKeptWorkDiscard for an entry that
-// already holds a discard confirmation: it stands until it is carried out
-// or withdrawn, and nothing is written.
-var ErrKeptWorkDiscardConfirmed = errors.New("store: the kept work entry already holds a discard confirmation")
-
 // ErrKeptWorkCarryOnClaimed is returned, matching ErrKeptWorkCopyOwed too,
-// by every answer and by ConfirmKeptWorkDiscard for an entry that already
+// by every answer for an entry that already
 // holds a carry-on claim: it stands until it is carried out or withdrawn,
 // and nothing is written.
 var ErrKeptWorkCarryOnClaimed = errors.New("store: the kept work entry already holds a carry-on claim")
@@ -620,93 +592,6 @@ func (s *Store) MarkKeptWorkSurfaced(ctx context.Context, id int64, at time.Time
 	return nil
 }
 
-// ConfirmKeptWorkDiscard records a person's confirmation of a discard on
-// an open entry, the first of the discard's two facts: digest, what the
-// confirmation was shown, lacks, the commits it was shown as lost, and by,
-// who confirmed, with the instant: PRD section 6's "recording who
-// discarded what". The entry stays open, so it is listed and holds the
-// project's dispatch as before, until MarkKeptWorkDiscarded answers it with
-// the removal or WithdrawKeptWorkDiscard takes the confirmation back. An
-// entry answered is ErrKeptWorkAnswered, one closed ErrKeptWorkClosed, one
-// confirmed already ErrKeptWorkDiscardConfirmed, and one of a copy another
-// entry of which holds an answer not yet carried out ErrKeptWorkCopyOwed;
-// an empty digest and the zero Resolver are refused. Nothing is written on
-// a refusal, and nothing is removed here.
-func (s *Store) ConfirmKeptWorkDiscard(ctx context.Context, id int64, digest string, lacks []string, by Resolver) (KeptWork, error) {
-	if strings.TrimSpace(digest) == "" {
-		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a discard confirmation records what it was shown, and was shown nothing", id)
-	}
-	who, err := resolverText(by)
-	if err != nil {
-		return KeptWork{}, fmt.Errorf("store: confirming a discard of kept work entry %d: %w", id, err)
-	}
-	if lacks == nil {
-		lacks = []string{}
-	}
-	shown, err := encodeExamined(lacks)
-	if err != nil {
-		return KeptWork{}, err
-	}
-	var out KeptWork
-	err = s.inTx(ctx, func(tx *sql.Tx) error {
-		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
-		if err != nil {
-			return errNoRows(err)
-		}
-		if err := refuseUnlessAnswerable(ctx, tx, k); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET discard_digest = ?, discard_lacks = ?, discard_by = ?, discard_confirmed_at = ?
-			WHERE id = ?`, digest, shown, who, encodeTime(nowUTC()), id); err != nil {
-			return err
-		}
-		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
-		return err
-	})
-	if err != nil {
-		return KeptWork{}, fmt.Errorf("store: confirming a discard of kept work entry %d: %w", id, err)
-	}
-	return out, nil
-}
-
-// ErrKeptWorkNotConfirmed is returned by WithdrawKeptWorkDiscard and
-// RecordKeptWorkDiscardRead for an entry that holds no discard
-// confirmation, or one of another digest.
-var ErrKeptWorkNotConfirmed = errors.New("store: the kept work entry holds no discard confirmation of that digest")
-
-// WithdrawKeptWorkDiscard takes back the discard confirmation of digest from
-// an entry still unanswered, which the caller does when the copy no longer
-// holds what the confirmation was shown: the entry is open again with no
-// confirmation and no read recorded under it, to be shown and answered
-// afresh. An entry answered is
-// ErrKeptWorkAnswered, and one with no confirmation of that digest
-// ErrKeptWorkNotConfirmed. It removes nothing.
-func (s *Store) WithdrawKeptWorkDiscard(ctx context.Context, id int64, digest string) (KeptWork, error) {
-	var out KeptWork
-	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
-		if err != nil {
-			return errNoRows(err)
-		}
-		if k.Answered() {
-			return ErrKeptWorkAnswered
-		}
-		if k.DiscardDigest.Or("") != digest || digest == "" {
-			return ErrKeptWorkNotConfirmed
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET discard_digest = NULL, discard_lacks = NULL, discard_by = NULL,
-			discard_confirmed_at = NULL, discard_read_at = NULL WHERE id = ?`, id); err != nil {
-			return err
-		}
-		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
-		return err
-	})
-	if err != nil {
-		return KeptWork{}, fmt.Errorf("store: withdrawing the discard confirmation of kept work entry %d: %w", id, err)
-	}
-	return out, nil
-}
-
 // ClaimKeptWorkCarryOn records a carry on of an open entry, the first of
 // the carry on's two facts: task, the task that will carry it on, whose
 // identifier the caller reserves and whose row does not exist yet, which
@@ -804,9 +689,8 @@ func (s *Store) WithdrawKeptWorkCarryOn(ctx context.Context, id int64, task stri
 	return out, nil
 }
 
-// refuseUnlessAnswerable is the refusal every answer and every discard
-// confirmation shares, inside its transaction: an entry answered, one
-// closed, one holding a discard confirmation, and one of a copy another
+// refuseUnlessAnswerable is the refusal every answer shares, inside its
+// transaction: an entry answered, one closed, and one of a copy another
 // entry of which holds an answer not yet carried out are refused, on the
 // errors' terms.
 func refuseUnlessAnswerable(ctx context.Context, tx *sql.Tx, k KeptWork) error {
@@ -816,9 +700,6 @@ func refuseUnlessAnswerable(ctx context.Context, tx *sql.Tx, k KeptWork) error {
 	if k.Closure.IsKnown() {
 		return ErrKeptWorkClosed
 	}
-	if k.DiscardDigest.IsKnown() {
-		return fmt.Errorf("%w: %w", ErrKeptWorkCopyOwed, ErrKeptWorkDiscardConfirmed)
-	}
 	if k.CarriedOnTask.IsKnown() {
 		return fmt.Errorf("%w: %w", ErrKeptWorkCopyOwed, ErrKeptWorkCarryOnClaimed)
 	}
@@ -827,8 +708,7 @@ func refuseUnlessAnswerable(ctx context.Context, tx *sql.Tx, k KeptWork) error {
 	}
 	var owed int64
 	var what string
-	switch err := tx.QueryRowContext(ctx, `SELECT id, CASE WHEN discard_digest IS NOT NULL THEN 'confirmed discard'
-		WHEN carried_on_task IS NOT NULL THEN 'claimed carry on by task ' || carried_on_task ELSE 'claimed land' END
+	switch err := tx.QueryRowContext(ctx, `SELECT id, CASE WHEN carried_on_task IS NOT NULL THEN 'claimed carry on by task ' || carried_on_task ELSE 'claimed land' END
 		FROM kept_work WHERE copy_path = ? AND id <> ? AND (`+owedOnCopy+`) ORDER BY id LIMIT 1`, k.CopyPath, k.ID).Scan(&owed, &what); {
 	case err == nil:
 		return fmt.Errorf("%w: entry %d is %s", ErrKeptWorkCopyOwed, owed, what)
@@ -840,24 +720,24 @@ func refuseUnlessAnswerable(ctx context.Context, tx *sql.Tx, k KeptWork) error {
 
 // owedOnCopy is the condition of an entry holding an answer not yet
 // carried out, which ErrKeptWorkCopyOwed names: a landing or a carry on
-// claimed or a discard confirmed on an entry neither answered nor closed.
+// claimed on an entry neither answered nor closed.
 const owedOnCopy = `answer IS NULL AND closure IS NULL AND
-	(landing_claimed_at IS NOT NULL OR carried_on_task IS NOT NULL OR discard_digest IS NOT NULL)`
+	(landing_claimed_at IS NOT NULL OR carried_on_task IS NOT NULL)`
 
 const keptWorkColumns = `SELECT id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
 	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, lacks, against, unestablished,
-	landing_claimed_at, landing_by, landed_run, carried_on_task, carried_on_copy, carry_on_by, carry_on_claimed_at, carried_on_at, discard_digest,
-	discard_lacks, discard_by, discard_confirmed_at, discarded_at, (SELECT task.machine FROM task WHERE task.id = kept_work.task_id)`
+	landing_claimed_at, landing_by, landed_run, carried_on_task, carried_on_copy, carry_on_by, carry_on_claimed_at, carried_on_at,
+	(SELECT task.machine FROM task WHERE task.id = kept_work.task_id)`
 
 func scanKeptWork(sc scanner) (KeptWork, error) {
 	var k KeptWork
 	var holds, kept string
-	var surfaced, answer, by, answered, closure, proof, closed, lacks, landingClaimed, landingBy, carryOnBy, carryOnClaimed, carriedOn, discardLacks,
-		discardBy, confirmed, discarded, machine Optional[string]
+	var surfaced, answer, by, answered, closure, proof, closed, lacks, landingClaimed, landingBy, carryOnBy, carryOnClaimed, carriedOn,
+		machine Optional[string]
 	if err := sc.Scan(&k.ID, &k.TaskID, &k.RunID, &k.RepositoryID, &k.Branch, &k.CopyPath, &holds, &k.Reason, &k.Detail,
 		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &lacks, &k.Against, &k.Unestablished,
-		&landingClaimed, &landingBy, &k.LandedRun, &k.CarriedOnTask, &k.CarriedOnCopy, &carryOnBy, &carryOnClaimed, &carriedOn, &k.DiscardDigest,
-		&discardLacks, &discardBy, &confirmed, &discarded, &machine); err != nil {
+		&landingClaimed, &landingBy, &k.LandedRun, &k.CarriedOnTask, &k.CarriedOnCopy, &carryOnBy, &carryOnClaimed, &carriedOn,
+		&machine); err != nil {
 		return KeptWork{}, err
 	}
 	if name, ok := machine.Get(); ok {
@@ -875,14 +755,6 @@ func scanKeptWork(sc scanner) (KeptWork, error) {
 		}
 		if k.Lacks == nil {
 			k.Lacks = []string{}
-		}
-	}
-	if encoded, ok := discardLacks.Get(); ok {
-		if err := json.Unmarshal([]byte(encoded), &k.DiscardLacks); err != nil {
-			return KeptWork{}, fmt.Errorf("column discard_lacks: %w", err)
-		}
-		if k.DiscardLacks == nil {
-			k.DiscardLacks = []string{}
 		}
 	}
 	var err error
@@ -929,15 +801,6 @@ func scanKeptWork(sc scanner) (KeptWork, error) {
 		return KeptWork{}, err
 	}
 	if k.CarriedOnAt, err = optionalTimeValue(carriedOn, "carried_on_at"); err != nil {
-		return KeptWork{}, err
-	}
-	if k.DiscardBy, err = resolverValue(discardBy, "discard_by"); err != nil {
-		return KeptWork{}, err
-	}
-	if k.DiscardConfirmedAt, err = optionalTimeValue(confirmed, "discard_confirmed_at"); err != nil {
-		return KeptWork{}, err
-	}
-	if k.DiscardedAt, err = optionalTimeValue(discarded, "discarded_at"); err != nil {
 		return KeptWork{}, err
 	}
 	return k, nil
@@ -1151,7 +1014,7 @@ func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64, task string
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = 'carry-on', answered_by = ?, answered_at = ?, carried_on_task = ?,
 			carried_on_copy = ?, carry_on_by = ?, carry_on_claimed_at = ?, carried_on_at = ?
-			WHERE id = ? OR (copy_path = ? AND answer IS NULL AND closure IS NULL AND discard_digest IS NULL AND carried_on_task IS NULL)`,
+			WHERE id = ? OR (copy_path = ? AND answer IS NULL AND closure IS NULL AND carried_on_task IS NULL)`,
 			by, claimed, task, copied, by, claimed, encodeTime(nowUTC()), id, k.CopyPath); err != nil {
 			return err
 		}
@@ -1201,126 +1064,6 @@ func (s *Store) KeptWorkCarriedOnBy(ctx context.Context, taskID string) ([]KeptW
 	out, err := scanKeptWorkRows(rows)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading the kept work task %s carried on: %w", taskID, err)
-	}
-	return out, nil
-}
-
-// RecordKeptWorkDiscardRead records at as the moment the removal of
-// digest's confirmation went ahead, which the caller writes once it found
-// the copy holding what the confirmation was shown, from before its read
-// of the loss until then, and immediately before the removal:
-// MarkKeptWorkDiscarded bounds the entries it takes by it, so the bound is
-// the moment the removal went ahead even when the mark is left to a later
-// call that finds the copy gone. A later removal of a copy still standing
-// records its own. An entry answered is
-// ErrKeptWorkAnswered, one closed ErrKeptWorkClosed, and one holding no
-// confirmation of digest ErrKeptWorkNotConfirmed; nothing is written then.
-func (s *Store) RecordKeptWorkDiscardRead(ctx context.Context, id int64, digest string, at time.Time) error {
-	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
-		if err != nil {
-			return errNoRows(err)
-		}
-		switch {
-		case k.Answered():
-			return ErrKeptWorkAnswered
-		case k.Closure.IsKnown():
-			return ErrKeptWorkClosed
-		case digest == "" || k.DiscardDigest.Or("") != digest:
-			return ErrKeptWorkNotConfirmed
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE kept_work SET discard_read_at = ? WHERE id = ?`, encodeTime(at), id)
-		return err
-	})
-	if err != nil {
-		return fmt.Errorf("store: recording when the read of kept work entry %d's copy for its discard began: %w", id, err)
-	}
-	return nil
-}
-
-// ErrKeptWorkNotDiscard is returned by MarkKeptWorkDiscarded for an entry
-// that holds no discard confirmation.
-var ErrKeptWorkNotDiscard = errors.New("store: the kept work entry holds no discard confirmation")
-
-// ErrKeptWorkDiscarded is returned by MarkKeptWorkDiscarded for an entry
-// already discarded.
-var ErrKeptWorkDiscarded = errors.New("store: the kept work entry is already discarded")
-
-// MarkKeptWorkDiscarded records that the copy a discard confirmation was
-// shown is gone, the discard's second fact, once: the entry is answered
-// discard, by who confirmed and as of when, with the instant the copy
-// went, in one write that also answers and marks every other open entry
-// of the same copy kept by the moment the removal went ahead, or by the
-// confirmation when that is later, the copy kept again at another state,
-// with the same confirmation, since the copy is gone for all of them. The
-// moment is the one RecordKeptWorkDiscardRead recorded on the entry, never
-// the caller's clock, so a mark left to a call that finds the copy gone is
-// bounded by the moment the removal went ahead: the caller records it only
-// once the copy is found holding what was shown, so an entry kept by then
-// was kept from the state the removal destroyed, and one kept after it,
-// while the copy was being removed, is left open. With no moment recorded,
-// a copy that went without a removal of this confirmation, the bound is
-// the confirmation. An entry already
-// marked is ErrKeptWorkDiscarded, one answered otherwise
-// ErrKeptWorkAnswered, one closed on a proof ErrKeptWorkClosed, one with no
-// confirmation ErrKeptWorkNotDiscard, and an unknown identifier
-// ErrNotFound. It records and removes nothing else; the removal is the
-// caller's, made before this.
-func (s *Store) MarkKeptWorkDiscarded(ctx context.Context, id int64) (KeptWork, error) {
-	var out KeptWork
-	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
-		if err != nil {
-			return errNoRows(err)
-		}
-		switch {
-		case k.DiscardedAt.IsKnown():
-			return ErrKeptWorkDiscarded
-		case k.Answered():
-			return ErrKeptWorkAnswered
-		case k.Closure.IsKnown():
-			return ErrKeptWorkClosed
-		case !k.DiscardDigest.IsKnown():
-			return ErrKeptWorkNotDiscard
-		}
-		var digest, lacks, by, confirmed string
-		var read sql.NullString
-		if err := tx.QueryRowContext(ctx, `SELECT discard_digest, discard_lacks, discard_by, discard_confirmed_at, discard_read_at
-			FROM kept_work WHERE id = ?`, id).Scan(&digest, &lacks, &by, &confirmed, &read); err != nil {
-			return err
-		}
-		through := max(confirmed, read.String)
-		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = 'discard', answered_by = ?, answered_at = ?, discard_digest = ?,
-			discard_lacks = ?, discard_by = ?, discard_confirmed_at = ?, discarded_at = ?
-			WHERE id = ? OR (copy_path = ? AND answer IS NULL AND closure IS NULL AND discard_digest IS NULL AND kept_at <= ?)`,
-			by, confirmed, digest, lacks, by, confirmed, encodeTime(nowUTC()), id, k.CopyPath, through); err != nil {
-			return err
-		}
-		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
-		return err
-	})
-	if err != nil {
-		return KeptWork{}, fmt.Errorf("store: marking kept work entry %d discarded: %w", id, err)
-	}
-	return out, nil
-}
-
-// KeptWorkDiscardsOwed returns every entry holding a discard confirmation
-// not yet carried out, open and oldest first: a discard a stopped service
-// confirmed and did not carry out, which the next start carries out or
-// withdraws.
-func (s *Store) KeptWorkDiscardsOwed(ctx context.Context) ([]KeptWork, error) {
-	if err := s.live(); err != nil {
-		return nil, err
-	}
-	rows, err := s.read.QueryContext(ctx, keptWorkColumns+` FROM kept_work
-		WHERE discard_digest IS NOT NULL AND answer IS NULL AND closure IS NULL ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("store: reading the kept work discards owed: %w", err)
-	}
-	out, err := scanKeptWorkRows(rows)
-	if err != nil {
-		return nil, fmt.Errorf("store: reading the kept work discards owed: %w", err)
 	}
 	return out, nil
 }

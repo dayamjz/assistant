@@ -336,22 +336,6 @@ type Cleaner struct {
 	// git are the options every repository this Cleaner opens is opened
 	// with, from gitOptions.
 	git []vcs.Option
-	// betweenDiscardReadAndCheck runs in a discard once the digest is
-	// checked and before anything is set aside. It is nil in production
-	// and set only by this package's tests, which use it to change the copy
-	// between the read the digest is checked on and what is set aside.
-	betweenDiscardReadAndCheck func()
-	// betweenAsideAndCheck runs in a discard after what was shown is set
-	// aside and before the copy is read again, and an error it returns ends
-	// the discard there, as a service that stopped there leaves it. It is
-	// nil in production and set only by this package's tests and through
-	// BetweenAsideAndCheckForTest.
-	betweenAsideAndCheck func() error
-	// beforeWrite runs in a discard before each path it writes from the
-	// target's tree, once that path is journalled. It is nil in production
-	// and set only by this package's tests, which use it to write into the
-	// path first, as a process working in the copy might.
-	beforeWrite func(rel string)
 	// betweenProofAndRemoval runs after the proof is recorded and before
 	// the copy is re-read and removed. It is nil in production and set only
 	// by this package's tests, which use it to change the copy inside the
@@ -384,9 +368,9 @@ func NewCleaner(d CleanupDeps) (*Cleaner, error) {
 	}
 	// Every repository the cleaner opens is read as its objects record it
 	// (vcs.WithoutReplaceObjects): what a copy holds, what a proof finds
-	// landed and what a discard shows as lost are decided from the object
-	// graph itself, so a replacement reference in the copy can neither
-	// hide a commit from the loss nor make one read as landed.
+	// landed and what a discard's preview shows as lost are decided from
+	// the object graph itself, so a replacement reference in the copy can
+	// neither hide a commit from the loss nor make one read as landed.
 	return &Cleaner{home: d.Home, store: d.Store, forge: d.Forge,
 		git: append(gitOptions(d.GitDeadline), vcs.WithoutReplaceObjects())}, nil
 }
@@ -404,20 +388,6 @@ func (c *Cleaner) InterruptBeforeMarkForTest(tb testing.TB, f func() error) erro
 		return errors.New("tasks: InterruptBeforeMarkForTest is a test's seam and takes the test")
 	}
 	c.betweenRemovalAndMark = f
-	return nil
-}
-
-// BetweenAsideAndCheckForTest makes every discard this Cleaner makes run f
-// once what the discard showed is set aside and before the copy is read
-// again, so a test can write into that moment; an error f returns ends the
-// discard there with what was set aside left standing, as a service that
-// stopped there leaves it. It takes the test and refuses a nil one, on
-// InterruptBeforeMarkForTest's terms.
-func (c *Cleaner) BetweenAsideAndCheckForTest(tb testing.TB, f func() error) error {
-	if tb == nil {
-		return errors.New("tasks: BetweenAsideAndCheckForTest is a test's seam and takes the test")
-	}
-	c.betweenAsideAndCheck = f
 	return nil
 }
 

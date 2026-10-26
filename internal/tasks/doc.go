@@ -346,10 +346,9 @@
 //     nothing git tracks.
 //   - vcs.RemoveWorktreeDiscardingChanges is exported and reachable by any
 //     importer, as is os.RemoveAll, so only this package calling either
-//     behind a Removal is convention, and a person's discard removes a
-//     run's copy only through git's removal without force and a task's
-//     clone only on a Removal (kept_discard.go, kept_aside.go); no type
-//     stops another package from removing a copy it never proved.
+//     behind a Removal is convention, and no type stops another package
+//     from removing a copy it never proved. (A person's discard removes
+//     nothing in this build: its removal is deferred to AGE-486.)
 //   - A caller states the terminal's liveness, and one that states Dead of
 //     a terminal it never probed is indistinguishable from one that did.
 //   - Ignored files are invisible to vcs.Inventory and so to the dirty and

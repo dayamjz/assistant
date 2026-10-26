@@ -102,7 +102,7 @@ func TestKeptWorkIsAnsweredOnceAndOtherwiseSealed(t *testing.T) {
 	if answered.Answer.Or("") != KeptLand || answered.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || !answered.AnsweredAt.IsKnown() {
 		t.Fatalf("answered = %+v; want land by the machine interface, timed", answered)
 	}
-	if _, err := s.ConfirmKeptWorkDiscard(ctx, entry.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkAnswered) {
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, entry.ID, "taskcarrying", "a-copy", ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkAnswered) {
 		t.Fatalf("a second answer = %v; want ErrKeptWorkAnswered", err)
 	}
 	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || got.Answer.Or("") != KeptLand {
@@ -164,7 +164,7 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 	if listed, err := s.OpenKeptWork(ctx); err != nil || len(listed) != 0 {
 		t.Fatalf("OpenKeptWork = %+v, %v; want none", listed, err)
 	}
-	if _, err := s.ConfirmKeptWorkDiscard(ctx, open.ID, "shown", nil, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkClosed) {
+	if _, err := s.ClaimKeptWorkLanding(ctx, open.ID, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkClosed) {
 		t.Fatalf("answering a closed entry = %v; want ErrKeptWorkClosed", err)
 	}
 	for name, statement := range map[string]string{

@@ -100,7 +100,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 			"(the hold's key, or a finding id under that task); without it the only open one is answered, and more than one open is refused; "+
 			"a kept work entry's key, kept-work/N, answers that entry, with --task or --run=RUN naming whose copy it is")
 		set.StringVar(&confirm, "confirm", "", "with --answer discard and --hold kept-work/N: the digest a discard shown beforehand carried; "+
-			"without it the discard shows what would be lost and removes nothing")
+			"without it the discard shows what would be lost and removes nothing, and with it the answer is refused: "+
+			"removal on a confirmed discard is not in this build")
 		set.Var(&runFlag, "run", "with --task --answer: answer the task's current run even while "+
 			"the task still has holds of its own open; written --run=RUN with --answer and --hold kept-work/N, the run whose kept copy is answered")
 		set.Var(&cancel, cancelFlagName, "end this branch's run, wherever it stands; written --"+cancelFlagName+
@@ -891,15 +892,6 @@ func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any,
 	case len(f.others) > 0:
 		return nil, usagef("an answer to kept work reads --answer, --hold, --task or --run=RUN, and --confirm with discard, and not --%s", f.others[0])
 	}
-	// A discard is confirmed only by a person at a terminal, PRD section
-	// 6's "you discard it yourself" as the owner decided it on #411: a
-	// confirmation under --json, or from a process not at one, is refused
-	// here, before anything reaches the service, with the row that says so.
-	// What that buys and does not is keptdiscard.go's header in
-	// internal/service.
-	if f.confirmSet && (in.json || !in.env.Interactive) {
-		return nil, discardNeedsTerminal{}
-	}
 	in.progressf("answering kept work %s with %q", f.hold, f.answer)
 	var answered machine.KeptWorkAnswered
 	err := in.callService(ctx, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
@@ -922,10 +914,3 @@ func (in *invocation) flagsBeside() []string {
 	})
 	return out
 }
-
-// discardNeedsTerminal is the refusal of a discard confirmation given where
-// no person is at a terminal. Its text is the row a person reads.
-type discardNeedsTerminal struct{}
-
-// Error is the row, which says all there is.
-func (discardNeedsTerminal) Error() string { return machine.PhraseDiscardNeedsTerminal.String() }

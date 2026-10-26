@@ -10,12 +10,12 @@ import (
 // controlling terminal, decided from the kernel's credentials and the
 // lineage it keeps for the peer, and nothing a caller states. It is the
 // third relation over one input beside containment (contain.go) and the
-// worker group set (workers.go), and it answers for exactly two requests:
+// worker group set (workers.go), and it answers for exactly one request:
 // task.respond on the local landing's approval hold, which PRD section 6
-// gives the person ("You approve") and which local.go raises, and
-// keptwork.answer's confirmation of a discard, the other answer section 6
-// gives the person alone ("you discard it yourself"), which keptdiscard.go
-// holds to it on the owner's decision for #411.
+// gives the person ("You approve") and which local.go raises. (A discard's
+// confirmation, the other answer section 6 gives the person alone, is
+// refused for every caller in this build, its removal deferred, so it is
+// not held to this relation.)
 //
 // # Why this fact
 //
