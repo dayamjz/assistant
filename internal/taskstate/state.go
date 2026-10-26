@@ -131,6 +131,10 @@ type Inputs struct {
 	// naming a run outside Runs is not the task's and is not read, so a
 	// caller that hands the resolver another task's record changes nothing.
 	MergeRecords []store.MergeRecord
+	// NothingToDeliver are the nothing-to-deliver records of Runs, in any
+	// order, on MergeRecords' terms: a record naming a run outside Runs is
+	// not the task's and is not read.
+	NothingToDeliver []store.NothingToDeliver
 	// Cleanup is the task's cleanup record, and unknown while none has been
 	// written.
 	Cleanup store.Optional[store.TaskCleanup]
@@ -213,10 +217,16 @@ type Basis struct {
 	RunID        string          `json:"run_id"`
 	RunStatus    store.RunStatus `json:"run_status"`
 	RunUpdatedAt time.Time       `json:"run_updated_at"`
-	// LandedRun names the attributed run whose merge record established
-	// Landed, the newest attributed run with a record reading merged, and
-	// is empty when no attributed run has one.
+	// LandedRun names the attributed run whose record established Landed,
+	// the newest attributed run with a merge record reading merged or a
+	// nothing-to-deliver record, and is empty when no attributed run has
+	// either.
 	LandedRun string `json:"landed_run"`
+	// NothingToDeliver is whether the record that established Landed for
+	// LandedRun is its nothing-to-deliver record rather than a merge record:
+	// the change was already on the default branch and nothing was
+	// delivered. It is false whenever LandedRun is empty.
+	NothingToDeliver bool `json:"nothing_to_deliver"`
 	// LandedLocally is the commit the task's local landing record says the
 	// approved fast-forward moved the local default branch to, and empty
 	// when the task has no such record. It is recorded whether or not it

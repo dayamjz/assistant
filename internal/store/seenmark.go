@@ -10,11 +10,13 @@ import (
 	"time"
 )
 
-// SeenKind is which of the two landed records a seen mark names. PRD section
-// 8's seen mark is one row per merge or cleanup record a person was shown
-// and marked seen, keyed the way that record is keyed, so the kind is what
-// says which key it is: a merge record is keyed by its run and a task's
-// cleanup record by its task. The set is closed.
+// SeenKind is which of the three landed records a seen mark names. PRD
+// section 8's seen mark is one row per merge or cleanup record a person was
+// shown and marked seen, keyed the way that record is keyed, and a
+// nothing-to-deliver record is shown and marked seen on the same terms, so
+// the kind is what says which key it is: a merge record and a
+// nothing-to-deliver record are keyed by their run and a task's cleanup
+// record by its task. The set is closed.
 type SeenKind string
 
 const (
@@ -22,9 +24,12 @@ const (
 	SeenMerge SeenKind = "merge"
 	// SeenCleanup names a task's cleanup record, by the task.
 	SeenCleanup SeenKind = "cleanup"
+	// SeenNothingToDeliver names a nothing-to-deliver record, by the run
+	// that wrote it.
+	SeenNothingToDeliver SeenKind = "nothing-to-deliver"
 )
 
-var seenKinds = []SeenKind{SeenMerge, SeenCleanup}
+var seenKinds = []SeenKind{SeenMerge, SeenCleanup, SeenNothingToDeliver}
 
 // SeenKinds returns the closed set, in the order above. The result is a copy.
 func SeenKinds() []SeenKind { return slices.Clone(seenKinds) }
@@ -33,13 +38,14 @@ func SeenKinds() []SeenKind { return slices.Clone(seenKinds) }
 func (k SeenKind) Recognized() bool { return slices.Contains(seenKinds, k) }
 
 // SeenRecord names one landed record the way that record is keyed: a merge
-// record by its run, a task's cleanup record by its task. It is what a
+// record and a nothing-to-deliver record by their run, a task's cleanup
+// record by its task. It is what a
 // catch-up read shows a person and what a mark names back.
 type SeenRecord struct {
 	// Kind is which record it is.
 	Kind SeenKind `json:"kind"`
-	// Key is that record's own key: the run for a merge record, the task
-	// for a cleanup record.
+	// Key is that record's own key: the run for a merge record or a
+	// nothing-to-deliver record, the task for a cleanup record.
 	Key string `json:"key"`
 }
 
@@ -64,8 +70,8 @@ type SeenMark struct {
 // Each record is checked before anything is written. A kind outside the
 // closed set is refused with ErrUnknownSeenKind, and a record that is not a
 // landed record - no merge record for the run, one that reads closed rather
-// than merged, no cleanup record for the task, or one whose removal is not
-// recorded yet - with ErrNotLanded, each as a *SeenRecordError naming it, and
+// than merged, no nothing-to-deliver record for the run, no cleanup record for
+// the task, or one whose removal is not recorded yet - with ErrNotLanded, each as a *SeenRecordError naming it, and
 // then the whole batch writes nothing. An empty batch is refused. A record
 // already marked keeps its first row, and its mark is returned as it was
 // first written, so a mark retried after a commit the caller did not see
@@ -127,6 +133,14 @@ func landed(ctx context.Context, tx *sql.Tx, r SeenRecord) error {
 			return fmt.Errorf("store: reading the merge record of run %s: %w", r.Key, err)
 		case PullRequestEnd(end) != PullRequestMerged:
 			return &SeenRecordError{Record: r, Reason: ErrNotLanded}
+		}
+	case SeenNothingToDeliver:
+		var one int
+		switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM nothing_to_deliver WHERE run = ?`, r.Key).Scan(&one); {
+		case isNoRows(err):
+			return &SeenRecordError{Record: r, Reason: ErrNotLanded}
+		case err != nil:
+			return fmt.Errorf("store: reading the nothing-to-deliver record of run %s: %w", r.Key, err)
 		}
 	case SeenCleanup:
 		var removed Optional[string]
